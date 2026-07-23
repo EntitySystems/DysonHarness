@@ -7,13 +7,7 @@
     {
         @foreach (var call in Turn.ToolCalls)
         {
-            <div class="tool-row">
-                <div class="tool-row__top">
-                    <span class="tool-row__name mono">@call.ToolName</span>
-                    <span class="tool-status queued">Queued</span>
-                </div>
-                <div class="tool-row__meta mono">stage @call.Stage · @call.ArgumentsJson</div>
-            </div>
+            <QueuedToolCallRow Call="call" />
         }
     }
     else

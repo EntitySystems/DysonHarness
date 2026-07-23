@@ -1,26 +1,37 @@
 @namespace Harness.UI.Components.Tools
 @using DysonHarness
 
-<div class="tool-row">
-    <div class="tool-row__top">
+<div class="tool-row @(_expanded ? "tool-row--expanded" : null)">
+    <button type="button"
+            class="tool-row__header"
+            aria-expanded="@(_expanded ? "true" : "false")"
+            @onclick="ToggleExpanded">
         <span class="tool-row__name mono">@Tracked.Call.ToolName</span>
         <span class="tool-status @StatusClass">@Tracked.Status</span>
+    </button>
+    <div class="tool-row__body">
+        <div class="tool-row__body-inner">
+            <div class="tool-row__meta mono">
+                #@Tracked.Call.CallId · stage @Tracked.Call.Stage
+                @if (!string.IsNullOrWhiteSpace(Tracked.Call.ArgumentsJson))
+                {
+                    <text> · @Tracked.Call.ArgumentsJson</text>
+                }
+            </div>
+            @if (Tracked.Result is not null)
+            {
+                <div class="tool-row__result mono">@Tracked.Result.Content</div>
+            }
+        </div>
     </div>
-    <div class="tool-row__meta mono">
-        #@Tracked.Call.CallId · stage @Tracked.Call.Stage
-        @if (!string.IsNullOrWhiteSpace(Tracked.Call.ArgumentsJson))
-        {
-            <text> · @Tracked.Call.ArgumentsJson</text>
-        }
-    </div>
-    @if (Tracked.Result is not null)
-    {
-        <div class="tool-row__result mono">@Tracked.Result.Content</div>
-    }
 </div>
 
 @code {
     [Parameter, EditorRequired] public DysonTrackedToolCall Tracked { get; set; } = default!;
+
+    private bool _expanded;
+
+    private void ToggleExpanded() => _expanded = !_expanded;
 
     private string StatusClass => Tracked.Status switch
     {

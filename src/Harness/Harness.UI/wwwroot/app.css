@@ -1179,14 +1179,31 @@ code, .mono {
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg-2);
-  padding: 8px;
+  padding: 0;
+  overflow: hidden;
 }
 
-.tool-row__top {
+.tool-row__header {
   display: flex;
   justify-content: space-between;
   gap: 8px;
   align-items: center;
+  width: 100%;
+  margin: 0;
+  padding: 8px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tool-row__header:hover {
+  background: var(--bg-hover);
+}
+
+.tool-row__header:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .tool-row__name {
@@ -1198,12 +1215,36 @@ code, .mono {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  flex-shrink: 0;
 }
 
 .tool-status.queued { color: var(--text-dim); }
 .tool-status.working { color: var(--warning); }
 .tool-status.completed { color: var(--success); }
 .tool-status.failed { color: var(--danger); }
+
+.tool-row__body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.2s ease;
+}
+
+.tool-row--expanded .tool-row__body {
+  grid-template-rows: 1fr;
+}
+
+.tool-row__body-inner {
+  overflow: hidden;
+  min-height: 0;
+  padding: 0 8px;
+  opacity: 0;
+  transition: opacity 0.15s ease, padding 0.2s ease;
+}
+
+.tool-row--expanded .tool-row__body-inner {
+  padding: 0 8px 8px;
+  opacity: 1;
+}
 
 .tool-row__meta,
 .tool-row__result {
@@ -1212,6 +1253,11 @@ code, .mono {
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-word;
+  user-select: text;
+}
+
+.tool-row__meta:first-child {
+  margin-top: 0;
 }
 
 /* Theme switcher */
