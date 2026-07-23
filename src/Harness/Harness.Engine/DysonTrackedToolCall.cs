@@ -13,6 +13,13 @@ public sealed class DysonTrackedToolCall
 
     internal void Attach(DysonAgentTurn owner) => _owner = owner;
 
+    /// <summary>Hydrates status/result from persistence without raising status events.</summary>
+    internal void RestoreState(DysonToolCallStatus status, DysonToolCallResult? result)
+    {
+        Status = status;
+        Result = result;
+    }
+
     internal void SetWorking()
     {
         var previous = Status;

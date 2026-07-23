@@ -30,6 +30,9 @@ public abstract class DysonAgentSession
     /// <summary>Session identity. Root sessions are 0; subagents are allocated from 1.</summary>
     public int Id { get; protected set; }
 
+    /// <summary>Durable SQLite session id (distinct from runtime <see cref="Id"/>).</summary>
+    public Guid PersistenceId { get; protected set; }
+
     public DysonAgentSessionConfig Config { get; }
 
     public string Mode { get; }
@@ -123,7 +126,11 @@ public abstract class DysonAgentSession
     {
         ArgumentNullException.ThrowIfNull(line);
         _logLines.Enqueue(line);
+        LogAppended?.Invoke(this, line);
     }
+
+    /// <summary>Raised after each <see cref="AppendLog"/> (hosts may persist a LogLine entry).</summary>
+    public event EventHandler<string>? LogAppended;
 
     /// <summary>Snapshot of append-only log lines. When <paramref name="maxLines"/> is set, returns the most recent lines.</summary>
     public IReadOnlyList<string> SnapshotLog(int? maxLines = null)
@@ -140,6 +147,73 @@ public abstract class DysonAgentSession
 
     /// <summary>Session transcript turns (oldest first). Used by context optimization and future chat loop.</summary>
     protected List<DysonAgentTurn> TurnHistory { get; } = [];
+
+    /// <summary>Public read-only view of <see cref="TurnHistory"/> for UI binding.</summary>
+    public IReadOnlyList<DysonAgentTurn> Turns => TurnHistory;
+
+    /// <summary>Raised after a turn is appended via <see cref="AddTurn"/> (hosts may UpsertTurn + TurnStarted log).</summary>
+    public event EventHandler<DysonAgentTurn>? TurnAdded;
+
+    /// <summary>Appends a turn to history and raises <see cref="TurnAdded"/>.</summary>
+    protected void AddTurn(DysonAgentTurn turn)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+        TurnHistory.Add(turn);
+        TurnAdded?.Invoke(this, turn);
+    }
+
+    /// <summary>
+    /// Hydrates this session from a full DB aggregate: sets <see cref="PersistenceId"/> /
+    /// runtime <see cref="Id"/>, rebuilds turns (including tool state), and restores LogLine text.
+    /// Caller must construct the session with matching mode/provider/config first.
+    /// </summary>
+    protected void RestoreFromPersisted(DysonPersistedSession state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(state.Session);
+        ArgumentNullException.ThrowIfNull(state.Turns);
+        ArgumentNullException.ThrowIfNull(state.Logs);
+
+        PersistenceId = state.Session.Id;
+        Id = state.Session.RuntimeId;
+
+        TurnHistory.Clear();
+        foreach (var row in state.Turns.OrderBy(t => t.Sequence))
+        {
+            var turn = new DysonAgentTurn
+            {
+                Id = row.Id,
+                Kind = row.Kind,
+                Instruction = row.Instruction,
+                AgentTitle = row.AgentTitle,
+                AssistantText = row.AssistantText,
+                ToolHistoryOptimized = row.ToolHistoryOptimized,
+                CompactToolHistory = row.CompactToolHistory,
+            };
+            DysonTurnToolStateSerializer.ApplyToTurn(turn, row.ToolStateJson);
+            TurnHistory.Add(turn);
+        }
+
+        while (_logLines.TryDequeue(out _))
+        {
+        }
+
+        foreach (var log in state.Logs.OrderBy(l => l.Sequence))
+        {
+            if (!DysonSessionLogPayload.TryParseKind(log.Kind, out var kind)
+                || kind != DysonSessionLogKind.LogLine)
+            {
+                continue;
+            }
+
+            var payload = DysonSessionLogPayload.Deserialize<DysonSessionLogLogLine>(log.PayloadJson);
+            if (payload?.Line is not null)
+                _logLines.Enqueue(payload.Line);
+        }
+    }
+
+    /// <summary>Assigns <see cref="PersistenceId"/> after <see cref="DysonSessionStore.CreateSessionAsync"/>.</summary>
+    protected void SetPersistenceId(Guid persistenceId) => PersistenceId = persistenceId;
 
     /// <summary>Compacts older tool history when turn-count or token thresholds fire.</summary>
     protected DysonContextOptimizer ContextOptimizer { get; set; } = new();

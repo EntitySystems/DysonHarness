@@ -1,0 +1,367 @@
+@namespace Harness.UI.Components.Models
+@using DysonHarness
+@inject DysonModelStore ModelStore
+
+<div class="models-panel panel">
+    <div class="tool-panel__title">Providers &amp; slugs</div>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="error-banner" style="margin:0;">@_error</div>
+    }
+
+    <div class="list" style="max-height:280px;">
+        @if (_providers.Count == 0)
+        {
+            <div class="empty-state" style="padding:8px 0;">No providers</div>
+        }
+        else
+        {
+            @foreach (var provider in _providers)
+            {
+                <div class="list-item" style="cursor:default;">
+                    @if (_editingProviderId == provider.Id)
+                    {
+                        <div class="field">
+                            <label>Display name</label>
+                            <input @bind="_editDisplayName" />
+                        </div>
+                        <div class="field">
+                            <label>Provider kind</label>
+                            <input @bind="_editProviderKind" />
+                        </div>
+                        <div class="field">
+                            <label>Base URL</label>
+                            <input @bind="_editBaseUrl" />
+                        </div>
+                        <div class="field">
+                            <label>API key</label>
+                            <input @bind="_editApiKey" type="password" autocomplete="off" />
+                        </div>
+                        <div class="btn-row" style="margin-top:4px;">
+                            <button type="button" class="btn btn-primary" style="padding:3px 7px;font-size:11px;" @onclick="() => SaveProviderAsync(provider.Id)">Save</button>
+                            <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="CancelEditProvider">Cancel</button>
+                        </div>
+                    }
+                    else
+                    {
+                        <span class="list-item__title">@provider.DisplayName</span>
+                        <span class="list-item__meta mono">
+                            @provider.ProviderKind
+                            @if (!string.IsNullOrEmpty(provider.BaseUrl))
+                            {
+                                <text> · @provider.BaseUrl</text>
+                            }
+                            @(string.IsNullOrEmpty(provider.ApiKey) ? "" : " · key set")
+                        </span>
+                        <div class="btn-row" style="margin-top:4px;">
+                            <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="() => BeginEditProvider(provider)">Edit</button>
+                            <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="() => DeleteProviderAsync(provider.Id)">Delete</button>
+                        </div>
+                    }
+
+                    <div class="models-panel__slugs">
+                        @if (provider.Slugs.Count == 0)
+                        {
+                            <div class="list-item__meta" style="padding:4px 0;">No slugs</div>
+                        }
+                        else
+                        {
+                            @foreach (var slug in provider.Slugs)
+                            {
+                                <div class="models-panel__slug @(slug.IsDefault ? "is-active" : null)">
+                                    <span class="list-item__title">@slug.DisplayAlias</span>
+                                    <span class="list-item__meta mono">
+                                        @slug.Slug
+                                        @(slug.IsDefault ? " · default" : "")
+                                    </span>
+                                    <div class="btn-row" style="margin-top:2px;">
+                                        @if (!slug.IsDefault)
+                                        {
+                                            <button type="button" class="btn" style="padding:2px 6px;font-size:10px;" @onclick="() => SetDefaultAsync(slug.Id)">Default</button>
+                                        }
+                                        <button type="button" class="btn btn-ghost" style="padding:2px 6px;font-size:10px;" @onclick="() => RemoveSlugAsync(slug.Id)">Remove</button>
+                                    </div>
+                                </div>
+                            }
+                        }
+
+                        @if (_addSlugProviderId == provider.Id)
+                        {
+                            <div style="margin-top:6px;">
+                                <div class="field">
+                                    <label>Display alias</label>
+                                    <input @bind="_slugAlias" />
+                                </div>
+                                <div class="field">
+                                    <label>Slug</label>
+                                    <input @bind="_slugValue" placeholder="gpt-4o" />
+                                </div>
+                                <label class="checkbox-row">
+                                    <input type="checkbox" @bind="_slugIsDefault" />
+                                    Set as default
+                                </label>
+                                <div class="btn-row">
+                                    <button type="button" class="btn btn-primary" style="padding:3px 7px;font-size:11px;" @onclick="() => AddSlugAsync(provider.Id)">Add</button>
+                                    <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="CancelAddSlug">Cancel</button>
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <button type="button" class="btn" style="margin-top:6px;padding:3px 7px;font-size:11px;" @onclick="() => BeginAddSlug(provider.Id)">Add slug</button>
+                        }
+                    </div>
+                </div>
+            }
+        }
+    </div>
+
+    <details open="@_providerFormOpen">
+        <summary @onclick:preventDefault="false">Add provider</summary>
+        <div style="margin-top:8px;">
+            <div class="field">
+                <label>Display name</label>
+                <input @bind="_displayName" />
+            </div>
+            <div class="field">
+                <label>Provider kind</label>
+                <input @bind="_providerKind" placeholder="demo / OpenAICompatible" />
+            </div>
+            <div class="field">
+                <label>Base URL (optional)</label>
+                <input @bind="_baseUrl" />
+            </div>
+            <div class="field">
+                <label>API key (optional, plaintext local)</label>
+                <input @bind="_apiKey" type="password" autocomplete="off" />
+            </div>
+            <div class="field">
+                <label>Initial slug</label>
+                <input @bind="_initialSlug" placeholder="demo-mock" />
+            </div>
+            <div class="field">
+                <label>Initial display alias</label>
+                <input @bind="_initialAlias" placeholder="Demo Mock" />
+            </div>
+            <label class="checkbox-row">
+                <input type="checkbox" @bind="_initialIsDefault" />
+                Set slug as default
+            </label>
+            <button type="button" class="btn btn-primary" @onclick="CreateProviderAsync">Create</button>
+        </div>
+    </details>
+</div>
+
+@code {
+    private List<DysonModelProviderEntity> _providers = [];
+    private string? _error;
+    private bool _providerFormOpen = true;
+
+    private string _displayName = "";
+    private string _providerKind = "demo";
+    private string? _baseUrl;
+    private string? _apiKey;
+    private string _initialSlug = "";
+    private string _initialAlias = "";
+    private bool _initialIsDefault;
+
+    private Guid? _editingProviderId;
+    private string _editDisplayName = "";
+    private string _editProviderKind = "";
+    private string? _editBaseUrl;
+    private string? _editApiKey;
+
+    private Guid? _addSlugProviderId;
+    private string _slugAlias = "";
+    private string _slugValue = "";
+    private bool _slugIsDefault;
+
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    protected override async Task OnInitializedAsync() => await RefreshAsync();
+
+    public async Task RefreshAsync()
+    {
+        _error = null;
+        var result = await ModelStore.ListProvidersAsync();
+        if (result.IsError)
+        {
+            _error = result.Error;
+            return;
+        }
+
+        _providers = result.Value.ToList();
+    }
+
+    private async Task CreateProviderAsync()
+    {
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_displayName))
+        {
+            _error = "Display name is required.";
+            return;
+        }
+
+        var slug = string.IsNullOrWhiteSpace(_initialSlug) ? "demo-mock" : _initialSlug.Trim();
+        var alias = string.IsNullOrWhiteSpace(_initialAlias) ? _displayName.Trim() : _initialAlias.Trim();
+        var makeDefault = _initialIsDefault || !_providers.Any(p => p.Slugs.Any(s => s.IsDefault));
+
+        var create = await ModelStore.CreateProviderAsync(new DysonModelProviderEntity
+        {
+            DisplayName = _displayName.Trim(),
+            ProviderKind = string.IsNullOrWhiteSpace(_providerKind) ? "demo" : _providerKind.Trim(),
+            BaseUrl = string.IsNullOrWhiteSpace(_baseUrl) ? null : _baseUrl.Trim(),
+            ApiKey = string.IsNullOrWhiteSpace(_apiKey) ? null : _apiKey,
+        });
+
+        if (create.IsError)
+        {
+            _error = create.Error;
+            return;
+        }
+
+        var addSlug = await ModelStore.AddSlugAsync(create.Value, slug, alias, makeDefault);
+        if (addSlug.IsError)
+        {
+            _error = addSlug.Error;
+            return;
+        }
+
+        _displayName = "";
+        _providerKind = "demo";
+        _baseUrl = null;
+        _apiKey = null;
+        _initialSlug = "";
+        _initialAlias = "";
+        _initialIsDefault = false;
+        await RefreshAsync();
+        await OnChanged.InvokeAsync();
+    }
+
+    private void BeginEditProvider(DysonModelProviderEntity provider)
+    {
+        _editingProviderId = provider.Id;
+        _editDisplayName = provider.DisplayName;
+        _editProviderKind = provider.ProviderKind;
+        _editBaseUrl = provider.BaseUrl;
+        _editApiKey = provider.ApiKey;
+    }
+
+    private void CancelEditProvider()
+    {
+        _editingProviderId = null;
+    }
+
+    private async Task SaveProviderAsync(Guid id)
+    {
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_editDisplayName))
+        {
+            _error = "Display name is required.";
+            return;
+        }
+
+        var update = await ModelStore.UpdateProviderAsync(new DysonModelProviderEntity
+        {
+            Id = id,
+            DisplayName = _editDisplayName.Trim(),
+            ProviderKind = string.IsNullOrWhiteSpace(_editProviderKind) ? "demo" : _editProviderKind.Trim(),
+            BaseUrl = string.IsNullOrWhiteSpace(_editBaseUrl) ? null : _editBaseUrl.Trim(),
+            ApiKey = string.IsNullOrWhiteSpace(_editApiKey) ? null : _editApiKey,
+        });
+
+        if (update.IsError)
+        {
+            _error = update.Error;
+            return;
+        }
+
+        _editingProviderId = null;
+        await RefreshAsync();
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task DeleteProviderAsync(Guid id)
+    {
+        var del = await ModelStore.DeleteProviderAsync(id);
+        if (del.IsError)
+        {
+            _error = del.Error;
+            return;
+        }
+
+        if (_editingProviderId == id)
+            _editingProviderId = null;
+        if (_addSlugProviderId == id)
+            _addSlugProviderId = null;
+
+        await RefreshAsync();
+        await OnChanged.InvokeAsync();
+    }
+
+    private void BeginAddSlug(Guid providerId)
+    {
+        _addSlugProviderId = providerId;
+        _slugAlias = "";
+        _slugValue = "";
+        _slugIsDefault = false;
+    }
+
+    private void CancelAddSlug()
+    {
+        _addSlugProviderId = null;
+    }
+
+    private async Task AddSlugAsync(Guid providerId)
+    {
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_slugValue) || string.IsNullOrWhiteSpace(_slugAlias))
+        {
+            _error = "Slug and display alias are required.";
+            return;
+        }
+
+        var add = await ModelStore.AddSlugAsync(
+            providerId,
+            _slugValue.Trim(),
+            _slugAlias.Trim(),
+            _slugIsDefault);
+
+        if (add.IsError)
+        {
+            _error = add.Error;
+            return;
+        }
+
+        _addSlugProviderId = null;
+        await RefreshAsync();
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task SetDefaultAsync(Guid slugId)
+    {
+        var set = await ModelStore.SetDefaultSlugAsync(slugId);
+        if (set.IsError)
+        {
+            _error = set.Error;
+            return;
+        }
+
+        await RefreshAsync();
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task RemoveSlugAsync(Guid slugId)
+    {
+        var del = await ModelStore.RemoveSlugAsync(slugId);
+        if (del.IsError)
+        {
+            _error = del.Error;
+            return;
+        }
+
+        await RefreshAsync();
+        await OnChanged.InvokeAsync();
+    }
+}

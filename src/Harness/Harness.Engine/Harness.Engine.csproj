@@ -7,8 +7,37 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
     <PackageReference Include="Microsoft.ML.Tokenizers.Data.Cl100kBase" Version="2.0.0" />
   </ItemGroup>
+
+  <!-- Prebuild: git branch → DysonAppMode → obj/.../DysonBuildInfo.g.cs -->
+  <PropertyGroup>
+    <_DysonResolveAppModePs1>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\scripts\resolve-app-mode.ps1'))</_DysonResolveAppModePs1>
+    <_DysonResolveAppModeSh>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\scripts\resolve-app-mode.sh'))</_DysonResolveAppModeSh>
+  </PropertyGroup>
+
+  <Target Name="GenerateAppMode" BeforeTargets="BeforeCompile;CoreCompile">
+    <PropertyGroup>
+      <_DysonBuildInfoPath>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\$(IntermediateOutputPath)DysonBuildInfo.g.cs'))</_DysonBuildInfoPath>
+      <_DysonBuildInfoDir>$([System.IO.Path]::GetDirectoryName('$(_DysonBuildInfoPath)'))</_DysonBuildInfoDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(_DysonBuildInfoDir)" />
+    <Exec Condition="!$([MSBuild]::IsOSUnixLike())"
+          Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(_DysonResolveAppModePs1)&quot; -OutputPath &quot;$(_DysonBuildInfoPath)&quot;"
+          IgnoreExitCode="false" />
+    <Exec Condition="$([MSBuild]::IsOSUnixLike())"
+          Command="bash &quot;$(_DysonResolveAppModeSh)&quot; &quot;$(_DysonBuildInfoPath)&quot;"
+          IgnoreExitCode="false" />
+    <ItemGroup>
+      <Compile Include="$(_DysonBuildInfoPath)" Condition="Exists('$(_DysonBuildInfoPath)')" />
+      <FileWrites Include="$(_DysonBuildInfoPath)" />
+    </ItemGroup>
+  </Target>
 
 </Project>

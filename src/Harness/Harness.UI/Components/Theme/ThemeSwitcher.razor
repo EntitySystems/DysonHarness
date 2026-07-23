@@ -1,0 +1,43 @@
+@namespace Harness.UI.Components.Theme
+@inject ThemeService Theme
+
+<div class="theme-switcher">
+    <div>
+        <div class="sidebar__section-label">Theme</div>
+        <div class="theme-switcher__group">
+            @foreach (var theme in ThemeService.Themes)
+            {
+                <button type="button"
+                        class="theme-chip @(Theme.Theme == theme ? "is-active" : null)"
+                        @onclick="() => OnThemeAsync(theme)">
+                    @theme
+                </button>
+            }
+        </div>
+    </div>
+    <div>
+        <div class="sidebar__section-label">Accent</div>
+        <div class="theme-switcher__group">
+            @foreach (var accent in ThemeService.Accents)
+            {
+                <button type="button"
+                        class="theme-chip @(Theme.Accent == accent ? "is-active" : null)"
+                        @onclick="() => OnAccentAsync(accent)">
+                    <span class="accent-dot @accent"></span>@accent
+                </button>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await Theme.InitializeAsync();
+    }
+
+    private Task OnThemeAsync(string theme) => Theme.SetThemeAsync(theme);
+
+    private Task OnAccentAsync(string accent) => Theme.SetAccentAsync(accent);
+}

@@ -1,0 +1,33 @@
+@namespace Harness.UI.Components.Shell
+@using DysonHarness
+@using Harness.UI.Demo
+
+<div class="session-header">
+    @if (Session is null)
+    {
+        <span class="empty-state" style="padding:0;text-align:left;">No active session</span>
+    }
+    else
+    {
+        <strong>@(Title ?? "Session")</strong>
+        <div class="session-header__meta">
+            <span>Mode @Session.Mode</span>
+            <span class="mono">Runtime #@Session.Id</span>
+            <span class="mono">Persist @ShortGuid(Session.PersistenceId)</span>
+            <span>MCP @Session.Config.McpAccessMode</span>
+            <span class="badge">@DysonBuildInfo.Current</span>
+            @if (Session.Provider is DemoDysonAgentProvider demo)
+            {
+                <span>@demo.DisplayAlias · @demo.ProviderDisplayName / @demo.Slug</span>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public DemoDysonAgentSession? Session { get; set; }
+    [Parameter] public string? Title { get; set; }
+
+    private static string ShortGuid(Guid id) =>
+        id == Guid.Empty ? "—" : id.ToString("N")[..8];
+}

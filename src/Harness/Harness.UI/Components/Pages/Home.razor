@@ -1,0 +1,163 @@
+﻿@page "/"
+@using DysonHarness
+@using Harness.UI.Demo
+@implements IDisposable
+@inject DysonUiHost Host
+@inject ThemeService Theme
+
+<AppShell>
+    <Sidebar>
+        <Sidebar>
+            <SessionList>
+                <SessionList Sessions="_sessions"
+                             ActiveSessionId="Host.ActiveSessionId"
+                             Busy="Host.IsBusy"
+                             Error="_listError"
+                             OnNew="StartNewAsync"
+                             OnResume="ResumeAsync"
+                             OnRefresh="RefreshSessionsAsync" />
+            </SessionList>
+            <Models>
+                <ModelsPanel OnChanged="RefreshSessionsAsync" />
+            </Models>
+            <Theme>
+                <ThemeSwitcher />
+            </Theme>
+        </Sidebar>
+    </Sidebar>
+    <Main>
+        <SessionHeader Session="Host.Session" Title="@_activeTitle" />
+        @if (!string.IsNullOrEmpty(Host.LastError))
+        {
+            <div class="error-banner">@Host.LastError</div>
+        }
+        <ChatPanel Turns="@(Host.Session?.Turns ?? Array.Empty<DysonAgentTurn>())"
+                   Disabled="@(Host.Session is null || Host.IsBusy)"
+                   OnSubmit="PromptAsync" />
+    </Main>
+    <Rail>
+        <div class="tool-panel">
+            <div class="tool-panel__title">Live tools</div>
+            @if (_latestTurn is null || (_latestTurn.TrackedToolCalls.Count == 0 && _latestTurn.ToolCalls.Count == 0))
+            {
+                <div class="empty-state" style="padding:12px 0;">No tool activity</div>
+            }
+            else
+            {
+                <ToolCallPanel Turn="_latestTurn" />
+            }
+        </div>
+        <div class="tool-panel" style="border-top:1px solid var(--border);">
+            <div class="tool-panel__title">Session log</div>
+            <div class="list" style="max-height:240px;">
+                @if (Host.Session is null)
+                {
+                    <div class="empty-state" style="padding:8px 0;">—</div>
+                }
+                else
+                {
+                    @foreach (var line in Host.Session.SnapshotLog(40).Reverse())
+                    {
+                        <div class="list-item__meta mono" style="padding:2px 0;">@line</div>
+                    }
+                }
+            </div>
+        </div>
+    </Rail>
+</AppShell>
+
+@code {
+    private IReadOnlyList<DysonSessionSummary> _sessions = [];
+    private string? _listError;
+    private string? _activeTitle;
+
+    private DysonAgentTurn? _latestTurn =>
+        Host.Session?.Turns is { Count: > 0 } turns ? turns[^1] : null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Host.Changed += OnHostChanged;
+        Theme.Changed += OnThemeChanged;
+
+        await Host.EnsureDefaultModelAsync();
+        await RefreshSessionsAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await Theme.InitializeAsync();
+    }
+
+    private void OnHostChanged() => _ = InvokeAsync(async () =>
+    {
+        await RefreshSessionsQuietAsync();
+        StateHasChanged();
+    });
+
+    private void OnThemeChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private async Task RefreshSessionsAsync()
+    {
+        _listError = null;
+        var list = await Host.ListSessionsAsync();
+        if (list.IsError)
+        {
+            _listError = list.Error;
+            return;
+        }
+
+        _sessions = list.Value;
+        UpdateActiveTitle();
+    }
+
+    private async Task RefreshSessionsQuietAsync()
+    {
+        var list = await Host.ListSessionsAsync();
+        if (list.IsSuccess)
+        {
+            _sessions = list.Value;
+            UpdateActiveTitle();
+        }
+    }
+
+    private void UpdateActiveTitle()
+    {
+        if (Host.ActiveSessionId is Guid id)
+        {
+            _activeTitle = _sessions.FirstOrDefault(s => s.Id == id)?.Title;
+        }
+        else
+        {
+            _activeTitle = null;
+        }
+    }
+
+    private async Task StartNewAsync()
+    {
+        var result = await Host.StartNewSessionAsync();
+        if (result.IsError)
+            _listError = result.Error;
+        await RefreshSessionsAsync();
+    }
+
+    private async Task ResumeAsync(Guid sessionId)
+    {
+        var result = await Host.ResumeSessionAsync(sessionId);
+        if (result.IsError)
+            _listError = result.Error;
+        await RefreshSessionsAsync();
+    }
+
+    private async Task PromptAsync(string prompt)
+    {
+        await Host.PromptAsync(prompt);
+        await RefreshSessionsAsync();
+    }
+
+    public void Dispose()
+    {
+        Host.Changed -= OnHostChanged;
+        Theme.Changed -= OnThemeChanged;
+    }
+}

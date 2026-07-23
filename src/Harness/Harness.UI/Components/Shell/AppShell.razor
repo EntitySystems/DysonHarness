@@ -1,0 +1,19 @@
+@namespace Harness.UI.Components.Shell
+
+<div class="app-shell">
+    <aside class="app-shell__sidebar">
+        @Sidebar
+    </aside>
+    <main class="app-shell__main">
+        @Main
+    </main>
+    <aside class="app-shell__rail">
+        @Rail
+    </aside>
+</div>
+
+@code {
+    [Parameter] public RenderFragment? Sidebar { get; set; }
+    [Parameter] public RenderFragment? Main { get; set; }
+    [Parameter] public RenderFragment? Rail { get; set; }
+}

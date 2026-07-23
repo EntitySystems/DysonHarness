@@ -23,6 +23,9 @@ public sealed class DysonAgentTurn
 {
     private readonly List<DysonTrackedToolCall> _tracked = [];
 
+    /// <summary>Stable turn identity for persistence / UI binding.</summary>
+    public Guid Id { get; init; } = Guid.NewGuid();
+
     public string? Instruction { get; init; }
     public DysonAgentTurnKind Kind { get; init; }
 
@@ -30,6 +33,9 @@ public sealed class DysonAgentTurn
     /// Agent-generated Markdown H1 title for this turn (without leading #), when the reply is agent-authored.
     /// </summary>
     public string? AgentTitle { get; set; }
+
+    /// <summary>Assistant body text after title parse (persistence / UI).</summary>
+    public string? AssistantText { get; set; }
 
     /// <summary>Source tool calls for this turn (stage + name + args).</summary>
     public List<DysonToolCall> ToolCalls { get; } = [];
@@ -132,6 +138,38 @@ public sealed class DysonAgentTurn
             _tracked.Add(tracked);
             NotifyStatusChanged(tracked, DysonToolCallStatus.Queued);
         }
+    }
+
+    /// <summary>Restores tracked rows from a persisted tool-state snapshot (no status events).</summary>
+    public void RestoreTrackedCalls(IEnumerable<DysonPersistedTrackedToolCall> trackedRows)
+    {
+        ArgumentNullException.ThrowIfNull(trackedRows);
+
+        _tracked.Clear();
+        var byId = ToolCalls.ToDictionary(c => c.CallId, StringComparer.Ordinal);
+        foreach (var row in trackedRows)
+        {
+            if (!byId.TryGetValue(row.CallId, out var call))
+                continue;
+
+            var tracked = new DysonTrackedToolCall { Call = call };
+            tracked.Attach(this);
+            tracked.RestoreState(row.Status, row.Result);
+            _tracked.Add(tracked);
+        }
+    }
+
+    /// <summary>Replaces <see cref="ResponseLog"/> from a persisted snapshot.</summary>
+    public void RestoreResponseLog(IEnumerable<DysonToolCallResult> results)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+
+        while (ResponseLog.TryDequeue(out _))
+        {
+        }
+
+        foreach (var result in results)
+            ResponseLog.Enqueue(result);
     }
 
     internal void NotifyStatusChanged(DysonTrackedToolCall tracked, DysonToolCallStatus previousStatus)

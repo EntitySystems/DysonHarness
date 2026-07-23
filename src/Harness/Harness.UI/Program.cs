@@ -1,0 +1,38 @@
+using DysonHarness;
+using Harness.UI.Components;
+using Harness.UI.Demo;
+using Harness.UI.Theme;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddRazorComponents()
+    .AddInteractiveServerComponents();
+
+builder.Services.AddScoped(_ =>
+{
+    var db = new DysonDbContext();
+    db.EnsureMigrated();
+    return db;
+});
+builder.Services.AddScoped<DysonModelStore>();
+builder.Services.AddScoped<DysonSessionStore>();
+builder.Services.AddScoped<DysonUiHost>();
+builder.Services.AddScoped<ThemeService>();
+
+var app = builder.Build();
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseExceptionHandler("/Error", createScopeForErrors: true);
+    app.UseHsts();
+}
+
+app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+app.UseHttpsRedirection();
+app.UseAntiforgery();
+
+app.MapStaticAssets();
+app.MapRazorComponents<App>()
+    .AddInteractiveServerRenderMode();
+
+app.Run();

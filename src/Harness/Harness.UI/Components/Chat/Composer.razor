@@ -1,0 +1,38 @@
+@namespace Harness.UI.Components.Chat
+
+<div class="composer">
+    <textarea @bind="_text"
+              @bind:event="oninput"
+              @onkeydown="OnKeyDown"
+              placeholder="Prompt the demo agent…"
+              disabled="@Disabled"></textarea>
+    <div class="composer__actions">
+        <span class="list-item__meta">Ctrl+Enter to send</span>
+        <button type="button" class="btn btn-primary" disabled="@(Disabled || string.IsNullOrWhiteSpace(_text))" @onclick="SubmitAsync">
+            Send
+        </button>
+    </div>
+</div>
+
+@code {
+    private string _text = "";
+
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public EventCallback<string> OnSubmit { get; set; }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && e.CtrlKey)
+            await SubmitAsync();
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (Disabled || string.IsNullOrWhiteSpace(_text))
+            return;
+
+        var prompt = _text.Trim();
+        _text = "";
+        await OnSubmit.InvokeAsync(prompt);
+    }
+}

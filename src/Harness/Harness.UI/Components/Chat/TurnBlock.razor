@@ -1,0 +1,31 @@
+@namespace Harness.UI.Components.Chat
+@using DysonHarness
+@using Harness.UI.Components.Tools
+
+<article class="turn-block">
+    <header class="turn-block__header">
+        <div class="turn-block__title">@(Turn.AgentTitle ?? "Turn")</div>
+        <div class="turn-block__kind mono">@Turn.Kind · @ShortId(Turn.Id)</div>
+    </header>
+    @if (!string.IsNullOrWhiteSpace(Turn.AssistantText))
+    {
+        <div class="turn-block__body">@Turn.AssistantText</div>
+    }
+    else if (!string.IsNullOrWhiteSpace(Turn.Instruction))
+    {
+        <div class="turn-block__body">@Turn.Instruction</div>
+    }
+
+    @if (Turn.TrackedToolCalls.Count > 0 || Turn.ToolCalls.Count > 0)
+    {
+        <div style="padding:0 8px 8px;">
+            <ToolCallPanel Turn="Turn" />
+        </div>
+    }
+</article>
+
+@code {
+    [Parameter, EditorRequired] public DysonAgentTurn Turn { get; set; } = default!;
+
+    private static string ShortId(Guid id) => id.ToString("N")[..8];
+}

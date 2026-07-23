@@ -1,0 +1,37 @@
+## Build
+bin/
+obj/
+[Bb]in/
+[Oo]bj/
+
+## Visual Studio / VS Code
+.vs/
+*.user
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+## NuGet
+*.nupkg
+**/packages/*
+!**/packages/build/
+
+## Test / coverage
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+*.coverage
+*.coveragexml
+
+## OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+## Local / secrets
+*.db
+*.db-shm
+*.db-wal
+.env
+*.pfx
+*.key

@@ -1,0 +1,30 @@
+@namespace Harness.UI.Components.Tools
+@using DysonHarness
+
+<div class="tool-panel" style="padding:0;">
+    <div class="tool-panel__title">Tools</div>
+    @if (Turn.TrackedToolCalls.Count == 0)
+    {
+        @foreach (var call in Turn.ToolCalls)
+        {
+            <div class="tool-row">
+                <div class="tool-row__top">
+                    <span class="tool-row__name mono">@call.ToolName</span>
+                    <span class="tool-status queued">Queued</span>
+                </div>
+                <div class="tool-row__meta mono">stage @call.Stage · @call.ArgumentsJson</div>
+            </div>
+        }
+    }
+    else
+    {
+        @foreach (var tracked in Turn.TrackedToolCalls)
+        {
+            <ToolCallRow Tracked="tracked" />
+        }
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public DysonAgentTurn Turn { get; set; } = default!;
+}

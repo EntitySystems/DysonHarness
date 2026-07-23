@@ -1,0 +1,27 @@
+@namespace Harness.UI.Components.Shell
+@using DysonHarness
+@using Harness.UI.Demo
+
+<div class="sidebar__brand">
+    <div class="sidebar__title">DysonHarness</div>
+    <span class="badge mono">@DysonBuildInfo.Current</span>
+</div>
+
+<div class="sidebar__section">
+    @SessionList
+</div>
+
+<div class="sidebar__section">
+    <div class="sidebar__section-label">Models</div>
+    @Models
+</div>
+
+<div class="sidebar__footer">
+    @Theme
+</div>
+
+@code {
+    [Parameter] public RenderFragment? SessionList { get; set; }
+    [Parameter] public RenderFragment? Models { get; set; }
+    [Parameter] public RenderFragment? Theme { get; set; }
+}

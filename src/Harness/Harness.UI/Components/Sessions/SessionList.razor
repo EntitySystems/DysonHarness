@@ -1,0 +1,65 @@
+@namespace Harness.UI.Components.Sessions
+@using DysonHarness
+
+<div>
+    <div class="sidebar__section-label">Sessions</div>
+    <div class="btn-row" style="margin-bottom:8px;">
+        <button type="button" class="btn btn-primary" disabled="@Busy" @onclick="OnNewAsync">New</button>
+        <button type="button" class="btn" disabled="@(Busy || SelectedId is null)" @onclick="OnResumeAsync">Resume</button>
+        <button type="button" class="btn btn-ghost" disabled="@Busy" @onclick="OnRefreshAsync">↻</button>
+    </div>
+
+    @if (!string.IsNullOrEmpty(Error))
+    {
+        <div class="error-banner" style="margin:0 0 8px;">@Error</div>
+    }
+
+    <div class="list">
+        @if (Sessions.Count == 0)
+        {
+            <div class="empty-state" style="padding:12px 4px;">No sessions yet</div>
+        }
+        else
+        {
+            @foreach (var session in Sessions)
+            {
+                var active = session.Id == ActiveSessionId || session.Id == SelectedId;
+                <button type="button"
+                        class="list-item @(active ? "is-active" : null)"
+                        @onclick="() => Select(session.Id)">
+                    <span class="list-item__title">@(session.Title ?? "Untitled")</span>
+                    <span class="list-item__meta mono">
+                        @session.AgentMode · @session.Status · @session.LastActivityUtc.ToLocalTime().ToString("g")
+                    </span>
+                </button>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<DysonSessionSummary> Sessions { get; set; } = [];
+    [Parameter] public Guid? ActiveSessionId { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public EventCallback OnNew { get; set; }
+    [Parameter] public EventCallback<Guid> OnResume { get; set; }
+    [Parameter] public EventCallback OnRefresh { get; set; }
+
+    private Guid? SelectedId { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        if (ActiveSessionId is Guid active)
+            SelectedId = active;
+    }
+
+    private void Select(Guid id) => SelectedId = id;
+
+    private Task OnNewAsync() => OnNew.InvokeAsync();
+
+    private Task OnResumeAsync() =>
+        SelectedId is Guid id ? OnResume.InvokeAsync(id) : Task.CompletedTask;
+
+    private Task OnRefreshAsync() => OnRefresh.InvokeAsync();
+}
