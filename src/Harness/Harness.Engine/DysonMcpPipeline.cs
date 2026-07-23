@@ -33,6 +33,10 @@ public sealed class DysonMcpPipeline
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Available MCP tools");
+        sb.AppendLine(
+            "Every tool call must include harness fields: callId (optional; assigned if omitted), stage (int; required). " +
+            "Calls are ordered by stage; same stage runs concurrently.");
+        sb.AppendLine();
 
         foreach (var tool in Tools.Values.OrderBy(t => t.Name, StringComparer.Ordinal))
         {
@@ -54,6 +58,8 @@ public sealed class DysonMcpPipeline
             Name = "StartSubagent",
             Description =
                 "Spawn a nested agent session (Drone or another mode) for delegated work. " +
+                "The spawned agent receives a unique integer Id (≥ 1). " +
+                "Completion surfaces via parent interrupts or WaitForSubagent. " +
                 "Use when parallel or isolated work clearly helps; pass a clear task brief.",
             InputSchemaJson = """
                 {
@@ -70,9 +76,82 @@ public sealed class DysonMcpPipeline
 
         yield return new DysonMcpTool
         {
+            Name = "WaitForSubagent",
+            Description =
+                "Block/wait until a subagent completes (or until timeout). " +
+                "Parent multitasking uses the interrupt queue under the hood later.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "subagentId": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Id of the subagent to wait on (≥ 1)."
+                    },
+                    "timeoutMs": {
+                      "type": "integer",
+                      "description": "Optional max wait in milliseconds before returning."
+                    }
+                  },
+                  "required": ["subagentId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "InspectSubagentLog",
+            Description = "Read recent log lines for a subagent by Id.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "subagentId": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Id of the subagent whose log to inspect (≥ 1)."
+                    },
+                    "maxLines": {
+                      "type": "integer",
+                      "description": "Optional max number of recent log lines to return."
+                    }
+                  },
+                  "required": ["subagentId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "StopSubagent",
+            Description = "Request cooperative stop / cancel of a running subagent.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "subagentId": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Id of the subagent to stop (≥ 1)."
+                    },
+                    "reason": {
+                      "type": "string",
+                      "description": "Optional reason for the stop request."
+                    }
+                  },
+                  "required": ["subagentId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
             Name = "CompleteTask",
             Description =
-                "Signal that the current task is finished and hand off a concise result summary to the parent or user.",
+                "Request completion review: the harness schedules a confirmation turn rather than ending immediately. " +
+                "On that follow-up turn you must call ConfirmTaskComplete or ContinueWork. " +
+                "After ConfirmTaskComplete, a ReportSummary turn follows.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -86,6 +165,66 @@ public sealed class DysonMcpPipeline
                     "residualRisks": { "type": "string", "description": "Optional leftover risks or follow-ups." }
                   },
                   "required": ["summary"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ConfirmTaskComplete",
+            Description =
+                "Affirm the prior CompleteTask claim after self-check. " +
+                "The harness then schedules a ReportSummary turn (final handoff for this agent).",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "rationale": {
+                      "type": "string",
+                      "description": "Optional short rationale that completion is genuinely satisfied."
+                    }
+                  }
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ContinueWork",
+            Description =
+                "Reject the prior CompleteTask claim and request a continuation turn for unfinished work.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "reason": {
+                      "type": "string",
+                      "description": "Optional why completion was withdrawn."
+                    },
+                    "remainingWork": {
+                      "type": "string",
+                      "description": "Optional description of what still needs to be done."
+                    }
+                  }
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ExpandThoughtProcess",
+            Description =
+                "Request a special reformulation turn before continuing heavy work. " +
+                "Use when context is noisy or the plan is unclear.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "focus": {
+                      "type": "string",
+                      "description": "Optional focus: what to clarify or reformulate."
+                    }
+                  }
                 }
                 """,
         };
