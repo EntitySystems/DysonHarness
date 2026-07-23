@@ -231,6 +231,26 @@ public sealed class DysonMcpPipeline
 
         yield return new DysonMcpTool
         {
+            Name = "RenameSession",
+            Description =
+                "Rename the current agent session for the UI/session list. " +
+                "Pass a short human-readable title when the conversation topic is clear.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string",
+                      "description": "New session title (non-empty after trim; max 120 characters)."
+                    }
+                  },
+                  "required": ["title"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
             Name = "ReadFile",
             Description = "Read workspace file contents by path. Prefer this over shell for reading files.",
             InputSchemaJson = """

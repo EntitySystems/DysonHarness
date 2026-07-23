@@ -1,4 +1,5 @@
 @namespace Harness.UI.Components.Chat
+@using Harness.UI.Components.Models
 
 <div class="composer">
     <textarea @bind="_text"
@@ -6,6 +7,16 @@
               @onkeydown="OnKeyDown"
               placeholder="Prompt the demo agent…"
               disabled="@Disabled"></textarea>
+    <div class="composer__toolbar">
+        <ModelSlugPicker SelectedSlugId="SelectedSlugId"
+                         SelectedSlugIdChanged="SelectedSlugIdChanged" />
+        <AgentModePicker SelectedMode="SelectedAgentMode"
+                         SelectedModeChanged="SelectedAgentModeChanged" />
+        <span class="composer-chip composer-chip--branch @(string.IsNullOrEmpty(GitBranch) ? "is-muted" : null)"
+              title="@(GitBranch ?? "No git repo")">
+            @(string.IsNullOrEmpty(GitBranch) ? "No git repo" : GitBranch)
+        </span>
+    </div>
     <div class="composer__actions">
         <span class="list-item__meta">Ctrl+Enter to send</span>
         <button type="button" class="btn btn-primary" disabled="@(Disabled || string.IsNullOrWhiteSpace(_text))" @onclick="SubmitAsync">
@@ -18,6 +29,11 @@
     private string _text = "";
 
     [Parameter] public bool Disabled { get; set; }
+    [Parameter] public Guid? SelectedSlugId { get; set; }
+    [Parameter] public EventCallback<Guid?> SelectedSlugIdChanged { get; set; }
+    [Parameter] public string SelectedAgentMode { get; set; } = DysonAgentModes.Work;
+    [Parameter] public EventCallback<string> SelectedAgentModeChanged { get; set; }
+    [Parameter] public string? GitBranch { get; set; }
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
 
     private async Task OnKeyDown(KeyboardEventArgs e)

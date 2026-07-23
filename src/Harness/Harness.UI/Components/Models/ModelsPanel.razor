@@ -10,147 +10,159 @@
         <div class="error-banner" style="margin:0;">@_error</div>
     }
 
-    <div class="list" style="max-height:280px;">
-        @if (_providers.Count == 0)
-        {
-            <div class="empty-state" style="padding:8px 0;">No providers</div>
-        }
-        else
-        {
-            @foreach (var provider in _providers)
+    <div class="models-panel__body">
+        <div class="models-panel__list list">
+            @if (_providers.Count == 0)
             {
-                <div class="list-item" style="cursor:default;">
-                    @if (_editingProviderId == provider.Id)
-                    {
-                        <div class="field">
-                            <label>Display name</label>
-                            <input @bind="_editDisplayName" />
-                        </div>
-                        <div class="field">
-                            <label>Provider kind</label>
-                            <input @bind="_editProviderKind" />
-                        </div>
-                        <div class="field">
-                            <label>Base URL</label>
-                            <input @bind="_editBaseUrl" />
-                        </div>
-                        <div class="field">
-                            <label>API key</label>
-                            <input @bind="_editApiKey" type="password" autocomplete="off" />
-                        </div>
-                        <div class="btn-row" style="margin-top:4px;">
-                            <button type="button" class="btn btn-primary" style="padding:3px 7px;font-size:11px;" @onclick="() => SaveProviderAsync(provider.Id)">Save</button>
-                            <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="CancelEditProvider">Cancel</button>
-                        </div>
-                    }
-                    else
-                    {
-                        <span class="list-item__title">@provider.DisplayName</span>
-                        <span class="list-item__meta mono">
-                            @provider.ProviderKind
-                            @if (!string.IsNullOrEmpty(provider.BaseUrl))
-                            {
-                                <text> · @provider.BaseUrl</text>
-                            }
-                            @(string.IsNullOrEmpty(provider.ApiKey) ? "" : " · key set")
-                        </span>
-                        <div class="btn-row" style="margin-top:4px;">
-                            <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="() => BeginEditProvider(provider)">Edit</button>
-                            <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="() => DeleteProviderAsync(provider.Id)">Delete</button>
-                        </div>
-                    }
-
-                    <div class="models-panel__slugs">
-                        @if (provider.Slugs.Count == 0)
+                <div class="empty-state" style="padding:8px 0;">No providers</div>
+            }
+            else
+            {
+                @foreach (var provider in _providers)
+                {
+                    <div class="list-item" style="cursor:default;">
+                        @if (_editingProviderId == provider.Id)
                         {
-                            <div class="list-item__meta" style="padding:4px 0;">No slugs</div>
-                        }
-                        else
-                        {
-                            @foreach (var slug in provider.Slugs)
-                            {
-                                <div class="models-panel__slug @(slug.IsDefault ? "is-active" : null)">
-                                    <span class="list-item__title">@slug.DisplayAlias</span>
-                                    <span class="list-item__meta mono">
-                                        @slug.Slug
-                                        @(slug.IsDefault ? " · default" : "")
-                                    </span>
-                                    <div class="btn-row" style="margin-top:2px;">
-                                        @if (!slug.IsDefault)
-                                        {
-                                            <button type="button" class="btn" style="padding:2px 6px;font-size:10px;" @onclick="() => SetDefaultAsync(slug.Id)">Default</button>
-                                        }
-                                        <button type="button" class="btn btn-ghost" style="padding:2px 6px;font-size:10px;" @onclick="() => RemoveSlugAsync(slug.Id)">Remove</button>
-                                    </div>
-                                </div>
-                            }
-                        }
-
-                        @if (_addSlugProviderId == provider.Id)
-                        {
-                            <div style="margin-top:6px;">
-                                <div class="field">
-                                    <label>Display alias</label>
-                                    <input @bind="_slugAlias" />
-                                </div>
-                                <div class="field">
-                                    <label>Slug</label>
-                                    <input @bind="_slugValue" placeholder="gpt-4o" />
-                                </div>
-                                <label class="checkbox-row">
-                                    <input type="checkbox" @bind="_slugIsDefault" />
-                                    Set as default
-                                </label>
-                                <div class="btn-row">
-                                    <button type="button" class="btn btn-primary" style="padding:3px 7px;font-size:11px;" @onclick="() => AddSlugAsync(provider.Id)">Add</button>
-                                    <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="CancelAddSlug">Cancel</button>
-                                </div>
+                            <div class="field">
+                                <label>Display name</label>
+                                <input @bind="_editDisplayName" />
+                            </div>
+                            <div class="field">
+                                <label>Provider kind</label>
+                                <select @bind="_editProviderKind">
+                                    @foreach (var kind in ProviderKindOptions(_editProviderKind))
+                                    {
+                                        <option value="@kind">@kind</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label>Base URL</label>
+                                <input @bind="_editBaseUrl" />
+                            </div>
+                            <div class="field">
+                                <label>API key</label>
+                                <input @bind="_editApiKey" type="password" autocomplete="off" />
+                            </div>
+                            <div class="btn-row" style="margin-top:4px;">
+                                <button type="button" class="btn btn-primary" style="padding:3px 7px;font-size:11px;" @onclick="() => SaveProviderAsync(provider.Id)">Save</button>
+                                <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="CancelEditProvider">Cancel</button>
                             </div>
                         }
                         else
                         {
-                            <button type="button" class="btn" style="margin-top:6px;padding:3px 7px;font-size:11px;" @onclick="() => BeginAddSlug(provider.Id)">Add slug</button>
+                            <span class="list-item__title">@provider.DisplayName</span>
+                            <span class="list-item__meta mono">
+                                @provider.ProviderKind
+                                @if (!string.IsNullOrEmpty(provider.BaseUrl))
+                                {
+                                    <text> · @provider.BaseUrl</text>
+                                }
+                                @(string.IsNullOrEmpty(provider.ApiKey) ? "" : " · key set")
+                            </span>
+                            <div class="btn-row" style="margin-top:4px;">
+                                <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="() => BeginEditProvider(provider)">Edit</button>
+                                <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="() => DeleteProviderAsync(provider.Id)">Delete</button>
+                            </div>
                         }
-                    </div>
-                </div>
-            }
-        }
-    </div>
 
-    <details open="@_providerFormOpen">
-        <summary @onclick:preventDefault="false">Add provider</summary>
-        <div style="margin-top:8px;">
-            <div class="field">
-                <label>Display name</label>
-                <input @bind="_displayName" />
-            </div>
-            <div class="field">
-                <label>Provider kind</label>
-                <input @bind="_providerKind" placeholder="demo / OpenAICompatible" />
-            </div>
-            <div class="field">
-                <label>Base URL (optional)</label>
-                <input @bind="_baseUrl" />
-            </div>
-            <div class="field">
-                <label>API key (optional, plaintext local)</label>
-                <input @bind="_apiKey" type="password" autocomplete="off" />
-            </div>
-            <div class="field">
-                <label>Initial slug</label>
-                <input @bind="_initialSlug" placeholder="demo-mock" />
-            </div>
-            <div class="field">
-                <label>Initial display alias</label>
-                <input @bind="_initialAlias" placeholder="Demo Mock" />
-            </div>
-            <label class="checkbox-row">
-                <input type="checkbox" @bind="_initialIsDefault" />
-                Set slug as default
-            </label>
-            <button type="button" class="btn btn-primary" @onclick="CreateProviderAsync">Create</button>
+                        <div class="models-panel__slugs">
+                            @if (provider.Slugs.Count == 0)
+                            {
+                                <div class="list-item__meta" style="padding:4px 0;">No slugs</div>
+                            }
+                            else
+                            {
+                                @foreach (var slug in provider.Slugs)
+                                {
+                                    <div class="models-panel__slug @(slug.IsDefault ? "is-active" : null)">
+                                        <span class="list-item__title">@slug.DisplayAlias</span>
+                                        <span class="list-item__meta mono">
+                                            @slug.Slug
+                                            @(slug.IsDefault ? " · default" : "")
+                                        </span>
+                                        <div class="btn-row" style="margin-top:2px;">
+                                            @if (!slug.IsDefault)
+                                            {
+                                                <button type="button" class="btn" style="padding:2px 6px;font-size:10px;" @onclick="() => SetDefaultAsync(slug.Id)">Default</button>
+                                            }
+                                            <button type="button" class="btn btn-ghost" style="padding:2px 6px;font-size:10px;" @onclick="() => RemoveSlugAsync(slug.Id)">Remove</button>
+                                        </div>
+                                    </div>
+                                }
+                            }
+
+                            @if (_addSlugProviderId == provider.Id)
+                            {
+                                <div style="margin-top:6px;">
+                                    <div class="field">
+                                        <label>Display alias</label>
+                                        <input @bind="_slugAlias" />
+                                    </div>
+                                    <div class="field">
+                                        <label>Slug</label>
+                                        <input @bind="_slugValue" placeholder="gpt-4o" />
+                                    </div>
+                                    <label class="checkbox-row">
+                                        <input type="checkbox" @bind="_slugIsDefault" />
+                                        Set as default
+                                    </label>
+                                    <div class="btn-row">
+                                        <button type="button" class="btn btn-primary" style="padding:3px 7px;font-size:11px;" @onclick="() => AddSlugAsync(provider.Id)">Add</button>
+                                        <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="CancelAddSlug">Cancel</button>
+                                    </div>
+                                </div>
+                            }
+                            else
+                            {
+                                <button type="button" class="btn" style="margin-top:6px;padding:3px 7px;font-size:11px;" @onclick="() => BeginAddSlug(provider.Id)">Add slug</button>
+                            }
+                        </div>
+                    </div>
+                }
+            }
         </div>
-    </details>
+
+        <details class="models-panel__add" open="@_providerFormOpen">
+            <summary @onclick:preventDefault="false">Add provider</summary>
+            <div class="models-panel__add-form">
+                <div class="field">
+                    <label>Display name</label>
+                    <input @bind="_displayName" />
+                </div>
+                <div class="field">
+                    <label>Provider kind</label>
+                    <select @bind="_providerKind">
+                        @foreach (var kind in DysonProviderKinds.All)
+                        {
+                            <option value="@kind">@kind</option>
+                        }
+                    </select>
+                </div>
+                <div class="field">
+                    <label>Base URL (optional)</label>
+                    <input @bind="_baseUrl" />
+                </div>
+                <div class="field">
+                    <label>API key (optional, plaintext local)</label>
+                    <input @bind="_apiKey" type="password" autocomplete="off" />
+                </div>
+                <div class="field">
+                    <label>Initial slug</label>
+                    <input @bind="_initialSlug" placeholder="demo-mock" />
+                </div>
+                <div class="field">
+                    <label>Initial display alias</label>
+                    <input @bind="_initialAlias" placeholder="Demo Mock" />
+                </div>
+                <label class="checkbox-row">
+                    <input type="checkbox" @bind="_initialIsDefault" />
+                    Set slug as default
+                </label>
+                <button type="button" class="btn btn-primary" @onclick="CreateProviderAsync">Create</button>
+            </div>
+        </details>
+    </div>
 </div>
 
 @code {
@@ -159,7 +171,7 @@
     private bool _providerFormOpen = true;
 
     private string _displayName = "";
-    private string _providerKind = "demo";
+    private string _providerKind = DysonProviderKinds.Demo;
     private string? _baseUrl;
     private string? _apiKey;
     private string _initialSlug = "";
@@ -168,7 +180,7 @@
 
     private Guid? _editingProviderId;
     private string _editDisplayName = "";
-    private string _editProviderKind = "";
+    private string _editProviderKind = DysonProviderKinds.Demo;
     private string? _editBaseUrl;
     private string? _editApiKey;
 
@@ -210,7 +222,7 @@
         var create = await ModelStore.CreateProviderAsync(new DysonModelProviderEntity
         {
             DisplayName = _displayName.Trim(),
-            ProviderKind = string.IsNullOrWhiteSpace(_providerKind) ? "demo" : _providerKind.Trim(),
+            ProviderKind = string.IsNullOrWhiteSpace(_providerKind) ? DysonProviderKinds.Demo : _providerKind.Trim(),
             BaseUrl = string.IsNullOrWhiteSpace(_baseUrl) ? null : _baseUrl.Trim(),
             ApiKey = string.IsNullOrWhiteSpace(_apiKey) ? null : _apiKey,
         });
@@ -229,7 +241,7 @@
         }
 
         _displayName = "";
-        _providerKind = "demo";
+        _providerKind = DysonProviderKinds.Demo;
         _baseUrl = null;
         _apiKey = null;
         _initialSlug = "";
@@ -243,7 +255,9 @@
     {
         _editingProviderId = provider.Id;
         _editDisplayName = provider.DisplayName;
-        _editProviderKind = provider.ProviderKind;
+        _editProviderKind = string.IsNullOrWhiteSpace(provider.ProviderKind)
+            ? DysonProviderKinds.Demo
+            : provider.ProviderKind;
         _editBaseUrl = provider.BaseUrl;
         _editApiKey = provider.ApiKey;
     }
@@ -251,6 +265,18 @@
     private void CancelEditProvider()
     {
         _editingProviderId = null;
+    }
+
+    private static IEnumerable<string> ProviderKindOptions(string current)
+    {
+        if (!string.IsNullOrWhiteSpace(current)
+            && !DysonProviderKinds.All.Contains(current, StringComparer.Ordinal))
+        {
+            yield return current;
+        }
+
+        foreach (var kind in DysonProviderKinds.All)
+            yield return kind;
     }
 
     private async Task SaveProviderAsync(Guid id)
@@ -266,7 +292,7 @@
         {
             Id = id,
             DisplayName = _editDisplayName.Trim(),
-            ProviderKind = string.IsNullOrWhiteSpace(_editProviderKind) ? "demo" : _editProviderKind.Trim(),
+            ProviderKind = string.IsNullOrWhiteSpace(_editProviderKind) ? DysonProviderKinds.Demo : _editProviderKind.Trim(),
             BaseUrl = string.IsNullOrWhiteSpace(_editBaseUrl) ? null : _editBaseUrl.Trim(),
             ApiKey = string.IsNullOrWhiteSpace(_editApiKey) ? null : _editApiKey,
         });

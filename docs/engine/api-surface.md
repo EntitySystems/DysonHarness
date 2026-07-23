@@ -17,11 +17,12 @@ Conceptual overview: [README.md](README.md).
 ### Session members (high level)
 
 - Identity: `Id` (runtime int; root `0`)
-- Persistence (when wired): `PersistenceId` (`Guid`), `Turns`, `TurnAdded`, `AddTurn`, `RestoreFromPersisted`
+- Persistence (when wired): `PersistenceId` (`Guid`), `DisplayTitle`, `Turns`, `TurnAdded`, `AddTurn`, `RestoreFromPersisted`
+- Rename: `RenameAsync(title)` → validates (trim, max 120) → sets `DisplayTitle` → raises `SessionRenamed` (`DysonSessionRenamedEventArgs`: `PersistenceId`, `Title`); host/tool executor persists `sessions.Title`
 - Config / mode: `Config`, `Mode`, `SystemPrompt`, `McpPipeline`, `Provider`
 - Subagents: `SubSessions`, `RegisterSubagent`
 - Interrupts: `EnqueueInterrupt`, `TryDequeueInterrupt`, `WaitForInterruptAsync`
-- Log: `AppendLog`, `SnapshotLog`
+- Log: `AppendLog`, `SnapshotLog`, `LogAppended`
 - Turns / context: `CreateExpandThoughtProcessTurn`, completion-turn helpers, `OptimizeContextIfNeeded`
 - Loop: `LoadFunctionalContextAsync`, `PromptAsync`, `WaitForNotifyAsync`
 
@@ -30,6 +31,7 @@ Conceptual overview: [README.md](README.md).
 | Type | Notes |
 | ---- | ----- |
 | `DysonAgentModes` | Built-in mode name constants |
+| `DysonProviderKinds` | Known provider-kind strings (`demo`, `OpenAICompatible`, `Anthropic`) |
 | `DysonAgentSystemPrompts` | `ForMode` → system prompt text |
 
 ## Turns & tools
@@ -55,6 +57,8 @@ Conceptual overview: [README.md](README.md).
 | `DysonMcpPipeline` | Tool catalog + optional auto-review proxy |
 | `DysonMcpTool` | Name, description, input schema JSON |
 | `DysonMcpAutoReviewProxy` | In-process review gate when mode is AutoReview |
+
+Default catalog includes session tools (`StartSubagent`, `WaitForSubagent`, …), completion tools, workspace file tools, and **`RenameSession`** (`{ "title": string }` required) for UI/list titles.
 
 ## Interrupts & completion
 
@@ -85,9 +89,10 @@ Conceptual overview: [README.md](README.md).
 
 ## Persistence-facing types
 
-Documented under [docs/storage](../storage/models.md) and [sessions.md](../storage/sessions.md):
+Documented under [docs/storage](../storage/models.md), [sessions.md](../storage/sessions.md), and [work-directories.md](../storage/work-directories.md):
 
 - `DysonAppMode`, `DysonAppPaths`, `DysonBuildInfo`
-- `DysonDbContext`, `DysonModelStore`, `DysonSessionStore`
+- `DysonDbContext`, `DysonModelStore`, `DysonSessionStore`, `DysonWorkDirectoryStore`
 - `DysonModelProviderEntity`, `DysonModelSlugEntity` (providers own `ApiKey` / `BaseUrl` / `ProviderKind`; slugs own `Slug` + `DisplayAlias`)
-- Session/turn/log entities and `DysonPersistedSession` (sessions reference `ModelSlugId`)
+- `DysonWorkDirectoryEntity`, `DysonNativeFolderPicker`, `DysonGitInfo`
+- Session/turn/log entities and `DysonPersistedSession` (sessions reference `ModelSlugId` + optional `WorkDirectoryId`)

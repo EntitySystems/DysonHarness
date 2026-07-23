@@ -35,6 +35,7 @@ Single SQLite file holds providers, slugs, and sessions for that mode.
 - Packages: `Microsoft.EntityFrameworkCore.Sqlite`, `Microsoft.EntityFrameworkCore.Design` (private)
 - `DysonDbContext` → `UseSqlite` at `DysonAppPaths.GetDatabasePath(DysonBuildInfo.Current)`
 - `Database.Migrate()` on open; migrations under `Harness.Engine/Migrations/`
+- Entity timestamps are `DateTime` (UTC). Do not use `DateTimeOffset` on EF entities or in EF `OrderBy` queries (SQLite limitation).
 
 ## Model providers (`model_providers`)
 
@@ -44,10 +45,10 @@ Credentials and endpoint live on the provider only. Slugs are children; add/remo
 | -------- | ----- |
 | `Id` | Guid PK |
 | `DisplayName` | UI label (e.g. “OpenAI work”) |
-| `ProviderKind` | Provider family / kind string (`demo`, `OpenAICompatible`, …) |
+| `ProviderKind` | Provider family string from `DysonProviderKinds` (`demo`, `OpenAICompatible`, `Anthropic`) |
 | `BaseUrl` | Optional endpoint override |
 | `ApiKey` | Optional; **plaintext-local** (no OS keychain yet) |
-| `CreatedUtc`, `UpdatedUtc` | |
+| `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
 | `Slugs` | Navigation to child `model_slugs` |
 
 Cascade-delete: removing a provider deletes its slugs.
@@ -61,9 +62,19 @@ Cascade-delete: removing a provider deletes its slugs.
 | `Slug` | API model id (e.g. `gpt-4o`) |
 | `DisplayAlias` | UI label (e.g. “GPT-4o Fast”) |
 | `IsDefault` | Global default selection for new sessions (one default across all providers) |
-| `CreatedUtc`, `UpdatedUtc` | |
+| `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
 
 Unique index on `(ProviderId, Slug)`.
+
+## Model favorites (`model_favorites`)
+
+User-starred slugs for the Composer model picker (persisted per app-data DB).
+
+| Property | Notes |
+| -------- | ----- |
+| `Id` | Guid PK |
+| `ModelSlugId` | FK → `model_slugs` (cascade delete); unique |
+| `CreatedUtc` | `DateTime` UTC — when favorited |
 
 ## `DysonModelStore`
 
@@ -72,6 +83,7 @@ Thin CRUD over `DysonDbContext` using the Result pattern (`Result` / `VoidResult
 - **Providers:** list (include slugs), get, create, update (incl. `ApiKey` / `BaseUrl`), delete
 - **Slugs:** add under a provider, update, remove
 - **Selection:** get/set default slug, get slug by id (with provider loaded)
+- **Favorites:** `ListFavoriteSlugIdsAsync`, `AddFavoriteAsync`, `RemoveFavoriteAsync`, `IsFavoriteAsync`
 
 ## Ephemeral providers
 

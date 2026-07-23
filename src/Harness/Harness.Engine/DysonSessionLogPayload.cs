@@ -34,6 +34,8 @@ public sealed record DysonSessionLogLogLine(string Line);
 
 public sealed record DysonSessionLogCompletionFlow(string Phase, string? Detail = null);
 
+public sealed record DysonSessionLogSessionRenamed(string Title);
+
 /// <summary>
 /// Kind-column discriminator + JSON payload helper (no deep abstraction).
 /// </summary>
@@ -68,14 +70,14 @@ public static class DysonSessionLogPayload
         object payload,
         Guid? turnId = null,
         long sequence = 0,
-        DateTimeOffset? timestampUtc = null) =>
+        DateTime? timestampUtc = null) =>
         new()
         {
             Id = Guid.NewGuid(),
             SessionId = sessionId,
             TurnId = turnId,
             Sequence = sequence,
-            TimestampUtc = timestampUtc ?? DateTimeOffset.UtcNow,
+            TimestampUtc = timestampUtc ?? DateTime.UtcNow,
             Kind = KindName(kind),
             PayloadJson = Serialize(payload),
         };

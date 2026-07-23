@@ -1,0 +1,141 @@
+@namespace Harness.UI.Components.Chat
+@using DysonHarness
+@using Microsoft.AspNetCore.Components.Web
+
+<div class="agent-mode-picker">
+    <button type="button"
+            class="composer-chip agent-mode-picker__trigger"
+            aria-label="Agent mode"
+            aria-haspopup="dialog"
+            @onclick="OpenModal">
+        <span class="agent-mode-picker__trigger-label">@SelectedMode</span>
+        <span class="agent-mode-picker__trigger-caret" aria-hidden="true">▾</span>
+    </button>
+</div>
+
+@if (_modalOpen)
+{
+    <div class="agent-mode-modal-backdrop"
+         @onclick="CloseModal"
+         @onkeydown="OnBackdropKeyDown">
+        <div class="agent-mode-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="agent-mode-modal-title"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnModalKeyDown">
+            <div class="agent-mode-modal__header">
+                <h3 id="agent-mode-modal-title">Select agent mode</h3>
+                <button type="button" class="btn btn-ghost agent-mode-modal__close" @onclick="CloseModal" aria-label="Close">×</button>
+            </div>
+
+            <div class="agent-mode-modal__search">
+                <input @ref="_searchInput"
+                       type="search"
+                       placeholder="Search modes…"
+                       value="@_search"
+                       @oninput="OnSearchInput"
+                       @onkeydown="OnModalKeyDown"
+                       autofocus />
+            </div>
+
+            <div class="agent-mode-modal__list" role="listbox">
+                @if (FilteredModes.Count == 0)
+                {
+                    <div class="agent-mode-modal__empty">No matching modes.</div>
+                }
+                else
+                {
+                    @foreach (var mode in FilteredModes)
+                    {
+                        var selected = SelectedMode == mode;
+                        <div class="agent-mode-modal__row @(selected ? "is-selected" : null)"
+                             role="option"
+                             aria-selected="@selected">
+                            <button type="button"
+                                    class="agent-mode-modal__option"
+                                    @onclick="() => SelectAsync(mode)">
+                                <span class="agent-mode-modal__option-label">@mode</span>
+                            </button>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _modalOpen;
+    private bool _focusSearch;
+    private string _search = "";
+    private ElementReference _searchInput;
+
+    [Parameter] public string SelectedMode { get; set; } = DysonAgentModes.Work;
+    [Parameter] public EventCallback<string> SelectedModeChanged { get; set; }
+
+    private IReadOnlyList<string> FilteredModes
+    {
+        get
+        {
+            IEnumerable<string> query = DysonAgentModes.BuiltIns;
+            if (!string.IsNullOrWhiteSpace(_search))
+            {
+                var term = _search.Trim();
+                query = query.Where(m => m.Contains(term, StringComparison.OrdinalIgnoreCase));
+            }
+
+            return query.ToList();
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_modalOpen || !_focusSearch)
+            return;
+
+        _focusSearch = false;
+        try
+        {
+            await _searchInput.FocusAsync();
+        }
+        catch
+        {
+            // Element may not be ready on first paint of the modal.
+        }
+    }
+
+    private void OpenModal()
+    {
+        _search = "";
+        _modalOpen = true;
+        _focusSearch = true;
+    }
+
+    private void CloseModal()
+    {
+        _modalOpen = false;
+        _search = "";
+    }
+
+    private void OnSearchInput(ChangeEventArgs args) =>
+        _search = args.Value?.ToString() ?? "";
+
+    private void OnBackdropKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            CloseModal();
+    }
+
+    private void OnModalKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            CloseModal();
+    }
+
+    private async Task SelectAsync(string mode)
+    {
+        await SelectedModeChanged.InvokeAsync(mode);
+        CloseModal();
+    }
+}

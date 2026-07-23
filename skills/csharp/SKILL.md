@@ -69,6 +69,10 @@ Apply this checklist when writing or reviewing C# in this repo (`net10.0`, names
 - Public expected-failure paths return `Result` / `VoidResult` / `ValueResult` per [rules/rules_csharp.md](../../rules/rules_csharp.md).
 - Exceptions remain for unexpected programmer bugs (`ArgumentNullException.ThrowIfNull`, etc.).
 
+## DB / EF
+
+- Entity timestamps and EF queries: use `DateTime` (UTC via `DateTime.UtcNow`), never `DateTimeOffset` — see [rules/rules_csharp.md](../../rules/rules_csharp.md).
+
 ## Sources
 
 - [.NET Coding Conventions](https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions)

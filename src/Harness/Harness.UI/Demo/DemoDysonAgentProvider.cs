@@ -12,7 +12,7 @@ public sealed class DemoDysonAgentProvider : DysonAgentProvider
         ApiKey = provider?.ApiKey ?? slug?.Provider?.ApiKey;
         Slug = slug?.Slug ?? "demo-mock";
         DisplayAlias = slug?.DisplayAlias ?? "Demo (no slug)";
-        ProviderKind = provider?.ProviderKind ?? slug?.Provider?.ProviderKind ?? "demo";
+        ProviderKind = provider?.ProviderKind ?? slug?.Provider?.ProviderKind ?? DysonProviderKinds.Demo;
         BaseUrl = provider?.BaseUrl ?? slug?.Provider?.BaseUrl;
         ProviderDisplayName = provider?.DisplayName ?? slug?.Provider?.DisplayName ?? "Demo";
     }

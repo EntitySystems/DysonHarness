@@ -10,6 +10,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 {
     private readonly DysonSessionStore _sessions;
     private readonly DysonModelStore _models;
+    private readonly DysonWorkDirectoryStore _workDirectories;
     private readonly SemaphoreSlim _persistGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, EventHandler<DysonToolCallStatusChangedEventArgs>> _toolHandlers = new();
 
@@ -17,10 +18,14 @@ public sealed class DysonUiHost : IAsyncDisposable
     private DemoDysonAgentSession? _session;
     private bool _disposed;
 
-    public DysonUiHost(DysonSessionStore sessions, DysonModelStore models)
+    public DysonUiHost(
+        DysonSessionStore sessions,
+        DysonModelStore models,
+        DysonWorkDirectoryStore workDirectories)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
+        _workDirectories = workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
     }
 
     public DemoDysonEngine? Engine => _engine;
@@ -44,7 +49,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             new DysonModelProviderEntity
             {
                 DisplayName = "Demo Mock",
-                ProviderKind = "demo",
+                ProviderKind = DysonProviderKinds.Demo,
             },
             cancellationToken).ConfigureAwait(false);
 
@@ -64,15 +69,31 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     public async Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListSessionsAsync(
+        Guid? workDirectoryId = null,
         CancellationToken cancellationToken = default) =>
-        await _sessions.ListSessionsAsync(rootsOnly: true, cancellationToken).ConfigureAwait(false);
+        await _sessions.ListSessionsAsync(
+            workDirectoryId: workDirectoryId,
+            rootsOnly: true,
+            cancellationToken).ConfigureAwait(false);
+
+    public Task<Result<IReadOnlyList<DysonWorkDirectoryEntity>, string>> ListWorkDirectoriesAsync(
+        CancellationToken cancellationToken = default) =>
+        _workDirectories.ListAsync(cancellationToken);
 
     public async Task<VoidResult<string>> StartNewSessionAsync(
         string agentMode = DysonAgentModes.Work,
         Guid? modelSlugId = null,
+        Guid? workDirectoryId = null,
         CancellationToken cancellationToken = default)
     {
         LastError = null;
+
+        if (workDirectoryId is null || workDirectoryId == Guid.Empty)
+        {
+            LastError = "Select a work directory before creating a session.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
 
         var providerResult = await ResolveProviderAsync(modelSlugId, cancellationToken)
             .ConfigureAwait(false);
@@ -88,6 +109,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         var created = await DemoDysonAgentSession.CreateAsync(
             _sessions,
             providerResult.Value,
+            workDirectoryId.Value,
             agentMode,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
@@ -187,23 +209,6 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return appendUser;
             }
 
-            if (_session.Turns.Count == 0)
-            {
-                var title = prompt.Trim();
-                if (title.Length > 64)
-                    title = title[..64] + "…";
-
-                await PersistAsync(
-                    () => _sessions.UpdateSessionMetaAsync(
-                        new DysonSessionMetaUpdate
-                        {
-                            SessionId = sessionId,
-                            Title = title,
-                        },
-                        cancellationToken),
-                    cancellationToken).ConfigureAwait(false);
-            }
-
             var result = await _session.PromptAsync(prompt, cancellationToken).ConfigureAwait(false);
             if (result.IsError)
             {
@@ -263,6 +268,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         session.TurnAdded += OnTurnAdded;
         session.LogAppended += OnLogAppended;
+        session.SessionRenamed += OnSessionRenamed;
 
         foreach (var turn in session.Turns)
             HookTurn(turn);
@@ -275,6 +281,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         _session.TurnAdded -= OnTurnAdded;
         _session.LogAppended -= OnLogAppended;
+        _session.SessionRenamed -= OnSessionRenamed;
 
         foreach (var turn in _session.Turns)
             UnhookTurn(turn);
@@ -317,6 +324,12 @@ public sealed class DysonUiHost : IAsyncDisposable
             new DysonSessionLogLogLine(line));
 
         _ = PersistAsync(() => _sessions.AppendLogAsync(entry), CancellationToken.None);
+        Notify();
+    }
+
+    private void OnSessionRenamed(object? sender, DysonSessionRenamedEventArgs args)
+    {
+        // Demo tool executor persists Title; host notifies UI to refresh list/header.
         Notify();
     }
 
@@ -382,7 +395,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             turn,
             sessionId,
             sequence,
-            completedUtc: DateTimeOffset.UtcNow);
+            completedUtc: DateTime.UtcNow);
 
         var upsert = await PersistAsync(
             () => _sessions.UpsertTurnAsync(entity, cancellationToken),

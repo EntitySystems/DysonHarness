@@ -7,8 +7,8 @@ public static class DysonTurnPersistence
         DysonAgentTurn turn,
         Guid sessionId,
         int sequence,
-        DateTimeOffset? createdUtc = null,
-        DateTimeOffset? completedUtc = null)
+        DateTime? createdUtc = null,
+        DateTime? completedUtc = null)
     {
         ArgumentNullException.ThrowIfNull(turn);
 
@@ -24,7 +24,7 @@ public static class DysonTurnPersistence
             ToolStateJson = DysonTurnToolStateSerializer.CaptureFromTurn(turn),
             ToolHistoryOptimized = turn.ToolHistoryOptimized,
             CompactToolHistory = turn.CompactToolHistory,
-            CreatedUtc = createdUtc ?? DateTimeOffset.UtcNow,
+            CreatedUtc = createdUtc ?? DateTime.UtcNow,
             CompletedUtc = completedUtc,
         };
     }

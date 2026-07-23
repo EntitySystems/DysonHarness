@@ -17,4 +17,5 @@ public enum DysonSessionLogKind
     ContextOptimized = 12,
     LogLine = 13,
     CompletionFlow = 14,
+    SessionRenamed = 15,
 }

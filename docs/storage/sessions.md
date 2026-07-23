@@ -13,13 +13,14 @@ Durable session state lives in the same EF Core SQLite DB as model providers/slu
 | `ParentSessionId` | Guid? FK to parent persisted session |
 | `AgentMode` | Ask / Plan / Work / … |
 | `ModelSlugId` | Guid? FK to `model_slugs` (credentials via parent provider) |
+| `WorkDirectoryId` | Guid? FK to `work_directories` (`SetNull` on delete; required for new sessions) |
 | `McpAccessMode` | enum |
 | `Status` | `Active` / `Completed` / `Stopped` / `Failed` |
-| `Title` | Optional UI title (first prompt / H1) |
+| `Title` | Optional UI title (agent `RenameSession` / first prompt); mirrored live as `DysonAgentSession.DisplayTitle` |
 | `SystemPromptSnapshot` | Prompt at create time |
-| `CreatedUtc`, `UpdatedUtc`, `LastActivityUtc` | |
+| `CreatedUtc`, `UpdatedUtc`, `LastActivityUtc` | `DateTime` UTC |
 
-Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`.
+Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work directories: [work-directories.md](work-directories.md).
 
 ### `turns`
 
@@ -35,7 +36,7 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`.
 | `ToolStateJson` | Full snapshot of tool calls + results (restore fidelity) |
 | `ToolHistoryOptimized` | bool |
 | `CompactToolHistory` | string? |
-| `CreatedUtc`, `CompletedUtc`? | |
+| `CreatedUtc`, `CompletedUtc`? | `DateTime` UTC |
 
 ### `session_logs` (discriminated JSON)
 
@@ -47,7 +48,7 @@ Append-only. Filter by `Kind`; payload fields live in `PayloadJson`.
 | `SessionId` | Guid FK (indexed) |
 | `TurnId` | Guid? when event belongs to a turn |
 | `Sequence` | Monotonic per session |
-| `TimestampUtc` | |
+| `TimestampUtc` | `DateTime` UTC |
 | `Kind` | Discriminator (`DysonSessionLogKind`) |
 | `PayloadJson` | Kind-specific JSON |
 
@@ -58,6 +59,7 @@ Append-only. Filter by `Kind`; payload fields live in `PayloadJson`.
 | `SessionCreated` | session meta snapshot |
 | `SessionResumed` | `{ "sessionId" }` |
 | `SessionStatusChanged` | `{ "status", … }` |
+| `SessionRenamed` | `{ "title" }` (from `RenameSession` / `RenameAsync`) |
 | `UserPrompt` | `{ "prompt", "filePaths"? }` |
 | `TurnStarted` / `TurnCompleted` | `{ "turnId", "kind", "agentTitle"? }` |
 | `AgentReply` | `{ "turnId", "title", "body" }` |
@@ -78,9 +80,11 @@ Task<Result<Guid, string>> CreateSessionAsync(DysonSessionCreateRequest request,
 Task<VoidResult<string>> UpdateSessionMetaAsync(...);
 Task<VoidResult<string>> UpsertTurnAsync(DysonTurnEntity turn, CancellationToken ct = default);
 Task<VoidResult<string>> AppendLogAsync(DysonSessionLogEntry entry, CancellationToken ct = default);
-Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListSessionsAsync(...);
+Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListSessionsAsync(Guid? workDirectoryId = null, bool rootsOnly = true, CancellationToken ct = default);
 Task<Result<DysonPersistedSession, string>> GetFullSessionAsync(Guid sessionId, CancellationToken ct = default);
 ```
+
+`ListSessionsAsync` optionally filters by `WorkDirectoryId`. `DysonSessionCreateRequest` / summaries include `WorkDirectoryId`.
 
 `GetFullSessionAsync` returns session row + all turns (ordered) + all log entries (ordered by `Sequence`).
 

@@ -3,6 +3,7 @@ using System;
 using DysonHarness;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Harness.Engine.Migrations
 {
     [DbContext(typeof(DysonDbContext))]
-    partial class DysonDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260723223002_UseDateTimeForEntityTimestamps")]
+    partial class UseDateTimeForEntityTimestamps
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
@@ -145,9 +148,6 @@ namespace Harness.Engine.Migrations
                     b.Property<DateTime>("UpdatedUtc")
                         .HasColumnType("TEXT");
 
-                    b.Property<Guid?>("WorkDirectoryId")
-                        .HasColumnType("TEXT");
-
                     b.HasKey("Id");
 
                     b.HasIndex("LastActivityUtc");
@@ -155,8 +155,6 @@ namespace Harness.Engine.Migrations
                     b.HasIndex("ModelSlugId");
 
                     b.HasIndex("ParentSessionId");
-
-                    b.HasIndex("WorkDirectoryId");
 
                     b.ToTable("sessions", (string)null);
                 });
@@ -247,36 +245,6 @@ namespace Harness.Engine.Migrations
                     b.ToTable("turns", (string)null);
                 });
 
-            modelBuilder.Entity("DysonHarness.DysonWorkDirectoryEntity", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("AbsolutePath")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("CreatedUtc")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("LastOpenedUtc")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("AbsolutePath")
-                        .IsUnique();
-
-                    b.HasIndex("LastOpenedUtc");
-
-                    b.ToTable("work_directories", (string)null);
-                });
-
             modelBuilder.Entity("DysonHarness.DysonModelFavoriteEntity", b =>
                 {
                     b.HasOne("DysonHarness.DysonModelSlugEntity", "ModelSlug")
@@ -311,16 +279,9 @@ namespace Harness.Engine.Migrations
                         .HasForeignKey("ParentSessionId")
                         .OnDelete(DeleteBehavior.Restrict);
 
-                    b.HasOne("DysonHarness.DysonWorkDirectoryEntity", "WorkDirectory")
-                        .WithMany("Sessions")
-                        .HasForeignKey("WorkDirectoryId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.Navigation("ModelSlug");
 
                     b.Navigation("ParentSession");
-
-                    b.Navigation("WorkDirectory");
                 });
 
             modelBuilder.Entity("DysonHarness.DysonSessionLogEntry", b =>
@@ -355,11 +316,6 @@ namespace Harness.Engine.Migrations
                     b.Navigation("Logs");
 
                     b.Navigation("Turns");
-                });
-
-            modelBuilder.Entity("DysonHarness.DysonWorkDirectoryEntity", b =>
-                {
-                    b.Navigation("Sessions");
                 });
 #pragma warning restore 612, 618
         }

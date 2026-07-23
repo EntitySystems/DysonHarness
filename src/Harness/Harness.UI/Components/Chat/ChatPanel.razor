@@ -15,11 +15,22 @@
             }
         }
     </div>
-    <Composer Disabled="@Disabled" OnSubmit="OnSubmit" />
+    <Composer Disabled="@Disabled"
+              SelectedSlugId="SelectedSlugId"
+              SelectedSlugIdChanged="SelectedSlugIdChanged"
+              SelectedAgentMode="SelectedAgentMode"
+              SelectedAgentModeChanged="SelectedAgentModeChanged"
+              GitBranch="GitBranch"
+              OnSubmit="OnSubmit" />
 </div>
 
 @code {
     [Parameter] public IReadOnlyList<DysonAgentTurn> Turns { get; set; } = [];
     [Parameter] public bool Disabled { get; set; }
+    [Parameter] public Guid? SelectedSlugId { get; set; }
+    [Parameter] public EventCallback<Guid?> SelectedSlugIdChanged { get; set; }
+    [Parameter] public string SelectedAgentMode { get; set; } = DysonAgentModes.Work;
+    [Parameter] public EventCallback<string> SelectedAgentModeChanged { get; set; }
+    [Parameter] public string? GitBranch { get; set; }
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
 }

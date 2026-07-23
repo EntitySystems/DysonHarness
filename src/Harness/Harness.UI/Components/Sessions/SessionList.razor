@@ -4,10 +4,36 @@
 <div>
     <div class="sidebar__section-label">Sessions</div>
     <div class="btn-row" style="margin-bottom:8px;">
-        <button type="button" class="btn btn-primary" disabled="@Busy" @onclick="OnNewAsync">New</button>
-        <button type="button" class="btn" disabled="@(Busy || SelectedId is null)" @onclick="OnResumeAsync">Resume</button>
-        <button type="button" class="btn btn-ghost" disabled="@Busy" @onclick="OnRefreshAsync">↻</button>
+        <button type="button"
+                class="btn btn-primary btn-icon"
+                disabled="@(Busy || !CanCreate)"
+                title="@(CanCreate ? "New session" : "Select a work directory first")"
+                aria-label="New session"
+                @onclick="OnNewAsync">
+            <img src="icons/plus.svg" alt="" />
+        </button>
+        <button type="button"
+                class="btn btn-icon"
+                disabled="@(Busy || SelectedId is null)"
+                title="Resume"
+                aria-label="Resume"
+                @onclick="OnResumeAsync">
+            <img src="icons/play.svg" alt="" />
+        </button>
+        <button type="button"
+                class="btn btn-ghost btn-icon"
+                disabled="@Busy"
+                title="Refresh"
+                aria-label="Refresh"
+                @onclick="OnRefreshAsync">
+            <img src="icons/refresh.svg" alt="" />
+        </button>
     </div>
+
+    @if (!CanCreate)
+    {
+        <div class="list-item__meta" style="margin:0 0 8px;">Select a work directory to create sessions.</div>
+    }
 
     @if (!string.IsNullOrEmpty(Error))
     {
@@ -41,6 +67,7 @@
     [Parameter] public IReadOnlyList<DysonSessionSummary> Sessions { get; set; } = [];
     [Parameter] public Guid? ActiveSessionId { get; set; }
     [Parameter] public bool Busy { get; set; }
+    [Parameter] public bool CanCreate { get; set; } = true;
     [Parameter] public string? Error { get; set; }
     [Parameter] public EventCallback OnNew { get; set; }
     [Parameter] public EventCallback<Guid> OnResume { get; set; }

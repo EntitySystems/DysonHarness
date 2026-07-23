@@ -15,6 +15,8 @@ public sealed class DysonDbContext : DbContext
 
     public DbSet<DysonModelProviderEntity> ModelProviders => Set<DysonModelProviderEntity>();
     public DbSet<DysonModelSlugEntity> ModelSlugs => Set<DysonModelSlugEntity>();
+    public DbSet<DysonModelFavoriteEntity> ModelFavorites => Set<DysonModelFavoriteEntity>();
+    public DbSet<DysonWorkDirectoryEntity> WorkDirectories => Set<DysonWorkDirectoryEntity>();
     public DbSet<DysonSessionEntity> Sessions => Set<DysonSessionEntity>();
     public DbSet<DysonTurnEntity> Turns => Set<DysonTurnEntity>();
     public DbSet<DysonSessionLogEntry> SessionLogs => Set<DysonSessionLogEntry>();
@@ -53,6 +55,27 @@ public sealed class DysonDbContext : DbContext
             e.HasIndex(x => x.IsDefault);
         });
 
+        modelBuilder.Entity<DysonModelFavoriteEntity>(e =>
+        {
+            e.ToTable("model_favorites");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.ModelSlugId).IsUnique();
+            e.HasOne(x => x.ModelSlug)
+                .WithMany()
+                .HasForeignKey(x => x.ModelSlugId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DysonWorkDirectoryEntity>(e =>
+        {
+            e.ToTable("work_directories");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Name).IsRequired();
+            e.Property(x => x.AbsolutePath).IsRequired();
+            e.HasIndex(x => x.AbsolutePath).IsUnique();
+            e.HasIndex(x => x.LastOpenedUtc);
+        });
+
         modelBuilder.Entity<DysonSessionEntity>(e =>
         {
             e.ToTable("sessions");
@@ -63,6 +86,7 @@ public sealed class DysonDbContext : DbContext
             e.Property(x => x.Status).HasConversion<int>();
             e.HasIndex(x => x.LastActivityUtc);
             e.HasIndex(x => x.ParentSessionId);
+            e.HasIndex(x => x.WorkDirectoryId);
             e.HasOne(x => x.ParentSession)
                 .WithMany()
                 .HasForeignKey(x => x.ParentSessionId)
@@ -70,6 +94,10 @@ public sealed class DysonDbContext : DbContext
             e.HasOne(x => x.ModelSlug)
                 .WithMany()
                 .HasForeignKey(x => x.ModelSlugId)
+                .OnDelete(DeleteBehavior.SetNull);
+            e.HasOne(x => x.WorkDirectory)
+                .WithMany(w => w.Sessions)
+                .HasForeignKey(x => x.WorkDirectoryId)
                 .OnDelete(DeleteBehavior.SetNull);
         });
 

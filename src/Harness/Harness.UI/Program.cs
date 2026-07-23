@@ -16,6 +16,7 @@ builder.Services.AddScoped(_ =>
 });
 builder.Services.AddScoped<DysonModelStore>();
 builder.Services.AddScoped<DysonSessionStore>();
+builder.Services.AddScoped<DysonWorkDirectoryStore>();
 builder.Services.AddScoped<DysonUiHost>();
 builder.Services.AddScoped<ThemeService>();
 

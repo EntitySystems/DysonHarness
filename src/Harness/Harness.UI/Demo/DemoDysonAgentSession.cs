@@ -1,15 +1,20 @@
+using System.Text.Json;
 using DysonHarness;
 
 namespace Harness.UI.Demo;
 
 public sealed class DemoDysonAgentSession : DysonAgentSession
 {
+    private readonly DysonSessionStore? _store;
+
     public DemoDysonAgentSession(
         string agentMode,
         DysonAgentSessionConfig config,
-        DysonAgentProvider provider)
+        DysonAgentProvider provider,
+        DysonSessionStore? store = null)
         : base(agentMode, config, provider)
     {
+        _store = store;
     }
 
     /// <summary>
@@ -18,6 +23,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
     public static async Task<Result<DemoDysonAgentSession, string>> CreateAsync(
         DysonSessionStore store,
         DemoDysonAgentProvider provider,
+        Guid workDirectoryId,
         string agentMode = DysonAgentModes.Work,
         DysonAgentSessionConfig? config = null,
         string? title = null,
@@ -26,8 +32,13 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(provider);
 
+        if (workDirectoryId == Guid.Empty)
+            return Result<DemoDysonAgentSession, string>.AsError("Work directory is required.");
+
         config ??= new DysonAgentSessionConfig();
-        var session = new DemoDysonAgentSession(agentMode, config, provider);
+        var session = new DemoDysonAgentSession(agentMode, config, provider, store);
+        var initialTitle = title ?? "New session";
+        session.SetDisplayTitle(initialTitle);
 
         var create = await store.CreateSessionAsync(
             new DysonSessionCreateRequest
@@ -35,8 +46,9 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                 RuntimeId = 0,
                 AgentMode = agentMode,
                 ModelSlugId = provider.SlugId,
+                WorkDirectoryId = workDirectoryId,
                 McpAccessMode = config.McpAccessMode,
-                Title = title ?? "New session",
+                Title = initialTitle,
                 SystemPromptSnapshot = session.SystemPrompt,
                 Status = DysonSessionStatus.Active,
             },
@@ -82,7 +94,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             McpAccessMode = state.Session.McpAccessMode,
         };
 
-        var session = new DemoDysonAgentSession(state.Session.AgentMode, config, provider);
+        var session = new DemoDysonAgentSession(state.Session.AgentMode, config, provider, store);
         session.RestoreFromPersisted(state);
 
         var resumedLog = DysonSessionLogPayload.CreateEntry(
@@ -119,6 +131,19 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         AppendLog($"prompt: {Truncate(prompt, 120)}");
 
         var turn = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+
+        if (TurnHistory.Count == 0)
+        {
+            var renameTitle = Truncate(prompt.Trim(), 64);
+            turn.ToolCalls.Add(new DysonToolCall
+            {
+                CallId = "",
+                ToolName = "RenameSession",
+                Stage = 0,
+                ArgumentsJson = JsonSerializer.Serialize(new { title = renameTitle }),
+            });
+        }
+
         turn.ToolCalls.Add(new DysonToolCall
         {
             CallId = "",
@@ -190,10 +215,13 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             ? $"{demo.ProviderKind}/{demo.Slug}"
             : Provider.GetType().Name;
 
-    private static async Task<DysonToolCallResult> ExecuteMockToolAsync(
+    private async Task<DysonToolCallResult> ExecuteMockToolAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
+        if (string.Equals(call.ToolName, "RenameSession", StringComparison.OrdinalIgnoreCase))
+            return await ExecuteRenameSessionAsync(call, cancellationToken).ConfigureAwait(false);
+
         var delayMs = 180 + (Math.Abs(call.ToolName.GetHashCode(StringComparison.Ordinal)) % 220);
         await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
 
@@ -204,6 +232,83 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             Stage = call.Stage,
             IsError = false,
             Content = $"[demo] {call.ToolName} ok — args={Truncate(call.ArgumentsJson, 80)}",
+        };
+    }
+
+    private async Task<DysonToolCallResult> ExecuteRenameSessionAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        string? title = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(
+                string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
+            if (doc.RootElement.TryGetProperty("title", out var titleProp))
+                title = titleProp.GetString();
+        }
+        catch (JsonException)
+        {
+            return new DysonToolCallResult
+            {
+                CallId = call.CallId,
+                ToolName = call.ToolName,
+                Stage = call.Stage,
+                IsError = true,
+                Content = "RenameSession: invalid JSON arguments.",
+            };
+        }
+
+        var rename = await RenameAsync(title ?? "", cancellationToken).ConfigureAwait(false);
+        if (rename.IsError)
+        {
+            return new DysonToolCallResult
+            {
+                CallId = call.CallId,
+                ToolName = call.ToolName,
+                Stage = call.Stage,
+                IsError = true,
+                Content = rename.Error,
+            };
+        }
+
+        if (_store is not null && PersistenceId != Guid.Empty)
+        {
+            var persist = await _store.UpdateSessionMetaAsync(
+                new DysonSessionMetaUpdate
+                {
+                    SessionId = PersistenceId,
+                    Title = DisplayTitle,
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (persist.IsError)
+            {
+                return new DysonToolCallResult
+                {
+                    CallId = call.CallId,
+                    ToolName = call.ToolName,
+                    Stage = call.Stage,
+                    IsError = true,
+                    Content = persist.Error,
+                };
+            }
+
+            var renamedLog = DysonSessionLogPayload.CreateEntry(
+                PersistenceId,
+                DysonSessionLogKind.SessionRenamed,
+                new DysonSessionLogSessionRenamed(DisplayTitle!));
+
+            await _store.AppendLogAsync(renamedLog, cancellationToken).ConfigureAwait(false);
+        }
+
+        return new DysonToolCallResult
+        {
+            CallId = call.CallId,
+            ToolName = call.ToolName,
+            Stage = call.Stage,
+            IsError = false,
+            Content = $"Renamed session to \"{DisplayTitle}\".",
         };
     }
 

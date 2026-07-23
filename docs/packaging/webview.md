@@ -19,6 +19,7 @@ Ship a **Windows desktop shell** that hosts the same Dyson UI (or a thin host pa
 - Do not fork session/resume semantics; use `DysonSessionStore.GetFullSessionAsync` / restore
 - Keep providers ephemeral; model profiles remain SQLite rows
 - WebView2 evergreen runtime is a deployment dependency on Windows
+- Reuse `DysonNativeFolderPicker` for work-directory registration (host-process OS dialog; interactive desktop required — not for headless/remote Blazor hosts)
 
 ## Non-goals (for now)
 

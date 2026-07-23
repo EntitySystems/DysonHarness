@@ -33,6 +33,9 @@ public abstract class DysonAgentSession
     /// <summary>Durable SQLite session id (distinct from runtime <see cref="Id"/>).</summary>
     public Guid PersistenceId { get; protected set; }
 
+    /// <summary>UI/list title mirrored from persisted <c>sessions.Title</c>.</summary>
+    public string? DisplayTitle { get; protected set; }
+
     public DysonAgentSessionConfig Config { get; }
 
     public string Mode { get; }
@@ -132,6 +135,9 @@ public abstract class DysonAgentSession
     /// <summary>Raised after each <see cref="AppendLog"/> (hosts may persist a LogLine entry).</summary>
     public event EventHandler<string>? LogAppended;
 
+    /// <summary>Raised after a successful <see cref="RenameAsync"/> (hosts should persist Title).</summary>
+    public event EventHandler<DysonSessionRenamedEventArgs>? SessionRenamed;
+
     /// <summary>Snapshot of append-only log lines. When <paramref name="maxLines"/> is set, returns the most recent lines.</summary>
     public IReadOnlyList<string> SnapshotLog(int? maxLines = null)
     {
@@ -176,6 +182,7 @@ public abstract class DysonAgentSession
 
         PersistenceId = state.Session.Id;
         Id = state.Session.RuntimeId;
+        DisplayTitle = state.Session.Title;
 
         TurnHistory.Clear();
         foreach (var row in state.Turns.OrderBy(t => t.Sequence))
@@ -214,6 +221,39 @@ public abstract class DysonAgentSession
 
     /// <summary>Assigns <see cref="PersistenceId"/> after <see cref="DysonSessionStore.CreateSessionAsync"/>.</summary>
     protected void SetPersistenceId(Guid persistenceId) => PersistenceId = persistenceId;
+
+    /// <summary>Sets <see cref="DisplayTitle"/> after create (mirrors persisted Title).</summary>
+    protected void SetDisplayTitle(string? title) => DisplayTitle = title;
+
+    public const int MaxDisplayTitleLength = 120;
+
+    /// <summary>
+    /// Renames the session for UI/list display. Validates, sets <see cref="DisplayTitle"/>,
+    /// raises <see cref="SessionRenamed"/>. Caller/host should persist <c>sessions.Title</c>.
+    /// </summary>
+    public Task<VoidResult<string>> RenameAsync(
+        string title,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (string.IsNullOrWhiteSpace(title))
+            return Task.FromResult(new VoidResult<string>("Title is required."));
+
+        var trimmed = title.Trim();
+        if (trimmed.Length > MaxDisplayTitleLength)
+            return Task.FromResult(new VoidResult<string>(
+                $"Title must be at most {MaxDisplayTitleLength} characters."));
+
+        DisplayTitle = trimmed;
+        SessionRenamed?.Invoke(this, new DysonSessionRenamedEventArgs
+        {
+            PersistenceId = PersistenceId,
+            Title = trimmed,
+        });
+
+        return Task.FromResult(VoidResult<string>.Success);
+    }
 
     /// <summary>Compacts older tool history when turn-count or token thresholds fire.</summary>
     protected DysonContextOptimizer ContextOptimizer { get; set; } = new();

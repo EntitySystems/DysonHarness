@@ -8,6 +8,7 @@ public sealed class DysonSessionCreateRequest
     public Guid? ParentSessionId { get; init; }
     public required string AgentMode { get; init; }
     public Guid? ModelSlugId { get; init; }
+    public Guid? WorkDirectoryId { get; init; }
     public DysonMcpAccessMode McpAccessMode { get; init; } = DysonMcpAccessMode.FullAccess;
     public string? Title { get; init; }
     public required string SystemPromptSnapshot { get; init; }
@@ -32,8 +33,11 @@ public sealed class DysonSessionSummary
     public DysonSessionStatus Status { get; init; }
     public string? Title { get; init; }
     public Guid? ModelSlugId { get; init; }
-    public DateTimeOffset CreatedUtc { get; init; }
-    public DateTimeOffset LastActivityUtc { get; init; }
+    public Guid? WorkDirectoryId { get; init; }
+    /// <summary>UTC.</summary>
+    public DateTime CreatedUtc { get; init; }
+    /// <summary>UTC.</summary>
+    public DateTime LastActivityUtc { get; init; }
 }
 
 public sealed class DysonPersistedSession
@@ -56,7 +60,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
 
         try
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = DateTime.UtcNow;
             var entity = new DysonSessionEntity
             {
                 Id = Guid.NewGuid(),
@@ -64,6 +68,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 ParentSessionId = request.ParentSessionId,
                 AgentMode = request.AgentMode,
                 ModelSlugId = request.ModelSlugId,
+                WorkDirectoryId = request.WorkDirectoryId,
                 McpAccessMode = request.McpAccessMode,
                 Status = request.Status,
                 Title = request.Title,
@@ -109,7 +114,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
             else if (update.ModelSlugId is not null)
                 entity.ModelSlugId = update.ModelSlugId;
 
-            var now = DateTimeOffset.UtcNow;
+            var now = DateTime.UtcNow;
             entity.UpdatedUtc = now;
             entity.LastActivityUtc = now;
 
@@ -140,7 +145,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
             if (existing is null)
             {
                 if (turn.CreatedUtc == default)
-                    turn.CreatedUtc = DateTimeOffset.UtcNow;
+                    turn.CreatedUtc = DateTime.UtcNow;
 
                 _db.Turns.Add(turn);
             }
@@ -164,7 +169,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
 
             if (session is not null)
             {
-                var now = DateTimeOffset.UtcNow;
+                var now = DateTime.UtcNow;
                 session.UpdatedUtc = now;
                 session.LastActivityUtc = now;
             }
@@ -190,7 +195,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 entry.Id = Guid.NewGuid();
 
             if (entry.TimestampUtc == default)
-                entry.TimestampUtc = DateTimeOffset.UtcNow;
+                entry.TimestampUtc = DateTime.UtcNow;
 
             if (entry.Sequence <= 0)
                 entry.Sequence = await NextLogSequenceAsync(entry.SessionId, cancellationToken)
@@ -204,7 +209,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
 
             if (session is not null)
             {
-                var now = DateTimeOffset.UtcNow;
+                var now = DateTime.UtcNow;
                 session.UpdatedUtc = now;
                 session.LastActivityUtc = now;
             }
@@ -219,6 +224,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
     }
 
     public async Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListSessionsAsync(
+        Guid? workDirectoryId = null,
         bool rootsOnly = true,
         CancellationToken cancellationToken = default)
     {
@@ -227,6 +233,9 @@ public sealed class DysonSessionStore(DysonDbContext db)
             var query = _db.Sessions.AsNoTracking().AsQueryable();
             if (rootsOnly)
                 query = query.Where(s => s.ParentSessionId == null);
+
+            if (workDirectoryId is Guid wd)
+                query = query.Where(s => s.WorkDirectoryId == wd);
 
             var list = await query
                 .OrderByDescending(s => s.LastActivityUtc)
@@ -239,6 +248,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
                     Status = s.Status,
                     Title = s.Title,
                     ModelSlugId = s.ModelSlugId,
+                    WorkDirectoryId = s.WorkDirectoryId,
                     CreatedUtc = s.CreatedUtc,
                     LastActivityUtc = s.LastActivityUtc,
                 })

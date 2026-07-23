@@ -1,5 +1,6 @@
 @namespace Harness.UI.Components.Models
 @using DysonHarness
+@using Microsoft.AspNetCore.Components.Web
 @inject DysonModelStore ModelStore
 
 <div class="model-slug-picker">
@@ -17,28 +18,134 @@
     }
     else
     {
-        <div class="field" style="margin-bottom:0;">
-            <label for="model-slug-picker">Registered slug</label>
-            <select id="model-slug-picker"
-                    value="@SelectedSlugId"
-                    @onchange="OnChangeAsync">
-                @foreach (var option in _options)
-                {
-                    <option value="@option.Id">@option.Label</option>
-                }
-            </select>
+    <div class="field" style="margin-bottom:0;">
+            <button id="model-slug-picker"
+                    type="button"
+                    class="model-slug-picker__trigger"
+                    @onclick="OpenModal">
+                <span class="model-slug-picker__trigger-label">@CurrentLabel</span>
+                <span class="model-slug-picker__trigger-caret" aria-hidden="true">▾</span>
+            </button>
         </div>
     }
 </div>
 
+@if (_modalOpen)
+{
+    <div class="model-slug-modal-backdrop"
+         @onclick="CloseModal"
+         @onkeydown="OnBackdropKeyDown">
+        <div class="model-slug-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="model-slug-modal-title"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnModalKeyDown">
+            <div class="model-slug-modal__header">
+                <h3 id="model-slug-modal-title">Select model</h3>
+                <button type="button" class="btn btn-ghost model-slug-modal__close" @onclick="CloseModal" aria-label="Close">×</button>
+            </div>
+
+            <div class="model-slug-modal__search">
+                <input @ref="_searchInput"
+                       type="search"
+                       placeholder="Search alias, provider, or slug…"
+                       value="@_search"
+                       @oninput="OnSearchInput"
+                       @onkeydown="OnModalKeyDown"
+                       autofocus />
+            </div>
+
+            <div class="model-slug-modal__list" role="listbox">
+                @if (FilteredOptions.Count == 0)
+                {
+                    <div class="model-slug-modal__empty">No matching models.</div>
+                }
+                else
+                {
+                    @foreach (var option in FilteredOptions)
+                    {
+                        var selected = SelectedSlugId == option.Id;
+                        <div class="model-slug-modal__row @(selected ? "is-selected" : null)" role="option" aria-selected="@selected">
+                            <button type="button"
+                                    class="model-slug-modal__option"
+                                    @onclick="() => SelectAsync(option.Id)">
+                                <span class="model-slug-modal__option-label">@option.Label</span>
+                                @if (option.IsFavorite)
+                                {
+                                    <span class="model-slug-modal__badge">Favorite</span>
+                                }
+                            </button>
+                            <button type="button"
+                                    class="model-slug-modal__star @(option.IsFavorite ? "is-favorite" : null)"
+                                    title="@(option.IsFavorite ? "Remove favorite" : "Add favorite")"
+                                    aria-label="@(option.IsFavorite ? "Remove favorite" : "Add favorite")"
+                                    @onclick="() => ToggleFavoriteAsync(option)"
+                                    @onclick:stopPropagation="true">
+                                @(option.IsFavorite ? "★" : "☆")
+                            </button>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+}
+
 @code {
     private readonly List<SlugOption> _options = [];
+    private HashSet<Guid> _favoriteIds = [];
     private string? _error;
+    private bool _modalOpen;
+    private bool _focusSearch;
+    private string _search = "";
+    private ElementReference _searchInput;
 
     [Parameter] public Guid? SelectedSlugId { get; set; }
     [Parameter] public EventCallback<Guid?> SelectedSlugIdChanged { get; set; }
 
+    private string CurrentLabel =>
+        _options.FirstOrDefault(o => o.Id == SelectedSlugId)?.Label ?? "Select model…";
+
+    private IReadOnlyList<SlugOption> FilteredOptions
+    {
+        get
+        {
+            IEnumerable<SlugOption> query = _options;
+            if (!string.IsNullOrWhiteSpace(_search))
+            {
+                var term = _search.Trim();
+                query = query.Where(o =>
+                    o.DisplayAlias.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || o.ProviderName.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || o.Slug.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || o.Label.Contains(term, StringComparison.OrdinalIgnoreCase));
+            }
+
+            return query
+                .OrderByDescending(o => o.IsFavorite)
+                .ThenBy(o => o.DisplayAlias, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+    }
+
     protected override async Task OnInitializedAsync() => await RefreshAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_modalOpen || !_focusSearch)
+            return;
+
+        _focusSearch = false;
+        try
+        {
+            await _searchInput.FocusAsync();
+        }
+        catch
+        {
+            // Element may not be ready on first paint of the modal.
+        }
+    }
 
     public async Task RefreshAsync()
     {
@@ -52,14 +159,27 @@
             return;
         }
 
+        var favorites = await ModelStore.ListFavoriteSlugIdsAsync();
+        if (favorites.IsError)
+        {
+            _error = favorites.Error;
+            return;
+        }
+
+        _favoriteIds = favorites.Value.ToHashSet();
+
         foreach (var provider in result.Value)
         {
             foreach (var slug in provider.Slugs)
             {
                 _options.Add(new SlugOption(
                     slug.Id,
+                    slug.DisplayAlias,
+                    provider.DisplayName,
+                    slug.Slug,
                     $"{slug.DisplayAlias} · {provider.DisplayName} / {slug.Slug}",
-                    slug.IsDefault));
+                    slug.IsDefault,
+                    _favoriteIds.Contains(slug.Id)));
             }
         }
 
@@ -77,13 +197,74 @@
         await SelectedSlugIdChanged.InvokeAsync(fallback.Id);
     }
 
-    private Task OnChangeAsync(ChangeEventArgs args)
+    private void OpenModal()
     {
-        if (args.Value is string text && Guid.TryParse(text, out var id))
-            return SelectedSlugIdChanged.InvokeAsync(id);
-
-        return SelectedSlugIdChanged.InvokeAsync(null);
+        _search = "";
+        _modalOpen = true;
+        _focusSearch = true;
     }
 
-    private sealed record SlugOption(Guid Id, string Label, bool IsDefault);
+    private void CloseModal()
+    {
+        _modalOpen = false;
+        _search = "";
+    }
+
+    private void OnSearchInput(ChangeEventArgs args) =>
+        _search = args.Value?.ToString() ?? "";
+
+    private void OnBackdropKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            CloseModal();
+    }
+
+    private void OnModalKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            CloseModal();
+    }
+
+    private async Task SelectAsync(Guid id)
+    {
+        await SelectedSlugIdChanged.InvokeAsync(id);
+        CloseModal();
+    }
+
+    private async Task ToggleFavoriteAsync(SlugOption option)
+    {
+        _error = null;
+        VoidResult<string> result;
+        if (option.IsFavorite)
+            result = await ModelStore.RemoveFavoriteAsync(option.Id);
+        else
+            result = await ModelStore.AddFavoriteAsync(option.Id);
+
+        if (result.IsError)
+        {
+            _error = result.Error;
+            return;
+        }
+
+        if (option.IsFavorite)
+            _favoriteIds.Remove(option.Id);
+        else
+            _favoriteIds.Add(option.Id);
+
+        var index = _options.FindIndex(o => o.Id == option.Id);
+        if (index >= 0)
+        {
+            var current = _options[index];
+            _options[index] = current with { IsFavorite = !current.IsFavorite };
+        }
+    }
+
+    private sealed record SlugOption(
+        Guid Id,
+        string DisplayAlias,
+        string ProviderName,
+        string Slug,
+        string Label,
+        bool IsDefault,
+        bool IsFavorite);
 }

@@ -3,33 +3,44 @@
 @using Harness.UI.Demo
 @implements IDisposable
 @inject DysonUiHost Host
+@inject DysonWorkDirectoryStore WorkDirs
 @inject ThemeService Theme
+@inject IJSRuntime Js
 
 <AppShell>
     <Sidebar>
         <Sidebar>
+            <WorkDirectory>
+                <WorkDirectorySwitcher @ref="_workdirSwitcher"
+                                       ActiveWorkDirectoryId="_activeWorkDirectoryId"
+                                       ActiveWorkDirectoryIdChanged="OnWorkDirectoryChangedAsync"
+                                       Busy="Host.IsBusy"
+                                       OnChanged="OnWorkDirectoryListChangedAsync" />
+            </WorkDirectory>
             <SessionList>
                 <SessionList Sessions="_sessions"
                              ActiveSessionId="Host.ActiveSessionId"
                              Busy="Host.IsBusy"
-                             Error="_listError"
+                             CanCreate="_activeWorkDirectoryId is not null"
+                             Error="@_listError"
                              OnNew="StartNewAsync"
                              OnResume="ResumeAsync"
                              OnRefresh="RefreshSessionsAsync" />
             </SessionList>
-            <SlugPicker>
-                <ModelSlugPicker @bind-SelectedSlugId="_selectedSlugId" />
-            </SlugPicker>
         </Sidebar>
     </Sidebar>
     <Main>
-        <SessionHeader Session="Host.Session" Title="@_activeTitle" />
+        <SessionHeader Session="Host.Session" Title="@_activeTitle" GitBranch="@_gitBranch" />
         @if (!string.IsNullOrEmpty(Host.LastError))
         {
             <div class="error-banner">@Host.LastError</div>
         }
         <ChatPanel Turns="@(Host.Session?.Turns ?? Array.Empty<DysonAgentTurn>())"
                    Disabled="@(Host.Session is null || Host.IsBusy)"
+                   @bind-SelectedSlugId="_selectedSlugId"
+                   SelectedAgentMode="_selectedAgentMode"
+                   SelectedAgentModeChanged="OnAgentModeChanged"
+                   GitBranch="_gitBranch"
                    OnSubmit="PromptAsync" />
     </Main>
     <Rail>
@@ -68,6 +79,11 @@
     private string? _listError;
     private string? _activeTitle;
     private Guid? _selectedSlugId;
+    private string _selectedAgentMode = DysonAgentModes.Work;
+    private Guid? _activeWorkDirectoryId;
+    private string? _gitBranch;
+    private bool _workdirHydrated;
+    private WorkDirectorySwitcher? _workdirSwitcher;
 
     private DysonAgentTurn? _latestTurn =>
         Host.Session?.Turns is { Count: > 0 } turns ? turns[^1] : null;
@@ -85,55 +101,217 @@
     {
         if (firstRender)
             await Theme.InitializeAsync();
+
+        if (!_workdirHydrated)
+        {
+            _workdirHydrated = true;
+            await HydrateWorkDirectoryAsync();
+        }
+    }
+
+    private async Task HydrateWorkDirectoryAsync()
+    {
+        try
+        {
+            var stored = await Js.InvokeAsync<string?>("dysonWorkdir.get");
+            if (!string.IsNullOrWhiteSpace(stored) && Guid.TryParse(stored, out var id))
+            {
+                var get = await WorkDirs.GetAsync(id);
+                if (get.IsSuccess)
+                {
+                    _activeWorkDirectoryId = id;
+                    await WorkDirs.TouchOpenedAsync(id);
+                    RefreshGitBranch(get.Value.AbsolutePath);
+                    await RefreshSessionsAsync();
+                    StateHasChanged();
+                    return;
+                }
+            }
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        var list = await WorkDirs.ListAsync();
+        if (list.IsSuccess && list.Value.Count > 0)
+        {
+            var first = list.Value[0];
+            await SetActiveWorkDirectoryAsync(first.Id, first.AbsolutePath);
+        }
+        else
+        {
+            RefreshGitBranch(null);
+            await RefreshSessionsAsync();
+        }
+
+        StateHasChanged();
     }
 
     private void OnHostChanged() => _ = InvokeAsync(async () =>
     {
+        UpdateActiveTitle();
         await RefreshSessionsQuietAsync();
         StateHasChanged();
     });
 
     private void OnThemeChanged() => _ = InvokeAsync(StateHasChanged);
 
+    private Task OnAgentModeChanged(string mode)
+    {
+        _selectedAgentMode = mode;
+        return Task.CompletedTask;
+    }
+
+    private async Task OnWorkDirectoryChangedAsync(Guid? id)
+    {
+        _listError = null;
+        if (id is Guid wd)
+        {
+            var get = await WorkDirs.GetAsync(wd);
+            if (get.IsError)
+            {
+                _listError = get.Error;
+                return;
+            }
+
+            await SetActiveWorkDirectoryAsync(wd, get.Value.AbsolutePath);
+        }
+        else
+        {
+            _activeWorkDirectoryId = null;
+            RefreshGitBranch(null);
+            await PersistWorkDirectoryAsync(null);
+            await RefreshSessionsAsync();
+        }
+    }
+
+    private async Task OnWorkDirectoryListChangedAsync()
+    {
+        if (_workdirSwitcher is not null)
+            await _workdirSwitcher.RefreshAsync();
+        await RefreshSessionsAsync();
+    }
+
+    private async Task SetActiveWorkDirectoryAsync(Guid id, string absolutePath)
+    {
+        _activeWorkDirectoryId = id;
+        RefreshGitBranch(absolutePath);
+        await PersistWorkDirectoryAsync(id);
+        await RefreshSessionsAsync();
+    }
+
+    private void RefreshGitBranch(string? absolutePath)
+    {
+        if (string.IsNullOrWhiteSpace(absolutePath))
+        {
+            _gitBranch = null;
+            return;
+        }
+
+        var branch = DysonGitInfo.TryGetBranch(absolutePath);
+        _gitBranch = branch.IsSuccess ? branch.Value : null;
+    }
+
+    private async Task PersistWorkDirectoryAsync(Guid? id)
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("dysonWorkdir.set", id?.ToString());
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
     private async Task RefreshSessionsAsync()
     {
         _listError = null;
-        var list = await Host.ListSessionsAsync();
+        if (_activeWorkDirectoryId is null)
+        {
+            _sessions = [];
+            UpdateActiveTitle();
+            return;
+        }
+
+        var list = await Host.ListSessionsAsync(_activeWorkDirectoryId);
         if (list.IsError)
         {
             _listError = list.Error;
             return;
         }
 
-        _sessions = list.Value;
+        _sessions = OverlayLiveTitle(list.Value);
         UpdateActiveTitle();
     }
 
     private async Task RefreshSessionsQuietAsync()
     {
-        var list = await Host.ListSessionsAsync();
+        if (_activeWorkDirectoryId is null)
+        {
+            _sessions = [];
+            UpdateActiveTitle();
+            return;
+        }
+
+        var list = await Host.ListSessionsAsync(_activeWorkDirectoryId);
         if (list.IsSuccess)
         {
-            _sessions = list.Value;
+            _sessions = OverlayLiveTitle(list.Value);
             UpdateActiveTitle();
         }
     }
 
+    private IReadOnlyList<DysonSessionSummary> OverlayLiveTitle(
+        IReadOnlyList<DysonSessionSummary> list)
+    {
+        if (Host.Session?.PersistenceId is not Guid pid || Host.Session.DisplayTitle is null)
+            return list;
+
+        return list
+            .Select(s => s.Id == pid
+                ? new DysonSessionSummary
+                {
+                    Id = s.Id,
+                    RuntimeId = s.RuntimeId,
+                    ParentSessionId = s.ParentSessionId,
+                    AgentMode = s.AgentMode,
+                    Status = s.Status,
+                    Title = Host.Session.DisplayTitle,
+                    ModelSlugId = s.ModelSlugId,
+                    WorkDirectoryId = s.WorkDirectoryId,
+                    CreatedUtc = s.CreatedUtc,
+                    LastActivityUtc = s.LastActivityUtc,
+                }
+                : s)
+            .ToList();
+    }
+
     private void UpdateActiveTitle()
     {
+        if (Host.Session?.DisplayTitle is { } live)
+        {
+            _activeTitle = live;
+            return;
+        }
+
         if (Host.ActiveSessionId is Guid id)
-        {
             _activeTitle = _sessions.FirstOrDefault(s => s.Id == id)?.Title;
-        }
         else
-        {
             _activeTitle = null;
-        }
     }
 
     private async Task StartNewAsync()
     {
-        var result = await Host.StartNewSessionAsync(DysonAgentModes.Work, _selectedSlugId);
+        var result = await Host.StartNewSessionAsync(
+            _selectedAgentMode,
+            _selectedSlugId,
+            _activeWorkDirectoryId);
         if (result.IsError)
             _listError = result.Error;
         await RefreshSessionsAsync();

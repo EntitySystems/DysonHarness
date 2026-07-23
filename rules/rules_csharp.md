@@ -20,3 +20,10 @@ Follow [`skills/csharp/SKILL.md`](../skills/csharp/SKILL.md) for modern C# / .NE
 - Prefer concrete types and direct calls over indirection.
 - Cap at **1–2 layers of abstraction** for a given concern unless necessity is demonstrated (e.g. a real second implementation or boundary exists now).
 - Do not add interfaces, wrappers, factories, or DI layers “for testability/future-proofing” without that necessity.
+
+## DB timestamps (SQLite / EF)
+
+- EF entity timestamp properties and EF queries over them must use `DateTime` stored as **UTC** (`DateTime.UtcNow`), never `DateTimeOffset`.
+- SQLite cannot translate `DateTimeOffset` in `ORDER BY` / many expressions; `DateTime` avoids that class of runtime errors.
+- Document entity timestamp properties as UTC (name with `Utc` and/or a short XML note).
+- Non-DB domain types may still use `DateTimeOffset` when appropriate (e.g. live tool/interrupt timestamps).

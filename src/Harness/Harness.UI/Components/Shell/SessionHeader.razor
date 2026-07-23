@@ -9,12 +9,16 @@
     }
     else
     {
-        <strong>@(Title ?? "Session")</strong>
+        <strong>@(Title ?? Session.DisplayTitle ?? "Session")</strong>
         <div class="session-header__meta">
             <span>Mode @Session.Mode</span>
             <span class="mono">Runtime #@Session.Id</span>
             <span class="mono">Persist @ShortGuid(Session.PersistenceId)</span>
             <span>MCP @Session.Config.McpAccessMode</span>
+            @if (!string.IsNullOrEmpty(GitBranch))
+            {
+                <span class="mono" title="Active work directory branch">⎇ @GitBranch</span>
+            }
             <span class="badge">@DysonBuildInfo.Current</span>
             @if (Session.Provider is DemoDysonAgentProvider demo)
             {
@@ -27,6 +31,7 @@
 @code {
     [Parameter] public DemoDysonAgentSession? Session { get; set; }
     [Parameter] public string? Title { get; set; }
+    [Parameter] public string? GitBranch { get; set; }
 
     private static string ShortGuid(Guid id) =>
         id == Guid.Empty ? "—" : id.ToString("N")[..8];

@@ -1,0 +1,278 @@
+@namespace Harness.UI.Components.Sessions
+@using DysonHarness
+@using Microsoft.AspNetCore.Components.Web
+@inject DysonWorkDirectoryStore WorkDirs
+
+<div class="workdir-switcher">
+    <div class="sidebar__section-label">Work directory</div>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="error-banner" style="margin:0 0 8px;">@_error</div>
+    }
+
+    <button type="button"
+            class="workdir-switcher__trigger"
+            aria-label="Active work directory"
+            disabled="@Busy"
+            @onclick="OpenModal">
+        <span class="workdir-switcher__trigger-label">@CurrentLabel</span>
+        <span class="workdir-switcher__trigger-caret" aria-hidden="true">▾</span>
+    </button>
+</div>
+
+@if (_modalOpen)
+{
+    <div class="workdir-modal-backdrop"
+         @onclick="CloseModal"
+         @onkeydown="OnBackdropKeyDown">
+        <div class="workdir-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="workdir-modal-title"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnModalKeyDown">
+            <div class="workdir-modal__header">
+                <h3 id="workdir-modal-title">Select work directory</h3>
+                <button type="button" class="btn btn-ghost workdir-modal__close" @onclick="CloseModal" aria-label="Close">×</button>
+            </div>
+
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <div class="error-banner" style="margin:0;border-radius:0;">@_error</div>
+            }
+
+            <div class="workdir-modal__search">
+                <input @ref="_searchInput"
+                       type="search"
+                       placeholder="Search name or path…"
+                       value="@_search"
+                       disabled="@Busy"
+                       @oninput="OnSearchInput"
+                       @onkeydown="OnModalKeyDown"
+                       autofocus />
+            </div>
+
+            <div class="workdir-modal__list" role="listbox">
+                @if (_items.Count == 0)
+                {
+                    <div class="workdir-modal__empty">
+                        No work directories yet. Add a folder to organize sessions.
+                    </div>
+                }
+                else if (FilteredItems.Count == 0)
+                {
+                    <div class="workdir-modal__empty">No matching work directories.</div>
+                }
+                else
+                {
+                    @foreach (var item in FilteredItems)
+                    {
+                        var selected = ActiveWorkDirectoryId == item.Id;
+                        <div class="workdir-modal__row @(selected ? "is-selected" : null)"
+                             role="option"
+                             aria-selected="@selected">
+                            <button type="button"
+                                    class="workdir-modal__option"
+                                    disabled="@Busy"
+                                    @onclick="() => SelectAsync(item.Id)">
+                                <span class="workdir-modal__option-name">@item.Name</span>
+                                <span class="workdir-modal__option-path mono" title="@item.AbsolutePath">
+                                    @TruncatePath(item.AbsolutePath)
+                                </span>
+                            </button>
+                            <button type="button"
+                                    class="btn btn-ghost btn-icon workdir-modal__remove"
+                                    disabled="@Busy"
+                                    title="Remove from list (does not delete disk folder)"
+                                    aria-label="Remove @item.Name"
+                                    @onclick="() => RemoveAsync(item.Id)"
+                                    @onclick:stopPropagation="true">
+                                <img src="icons/trash.svg" alt="Remove work directory" />
+                            </button>
+                        </div>
+                    }
+                }
+            </div>
+
+            <div class="workdir-modal__footer btn-row">
+                <button type="button"
+                        class="btn btn-primary btn-icon"
+                        disabled="@Busy"
+                        title="Add work directory"
+                        aria-label="Add work directory"
+                        @onclick="AddAsync">
+                    <img src="icons/folder-plus.svg" alt="Add work directory" />
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private readonly List<DysonWorkDirectoryEntity> _items = [];
+    private string? _error;
+    private bool _modalOpen;
+    private bool _focusSearch;
+    private string _search = "";
+    private ElementReference _searchInput;
+
+    [Parameter] public Guid? ActiveWorkDirectoryId { get; set; }
+    [Parameter] public EventCallback<Guid?> ActiveWorkDirectoryIdChanged { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private string CurrentLabel => Active?.Name ?? "Select work directory…";
+
+    private DysonWorkDirectoryEntity? Active =>
+        ActiveWorkDirectoryId is Guid id
+            ? _items.FirstOrDefault(w => w.Id == id)
+            : null;
+
+    private IReadOnlyList<DysonWorkDirectoryEntity> FilteredItems
+    {
+        get
+        {
+            IEnumerable<DysonWorkDirectoryEntity> query = _items;
+            if (!string.IsNullOrWhiteSpace(_search))
+            {
+                var term = _search.Trim();
+                query = query.Where(w =>
+                    w.Name.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || w.AbsolutePath.Contains(term, StringComparison.OrdinalIgnoreCase));
+            }
+
+            return query
+                .OrderBy(w => w.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+    }
+
+    protected override async Task OnInitializedAsync() => await RefreshAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_modalOpen || !_focusSearch)
+            return;
+
+        _focusSearch = false;
+        try
+        {
+            await _searchInput.FocusAsync();
+        }
+        catch
+        {
+            // Element may not be ready on first paint of the modal.
+        }
+    }
+
+    public async Task RefreshAsync()
+    {
+        _error = null;
+        _items.Clear();
+
+        var list = await WorkDirs.ListAsync();
+        if (list.IsError)
+        {
+            _error = list.Error;
+            return;
+        }
+
+        _items.AddRange(list.Value);
+
+        if (ActiveWorkDirectoryId is Guid active && _items.All(w => w.Id != active))
+            await ActiveWorkDirectoryIdChanged.InvokeAsync(null);
+    }
+
+    private void OpenModal()
+    {
+        _search = "";
+        _modalOpen = true;
+        _focusSearch = true;
+    }
+
+    private void CloseModal()
+    {
+        _modalOpen = false;
+        _search = "";
+    }
+
+    private void OnSearchInput(ChangeEventArgs args) =>
+        _search = args.Value?.ToString() ?? "";
+
+    private void OnBackdropKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            CloseModal();
+    }
+
+    private void OnModalKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            CloseModal();
+    }
+
+    private async Task SelectAsync(Guid id)
+    {
+        _error = null;
+
+        var touch = await WorkDirs.TouchOpenedAsync(id);
+        if (touch.IsError)
+            _error = touch.Error;
+
+        await ActiveWorkDirectoryIdChanged.InvokeAsync(id);
+        await OnChanged.InvokeAsync();
+        CloseModal();
+    }
+
+    private async Task AddAsync()
+    {
+        _error = null;
+        var pick = await DysonNativeFolderPicker.PickFolderAsync();
+        if (pick.IsError)
+        {
+            if (!pick.Error.Contains("cancelled", StringComparison.OrdinalIgnoreCase))
+                _error = pick.Error;
+            return;
+        }
+
+        var create = await WorkDirs.CreateAsync(pick.Value);
+        if (create.IsError)
+        {
+            _error = create.Error;
+            return;
+        }
+
+        await RefreshAsync();
+        await WorkDirs.TouchOpenedAsync(create.Value);
+        await ActiveWorkDirectoryIdChanged.InvokeAsync(create.Value);
+        await OnChanged.InvokeAsync();
+        CloseModal();
+    }
+
+    private async Task RemoveAsync(Guid id)
+    {
+        _error = null;
+        var remove = await WorkDirs.DeleteAsync(id);
+        if (remove.IsError)
+        {
+            _error = remove.Error;
+            return;
+        }
+
+        var wasActive = ActiveWorkDirectoryId == id;
+        await RefreshAsync();
+        if (wasActive)
+            await ActiveWorkDirectoryIdChanged.InvokeAsync(null);
+        await OnChanged.InvokeAsync();
+    }
+
+    private static string TruncatePath(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return "—";
+        if (path.Length <= 42)
+            return path;
+        return "…" + path[^41..];
+    }
+}

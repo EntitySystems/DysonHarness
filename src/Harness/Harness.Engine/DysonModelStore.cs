@@ -72,7 +72,7 @@ public sealed class DysonModelStore(DysonDbContext db)
 
         try
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = DateTime.UtcNow;
             if (provider.Id == Guid.Empty)
                 provider.Id = Guid.NewGuid();
 
@@ -109,7 +109,7 @@ public sealed class DysonModelStore(DysonDbContext db)
             existing.ProviderKind = provider.ProviderKind;
             existing.BaseUrl = provider.BaseUrl;
             existing.ApiKey = provider.ApiKey;
-            existing.UpdatedUtc = DateTimeOffset.UtcNow;
+            existing.UpdatedUtc = DateTime.UtcNow;
 
             await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;
@@ -165,7 +165,7 @@ public sealed class DysonModelStore(DysonDbContext db)
             if (isDefault)
                 await ClearDefaultsAsync(cancellationToken).ConfigureAwait(false);
 
-            var now = DateTimeOffset.UtcNow;
+            var now = DateTime.UtcNow;
             var entity = new DysonModelSlugEntity
             {
                 Id = Guid.NewGuid(),
@@ -208,7 +208,7 @@ public sealed class DysonModelStore(DysonDbContext db)
             existing.Slug = slug.Slug;
             existing.DisplayAlias = slug.DisplayAlias;
             existing.IsDefault = slug.IsDefault;
-            existing.UpdatedUtc = DateTimeOffset.UtcNow;
+            existing.UpdatedUtc = DateTime.UtcNow;
 
             await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;
@@ -277,7 +277,7 @@ public sealed class DysonModelStore(DysonDbContext db)
 
             await ClearDefaultsAsync(cancellationToken).ConfigureAwait(false);
             existing.IsDefault = true;
-            existing.UpdatedUtc = DateTimeOffset.UtcNow;
+            existing.UpdatedUtc = DateTime.UtcNow;
 
             await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;
@@ -309,6 +309,106 @@ public sealed class DysonModelStore(DysonDbContext db)
         {
             return Result<DysonModelSlugEntity, string>.AsError(
                 $"Failed to get model slug: {ex.Message}");
+        }
+    }
+
+    public async Task<Result<IReadOnlyList<Guid>, string>> ListFavoriteSlugIdsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var ids = await _db.ModelFavorites
+                .AsNoTracking()
+                .OrderBy(f => f.CreatedUtc)
+                .Select(f => f.ModelSlugId)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            return Result<IReadOnlyList<Guid>, string>.AsValue(ids);
+        }
+        catch (Exception ex)
+        {
+            return Result<IReadOnlyList<Guid>, string>.AsError(
+                $"Failed to list favorite model slugs: {ex.Message}");
+        }
+    }
+
+    public async Task<Result<bool, string>> IsFavoriteAsync(
+        Guid modelSlugId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var isFavorite = await _db.ModelFavorites
+                .AsNoTracking()
+                .AnyAsync(f => f.ModelSlugId == modelSlugId, cancellationToken)
+                .ConfigureAwait(false);
+
+            return Result<bool, string>.AsValue(isFavorite);
+        }
+        catch (Exception ex)
+        {
+            return Result<bool, string>.AsError(
+                $"Failed to check favorite model slug: {ex.Message}");
+        }
+    }
+
+    public async Task<VoidResult<string>> AddFavoriteAsync(
+        Guid modelSlugId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var slugExists = await _db.ModelSlugs
+                .AnyAsync(s => s.Id == modelSlugId, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!slugExists)
+                return new VoidResult<string>($"Model slug '{modelSlugId}' not found.");
+
+            var already = await _db.ModelFavorites
+                .AnyAsync(f => f.ModelSlugId == modelSlugId, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (already)
+                return VoidResult<string>.Success;
+
+            _db.ModelFavorites.Add(new DysonModelFavoriteEntity
+            {
+                Id = Guid.NewGuid(),
+                ModelSlugId = modelSlugId,
+                CreatedUtc = DateTime.UtcNow,
+            });
+
+            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex)
+        {
+            return new VoidResult<string>($"Failed to add favorite model slug: {ex.Message}");
+        }
+    }
+
+    public async Task<VoidResult<string>> RemoveFavoriteAsync(
+        Guid modelSlugId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var existing = await _db.ModelFavorites
+                .FirstOrDefaultAsync(f => f.ModelSlugId == modelSlugId, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (existing is null)
+                return VoidResult<string>.Success;
+
+            _db.ModelFavorites.Remove(existing);
+            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex)
+        {
+            return new VoidResult<string>($"Failed to remove favorite model slug: {ex.Message}");
         }
     }
 

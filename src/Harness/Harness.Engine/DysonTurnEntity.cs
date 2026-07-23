@@ -12,8 +12,10 @@ public sealed class DysonTurnEntity
     public string ToolStateJson { get; set; } = "{}";
     public bool ToolHistoryOptimized { get; set; }
     public string? CompactToolHistory { get; set; }
-    public DateTimeOffset CreatedUtc { get; set; }
-    public DateTimeOffset? CompletedUtc { get; set; }
+    /// <summary>UTC.</summary>
+    public DateTime CreatedUtc { get; set; }
+    /// <summary>UTC.</summary>
+    public DateTime? CompletedUtc { get; set; }
 
     public DysonSessionEntity? Session { get; set; }
 }
