@@ -1,0 +1,89 @@
+@namespace Harness.UI.Components.Models
+@using DysonHarness
+@inject DysonModelStore ModelStore
+
+<div class="model-slug-picker">
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="error-banner" style="margin:0 0 8px;">@_error</div>
+    }
+
+    @if (_options.Count == 0)
+    {
+        <div class="empty-state" style="padding:8px 0;">
+            No registered slugs.
+            <a href="/settings/models">Add models</a>
+        </div>
+    }
+    else
+    {
+        <div class="field" style="margin-bottom:0;">
+            <label for="model-slug-picker">Registered slug</label>
+            <select id="model-slug-picker"
+                    value="@SelectedSlugId"
+                    @onchange="OnChangeAsync">
+                @foreach (var option in _options)
+                {
+                    <option value="@option.Id">@option.Label</option>
+                }
+            </select>
+        </div>
+    }
+</div>
+
+@code {
+    private readonly List<SlugOption> _options = [];
+    private string? _error;
+
+    [Parameter] public Guid? SelectedSlugId { get; set; }
+    [Parameter] public EventCallback<Guid?> SelectedSlugIdChanged { get; set; }
+
+    protected override async Task OnInitializedAsync() => await RefreshAsync();
+
+    public async Task RefreshAsync()
+    {
+        _error = null;
+        _options.Clear();
+
+        var result = await ModelStore.ListProvidersAsync();
+        if (result.IsError)
+        {
+            _error = result.Error;
+            return;
+        }
+
+        foreach (var provider in result.Value)
+        {
+            foreach (var slug in provider.Slugs)
+            {
+                _options.Add(new SlugOption(
+                    slug.Id,
+                    $"{slug.DisplayAlias} · {provider.DisplayName} / {slug.Slug}",
+                    slug.IsDefault));
+            }
+        }
+
+        if (_options.Count == 0)
+        {
+            if (SelectedSlugId is not null)
+                await SelectedSlugIdChanged.InvokeAsync(null);
+            return;
+        }
+
+        if (SelectedSlugId is Guid selected && _options.Any(o => o.Id == selected))
+            return;
+
+        var fallback = _options.FirstOrDefault(o => o.IsDefault) ?? _options[0];
+        await SelectedSlugIdChanged.InvokeAsync(fallback.Id);
+    }
+
+    private Task OnChangeAsync(ChangeEventArgs args)
+    {
+        if (args.Value is string text && Guid.TryParse(text, out var id))
+            return SelectedSlugIdChanged.InvokeAsync(id);
+
+        return SelectedSlugIdChanged.InvokeAsync(null);
+    }
+
+    private sealed record SlugOption(Guid Id, string Label, bool IsDefault);
+}

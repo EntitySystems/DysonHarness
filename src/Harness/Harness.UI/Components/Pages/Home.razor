@@ -17,12 +17,9 @@
                              OnResume="ResumeAsync"
                              OnRefresh="RefreshSessionsAsync" />
             </SessionList>
-            <Models>
-                <ModelsPanel OnChanged="RefreshSessionsAsync" />
-            </Models>
-            <Theme>
-                <ThemeSwitcher />
-            </Theme>
+            <SlugPicker>
+                <ModelSlugPicker @bind-SelectedSlugId="_selectedSlugId" />
+            </SlugPicker>
         </Sidebar>
     </Sidebar>
     <Main>
@@ -70,6 +67,7 @@
     private IReadOnlyList<DysonSessionSummary> _sessions = [];
     private string? _listError;
     private string? _activeTitle;
+    private Guid? _selectedSlugId;
 
     private DysonAgentTurn? _latestTurn =>
         Host.Session?.Turns is { Count: > 0 } turns ? turns[^1] : null;
@@ -135,7 +133,7 @@
 
     private async Task StartNewAsync()
     {
-        var result = await Host.StartNewSessionAsync();
+        var result = await Host.StartNewSessionAsync(DysonAgentModes.Work, _selectedSlugId);
         if (result.IsError)
             _listError = result.Error;
         await RefreshSessionsAsync();

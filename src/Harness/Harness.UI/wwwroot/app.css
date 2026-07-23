@@ -192,6 +192,130 @@ code, .mono {
   padding: 10px;
 }
 
+.sidebar__settings-link {
+  display: block;
+  padding: 6px 8px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.sidebar__settings-link:hover {
+  background: var(--bg-hover);
+  color: var(--accent-text);
+}
+
+/* Settings shell */
+.settings-shell {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  height: 100vh;
+  min-height: 100vh;
+  background: var(--bg-0);
+  overflow: hidden;
+}
+
+.settings-shell__nav {
+  background: var(--bg-1);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.settings-shell__links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px;
+}
+
+.settings-shell__link {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+}
+
+.settings-shell__link:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.settings-shell__link.active {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.settings-shell__back {
+  display: block;
+  padding: 6px 8px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.settings-shell__back:hover {
+  background: var(--bg-hover);
+  color: var(--accent-text);
+}
+
+.settings-shell__content {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg-0);
+}
+
+.settings-page {
+  max-width: 720px;
+  padding: 24px 28px 40px;
+}
+
+.settings-page__title {
+  margin: 0 0 8px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.settings-page__copy {
+  margin: 0 0 18px;
+  color: var(--text-muted);
+  max-width: 52ch;
+}
+
+.settings-page__panel {
+  padding: 14px;
+}
+
+.settings-shell__content .models-panel .list {
+  max-height: min(60vh, 520px);
+}
+
+.model-slug-picker {
+  padding: 0 2px;
+}
+
+@media (max-width: 760px) {
+  .settings-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .settings-shell__nav {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .settings-shell__links {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+
 /* Lists / panels */
 .panel {
   background: var(--bg-2);

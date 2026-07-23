@@ -1,6 +1,5 @@
 @namespace Harness.UI.Components.Shell
 @using DysonHarness
-@using Harness.UI.Demo
 
 <div class="sidebar__brand">
     <div class="sidebar__title">DysonHarness</div>
@@ -12,16 +11,15 @@
 </div>
 
 <div class="sidebar__section">
-    <div class="sidebar__section-label">Models</div>
-    @Models
+    <div class="sidebar__section-label">Model</div>
+    @SlugPicker
 </div>
 
 <div class="sidebar__footer">
-    @Theme
+    <a class="sidebar__settings-link" href="/settings/general">Settings</a>
 </div>
 
 @code {
     [Parameter] public RenderFragment? SessionList { get; set; }
-    [Parameter] public RenderFragment? Models { get; set; }
-    [Parameter] public RenderFragment? Theme { get; set; }
+    [Parameter] public RenderFragment? SlugPicker { get; set; }
 }

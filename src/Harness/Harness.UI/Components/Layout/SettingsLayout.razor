@@ -1,0 +1,25 @@
+@inherits LayoutComponentBase
+@layout MainLayout
+@using DysonHarness
+
+<div class="settings-shell">
+    <aside class="settings-shell__nav">
+        <div class="sidebar__brand">
+            <div class="sidebar__title">Settings</div>
+            <span class="badge mono">@DysonBuildInfo.Current</span>
+        </div>
+
+        <nav class="settings-shell__links">
+            <NavLink class="settings-shell__link" href="/settings/general" Match="NavLinkMatch.All">General</NavLink>
+            <NavLink class="settings-shell__link" href="/settings/models" Match="NavLinkMatch.All">Models</NavLink>
+        </nav>
+
+        <div class="sidebar__footer">
+            <a class="settings-shell__back" href="/">← Back to agent</a>
+        </div>
+    </aside>
+
+    <main class="settings-shell__content">
+        @Body
+    </main>
+</div>
