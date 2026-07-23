@@ -1,0 +1,16 @@
+namespace DysonHarness;
+
+public class DysonAgentSessionConfig
+{
+    /// <summary>
+    /// Local custom agent system prompts keyed by mode string.
+    /// Used when agentMode is not a built-in mode name.
+    /// </summary>
+    public Dictionary<string, string> CustomAgents { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// FullAccess runs tools directly. AutoReview routes calls through the in-process MCP proxy.
+    /// No allowlist either way.
+    /// </summary>
+    public DysonMcpAccessMode McpAccessMode { get; set; } = DysonMcpAccessMode.FullAccess;
+}
