@@ -15,11 +15,11 @@ Conceptual overview: [README.md](README.md).
 | `OpenAiCompatibleAgentSession` | Completions/Responses tool-loop session |
 | `OpenAiCompletionsClient` / `OpenAiResponsesClient` | Streaming SSE adapters (`StreamCreateAsync` → `OpenAiStreamChunk`) |
 | `OpenAiCacheFriendlyTranscriptBuilder` | Stable-prefix transcript + `prompt_cache_key` |
-| `DysonWorkspaceToolExecutor` | Workdir-scoped file tools + `RenameSession` + `ShellExecute`; stubs for the rest |
+| `DysonWorkspaceToolExecutor` | Workdir-scoped file tools + `RenameSession` + `ShellExecute` + web search/fetch tools; stubs for the rest |
 | `DysonShell` / `DysonWindowsShell` | Shell runners (`ShellType` get); Windows: Pwsh / PowerShell / Cmd |
 | `DysonShellType` / `DysonShellRunResult` | Shell enum + process result |
 | `DysonOpenAiApiModes` | `Completions` / `Responses` constants |
-| `DysonAgentSessionConfig` | `CustomAgents`, `McpAccessMode`, `AvailableShellTypes` |
+| `DysonAgentSessionConfig` | `CustomAgents`, `McpAccessMode`, `AvailableShellTypes`, optional `BraveApiKey` |
 | `DysonAgentSessionEvent` | Abstract notify payload for `WaitForNotifyAsync` |
 
 ### Session members (high level)
@@ -68,7 +68,19 @@ Conceptual overview: [README.md](README.md).
 | `DysonMcpTool` | Name, description, input schema JSON |
 | `DysonMcpAutoReviewProxy` | In-process review gate when mode is AutoReview |
 
-Default catalog includes session tools (`StartSubagent`, `WaitForSubagent`, …), completion tools, workspace file tools, **`RenameSession`** (`{ "title": string }` required) for UI/list titles, and **`ShellExecute`** (`shell` enum from session `AvailableShellTypes`, `command`, optional `timeoutMs` / `workingDirectory`) when shells are available. Call `RenameSession` only when the harness every-8 rename-review mandate asks, or when the user explicitly requests a rename. `DysonMcpPipeline.CreateDefault(accessMode, availableShellTypes)` builds the dynamic ShellExecute schema.
+Default catalog includes session tools (`StartSubagent`, `WaitForSubagent`, …), completion tools, workspace file tools, **`RenameSession`** (`{ "title": string }` required) for UI/list titles, **`ShellExecute`** (`shell` enum from session `AvailableShellTypes`, `command`, optional `timeoutMs` / `workingDirectory`) when shells are available, and **web search/fetch** tools: `FreeSearch`, `FreeSearchAdvanced`, `SearchWithSynthesis`, `FreeExtract`, `WebFetch`, `FetchGithubReadme` (see [README.md](README.md)#web-search--fetch-in-process). Call `RenameSession` only when the harness every-8 rename-review mandate asks, or when the user explicitly requests a rename. `DysonMcpPipeline.CreateDefault(accessMode, availableShellTypes)` builds the dynamic ShellExecute schema.
+
+## Search (in-process)
+
+| Type | Notes |
+| ---- | ----- |
+| `SearchOrchestrator` | `FreeSearchAsync` / `FreeSearchAdvancedAsync` / `SearchWithSynthesisAsync` |
+| `SearchEngines` | Bing HTML, Wikipedia API, optional Brave API |
+| `SearchFetch` | `WebFetchAsync`, `FreeExtractAsync`, `FetchGithubReadmeAsync` |
+| `SearchHttp` | Shared `HttpClient` + `ValidateUrl` SSRF guard |
+| `SearchAggregation` | Dedup, filter, confidence 1–3 scoring, waterfall basket |
+| `SearchSelfCheck` | `RunSsrfChecks()` — localhost/private IP block + Bing parse smoke |
+| `SearchHit` / `SearchResponse` / `SearchOptions` / `WebFetchResult` | Search DTOs |
 
 ## Interrupts & completion
 

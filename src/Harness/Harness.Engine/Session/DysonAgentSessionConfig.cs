@@ -20,4 +20,10 @@ public class DysonAgentSessionConfig
     /// </summary>
     public IReadOnlyList<DysonShellType> AvailableShellTypes { get; set; } =
         DysonShell.AvailableForCurrentPlatform();
+
+    /// <summary>
+    /// Optional Brave Search API key for FreeSearch / FreeSearchAdvanced.
+    /// Falls back to env <c>BRAVE_API_KEY</c> when unset.
+    /// </summary>
+    public string? BraveApiKey { get; set; }
 }

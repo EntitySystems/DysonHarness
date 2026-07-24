@@ -7,6 +7,10 @@ var shellCheck = DysonWindowsShell.SelfCheckArgMap();
 if (shellCheck.IsError)
     throw new InvalidOperationException(shellCheck.Error);
 
+var searchCheck = SearchSelfCheck.RunSsrfChecks();
+if (searchCheck.IsError)
+    throw new InvalidOperationException(searchCheck.Error);
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddRazorComponents()

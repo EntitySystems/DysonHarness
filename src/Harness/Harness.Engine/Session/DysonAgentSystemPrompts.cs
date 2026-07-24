@@ -14,6 +14,7 @@ public static class DysonAgentSystemPrompts
         - Match existing project conventions (style, naming, layout, patterns) before inventing new ones.
         - Use tools when they improve accuracy; do not guess file contents or repo state.
         - Prefer MCP tools over shell whenever an appropriate MCP tool exists (e.g. ReadFile, WriteFile, Grep, ListDirectory, CreateDirectory, CreateFile). Use shell only when no suitable MCP tool covers the need.
+        - For public web facts, prefer MCP search tools (FreeSearch, FreeSearchAdvanced, SearchWithSynthesis, FreeExtract, WebFetch, FetchGithubReadme) over inventing URLs or scraping via shell. Still prefer file MCP tools over search when the answer is in the workspace.
         - When writing or reviewing C# in this repository, follow Result-pattern rules: public APIs return Result / VoidResult / ValueResult for expected failures; do not use exceptions for ordinary control flow.
         - Skills live under /skills. Repo agent rules live under /rules and AGENTS.md—respect them.
         - Never claim work is done that you did not actually perform.

@@ -16,7 +16,7 @@ DI (scoped): `ThemeService`, `DysonDbContext`, `DysonModelStore`, `DysonSessionS
 
 On first open, a default **Demo Mock** provider + slug is seeded if none exists. SQLite lives under the platform app-data folder for the current `DysonAppMode` (see [storage/models](../storage/models.md)).
 
-`DysonUiHost` branches on effective `ProviderKind` (see below): `demo` (no credentials) → `DemoDysonAgentSession`; `OpenAICompatible` → `OpenAiCompatibleAgentSession` (engine). Anthropic is not wired yet.
+`DysonUiHost` branches on effective `ProviderKind` (see below): `demo` (no credentials) → `DemoDysonAgentSession`; `OpenAICompatible` → `OpenAiCompatibleAgentSession` (engine). Anthropic is not wired yet. OpenAI-compatible sessions expose in-process web search MCP tools (`FreeSearch`, `WebFetch`, …) via the engine catalog — see [engine README](../engine/README.md)#web-search--fetch-in-process. On startup the UI runs `SearchSelfCheck.RunSsrfChecks()` and logs a warning if it fails.
 
 **Provider routing:** session type follows the slug’s provider `ProviderKind`. Demo mode is for offline UI testing — `DemoDysonAgentSession` injects mock tools every turn (`read_file`, `grep`, `list_dir`) and mocks `RenameSession` only on rename-review turns (1, 9, 17, …), without calling an LLM. OpenAI-compatible providers call the real API and only run tools the model requests.
 

@@ -428,5 +428,124 @@ public sealed class DysonMcpPipeline
         var shellExecute = CreateShellExecuteTool(availableShellTypes);
         if (shellExecute is not null)
             yield return shellExecute;
+
+        yield return new DysonMcpTool
+        {
+            Name = "FreeSearch",
+            Description =
+                "Web search across free engines (Bing + Wikipedia; Brave when BRAVE_API_KEY / config is set). " +
+                "Returns JSON results with title, url, snippet, and confidence 1–3. " +
+                "Prefer this over inventing URLs. Not for local codebase search (use Grep).",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "query": { "type": "string", "description": "Search query." },
+                    "count": { "type": "integer", "description": "Max results (1-20, default 10)." },
+                    "engines": {
+                      "type": "array",
+                      "items": { "type": "string", "enum": ["bing", "wikipedia", "brave"] },
+                      "description": "Optional engine allowlist. Default: bing+wikipedia (+brave if keyed)."
+                    }
+                  },
+                  "required": ["query"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "FreeSearchAdvanced",
+            Description =
+                "Advanced web search with waterfall phases, domain filters, min confidence, and optional Jina enrichment. " +
+                "Prefer FreeSearch for simple queries.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "query": { "type": "string", "description": "Search query." },
+                    "count": { "type": "integer", "description": "Max results (1-20, default 5)." },
+                    "minConfidence": { "type": "integer", "description": "Only return results with confidence >= N (1-3)." },
+                    "includeDomains": { "type": "array", "items": { "type": "string" }, "description": "Only keep these domains." },
+                    "excludeDomains": { "type": "array", "items": { "type": "string" }, "description": "Drop these domains." },
+                    "waterfall": { "type": "boolean", "description": "Enable progressive engine phases (default true)." },
+                    "waterfallMinResults": { "type": "integer", "description": "Min results for early waterfall stop." },
+                    "waterfallMinConfidence": { "type": "number", "description": "Min avg confidence (0-1) for early stop." },
+                    "enrich": { "type": "boolean", "description": "Enrich low-confidence snippets via Jina Reader." },
+                    "enrichMax": { "type": "integer", "description": "Max results to enrich." }
+                  },
+                  "required": ["query"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "SearchWithSynthesis",
+            Description =
+                "Waterfall search plus a string prompt_hint for the agent to synthesize an answer (no external LLM call).",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "query": { "type": "string", "description": "Search query." },
+                    "count": { "type": "integer", "description": "Max results (1-20, default 10)." },
+                    "minConfidence": { "type": "integer", "description": "Only return results with confidence >= N (1-3)." }
+                  },
+                  "required": ["query"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "FreeExtract",
+            Description =
+                "Extract page content as markdown via Jina Reader (r.jina.ai/{url}). SSRF-guarded.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "url": { "type": "string", "description": "Public http(s) URL to extract." },
+                    "maxLength": { "type": "integer", "description": "Max characters to return (default 5000)." }
+                  },
+                  "required": ["url"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "WebFetch",
+            Description =
+                "HTTP GET a public URL and return raw HTML plus statusCode, contentType, finalUrl. SSRF-guarded. " +
+                "Prefer FreeExtract when you need readable markdown.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "url": { "type": "string", "description": "Public http(s) URL to fetch." },
+                    "maxBytes": { "type": "integer", "description": "Optional response body cap in bytes." }
+                  },
+                  "required": ["url"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "FetchGithubReadme",
+            Description =
+                "Fetch README from a GitHub repository via raw.githubusercontent.com. Pass a github.com owner/repo URL.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "url": { "type": "string", "description": "GitHub repository URL (https://github.com/owner/repo)." }
+                  },
+                  "required": ["url"]
+                }
+                """,
+        };
     }
 }

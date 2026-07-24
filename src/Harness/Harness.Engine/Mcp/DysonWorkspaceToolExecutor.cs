@@ -5,7 +5,8 @@ using System.Text.RegularExpressions;
 namespace DysonHarness;
 
 /// <summary>
-/// Executes workspace-scoped MCP tools against a work directory root, plus RenameSession and ShellExecute.
+/// Executes workspace-scoped MCP tools against a work directory root, plus RenameSession,
+/// ShellExecute, and in-process web search/fetch tools.
 /// Other catalog tools return a not-implemented stub result.
 /// </summary>
 public sealed class DysonWorkspaceToolExecutor
@@ -43,6 +44,12 @@ public sealed class DysonWorkspaceToolExecutor
                 "ListDirectory" => await ListDirectoryAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateDirectory" => await CreateDirectoryAsync(call, cancellationToken).ConfigureAwait(false),
                 "ShellExecute" => await ShellExecuteAsync(call, cancellationToken).ConfigureAwait(false),
+                "FreeSearch" => await FreeSearchAsync(call, cancellationToken).ConfigureAwait(false),
+                "FreeSearchAdvanced" => await FreeSearchAdvancedAsync(call, cancellationToken).ConfigureAwait(false),
+                "SearchWithSynthesis" => await SearchWithSynthesisAsync(call, cancellationToken).ConfigureAwait(false),
+                "FreeExtract" => await FreeExtractAsync(call, cancellationToken).ConfigureAwait(false),
+                "WebFetch" => await WebFetchAsync(call, cancellationToken).ConfigureAwait(false),
+                "FetchGithubReadme" => await FetchGithubReadmeAsync(call, cancellationToken).ConfigureAwait(false),
                 _ => Stub(call),
             };
         }
@@ -497,6 +504,180 @@ public sealed class DysonWorkspaceToolExecutor
         return r.TimedOut || r.ExitCode != 0
             ? Error(call, content)
             : Ok(call, string.IsNullOrEmpty(content) ? "(no output)" : content);
+    }
+
+    private async Task<DysonToolCallResult> FreeSearchAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var options = ParseSearchOptions(call, defaultCount: 10, waterfallDefault: false, enrichDefault: false);
+        if (options.IsError)
+            return Error(call, options.Error);
+
+        var result = await SearchOrchestrator.FreeSearchAsync(options.Value, cancellationToken)
+            .ConfigureAwait(false);
+        return result.IsError
+            ? Error(call, result.Error)
+            : Ok(call, SearchOrchestrator.ToJson(result.Value));
+    }
+
+    private async Task<DysonToolCallResult> FreeSearchAdvancedAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var options = ParseSearchOptions(call, defaultCount: 5, waterfallDefault: true, enrichDefault: true);
+        if (options.IsError)
+            return Error(call, options.Error);
+
+        var result = await SearchOrchestrator.FreeSearchAdvancedAsync(options.Value, cancellationToken)
+            .ConfigureAwait(false);
+        return result.IsError
+            ? Error(call, result.Error)
+            : Ok(call, SearchOrchestrator.ToJson(result.Value));
+    }
+
+    private async Task<DysonToolCallResult> SearchWithSynthesisAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var options = ParseSearchOptions(call, defaultCount: 10, waterfallDefault: true, enrichDefault: true);
+        if (options.IsError)
+            return Error(call, options.Error);
+
+        var result = await SearchOrchestrator.SearchWithSynthesisAsync(options.Value, cancellationToken)
+            .ConfigureAwait(false);
+        return result.IsError
+            ? Error(call, result.Error)
+            : Ok(call, SearchOrchestrator.ToJson(result.Value));
+    }
+
+    private async Task<DysonToolCallResult> FreeExtractAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+        var url = RequireString(doc.RootElement, "url");
+        if (url.IsError)
+            return Error(call, url.Error);
+
+        var maxLength = GetInt(doc.RootElement, "maxLength") ?? 5000;
+        var result = await SearchFetch.FreeExtractAsync(url.Value, maxLength, cancellationToken)
+            .ConfigureAwait(false);
+        return result.IsError ? Error(call, result.Error) : Ok(call, result.Value);
+    }
+
+    private async Task<DysonToolCallResult> WebFetchAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+        var url = RequireString(doc.RootElement, "url");
+        if (url.IsError)
+            return Error(call, url.Error);
+
+        var maxBytes = GetInt(doc.RootElement, "maxBytes");
+        var result = await SearchFetch.WebFetchAsync(url.Value, maxBytes, cancellationToken)
+            .ConfigureAwait(false);
+        return result.IsError
+            ? Error(call, result.Error)
+            : Ok(call, SearchFetch.WebFetchToJson(result.Value));
+    }
+
+    private async Task<DysonToolCallResult> FetchGithubReadmeAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+        var url = RequireString(doc.RootElement, "url");
+        if (url.IsError)
+            return Error(call, url.Error);
+
+        var result = await SearchFetch.FetchGithubReadmeAsync(url.Value, cancellationToken)
+            .ConfigureAwait(false);
+        return result.IsError ? Error(call, result.Error) : Ok(call, result.Value);
+    }
+
+    private Result<SearchOptions, string> ParseSearchOptions(
+        DysonToolCall call,
+        int defaultCount,
+        bool waterfallDefault,
+        bool enrichDefault)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var root = doc.RootElement;
+            var query = RequireString(root, "query");
+            if (query.IsError)
+                return Result<SearchOptions, string>.AsError(query.Error);
+
+            List<string>? engines = null;
+            if (root.TryGetProperty("engines", out var enginesProp) && enginesProp.ValueKind == JsonValueKind.Array)
+            {
+                engines = [];
+                foreach (var item in enginesProp.EnumerateArray())
+                {
+                    var s = item.GetString();
+                    if (!string.IsNullOrWhiteSpace(s))
+                        engines.Add(s);
+                }
+            }
+
+            List<string>? includeDomains = ReadStringArray(root, "includeDomains");
+            List<string>? excludeDomains = ReadStringArray(root, "excludeDomains");
+
+            var waterfall = waterfallDefault;
+            if (root.TryGetProperty("waterfall", out var wf))
+                waterfall = wf.ValueKind != JsonValueKind.False;
+
+            var enrich = enrichDefault;
+            if (root.TryGetProperty("enrich", out var en))
+                enrich = en.ValueKind != JsonValueKind.False;
+
+            double waterfallMinConfidence = 0.6;
+            if (root.TryGetProperty("waterfallMinConfidence", out var wmc)
+                && wmc.ValueKind == JsonValueKind.Number
+                && wmc.TryGetDouble(out var wmcVal))
+            {
+                waterfallMinConfidence = wmcVal;
+            }
+
+            return Result<SearchOptions, string>.AsValue(new SearchOptions
+            {
+                Query = query.Value,
+                Count = GetInt(root, "count") ?? defaultCount,
+                Engines = engines,
+                MinConfidence = GetInt(root, "minConfidence") ?? 1,
+                IncludeDomains = includeDomains,
+                ExcludeDomains = excludeDomains,
+                Waterfall = waterfall,
+                WaterfallMinResults = GetInt(root, "waterfallMinResults") ?? 3,
+                WaterfallMinConfidence = waterfallMinConfidence,
+                Enrich = enrich,
+                EnrichMax = GetInt(root, "enrichMax") ?? 3,
+                BraveApiKey = SearchOrchestrator.ResolveBraveApiKey(_session.Config),
+            });
+        }
+        catch (JsonException)
+        {
+            return Result<SearchOptions, string>.AsError($"{call.ToolName}: invalid JSON arguments.");
+        }
+    }
+
+    private static List<string>? ReadStringArray(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var prop) || prop.ValueKind != JsonValueKind.Array)
+            return null;
+
+        var list = new List<string>();
+        foreach (var item in prop.EnumerateArray())
+        {
+            var s = item.GetString();
+            if (!string.IsNullOrWhiteSpace(s))
+                list.Add(s);
+        }
+
+        return list.Count > 0 ? list : null;
     }
 
     private Result<string, string> ResolveUnderWorkRoot(string path)
