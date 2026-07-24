@@ -43,7 +43,11 @@ public sealed class OpenAiResponsesClient(HttpClient http)
             };
         }
 
+        if (!string.IsNullOrWhiteSpace(provider.ReasoningEffort))
+            body["reasoning_effort"] = provider.ReasoningEffort.Trim();
+
         var content = new StringBuilder();
+        var reasoning = new StringBuilder();
         var functionCalls = new Dictionary<string, ResponsesFunctionSlot>(StringComparer.Ordinal);
         string? responseId = null;
         JsonObject? completedResponse = null;
@@ -92,6 +96,7 @@ public sealed class OpenAiResponsesClient(HttpClient http)
             }
 
             string? textDelta = null;
+            string? reasoningDelta = null;
             List<OpenAiStreamToolCallDelta>? toolDeltas = null;
 
             if (string.Equals(eventType, "response.created", StringComparison.Ordinal)
@@ -108,6 +113,16 @@ public sealed class OpenAiResponsesClient(HttpClient http)
                 {
                     content.Append(delta);
                     textDelta = delta;
+                }
+            }
+            else if (string.Equals(eventType, "response.reasoning_summary_text.delta", StringComparison.Ordinal)
+                || string.Equals(eventType, "response.reasoning_text.delta", StringComparison.Ordinal))
+            {
+                var delta = TryGetString(obj["delta"]);
+                if (!string.IsNullOrEmpty(delta))
+                {
+                    reasoning.Append(delta);
+                    reasoningDelta = delta;
                 }
             }
             else if (string.Equals(eventType, "response.output_item.added", StringComparison.Ordinal))
@@ -204,11 +219,12 @@ public sealed class OpenAiResponsesClient(HttpClient http)
                 responseId ??= completedResponse?["id"]?.GetValue<string>();
             }
 
-            if (textDelta is not null || toolDeltas is { Count: > 0 })
+            if (textDelta is not null || reasoningDelta is not null || toolDeltas is { Count: > 0 })
             {
                 yield return Result<OpenAiStreamChunk, string>.AsValue(new OpenAiStreamChunk
                 {
                     TextDelta = textDelta,
+                    ReasoningDelta = reasoningDelta,
                     ToolCallDeltas = toolDeltas,
                 });
             }
@@ -225,12 +241,18 @@ public sealed class OpenAiResponsesClient(HttpClient http)
             ? OpenAiCompatibleHttp.FormatUsageCacheHint(completedResponse)
             : null;
 
+        // Prefer streamed accumulation; fall back to completed response payload if empty.
+        var reasoningContent = reasoning.Length == 0
+            ? ExtractReasoningFromResponse(completedResponse)
+            : reasoning.ToString();
+
         yield return Result<OpenAiStreamChunk, string>.AsValue(new OpenAiStreamChunk
         {
             IsRoundComplete = true,
             CompletedReply = new OpenAiModelReply
             {
                 Content = content.Length == 0 ? null : content.ToString(),
+                ReasoningContent = reasoningContent,
                 ToolCalls = toolCalls,
                 ResponseId = responseId,
                 UsageCacheHint = usageHint,
@@ -247,6 +269,7 @@ public sealed class OpenAiResponsesClient(HttpClient http)
             return Result<OpenAiModelReply, string>.AsError("Responses payload had no output array.");
 
         var contentParts = new List<string>();
+        var reasoningParts = new List<string>();
         var toolCalls = new List<DysonToolCall>();
 
         foreach (var item in output)
@@ -274,6 +297,10 @@ public sealed class OpenAiResponsesClient(HttpClient http)
                     }
                 }
             }
+            else if (string.Equals(type, "reasoning", StringComparison.Ordinal))
+            {
+                AppendReasoningParts(obj, reasoningParts);
+            }
             else if (string.Equals(type, "function_call", StringComparison.Ordinal))
             {
                 var id = obj["call_id"]?.GetValue<string>()
@@ -296,13 +323,65 @@ public sealed class OpenAiResponsesClient(HttpClient http)
         }
 
         var content = contentParts.Count == 0 ? null : string.Join("\n", contentParts);
+        var reasoningContent = reasoningParts.Count == 0 ? null : string.Join("\n", reasoningParts);
         return Result<OpenAiModelReply, string>.AsValue(new OpenAiModelReply
         {
             Content = content,
+            ReasoningContent = reasoningContent,
             ToolCalls = toolCalls,
             ResponseId = response["id"]?.GetValue<string>(),
             UsageCacheHint = OpenAiCompatibleHttp.FormatUsageCacheHint(response),
         });
+    }
+
+    private static string? ExtractReasoningFromResponse(JsonObject? response)
+    {
+        if (response is null)
+            return null;
+
+        var parts = new List<string>();
+        if (response["output"] is JsonArray output)
+        {
+            foreach (var item in output)
+            {
+                if (item is JsonObject obj
+                    && string.Equals(obj["type"]?.GetValue<string>(), "reasoning", StringComparison.Ordinal))
+                {
+                    AppendReasoningParts(obj, parts);
+                }
+            }
+        }
+
+        return parts.Count == 0 ? null : string.Join("\n", parts);
+    }
+
+    private static void AppendReasoningParts(JsonObject reasoningItem, List<string> parts)
+    {
+        // summary: [{ type: "summary_text", text: "..." }, ...]
+        if (reasoningItem["summary"] is JsonArray summary)
+        {
+            foreach (var part in summary)
+            {
+                if (part is not JsonObject p)
+                    continue;
+                var text = TryGetString(p["text"]);
+                if (!string.IsNullOrEmpty(text))
+                    parts.Add(text);
+            }
+        }
+
+        // content: [{ type: "reasoning_text", text: "..." }, ...]
+        if (reasoningItem["content"] is JsonArray content)
+        {
+            foreach (var part in content)
+            {
+                if (part is not JsonObject p)
+                    continue;
+                var text = TryGetString(p["text"]);
+                if (!string.IsNullOrEmpty(text))
+                    parts.Add(text);
+            }
+        }
     }
 
     private static ResponsesFunctionSlot GetOrCreateFunctionSlot(

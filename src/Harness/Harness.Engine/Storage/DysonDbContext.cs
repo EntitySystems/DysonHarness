@@ -53,6 +53,9 @@ public sealed class DysonDbContext : DbContext
             e.HasKey(x => x.Id);
             e.Property(x => x.Slug).IsRequired();
             e.Property(x => x.DisplayAlias).IsRequired();
+            e.Property(x => x.ReasoningModes)
+                .HasConversion(new StringListJsonValueConverter(), StringListJsonValueConverter.Comparer)
+                .HasColumnType("TEXT");
             e.HasIndex(x => new { x.ProviderId, x.Slug }).IsUnique();
             e.HasIndex(x => x.IsDefault);
         });

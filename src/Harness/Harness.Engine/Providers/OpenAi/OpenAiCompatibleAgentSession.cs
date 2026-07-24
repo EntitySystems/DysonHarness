@@ -75,6 +75,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 AgentMode = agentMode,
                 ModelSlugId = provider.SlugId,
                 WorkDirectoryId = workDirectoryId,
+                ReasoningEffort = provider.ReasoningEffort,
                 McpAccessMode = config.McpAccessMode,
                 Title = initialTitle,
                 SystemPromptSnapshot = session.SystemPrompt,
@@ -199,6 +200,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 AgentMode = agentMode,
                 ModelSlugId = childProvider.SlugId,
                 WorkDirectoryId = _workDirectoryId,
+                ReasoningEffort = childProvider.ReasoningEffort,
                 McpAccessMode = Config.McpAccessMode,
                 Title = title,
                 SystemPromptSnapshot = child.SystemPrompt,
@@ -380,6 +382,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 if (replyResult.IsError)
                 {
                     turn.ClearStreamingPreview();
+                    turn.ClearReasoningPreview();
                     turn.FinalizeIncompleteTools(incompleteToolReason);
                     return new VoidResult<string>(replyResult.Error);
                 }
@@ -394,6 +397,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 if (reply.ToolCalls.Count > 0)
                 {
                     turn.ClearStreamingPreview();
+                    turn.ClearReasoningPreview();
 
                     foreach (var call in reply.ToolCalls)
                         turn.ToolCalls.Add(call);
@@ -406,6 +410,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     if (staged.IsError)
                     {
                         turn.ClearStreamingPreview();
+                        turn.ClearReasoningPreview();
                         turn.FinalizeIncompleteTools(incompleteToolReason);
                         return staged;
                     }
@@ -450,6 +455,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     {
                         // Keep AssistantText unset so history stays incomplete and tools remain inFlight-only.
                         turn.ClearStreamingPreview();
+                        turn.ClearReasoningPreview();
                         previousResponseId = null;
                         harnessFollowUp =
                             $"Your previous assistant reply was not accepted as a finish:\n\n{text}\n\n{childReportNudge}";
@@ -459,6 +465,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     }
 
                     turn.ClearStreamingPreview();
+                    turn.ClearReasoningPreview();
                     turn.FinalizeIncompleteTools(incompleteToolReason);
                     AppendLog("child report gate: missing SubmitSubagentReport after nudge");
                     return new VoidResult<string>(childReportMissing);
@@ -466,18 +473,22 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
                 // Title parse only at finalize — preview stays raw (incl. mid-stream H1) until then.
                 ApplyAssistantText(turn, text);
+                ApplyReasoningText(turn, reply);
                 turn.FinishStreaming();
+                turn.FinishReasoningStreaming();
                 AppendLog($"turn complete: {turn.AgentTitle ?? turn.Id.ToString("N")[..8]}");
                 return VoidResult<string>.Success;
             }
 
             turn.ClearStreamingPreview();
+            turn.ClearReasoningPreview();
             turn.FinalizeIncompleteTools(incompleteToolReason);
             return new VoidResult<string>($"Tool loop exceeded {MaxToolRounds} rounds without a final reply.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             turn.ClearStreamingPreview();
+            turn.ClearReasoningPreview();
             turn.FinalizeIncompleteTools(incompleteToolReason);
             return new VoidResult<string>("Prompt was cancelled.");
         }
@@ -546,6 +557,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 if (!string.IsNullOrEmpty(chunk.TextDelta))
                     turn.AppendStreamingDelta(chunk.TextDelta);
 
+                if (!string.IsNullOrEmpty(chunk.ReasoningDelta))
+                    turn.AppendReasoningDelta(chunk.ReasoningDelta);
+
                 if (chunk.IsRoundComplete)
                     completed = chunk.CompletedReply;
             }
@@ -573,6 +587,16 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         {
             turn.AssistantText = text;
         }
+    }
+
+    private static void ApplyReasoningText(DysonAgentTurn turn, OpenAiModelReply reply)
+    {
+        var reasoning = reply.ReasoningContent;
+        if (string.IsNullOrWhiteSpace(reasoning))
+            reasoning = turn.ReasoningStreamingPreview;
+
+        if (!string.IsNullOrWhiteSpace(reasoning))
+            turn.ReasoningText = reasoning;
     }
 
     private static string Truncate(string value, int max)

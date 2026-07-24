@@ -3,7 +3,10 @@ namespace DysonHarness;
 /// <summary>Ephemeral OpenAI-compatible provider built from a model provider + slug.</summary>
 public sealed class OpenAiCompatibleAgentProvider : DysonAgentProvider
 {
-    public OpenAiCompatibleAgentProvider(DysonModelProviderEntity? provider, DysonModelSlugEntity? slug)
+    public OpenAiCompatibleAgentProvider(
+        DysonModelProviderEntity? provider,
+        DysonModelSlugEntity? slug,
+        string? reasoningEffort = null)
     {
         ProviderId = provider?.Id ?? slug?.ProviderId;
         SlugId = slug?.Id;
@@ -19,11 +22,13 @@ public sealed class OpenAiCompatibleAgentProvider : DysonAgentProvider
             ?? "OpenAI Compatible";
         OpenAiApiMode = DysonOpenAiApiModes.Normalize(
             provider?.OpenAiApiMode ?? slug?.Provider?.OpenAiApiMode);
+        ReasoningEffort = NormalizeReasoningEffort(
+            reasoningEffort ?? slug?.DefaultReasoningEffort);
     }
 
     /// <summary>Convenience: slug must include <see cref="DysonModelSlugEntity.Provider"/>.</summary>
-    public OpenAiCompatibleAgentProvider(DysonModelSlugEntity? slug)
-        : this(slug?.Provider, slug)
+    public OpenAiCompatibleAgentProvider(DysonModelSlugEntity? slug, string? reasoningEffort = null)
+        : this(slug?.Provider, slug, reasoningEffort)
     {
     }
 
@@ -36,4 +41,9 @@ public sealed class OpenAiCompatibleAgentProvider : DysonAgentProvider
     public string? BaseUrl { get; }
     public string ProviderDisplayName { get; }
     public string OpenAiApiMode { get; }
+    /// <summary>Top-level request reasoning_effort; null/empty = omit.</summary>
+    public string? ReasoningEffort { get; set; }
+
+    public static string? NormalizeReasoningEffort(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

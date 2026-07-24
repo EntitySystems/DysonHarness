@@ -727,6 +727,7 @@ public abstract class DysonAgentSession
                 Instruction = row.Instruction,
                 AgentTitle = row.AgentTitle,
                 AssistantText = row.AssistantText,
+                ReasoningText = row.ReasoningText,
                 ToolHistoryOptimized = row.ToolHistoryOptimized,
                 CompactToolHistory = row.CompactToolHistory,
                 StartedUtc = row.CreatedUtc,

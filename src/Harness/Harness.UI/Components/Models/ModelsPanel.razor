@@ -102,20 +102,71 @@
                             {
                                 @foreach (var slug in provider.Slugs)
                                 {
-                                    <div class="models-panel__slug @(slug.IsDefault ? "is-active" : null)">
-                                        <span class="list-item__title">@slug.DisplayAlias</span>
-                                        <span class="list-item__meta mono">
-                                            @slug.Slug
-                                            @(slug.IsDefault ? " · default" : "")
-                                        </span>
-                                        <div class="btn-row" style="margin-top:2px;">
-                                            @if (!slug.IsDefault)
-                                            {
-                                                <button type="button" class="btn" style="padding:2px 6px;font-size:10px;" @onclick="() => SetDefaultAsync(slug.Id)">Default</button>
-                                            }
-                                            <button type="button" class="btn btn-ghost" style="padding:2px 6px;font-size:10px;" @onclick="() => RemoveSlugAsync(slug.Id)">Remove</button>
+                                    @if (_editingSlugId == slug.Id)
+                                    {
+                                        <div class="models-panel__slug" style="margin-top:4px;">
+                                            <div class="field">
+                                                <label>Display alias</label>
+                                                <input @bind="_editSlugAlias" />
+                                            </div>
+                                            <div class="field">
+                                                <label>Slug</label>
+                                                <input @bind="_editSlugValue" />
+                                            </div>
+                                            <div class="field">
+                                                <label>Default reasoning effort</label>
+                                                <input @bind="_editSlugEffort" placeholder="blank = omit" />
+                                            </div>
+                                            <div class="field">
+                                                <label>Reasoning modes</label>
+                                                <div class="models-panel__modes">
+                                                    @foreach (var mode in _editSlugReasoningModes)
+                                                    {
+                                                        var m = mode;
+                                                        <span class="models-panel__mode-chip">
+                                                            <span class="mono">@m</span>
+                                                            <button type="button" class="btn btn-ghost" style="padding:0 4px;font-size:10px;" @onclick="() => RemoveEditSlugMode(m)" title="Remove">×</button>
+                                                        </span>
+                                                    }
+                                                </div>
+                                                <div class="btn-row" style="margin-top:4px;align-items:center;">
+                                                    <input @bind="_editSlugModeDraft" @bind:event="oninput" placeholder="e.g. high" style="flex:1;min-width:0;"
+                                                           @onkeydown="OnEditSlugModeKeyDown" />
+                                                    <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="AddEditSlugMode">Add</button>
+                                                </div>
+                                            </div>
+                                            <label class="checkbox-row">
+                                                <input type="checkbox" @bind="_editSlugIsDefault" />
+                                                Set as default
+                                            </label>
+                                            <div class="btn-row" style="margin-top:2px;">
+                                                <button type="button" class="btn btn-primary" style="padding:2px 6px;font-size:10px;" @onclick="() => SaveSlugAsync(slug)">Save</button>
+                                                <button type="button" class="btn btn-ghost" style="padding:2px 6px;font-size:10px;" @onclick="CancelEditSlug">Cancel</button>
+                                            </div>
                                         </div>
-                                    </div>
+                                    }
+                                    else
+                                    {
+                                        <div class="models-panel__slug @(slug.IsDefault ? "is-active" : null)">
+                                            <span class="list-item__title">@slug.DisplayAlias</span>
+                                            <span class="list-item__meta mono">
+                                                @slug.Slug
+                                                @(slug.IsDefault ? " · default" : "")
+                                                @if (!string.IsNullOrWhiteSpace(slug.DefaultReasoningEffort))
+                                                {
+                                                    <text> · effort @slug.DefaultReasoningEffort</text>
+                                                }
+                                            </span>
+                                            <div class="btn-row" style="margin-top:2px;">
+                                                <button type="button" class="btn" style="padding:2px 6px;font-size:10px;" @onclick="() => BeginEditSlug(slug)">Edit</button>
+                                                @if (!slug.IsDefault)
+                                                {
+                                                    <button type="button" class="btn" style="padding:2px 6px;font-size:10px;" @onclick="() => SetDefaultAsync(slug.Id)">Default</button>
+                                                }
+                                                <button type="button" class="btn btn-ghost" style="padding:2px 6px;font-size:10px;" @onclick="() => RemoveSlugAsync(slug.Id)">Remove</button>
+                                            </div>
+                                        </div>
+                                    }
                                 }
                             }
 
@@ -129,6 +180,28 @@
                                     <div class="field">
                                         <label>Slug</label>
                                         <input @bind="_slugValue" placeholder="gpt-4o" />
+                                    </div>
+                                    <div class="field">
+                                        <label>Default reasoning effort</label>
+                                        <input @bind="_slugEffort" placeholder="blank = omit" />
+                                    </div>
+                                    <div class="field">
+                                        <label>Reasoning modes</label>
+                                        <div class="models-panel__modes">
+                                            @foreach (var mode in _addSlugReasoningModes)
+                                            {
+                                                var m = mode;
+                                                <span class="models-panel__mode-chip">
+                                                    <span class="mono">@m</span>
+                                                    <button type="button" class="btn btn-ghost" style="padding:0 4px;font-size:10px;" @onclick="() => RemoveAddSlugMode(m)" title="Remove">×</button>
+                                                </span>
+                                            }
+                                        </div>
+                                        <div class="btn-row" style="margin-top:4px;align-items:center;">
+                                            <input @bind="_addSlugModeDraft" @bind:event="oninput" placeholder="e.g. high" style="flex:1;min-width:0;"
+                                                   @onkeydown="OnAddSlugModeKeyDown" />
+                                            <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="AddAddSlugMode">Add</button>
+                                        </div>
                                     </div>
                                     <label class="checkbox-row">
                                         <input type="checkbox" @bind="_slugIsDefault" />
@@ -194,6 +267,28 @@
                     <label>Initial display alias</label>
                     <input @bind="_initialAlias" placeholder="Demo Mock" />
                 </div>
+                <div class="field">
+                    <label>Default reasoning effort (optional)</label>
+                    <input @bind="_initialEffort" placeholder="blank = omit" />
+                </div>
+                <div class="field">
+                    <label>Reasoning modes</label>
+                    <div class="models-panel__modes">
+                        @foreach (var mode in _initialReasoningModes)
+                        {
+                            var m = mode;
+                            <span class="models-panel__mode-chip">
+                                <span class="mono">@m</span>
+                                <button type="button" class="btn btn-ghost" style="padding:0 4px;font-size:10px;" @onclick="() => RemoveInitialMode(m)" title="Remove">×</button>
+                            </span>
+                        }
+                    </div>
+                    <div class="btn-row" style="margin-top:4px;align-items:center;">
+                        <input @bind="_initialModeDraft" @bind:event="oninput" placeholder="e.g. high" style="flex:1;min-width:0;"
+                               @onkeydown="OnInitialModeKeyDown" />
+                        <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="AddInitialMode">Add</button>
+                    </div>
+                </div>
                 <label class="checkbox-row">
                     <input type="checkbox" @bind="_initialIsDefault" />
                     Set slug as default
@@ -217,7 +312,10 @@
     private string _openAiApiMode = DysonOpenAiApiModes.Completions;
     private string _initialSlug = "";
     private string _initialAlias = "";
+    private string _initialEffort = "high";
     private bool _initialIsDefault;
+    private List<string> _initialReasoningModes = [];
+    private string _initialModeDraft = "";
 
     private Guid? _editingProviderId;
     private string _editDisplayName = "";
@@ -229,7 +327,18 @@
     private Guid? _addSlugProviderId;
     private string _slugAlias = "";
     private string _slugValue = "";
+    private string _slugEffort = "high";
     private bool _slugIsDefault;
+    private List<string> _addSlugReasoningModes = [];
+    private string _addSlugModeDraft = "";
+
+    private Guid? _editingSlugId;
+    private string _editSlugAlias = "";
+    private string _editSlugValue = "";
+    private string _editSlugEffort = "";
+    private bool _editSlugIsDefault;
+    private List<string> _editSlugReasoningModes = [];
+    private string _editSlugModeDraft = "";
 
     [Parameter] public EventCallback OnChanged { get; set; }
 
@@ -284,7 +393,13 @@
             return;
         }
 
-        var addSlug = await ModelStore.AddSlugAsync(create.Value, slug, alias, makeDefault);
+        var addSlug = await ModelStore.AddSlugAsync(
+            create.Value,
+            slug,
+            alias,
+            makeDefault,
+            string.IsNullOrWhiteSpace(_initialEffort) ? null : _initialEffort.Trim(),
+            _initialReasoningModes);
         if (addSlug.IsError)
         {
             _error = addSlug.Error;
@@ -296,8 +411,11 @@
         _baseUrl = null;
         _apiKey = null;
         _openAiApiMode = DysonOpenAiApiModes.Completions;
+        _initialReasoningModes = [];
+        _initialModeDraft = "";
         _initialSlug = "";
         _initialAlias = "";
+        _initialEffort = "high";
         _initialIsDefault = false;
         await RefreshAsync();
         await OnChanged.InvokeAsync();
@@ -318,6 +436,64 @@
     private void CancelEditProvider()
     {
         _editingProviderId = null;
+    }
+
+    private void AddInitialMode()
+    {
+        if (!TryAddMode(_initialReasoningModes, _initialModeDraft))
+            return;
+        _initialModeDraft = "";
+    }
+
+    private void RemoveInitialMode(string mode) => _initialReasoningModes.Remove(mode);
+
+    private void OnInitialModeKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            AddInitialMode();
+    }
+
+    private void AddAddSlugMode()
+    {
+        if (!TryAddMode(_addSlugReasoningModes, _addSlugModeDraft))
+            return;
+        _addSlugModeDraft = "";
+    }
+
+    private void RemoveAddSlugMode(string mode) => _addSlugReasoningModes.Remove(mode);
+
+    private void OnAddSlugModeKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            AddAddSlugMode();
+    }
+
+    private void AddEditSlugMode()
+    {
+        if (!TryAddMode(_editSlugReasoningModes, _editSlugModeDraft))
+            return;
+        _editSlugModeDraft = "";
+    }
+
+    private void RemoveEditSlugMode(string mode) => _editSlugReasoningModes.Remove(mode);
+
+    private void OnEditSlugModeKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            AddEditSlugMode();
+    }
+
+    private static bool TryAddMode(List<string> modes, string? draft)
+    {
+        if (string.IsNullOrWhiteSpace(draft))
+            return false;
+
+        var trimmed = draft.Trim();
+        if (modes.Contains(trimmed, StringComparer.Ordinal))
+            return false;
+
+        modes.Add(trimmed);
+        return true;
     }
 
     private static IEnumerable<string> ProviderKindOptions(string current)
@@ -391,14 +567,70 @@
     private void BeginAddSlug(Guid providerId)
     {
         _addSlugProviderId = providerId;
+        _editingSlugId = null;
         _slugAlias = "";
         _slugValue = "";
+        _slugEffort = "high";
         _slugIsDefault = false;
+        _addSlugReasoningModes = [];
+        _addSlugModeDraft = "";
     }
 
     private void CancelAddSlug()
     {
         _addSlugProviderId = null;
+        _addSlugModeDraft = "";
+    }
+
+    private void BeginEditSlug(DysonModelSlugEntity slug)
+    {
+        _addSlugProviderId = null;
+        _editingSlugId = slug.Id;
+        _editSlugAlias = slug.DisplayAlias;
+        _editSlugValue = slug.Slug;
+        _editSlugEffort = slug.DefaultReasoningEffort ?? "";
+        _editSlugIsDefault = slug.IsDefault;
+        _editSlugReasoningModes = [..slug.ReasoningModes];
+        _editSlugModeDraft = "";
+    }
+
+    private void CancelEditSlug()
+    {
+        _editingSlugId = null;
+        _editSlugModeDraft = "";
+    }
+
+    private async Task SaveSlugAsync(DysonModelSlugEntity slug)
+    {
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_editSlugValue) || string.IsNullOrWhiteSpace(_editSlugAlias))
+        {
+            _error = "Slug and display alias are required.";
+            return;
+        }
+
+        var update = await ModelStore.UpdateSlugAsync(new DysonModelSlugEntity
+        {
+            Id = slug.Id,
+            ProviderId = slug.ProviderId,
+            Slug = _editSlugValue.Trim(),
+            DisplayAlias = _editSlugAlias.Trim(),
+            IsDefault = _editSlugIsDefault,
+            DefaultReasoningEffort = string.IsNullOrWhiteSpace(_editSlugEffort)
+                ? null
+                : _editSlugEffort.Trim(),
+            ReasoningModes = [.._editSlugReasoningModes],
+        });
+
+        if (update.IsError)
+        {
+            _error = update.Error;
+            return;
+        }
+
+        _editingSlugId = null;
+        await RefreshAsync();
+        await OnChanged.InvokeAsync();
     }
 
     private async Task AddSlugAsync(Guid providerId)
@@ -414,7 +646,9 @@
             providerId,
             _slugValue.Trim(),
             _slugAlias.Trim(),
-            _slugIsDefault);
+            _slugIsDefault,
+            string.IsNullOrWhiteSpace(_slugEffort) ? null : _slugEffort.Trim(),
+            _addSlugReasoningModes);
 
         if (add.IsError)
         {

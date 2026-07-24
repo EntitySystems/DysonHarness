@@ -76,6 +76,8 @@ Cascade-delete: removing a provider deletes its slugs.
 | `Slug` | API model id (e.g. `gpt-4o`) |
 | `DisplayAlias` | UI label (e.g. “GPT-4o Fast”) |
 | `IsDefault` | Global default selection for new sessions (one default across all providers) |
+| `DefaultReasoningEffort` | Optional freeform default for top-level API `reasoning_effort` (e.g. `high` / `low`); null/empty = omit |
+| `ReasoningModes` | Freeform `List<string>` of `reasoning_effort` values for the Composer dropdown; stored as JSON TEXT via `StringListJsonValueConverter` (normalize on write; empty list on bad JSON read); default `[]` |
 | `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
 
 Unique index on `(ProviderId, Slug)`.
@@ -95,9 +97,20 @@ User-starred slugs for the Composer model picker (persisted per app-data DB).
 Thin CRUD over `DysonDbContext` using the Result pattern (`Result` / `VoidResult`):
 
 - **Providers:** list (include slugs), get, create, update (incl. `ApiKey` / `BaseUrl` / `OpenAiApiMode`), delete
-- **Slugs:** add under a provider, update, remove
+- **Slugs:** add under a provider (optional `defaultReasoningEffort` + `reasoningModes`), update (alias / slug / default effort / modes / is-default), remove
 - **Selection:** get/set default slug, get slug by id (with provider loaded), `FindSlugByNameAsync` (case-insensitive exact match on `Slug` then `DisplayAlias`)
 - **Favorites:** `ListFavoriteSlugIdsAsync`, `AddFavoriteAsync`, `RemoveFavoriteAsync`, `IsFavoriteAsync`
+
+## Reasoning effort
+
+Per-slug **default** (`DefaultReasoningEffort`) plus a **session override** (`sessions.ReasoningEffort` — see [sessions.md](sessions.md)):
+
+1. New session / model slug change → session effort initialized from the slug’s default.
+2. Models editor prefills new-slug / new-provider initial default effort to `high`; clearing the field saves **null** (omit).
+3. Slug **`ReasoningModes`** registers freeform values for the Composer Effort dropdown (not a hard-coded enum; no requirement that slug default ∈ modes).
+4. Composer can override for the current session only (does not rewrite the slug default).
+5. Live `OpenAiCompatibleAgentProvider.ReasoningEffort` is built as session value when set (including empty = omit); if session value is null (legacy rows), fall back to slug default.
+6. When non-empty, Completions and Responses request bodies include top-level `"reasoning_effort": "<value>"`; blank/null omits the field.
 
 ## OpenAI-compatible API mode
 

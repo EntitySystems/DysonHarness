@@ -38,6 +38,11 @@ public sealed class DysonAgentTurn
     /// <summary>Assistant body text after title parse (persistence / UI).</summary>
     public string? AssistantText { get; set; }
 
+    /// <summary>
+    /// Model reasoning / thinking text for this turn (UI + persistence only; not sent back in transcripts).
+    /// </summary>
+    public string? ReasoningText { get; set; }
+
     /// <summary>UTC when this turn began (live create or restored from persistence).</summary>
     public DateTime StartedUtc { get; set; }
 
@@ -45,6 +50,7 @@ public sealed class DysonAgentTurn
     public DateTime? CompletedUtc { get; set; }
 
     private readonly StringBuilder _streamingPreview = new();
+    private readonly StringBuilder _reasoningPreview = new();
 
     /// <summary>Live streaming preview (transient; not persisted).</summary>
     public string? StreamingPreview =>
@@ -53,7 +59,14 @@ public sealed class DysonAgentTurn
     /// <summary>True while assistant text is streaming into <see cref="StreamingPreview"/>.</summary>
     public bool IsStreaming { get; private set; }
 
-    /// <summary>Raised when streaming preview or finalized assistant text changes.</summary>
+    /// <summary>Live reasoning preview (transient; not persisted).</summary>
+    public string? ReasoningStreamingPreview =>
+        _reasoningPreview.Length == 0 ? null : _reasoningPreview.ToString();
+
+    /// <summary>True while reasoning text is streaming into <see cref="ReasoningStreamingPreview"/>.</summary>
+    public bool IsReasoningStreaming { get; private set; }
+
+    /// <summary>Raised when streaming preview or finalized assistant/reasoning text changes.</summary>
     public event EventHandler? AssistantTextChanged;
 
     /// <summary>Source tool calls for this turn (stage + name + args).</summary>
@@ -340,6 +353,43 @@ public sealed class DysonAgentTurn
 
         _streamingPreview.Clear();
         IsStreaming = false;
+        NotifyAssistantTextChanged();
+    }
+
+    /// <summary>Append a reasoning / thinking delta and mark reasoning as streaming.</summary>
+    public void AppendReasoningDelta(string delta)
+    {
+        ArgumentNullException.ThrowIfNull(delta);
+        if (delta.Length == 0)
+            return;
+
+        _reasoningPreview.Append(delta);
+        IsReasoningStreaming = true;
+        NotifyAssistantTextChanged();
+    }
+
+    /// <summary>Clear transient reasoning preview (same paths as <see cref="ClearStreamingPreview"/>).</summary>
+    public void ClearReasoningPreview()
+    {
+        if (_reasoningPreview.Length == 0 && !IsReasoningStreaming)
+            return;
+
+        _reasoningPreview.Clear();
+        IsReasoningStreaming = false;
+        NotifyAssistantTextChanged();
+    }
+
+    /// <summary>
+    /// End reasoning streaming after <see cref="ReasoningText"/> has been set.
+    /// Clears preview and raises one change so UI can hand off to Markdig / collapse.
+    /// </summary>
+    public void FinishReasoningStreaming()
+    {
+        if (_reasoningPreview.Length == 0 && !IsReasoningStreaming)
+            return;
+
+        _reasoningPreview.Clear();
+        IsReasoningStreaming = false;
         NotifyAssistantTextChanged();
     }
 

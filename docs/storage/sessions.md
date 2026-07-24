@@ -13,6 +13,7 @@ Durable session state lives in the same EF Core SQLite DB as model providers/slu
 | `ParentSessionId` | Guid? FK to parent persisted session |
 | `AgentMode` | Ask / Plan / Work / … |
 | `ModelSlugId` | Guid? FK to `model_slugs` (credentials via parent provider) |
+| `ReasoningEffort` | Session-scoped `reasoning_effort` override; null = fall back to slug `DefaultReasoningEffort` on resolve; empty = omit from request |
 | `WorkDirectoryId` | Guid? FK to `work_directories` (`SetNull` on delete; required for new sessions) |
 | `McpAccessMode` | enum |
 | `Status` | `Active` / `Completed` / `Stopped` / `Failed` |
@@ -33,6 +34,7 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `AgentTitle` | Parsed H1 |
 | `Instruction` | Harness-injected instruction |
 | `AssistantText` | Agent body after title |
+| `ReasoningText` | Optional model reasoning / thinking (UI + reload; not replayed into transcripts) |
 | `ToolStateJson` | Full snapshot of tool calls + results (restore fidelity) |
 | `ToolHistoryOptimized` | bool |
 | `CompactToolHistory` | string? |

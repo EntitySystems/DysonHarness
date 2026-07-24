@@ -30,6 +30,8 @@
     <Composer Disabled="@Disabled"
               SelectedSlugId="SelectedSlugId"
               SelectedSlugIdChanged="SelectedSlugIdChanged"
+              ReasoningEffort="ReasoningEffort"
+              ReasoningEffortChanged="ReasoningEffortChanged"
               SelectedAgentMode="@SelectedAgentMode"
               SelectedAgentModeChanged="SelectedAgentModeChanged"
               GitBranch="@GitBranch"
@@ -53,6 +55,8 @@
     [Parameter] public EventCallback OnCancelPrompt { get; set; }
     [Parameter] public Guid? SelectedSlugId { get; set; }
     [Parameter] public EventCallback<Guid?> SelectedSlugIdChanged { get; set; }
+    [Parameter] public string? ReasoningEffort { get; set; }
+    [Parameter] public EventCallback<string?> ReasoningEffortChanged { get; set; }
     [Parameter] public string SelectedAgentMode { get; set; } = DysonAgentModes.Work;
     [Parameter] public EventCallback<string> SelectedAgentModeChanged { get; set; }
     [Parameter] public string? GitBranch { get; set; }

@@ -4,6 +4,8 @@ namespace DysonHarness;
 public sealed class OpenAiModelReply
 {
     public string? Content { get; init; }
+    /// <summary>Model reasoning / thinking text when the provider emits it (UI + persist only).</summary>
+    public string? ReasoningContent { get; init; }
     public IReadOnlyList<DysonToolCall> ToolCalls { get; init; } = [];
     public string? ResponseId { get; init; }
     public string? UsageCacheHint { get; init; }
@@ -13,6 +15,8 @@ public sealed class OpenAiModelReply
 public sealed class OpenAiStreamChunk
 {
     public string? TextDelta { get; init; }
+    /// <summary>Incremental reasoning / thinking text delta (Completions <c>reasoning_content</c> or Responses reasoning events).</summary>
+    public string? ReasoningDelta { get; init; }
     public IReadOnlyList<OpenAiStreamToolCallDelta>? ToolCallDeltas { get; init; }
     public bool IsRoundComplete { get; init; }
     public OpenAiModelReply? CompletedReply { get; init; }

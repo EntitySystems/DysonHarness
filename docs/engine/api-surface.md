@@ -11,7 +11,7 @@ Conceptual overview: [README.md](README.md).
 | `DysonEngine` | Abstract; exposes `RootSession` |
 | `DysonAgentSession` | Abstract session: mode, prompt, MCP pipeline, subagents, interrupts, log, turns, optimizer hooks |
 | `DysonAgentProvider` | Abstract ephemeral model provider (no durable state) |
-| `OpenAiCompatibleAgentProvider` | OpenAI-compatible ephemeral provider (`BaseUrl`, `ApiKey`, `Slug`, `OpenAiApiMode`, …) |
+| `OpenAiCompatibleAgentProvider` | OpenAI-compatible ephemeral provider (`BaseUrl`, `ApiKey`, `Slug`, `OpenAiApiMode`, optional `ReasoningEffort`, …) |
 | `OpenAiCompatibleAgentSession` | Completions/Responses tool-loop session |
 | `OpenAiCompletionsClient` / `OpenAiResponsesClient` | Streaming SSE adapters (`StreamCreateAsync` → `OpenAiStreamChunk`) |
 | `OpenAiCacheFriendlyTranscriptBuilder` | Stable-prefix transcript + `prompt_cache_key` |
@@ -53,7 +53,7 @@ Conceptual overview: [README.md](README.md).
 
 | Type | Notes |
 | ---- | ----- |
-| `DysonAgentTurn` | Turn kind, instruction, agent title, `AssistantText`, `StartedUtc` / `CompletedUtc` (UI chrome + persistence; not in model transcript), live `StreamingPreview`/`IsStreaming`/`AssistantTextChanged`, tool calls, tracked status, response log, compact history |
+| `DysonAgentTurn` | Turn kind, instruction, agent title, `AssistantText`, `ReasoningText` (optional model thinking; UI + persist only, not in model transcript), `StartedUtc` / `CompletedUtc` (UI chrome + persistence; not in model transcript), live `StreamingPreview`/`IsStreaming` + `ReasoningStreamingPreview`/`IsReasoningStreaming`/`AssistantTextChanged`, tool calls, tracked status, response log, compact history |
 | `DysonAgentTurnKind` | `Normal`, `ExpandThoughtProcess`, `TaskCompletionConfirm`, `Continuation`, `ReportSummary`, `InitializeSession` |
 | `DysonSessionInitialization` | First-turn factory (`CreateTurn` → `InitializeSession`); `RenameSessionReviewMandate` + `IsRenameReviewTurn` (every 8 turns: 1, 9, 17, …; mandate appended only for incomplete current turn) |
 | `DysonToolCall` | `CallId`, `ToolName`, `Stage`, `ArgumentsJson` |
@@ -127,8 +127,8 @@ Documented under [docs/storage](../storage/models.md), [sessions.md](../storage/
 
 - `DysonAppMode`, `DysonAppPaths`, `DysonBuildInfo`
 - `DysonDbContext`, `DysonModelStore`, `DysonSessionStore`, `DysonWorkDirectoryStore`, `DysonAppSettingsStore`
-- `DysonModelProviderEntity`, `DysonModelSlugEntity` (providers own `ApiKey` / `BaseUrl` / `ProviderKind`; slugs own `Slug` + `DisplayAlias`)
+- `DysonModelProviderEntity`, `DysonModelSlugEntity` (providers own `ApiKey` / `BaseUrl` / `ProviderKind`; slugs own `Slug` + `DisplayAlias` + optional `DefaultReasoningEffort` + `ReasoningModes`)
 - `DysonAppSettingEntity` / `DysonAppSettingKeys` (key/value prefs, e.g. web search summarizer slug)
 - `DysonWorkDirectoryEntity`, `DysonNativeFolderPicker`, `DysonGitInfo`
-- Session/turn/log entities and `DysonPersistedSession` (sessions reference `ModelSlugId` + optional `WorkDirectoryId`; aggregate includes todos)
+- Session/turn/log entities and `DysonPersistedSession` (sessions reference `ModelSlugId`, optional `ReasoningEffort`, + optional `WorkDirectoryId`; aggregate includes todos)
 - `DysonSessionTodoEntity` / `DysonSessionTodo` / `DysonSessionTodoStatus` / todo request DTOs on `DysonSessionStore`

@@ -150,6 +150,8 @@ public sealed class DysonModelStore(DysonDbContext db)
         string slug,
         string displayAlias,
         bool isDefault = false,
+        string? defaultReasoningEffort = null,
+        IEnumerable<string>? reasoningModes = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(slug);
@@ -175,6 +177,8 @@ public sealed class DysonModelStore(DysonDbContext db)
                 Slug = slug,
                 DisplayAlias = displayAlias,
                 IsDefault = isDefault,
+                DefaultReasoningEffort = NormalizeReasoningEffort(defaultReasoningEffort),
+                ReasoningModes = StringListJsonValueConverter.Normalize(reasoningModes),
                 CreatedUtc = now,
                 UpdatedUtc = now,
             };
@@ -210,6 +214,8 @@ public sealed class DysonModelStore(DysonDbContext db)
             existing.Slug = slug.Slug;
             existing.DisplayAlias = slug.DisplayAlias;
             existing.IsDefault = slug.IsDefault;
+            existing.DefaultReasoningEffort = NormalizeReasoningEffort(slug.DefaultReasoningEffort);
+            existing.ReasoningModes = StringListJsonValueConverter.Normalize(slug.ReasoningModes);
             existing.UpdatedUtc = DateTime.UtcNow;
 
             await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -499,4 +505,7 @@ public sealed class DysonModelStore(DysonDbContext db)
         foreach (var item in defaults)
             item.IsDefault = false;
     }
+
+    private static string? NormalizeReasoningEffort(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

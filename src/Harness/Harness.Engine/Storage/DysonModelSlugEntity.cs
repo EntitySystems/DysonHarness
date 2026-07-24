@@ -7,6 +7,10 @@ public sealed class DysonModelSlugEntity
     public string Slug { get; set; } = "";
     public string DisplayAlias { get; set; } = "";
     public bool IsDefault { get; set; }
+    /// <summary>Default top-level reasoning_effort for this slug; null/empty = omit.</summary>
+    public string? DefaultReasoningEffort { get; set; }
+    /// <summary>reasoning_effort values for the composer dropdown; empty = None only.</summary>
+    public List<string> ReasoningModes { get; set; } = [];
     /// <summary>UTC.</summary>
     public DateTime CreatedUtc { get; set; }
     /// <summary>UTC.</summary>

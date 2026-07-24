@@ -40,6 +40,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     private double _toolPanelWidthPercent = DefaultToolPanelWidthPercent;
     private bool _toolPanelWidthLoaded;
     private CancellationTokenSource? _toolPanelSaveCts;
+    /// <summary>Pre-session composer effort; applied on next <see cref="StartNewSessionAsync"/>.</summary>
+    private string? _pendingReasoningEffort;
 
     static DysonUiHost()
     {
@@ -88,6 +90,18 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     public string? LastError { get; private set; }
+
+    /// <summary>
+    /// Effective session reasoning_effort for the composer (live provider, else pending).
+    /// Null/empty = omit from requests.
+    /// </summary>
+    public string? SessionReasoningEffort =>
+        _session?.Provider switch
+        {
+            OpenAiCompatibleAgentProvider oai => oai.ReasoningEffort,
+            DemoDysonAgentProvider demo => demo.ReasoningEffort,
+            _ => OpenAiCompatibleAgentProvider.NormalizeReasoningEffort(_pendingReasoningEffort),
+        };
 
     /// <summary>True when the focused session has an in-flight host <see cref="PromptAsync"/>.</summary>
     public bool IsBusy =>
@@ -227,7 +241,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             slug: "demo-mock",
             displayAlias: "Demo Mock",
             isDefault: true,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return addSlug.IsError
             ? new VoidResult<string>(addSlug.Error)
@@ -297,7 +311,10 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(workDir.Error);
         }
 
-        var providerResult = await ResolveProviderAsync(modelSlugId, cancellationToken)
+        var providerResult = await ResolveProviderAsync(
+                modelSlugId,
+                _pendingReasoningEffort,
+                cancellationToken)
             .ConfigureAwait(false);
         if (providerResult.IsError)
         {
@@ -305,6 +322,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             Notify();
             return new VoidResult<string>(providerResult.Error);
         }
+
+        _pendingReasoningEffort = null;
 
         var kind = providerResult.Value.Kind;
         if (string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
@@ -358,7 +377,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     /// <summary>
     /// Apply a model slug to the focused session (same provider kind only).
-    /// With no session, preference is caller-owned (<c>_selectedSlugId</c>); this is a no-op.
+    /// Resets session reasoning effort to the slug's default.
+    /// With no session, preference is caller-owned (<c>_selectedSlugId</c>); updates pending effort to slug default.
     /// </summary>
     public async Task<VoidResult<string>> SetSessionModelSlugAsync(
         Guid? modelSlugId,
@@ -367,7 +387,21 @@ public sealed class DysonUiHost : IAsyncDisposable
         LastError = null;
 
         if (_session is null)
+        {
+            var pending = await ResolveProviderAsync(modelSlugId, reasoningEffort: null, cancellationToken)
+                .ConfigureAwait(false);
+            if (pending.IsError)
+            {
+                LastError = pending.Error;
+                Notify();
+                return new VoidResult<string>(pending.Error);
+            }
+
+            _pendingReasoningEffort = pending.Value.OpenAi?.ReasoningEffort
+                ?? pending.Value.Demo?.ReasoningEffort;
+            Notify();
             return VoidResult<string>.Success;
+        }
 
         if (IsBusy)
         {
@@ -376,7 +410,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(LastError);
         }
 
-        var providerResult = await ResolveProviderAsync(modelSlugId, cancellationToken)
+        // null effort → constructor uses slug DefaultReasoningEffort
+        var providerResult = await ResolveProviderAsync(modelSlugId, reasoningEffort: null, cancellationToken)
             .ConfigureAwait(false);
         if (providerResult.IsError)
         {
@@ -408,6 +443,13 @@ public sealed class DysonUiHost : IAsyncDisposable
             _ => null,
         };
 
+        var effort = nextProvider switch
+        {
+            OpenAiCompatibleAgentProvider oai => oai.ReasoningEffort,
+            DemoDysonAgentProvider demo => demo.ReasoningEffort,
+            _ => null,
+        };
+
         if (_session.PersistenceId != Guid.Empty)
         {
             var persist = await _sessions.UpdateSessionMetaAsync(
@@ -416,6 +458,69 @@ public sealed class DysonUiHost : IAsyncDisposable
                     SessionId = _session.PersistenceId,
                     ModelSlugId = slugId,
                     ClearModelSlug = slugId is null,
+                    UpdateReasoningEffort = true,
+                    ReasoningEffort = effort,
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (persist.IsError)
+            {
+                LastError = persist.Error;
+                Notify();
+                return new VoidResult<string>(persist.Error);
+            }
+        }
+
+        Notify();
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Session-scoped reasoning_effort override (does not change the slug default).
+    /// Empty/whitespace omits the request field. Persists when a session is focused.
+    /// </summary>
+    public async Task<VoidResult<string>> SetSessionReasoningEffortAsync(
+        string? reasoningEffort,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+
+        var normalized = OpenAiCompatibleAgentProvider.NormalizeReasoningEffort(reasoningEffort);
+        // Persist empty string when cleared so resume does not fall back to slug default.
+        var stored = normalized ?? "";
+
+        if (_session is null)
+        {
+            _pendingReasoningEffort = stored;
+            Notify();
+            return VoidResult<string>.Success;
+        }
+
+        if (IsBusy)
+        {
+            LastError = "Cannot change reasoning effort while a prompt is in flight.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        switch (_session.Provider)
+        {
+            case OpenAiCompatibleAgentProvider oai:
+                oai.ReasoningEffort = normalized;
+                break;
+            case DemoDysonAgentProvider demo:
+                demo.ReasoningEffort = normalized;
+                break;
+        }
+
+        if (_session.PersistenceId != Guid.Empty)
+        {
+            var persist = await _sessions.UpdateSessionMetaAsync(
+                new DysonSessionMetaUpdate
+                {
+                    SessionId = _session.PersistenceId,
+                    UpdateReasoningEffort = true,
+                    ReasoningEffort = stored,
                 },
                 cancellationToken).ConfigureAwait(false);
 
@@ -573,7 +678,10 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(full.Error);
         }
 
-        var providerResult = await ResolveProviderAsync(full.Value.Session.ModelSlugId, cancellationToken)
+        var providerResult = await ResolveProviderAsync(
+                full.Value.Session.ModelSlugId,
+                full.Value.Session.ReasoningEffort,
+                cancellationToken)
             .ConfigureAwait(false);
         if (providerResult.IsError)
         {
@@ -691,6 +799,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private async Task<Result<ResolvedProvider, string>> ResolveProviderAsync(
         Guid? modelSlugId,
+        string? reasoningEffort,
         CancellationToken cancellationToken)
     {
         DysonModelSlugEntity? slug = null;
@@ -719,11 +828,14 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
         {
             return Result<ResolvedProvider, string>.AsValue(
-                new ResolvedProvider(kind, null, new OpenAiCompatibleAgentProvider(slug)));
+                new ResolvedProvider(kind, null, new OpenAiCompatibleAgentProvider(slug, reasoningEffort)));
         }
 
         return Result<ResolvedProvider, string>.AsValue(
-            new ResolvedProvider(DysonProviderKinds.Demo, new DemoDysonAgentProvider(slug), null));
+            new ResolvedProvider(
+                DysonProviderKinds.Demo,
+                new DemoDysonAgentProvider(slug, reasoningEffort),
+                null));
     }
 
     private void FocusSession(DysonAgentSession session, Guid? parentSessionId)
@@ -906,7 +1018,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         EventHandler textHandler = (_, _) =>
         {
             // Final handoff / clear: flush immediately so Markdig replaces preview without throttle lag.
-            if (!turn.IsStreaming)
+            if (!turn.IsStreaming && !turn.IsReasoningStreaming)
             {
                 FlushNotifyForTurn(turn.Id);
                 // Background child PromptAsync bypasses host — persist completion when streaming ends.

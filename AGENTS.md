@@ -29,3 +29,4 @@ AI model harness.
 All skills must live under [`skills/`](skills/).
 
 - C# / .NET: [skills/csharp/SKILL.md](skills/csharp/SKILL.md)
+- EF Core + SQLite: [skills/ef-core-sqlite/SKILL.md](skills/ef-core-sqlite/SKILL.md)

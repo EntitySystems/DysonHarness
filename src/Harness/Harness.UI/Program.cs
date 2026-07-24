@@ -13,6 +13,8 @@ if (searchCheck.IsError)
     throw new InvalidOperationException(searchCheck.Error);
 
 DysonSessionTodoSelfCheck.Run();
+OpenAiReasoningSelfCheck.Run();
+StringListJsonValueConverterSelfCheck.Run();
 ComposerSlashCommands.SelfCheck();
 
 var builder = WebApplication.CreateBuilder(args);

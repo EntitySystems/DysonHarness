@@ -16,6 +16,11 @@ public sealed class DysonSessionEntity
     public string AgentMode { get; set; } = "";
     public Guid? ModelSlugId { get; set; }
     public Guid? WorkDirectoryId { get; set; }
+    /// <summary>
+    /// Session-scoped reasoning_effort override. Null = fall back to slug default on resolve;
+    /// empty = omit from request.
+    /// </summary>
+    public string? ReasoningEffort { get; set; }
     public DysonMcpAccessMode McpAccessMode { get; set; }
     public DysonSessionStatus Status { get; set; }
     public string? Title { get; set; }

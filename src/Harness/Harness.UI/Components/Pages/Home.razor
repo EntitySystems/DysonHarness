@@ -47,6 +47,8 @@
                    OnCancelPrompt="CancelPrompt"
                    SelectedSlugId="_selectedSlugId"
                    SelectedSlugIdChanged="OnSelectedSlugIdChangedAsync"
+                   ReasoningEffort="_reasoningEffort"
+                   ReasoningEffortChanged="OnReasoningEffortChangedAsync"
                    SelectedAgentMode="@_selectedAgentMode"
                    SelectedAgentModeChanged="OnAgentModeChanged"
                    GitBranch="@_gitBranch"
@@ -89,6 +91,7 @@
     private string? _listError;
     private string? _activeTitle;
     private Guid? _selectedSlugId;
+    private string? _reasoningEffort;
     private string _selectedAgentMode = DysonAgentModes.Work;
     private Guid? _activeWorkDirectoryId;
     private string? _gitBranch;
@@ -163,6 +166,7 @@
     private void OnHostChanged() => _ = InvokeAsync(async () =>
     {
         SyncSelectedSlugFromSession();
+        SyncReasoningEffortFromHost();
         UpdateActiveTitle();
         await RefreshSessionsQuietAsync();
         StateHasChanged();
@@ -173,8 +177,15 @@
     private async Task OnSelectedSlugIdChangedAsync(Guid? id)
     {
         _selectedSlugId = id;
-        if (Host.Session is not null)
-            await Host.SetSessionModelSlugAsync(id);
+        await Host.SetSessionModelSlugAsync(id);
+        SyncReasoningEffortFromHost();
+    }
+
+    private async Task OnReasoningEffortChangedAsync(string? effort)
+    {
+        _reasoningEffort = effort;
+        await Host.SetSessionReasoningEffortAsync(effort);
+        SyncReasoningEffortFromHost();
     }
 
     private void SyncSelectedSlugFromSession()
@@ -183,6 +194,11 @@
             _selectedSlugId = oai.SlugId;
         else if (Host.Session?.Provider is DemoDysonAgentProvider demo)
             _selectedSlugId = demo.SlugId;
+    }
+
+    private void SyncReasoningEffortFromHost()
+    {
+        _reasoningEffort = Host.SessionReasoningEffort;
     }
 
     private Task OnAgentModeChanged(string mode)
@@ -341,6 +357,7 @@
         if (result.IsError)
             _listError = result.Error;
         SyncSelectedSlugFromSession();
+        SyncReasoningEffortFromHost();
         await RefreshSessionsAsync();
     }
 
@@ -350,6 +367,7 @@
         if (result.IsError)
             _listError = result.Error;
         SyncSelectedSlugFromSession();
+        SyncReasoningEffortFromHost();
         await RefreshSessionsAsync();
     }
 
@@ -373,6 +391,7 @@
         if (result.IsError)
             _listError = result.Error;
         SyncSelectedSlugFromSession();
+        SyncReasoningEffortFromHost();
         await RefreshSessionsAsync();
     }
 

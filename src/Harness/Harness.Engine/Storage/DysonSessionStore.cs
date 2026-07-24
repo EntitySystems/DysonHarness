@@ -10,6 +10,8 @@ public sealed class DysonSessionCreateRequest
     public required string AgentMode { get; init; }
     public Guid? ModelSlugId { get; init; }
     public Guid? WorkDirectoryId { get; init; }
+    /// <summary>Copied from slug default on create; empty = omit; null = fall back later.</summary>
+    public string? ReasoningEffort { get; init; }
     public DysonMcpAccessMode McpAccessMode { get; init; } = DysonMcpAccessMode.FullAccess;
     public string? Title { get; init; }
     public required string SystemPromptSnapshot { get; init; }
@@ -23,6 +25,9 @@ public sealed class DysonSessionMetaUpdate
     public string? Title { get; init; }
     public Guid? ModelSlugId { get; init; }
     public bool ClearModelSlug { get; init; }
+    /// <summary>When true, write <see cref="ReasoningEffort"/> (null/empty allowed).</summary>
+    public bool UpdateReasoningEffort { get; init; }
+    public string? ReasoningEffort { get; init; }
 }
 
 public sealed class DysonSessionSummary
@@ -207,6 +212,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 AgentMode = request.AgentMode,
                 ModelSlugId = request.ModelSlugId,
                 WorkDirectoryId = request.WorkDirectoryId,
+                ReasoningEffort = request.ReasoningEffort,
                 McpAccessMode = request.McpAccessMode,
                 Status = request.Status,
                 Title = request.Title,
@@ -250,6 +256,9 @@ public sealed class DysonSessionStore(DysonDbContext db)
             else if (update.ModelSlugId is not null)
                 entity.ModelSlugId = update.ModelSlugId;
 
+            if (update.UpdateReasoningEffort)
+                entity.ReasoningEffort = update.ReasoningEffort;
+
             var now = DateTime.UtcNow;
             entity.UpdatedUtc = now;
             entity.LastActivityUtc = now;
@@ -291,6 +300,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 existing.AgentTitle = turn.AgentTitle;
                 existing.Instruction = turn.Instruction;
                 existing.AssistantText = turn.AssistantText;
+                existing.ReasoningText = turn.ReasoningText;
                 existing.ToolStateJson = turn.ToolStateJson;
                 existing.ToolHistoryOptimized = turn.ToolHistoryOptimized;
                 existing.CompactToolHistory = turn.CompactToolHistory;

@@ -36,6 +36,19 @@
     <div class="composer__toolbar">
         <ModelSlugPicker SelectedSlugId="SelectedSlugId"
                          SelectedSlugIdChanged="SelectedSlugIdChanged" />
+        <label class="composer-effort" title="Session reasoning_effort (None = omit)">
+            <span class="composer-effort__label">Effort</span>
+            <select class="composer-effort__input composer-effort__select"
+                    value="@(_effortDraft)"
+                    disabled="@Disabled"
+                    @onchange="OnEffortSelectedAsync">
+                <option value="">None</option>
+                @foreach (var mode in EffortOptions)
+                {
+                    <option value="@mode">@mode</option>
+                }
+            </select>
+        </label>
         <AgentModePicker SelectedMode="@SelectedAgentMode"
                          SelectedModeChanged="SelectedAgentModeChanged" />
         <span class="composer-chip composer-chip--branch @(string.IsNullOrEmpty(GitBranch) ? "is-muted" : null)"
@@ -63,11 +76,55 @@
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public Guid? SelectedSlugId { get; set; }
     [Parameter] public EventCallback<Guid?> SelectedSlugIdChanged { get; set; }
+    [Parameter] public string? ReasoningEffort { get; set; }
+    [Parameter] public EventCallback<string?> ReasoningEffortChanged { get; set; }
     [Parameter] public string SelectedAgentMode { get; set; } = DysonAgentModes.Work;
     [Parameter] public EventCallback<string> SelectedAgentModeChanged { get; set; }
     [Parameter] public string? GitBranch { get; set; }
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
     [Parameter] public EventCallback OnNewSession { get; set; }
+
+    private string _effortDraft = "";
+    private readonly Dictionary<Guid, IReadOnlyList<string>> _slugReasoningModes = new();
+
+    private IEnumerable<string> EffortOptions
+    {
+        get
+        {
+            IReadOnlyList<string> modes = [];
+            if (SelectedSlugId is Guid slugId
+                && _slugReasoningModes.TryGetValue(slugId, out var registered))
+            {
+                modes = registered;
+            }
+
+            foreach (var mode in modes)
+                yield return mode;
+
+            var current = string.IsNullOrWhiteSpace(ReasoningEffort) ? null : ReasoningEffort.Trim();
+            if (current is not null
+                && !modes.Contains(current, StringComparer.Ordinal))
+            {
+                yield return current;
+            }
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        _effortDraft = ReasoningEffort ?? "";
+    }
+
+    private async Task OnEffortSelectedAsync(ChangeEventArgs e)
+    {
+        var next = string.IsNullOrWhiteSpace(e.Value?.ToString()) ? null : e.Value!.ToString()!.Trim();
+        _effortDraft = next ?? "";
+        var current = string.IsNullOrWhiteSpace(ReasoningEffort) ? null : ReasoningEffort.Trim();
+        if (string.Equals(next, current, StringComparison.Ordinal))
+            return;
+
+        await ReasoningEffortChanged.InvokeAsync(next);
+    }
 
     protected override async Task OnInitializedAsync() => await RefreshModelsAsync();
 
@@ -92,6 +149,7 @@
     private async Task RefreshModelsAsync()
     {
         _models.Clear();
+        _slugReasoningModes.Clear();
         var result = await ModelStore.ListProvidersAsync();
         if (result.IsError)
             return;
@@ -100,6 +158,7 @@
         {
             foreach (var slug in provider.Slugs)
             {
+                _slugReasoningModes[slug.Id] = slug.ReasoningModes;
                 _models.Add(new ComposerSlashCommands.ModelOption(
                     slug.Id,
                     slug.DisplayAlias,

@@ -42,7 +42,11 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
             };
         }
 
+        if (!string.IsNullOrWhiteSpace(provider.ReasoningEffort))
+            body["reasoning_effort"] = provider.ReasoningEffort.Trim();
+
         var content = new StringBuilder();
+        var reasoning = new StringBuilder();
         var toolSlots = new Dictionary<int, CompletionsToolSlot>();
         string? responseId = null;
         JsonObject? usageResponse = null;
@@ -96,6 +100,7 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
                 continue;
 
             string? textDelta = null;
+            string? reasoningDelta = null;
             List<OpenAiStreamToolCallDelta>? toolDeltas = null;
 
             var deltaContent = TryGetString(delta["content"]);
@@ -103,6 +108,13 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
             {
                 content.Append(deltaContent);
                 textDelta = deltaContent;
+            }
+
+            var deltaReasoning = TryGetString(delta["reasoning_content"]);
+            if (!string.IsNullOrEmpty(deltaReasoning))
+            {
+                reasoning.Append(deltaReasoning);
+                reasoningDelta = deltaReasoning;
             }
 
             if (delta["tool_calls"] is JsonArray toolArr)
@@ -145,11 +157,12 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
                 }
             }
 
-            if (textDelta is not null || toolDeltas is { Count: > 0 })
+            if (textDelta is not null || reasoningDelta is not null || toolDeltas is { Count: > 0 })
             {
                 yield return Result<OpenAiStreamChunk, string>.AsValue(new OpenAiStreamChunk
                 {
                     TextDelta = textDelta,
+                    ReasoningDelta = reasoningDelta,
                     ToolCallDeltas = toolDeltas,
                 });
             }
@@ -166,6 +179,7 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
             CompletedReply = new OpenAiModelReply
             {
                 Content = content.Length == 0 ? null : content.ToString(),
+                ReasoningContent = reasoning.Length == 0 ? null : reasoning.ToString(),
                 ToolCalls = toolCalls,
                 ResponseId = responseId,
                 UsageCacheHint = usageHint,
@@ -186,6 +200,7 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
             return Result<OpenAiModelReply, string>.AsError("Completions choice had no message.");
 
         var content = message["content"]?.GetValue<string>();
+        var reasoningContent = TryGetString(message["reasoning_content"]);
         var toolCalls = new List<DysonToolCall>();
         if (message["tool_calls"] is JsonArray toolArr)
         {
@@ -215,6 +230,7 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
         return Result<OpenAiModelReply, string>.AsValue(new OpenAiModelReply
         {
             Content = content,
+            ReasoningContent = reasoningContent,
             ToolCalls = toolCalls,
             ResponseId = response["id"]?.GetValue<string>(),
             UsageCacheHint = OpenAiCompatibleHttp.FormatUsageCacheHint(response),

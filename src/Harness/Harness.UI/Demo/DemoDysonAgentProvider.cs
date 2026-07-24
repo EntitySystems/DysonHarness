@@ -5,7 +5,10 @@ namespace Harness.UI.Demo;
 /// <summary>Ephemeral demo provider built from a model provider + slug (no live API calls).</summary>
 public sealed class DemoDysonAgentProvider : DysonAgentProvider
 {
-    public DemoDysonAgentProvider(DysonModelProviderEntity? provider, DysonModelSlugEntity? slug)
+    public DemoDysonAgentProvider(
+        DysonModelProviderEntity? provider,
+        DysonModelSlugEntity? slug,
+        string? reasoningEffort = null)
     {
         ProviderId = provider?.Id ?? slug?.ProviderId;
         SlugId = slug?.Id;
@@ -15,11 +18,13 @@ public sealed class DemoDysonAgentProvider : DysonAgentProvider
         ProviderKind = provider?.ProviderKind ?? slug?.Provider?.ProviderKind ?? DysonProviderKinds.Demo;
         BaseUrl = provider?.BaseUrl ?? slug?.Provider?.BaseUrl;
         ProviderDisplayName = provider?.DisplayName ?? slug?.Provider?.DisplayName ?? "Demo";
+        ReasoningEffort = OpenAiCompatibleAgentProvider.NormalizeReasoningEffort(
+            reasoningEffort ?? slug?.DefaultReasoningEffort);
     }
 
     /// <summary>Convenience: slug must include <see cref="DysonModelSlugEntity.Provider"/>.</summary>
-    public DemoDysonAgentProvider(DysonModelSlugEntity? slug)
-        : this(slug?.Provider, slug)
+    public DemoDysonAgentProvider(DysonModelSlugEntity? slug, string? reasoningEffort = null)
+        : this(slug?.Provider, slug, reasoningEffort)
     {
     }
 
@@ -31,4 +36,6 @@ public sealed class DemoDysonAgentProvider : DysonAgentProvider
     public string ProviderKind { get; }
     public string? BaseUrl { get; }
     public string ProviderDisplayName { get; }
+    /// <summary>Carried for parity with OpenAI provider; demo client ignores it.</summary>
+    public string? ReasoningEffort { get; set; }
 }

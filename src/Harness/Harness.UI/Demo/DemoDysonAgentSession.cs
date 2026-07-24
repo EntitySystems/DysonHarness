@@ -57,6 +57,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                 AgentMode = agentMode,
                 ModelSlugId = provider.SlugId,
                 WorkDirectoryId = workDirectoryId,
+                ReasoningEffort = provider.ReasoningEffort,
                 McpAccessMode = config.McpAccessMode,
                 Title = initialTitle,
                 SystemPromptSnapshot = session.SystemPrompt,
@@ -173,6 +174,9 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                 AgentMode = agentMode,
                 ModelSlugId = modelSlugId,
                 WorkDirectoryId = _workDirectoryId,
+                ReasoningEffort = childProvider is DemoDysonAgentProvider dEffort
+                    ? dEffort.ReasoningEffort
+                    : null,
                 McpAccessMode = Config.McpAccessMode,
                 Title = title,
                 SystemPromptSnapshot = child.SystemPrompt,

@@ -60,19 +60,38 @@
             <div class="turn-block__instruction">@MarkdownRenderer.ToHtml(Turn.Instruction)</div>
         }
 
-        @if (HasAssistantBody || HasTools)
+        @if (HasAssistantBody || HasReasoning || HasTools)
         {
             <div @ref="_contentEl" class="turn-block__content">
-                @if (Turn.IsStreaming && !string.IsNullOrEmpty(Turn.StreamingPreview))
-                {
-                    <div class="turn-block__body turn-block__body--streaming">
-                        @Turn.StreamingPreview<span class="turn-block__caret" aria-hidden="true"></span>
-                    </div>
-                }
-                else if (!string.IsNullOrWhiteSpace(Turn.AssistantText))
-                {
-                    <div class="turn-block__body">@MarkdownRenderer.ToHtml(Turn.AssistantText)</div>
-                }
+                <div class="turn-block__main">
+                    @if (HasReasoning)
+                    {
+                        <details class="turn-block__reasoning" @attributes="ReasoningDetailsAttrs">
+                            <summary class="turn-block__reasoning-summary">Thinking</summary>
+                            @if (Turn.IsReasoningStreaming && !string.IsNullOrEmpty(Turn.ReasoningStreamingPreview))
+                            {
+                                <div class="turn-block__body turn-block__body--streaming">
+                                    @Turn.ReasoningStreamingPreview<span class="turn-block__caret" aria-hidden="true"></span>
+                                </div>
+                            }
+                            else if (!string.IsNullOrWhiteSpace(Turn.ReasoningText))
+                            {
+                                <div class="turn-block__body">@MarkdownRenderer.ToHtml(Turn.ReasoningText)</div>
+                            }
+                        </details>
+                    }
+
+                    @if (Turn.IsStreaming && !string.IsNullOrEmpty(Turn.StreamingPreview))
+                    {
+                        <div class="turn-block__body turn-block__body--streaming">
+                            @Turn.StreamingPreview<span class="turn-block__caret" aria-hidden="true"></span>
+                        </div>
+                    }
+                    else if (!string.IsNullOrWhiteSpace(Turn.AssistantText))
+                    {
+                        <div class="turn-block__body">@MarkdownRenderer.ToHtml(Turn.AssistantText)</div>
+                    }
+                </div>
 
                 @if (HasTools)
                 {
@@ -163,6 +182,19 @@
     private bool HasAssistantBody =>
         (Turn.IsStreaming && !string.IsNullOrEmpty(Turn.StreamingPreview))
         || !string.IsNullOrWhiteSpace(Turn.AssistantText);
+
+    private bool HasReasoning =>
+        (Turn.IsReasoningStreaming && !string.IsNullOrEmpty(Turn.ReasoningStreamingPreview))
+        || !string.IsNullOrWhiteSpace(Turn.ReasoningText);
+
+    /// <summary>
+    /// Force open while reasoning streams; omit after finish so the section collapses by default
+    /// and the user can re-expand without Blazor fighting the native <c>details</c> state.
+    /// </summary>
+    private IReadOnlyDictionary<string, object>? ReasoningDetailsAttrs =>
+        Turn.IsReasoningStreaming
+            ? new Dictionary<string, object> { ["open"] = true }
+            : null;
 
     private bool HasTools =>
         Turn.TrackedToolCalls.Count > 0 || Turn.ToolCalls.Count > 0;

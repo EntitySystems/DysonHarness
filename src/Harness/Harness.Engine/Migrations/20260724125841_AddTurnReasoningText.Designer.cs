@@ -3,6 +3,7 @@ using System;
 using DysonHarness;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Harness.Engine.Migrations
 {
     [DbContext(typeof(DysonDbContext))]
-    partial class DysonDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260724125841_AddTurnReasoningText")]
+    partial class AddTurnReasoningText
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
@@ -95,9 +98,6 @@ namespace Harness.Engine.Migrations
                     b.Property<DateTime>("CreatedUtc")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("DefaultReasoningEffort")
-                        .HasColumnType("TEXT");
-
                     b.Property<string>("DisplayAlias")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -106,10 +106,6 @@ namespace Harness.Engine.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<Guid>("ProviderId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ReasoningModes")
-                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Slug")
@@ -152,9 +148,6 @@ namespace Harness.Engine.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<Guid?>("ParentSessionId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ReasoningEffort")
                         .HasColumnType("TEXT");
 
                     b.Property<int>("RuntimeId")

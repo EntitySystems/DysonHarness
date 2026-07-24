@@ -9,6 +9,8 @@ public sealed class DysonTurnEntity
     public string? AgentTitle { get; set; }
     public string? Instruction { get; set; }
     public string? AssistantText { get; set; }
+    /// <summary>Model reasoning / thinking text (UI only; not replayed into transcripts).</summary>
+    public string? ReasoningText { get; set; }
     public string ToolStateJson { get; set; } = "{}";
     public bool ToolHistoryOptimized { get; set; }
     public string? CompactToolHistory { get; set; }
