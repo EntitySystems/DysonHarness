@@ -13,4 +13,11 @@ public class DysonAgentSessionConfig
     /// No allowlist either way.
     /// </summary>
     public DysonMcpAccessMode McpAccessMode { get; set; } = DysonMcpAccessMode.FullAccess;
+
+    /// <summary>
+    /// Shells listed on the ShellExecute MCP enum for this session.
+    /// Defaults from <see cref="DysonShell.AvailableForCurrentPlatform"/>.
+    /// </summary>
+    public IReadOnlyList<DysonShellType> AvailableShellTypes { get; set; } =
+        DysonShell.AvailableForCurrentPlatform();
 }

@@ -785,6 +785,7 @@ code, .mono {
   border-radius: 5px;
   background: var(--bg-1);
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .turn-block__header {
@@ -831,6 +832,7 @@ code, .mono {
   flex-shrink: 0;
   display: flex;
   align-items: center;
+  justify-content: center;
   padding-top: 3px;
 }
 
@@ -846,6 +848,41 @@ code, .mono {
 
 @keyframes turn-block-spin {
   to { transform: rotate(360deg); }
+}
+
+.turn-block__cancel {
+  margin: 0;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 4px;
+  color: var(--danger);
+}
+
+.turn-block__cancel:disabled {
+  cursor: default;
+  pointer-events: none;
+}
+
+.turn-block__cancel:not(:disabled):hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.turn-block__cancel-icon {
+  display: none;
+  width: 14px;
+  height: 14px;
+  /* stroke SVG is black; tint to danger */
+  filter: brightness(0) saturate(100%) invert(42%) sepia(62%) saturate(1800%) hue-rotate(330deg) brightness(1.05);
+}
+
+.turn-block__cancel:not(:disabled):hover .turn-block__spinner {
+  display: none;
+}
+
+.turn-block__cancel:not(:disabled):hover .turn-block__cancel-icon {
+  display: block;
 }
 
 .turn-block__instruction {
@@ -1017,6 +1054,7 @@ code, .mono {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .composer textarea {

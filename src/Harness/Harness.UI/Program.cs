@@ -3,6 +3,10 @@ using Harness.UI.Components;
 using Harness.UI.Demo;
 using Harness.UI.Theme;
 
+var shellCheck = DysonWindowsShell.SelfCheckArgMap();
+if (shellCheck.IsError)
+    throw new InvalidOperationException(shellCheck.Error);
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddRazorComponents()

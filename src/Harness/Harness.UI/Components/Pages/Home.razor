@@ -38,6 +38,7 @@
         <ChatPanel Turns="@(Host.Session?.Turns ?? Array.Empty<DysonAgentTurn>())"
                    Disabled="@(Host.Session is null || Host.IsBusy)"
                    SessionBusy="Host.IsBusy"
+                   OnCancelPrompt="CancelPrompt"
                    @bind-SelectedSlugId="_selectedSlugId"
                    SelectedAgentMode="_selectedAgentMode"
                    SelectedAgentModeChanged="OnAgentModeChanged"
@@ -331,6 +332,8 @@
         await Host.PromptAsync(prompt);
         await RefreshSessionsAsync();
     }
+
+    private void CancelPrompt() => Host.CancelPrompt();
 
     public void Dispose()
     {

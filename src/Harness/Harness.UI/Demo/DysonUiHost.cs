@@ -20,6 +20,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private DemoDysonEngine? _engine;
     private DysonAgentSession? _session;
+    private CancellationTokenSource? _promptCts;
     private bool _disposed;
 
     public DysonUiHost(
@@ -256,6 +257,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         return VoidResult<string>.Success;
     }
 
+    /// <summary>Cancels the in-flight <see cref="PromptAsync"/> when busy.</summary>
+    public void CancelPrompt() => _promptCts?.Cancel();
+
     public async Task<VoidResult<string>> PromptAsync(
         string prompt,
         CancellationToken cancellationToken = default)
@@ -274,6 +278,10 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(LastError);
         }
 
+        _promptCts?.Dispose();
+        _promptCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var token = _promptCts.Token;
+
         IsBusy = true;
         LastError = null;
         Notify();
@@ -287,15 +295,15 @@ public sealed class DysonUiHost : IAsyncDisposable
                 new DysonSessionLogUserPrompt(prompt));
 
             var appendUser = await PersistAsync(
-                () => _sessions.AppendLogAsync(userLog, cancellationToken),
-                cancellationToken).ConfigureAwait(false);
+                () => _sessions.AppendLogAsync(userLog, token),
+                token).ConfigureAwait(false);
             if (appendUser.IsError)
             {
                 LastError = appendUser.Error;
                 return appendUser;
             }
 
-            var result = await _session.PromptAsync(prompt, cancellationToken).ConfigureAwait(false);
+            var result = await _session.PromptAsync(prompt, token).ConfigureAwait(false);
             if (result.IsError)
             {
                 LastError = result.Error;
@@ -305,7 +313,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             var last = _session.Turns.Count > 0 ? _session.Turns[^1] : null;
             if (last is not null)
             {
-                var complete = await PersistTurnCompletedAsync(last, cancellationToken)
+                var complete = await PersistTurnCompletedAsync(last, token)
                     .ConfigureAwait(false);
                 if (complete.IsError)
                 {
@@ -319,6 +327,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         finally
         {
             IsBusy = false;
+            _promptCts?.Dispose();
+            _promptCts = null;
             Notify();
         }
     }
@@ -650,6 +660,9 @@ public sealed class DysonUiHost : IAsyncDisposable
             return ValueTask.CompletedTask;
 
         _disposed = true;
+        _promptCts?.Cancel();
+        _promptCts?.Dispose();
+        _promptCts = null;
         DetachSession();
         _persistGate.Dispose();
         return ValueTask.CompletedTask;

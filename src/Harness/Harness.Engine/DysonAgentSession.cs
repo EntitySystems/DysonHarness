@@ -24,7 +24,7 @@ public abstract class DysonAgentSession
 
         Mode = agentMode;
         SystemPrompt = prompt.Value;
-        McpPipeline = DysonMcpPipeline.CreateDefault(config.McpAccessMode);
+        McpPipeline = DysonMcpPipeline.CreateDefault(config.McpAccessMode, config.AvailableShellTypes);
     }
 
     /// <summary>Session identity. Root sessions are 0; subagents are allocated from 1.</summary>

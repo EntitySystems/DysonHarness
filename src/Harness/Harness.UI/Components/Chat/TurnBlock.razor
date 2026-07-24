@@ -14,9 +14,15 @@
             <div class="turn-block__user-prompt">@MarkdownRenderer.ToHtml(Turn.Instruction)</div>
             @if (ShowPromptSpinner)
             {
-                <div class="turn-block__user-spinner" role="status" aria-label="Waiting for reply">
+                <button type="button"
+                        class="turn-block__user-spinner turn-block__cancel"
+                        disabled="@(!CanCancel)"
+                        title="Cancel"
+                        aria-label="Cancel prompt"
+                        @onclick="HandleCancelAsync">
                     <span class="turn-block__spinner" aria-hidden="true"></span>
-                </div>
+                    <img class="turn-block__cancel-icon" src="icons/cancel.svg" alt="" />
+                </button>
             }
         </div>
     }
@@ -53,8 +59,13 @@
     /// <summary>True when this turn is the latest in the transcript (awaiting-model spinner).</summary>
     [Parameter] public bool IsLatestTurn { get; set; }
 
+    /// <summary>Cancels the in-flight prompt (wired only for the latest busy turn).</summary>
+    [Parameter] public EventCallback OnCancel { get; set; }
+
     private bool IsUserTurn =>
         Turn.Kind is DysonAgentTurnKind.Normal or DysonAgentTurnKind.InitializeSession;
+
+    private bool CanCancel => SessionBusy && IsLatestTurn && OnCancel.HasDelegate;
 
     /// <summary>
     /// Compact loader on the user prompt row until the assistant reply is finalized.
@@ -85,6 +96,8 @@
         Turn.TrackedToolCalls.Any(t =>
             t.Status is DysonToolCallStatus.Queued or DysonToolCallStatus.Working)
         || (Turn.ToolCalls.Count > 0 && Turn.TrackedToolCalls.Count == 0);
+
+    private Task HandleCancelAsync() => CanCancel ? OnCancel.InvokeAsync() : Task.CompletedTask;
 
     private static string ShortId(Guid id) => id.ToString("N")[..8];
 }

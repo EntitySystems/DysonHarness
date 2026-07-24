@@ -5,7 +5,7 @@ using System.Text.RegularExpressions;
 namespace DysonHarness;
 
 /// <summary>
-/// Executes workspace-scoped MCP tools against a work directory root, plus RenameSession.
+/// Executes workspace-scoped MCP tools against a work directory root, plus RenameSession and ShellExecute.
 /// Other catalog tools return a not-implemented stub result.
 /// </summary>
 public sealed class DysonWorkspaceToolExecutor
@@ -42,6 +42,7 @@ public sealed class DysonWorkspaceToolExecutor
                 "Grep" => await GrepAsync(call, cancellationToken).ConfigureAwait(false),
                 "ListDirectory" => await ListDirectoryAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateDirectory" => await CreateDirectoryAsync(call, cancellationToken).ConfigureAwait(false),
+                "ShellExecute" => await ShellExecuteAsync(call, cancellationToken).ConfigureAwait(false),
                 _ => Stub(call),
             };
         }
@@ -420,6 +421,82 @@ public sealed class DysonWorkspaceToolExecutor
             Directory.CreateDirectory(resolved.Value); // CreateDirectory always creates parents on .NET
 
         return Task.FromResult(Ok(call, $"Created directory {path.Value}."));
+    }
+
+    private async Task<DysonToolCallResult> ShellExecuteAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+        var shellName = RequireString(doc.RootElement, "shell");
+        if (shellName.IsError)
+            return Error(call, shellName.Error);
+
+        var command = RequireString(doc.RootElement, "command");
+        if (command.IsError)
+            return Error(call, command.Error);
+
+        if (!Enum.TryParse<DysonShellType>(shellName.Value, ignoreCase: true, out var shellType))
+            return Error(call, $"Unknown shell '{shellName.Value}'.");
+
+        var available = _session.Config.AvailableShellTypes;
+        if (!available.Contains(shellType))
+        {
+            var listed = string.Join(", ", available);
+            return Error(call, $"Shell '{shellType}' is not available for this session. Available: {listed}.");
+        }
+
+        var workDirRel = doc.RootElement.TryGetProperty("workingDirectory", out var wdProp)
+            ? wdProp.GetString()
+            : null;
+        var workDir = string.IsNullOrWhiteSpace(workDirRel)
+            ? Result<string, string>.AsValue(_workRoot)
+            : ResolveUnderWorkRoot(workDirRel);
+        if (workDir.IsError)
+            return Error(call, workDir.Error);
+
+        if (!Directory.Exists(workDir.Value))
+            return Error(call, $"Working directory not found: {workDirRel ?? "."}");
+
+        var timeoutMs = GetInt(doc.RootElement, "timeoutMs");
+        DysonShell shell;
+        try
+        {
+            shell = DysonShell.Create(shellType);
+        }
+        catch (Exception ex)
+        {
+            return Error(call, ex.Message);
+        }
+
+        var run = await shell.ExecuteAsync(command.Value, workDir.Value, timeoutMs, cancellationToken)
+            .ConfigureAwait(false);
+        if (run.IsError)
+            return Error(call, run.Error);
+
+        var r = run.Value;
+        var sb = new StringBuilder();
+        sb.Append("exitCode=");
+        sb.Append(r.ExitCode);
+        if (r.TimedOut)
+            sb.Append(" timedOut=true");
+        sb.AppendLine();
+        if (!string.IsNullOrEmpty(r.Stdout))
+        {
+            sb.AppendLine("--- stdout ---");
+            sb.AppendLine(r.Stdout.TrimEnd());
+        }
+
+        if (!string.IsNullOrEmpty(r.Stderr))
+        {
+            sb.AppendLine("--- stderr ---");
+            sb.AppendLine(r.Stderr.TrimEnd());
+        }
+
+        var content = sb.ToString().TrimEnd();
+        return r.TimedOut || r.ExitCode != 0
+            ? Error(call, content)
+            : Ok(call, string.IsNullOrEmpty(content) ? "(no output)" : content);
     }
 
     private Result<string, string> ResolveUnderWorkRoot(string path)

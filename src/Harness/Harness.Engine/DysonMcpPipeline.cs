@@ -20,12 +20,64 @@ public sealed class DysonMcpPipeline
             : null;
     }
 
-    public static DysonMcpPipeline CreateDefault(DysonMcpAccessMode accessMode)
+    public static DysonMcpPipeline CreateDefault(
+        DysonMcpAccessMode accessMode,
+        IReadOnlyList<DysonShellType>? availableShellTypes = null)
     {
+        availableShellTypes ??= DysonShell.AvailableForCurrentPlatform();
         var pipeline = new DysonMcpPipeline(accessMode);
-        foreach (var tool in DefaultTools())
+        foreach (var tool in DefaultTools(availableShellTypes))
             pipeline.Tools[tool.Name] = tool;
         return pipeline;
+    }
+
+    /// <summary>
+    /// Builds ShellExecute with a shell enum matching the session's available types.
+    /// Returns null when no shells are available for the platform.
+    /// </summary>
+    public static DysonMcpTool? CreateShellExecuteTool(IReadOnlyList<DysonShellType> available)
+    {
+        ArgumentNullException.ThrowIfNull(available);
+        if (available.Count == 0)
+            return null;
+
+        var names = available.Select(t => t.ToString()).ToArray();
+        var listed = string.Join(", ", names);
+        var enumJson = string.Join(", ", names.Select(n => $"\"{n}\""));
+
+        return new DysonMcpTool
+        {
+            Name = "ShellExecute",
+            Description =
+                "Run a command in the session work directory. " +
+                $"Available shells for this session: {listed}. " +
+                "You must pass shell as one of these. Prefer dedicated MCP file tools over shell when they fit.",
+            InputSchemaJson = $$"""
+                {
+                  "type": "object",
+                  "properties": {
+                    "shell": {
+                      "type": "string",
+                      "enum": [{{enumJson}}],
+                      "description": "Shell to use (must be one of the available shells for this session)."
+                    },
+                    "command": {
+                      "type": "string",
+                      "description": "Command line to execute in the chosen shell."
+                    },
+                    "timeoutMs": {
+                      "type": "integer",
+                      "description": "Optional max run time in milliseconds before the process is killed."
+                    },
+                    "workingDirectory": {
+                      "type": "string",
+                      "description": "Optional subdirectory under the work root (default: work root)."
+                    }
+                  },
+                  "required": ["shell", "command"]
+                }
+                """,
+        };
     }
 
     /// <summary>Formats the tools dictionary into a prompt-injectable catalog string.</summary>
@@ -51,7 +103,7 @@ public sealed class DysonMcpPipeline
         return sb.ToString().TrimEnd();
     }
 
-    private static IEnumerable<DysonMcpTool> DefaultTools()
+    private static IEnumerable<DysonMcpTool> DefaultTools(IReadOnlyList<DysonShellType> availableShellTypes)
     {
         yield return new DysonMcpTool
         {
@@ -372,5 +424,9 @@ public sealed class DysonMcpPipeline
                 }
                 """,
         };
+
+        var shellExecute = CreateShellExecuteTool(availableShellTypes);
+        if (shellExecute is not null)
+            yield return shellExecute;
     }
 }

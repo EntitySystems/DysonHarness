@@ -4,8 +4,7 @@
 
 <div class="chat-panel">
     <div @ref="_turnsEl"
-         class="chat-panel__turns"
-         @onscroll="OnTurnsScrollAsync">
+         class="chat-panel__turns">
         @if (Turns.Count == 0)
         {
             <div class="empty-state">Start a session and send a prompt. Demo tools run staged mocks.</div>
@@ -17,7 +16,8 @@
                 var turn = Turns[i];
                 <TurnBlock Turn="turn"
                            SessionBusy="SessionBusy"
-                           IsLatestTurn="@(i == Turns.Count - 1)" />
+                           IsLatestTurn="@(i == Turns.Count - 1)"
+                           OnCancel="OnCancelPrompt" />
             }
         }
     </div>
@@ -32,13 +32,16 @@
 
 @code {
     private ElementReference _turnsEl;
-    private bool _stickToBottom = true;
+    private bool _forceStick;
+    private bool _attached;
     private int _lastTurnCount;
 
     [Parameter] public IReadOnlyList<DysonAgentTurn> Turns { get; set; } = [];
     [Parameter] public bool Disabled { get; set; }
     /// <summary>Host busy (prompt in flight) — drives the latest-turn prompt spinner.</summary>
     [Parameter] public bool SessionBusy { get; set; }
+    /// <summary>Cancel in-flight prompt (latest busy turn spinner).</summary>
+    [Parameter] public EventCallback OnCancelPrompt { get; set; }
     [Parameter] public Guid? SelectedSlugId { get; set; }
     [Parameter] public EventCallback<Guid?> SelectedSlugIdChanged { get; set; }
     [Parameter] public string SelectedAgentMode { get; set; } = DysonAgentModes.Work;
@@ -52,33 +55,29 @@
         if (Turns.Count != _lastTurnCount)
         {
             if (Turns.Count > _lastTurnCount)
-                _stickToBottom = true;
+                _forceStick = true;
             _lastTurnCount = Turns.Count;
         }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!_stickToBottom)
-            return;
-
         try
         {
+            if (!_attached)
+            {
+                await Js.InvokeVoidAsync("dysonChat.attach", _turnsEl);
+                _attached = true;
+            }
+
+            if (_forceStick)
+            {
+                _forceStick = false;
+                await Js.InvokeVoidAsync("dysonChat.setStick", _turnsEl, true);
+            }
+
+            // JS owns stick; no-op when user has scrolled away.
             await Js.InvokeVoidAsync("dysonChat.scrollToBottom", _turnsEl);
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-        }
-    }
-
-    private async Task OnTurnsScrollAsync()
-    {
-        try
-        {
-            _stickToBottom = await Js.InvokeAsync<bool>("dysonChat.isNearBottom", _turnsEl);
         }
         catch (JSException)
         {
@@ -90,7 +89,7 @@
 
     private async Task HandleSubmitAsync(string prompt)
     {
-        _stickToBottom = true;
+        _forceStick = true;
         await OnSubmit.InvokeAsync(prompt);
     }
 }
