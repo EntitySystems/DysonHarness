@@ -327,8 +327,10 @@ public sealed class DysonMcpPipeline
             Name = "SubmitSubagentReport",
             Description =
                 "Subagents must call this when finished (or blocked). " +
+                "Summary may be a success handoff or, when status is failed, a concrete failure reason. " +
                 "Notifies the parent with the summary so the host can queue a parent turn. " +
                 "Complete all session todos (or pass skipTasksCheck) before finishing. " +
+                "After a successful completed report, further calls are accepted as no-ops (idempotent). " +
                 "Do not use from a root Work session unless debugging.",
             InputSchemaJson = """
                 {
@@ -336,7 +338,7 @@ public sealed class DysonMcpPipeline
                   "properties": {
                     "summary": {
                       "type": "string",
-                      "description": "Crisp handoff for the parent (findings, outcome, blockers)."
+                      "description": "Crisp handoff for the parent (findings, outcome) or a concrete failure reason when status is failed."
                     },
                     "status": {
                       "type": "string",

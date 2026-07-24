@@ -352,8 +352,17 @@ public abstract class DysonAgentSession
 
         var trimmed = summary.Trim();
         var status = failed ? DysonSessionStatus.Failed : DysonSessionStatus.Completed;
+
+        // Post-success retries: already Completed → tool COMPLETED, no re-notify.
+        if (Status == DysonSessionStatus.Completed)
+            return Task.FromResult(Result<string, string>.AsValue(IdempotentReportJson()));
+
         if (!TryAcceptSubagentReport(status, trimmed))
         {
+            // Race: another thread completed between the check and TryAccept.
+            if (Status == DysonSessionStatus.Completed)
+                return Task.FromResult(Result<string, string>.AsValue(IdempotentReportJson()));
+
             return Task.FromResult(Result<string, string>.AsError(
                 $"SubmitSubagentReport: session already {Status}."));
         }
@@ -386,6 +395,15 @@ public abstract class DysonAgentSession
             status = Status.ToString(),
             summary = trimmed,
         })));
+
+        string IdempotentReportJson() => JsonSerializer.Serialize(new
+        {
+            subagentId = Id,
+            persistenceId = PersistenceId,
+            status = DysonSessionStatus.Completed.ToString(),
+            summary = LastReportSummary,
+            idempotent = true,
+        });
     }
 
     public Task<(DysonSessionStatus Status, string? Summary)> WaitForTerminalAsync(

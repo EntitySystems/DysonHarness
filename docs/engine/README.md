@@ -56,7 +56,7 @@ Built-in names in `DysonAgentModes`:
 | `Bug Review` | Bug-focused review |
 | `Custom` | Category label; lookup uses `Config.CustomAgents` keys |
 
-System prompts come from `DysonAgentSystemPrompts.ForMode`. Work / Explore / Drone directives cover orchestrator routing, Wait-only-for-prerequisites, and mandatory `SubmitSubagentReport`. Explore/Drone directives harden “report is mandatory” / “complete or impossible”. Every child first turn prepends `SubagentReportRequiredMandate`; Explore/Drone also get mode-specific first-turn blocks (`ExploreFirstTurnReportMandate`, `DroneFirstTurnContextMandate`).
+System prompts come from `DysonAgentSystemPrompts.ForMode`. Work / Explore / Drone directives cover orchestrator routing, Wait-only-for-prerequisites, and mandatory `SubmitSubagentReport`. Explore/Drone directives harden “report is mandatory” / “complete or impossible”, including `failed` + failure-reason summaries. Every child first turn prepends `SubagentReportRequiredMandate` (failure-reason reports are valid finishes); Explore/Drone also get mode-specific first-turn blocks (`ExploreFirstTurnReportMandate`, `DroneFirstTurnContextMandate`). Security Review / Bug Review directives briefly mirror the same when used as subagents.
 
 ## Orchestrator subagents
 
@@ -68,7 +68,7 @@ Primary flow: `StartSubagent` is **non-blocking**; the child runs in the backgro
 | `WaitForSubagent` | Block until child terminal or `timeoutMs`. Wait **only** when the child’s result is a **blocker for the next automatic turn** (typically Explore-before-implementation); do **not** Wait on Drones — prefer the notification turn |
 | `InspectSubagentLog` | `SnapshotLog` for a subagent id |
 | `StopSubagent` | Cancel child CTS; mark `Stopped`; notify parent |
-| `SubmitSubagentReport` | Child-only handoff (`summary`, optional `status` completed\|failed, optional `skipTasksCheck`); **blocks** when the session has incomplete todos (`Pending`/`Ongoing`) unless `skipTasksCheck: true` (then success payload includes `incompleteTodos`); empty todo list passes; persists meta and notifies parent (parent summary stays the agent-provided `summary`). If the child is already harness-`Failed` (e.g. kickoff missed a report), a later agent report **supersedes** that Failed status (`Completed`/`Failed` per tool `status`), replaces `LastReportSummary`, persists again, and **re-notifies** the parent. `Completed` / `Stopped` still reject a second submit. |
+| `SubmitSubagentReport` | Child-only handoff (`summary`, optional `status` completed\|failed, optional `skipTasksCheck`); **blocks** when the session has incomplete todos (`Pending`/`Ongoing`) unless `skipTasksCheck: true` (then success payload includes `incompleteTodos`); empty todo list passes; persists meta and notifies parent (parent summary stays the agent-provided `summary`). Summary may be a success handoff or, when `status` is `failed`, a concrete failure reason. If the child is already harness-`Failed` (e.g. kickoff missed a report), a later agent report **supersedes** that Failed status (`Completed`/`Failed` per tool `status`), replaces `LastReportSummary`, persists again, and **re-notifies** the parent. After a successful `completed` report, further `SubmitSubagentReport` calls are **idempotent** tool COMPLETED (`idempotent: true`, original summary; no re-notify). A first real `failed` report stays `Failed` (not rewritten to Completed). `Stopped` still rejects a second submit. |
 
 **Spawn policy (prompt + soft enforce):**
 

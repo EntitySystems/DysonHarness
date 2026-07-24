@@ -5,9 +5,9 @@ namespace Harness.UI.Demo;
 /// <summary>Card + auto-turn helpers for <see cref="DysonUiHost"/> (pure; self-checkable).</summary>
 public static class DysonSubagentHostLogic
 {
-    public static bool IsRunning(DysonSessionStatus status, DysonAgentTurn? latestTurn) =>
-        status == DysonSessionStatus.Active
-        && (latestTurn is null || latestTurn.CompletedUtc is null);
+    // latestTurn kept for call-site compatibility; parent spinner follows session Status only.
+    public static bool IsRunning(DysonSessionStatus status, DysonAgentTurn? latestTurn = null) =>
+        status == DysonSessionStatus.Active;
 
     public static string BuildSubagentReportContinuationPrompt(DysonAgentInterrupt interrupt, string? title)
     {
@@ -60,11 +60,17 @@ public static class DysonSubagentHostLogic
         var doneTurn = IsRunning(
             DysonSessionStatus.Active,
             new DysonAgentTurn { StartedUtc = DateTime.UtcNow, CompletedUtc = DateTime.UtcNow });
-        if (doneTurn)
-            throw new InvalidOperationException("Active with completed latest turn should not be running.");
+        if (!doneTurn)
+            throw new InvalidOperationException("Active with completed latest turn should still be running.");
 
         if (IsRunning(DysonSessionStatus.Completed, latestTurn: null))
             throw new InvalidOperationException("Completed status should not be running.");
+
+        if (IsRunning(DysonSessionStatus.Failed, latestTurn: null))
+            throw new InvalidOperationException("Failed status should not be running.");
+
+        if (IsRunning(DysonSessionStatus.Stopped, latestTurn: null))
+            throw new InvalidOperationException("Stopped status should not be running.");
 
         var prompt = BuildSubagentReportContinuationPrompt(
             new DysonAgentInterrupt

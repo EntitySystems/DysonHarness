@@ -91,6 +91,7 @@ public static class DysonAgentSystemPrompts
         - Finish session todos via UpdateTodo before SubmitSubagentReport, or set skipTasksCheck and expect incompleteTodos in the result.
         - SubmitSubagentReport is mandatory: do not end a turn with findings-only text (including an H1 + prose) as if the session is finished.
         - When investigation is done — or blocked — call SubmitSubagentReport with structured findings (`completed` or `failed`) so the parent can continue.
+        - Blocked or incomplete investigation: SubmitSubagentReport with status `failed` and a concrete failure reason (missing data, access blocker, tool error) — do not silently abandon, and do not retry SubmitSubagentReport after a successful submit.
         """;
 
     public const string DroneDirective = """
@@ -104,7 +105,7 @@ public static class DysonAgentSystemPrompts
         - Optional modelSlug on StartSubagent when an Explore child should use a different model (omit to inherit yours).
         - May spawn Explore only — never another Drone by default.
         - Same Wait/notify rules as Work for any Explore children: Wait only when an Explore child’s output blocks the next automatic turn; otherwise continue and incorporate SubmitSubagentReport notification turns.
-        - Do not ask the user clarifying questions; if blocked, SubmitSubagentReport with status failed and the reason, then stop.
+        - Do not ask the user clarifying questions; if blocked, SubmitSubagentReport with status failed and a concrete failure reason (missing context, agent/tool error), then stop.
         - After a tool failure: diagnose, retry or take an alternate approach, and keep working until the task is done or truly blocked. Do not stop after a single failed tool or wait for the user to say “resume”.
         - On success: verify as required, update todos, then SubmitSubagentReport with status completed and a crisp handoff the parent can consume without re-deriving your steps.
         - Prefer minimal output: completed work, files touched, verification, and any residual risks.
@@ -119,6 +120,7 @@ public static class DysonAgentSystemPrompts
         Harness mandate (first turn only):
         - Plain text (including an H1-only reply) does not finish this subagent.
         - Always end by calling SubmitSubagentReport with status completed or failed and a concrete summary.
+        - A completion report may use status failed with a concrete failure reason in the summary (e.g. missing data, blocker, agent/tool error) — that is a valid finish; the parent continues from that report.
         - The parent WaitForSubagent / notification path only continues on SubmitSubagentReport (or stop/fail).
         """;
 
@@ -129,6 +131,7 @@ public static class DysonAgentSystemPrompts
     public const string ExploreFirstTurnReportMandate = """
         Explore mandate (first turn only):
         - When you are done investigating — or blocked — call SubmitSubagentReport with structured findings.
+        - If blocked or incomplete: status failed plus a concrete failure reason; do not silently abandon or retry after a successful submit.
         - Do not treat findings-only text as a finish; the parent only continues on SubmitSubagentReport (or stop/fail).
         """;
 
@@ -145,7 +148,7 @@ public static class DysonAgentSystemPrompts
         - Spawn Explore only — do not spawn another Drone.
         - Fully complete the assigned job, or report it impossible/blocked — never abandon mid-implementation.
         - After a tool failure: diagnose, retry or alternate approach; do not stop after one failure or wait for “resume”.
-        - On true blocker: SubmitSubagentReport with status failed and the reason.
+        - On true blocker: SubmitSubagentReport with status failed and a concrete failure reason (missing context, errors).
         - On success: verify, update todos, then SubmitSubagentReport with status completed and a crisp handoff.
         """;
 
@@ -158,6 +161,7 @@ public static class DysonAgentSystemPrompts
         - Do not implement fixes unless the user explicitly asks; default is review-only.
         - Ignore pure style/nits unless they create a security footgun.
         - If evidence is incomplete, say what you still need and what you can already assert.
+        - When used as a subagent: finish with SubmitSubagentReport (`completed` with findings, or `failed` with a concrete failure reason if blocked).
         """;
 
     public const string BugReviewDirective = """
@@ -169,6 +173,7 @@ public static class DysonAgentSystemPrompts
         - Prefer concrete findings with impact, repro/trigger conditions, affected paths, and a practical fix direction.
         - Do not implement fixes unless the user explicitly asks; default is review-only.
         - Prioritize user-visible breakage and data corruption over stylistic concerns.
+        - When used as a subagent: finish with SubmitSubagentReport (`completed` with findings, or `failed` with a concrete failure reason if blocked).
         """;
 
     /// <summary>

@@ -584,10 +584,20 @@ public sealed class DysonWorkspaceToolExecutor
         if (submitted.IsError)
             return Error(call, submitted.Error);
 
-        await PersistSessionStatusAsync(_session, _session.Status, summary, cancellationToken)
+        var idempotent = ReportResultIsIdempotent(submitted.Value);
+
+        await PersistSessionStatusAsync(
+                _session,
+                _session.Status,
+                idempotent ? _session.LastReportSummary : summary,
+                cancellationToken)
             .ConfigureAwait(false);
 
-        if (_session.Parent is not null && _store is not null && _session.Parent.PersistenceId != Guid.Empty)
+        // Idempotent retries must not re-notify / re-append parent interrupt.
+        if (!idempotent
+            && _session.Parent is not null
+            && _store is not null
+            && _session.Parent.PersistenceId != Guid.Empty)
         {
             var interruptLog = DysonSessionLogPayload.CreateEntry(
                 _session.Parent.PersistenceId,
@@ -604,6 +614,20 @@ public sealed class DysonWorkspaceToolExecutor
         }
 
         return Ok(call, submitted.Value);
+    }
+
+    private static bool ReportResultIsIdempotent(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty("idempotent", out var prop)
+                   && prop.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private async Task PersistSessionStatusAsync(

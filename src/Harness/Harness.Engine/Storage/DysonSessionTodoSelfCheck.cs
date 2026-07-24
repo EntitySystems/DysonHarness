@@ -2,7 +2,8 @@ namespace DysonHarness;
 
 /// <summary>
 /// ponytail: assert-only self-check for session todo TaskCode uniqueness, status enum round-trip,
-/// SubmitSubagentReport incomplete-todo gate, and Failed-supersede report (no test framework).
+/// SubmitSubagentReport incomplete-todo gate, Failed-supersede, idempotent Completed retry,
+/// and first-failed stays Failed (no test framework).
 /// Run: <c>DysonSessionTodoSelfCheck.Run()</c> (also from UI <c>Program</c> startup).
 /// </summary>
 public static class DysonSessionTodoSelfCheck
@@ -13,6 +14,8 @@ public static class DysonSessionTodoSelfCheck
         AssertTaskCodeUniqueness().GetAwaiter().GetResult();
         AssertSubmitSubagentReportTodoGate().GetAwaiter().GetResult();
         AssertSubmitSubagentReportFailedSupersede().GetAwaiter().GetResult();
+        AssertSubmitSubagentReportIdempotentCompleted().GetAwaiter().GetResult();
+        AssertSubmitSubagentReportFirstFailedStaysFailed().GetAwaiter().GetResult();
     }
 
     private static void AssertStatusRoundTrip()
@@ -175,14 +178,16 @@ public static class DysonSessionTodoSelfCheck
         if (!string.Equals(failed.LastReportSummary, "agent handoff", StringComparison.Ordinal))
             throw new InvalidOperationException("Expected LastReportSummary replaced on supersede.");
 
-        // Completed → second submit still rejected
+        // Completed → second submit is idempotent success (no error)
         var second = await failed.SubmitSubagentReportAsync("again").ConfigureAwait(false);
-        if (!second.IsError
-            || second.Error.IndexOf("already Completed", StringComparison.OrdinalIgnoreCase) < 0)
-        {
-            throw new InvalidOperationException(
-                $"Expected second submit rejected as already Completed, got: {(second.IsError ? second.Error : "ok")}");
-        }
+        if (second.IsError)
+            throw new InvalidOperationException($"Expected second submit idempotent ok, got: {second.Error}");
+        if (second.Value.IndexOf("\"idempotent\":true", StringComparison.Ordinal) < 0)
+            throw new InvalidOperationException($"Expected idempotent:true in second submit, got: {second.Value}");
+        if (failed.Status != DysonSessionStatus.Completed)
+            throw new InvalidOperationException("Expected status to stay Completed after idempotent retry.");
+        if (!string.Equals(failed.LastReportSummary, "agent handoff", StringComparison.Ordinal))
+            throw new InvalidOperationException("Expected LastReportSummary unchanged on idempotent retry.");
 
         // Stopped → SubmitSubagentReport rejected
         var stopped = new StubSession();
@@ -195,6 +200,56 @@ public static class DysonSessionTodoSelfCheck
             throw new InvalidOperationException(
                 $"Expected Stopped submit rejected, got: {(stoppedReport.IsError ? stoppedReport.Error : "ok")}");
         }
+    }
+
+    private static async Task AssertSubmitSubagentReportIdempotentCompleted()
+    {
+        var session = new StubSession();
+        var first = await session.SubmitSubagentReportAsync("first handoff").ConfigureAwait(false);
+        if (first.IsError)
+            throw new InvalidOperationException($"Expected first completed report ok, got: {first.Error}");
+        if (session.Status != DysonSessionStatus.Completed)
+            throw new InvalidOperationException("Expected first completed report to mark Completed.");
+
+        var retry = await session.SubmitSubagentReportAsync("retry noise").ConfigureAwait(false);
+        if (retry.IsError)
+            throw new InvalidOperationException($"Expected idempotent retry ok, got: {retry.Error}");
+        if (retry.Value.IndexOf("\"idempotent\":true", StringComparison.Ordinal) < 0
+            || retry.Value.IndexOf("first handoff", StringComparison.Ordinal) < 0)
+        {
+            throw new InvalidOperationException(
+                $"Expected idempotent payload with original summary, got: {retry.Value}");
+        }
+
+        if (session.Status != DysonSessionStatus.Completed)
+            throw new InvalidOperationException("Expected status to remain Completed.");
+        if (!string.Equals(session.LastReportSummary, "first handoff", StringComparison.Ordinal))
+            throw new InvalidOperationException("Expected LastReportSummary unchanged on idempotent retry.");
+    }
+
+    private static async Task AssertSubmitSubagentReportFirstFailedStaysFailed()
+    {
+        var session = new StubSession();
+        var failed = await session
+            .SubmitSubagentReportAsync("blocked: missing schema", failed: true)
+            .ConfigureAwait(false);
+        if (failed.IsError)
+            throw new InvalidOperationException($"Expected first failed report ok, got: {failed.Error}");
+        if (session.Status != DysonSessionStatus.Failed)
+            throw new InvalidOperationException("Expected first failed report to mark Failed, not Completed.");
+        if (!string.Equals(session.LastReportSummary, "blocked: missing schema", StringComparison.Ordinal))
+            throw new InvalidOperationException("Expected LastReportSummary to keep failure reason.");
+
+        // Failed + failed again is not the post-success idempotent path (still Failed, not flipped to Completed)
+        var again = await session
+            .SubmitSubagentReportAsync("still blocked", failed: true)
+            .ConfigureAwait(false);
+        if (again.IsError)
+            throw new InvalidOperationException($"Expected Failed→Failed re-report ok, got: {again.Error}");
+        if (session.Status != DysonSessionStatus.Failed)
+            throw new InvalidOperationException("Expected re-failed report to stay Failed.");
+        if (again.Value.IndexOf("\"idempotent\":true", StringComparison.Ordinal) >= 0)
+            throw new InvalidOperationException("Did not expect idempotent:true on Failed re-report.");
     }
 
     private sealed class StubProvider : DysonAgentProvider;
