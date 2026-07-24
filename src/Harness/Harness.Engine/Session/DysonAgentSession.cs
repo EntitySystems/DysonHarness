@@ -1257,6 +1257,7 @@ public abstract class DysonAgentSession
                 Kind = row.Kind,
                 Instruction = row.Instruction,
                 AgentTitle = row.AgentTitle,
+                PlanRelativePath = row.PlanRelativePath,
                 AssistantText = row.AssistantText,
                 ReasoningText = row.ReasoningText,
                 ToolHistoryOptimized = row.ToolHistoryOptimized,
@@ -1659,6 +1660,23 @@ public abstract class DysonAgentSession
     /// </summary>
     public DysonAgentTurn CreateReportSummaryTurn(string? confirmRationale = null) =>
         DysonTaskCompletionFlow.CreateReportSummaryTurn(confirmRationale);
+
+    /// <summary>
+    /// Creates a PlanResult turn after SubmitPlan (no auto LLM).
+    /// Does not append to <see cref="TurnHistory"/>.
+    /// </summary>
+    public DysonAgentTurn CreatePlanResultTurn(string planRelativePath, string title) =>
+        DysonPlanResultFlow.CreateTurn(planRelativePath, title);
+
+    /// <summary>
+    /// Appends a completed PlanResult turn and raises <see cref="TurnAdded"/> for host persistence.
+    /// </summary>
+    public DysonAgentTurn AppendPlanResultTurn(string planRelativePath, string title)
+    {
+        var turn = CreatePlanResultTurn(planRelativePath, title);
+        AddTurn(turn);
+        return turn;
+    }
 
     /// <summary>
     /// Compacts eligible older turns' tool history when thresholds are met.

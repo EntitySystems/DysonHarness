@@ -306,6 +306,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 existing.Sequence = turn.Sequence;
                 existing.Kind = turn.Kind;
                 existing.AgentTitle = turn.AgentTitle;
+                existing.PlanRelativePath = turn.PlanRelativePath;
                 existing.Instruction = turn.Instruction;
                 existing.AssistantText = turn.AssistantText;
                 existing.ReasoningText = turn.ReasoningText;

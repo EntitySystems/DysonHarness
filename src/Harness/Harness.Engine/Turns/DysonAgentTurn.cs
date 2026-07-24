@@ -11,6 +11,7 @@ public enum DysonAgentTurnKind
     Continuation = 3,
     ReportSummary = 4,
     InitializeSession = 5,
+    PlanResult = 6,
 }
 
 public sealed class DysonToolCallStatusChangedEventArgs : EventArgs
@@ -29,6 +30,12 @@ public sealed class DysonAgentTurn
 
     public string? Instruction { get; init; }
     public DysonAgentTurnKind Kind { get; init; }
+
+    /// <summary>
+    /// Workspace-relative plan path for <see cref="DysonAgentTurnKind.PlanResult"/> turns
+    /// (forward slashes, e.g. <c>.dyson/plans/slug-hash.md</c>).
+    /// </summary>
+    public string? PlanRelativePath { get; set; }
 
     /// <summary>
     /// Agent-generated Markdown H1 title for this turn (without leading #), when the reply is agent-authored.

@@ -30,8 +30,9 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `Id` | Guid PK — also `DysonAgentTurn.Id` |
 | `SessionId` | Guid FK |
 | `Sequence` | Order within session |
-| `Kind` | `DysonAgentTurnKind` |
-| `AgentTitle` | Parsed H1 |
+| `Kind` | `DysonAgentTurnKind` (`PlanResult` = 6) |
+| `AgentTitle` | Parsed H1 / plan title |
+| `PlanRelativePath` | Workspace-relative plan path for `PlanResult` (e.g. `.dyson/plans/…`); null otherwise |
 | `Instruction` | Harness-injected instruction |
 | `AssistantText` | Agent body after title |
 | `ReasoningText` | Optional model reasoning / thinking (UI + reload; not replayed into transcripts) |

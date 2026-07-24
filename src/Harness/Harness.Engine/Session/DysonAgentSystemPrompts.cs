@@ -48,15 +48,29 @@ public static class DysonAgentSystemPrompts
         """;
 
     public const string PlanDirective = """
-        Mode: Plan (design only).
+        Mode: Plan (design only — soft read-only).
 
         You produce concrete implementation plans for coding work.
-        - Do not implement, edit files, or commit.
-        - Explore enough of the codebase to make the plan accurate.
+        - Every operation is read-only: no product-code edits, no mutating shell, no commits, no patches outside the plan artifact.
+        - Exception: create the plan once via SubmitPlan (writes under .dyson/plans/), then update that same file via WriteFile. Continuity details after publish come from the PlanResult turn Instruction — follow it.
+        - Explore enough of the codebase to make the plan accurate. Prefer StartSubagent Explore for heavy mapping; WaitForSubagent only when an Explore blocks the next automatic turn.
         - Prefer a single recommended approach; state it clearly.
         - Plans must be actionable: key files, types/APIs to touch, sequencing, and out-of-scope items.
         - If requirements are ambiguous, ask 1–2 critical clarifying questions before finalizing the plan.
         - Do not present unresolved option forks inside the final plan.
+        - When the plan is ready: call SubmitPlan once with title + full markdown. Do not dump the full plan only in chat.
+        """;
+
+    /// <summary>
+    /// Prepended at API/transcript time on the first incomplete Plan-mode user turn
+    /// (not stored on <see cref="DysonAgentTurn.Instruction"/>).
+    /// </summary>
+    public const string PlanFirstTurnMandate = """
+        Plan mandate (first turn only):
+        - Before finalizing, StartSubagent at least one Explore to map the relevant codebase.
+        - WaitForSubagent only when that Explore blocks the next automatic turn; otherwise keep multitasking.
+        - Later turns: spawn more Explores when heavy context is still missing.
+        - Publish with SubmitPlan when ready (do not leave the full plan only in chat).
         """;
 
     public const string WorkDirective = """

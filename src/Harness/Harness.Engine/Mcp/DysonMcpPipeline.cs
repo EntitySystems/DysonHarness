@@ -630,6 +630,31 @@ public sealed class DysonMcpPipeline
 
         yield return new DysonMcpTool
         {
+            Name = "SubmitPlan",
+            Description =
+                "Plan mode only: publish a plan artifact under .dyson/plans/{title}-{sha1}.md. " +
+                "Writes the markdown file, appends a PlanResult turn, and returns planPath for later WriteFile updates. " +
+                "Does not implement product code. Call once when the plan is ready; revise via WriteFile on planPath unless the user asks for a new plan.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string",
+                      "description": "Short plan title (used for the filename slug)."
+                    },
+                    "markdown": {
+                      "type": "string",
+                      "description": "Full plan markdown body to write."
+                    }
+                  },
+                  "required": ["title", "markdown"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
             Name = "RenameSession",
             Description =
                 "Rename the current agent session for the UI/session list. " +

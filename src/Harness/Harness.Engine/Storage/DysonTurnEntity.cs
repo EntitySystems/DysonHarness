@@ -7,6 +7,8 @@ public sealed class DysonTurnEntity
     public int Sequence { get; set; }
     public DysonAgentTurnKind Kind { get; set; }
     public string? AgentTitle { get; set; }
+    /// <summary>Workspace-relative plan path for PlanResult turns.</summary>
+    public string? PlanRelativePath { get; set; }
     public string? Instruction { get; set; }
     public string? AssistantText { get; set; }
     /// <summary>Model reasoning / thinking text (UI only; not replayed into transcripts).</summary>

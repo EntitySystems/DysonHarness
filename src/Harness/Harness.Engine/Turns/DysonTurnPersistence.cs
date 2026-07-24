@@ -19,6 +19,7 @@ public static class DysonTurnPersistence
             Sequence = sequence,
             Kind = turn.Kind,
             AgentTitle = turn.AgentTitle,
+            PlanRelativePath = turn.PlanRelativePath,
             Instruction = turn.Instruction,
             AssistantText = turn.AssistantText,
             ReasoningText = turn.ReasoningText,

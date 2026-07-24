@@ -1,0 +1,132 @@
+@namespace Harness.UI.Components.Files
+@using Harness.UI.Demo
+@using Harness.UI.Markdown
+@using Microsoft.AspNetCore.Components.Web
+@inject DysonUiHost Host
+
+@if (Host.FileViewer is { } viewer)
+{
+    <div class="file-viewer-modal-backdrop"
+         @onclick="Close"
+         @onkeydown="OnBackdropKeyDown">
+        <div class="file-viewer-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="file-viewer-modal-title"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnModalKeyDown">
+            <div class="file-viewer-modal__header">
+                <div class="file-viewer-modal__titles">
+                    <h3 id="file-viewer-modal-title">@viewer.Title</h3>
+                    <div class="file-viewer-modal__path mono">@viewer.RelativePath</div>
+                </div>
+                <button type="button"
+                        class="btn btn-ghost file-viewer-modal__close"
+                        @onclick="Close"
+                        aria-label="Close">×</button>
+            </div>
+
+            <div class="file-viewer-modal__body">
+                @if (!string.IsNullOrEmpty(viewer.Error))
+                {
+                    <div class="error-banner">@viewer.Error</div>
+                }
+                else if (viewer.IsMarkdown)
+                {
+                    @* ponytail: selection is paragraph/heading/pre blocks only (split on blank lines), not AST-precise; upgrade to Markdig block walker when comments persist. *@
+                    <div class="file-viewer-modal__markdown turn-block__body">
+                        @foreach (var (index, block) in MarkdownBlocks(viewer.Content))
+                        {
+                            var selected = _selectedBlock == index;
+                            <div class="file-viewer-block @(selected ? "is-selected" : null)"
+                                 @onclick="@(() => SelectBlock(index))"
+                                 @onclick:stopPropagation="true">
+                                @MarkdownRenderer.ToHtml(block)
+                                @if (selected)
+                                {
+                                    <button type="button"
+                                            class="file-viewer-comment"
+                                            title="Comment (UI only — not submitted)"
+                                            @onclick:stopPropagation="true">
+                                        Comment
+                                    </button>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <pre class="file-viewer-modal__code mono">@foreach (var (index, line) in CodeLines(viewer.Content))
+{
+    var selected = _selectedBlock == index;
+    <code class="file-viewer-line @(selected ? "is-selected" : null)"
+          @onclick="@(() => SelectBlock(index))"
+          @onclick:stopPropagation="true">@line
+@if (selected)
+{
+    <button type="button"
+            class="file-viewer-comment"
+            title="Comment (UI only — not submitted)"
+            @onclick:stopPropagation="true">Comment</button>
+}
+</code>
+}</pre>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private int? _selectedBlock;
+
+    protected override void OnParametersSet()
+    {
+        if (Host.FileViewer is null)
+            _selectedBlock = null;
+    }
+
+    private void Close()
+    {
+        _selectedBlock = null;
+        Host.CloseFileViewer();
+    }
+
+    private void SelectBlock(int index) =>
+        _selectedBlock = _selectedBlock == index ? null : index;
+
+    private void OnBackdropKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            Close();
+    }
+
+    private void OnModalKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            Close();
+    }
+
+    private static IEnumerable<(int Index, string Block)> MarkdownBlocks(string content)
+    {
+        if (string.IsNullOrEmpty(content))
+            yield break;
+
+        var parts = content.Replace("\r\n", "\n").Split("\n\n", StringSplitOptions.None);
+        var index = 0;
+        foreach (var part in parts)
+        {
+            if (string.IsNullOrWhiteSpace(part))
+                continue;
+            yield return (index++, part);
+        }
+    }
+
+    private static IEnumerable<(int Index, string Line)> CodeLines(string content)
+    {
+        var lines = content.Replace("\r\n", "\n").Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+            yield return (i, lines[i]);
+    }
+}

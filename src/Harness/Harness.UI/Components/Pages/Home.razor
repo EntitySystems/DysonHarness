@@ -1,5 +1,6 @@
 ﻿@page "/"
 @using DysonHarness
+@using Harness.UI.Components.Files
 @using Harness.UI.Demo
 @implements IDisposable
 @inject DysonUiHost Host
@@ -86,6 +87,8 @@
         </div>
     </Rail>
 </AppShell>
+
+<FileViewerOverlay />
 
 @code {
     private IReadOnlyList<DysonSessionSummary> _sessions = [];

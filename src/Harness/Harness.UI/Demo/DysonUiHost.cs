@@ -38,6 +38,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly List<DysonSubagentEventUiItem> _subagentEventUi = [];
     private readonly object _subagentEventUiGate = new();
     private DysonAskUiState? _pendingAskUi;
+    private DysonFileViewerState? _fileViewer;
 
     private DemoDysonEngine? _engine;
     private DysonAgentSession? _session;
@@ -136,6 +137,85 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     /// <summary>Pending AskQuestion / askQuestion parent-event UI (null when idle).</summary>
     public DysonAskUiState? PendingAskUi => _pendingAskUi;
+
+    /// <summary>Open file viewer overlay (null when closed).</summary>
+    public DysonFileViewerState? FileViewer => _fileViewer;
+
+    /// <summary>
+    /// Opens the file viewer for a workspace-relative path under the focused session work root.
+    /// Does not navigate away from chat.
+    /// </summary>
+    public async Task OpenFileViewerAsync(
+        string relativePath,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
+
+        var workRoot = await TryResolveActiveWorkRootAsync(cancellationToken).ConfigureAwait(false);
+        if (workRoot is null)
+        {
+            _fileViewer = new DysonFileViewerState
+            {
+                RelativePath = relativePath.Trim().Replace('\\', '/'),
+                Title = Path.GetFileName(relativePath) ?? relativePath,
+                Content = "",
+                IsMarkdown = false,
+                Error = "No active work directory to read the file.",
+            };
+            Notify();
+            return;
+        }
+
+        var path = relativePath.Trim().Replace('\\', '/');
+        var fm = new DysonFileManager(workRoot);
+        var read = fm.ReadText(path);
+        var title = Path.GetFileName(path) ?? path;
+        var isMd = path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+                   || path.EndsWith(".markdown", StringComparison.OrdinalIgnoreCase);
+
+        _fileViewer = read.IsError
+            ? new DysonFileViewerState
+            {
+                RelativePath = path,
+                Title = title,
+                Content = "",
+                IsMarkdown = isMd,
+                Error = read.Error,
+            }
+            : new DysonFileViewerState
+            {
+                RelativePath = path,
+                Title = title,
+                Content = read.Value,
+                IsMarkdown = isMd,
+            };
+        Notify();
+    }
+
+    public void CloseFileViewer()
+    {
+        if (_fileViewer is null)
+            return;
+        _fileViewer = null;
+        Notify();
+    }
+
+    private async Task<string?> TryResolveActiveWorkRootAsync(CancellationToken cancellationToken)
+    {
+        Guid? workDirectoryId = _session switch
+        {
+            DemoDysonAgentSession demo => demo.WorkDirectoryId,
+            OpenAiCompatibleAgentSession openAi => openAi.WorkDirectoryId,
+            _ => null,
+        };
+
+        if (workDirectoryId is null || workDirectoryId == Guid.Empty)
+            return null;
+
+        var wd = await _workDirectories.GetAsync(workDirectoryId.Value, cancellationToken)
+            .ConfigureAwait(false);
+        return wd.IsError ? null : wd.Value.AbsolutePath;
+    }
 
     /// <summary>Subagent event blocks for the focused session (pending + recent).</summary>
     public IReadOnlyList<DysonSubagentEventUiItem> SubagentEventUi
@@ -1097,6 +1177,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         _session = null;
         _engine = null;
+        CloseFileViewer();
     }
 
     private Guid? ResolveStoredParentId(DysonAgentSession session)
@@ -1238,6 +1319,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         lock (_subagentEventUiGate)
             _subagentEventUi.Clear();
         _pendingAskUi = null;
+        _fileViewer = null;
 
         foreach (var cts in _promptCtsBySession.Values)
         {
@@ -1762,10 +1844,17 @@ public sealed class DysonUiHost : IAsyncDisposable
                 var last = session.Turns.Count > 0 ? session.Turns[^1] : null;
                 if (last is not null)
                 {
-                    var complete = await PersistTurnCompletedAsync(session, last, token)
-                        .ConfigureAwait(false);
-                    if (complete.IsError)
-                        return complete;
+                    // Persist every unfinished turn (PlanResult may append after the prompt turn).
+                    foreach (var turn in session.Turns)
+                    {
+                        if (turn.CompletedUtc is not null)
+                            continue;
+
+                        var complete = await PersistTurnCompletedAsync(session, turn, token)
+                            .ConfigureAwait(false);
+                        if (complete.IsError)
+                            return complete;
+                    }
                 }
 
                 return VoidResult<string>.Success;

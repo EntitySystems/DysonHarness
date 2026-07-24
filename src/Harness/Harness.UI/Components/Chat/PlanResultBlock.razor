@@ -1,0 +1,46 @@
+@namespace Harness.UI.Components.Chat
+@using DysonHarness
+@using Harness.UI.Demo
+@inject DysonUiHost Host
+
+<div class="plan-result-block">
+    <div class="plan-result-block__meta">
+        <div class="plan-result-block__title">@(Turn.AgentTitle ?? "Plan")</div>
+        @if (!string.IsNullOrWhiteSpace(Turn.PlanRelativePath))
+        {
+            <div class="plan-result-block__path mono">@Turn.PlanRelativePath</div>
+        }
+    </div>
+    @if (!string.IsNullOrWhiteSpace(Turn.AssistantText))
+    {
+        <div class="plan-result-block__summary">@Turn.AssistantText</div>
+    }
+    <button type="button"
+            class="btn plan-result-block__open"
+            disabled="@(string.IsNullOrWhiteSpace(Turn.PlanRelativePath) || _opening)"
+            @onclick="OpenPlanAsync">
+        Open plan
+    </button>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public DysonAgentTurn Turn { get; set; } = default!;
+
+    private bool _opening;
+
+    private async Task OpenPlanAsync()
+    {
+        if (string.IsNullOrWhiteSpace(Turn.PlanRelativePath) || _opening)
+            return;
+
+        _opening = true;
+        try
+        {
+            await Host.OpenFileViewerAsync(Turn.PlanRelativePath);
+        }
+        finally
+        {
+            _opening = false;
+        }
+    }
+}

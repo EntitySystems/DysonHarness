@@ -18,6 +18,8 @@ StringListJsonValueConverterSelfCheck.Run();
 DysonAvailableModelsPromptSelfCheck.Run();
 DysonSubagentRestoreSelfCheck.Run();
 DysonParentEventSelfCheck.Run();
+DysonFileManagerSelfCheck.Run();
+DysonPlanResultSelfCheck.Run();
 ComposerSlashCommands.SelfCheck();
 
 var builder = WebApplication.CreateBuilder(args);

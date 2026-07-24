@@ -72,7 +72,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             ["content"] = systemContent,
         });
 
-        AppendHistoryMessages(messages, session.Turns, excludeLastIfCurrent: false);
+        AppendHistoryMessages(messages, session, excludeLastIfCurrent: false);
 
         if (inFlightRounds is not null)
         {
@@ -114,7 +114,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         var instructions = BuildSystemText(session);
         var input = new JsonArray();
 
-        AppendHistoryAsResponsesInput(input, session.Turns);
+        AppendHistoryAsResponsesInput(input, session);
 
         if (inFlightRounds is not null)
         {
@@ -212,25 +212,27 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
     private static void AppendHistoryMessages(
         JsonArray messages,
-        IReadOnlyList<DysonAgentTurn> turns,
+        DysonAgentSession session,
         bool excludeLastIfCurrent)
     {
+        var turns = session.Turns;
+        var incompleteIndex = FindIncompleteCurrentIndex(turns);
         var count = turns.Count;
         for (var i = 0; i < count; i++)
         {
-            if (excludeLastIfCurrent && i == count - 1)
+            if (excludeLastIfCurrent && i == incompleteIndex)
                 break;
 
             var turn = turns[i];
-            // In-progress current turn: user content may get ephemeral rename review;
-            // tool rounds come from inFlightRounds.
-            var incompleteCurrent = i == count - 1 && string.IsNullOrEmpty(turn.AssistantText);
+            // In-progress current turn: user content may get ephemeral rename / Plan mandates;
+            // tool rounds come from inFlightRounds. PlanResult may append after the live turn.
+            var incompleteCurrent = i == incompleteIndex;
             if (!string.IsNullOrEmpty(turn.Instruction))
             {
                 messages.Add(new JsonObject
                 {
                     ["role"] = "user",
-                    ["content"] = FormatTurnUserContent(turn, i, incompleteCurrent),
+                    ["content"] = FormatTurnUserContent(session, turn, i, incompleteCurrent),
                 });
             }
 
@@ -287,18 +289,20 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
     private static void AppendHistoryAsResponsesInput(
         JsonArray input,
-        IReadOnlyList<DysonAgentTurn> turns)
+        DysonAgentSession session)
     {
+        var turns = session.Turns;
+        var incompleteIndex = FindIncompleteCurrentIndex(turns);
         for (var i = 0; i < turns.Count; i++)
         {
             var turn = turns[i];
-            var incompleteCurrent = i == turns.Count - 1 && string.IsNullOrEmpty(turn.AssistantText);
+            var incompleteCurrent = i == incompleteIndex;
             if (!string.IsNullOrEmpty(turn.Instruction))
             {
                 input.Add(new JsonObject
                 {
                     ["role"] = "user",
-                    ["content"] = FormatTurnUserContent(turn, i, incompleteCurrent),
+                    ["content"] = FormatTurnUserContent(session, turn, i, incompleteCurrent),
                 });
             }
 
@@ -459,11 +463,28 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     }
 
     /// <summary>
+    /// Index of the in-flight prompt turn (may not be last when a PlanResult was appended mid-turn).
+    /// </summary>
+    private static int FindIncompleteCurrentIndex(IReadOnlyList<DysonAgentTurn> turns)
+    {
+        for (var i = turns.Count - 1; i >= 0; i--)
+        {
+            if (turns[i].Kind == DysonAgentTurnKind.PlanResult)
+                continue;
+            if (string.IsNullOrEmpty(turns[i].AssistantText))
+                return i;
+            break;
+        }
+
+        return -1;
+    }
+
+    /// <summary>
     /// History turns always send clean <see cref="DysonAgentTurn.Instruction"/>.
-    /// Incomplete current turn appends <see cref="DysonSessionInitialization.RenameSessionReviewMandate"/>
-    /// only on rename-review slots (1-based indices 1, 9, 17, …).
+    /// Incomplete current turn may append ephemeral mandates (rename review; Plan first-turn Explore).
     /// </summary>
     private static string FormatTurnUserContent(
+        DysonAgentSession session,
         DysonAgentTurn turn,
         int zeroBasedIndex,
         bool incompleteCurrent)
@@ -472,11 +493,24 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         if (!incompleteCurrent)
             return instruction;
 
+        var sb = new StringBuilder(instruction);
+        if (zeroBasedIndex == 0
+            && string.Equals(session.Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase))
+        {
+            sb.AppendLine();
+            sb.AppendLine();
+            sb.Append(DysonAgentSystemPrompts.PlanFirstTurnMandate.Trim());
+        }
+
         var oneBased = zeroBasedIndex + 1;
         if (DysonSessionInitialization.IsRenameReviewTurn(oneBased))
-            return $"{instruction}\n\n{DysonSessionInitialization.RenameSessionReviewMandate}";
+        {
+            sb.AppendLine();
+            sb.AppendLine();
+            sb.Append(DysonSessionInitialization.RenameSessionReviewMandate.Trim());
+        }
 
-        return instruction;
+        return sb.ToString();
     }
 
     private static string FormatAssistantReply(DysonAgentTurn turn)

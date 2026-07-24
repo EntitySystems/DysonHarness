@@ -48,7 +48,7 @@ Built-in names in `DysonAgentModes`:
 | Mode | Intent |
 | ---- | ------ |
 | `Ask` | Q&A without heavy mutation |
-| `Plan` | Planning / design (**top-level only** — banned as a subagent mode) |
+| `Plan` | Planning / design (**top-level only** — banned as a subagent mode). Soft read-only: publish via `SubmitPlan` → `.dyson/plans/`, then revise with `WriteFile`; first turn gets Explore mandate (transcript-only). |
 | `Work` | Primary work loop / orchestrator |
 | `Explore` | Codebase exploration (never spawns subagents) |
 | `Drone` | Delegated implementation; may spawn **Explore** only |
@@ -56,7 +56,11 @@ Built-in names in `DysonAgentModes`:
 | `Bug Review` | Bug-focused review |
 | `Custom` | Category label; lookup uses `Config.CustomAgents` keys |
 
-System prompts come from `DysonAgentSystemPrompts.ForMode`, then (when a `DysonModelStore` is available) an **available-models catalog** is appended: slugs of the same effective provider kind as the session, each with display alias, API slug, `defaultEffort`, and registered `modes`. That catalog is what UI / `StartSubagent.modelSlug` can select; effort tags are freeform for API `reasoning_effort` / `StartSubagent.reasoningEffort`. Work / Explore / Drone directives cover orchestrator routing, Wait-only-for-prerequisites, and mandatory `SubmitSubagentReport`. Explore/Drone directives harden “report is mandatory” / “complete or impossible”, including `failed` + failure-reason summaries. Every child first turn prepends `SubagentReportRequiredMandate` (failure-reason reports are valid finishes); Explore/Drone also get mode-specific first-turn blocks (`ExploreFirstTurnReportMandate`, `DroneFirstTurnContextMandate`). Security Review / Bug Review directives briefly mirror the same when used as subagents.
+System prompts come from `DysonAgentSystemPrompts.ForMode`, then (when a `DysonModelStore` is available) an **available-models catalog** is appended: slugs of the same effective provider kind as the session, each with display alias, API slug, `defaultEffort`, and registered `modes`. That catalog is what UI / `StartSubagent.modelSlug` can select; effort tags are freeform for API `reasoning_effort` / `StartSubagent.reasoningEffort`. Work / Explore / Drone directives cover orchestrator routing, Wait-only-for-prerequisites, and mandatory `SubmitSubagentReport`. Explore/Drone directives harden “report is mandatory” / “complete or impossible”, including `failed` + failure-reason summaries. Every child first turn prepends `SubagentReportRequiredMandate` (failure-reason reports are valid finishes); Explore/Drone also get mode-specific first-turn blocks (`ExploreFirstTurnReportMandate`, `DroneFirstTurnContextMandate`). Plan’s first incomplete user turn prepends `PlanFirstTurnMandate` (Explore before finalize; transcript-only). Security Review / Bug Review directives briefly mirror the same when used as subagents.
+
+### Plan artifacts
+
+In Plan mode, `SubmitPlan` (`title` + `markdown`) writes `.dyson/plans/{slug}-{sha1}.md` via `DysonFileManager`, appends a harness `PlanResult` turn (no LLM) with a turn `Instruction` that mandates updating that same `planPath` via `WriteFile` (no second `SubmitPlan` unless the user asks for a new plan), and returns `planPath` in the tool result. Mutating product tools remain available (soft / prompt-only read-only); only `SubmitPlan` is hard-gated to Plan mode.
 
 ## Orchestrator subagents
 

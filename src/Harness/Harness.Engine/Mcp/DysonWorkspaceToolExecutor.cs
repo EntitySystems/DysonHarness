@@ -43,6 +43,7 @@ public sealed class DysonWorkspaceToolExecutor
             {
                 "RenameSession" => await RenameSessionAsync(call, cancellationToken).ConfigureAwait(false),
                 "GetDateTime" => await GetDateTimeAsync(call, cancellationToken).ConfigureAwait(false),
+                "SubmitPlan" => await SubmitPlanAsync(call, cancellationToken).ConfigureAwait(false),
                 "StartSubagent" => await StartSubagentAsync(call, cancellationToken).ConfigureAwait(false),
                 "ListSubagents" => await ListSubagentsAsync(call, cancellationToken).ConfigureAwait(false),
                 "WaitForSubagent" => await WaitForSubagentAsync(call, cancellationToken).ConfigureAwait(false),
@@ -192,6 +193,62 @@ public sealed class DysonWorkspaceToolExecutor
 
         var content = $"timezone: {timezone}\ndatetime: {iso}\ndisplay: {display}";
         return Task.FromResult(Ok(call, content));
+    }
+
+    private Task<DysonToolCallResult> SubmitPlanAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!string.Equals(_session.Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult(Error(
+                call,
+                "SubmitPlan is only available in Plan mode. Start a Plan session to publish plan artifacts."));
+        }
+
+        string? title;
+        string? markdown;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var titleResult = RequireString(doc.RootElement, "title");
+            if (titleResult.IsError)
+                return Task.FromResult(Error(call, titleResult.Error));
+            title = titleResult.Value;
+
+            var markdownResult = RequireString(doc.RootElement, "markdown");
+            if (markdownResult.IsError)
+                return Task.FromResult(Error(call, markdownResult.Error));
+            markdown = markdownResult.Value;
+        }
+        catch (JsonException)
+        {
+            return Task.FromResult(Error(call, "SubmitPlan: invalid JSON arguments."));
+        }
+
+        if (string.IsNullOrWhiteSpace(markdown))
+            return Task.FromResult(Error(call, "SubmitPlan: markdown must be non-empty."));
+
+        var fm = new DysonFileManager(_workRoot);
+        var written = fm.WriteNewPlan(title, markdown);
+        if (written.IsError)
+            return Task.FromResult(Error(call, written.Error));
+
+        var planPath = written.Value;
+        _session.AppendPlanResultTurn(planPath, title);
+
+        var abs = Path.GetFullPath(Path.Combine(_workRoot, planPath.Replace('/', Path.DirectorySeparatorChar)));
+        var payload = $$"""
+            {
+              "planPath": {{JsonSerializer.Serialize(planPath)}},
+              "absolutePath": {{JsonSerializer.Serialize(abs)}},
+              "title": {{JsonSerializer.Serialize(title.Trim())}}
+            }
+            """;
+
+        return Task.FromResult(Ok(call, payload.Trim()));
     }
 
     private async Task<DysonToolCallResult> StartSubagentAsync(

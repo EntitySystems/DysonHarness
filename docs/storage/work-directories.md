@@ -34,6 +34,10 @@ Result-pattern concrete store:
 
 `DysonGitInfo.TryGetBranch(absolutePath)` runs `git -C path rev-parse --abbrev-ref HEAD` (≈2s timeout). Used for the composer branch chip; unrelated to build-time `DysonBuildInfo.BranchName`.
 
+## Workspace artifacts (`.dyson`)
+
+Plan mode publishes markdown under `{workRoot}/.dyson/plans/{slug}-{hash}.md` via `DysonFileManager` / `SubmitPlan`. Paths stay sandboxed under the work root. See [engine README](../engine/README.md) (Plan artifacts).
+
 ## UI
 
 Sidebar `WorkDirectorySwitcher` lists registered dirs, persists active id in `localStorage` (`dyson-workdir`), filters `SessionList` by that id. See [docs/ui/README.md](../ui/README.md).
