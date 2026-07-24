@@ -78,6 +78,7 @@ public sealed class DysonModelStore(DysonDbContext db)
 
             provider.CreatedUtc = now;
             provider.UpdatedUtc = now;
+            provider.OpenAiApiMode = DysonOpenAiApiModes.Normalize(provider.OpenAiApiMode);
             provider.Slugs = [];
 
             _db.ModelProviders.Add(provider);
@@ -109,6 +110,7 @@ public sealed class DysonModelStore(DysonDbContext db)
             existing.ProviderKind = provider.ProviderKind;
             existing.BaseUrl = provider.BaseUrl;
             existing.ApiKey = provider.ApiKey;
+            existing.OpenAiApiMode = DysonOpenAiApiModes.Normalize(provider.OpenAiApiMode);
             existing.UpdatedUtc = DateTime.UtcNow;
 
             await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -409,6 +411,42 @@ public sealed class DysonModelStore(DysonDbContext db)
         catch (Exception ex)
         {
             return new VoidResult<string>($"Failed to remove favorite model slug: {ex.Message}");
+        }
+    }
+
+    public async Task<Result<int, string>> RepairMisTaggedProvidersAsync(
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var candidates = await _db.ModelProviders
+                .Where(p => p.ProviderKind == DysonProviderKinds.Demo)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            var now = DateTime.UtcNow;
+            var updated = 0;
+
+            foreach (var provider in candidates)
+            {
+                if (!DysonProviderKinds.HasCredentials(provider.BaseUrl, provider.ApiKey))
+                    continue;
+
+                provider.ProviderKind = DysonProviderKinds.OpenAICompatible;
+                provider.OpenAiApiMode = DysonOpenAiApiModes.Normalize(provider.OpenAiApiMode);
+                provider.UpdatedUtc = now;
+                updated++;
+            }
+
+            if (updated > 0)
+                await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+            return Result<int, string>.AsValue(updated);
+        }
+        catch (Exception ex)
+        {
+            return Result<int, string>.AsError(
+                $"Failed to repair mis-tagged providers: {ex.Message}");
         }
     }
 

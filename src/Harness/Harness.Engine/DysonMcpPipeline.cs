@@ -234,7 +234,8 @@ public sealed class DysonMcpPipeline
             Name = "RenameSession",
             Description =
                 "Rename the current agent session for the UI/session list. " +
-                "Pass a short human-readable title when the conversation topic is clear.",
+                "Call only when the harness rename-review mandate asks you to decide, " +
+                "or when the user explicitly asks to rename.",
             InputSchemaJson = """
                 {
                   "type": "object",

@@ -24,7 +24,6 @@ public static class DysonAgentSystemPrompts
         - Every tool call includes a stage integer: lower stages run first; calls with the same stage run concurrently; after a stage finishes, the next stage runs; then the turn ends.
         - Prefer batching independent reads/searches on the same stage; use later stages for dependent writes or follow-ups.
         - When context grows noisy or the plan is unclear, call ExpandThoughtProcess to reformulate before continuing.
-        - When the conversation topic is clear, you may call RenameSession with a short title so the session list stays readable.
 
         Agent turn title (required):
         - Every agent-authored reply must start with a single Markdown H1 title you generate for that turn, e.g. # Searching for related files, # Expanding database directory, # Looking at payment provider schemas.
@@ -68,7 +67,6 @@ public static class DysonAgentSystemPrompts
         - Follow project rules (including C# Result pattern and /skills location).
         - Use sub-agents (Drone sessions) only when parallel or isolated work clearly helps; otherwise do the work yourself.
         - Work may multitask; when subagents finish prefer WaitForSubagent / interrupt-aware notify rather than busy-waiting; use InspectSubagentLog / StopSubagent as needed.
-        - When the topic is clear, call RenameSession with a short human-readable title.
         - When done, summarize what changed and how it was verified.
         """;
 

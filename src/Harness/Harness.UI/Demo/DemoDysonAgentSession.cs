@@ -130,9 +130,17 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
 
         AppendLog($"prompt: {Truncate(prompt, 120)}");
 
-        var turn = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        var isRenameReview = TurnHistory.Count % DysonSessionInitialization.RenameSessionReviewInterval == 0;
+        var turn = TurnHistory.Count == 0
+            ? DysonSessionInitialization.CreateTurn(prompt)
+            : new DysonAgentTurn
+            {
+                Kind = DysonAgentTurnKind.Normal,
+                Instruction = prompt,
+            };
 
-        if (TurnHistory.Count == 0)
+        // Mock RenameSession only on review cadence (turns 1, 9, 17, …) — not every turn.
+        if (isRenameReview)
         {
             var renameTitle = Truncate(prompt.Trim(), 64);
             turn.ToolCalls.Add(new DysonToolCall
@@ -168,32 +176,49 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
 
         AddTurn(turn);
 
-        var staged = await DysonToolCallScheduler.RunStagedAsync(
-            turn,
-            ExecuteMockToolAsync,
-            cancellationToken).ConfigureAwait(false);
-
-        if (staged.IsError)
-            return staged;
-
-        var reply =
-            $"# Demo turn\n\nProcessed: {Truncate(prompt, 200)}\n\n" +
-            $"Tools completed: {turn.TrackedToolCalls.Count} " +
-            $"(provider: {DescribeProvider()}).";
-
-        var parsed = DysonAgentTurn.TryParseAgentTitle(reply);
-        if (parsed.IsSuccess)
+        try
         {
-            turn.AgentTitle = parsed.Value.Title;
-            turn.AssistantText = parsed.Value.Body;
-        }
-        else
-        {
-            turn.AssistantText = reply;
-        }
+            var staged = await DysonToolCallScheduler.RunStagedAsync(
+                turn,
+                ExecuteMockToolAsync,
+                cancellationToken).ConfigureAwait(false);
 
-        AppendLog($"turn complete: {turn.AgentTitle ?? turn.Id.ToString("N")[..8]}");
-        return VoidResult<string>.Success;
+            if (staged.IsError)
+                return staged;
+
+            var reply =
+                $"# Demo turn\n\nProcessed: {Truncate(prompt, 200)}\n\n" +
+                $"Tools completed: {turn.TrackedToolCalls.Count} " +
+                $"(provider: {DescribeProvider()}).";
+
+            foreach (var chunk in ChunkForStreaming(reply, chunkSize: 12))
+            {
+                turn.AppendStreamingDelta(chunk);
+                await Task.Delay(25, cancellationToken).ConfigureAwait(false);
+            }
+
+            // Title parse only at finalize — preview stays raw until FinishStreaming.
+            var parsed = DysonAgentTurn.TryParseAgentTitle(reply);
+            if (parsed.IsSuccess)
+            {
+                turn.AgentTitle = parsed.Value.Title;
+                turn.AssistantText = parsed.Value.Body;
+            }
+            else
+            {
+                turn.AssistantText = reply;
+            }
+
+            turn.FinishStreaming();
+
+            AppendLog($"turn complete: {turn.AgentTitle ?? turn.Id.ToString("N")[..8]}");
+            return VoidResult<string>.Success;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            turn.ClearStreamingPreview();
+            return new VoidResult<string>("Prompt was cancelled.");
+        }
     }
 
     public override async Task<Result<DysonAgentSessionEvent, string>> WaitForNotifyAsync(
@@ -317,5 +342,17 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         if (string.IsNullOrEmpty(value) || value.Length <= max)
             return value;
         return value[..max] + "…";
+    }
+
+    private static IEnumerable<string> ChunkForStreaming(string text, int chunkSize)
+    {
+        if (string.IsNullOrEmpty(text))
+            yield break;
+
+        for (var i = 0; i < text.Length; i += chunkSize)
+        {
+            var len = Math.Min(chunkSize, text.Length - i);
+            yield return text.Substring(i, len);
+        }
     }
 }

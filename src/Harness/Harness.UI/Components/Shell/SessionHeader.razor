@@ -24,12 +24,16 @@
             {
                 <span>@demo.DisplayAlias · @demo.ProviderDisplayName / @demo.Slug</span>
             }
+            else if (Session.Provider is OpenAiCompatibleAgentProvider oai)
+            {
+                <span>@oai.DisplayAlias · @oai.ProviderDisplayName / @oai.Slug · @oai.OpenAiApiMode</span>
+            }
         </div>
     }
 </div>
 
 @code {
-    [Parameter] public DemoDysonAgentSession? Session { get; set; }
+    [Parameter] public DysonAgentSession? Session { get; set; }
     [Parameter] public string? Title { get; set; }
     [Parameter] public string? GitBranch { get; set; }
 

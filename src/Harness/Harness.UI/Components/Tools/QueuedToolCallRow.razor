@@ -9,11 +9,12 @@
         <span class="tool-row__name mono">@Call.ToolName</span>
         <span class="tool-status queued">Queued</span>
     </button>
-    <div class="tool-row__body">
-        <div class="tool-row__body-inner">
+    @if (_expanded)
+    {
+        <div class="tool-row__body">
             <div class="tool-row__meta mono">stage @Call.Stage · @Call.ArgumentsJson</div>
         </div>
-    </div>
+    }
 </div>
 
 @code {

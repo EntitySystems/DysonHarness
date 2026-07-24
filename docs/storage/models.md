@@ -46,8 +46,9 @@ Credentials and endpoint live on the provider only. Slugs are children; add/remo
 | `Id` | Guid PK |
 | `DisplayName` | UI label (e.g. “OpenAI work”) |
 | `ProviderKind` | Provider family string from `DysonProviderKinds` (`demo`, `OpenAICompatible`, `Anthropic`) |
-| `BaseUrl` | Optional endpoint override |
+| `BaseUrl` | Optional endpoint override (OpenAI-compatible default `https://api.openai.com/v1`) |
 | `ApiKey` | Optional; **plaintext-local** (no OS keychain yet) |
+| `OpenAiApiMode` | OpenAICompatible only: `Completions` (default) or `Responses` — see `DysonOpenAiApiModes` |
 | `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
 | `Slugs` | Navigation to child `model_slugs` |
 
@@ -80,15 +81,26 @@ User-starred slugs for the Composer model picker (persisted per app-data DB).
 
 Thin CRUD over `DysonDbContext` using the Result pattern (`Result` / `VoidResult`):
 
-- **Providers:** list (include slugs), get, create, update (incl. `ApiKey` / `BaseUrl`), delete
+- **Providers:** list (include slugs), get, create, update (incl. `ApiKey` / `BaseUrl` / `OpenAiApiMode`), delete
 - **Slugs:** add under a provider, update, remove
 - **Selection:** get/set default slug, get slug by id (with provider loaded)
 - **Favorites:** `ListFavoriteSlugIdsAsync`, `AddFavoriteAsync`, `RemoveFavoriteAsync`, `IsFavoriteAsync`
 
+## OpenAI-compatible API mode
+
+Per-provider setting (`OpenAiApiMode`), not per slug. UI shows the Completions | Responses toggle only when `ProviderKind == OpenAICompatible`.
+
+| Mode | Relative path (under normalized BaseUrl) |
+| ---- | ---------------------------------------- |
+| `Completions` (default) | `POST …/chat/completions` |
+| `Responses` | `POST …/responses` |
+
+Normalize BaseUrl to an absolute `…/v1` root (default `https://api.openai.com/v1`). Auth: `Authorization: Bearer {ApiKey}` when set.
+
 ## Ephemeral providers
 
 1. UI or host loads a model slug (or default), including its parent provider.
-2. Constructs a short-lived concrete `DysonAgentProvider` from provider credentials + slug fields.
+2. Constructs a short-lived concrete `DysonAgentProvider` from provider credentials + slug fields (`DemoDysonAgentProvider` or `OpenAiCompatibleAgentProvider`).
 3. Passes it into the session for that run/resume; session persists `ModelSlugId`.
 4. Discards the live provider when the session ends; provider/slug rows remain in SQLite.
 

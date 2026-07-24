@@ -10,6 +10,17 @@
         <div class="error-banner" style="margin:0;">@_error</div>
     }
 
+    @if (!string.IsNullOrEmpty(_status))
+    {
+        <div class="list-item__meta" style="margin:4px 0 0;">@_status</div>
+    }
+
+    <div class="btn-row" style="margin:8px 0;">
+        <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="RepairMisTaggedProvidersAsync">
+            Repair mis-tagged providers
+        </button>
+    </div>
+
     <div class="models-panel__body">
         <div class="models-panel__list list">
             @if (_providers.Count == 0)
@@ -44,6 +55,18 @@
                                 <label>API key</label>
                                 <input @bind="_editApiKey" type="password" autocomplete="off" />
                             </div>
+                            @if (string.Equals(_editProviderKind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
+                            {
+                                <div class="field">
+                                    <label>API mode</label>
+                                    <select @bind="_editOpenAiApiMode">
+                                        @foreach (var mode in DysonOpenAiApiModes.All)
+                                        {
+                                            <option value="@mode">@mode</option>
+                                        }
+                                    </select>
+                                </div>
+                            }
                             <div class="btn-row" style="margin-top:4px;">
                                 <button type="button" class="btn btn-primary" style="padding:3px 7px;font-size:11px;" @onclick="() => SaveProviderAsync(provider.Id)">Save</button>
                                 <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="CancelEditProvider">Cancel</button>
@@ -54,6 +77,10 @@
                             <span class="list-item__title">@provider.DisplayName</span>
                             <span class="list-item__meta mono">
                                 @provider.ProviderKind
+                                @if (string.Equals(provider.ProviderKind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
+                                {
+                                    <text> · @DysonOpenAiApiModes.Normalize(provider.OpenAiApiMode)</text>
+                                }
                                 @if (!string.IsNullOrEmpty(provider.BaseUrl))
                                 {
                                     <text> · @provider.BaseUrl</text>
@@ -147,6 +174,18 @@
                     <label>API key (optional, plaintext local)</label>
                     <input @bind="_apiKey" type="password" autocomplete="off" />
                 </div>
+                @if (string.Equals(_providerKind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
+                {
+                    <div class="field">
+                        <label>API mode</label>
+                        <select @bind="_openAiApiMode">
+                            @foreach (var mode in DysonOpenAiApiModes.All)
+                            {
+                                <option value="@mode">@mode</option>
+                            }
+                        </select>
+                    </div>
+                }
                 <div class="field">
                     <label>Initial slug</label>
                     <input @bind="_initialSlug" placeholder="demo-mock" />
@@ -168,12 +207,14 @@
 @code {
     private List<DysonModelProviderEntity> _providers = [];
     private string? _error;
+    private string? _status;
     private bool _providerFormOpen = true;
 
     private string _displayName = "";
-    private string _providerKind = DysonProviderKinds.Demo;
+    private string _providerKind = DysonProviderKinds.OpenAICompatible;
     private string? _baseUrl;
     private string? _apiKey;
+    private string _openAiApiMode = DysonOpenAiApiModes.Completions;
     private string _initialSlug = "";
     private string _initialAlias = "";
     private bool _initialIsDefault;
@@ -183,6 +224,7 @@
     private string _editProviderKind = DysonProviderKinds.Demo;
     private string? _editBaseUrl;
     private string? _editApiKey;
+    private string _editOpenAiApiMode = DysonOpenAiApiModes.Completions;
 
     private Guid? _addSlugProviderId;
     private string _slugAlias = "";
@@ -209,11 +251,19 @@
     private async Task CreateProviderAsync()
     {
         _error = null;
+        _status = null;
         if (string.IsNullOrWhiteSpace(_displayName))
         {
             _error = "Display name is required.";
             return;
         }
+
+        var baseUrl = string.IsNullOrWhiteSpace(_baseUrl) ? null : _baseUrl.Trim();
+        var apiKey = string.IsNullOrWhiteSpace(_apiKey) ? null : _apiKey;
+        var rawKind = string.IsNullOrWhiteSpace(_providerKind) ? DysonProviderKinds.Demo : _providerKind.Trim();
+        var kind = DysonProviderKinds.EffectiveKind(rawKind, baseUrl, apiKey);
+        if (!string.Equals(rawKind, kind, StringComparison.Ordinal))
+            _status = "Provider kind set to OpenAICompatible (credentials require a real provider).";
 
         var slug = string.IsNullOrWhiteSpace(_initialSlug) ? "demo-mock" : _initialSlug.Trim();
         var alias = string.IsNullOrWhiteSpace(_initialAlias) ? _displayName.Trim() : _initialAlias.Trim();
@@ -222,9 +272,10 @@
         var create = await ModelStore.CreateProviderAsync(new DysonModelProviderEntity
         {
             DisplayName = _displayName.Trim(),
-            ProviderKind = string.IsNullOrWhiteSpace(_providerKind) ? DysonProviderKinds.Demo : _providerKind.Trim(),
-            BaseUrl = string.IsNullOrWhiteSpace(_baseUrl) ? null : _baseUrl.Trim(),
-            ApiKey = string.IsNullOrWhiteSpace(_apiKey) ? null : _apiKey,
+            ProviderKind = kind,
+            BaseUrl = baseUrl,
+            ApiKey = apiKey,
+            OpenAiApiMode = DysonOpenAiApiModes.Normalize(_openAiApiMode),
         });
 
         if (create.IsError)
@@ -241,9 +292,10 @@
         }
 
         _displayName = "";
-        _providerKind = DysonProviderKinds.Demo;
+        _providerKind = DysonProviderKinds.OpenAICompatible;
         _baseUrl = null;
         _apiKey = null;
+        _openAiApiMode = DysonOpenAiApiModes.Completions;
         _initialSlug = "";
         _initialAlias = "";
         _initialIsDefault = false;
@@ -260,6 +312,7 @@
             : provider.ProviderKind;
         _editBaseUrl = provider.BaseUrl;
         _editApiKey = provider.ApiKey;
+        _editOpenAiApiMode = DysonOpenAiApiModes.Normalize(provider.OpenAiApiMode);
     }
 
     private void CancelEditProvider()
@@ -282,19 +335,28 @@
     private async Task SaveProviderAsync(Guid id)
     {
         _error = null;
+        _status = null;
         if (string.IsNullOrWhiteSpace(_editDisplayName))
         {
             _error = "Display name is required.";
             return;
         }
 
+        var baseUrl = string.IsNullOrWhiteSpace(_editBaseUrl) ? null : _editBaseUrl.Trim();
+        var apiKey = string.IsNullOrWhiteSpace(_editApiKey) ? null : _editApiKey;
+        var rawKind = string.IsNullOrWhiteSpace(_editProviderKind) ? DysonProviderKinds.Demo : _editProviderKind.Trim();
+        var kind = DysonProviderKinds.EffectiveKind(rawKind, baseUrl, apiKey);
+        if (!string.Equals(rawKind, kind, StringComparison.Ordinal))
+            _status = "Provider kind set to OpenAICompatible (credentials require a real provider).";
+
         var update = await ModelStore.UpdateProviderAsync(new DysonModelProviderEntity
         {
             Id = id,
             DisplayName = _editDisplayName.Trim(),
-            ProviderKind = string.IsNullOrWhiteSpace(_editProviderKind) ? DysonProviderKinds.Demo : _editProviderKind.Trim(),
-            BaseUrl = string.IsNullOrWhiteSpace(_editBaseUrl) ? null : _editBaseUrl.Trim(),
-            ApiKey = string.IsNullOrWhiteSpace(_editApiKey) ? null : _editApiKey,
+            ProviderKind = kind,
+            BaseUrl = baseUrl,
+            ApiKey = apiKey,
+            OpenAiApiMode = DysonOpenAiApiModes.Normalize(_editOpenAiApiMode),
         });
 
         if (update.IsError)
@@ -373,6 +435,26 @@
             _error = set.Error;
             return;
         }
+
+        await RefreshAsync();
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task RepairMisTaggedProvidersAsync()
+    {
+        _error = null;
+        _status = null;
+
+        var repair = await ModelStore.RepairMisTaggedProvidersAsync();
+        if (repair.IsError)
+        {
+            _error = repair.Error;
+            return;
+        }
+
+        _status = repair.Value == 0
+            ? "No mis-tagged providers found."
+            : $"Repaired {repair.Value} provider{(repair.Value == 1 ? "" : "s")} (demo → OpenAICompatible).";
 
         await RefreshAsync();
         await OnChanged.InvokeAsync();

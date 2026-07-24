@@ -11,6 +11,12 @@ Conceptual overview: [README.md](README.md).
 | `DysonEngine` | Abstract; exposes `RootSession` |
 | `DysonAgentSession` | Abstract session: mode, prompt, MCP pipeline, subagents, interrupts, log, turns, optimizer hooks |
 | `DysonAgentProvider` | Abstract ephemeral model provider (no durable state) |
+| `OpenAiCompatibleAgentProvider` | OpenAI-compatible ephemeral provider (`BaseUrl`, `ApiKey`, `Slug`, `OpenAiApiMode`, …) |
+| `OpenAiCompatibleAgentSession` | Completions/Responses tool-loop session |
+| `OpenAiCompletionsClient` / `OpenAiResponsesClient` | Streaming SSE adapters (`StreamCreateAsync` → `OpenAiStreamChunk`) |
+| `OpenAiCacheFriendlyTranscriptBuilder` | Stable-prefix transcript + `prompt_cache_key` |
+| `DysonWorkspaceToolExecutor` | Workdir-scoped file tools + `RenameSession`; stubs for the rest |
+| `DysonOpenAiApiModes` | `Completions` / `Responses` constants |
 | `DysonAgentSessionConfig` | `CustomAgents`, `McpAccessMode` |
 | `DysonAgentSessionEvent` | Abstract notify payload for `WaitForNotifyAsync` |
 
@@ -32,22 +38,24 @@ Conceptual overview: [README.md](README.md).
 | ---- | ----- |
 | `DysonAgentModes` | Built-in mode name constants |
 | `DysonProviderKinds` | Known provider-kind strings (`demo`, `OpenAICompatible`, `Anthropic`) |
+| `DysonOpenAiApiModes` | OpenAICompatible API surface (`Completions` default, `Responses`) |
 | `DysonAgentSystemPrompts` | `ForMode` → system prompt text |
 
 ## Turns & tools
 
 | Type | Notes |
 | ---- | ----- |
-| `DysonAgentTurn` | Turn kind, instruction, agent title, tool calls, tracked status, response log, compact history |
-| `DysonAgentTurnKind` | `Normal`, `ExpandThoughtProcess`, `TaskCompletionConfirm`, `Continuation`, `ReportSummary` |
+| `DysonAgentTurn` | Turn kind, instruction, agent title, `AssistantText`, live `StreamingPreview`/`IsStreaming`/`AssistantTextChanged`, tool calls, tracked status, response log, compact history |
+| `DysonAgentTurnKind` | `Normal`, `ExpandThoughtProcess`, `TaskCompletionConfirm`, `Continuation`, `ReportSummary`, `InitializeSession` |
+| `DysonSessionInitialization` | First-turn factory (`CreateTurn` → `InitializeSession`); `RenameSessionReviewMandate` + `IsRenameReviewTurn` (every 8 turns: 1, 9, 17, …; mandate appended only for incomplete current turn) |
 | `DysonToolCall` | `CallId`, `ToolName`, `Stage`, `ArgumentsJson` |
 | `DysonToolCallStatus` | `Queued`, `Working`, `Completed`, `Failed` |
 | `DysonTrackedToolCall` | Live status + result for UI rows |
 | `DysonToolCallResult` | Completed/failed payload (`IsError`, `Content`, …) |
 | `DysonToolCallStatusChangedEventArgs` | Previous/new status + tracked row |
-| `DysonToolCallScheduler` | `RunStagedAsync` — concurrent same-stage, barrier across stages |
+| `DysonToolCallScheduler` | `RunStagedAsync` — concurrent same-stage, barrier across stages; multi-round Queued-only runs |
 
-`DysonAgentTurn.TryParseAgentTitle` requires agent replies to start with a Markdown H1.
+`DysonAgentTurn.TryParseAgentTitle` requires agent replies to start with a Markdown H1. `PrepareAdditionalTrackedCalls` supports multi-round tool loops on one turn.
 
 ## MCP
 
@@ -58,7 +66,7 @@ Conceptual overview: [README.md](README.md).
 | `DysonMcpTool` | Name, description, input schema JSON |
 | `DysonMcpAutoReviewProxy` | In-process review gate when mode is AutoReview |
 
-Default catalog includes session tools (`StartSubagent`, `WaitForSubagent`, …), completion tools, workspace file tools, and **`RenameSession`** (`{ "title": string }` required) for UI/list titles.
+Default catalog includes session tools (`StartSubagent`, `WaitForSubagent`, …), completion tools, workspace file tools, and **`RenameSession`** (`{ "title": string }` required) for UI/list titles. Call `RenameSession` only when the harness every-8 rename-review mandate asks, or when the user explicitly requests a rename.
 
 ## Interrupts & completion
 
@@ -68,6 +76,7 @@ Default catalog includes session tools (`StartSubagent`, `WaitForSubagent`, …)
 | `DysonAgentInterruptKind` | `SubagentCompleted`, `SubagentStopped`, `SubagentFailed` |
 | `DysonSubagentInterruptEvent` | Session-event shape for subagent interrupts |
 | `DysonExpandThoughtProcess` | Expand-thought turn factory |
+| `DysonSessionInitialization` | First-prompt turn factory; periodic rename review mandate (ephemeral, not in subsequent history) |
 | `DysonTaskCompletionFlow` | Confirm / continuation / report-summary factories |
 
 ## Context & tokens

@@ -18,6 +18,24 @@ A concrete session implements:
 
 Typical flow: construct session with mode + config + provider → load context → prompt → model replies (H1 title + body) and/or queues tool calls → `DysonToolCallScheduler.RunStagedAsync` runs stages → optional expand / completion turns → `OptimizeContextIfNeeded` before the next provider request.
 
+### OpenAI-compatible provider
+
+When `ProviderKind == OpenAICompatible`, the host builds `OpenAiCompatibleAgentProvider` + `OpenAiCompatibleAgentSession` (engine). Demo kind stays on `DemoDysonAgentSession`.
+
+- **API mode** (`OpenAiApiMode` on the provider entity): `Completions` (default) → `POST …/chat/completions`; `Responses` → `POST …/responses`.
+- **Streaming SSE** (`stream: true`) for assistant text; Completions reads `choices[0].delta.content` (+ incremental `tool_calls`, `stream_options.include_usage`); Responses handles `response.output_text.delta`, function-call assembly (`output_item.added` / `function_call_arguments.delta|done` / `output_item.done`), and `error` / `response.failed`. Session consumes chunks per tool-loop round; `AssistantText` + H1 title parse only on the final no-tool round (preview stays raw until then). Cancel/error clears `StreamingPreview`.
+- **Native function tools** with required harness `stage` on every schema.
+- **Tool loop** inside one `PromptAsync` (cap ~20 rounds): model tool_calls → staged executor → feed results → call again.
+- **Executors (v1):** `DysonWorkspaceToolExecutor` — real `RenameSession` + workdir-scoped file tools (`ReadFile`, `CreateFile`, `WriteFile`, `Grep`, `ListDirectory`, `CreateDirectory`); other catalog tools return “not implemented yet”.
+- **RenameSession review:** every 8 turns (1-based indices **1, 9, 17, …** — when `TurnHistory.Count % 8 == 0` before adding the turn), the transcript builder appends an ephemeral yes/no `RenameSessionReviewMandate` on the **current incomplete** user message only. Turn 1 is `InitializeSession` via `DysonSessionInitialization.CreateTurn`; later review turns stay `Normal`. Completed/history turns always send clean `Instruction` — the mandate is never re-emitted. Soft every-turn rename nudges are not in system prompts; MCP description says rename only on harness review mandate or explicit user request.
+- **Cache-friendly requests** (`OpenAiCacheFriendlyTranscriptBuilder`):
+  1. Stable prefix first: system/instructions (mode prompt + MCP catalog) → `tools[]` (stable sort) → prior transcript → new user/tool deltas last.
+  2. Never mutate an already-sent/optimized prefix (`OptimizeContextIfNeeded` before building).
+  3. `prompt_cache_key` = `dyson:{PersistenceId}` on every call (send-first).
+  4. GPT-5.6+ only: optional `prompt_cache_options.mode=explicit` + breakpoint on the system prefix when the slug looks like `gpt-5.6+`.
+  5. Completions always sends full local `messages[]`. Responses rebuilds full `input` after compaction / new user turns (`store: false`); within a tool loop may chain `previous_response_id` + `function_call_output` (`store: true` for that hop).
+  6. User content for history turns is always `Instruction` only; rename-review mandate is appended only for the in-flight review turn.
+
 Root sessions have runtime `Id = 0`. Subagents get ids ≥ 1 via `RegisterSubagent`.
 
 ## Agent modes
@@ -44,9 +62,9 @@ System prompts come from `DysonAgentSystemPrompts.ForMode`.
 - **FullAccess** — tools run with full access; no allowlist.
 - **AutoReview** — calls route through in-process `DysonMcpAutoReviewProxy`; no allowlist.
 
-`DysonMcpPipeline` holds the per-session tool catalog (`FormatToolsForPrompt`) and optional auto-review proxy. Live remote MCP execution is out of scope for the library core; catalog + staging are in place.
+`DysonMcpPipeline` holds the per-session tool catalog (`FormatToolsForPrompt`) and optional auto-review proxy. OpenAI-compatible sessions also expose the same tools as native function schemas (with required `stage`). Live remote MCP servers remain out of scope; workspace file tools run locally via `DysonWorkspaceToolExecutor`.
 
-Default tools include subagent control (`StartSubagent`, `WaitForSubagent`, …), task completion (`CompleteTask`, `ConfirmTaskComplete`, `ContinueWork`), and related harness tools. Every call carries harness fields: optional `callId`, required `stage` (int).
+Default tools include subagent control (`StartSubagent`, `WaitForSubagent`, …), task completion (`CompleteTask`, `ConfirmTaskComplete`, `ContinueWork`), workspace file tools, and related harness tools. Every call carries harness fields: optional `callId`, required `stage` (int).
 
 ## Staged tool calls
 

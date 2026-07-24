@@ -37,6 +37,7 @@
         }
         <ChatPanel Turns="@(Host.Session?.Turns ?? Array.Empty<DysonAgentTurn>())"
                    Disabled="@(Host.Session is null || Host.IsBusy)"
+                   SessionBusy="Host.IsBusy"
                    @bind-SelectedSlugId="_selectedSlugId"
                    SelectedAgentMode="_selectedAgentMode"
                    SelectedAgentModeChanged="OnAgentModeChanged"

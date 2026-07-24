@@ -4,9 +4,9 @@ AI model harness.
 
 ## Todos
 
-- [ ] Define harness architecture
-- [ ] Add model provider interface
-- [ ] Wire up first provider
+- [x] Define harness architecture
+- [x] Add model provider interface
+- [x] Wire up first provider (demo + OpenAI-compatible)
 - [ ] Add evaluation / run loop
 
 ## Docs
@@ -21,6 +21,7 @@ AI model harness.
 - C#: [rules/rules_csharp.md](rules/rules_csharp.md)
 - Skills: [rules/rules_skills.md](rules/rules_skills.md)
 - Docs: [rules/rules_docs.md](rules/rules_docs.md)
+- UI restart: [rules/rules_ui_restart.md](rules/rules_ui_restart.md)
 
 ## Skills
 

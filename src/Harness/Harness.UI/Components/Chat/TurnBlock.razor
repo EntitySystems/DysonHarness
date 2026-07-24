@@ -1,19 +1,39 @@
 @namespace Harness.UI.Components.Chat
 @using DysonHarness
 @using Harness.UI.Components.Tools
+@using Harness.UI.Markdown
 
 <article class="turn-block">
     <header class="turn-block__header">
         <div class="turn-block__title">@(Turn.AgentTitle ?? "Turn")</div>
         <div class="turn-block__kind mono">@Turn.Kind · @ShortId(Turn.Id)</div>
     </header>
-    @if (!string.IsNullOrWhiteSpace(Turn.AssistantText))
+    @if (IsUserTurn && !string.IsNullOrWhiteSpace(Turn.Instruction))
     {
-        <div class="turn-block__body">@Turn.AssistantText</div>
+        <div class="turn-block__user">
+            <div class="turn-block__user-prompt">@MarkdownRenderer.ToHtml(Turn.Instruction)</div>
+            @if (ShowPromptSpinner)
+            {
+                <div class="turn-block__user-spinner" role="status" aria-label="Waiting for reply">
+                    <span class="turn-block__spinner" aria-hidden="true"></span>
+                </div>
+            }
+        </div>
     }
-    else if (!string.IsNullOrWhiteSpace(Turn.Instruction))
+    else if (!IsUserTurn && !string.IsNullOrWhiteSpace(Turn.Instruction))
     {
-        <div class="turn-block__body">@Turn.Instruction</div>
+        <div class="turn-block__instruction">@MarkdownRenderer.ToHtml(Turn.Instruction)</div>
+    }
+
+    @if (Turn.IsStreaming && !string.IsNullOrEmpty(Turn.StreamingPreview))
+    {
+        <div class="turn-block__body turn-block__body--streaming">
+            @Turn.StreamingPreview<span class="turn-block__caret" aria-hidden="true"></span>
+        </div>
+    }
+    else if (!string.IsNullOrWhiteSpace(Turn.AssistantText))
+    {
+        <div class="turn-block__body">@MarkdownRenderer.ToHtml(Turn.AssistantText)</div>
     }
 
     @if (Turn.TrackedToolCalls.Count > 0 || Turn.ToolCalls.Count > 0)
@@ -26,6 +46,45 @@
 
 @code {
     [Parameter, EditorRequired] public DysonAgentTurn Turn { get; set; } = default!;
+
+    /// <summary>True while the host is running a prompt on the active session.</summary>
+    [Parameter] public bool SessionBusy { get; set; }
+
+    /// <summary>True when this turn is the latest in the transcript (awaiting-model spinner).</summary>
+    [Parameter] public bool IsLatestTurn { get; set; }
+
+    private bool IsUserTurn =>
+        Turn.Kind is DysonAgentTurnKind.Normal or DysonAgentTurnKind.InitializeSession;
+
+    /// <summary>
+    /// Compact loader on the user prompt row until the assistant reply is finalized.
+    /// </summary>
+    private bool ShowPromptSpinner
+    {
+        get
+        {
+            // Final reply present and stream ended — done.
+            if (!string.IsNullOrWhiteSpace(Turn.AssistantText) && !Turn.IsStreaming)
+                return false;
+
+            if (Turn.IsStreaming)
+                return true;
+
+            if (HasPendingTools)
+                return true;
+
+            // Awaiting model (before first token / between tool rounds) on the live turn.
+            if (SessionBusy && IsLatestTurn && string.IsNullOrWhiteSpace(Turn.AssistantText))
+                return true;
+
+            return false;
+        }
+    }
+
+    private bool HasPendingTools =>
+        Turn.TrackedToolCalls.Any(t =>
+            t.Status is DysonToolCallStatus.Queued or DysonToolCallStatus.Working)
+        || (Turn.ToolCalls.Count > 0 && Turn.TrackedToolCalls.Count == 0);
 
     private static string ShortId(Guid id) => id.ToString("N")[..8];
 }

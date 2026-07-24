@@ -10,6 +10,7 @@ public enum DysonAgentTurnKind
     TaskCompletionConfirm = 2,
     Continuation = 3,
     ReportSummary = 4,
+    InitializeSession = 5,
 }
 
 public sealed class DysonToolCallStatusChangedEventArgs : EventArgs
@@ -36,6 +37,18 @@ public sealed class DysonAgentTurn
 
     /// <summary>Assistant body text after title parse (persistence / UI).</summary>
     public string? AssistantText { get; set; }
+
+    private readonly StringBuilder _streamingPreview = new();
+
+    /// <summary>Live streaming preview (transient; not persisted).</summary>
+    public string? StreamingPreview =>
+        _streamingPreview.Length == 0 ? null : _streamingPreview.ToString();
+
+    /// <summary>True while assistant text is streaming into <see cref="StreamingPreview"/>.</summary>
+    public bool IsStreaming { get; private set; }
+
+    /// <summary>Raised when streaming preview or finalized assistant text changes.</summary>
+    public event EventHandler? AssistantTextChanged;
 
     /// <summary>Source tool calls for this turn (stage + name + args).</summary>
     public List<DysonToolCall> ToolCalls { get; } = [];
@@ -140,6 +153,29 @@ public sealed class DysonAgentTurn
         }
     }
 
+    /// <summary>
+    /// Tracks any <see cref="ToolCalls"/> not yet in <see cref="TrackedToolCalls"/> (Queued).
+    /// Used for multi-round tool loops within one turn; does not clear existing rows.
+    /// </summary>
+    public void PrepareAdditionalTrackedCalls()
+    {
+        var existing = _tracked
+            .Select(t => t.Call.CallId)
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var call in ToolCalls)
+        {
+            if (string.IsNullOrEmpty(call.CallId) || existing.Contains(call.CallId))
+                continue;
+
+            var tracked = new DysonTrackedToolCall { Call = call };
+            tracked.Attach(this);
+            _tracked.Add(tracked);
+            NotifyStatusChanged(tracked, DysonToolCallStatus.Queued);
+            existing.Add(call.CallId);
+        }
+    }
+
     /// <summary>Restores tracked rows from a persisted tool-state snapshot (no status events).</summary>
     public void RestoreTrackedCalls(IEnumerable<DysonPersistedTrackedToolCall> trackedRows)
     {
@@ -186,4 +222,43 @@ public sealed class DysonAgentTurn
                 NewStatus = tracked.Status,
             });
     }
+
+    /// <summary>Append a streaming text delta and mark the turn as streaming.</summary>
+    public void AppendStreamingDelta(string delta)
+    {
+        ArgumentNullException.ThrowIfNull(delta);
+        if (delta.Length == 0)
+            return;
+
+        _streamingPreview.Append(delta);
+        IsStreaming = true;
+        NotifyAssistantTextChanged();
+    }
+
+    /// <summary>Clear transient streaming preview (e.g. before tool execution or on error).</summary>
+    public void ClearStreamingPreview()
+    {
+        if (_streamingPreview.Length == 0 && !IsStreaming)
+            return;
+
+        _streamingPreview.Clear();
+        IsStreaming = false;
+        NotifyAssistantTextChanged();
+    }
+
+    /// <summary>
+    /// End streaming after <see cref="AssistantText"/> has been set.
+    /// Clears preview and raises one change so UI can hand off to Markdig.
+    /// </summary>
+    public void FinishStreaming()
+    {
+        if (_streamingPreview.Length == 0 && !IsStreaming)
+            return;
+
+        _streamingPreview.Clear();
+        IsStreaming = false;
+        NotifyAssistantTextChanged();
+    }
+
+    private void NotifyAssistantTextChanged() => AssistantTextChanged?.Invoke(this, EventArgs.Empty);
 }

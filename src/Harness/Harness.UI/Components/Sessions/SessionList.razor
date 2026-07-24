@@ -1,7 +1,7 @@
 @namespace Harness.UI.Components.Sessions
 @using DysonHarness
 
-<div>
+<div class="session-list">
     <div class="sidebar__section-label">Sessions</div>
     <div class="btn-row" style="margin-bottom:8px;">
         <button type="button"
@@ -11,14 +11,6 @@
                 aria-label="New session"
                 @onclick="OnNewAsync">
             <img src="icons/plus.svg" alt="" />
-        </button>
-        <button type="button"
-                class="btn btn-icon"
-                disabled="@(Busy || SelectedId is null)"
-                title="Resume"
-                aria-label="Resume"
-                @onclick="OnResumeAsync">
-            <img src="icons/play.svg" alt="" />
         </button>
         <button type="button"
                 class="btn btn-ghost btn-icon"
@@ -49,10 +41,11 @@
         {
             @foreach (var session in Sessions)
             {
-                var active = session.Id == ActiveSessionId || session.Id == SelectedId;
+                var active = session.Id == ActiveSessionId;
                 <button type="button"
                         class="list-item @(active ? "is-active" : null)"
-                        @onclick="() => Select(session.Id)">
+                        disabled="@Busy"
+                        @onclick="() => OnResumeAsync(session.Id)">
                     <span class="list-item__title">@(session.Title ?? "Untitled")</span>
                     <span class="list-item__meta mono">
                         @session.AgentMode · @session.Status · @session.LastActivityUtc.ToLocalTime().ToString("g")
@@ -73,20 +66,9 @@
     [Parameter] public EventCallback<Guid> OnResume { get; set; }
     [Parameter] public EventCallback OnRefresh { get; set; }
 
-    private Guid? SelectedId { get; set; }
-
-    protected override void OnParametersSet()
-    {
-        if (ActiveSessionId is Guid active)
-            SelectedId = active;
-    }
-
-    private void Select(Guid id) => SelectedId = id;
-
     private Task OnNewAsync() => OnNew.InvokeAsync();
 
-    private Task OnResumeAsync() =>
-        SelectedId is Guid id ? OnResume.InvokeAsync(id) : Task.CompletedTask;
+    private Task OnResumeAsync(Guid id) => OnResume.InvokeAsync(id);
 
     private Task OnRefreshAsync() => OnRefresh.InvokeAsync();
 }

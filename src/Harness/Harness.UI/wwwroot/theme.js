@@ -37,3 +37,16 @@ window.dysonWorkdir = {
     }
   }
 };
+
+/** Stick-to-bottom helpers for `.chat-panel__turns`. */
+window.dysonChat = {
+  isNearBottom: function (el, thresholdPx) {
+    if (!el) return true;
+    var threshold = typeof thresholdPx === "number" ? thresholdPx : 96;
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+  },
+  scrollToBottom: function (el) {
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }
+};

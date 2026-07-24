@@ -8,6 +8,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
+builder.Services.AddHttpClient();
 builder.Services.AddScoped(_ =>
 {
     var db = new DysonDbContext();
@@ -17,6 +18,11 @@ builder.Services.AddScoped(_ =>
 builder.Services.AddScoped<DysonModelStore>();
 builder.Services.AddScoped<DysonSessionStore>();
 builder.Services.AddScoped<DysonWorkDirectoryStore>();
+builder.Services.AddScoped(sp =>
+{
+    var factory = sp.GetRequiredService<IHttpClientFactory>();
+    return factory.CreateClient();
+});
 builder.Services.AddScoped<DysonUiHost>();
 builder.Services.AddScoped<ThemeService>();
 

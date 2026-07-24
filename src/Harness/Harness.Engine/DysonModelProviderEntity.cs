@@ -7,6 +7,8 @@ public sealed class DysonModelProviderEntity
     public string ProviderKind { get; set; } = "";
     public string? BaseUrl { get; set; }
     public string? ApiKey { get; set; }
+    /// <summary>OpenAICompatible only. Completions = default.</summary>
+    public string OpenAiApiMode { get; set; } = DysonOpenAiApiModes.Completions;
     /// <summary>UTC.</summary>
     public DateTime CreatedUtc { get; set; }
     /// <summary>UTC.</summary>

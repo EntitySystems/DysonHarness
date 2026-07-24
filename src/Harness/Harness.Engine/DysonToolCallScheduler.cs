@@ -31,8 +31,17 @@ public static class DysonToolCallScheduler
 
         if (turn.TrackedToolCalls.Count == 0)
             turn.PrepareTrackedCalls();
+        else
+            turn.PrepareAdditionalTrackedCalls();
 
-        var stages = turn.TrackedToolCalls
+        var queued = turn.TrackedToolCalls
+            .Where(t => t.Status == DysonToolCallStatus.Queued)
+            .ToArray();
+
+        if (queued.Length == 0)
+            return VoidResult<string>.Success;
+
+        var stages = queued
             .GroupBy(t => t.Call.Stage)
             .OrderBy(g => g.Key);
 

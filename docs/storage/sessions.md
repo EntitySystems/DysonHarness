@@ -101,6 +101,7 @@ Aggregate DTO: session entity + `IReadOnlyList` turns + `IReadOnlyList` log entr
 5. Session is ready for further `PromptAsync`
 
 Demo path: `DemoDysonAgentSession.LoadAsync(store, sessionId, provider)`.
+OpenAI-compatible path: `OpenAiCompatibleAgentSession.LoadAsync(store, sessionId, provider, http, workDirectoryAbsolutePath)`.
 
 ### Subagents
 

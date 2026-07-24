@@ -1,17 +1,23 @@
 @namespace Harness.UI.Components.Chat
 @using DysonHarness
+@inject IJSRuntime Js
 
 <div class="chat-panel">
-    <div class="chat-panel__turns">
+    <div @ref="_turnsEl"
+         class="chat-panel__turns"
+         @onscroll="OnTurnsScrollAsync">
         @if (Turns.Count == 0)
         {
             <div class="empty-state">Start a session and send a prompt. Demo tools run staged mocks.</div>
         }
         else
         {
-            @foreach (var turn in Turns)
+            @for (var i = 0; i < Turns.Count; i++)
             {
-                <TurnBlock Turn="turn" />
+                var turn = Turns[i];
+                <TurnBlock Turn="turn"
+                           SessionBusy="SessionBusy"
+                           IsLatestTurn="@(i == Turns.Count - 1)" />
             }
         }
     </div>
@@ -21,16 +27,70 @@
               SelectedAgentMode="SelectedAgentMode"
               SelectedAgentModeChanged="SelectedAgentModeChanged"
               GitBranch="GitBranch"
-              OnSubmit="OnSubmit" />
+              OnSubmit="HandleSubmitAsync" />
 </div>
 
 @code {
+    private ElementReference _turnsEl;
+    private bool _stickToBottom = true;
+    private int _lastTurnCount;
+
     [Parameter] public IReadOnlyList<DysonAgentTurn> Turns { get; set; } = [];
     [Parameter] public bool Disabled { get; set; }
+    /// <summary>Host busy (prompt in flight) — drives the latest-turn prompt spinner.</summary>
+    [Parameter] public bool SessionBusy { get; set; }
     [Parameter] public Guid? SelectedSlugId { get; set; }
     [Parameter] public EventCallback<Guid?> SelectedSlugIdChanged { get; set; }
     [Parameter] public string SelectedAgentMode { get; set; } = DysonAgentModes.Work;
     [Parameter] public EventCallback<string> SelectedAgentModeChanged { get; set; }
     [Parameter] public string? GitBranch { get; set; }
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        // New turns (prompt send / resume) should re-attach to the bottom.
+        if (Turns.Count != _lastTurnCount)
+        {
+            if (Turns.Count > _lastTurnCount)
+                _stickToBottom = true;
+            _lastTurnCount = Turns.Count;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_stickToBottom)
+            return;
+
+        try
+        {
+            await Js.InvokeVoidAsync("dysonChat.scrollToBottom", _turnsEl);
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private async Task OnTurnsScrollAsync()
+    {
+        try
+        {
+            _stickToBottom = await Js.InvokeAsync<bool>("dysonChat.isNearBottom", _turnsEl);
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private async Task HandleSubmitAsync(string prompt)
+    {
+        _stickToBottom = true;
+        await OnSubmit.InvokeAsync(prompt);
+    }
 }

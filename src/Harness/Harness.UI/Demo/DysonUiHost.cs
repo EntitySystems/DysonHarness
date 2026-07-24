@@ -5,31 +5,37 @@ namespace Harness.UI.Demo;
 
 /// <summary>
 /// Scoped UI host: new/resume sessions, prompt forwarding, and persistence hooks.
+/// Branches on <see cref="DysonProviderKinds"/> for demo vs OpenAI-compatible sessions.
 /// </summary>
 public sealed class DysonUiHost : IAsyncDisposable
 {
     private readonly DysonSessionStore _sessions;
     private readonly DysonModelStore _models;
     private readonly DysonWorkDirectoryStore _workDirectories;
+    private readonly HttpClient _http;
     private readonly SemaphoreSlim _persistGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, EventHandler<DysonToolCallStatusChangedEventArgs>> _toolHandlers = new();
+    private readonly ConcurrentDictionary<Guid, EventHandler> _textHandlers = new();
+    private readonly ConcurrentDictionary<Guid, StreamingNotifyState> _streamingNotify = new();
 
     private DemoDysonEngine? _engine;
-    private DemoDysonAgentSession? _session;
+    private DysonAgentSession? _session;
     private bool _disposed;
 
     public DysonUiHost(
         DysonSessionStore sessions,
         DysonModelStore models,
-        DysonWorkDirectoryStore workDirectories)
+        DysonWorkDirectoryStore workDirectories,
+        HttpClient http)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
         _workDirectories = workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
+        _http = http ?? throw new ArgumentNullException(nameof(http));
     }
 
     public DemoDysonEngine? Engine => _engine;
-    public DemoDysonAgentSession? Session => _session;
+    public DysonAgentSession? Session => _session;
     public Guid? ActiveSessionId => _session?.PersistenceId is { } id && id != Guid.Empty ? id : null;
     public string? LastError { get; private set; }
     public bool IsBusy { get; private set; }
@@ -95,6 +101,15 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(LastError);
         }
 
+        var workDir = await _workDirectories.GetAsync(workDirectoryId.Value, cancellationToken)
+            .ConfigureAwait(false);
+        if (workDir.IsError)
+        {
+            LastError = workDir.Error;
+            Notify();
+            return new VoidResult<string>(workDir.Error);
+        }
+
         var providerResult = await ResolveProviderAsync(modelSlugId, cancellationToken)
             .ConfigureAwait(false);
         if (providerResult.IsError)
@@ -106,21 +121,46 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         DetachSession();
 
-        var created = await DemoDysonAgentSession.CreateAsync(
-            _sessions,
-            providerResult.Value,
-            workDirectoryId.Value,
-            agentMode,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        if (created.IsError)
+        var kind = providerResult.Value.Kind;
+        if (string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
         {
-            LastError = created.Error;
-            Notify();
-            return new VoidResult<string>(created.Error);
+            var created = await OpenAiCompatibleAgentSession.CreateAsync(
+                _sessions,
+                providerResult.Value.OpenAi!,
+                _http,
+                workDirectoryId.Value,
+                workDir.Value.AbsolutePath,
+                agentMode,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (created.IsError)
+            {
+                LastError = created.Error;
+                Notify();
+                return new VoidResult<string>(created.Error);
+            }
+
+            AttachSession(created.Value);
+        }
+        else
+        {
+            var created = await DemoDysonAgentSession.CreateAsync(
+                _sessions,
+                providerResult.Value.Demo!,
+                workDirectoryId.Value,
+                agentMode,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (created.IsError)
+            {
+                LastError = created.Error;
+                Notify();
+                return new VoidResult<string>(created.Error);
+            }
+
+            AttachSession(created.Value);
         }
 
-        AttachSession(created.Value);
         Notify();
         return VoidResult<string>.Success;
     }
@@ -149,23 +189,69 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(providerResult.Error);
         }
 
-        DetachSession();
-
-        var loaded = await DemoDysonAgentSession.LoadAsync(
-            _sessions,
-            sessionId,
-            providerResult.Value,
-            new DysonAgentSessionConfig { McpAccessMode = full.Value.Session.McpAccessMode },
-            cancellationToken).ConfigureAwait(false);
-
-        if (loaded.IsError)
+        string? workPath = null;
+        if (full.Value.Session.WorkDirectoryId is Guid wdId)
         {
-            LastError = loaded.Error;
-            Notify();
-            return new VoidResult<string>(loaded.Error);
+            var wd = await _workDirectories.GetAsync(wdId, cancellationToken).ConfigureAwait(false);
+            if (wd.IsError)
+            {
+                LastError = wd.Error;
+                Notify();
+                return new VoidResult<string>(wd.Error);
+            }
+
+            workPath = wd.Value.AbsolutePath;
         }
 
-        AttachSession(loaded.Value);
+        DetachSession();
+
+        var kind = providerResult.Value.Kind;
+        if (string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
+        {
+            if (string.IsNullOrWhiteSpace(workPath))
+            {
+                LastError = "Session has no work directory; cannot resume OpenAI-compatible session.";
+                Notify();
+                return new VoidResult<string>(LastError);
+            }
+
+            var loaded = await OpenAiCompatibleAgentSession.LoadAsync(
+                _sessions,
+                sessionId,
+                providerResult.Value.OpenAi!,
+                _http,
+                workPath,
+                new DysonAgentSessionConfig { McpAccessMode = full.Value.Session.McpAccessMode },
+                cancellationToken).ConfigureAwait(false);
+
+            if (loaded.IsError)
+            {
+                LastError = loaded.Error;
+                Notify();
+                return new VoidResult<string>(loaded.Error);
+            }
+
+            AttachSession(loaded.Value);
+        }
+        else
+        {
+            var loaded = await DemoDysonAgentSession.LoadAsync(
+                _sessions,
+                sessionId,
+                providerResult.Value.Demo!,
+                new DysonAgentSessionConfig { McpAccessMode = full.Value.Session.McpAccessMode },
+                cancellationToken).ConfigureAwait(false);
+
+            if (loaded.IsError)
+            {
+                LastError = loaded.Error;
+                Notify();
+                return new VoidResult<string>(loaded.Error);
+            }
+
+            AttachSession(loaded.Value);
+        }
+
         Notify();
         return VoidResult<string>.Success;
     }
@@ -237,7 +323,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
     }
 
-    private async Task<Result<DemoDysonAgentProvider, string>> ResolveProviderAsync(
+    private sealed record ResolvedProvider(
+        string Kind,
+        DemoDysonAgentProvider? Demo,
+        OpenAiCompatibleAgentProvider? OpenAi);
+
+    private async Task<Result<ResolvedProvider, string>> ResolveProviderAsync(
         Guid? modelSlugId,
         CancellationToken cancellationToken)
     {
@@ -247,21 +338,34 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             var get = await _models.GetSlugAsync(id, cancellationToken).ConfigureAwait(false);
             if (get.IsError)
-                return Result<DemoDysonAgentProvider, string>.AsError(get.Error);
+                return Result<ResolvedProvider, string>.AsError(get.Error);
             slug = get.Value;
         }
         else
         {
             var def = await _models.GetDefaultSlugAsync(cancellationToken).ConfigureAwait(false);
             if (def.IsError)
-                return Result<DemoDysonAgentProvider, string>.AsError(def.Error);
+                return Result<ResolvedProvider, string>.AsError(def.Error);
             slug = def.Value;
         }
 
-        return Result<DemoDysonAgentProvider, string>.AsValue(new DemoDysonAgentProvider(slug));
+        var provider = slug?.Provider;
+        var kind = DysonProviderKinds.EffectiveKind(
+            provider?.ProviderKind ?? DysonProviderKinds.Demo,
+            provider?.BaseUrl,
+            provider?.ApiKey);
+
+        if (string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
+        {
+            return Result<ResolvedProvider, string>.AsValue(
+                new ResolvedProvider(kind, null, new OpenAiCompatibleAgentProvider(slug)));
+        }
+
+        return Result<ResolvedProvider, string>.AsValue(
+            new ResolvedProvider(DysonProviderKinds.Demo, new DemoDysonAgentProvider(slug), null));
     }
 
-    private void AttachSession(DemoDysonAgentSession session)
+    private void AttachSession(DysonAgentSession session)
     {
         _session = session;
         _engine = new DemoDysonEngine(session);
@@ -289,21 +393,105 @@ public sealed class DysonUiHost : IAsyncDisposable
         _session = null;
         _engine = null;
         _toolHandlers.Clear();
+        _textHandlers.Clear();
+        _streamingNotify.Clear();
     }
 
     private void HookTurn(DysonAgentTurn turn)
     {
-        EventHandler<DysonToolCallStatusChangedEventArgs> handler = (_, args) =>
+        EventHandler<DysonToolCallStatusChangedEventArgs> toolHandler = (_, args) =>
             _ = OnToolStatusAsync(turn, args);
 
-        if (_toolHandlers.TryAdd(turn.Id, handler))
-            turn.ToolCallStatusChanged += handler;
+        if (_toolHandlers.TryAdd(turn.Id, toolHandler))
+            turn.ToolCallStatusChanged += toolHandler;
+
+        EventHandler textHandler = (_, _) =>
+        {
+            // Final handoff / clear: flush immediately so Markdig replaces preview without throttle lag.
+            if (!turn.IsStreaming)
+                FlushNotifyForTurn(turn.Id);
+            else
+                ThrottledNotifyForTurn(turn.Id);
+        };
+        if (_textHandlers.TryAdd(turn.Id, textHandler))
+            turn.AssistantTextChanged += textHandler;
     }
 
     private void UnhookTurn(DysonAgentTurn turn)
     {
-        if (_toolHandlers.TryRemove(turn.Id, out var handler))
-            turn.ToolCallStatusChanged -= handler;
+        if (_toolHandlers.TryRemove(turn.Id, out var toolHandler))
+            turn.ToolCallStatusChanged -= toolHandler;
+
+        if (_textHandlers.TryRemove(turn.Id, out var textHandler))
+            turn.AssistantTextChanged -= textHandler;
+
+        _streamingNotify.TryRemove(turn.Id, out _);
+    }
+
+    private void FlushNotifyForTurn(Guid turnId)
+    {
+        var state = _streamingNotify.GetOrAdd(turnId, _ => new StreamingNotifyState());
+        lock (state.Lock)
+        {
+            state.Pending = false;
+            state.LastNotifyTicks = Environment.TickCount64;
+        }
+
+        Notify();
+    }
+
+    private void ThrottledNotifyForTurn(Guid turnId)
+    {
+        const int intervalMs = 75;
+        var state = _streamingNotify.GetOrAdd(turnId, _ => new StreamingNotifyState());
+
+        lock (state.Lock)
+        {
+            var now = Environment.TickCount64;
+            var elapsed = now - state.LastNotifyTicks;
+            if (elapsed >= intervalMs)
+            {
+                state.LastNotifyTicks = now;
+                state.Pending = false;
+                Notify();
+                return;
+            }
+
+            if (state.Pending)
+                return;
+
+            state.Pending = true;
+            var delayMs = (int)(intervalMs - elapsed);
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(delayMs).ConfigureAwait(false);
+                }
+                catch
+                {
+                    return;
+                }
+
+                lock (state.Lock)
+                {
+                    if (!state.Pending)
+                        return;
+
+                    state.Pending = false;
+                    state.LastNotifyTicks = Environment.TickCount64;
+                }
+
+                Notify();
+            });
+        }
+    }
+
+    private sealed class StreamingNotifyState
+    {
+        public long LastNotifyTicks;
+        public bool Pending;
+        public object Lock = new();
     }
 
     private void OnTurnAdded(object? sender, DysonAgentTurn turn)
@@ -329,7 +517,6 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private void OnSessionRenamed(object? sender, DysonSessionRenamedEventArgs args)
     {
-        // Demo tool executor persists Title; host notifies UI to refresh list/header.
         Notify();
     }
 
