@@ -28,6 +28,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         ArgumentException.ThrowIfNullOrWhiteSpace(workDirectoryAbsolutePath);
         _workDirectoryPath = Path.GetFullPath(workDirectoryAbsolutePath);
         _store = store;
+        SessionStore = store;
         _workDirectoryId = workDirectoryId;
         _completions = new OpenAiCompletionsClient(_http);
         _responses = new OpenAiResponsesClient(_http);
@@ -143,6 +144,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         string agentMode,
         string task,
         string? context = null,
+        IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentMode);
@@ -194,6 +196,13 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             return Result<DysonStartSubagentResult, string>.AsError(create.Error);
 
         child.SetPersistenceId(create.Value);
+
+        if (initialTodos is { Count: > 0 })
+        {
+            var seeded = await child.ReplaceTodosAsync(initialTodos, cancellationToken).ConfigureAwait(false);
+            if (seeded.IsError)
+                return Result<DysonStartSubagentResult, string>.AsError(seeded.Error);
+        }
 
         var createdLog = DysonSessionLogPayload.CreateEntry(
             create.Value,

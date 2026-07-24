@@ -38,6 +38,23 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `CompactToolHistory` | string? |
 | `CreatedUtc`, `CompletedUtc`? | `DateTime` UTC |
 
+### `session_todos`
+
+Each session (root or subagent) owns its own list. Cascade-deleted with the session. Unique `(SessionId, TaskCode)`.
+
+| Property | Notes |
+| -------- | ----- |
+| `Id` | Guid PK |
+| `SessionId` | Guid FK → `sessions` (cascade) |
+| `TaskCode` | string; unique per session (trimmed) |
+| `DisplayName` | string |
+| `Status` | int enum `DysonSessionTodoStatus`: `0=Pending`, `1=Ongoing`, `2=Complete` |
+| `CommentsJson` | JSON `string[]` (default `[]`); append-only via update `appendComment`, or full replace via `comments` |
+| `Sequence` | int create/replace order within the session |
+| `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
+
+Runtime mirror: `DysonSessionTodo` (same fields; `Comments` as `IReadOnlyList<string>`). Self-check: `DysonSessionTodoSelfCheck.Run()`.
+
 ### `session_logs` (discriminated JSON)
 
 Append-only. Filter by `Kind`; payload fields live in `PayloadJson`.
@@ -83,23 +100,30 @@ Task<VoidResult<string>> AppendLogAsync(DysonSessionLogEntry entry, Cancellation
 Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListSessionsAsync(Guid? workDirectoryId = null, bool rootsOnly = true, CancellationToken ct = default);
 Task<Result<DysonPersistedSession, string>> GetFullSessionAsync(Guid sessionId, CancellationToken ct = default);
 Task<VoidResult<string>> DeleteSessionAsync(Guid sessionId, CancellationToken ct = default);
+Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ListTodosAsync(Guid sessionId, CancellationToken ct = default);
+Task<Result<DysonSessionTodo, string>> CreateTodoAsync(DysonSessionTodoCreateRequest request, CancellationToken ct = default);
+Task<Result<DysonSessionTodo, string>> UpdateTodoAsync(DysonSessionTodoUpdateRequest request, CancellationToken ct = default);
+Task<VoidResult<string>> DeleteTodoAsync(Guid sessionId, string taskCode, CancellationToken ct = default);
+Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ReplaceTodosAsync(Guid sessionId, IReadOnlyList<DysonSessionTodoReplaceItem> items, CancellationToken ct = default);
 ```
 
 `ListSessionsAsync` optionally filters by `WorkDirectoryId`. `DysonSessionCreateRequest` / summaries include `WorkDirectoryId`.
 
-`GetFullSessionAsync` returns session row + all turns (ordered) + all log entries (ordered by `Sequence`).
+`GetFullSessionAsync` returns session row + all turns (ordered) + all log entries (ordered by `Sequence`) + todos (ordered by `Sequence`).
 
-`DeleteSessionAsync` removes the session and descendant subagent sessions (`ParentSessionId` is Restrict, so children are deleted deepest-first). Turns and session logs cascade.
+`DeleteSessionAsync` removes the session and descendant subagent sessions (`ParentSessionId` is Restrict, so children are deleted deepest-first). Turns, session logs, and todos cascade.
+
+Todo CRUD rejects duplicate `TaskCode` (create) / missing code (update/delete). `UpdateTodoAsync` patches optional `DisplayName` / `Status`; `Comments` replaces the full list; `AppendComment` appends one string after any replace. `ReplaceTodosAsync` clears then inserts the seed set (used by `StartSubagent` child seed); duplicate codes in the set fail.
 
 ### `DysonPersistedSession`
 
-Aggregate DTO: session entity + `IReadOnlyList` turns + `IReadOnlyList` log entries.
+Aggregate DTO: session entity + `IReadOnlyList` turns + `IReadOnlyList` log entries + `IReadOnlyList` todos.
 
 ## Resume
 
 1. `GetFullSessionAsync(sessionId)`
 2. Construct concrete session with ephemeral provider (from selected model slug + parent provider)
-3. `RestoreFromPersisted(state)` — sets `PersistenceId`, rebuilds `TurnHistory` from turn rows (`ToolStateJson` → tool calls / tracked / response log), restores mode/config snapshots as applicable
+3. `RestoreFromPersisted(state)` — sets `PersistenceId`, rebuilds `TurnHistory` from turn rows (`ToolStateJson` → tool calls / tracked / response log), restores todos via `RestoreTodos`, restores mode/config snapshots as applicable
 4. Append `SessionResumed` log
 5. Session is ready for further `PromptAsync`
 
@@ -108,7 +132,7 @@ OpenAI-compatible path: `OpenAiCompatibleAgentSession.LoadAsync(store, sessionId
 
 ### Subagents
 
-Parent FK (`ParentSessionId`) links the graph. `CreateChildAsync` persists the child with `ParentSessionId = parent.PersistenceId`, allocates runtime id ≥ 1, and starts a background prompt. Child status updates via `UpdateSessionMetaAsync` on `SubmitSubagentReport` / stop / fail.
+Parent FK (`ParentSessionId`) links the graph. `CreateChildAsync` persists the child with `ParentSessionId = parent.PersistenceId`, allocates runtime id ≥ 1, optionally seeds the child todo list (`ReplaceTodosAsync` / in-memory hydrate from optional `initialTodos`), and starts a background prompt. Child status updates via `UpdateSessionMetaAsync` on `SubmitSubagentReport` / stop / fail.
 
 `ListSessionsAsync(..., rootsOnly: true)` (default) hides children from the sidebar; drill-in is UI navigation only (`NavigateToSessionAsync` / `NavigateToParentAsync`). Root resume loads root turns fully; live host keeps parent+children in a session registry so focus switches do not dispose running children.
 

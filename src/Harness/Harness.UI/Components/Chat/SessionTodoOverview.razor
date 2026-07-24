@@ -1,0 +1,91 @@
+@namespace Harness.UI.Components.Chat
+@using DysonHarness
+
+@if (_todos.Count > 0)
+{
+    <div class="session-todos">
+        <button type="button"
+                class="session-todos__toggle"
+                aria-expanded="@_expanded"
+                @onclick="Toggle">
+            <span class="session-todos__chevron" aria-hidden="true">@(_expanded ? "▾" : "▸")</span>
+            <span>@_completeCount/@_todos.Count tasks done</span>
+        </button>
+        @if (_expanded)
+        {
+            <ul class="session-todos__list">
+                @foreach (var todo in _todos)
+                {
+                    <li class="session-todos__item">
+                        <div class="session-todos__row">
+                            <span class="session-todos__name">@todo.DisplayName</span>
+                            <span class="session-todos__code mono">@todo.TaskCode</span>
+                            <span class="badge session-todos__status session-todos__status--@StatusClass(todo.Status)">
+                                @StatusLabel(todo.Status)
+                            </span>
+                        </div>
+                        @if (todo.Comments.Count > 0)
+                        {
+                            <ul class="session-todos__comments">
+                                @foreach (var comment in todo.Comments)
+                                {
+                                    <li>@comment</li>
+                                }
+                            </ul>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public DysonAgentSession? Session { get; set; }
+
+    private Guid? _boundSessionId;
+    private bool _expanded;
+    private IReadOnlyList<DysonSessionTodo> _todos = [];
+    private int _completeCount;
+
+    protected override void OnParametersSet()
+    {
+        var sessionId = Session?.PersistenceId;
+        if (sessionId != _boundSessionId)
+        {
+            _boundSessionId = sessionId;
+            _expanded = false;
+        }
+
+        RefreshTodos();
+    }
+
+    private void RefreshTodos()
+    {
+        _todos = Session?.Todos ?? [];
+        _completeCount = 0;
+        foreach (var t in _todos)
+        {
+            if (t.Status == DysonSessionTodoStatus.Complete)
+                _completeCount++;
+        }
+    }
+
+    private void Toggle() => _expanded = !_expanded;
+
+    private static string StatusLabel(DysonSessionTodoStatus status) => status switch
+    {
+        DysonSessionTodoStatus.Pending => "pending",
+        DysonSessionTodoStatus.Ongoing => "ongoing",
+        DysonSessionTodoStatus.Complete => "complete",
+        _ => status.ToString().ToLowerInvariant(),
+    };
+
+    private static string StatusClass(DysonSessionTodoStatus status) => status switch
+    {
+        DysonSessionTodoStatus.Pending => "pending",
+        DysonSessionTodoStatus.Ongoing => "ongoing",
+        DysonSessionTodoStatus.Complete => "complete",
+        _ => "pending",
+    };
+}

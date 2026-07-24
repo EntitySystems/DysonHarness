@@ -20,6 +20,7 @@ public sealed class DysonDbContext : DbContext
     public DbSet<DysonSessionEntity> Sessions => Set<DysonSessionEntity>();
     public DbSet<DysonTurnEntity> Turns => Set<DysonTurnEntity>();
     public DbSet<DysonSessionLogEntry> SessionLogs => Set<DysonSessionLogEntry>();
+    public DbSet<DysonSessionTodoEntity> SessionTodos => Set<DysonSessionTodoEntity>();
     public DbSet<DysonAppSettingEntity> AppSettings => Set<DysonAppSettingEntity>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
@@ -126,6 +127,22 @@ public sealed class DysonDbContext : DbContext
             e.HasIndex(x => new { x.SessionId, x.Kind });
             e.HasOne(x => x.Session)
                 .WithMany(s => s.Logs)
+                .HasForeignKey(x => x.SessionId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DysonSessionTodoEntity>(e =>
+        {
+            e.ToTable("session_todos");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.TaskCode).IsRequired();
+            e.Property(x => x.DisplayName).IsRequired();
+            e.Property(x => x.CommentsJson).IsRequired();
+            e.Property(x => x.Status).HasConversion<int>();
+            e.HasIndex(x => new { x.SessionId, x.TaskCode }).IsUnique();
+            e.HasIndex(x => new { x.SessionId, x.Sequence });
+            e.HasOne(x => x.Session)
+                .WithMany(s => s.Todos)
                 .HasForeignKey(x => x.SessionId)
                 .OnDelete(DeleteBehavior.Cascade);
         });

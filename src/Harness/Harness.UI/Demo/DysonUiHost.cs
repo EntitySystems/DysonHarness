@@ -559,6 +559,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         session.SessionRenamed += OnSessionRenamed;
         session.SubagentSpawned += OnSubagentSpawned;
         session.InterruptEnqueued += OnInterruptEnqueued;
+        session.TodosChanged += OnTodosChanged;
 
         foreach (var turn in session.Turns)
             HookTurn(turn);
@@ -633,6 +634,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         session.SessionRenamed -= OnSessionRenamed;
         session.SubagentSpawned -= OnSubagentSpawned;
         session.InterruptEnqueued -= OnInterruptEnqueued;
+        session.TodosChanged -= OnTodosChanged;
 
         foreach (var turn in session.Turns)
             UnhookTurn(turn);
@@ -1001,6 +1003,14 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     private void OnSessionRenamed(object? sender, DysonSessionRenamedEventArgs args)
+    {
+        if (sender is DysonAgentSession session)
+            RefreshRegistryKey(session);
+
+        Notify();
+    }
+
+    private void OnTodosChanged(object? sender, EventArgs e)
     {
         if (sender is DysonAgentSession session)
             RefreshRegistryKey(session);

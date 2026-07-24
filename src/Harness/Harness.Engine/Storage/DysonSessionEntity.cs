@@ -32,4 +32,5 @@ public sealed class DysonSessionEntity
     public DysonWorkDirectoryEntity? WorkDirectory { get; set; }
     public List<DysonTurnEntity> Turns { get; set; } = [];
     public List<DysonSessionLogEntry> Logs { get; set; } = [];
+    public List<DysonSessionTodoEntity> Todos { get; set; } = [];
 }

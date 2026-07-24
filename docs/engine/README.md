@@ -67,7 +67,7 @@ Primary flow: `StartSubagent` is **non-blocking**; the child runs in the backgro
 | `WaitForSubagent` | Block until child terminal or `timeoutMs`. Use **only** when the child’s result is a **prerequisite/blocker** for the next step |
 | `InspectSubagentLog` | `SnapshotLog` for a subagent id |
 | `StopSubagent` | Cancel child CTS; mark `Stopped`; notify parent |
-| `SubmitSubagentReport` | Child-only handoff (`summary`, optional `status` completed\|failed); persists meta and notifies parent |
+| `SubmitSubagentReport` | Child-only handoff (`summary`, optional `status` completed\|failed, optional `skipTasksCheck`); **blocks** when the session has incomplete todos (`Pending`/`Ongoing`) unless `skipTasksCheck: true` (then success payload includes `incompleteTodos`); empty todo list passes; persists meta and notifies parent (parent summary stays the agent-provided `summary`) |
 
 **Spawn policy (prompt + soft enforce):**
 

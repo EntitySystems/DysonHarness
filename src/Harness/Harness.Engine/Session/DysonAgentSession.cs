@@ -10,6 +10,8 @@ public abstract class DysonAgentSession
     private readonly ConcurrentQueue<DysonAgentInterrupt> _interrupts = new();
     private readonly SemaphoreSlim _interruptSignal = new(0);
     private readonly ConcurrentQueue<string> _logLines = new();
+    private readonly List<DysonSessionTodo> _todos = [];
+    private readonly object _todosGate = new();
     private readonly object _terminalGate = new();
     private readonly TaskCompletionSource<(DysonSessionStatus Status, string? Summary)> _terminalTcs =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -220,10 +222,12 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>Spawn a child session (non-blocking background prompt). Concrete providers implement persist + clone.</summary>
+    /// <param name="initialTodos">Optional seed for the child’s own todo list (applied after the child row is persisted).</param>
     public abstract Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
         string agentMode,
         string task,
         string? context = null,
+        IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Default WaitForSubagent timeout when the tool omits <c>timeoutMs</c> (5 minutes).</summary>
@@ -318,12 +322,31 @@ public abstract class DysonAgentSession
     public Task<Result<string, string>> SubmitSubagentReportAsync(
         string summary,
         bool failed = false,
+        bool skipTasksCheck = false,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
         if (string.IsNullOrWhiteSpace(summary))
             return Task.FromResult(Result<string, string>.AsError("SubmitSubagentReport: summary is required."));
+
+        var incomplete = Todos
+            .Where(t => t.Status is DysonSessionTodoStatus.Pending or DysonSessionTodoStatus.Ongoing)
+            .Select(t => new
+            {
+                taskCode = t.TaskCode,
+                displayName = t.DisplayName,
+                status = t.Status.ToString(),
+            })
+            .ToArray();
+
+        if (incomplete.Length > 0 && !skipTasksCheck)
+        {
+            var list = string.Join("; ", incomplete.Select(t =>
+                $"{t.taskCode} ({t.displayName})={t.status}"));
+            return Task.FromResult(Result<string, string>.AsError(
+                "SubmitSubagentReport: incomplete todos (pass skipTasksCheck to override): " + list));
+        }
 
         var trimmed = summary.Trim();
         var status = failed ? DysonSessionStatus.Failed : DysonSessionStatus.Completed;
@@ -339,6 +362,19 @@ public abstract class DysonAgentSession
                 Parent.NotifySubagentFailed(Id, trimmed, PersistenceId == Guid.Empty ? null : PersistenceId);
             else
                 Parent.NotifySubagentCompleted(Id, trimmed, PersistenceId == Guid.Empty ? null : PersistenceId);
+        }
+
+        if (incomplete.Length > 0)
+        {
+            return Task.FromResult(Result<string, string>.AsValue(JsonSerializer.Serialize(new
+            {
+                subagentId = Id,
+                persistenceId = PersistenceId,
+                status = Status.ToString(),
+                summary = trimmed,
+                incompleteTodos = incomplete,
+                skipTasksCheck = true,
+            })));
         }
 
         return Task.FromResult(Result<string, string>.AsValue(JsonSerializer.Serialize(new
@@ -518,6 +554,22 @@ public abstract class DysonAgentSession
     /// <summary>Public read-only view of <see cref="TurnHistory"/> for UI binding.</summary>
     public IReadOnlyList<DysonAgentTurn> Turns => TurnHistory;
 
+    /// <summary>In-memory session todo list (oldest/create-order first).</summary>
+    public IReadOnlyList<DysonSessionTodo> Todos
+    {
+        get
+        {
+            lock (_todosGate)
+                return _todos.ToArray();
+        }
+    }
+
+    /// <summary>Raised after in-memory todos change (create/update/delete/restore/replace).</summary>
+    public event EventHandler? TodosChanged;
+
+    /// <summary>Optional store for durable todo mutations when <see cref="PersistenceId"/> is set.</summary>
+    protected DysonSessionStore? SessionStore { get; set; }
+
     /// <summary>Raised after a turn is appended via <see cref="AddTurn"/> (hosts may UpsertTurn + TurnStarted log).</summary>
     public event EventHandler<DysonAgentTurn>? TurnAdded;
 
@@ -531,7 +583,8 @@ public abstract class DysonAgentSession
 
     /// <summary>
     /// Hydrates this session from a full DB aggregate: sets <see cref="PersistenceId"/> /
-    /// runtime <see cref="Id"/>, rebuilds turns (including tool state), and restores LogLine text.
+    /// runtime <see cref="Id"/>, rebuilds turns (including tool state), restores LogLine text,
+    /// and restores todos.
     /// Caller must construct the session with matching mode/provider/config first.
     /// </summary>
     protected void RestoreFromPersisted(DysonPersistedSession state)
@@ -540,6 +593,7 @@ public abstract class DysonAgentSession
         ArgumentNullException.ThrowIfNull(state.Session);
         ArgumentNullException.ThrowIfNull(state.Turns);
         ArgumentNullException.ThrowIfNull(state.Logs);
+        ArgumentNullException.ThrowIfNull(state.Todos);
 
         PersistenceId = state.Session.Id;
         Id = state.Session.RuntimeId;
@@ -585,6 +639,308 @@ public abstract class DysonAgentSession
             if (payload?.Line is not null)
                 _logLines.Enqueue(payload.Line);
         }
+
+        RestoreTodos(state.Todos);
+    }
+
+    /// <summary>Replaces the in-memory todo list (e.g. after resume) and raises <see cref="TodosChanged"/>.</summary>
+    public void RestoreTodos(IEnumerable<DysonSessionTodo> todos)
+    {
+        ArgumentNullException.ThrowIfNull(todos);
+        lock (_todosGate)
+        {
+            _todos.Clear();
+            _todos.AddRange(todos.OrderBy(t => t.Sequence));
+        }
+
+        TodosChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ListTodosAsync(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(Result<IReadOnlyList<DysonSessionTodo>, string>.AsValue(Todos));
+    }
+
+    public async Task<Result<DysonSessionTodo, string>> CreateTodoAsync(
+        string taskCode,
+        string displayName,
+        DysonSessionTodoStatus status = DysonSessionTodoStatus.Pending,
+        IReadOnlyList<string>? comments = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (PersistenceId != Guid.Empty)
+        {
+            if (SessionStore is null)
+                return Result<DysonSessionTodo, string>.AsError("Session store is not available.");
+
+            var persisted = await SessionStore.CreateTodoAsync(
+                    new DysonSessionTodoCreateRequest
+                    {
+                        SessionId = PersistenceId,
+                        TaskCode = taskCode,
+                        DisplayName = displayName,
+                        Status = status,
+                        Comments = comments,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (persisted.IsError)
+                return persisted;
+
+            UpsertTodoInMemory(persisted.Value);
+            return persisted;
+        }
+
+        if (string.IsNullOrWhiteSpace(taskCode))
+            return Result<DysonSessionTodo, string>.AsError("TaskCode is required.");
+
+        if (string.IsNullOrWhiteSpace(displayName))
+            return Result<DysonSessionTodo, string>.AsError("DisplayName is required.");
+
+        if (!Enum.IsDefined(status))
+            return Result<DysonSessionTodo, string>.AsError($"Invalid status '{status}'.");
+
+        var code = taskCode.Trim();
+        lock (_todosGate)
+        {
+            if (_todos.Any(t => string.Equals(t.TaskCode, code, StringComparison.Ordinal)))
+                return Result<DysonSessionTodo, string>.AsError($"Todo TaskCode '{code}' already exists.");
+        }
+
+        var now = DateTime.UtcNow;
+        int sequence;
+        lock (_todosGate)
+            sequence = (_todos.Count == 0 ? 0 : _todos.Max(t => t.Sequence)) + 1;
+
+        var todo = new DysonSessionTodo
+        {
+            Id = Guid.NewGuid(),
+            SessionId = PersistenceId,
+            TaskCode = code,
+            DisplayName = displayName.Trim(),
+            Status = status,
+            Comments = comments?.ToArray() ?? [],
+            Sequence = sequence,
+            CreatedUtc = now,
+            UpdatedUtc = now,
+        };
+        UpsertTodoInMemory(todo);
+        return Result<DysonSessionTodo, string>.AsValue(todo);
+    }
+
+    public async Task<Result<DysonSessionTodo, string>> UpdateTodoAsync(
+        string taskCode,
+        string? displayName = null,
+        DysonSessionTodoStatus? status = null,
+        IReadOnlyList<string>? comments = null,
+        string? appendComment = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (PersistenceId != Guid.Empty)
+        {
+            if (SessionStore is null)
+                return Result<DysonSessionTodo, string>.AsError("Session store is not available.");
+
+            var persisted = await SessionStore.UpdateTodoAsync(
+                    new DysonSessionTodoUpdateRequest
+                    {
+                        SessionId = PersistenceId,
+                        TaskCode = taskCode,
+                        DisplayName = displayName,
+                        Status = status,
+                        Comments = comments,
+                        AppendComment = appendComment,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (persisted.IsError)
+                return persisted;
+
+            UpsertTodoInMemory(persisted.Value);
+            return persisted;
+        }
+
+        if (string.IsNullOrWhiteSpace(taskCode))
+            return Result<DysonSessionTodo, string>.AsError("TaskCode is required.");
+
+        if (status is { } s && !Enum.IsDefined(s))
+            return Result<DysonSessionTodo, string>.AsError($"Invalid status '{s}'.");
+
+        var code = taskCode.Trim();
+        DysonSessionTodo updated;
+        lock (_todosGate)
+        {
+            var idx = _todos.FindIndex(t => string.Equals(t.TaskCode, code, StringComparison.Ordinal));
+            if (idx < 0)
+                return Result<DysonSessionTodo, string>.AsError($"Todo '{code}' not found.");
+
+            var current = _todos[idx];
+            if (displayName is not null && string.IsNullOrWhiteSpace(displayName))
+                return Result<DysonSessionTodo, string>.AsError("DisplayName cannot be empty.");
+
+            var nextComments = comments?.ToArray() ?? current.Comments.ToArray();
+            if (appendComment is not null)
+                nextComments = [.. nextComments, appendComment];
+
+            updated = new DysonSessionTodo
+            {
+                Id = current.Id,
+                SessionId = current.SessionId,
+                TaskCode = current.TaskCode,
+                DisplayName = displayName?.Trim() ?? current.DisplayName,
+                Status = status ?? current.Status,
+                Comments = nextComments,
+                Sequence = current.Sequence,
+                CreatedUtc = current.CreatedUtc,
+                UpdatedUtc = DateTime.UtcNow,
+            };
+            _todos[idx] = updated;
+        }
+
+        TodosChanged?.Invoke(this, EventArgs.Empty);
+        return Result<DysonSessionTodo, string>.AsValue(updated);
+    }
+
+    public async Task<VoidResult<string>> DeleteTodoAsync(
+        string taskCode,
+        CancellationToken cancellationToken = default)
+    {
+        if (PersistenceId != Guid.Empty)
+        {
+            if (SessionStore is null)
+                return new VoidResult<string>("Session store is not available.");
+
+            var deleted = await SessionStore.DeleteTodoAsync(PersistenceId, taskCode, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (deleted.IsError)
+                return deleted;
+
+            RemoveTodoInMemory(taskCode);
+            return VoidResult<string>.Success;
+        }
+
+        if (string.IsNullOrWhiteSpace(taskCode))
+            return new VoidResult<string>("TaskCode is required.");
+
+        if (!RemoveTodoInMemory(taskCode))
+            return new VoidResult<string>($"Todo '{taskCode.Trim()}' not found.");
+
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Replaces the in-memory list; when persisted, also replaces rows via the store.
+    /// </summary>
+    public async Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ReplaceTodosAsync(
+        IReadOnlyList<DysonSessionTodoReplaceItem> items,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+
+        if (PersistenceId != Guid.Empty)
+        {
+            if (SessionStore is null)
+            {
+                return Result<IReadOnlyList<DysonSessionTodo>, string>.AsError(
+                    "Session store is not available.");
+            }
+
+            var replaced = await SessionStore.ReplaceTodosAsync(PersistenceId, items, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (replaced.IsError)
+                return replaced;
+
+            RestoreTodos(replaced.Value);
+            return replaced;
+        }
+
+        var now = DateTime.UtcNow;
+        var built = new List<DysonSessionTodo>(items.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            if (string.IsNullOrWhiteSpace(item.TaskCode))
+            {
+                return Result<IReadOnlyList<DysonSessionTodo>, string>.AsError(
+                    $"items[{i}].TaskCode is required.");
+            }
+
+            if (string.IsNullOrWhiteSpace(item.DisplayName))
+            {
+                return Result<IReadOnlyList<DysonSessionTodo>, string>.AsError(
+                    $"items[{i}].DisplayName is required.");
+            }
+
+            if (!Enum.IsDefined(item.Status))
+            {
+                return Result<IReadOnlyList<DysonSessionTodo>, string>.AsError(
+                    $"items[{i}].Status is invalid.");
+            }
+
+            var code = item.TaskCode.Trim();
+            if (!seen.Add(code))
+            {
+                return Result<IReadOnlyList<DysonSessionTodo>, string>.AsError(
+                    $"Duplicate TaskCode '{code}' in replace set.");
+            }
+
+            built.Add(new DysonSessionTodo
+            {
+                Id = Guid.NewGuid(),
+                SessionId = PersistenceId,
+                TaskCode = code,
+                DisplayName = item.DisplayName.Trim(),
+                Status = item.Status,
+                Comments = item.Comments?.ToArray() ?? [],
+                Sequence = i + 1,
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            });
+        }
+
+        RestoreTodos(built);
+        return Result<IReadOnlyList<DysonSessionTodo>, string>.AsValue(built);
+    }
+
+    private void UpsertTodoInMemory(DysonSessionTodo todo)
+    {
+        ArgumentNullException.ThrowIfNull(todo);
+        lock (_todosGate)
+        {
+            var idx = _todos.FindIndex(
+                t => string.Equals(t.TaskCode, todo.TaskCode, StringComparison.Ordinal));
+            if (idx >= 0)
+                _todos[idx] = todo;
+            else
+                _todos.Add(todo);
+
+            _todos.Sort((a, b) => a.Sequence.CompareTo(b.Sequence));
+        }
+
+        TodosChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private bool RemoveTodoInMemory(string taskCode)
+    {
+        var code = taskCode.Trim();
+        lock (_todosGate)
+        {
+            var idx = _todos.FindIndex(t => string.Equals(t.TaskCode, code, StringComparison.Ordinal));
+            if (idx < 0)
+                return false;
+
+            _todos.RemoveAt(idx);
+        }
+
+        TodosChanged?.Invoke(this, EventArgs.Empty);
+        return true;
     }
 
     /// <summary>Assigns <see cref="PersistenceId"/> after <see cref="DysonSessionStore.CreateSessionAsync"/>.</summary>

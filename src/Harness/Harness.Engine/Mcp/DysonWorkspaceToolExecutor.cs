@@ -7,8 +7,8 @@ namespace DysonHarness;
 
 /// <summary>
 /// Executes workspace-scoped MCP tools against a work directory root, plus RenameSession,
-/// GetDateTime, ShellExecute, subagent spawn/report tools, and in-process web search/fetch tools.
-/// Other catalog tools return a not-implemented stub result.
+/// GetDateTime, ShellExecute, subagent spawn/report tools, session todo CRUD, and in-process
+/// web search/fetch tools. Other catalog tools return a not-implemented stub result.
 /// </summary>
 public sealed class DysonWorkspaceToolExecutor
 {
@@ -47,6 +47,10 @@ public sealed class DysonWorkspaceToolExecutor
                 "InspectSubagentLog" => await InspectSubagentLogAsync(call, cancellationToken).ConfigureAwait(false),
                 "StopSubagent" => await StopSubagentAsync(call, cancellationToken).ConfigureAwait(false),
                 "SubmitSubagentReport" => await SubmitSubagentReportAsync(call, cancellationToken).ConfigureAwait(false),
+                "ListTodos" => await ListTodosAsync(call, cancellationToken).ConfigureAwait(false),
+                "CreateTodo" => await CreateTodoAsync(call, cancellationToken).ConfigureAwait(false),
+                "UpdateTodo" => await UpdateTodoAsync(call, cancellationToken).ConfigureAwait(false),
+                "DeleteTodo" => await DeleteTodoAsync(call, cancellationToken).ConfigureAwait(false),
                 "ReadFile" => await ReadFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateFile" => await CreateFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "WriteFile" => await WriteFileAsync(call, cancellationToken).ConfigureAwait(false),
@@ -190,6 +194,7 @@ public sealed class DysonWorkspaceToolExecutor
         string? agentMode;
         string? task;
         string? context;
+        IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos;
         try
         {
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
@@ -204,13 +209,23 @@ public sealed class DysonWorkspaceToolExecutor
             agentMode = mode.Value;
             task = taskResult.Value;
             context = GetOptionalString(root, "context");
+
+            var todos = TryParseTodoSeedItems(root, "todos");
+            if (todos.IsError)
+                return Error(call, todos.Error);
+            initialTodos = todos.Value;
         }
         catch (JsonException)
         {
             return Error(call, "StartSubagent: invalid JSON arguments.");
         }
 
-        var started = await _session.CreateChildAsync(agentMode, task, context, cancellationToken)
+        var started = await _session.CreateChildAsync(
+                agentMode,
+                task,
+                context,
+                initialTodos,
+                cancellationToken)
             .ConfigureAwait(false);
         if (started.IsError)
             return Error(call, started.Error);
@@ -223,6 +238,218 @@ public sealed class DysonWorkspaceToolExecutor
             agentMode = r.AgentMode,
             title = r.Title,
         }));
+    }
+
+    private async Task<DysonToolCallResult> ListTodosAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var listed = await _session.ListTodosAsync(cancellationToken).ConfigureAwait(false);
+        if (listed.IsError)
+            return Error(call, listed.Error);
+
+        return Ok(call, SerializeTodos(listed.Value));
+    }
+
+    private async Task<DysonToolCallResult> CreateTodoAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        string displayName;
+        string taskCode;
+        DysonSessionTodoStatus status;
+        IReadOnlyList<string>? comments;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var root = doc.RootElement;
+            var name = RequireString(root, "displayName");
+            if (name.IsError)
+                return Error(call, name.Error);
+            var code = RequireString(root, "taskCode");
+            if (code.IsError)
+                return Error(call, code.Error);
+
+            displayName = name.Value;
+            taskCode = code.Value;
+
+            var statusParse = TryParseOptionalTodoStatus(root, "status");
+            if (statusParse.IsError)
+                return Error(call, statusParse.Error);
+            status = statusParse.Value ?? DysonSessionTodoStatus.Pending;
+
+            var commentsParse = TryParseOptionalStringArray(root, "comments");
+            if (commentsParse.IsError)
+                return Error(call, commentsParse.Error);
+            comments = commentsParse.Value;
+        }
+        catch (JsonException)
+        {
+            return Error(call, "CreateTodo: invalid JSON arguments.");
+        }
+
+        var created = await _session.CreateTodoAsync(
+                taskCode,
+                displayName,
+                status,
+                comments,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (created.IsError)
+            return Error(call, created.Error);
+
+        return Ok(call, SerializeTodo(created.Value));
+    }
+
+    private async Task<DysonToolCallResult> UpdateTodoAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        string taskCode;
+        string? displayName;
+        DysonSessionTodoStatus? status;
+        IReadOnlyList<string>? comments;
+        string? appendComment;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var root = doc.RootElement;
+            var code = RequireString(root, "taskCode");
+            if (code.IsError)
+                return Error(call, code.Error);
+            taskCode = code.Value;
+            displayName = GetOptionalString(root, "displayName");
+
+            var statusParse = TryParseOptionalTodoStatus(root, "status");
+            if (statusParse.IsError)
+                return Error(call, statusParse.Error);
+            status = statusParse.Value;
+
+            var hasComments = root.TryGetProperty("comments", out _);
+            comments = null;
+            if (hasComments)
+            {
+                var commentsParse = TryParseOptionalStringArray(root, "comments");
+                if (commentsParse.IsError)
+                    return Error(call, commentsParse.Error);
+                comments = commentsParse.Value ?? [];
+            }
+
+            appendComment = GetOptionalString(root, "appendComment");
+        }
+        catch (JsonException)
+        {
+            return Error(call, "UpdateTodo: invalid JSON arguments.");
+        }
+
+        var updated = await _session.UpdateTodoAsync(
+                taskCode,
+                displayName,
+                status,
+                comments,
+                appendComment,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (updated.IsError)
+            return Error(call, updated.Error);
+
+        return Ok(call, SerializeTodo(updated.Value));
+    }
+
+    private async Task<DysonToolCallResult> DeleteTodoAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        string taskCode;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var code = RequireString(doc.RootElement, "taskCode");
+            if (code.IsError)
+                return Error(call, code.Error);
+            taskCode = code.Value;
+        }
+        catch (JsonException)
+        {
+            return Error(call, "DeleteTodo: invalid JSON arguments.");
+        }
+
+        var deleted = await _session.DeleteTodoAsync(taskCode, cancellationToken).ConfigureAwait(false);
+        if (deleted.IsError)
+            return Error(call, deleted.Error);
+
+        return Ok(call, $"Deleted todo '{taskCode}'.");
+    }
+
+    /// <summary>
+    /// Parses optional <paramref name="propertyName"/> array of todo seed objects
+    /// (<c>displayName</c>, <c>taskCode</c>, optional <c>status</c>/<c>comments</c>).
+    /// </summary>
+    public static Result<IReadOnlyList<DysonSessionTodoReplaceItem>?, string> TryParseTodoSeedItems(
+        JsonElement root,
+        string propertyName = "todos")
+    {
+        if (!root.TryGetProperty(propertyName, out var prop))
+            return Result<IReadOnlyList<DysonSessionTodoReplaceItem>?, string>.AsValue(null);
+
+        if (prop.ValueKind == JsonValueKind.Null)
+            return Result<IReadOnlyList<DysonSessionTodoReplaceItem>?, string>.AsValue(null);
+
+        if (prop.ValueKind != JsonValueKind.Array)
+        {
+            return Result<IReadOnlyList<DysonSessionTodoReplaceItem>?, string>.AsError(
+                $"Field '{propertyName}' must be an array.");
+        }
+
+        var items = new List<DysonSessionTodoReplaceItem>();
+        var index = 0;
+        foreach (var el in prop.EnumerateArray())
+        {
+            if (el.ValueKind != JsonValueKind.Object)
+            {
+                return Result<IReadOnlyList<DysonSessionTodoReplaceItem>?, string>.AsError(
+                    $"{propertyName}[{index}] must be an object.");
+            }
+
+            var displayName = RequireString(el, "displayName");
+            if (displayName.IsError)
+            {
+                return Result<IReadOnlyList<DysonSessionTodoReplaceItem>?, string>.AsError(
+                    $"{propertyName}[{index}]: {displayName.Error}");
+            }
+
+            var taskCode = RequireString(el, "taskCode");
+            if (taskCode.IsError)
+            {
+                return Result<IReadOnlyList<DysonSessionTodoReplaceItem>?, string>.AsError(
+                    $"{propertyName}[{index}]: {taskCode.Error}");
+            }
+
+            var statusParse = TryParseOptionalTodoStatus(el, "status");
+            if (statusParse.IsError)
+            {
+                return Result<IReadOnlyList<DysonSessionTodoReplaceItem>?, string>.AsError(
+                    $"{propertyName}[{index}]: {statusParse.Error}");
+            }
+
+            var commentsParse = TryParseOptionalStringArray(el, "comments");
+            if (commentsParse.IsError)
+            {
+                return Result<IReadOnlyList<DysonSessionTodoReplaceItem>?, string>.AsError(
+                    $"{propertyName}[{index}]: {commentsParse.Error}");
+            }
+
+            items.Add(new DysonSessionTodoReplaceItem
+            {
+                DisplayName = displayName.Value,
+                TaskCode = taskCode.Value,
+                Status = statusParse.Value ?? DysonSessionTodoStatus.Pending,
+                Comments = commentsParse.Value,
+            });
+            index++;
+        }
+
+        return Result<IReadOnlyList<DysonSessionTodoReplaceItem>?, string>.AsValue(items);
     }
 
     private async Task<DysonToolCallResult> WaitForSubagentAsync(
@@ -317,6 +544,7 @@ public sealed class DysonWorkspaceToolExecutor
     {
         string summary;
         var failed = false;
+        var skipTasksCheck = false;
         try
         {
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
@@ -337,13 +565,16 @@ public sealed class DysonWorkspaceToolExecutor
                     return Error(call, "SubmitSubagentReport: status must be 'completed' or 'failed'.");
                 }
             }
+
+            skipTasksCheck = GetBool(doc.RootElement, "skipTasksCheck");
         }
         catch (JsonException)
         {
             return Error(call, "SubmitSubagentReport: invalid JSON arguments.");
         }
 
-        var submitted = await _session.SubmitSubagentReportAsync(summary, failed, cancellationToken)
+        var submitted = await _session
+            .SubmitSubagentReportAsync(summary, failed, skipTasksCheck, cancellationToken)
             .ConfigureAwait(false);
         if (submitted.IsError)
             return Error(call, submitted.Error);
@@ -1116,4 +1347,69 @@ public sealed class DysonWorkspaceToolExecutor
         var value = prop.GetString();
         return string.IsNullOrWhiteSpace(value) ? null : value;
     }
+
+    private static Result<DysonSessionTodoStatus?, string> TryParseOptionalTodoStatus(
+        JsonElement root,
+        string name)
+    {
+        if (!root.TryGetProperty(name, out var prop) || prop.ValueKind == JsonValueKind.Null)
+            return Result<DysonSessionTodoStatus?, string>.AsValue(null);
+
+        if (prop.ValueKind != JsonValueKind.String)
+            return Result<DysonSessionTodoStatus?, string>.AsError($"Field '{name}' must be a string.");
+
+        var raw = prop.GetString();
+        if (string.IsNullOrWhiteSpace(raw))
+            return Result<DysonSessionTodoStatus?, string>.AsValue(null);
+
+        if (Enum.TryParse<DysonSessionTodoStatus>(raw, ignoreCase: true, out var parsed)
+            && Enum.IsDefined(parsed))
+        {
+            return Result<DysonSessionTodoStatus?, string>.AsValue(parsed);
+        }
+
+        return Result<DysonSessionTodoStatus?, string>.AsError(
+            $"Field '{name}' must be one of: pending, ongoing, complete.");
+    }
+
+    private static Result<IReadOnlyList<string>?, string> TryParseOptionalStringArray(
+        JsonElement root,
+        string name)
+    {
+        if (!root.TryGetProperty(name, out var prop) || prop.ValueKind == JsonValueKind.Null)
+            return Result<IReadOnlyList<string>?, string>.AsValue(null);
+
+        if (prop.ValueKind != JsonValueKind.Array)
+            return Result<IReadOnlyList<string>?, string>.AsError($"Field '{name}' must be an array.");
+
+        var list = new List<string>();
+        foreach (var item in prop.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String)
+                return Result<IReadOnlyList<string>?, string>.AsError($"Field '{name}' items must be strings.");
+
+            list.Add(item.GetString() ?? "");
+        }
+
+        return Result<IReadOnlyList<string>?, string>.AsValue(list);
+    }
+
+    private static string SerializeTodos(IReadOnlyList<DysonSessionTodo> todos) =>
+        JsonSerializer.Serialize(todos.Select(ToTodoDto));
+
+    private static string SerializeTodo(DysonSessionTodo todo) =>
+        JsonSerializer.Serialize(ToTodoDto(todo));
+
+    private static object ToTodoDto(DysonSessionTodo todo) => new
+    {
+        id = todo.Id,
+        sessionId = todo.SessionId,
+        taskCode = todo.TaskCode,
+        displayName = todo.DisplayName,
+        status = todo.Status.ToString().ToLowerInvariant(),
+        comments = todo.Comments,
+        sequence = todo.Sequence,
+        createdUtc = todo.CreatedUtc,
+        updatedUtc = todo.UpdatedUtc,
+    };
 }

@@ -113,6 +113,7 @@ public sealed class DysonMcpPipeline
                 "Returns immediately with subagentId / persistenceId; the child runs in the background. " +
                 "When the child calls SubmitSubagentReport, the parent is notified and the host queues a turn — " +
                 "do not WaitForSubagent unless that child’s result is a blocker. " +
+                "Optional todos seeds the child’s own session todo list. " +
                 "Plan is banned as a subagent mode. Explore cannot spawn. Drone may spawn Explore only (not another Drone).",
             InputSchemaJson = """
                 {
@@ -120,9 +121,119 @@ public sealed class DysonMcpPipeline
                   "properties": {
                     "agentMode": { "type": "string", "description": "Mode for the sub-agent (e.g. Explore, Drone). Not Plan." },
                     "task": { "type": "string", "description": "Assigned task brief for the sub-agent." },
-                    "context": { "type": "string", "description": "Optional extra context or constraints." }
+                    "context": { "type": "string", "description": "Optional extra context or constraints." },
+                    "todos": {
+                      "type": "array",
+                      "description": "Optional seed checklist for the child’s session todo list.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "displayName": { "type": "string", "description": "Human-readable todo title." },
+                          "taskCode": { "type": "string", "description": "Stable code unique within the child session." },
+                          "status": {
+                            "type": "string",
+                            "enum": ["pending", "ongoing", "complete"],
+                            "description": "Initial status (default: pending)."
+                          },
+                          "comments": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Optional initial comments."
+                          }
+                        },
+                        "required": ["displayName", "taskCode"]
+                      }
+                    }
                   },
                   "required": ["agentMode", "task"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ListTodos",
+            Description =
+                "List todos for the current session (JSON array). " +
+                "Each session (root or subagent) owns its own list.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {}
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "CreateTodo",
+            Description =
+                "Create a todo on the current session’s list. TaskCode must be unique within the session.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "displayName": { "type": "string", "description": "Human-readable todo title." },
+                    "taskCode": { "type": "string", "description": "Stable code unique within this session." },
+                    "status": {
+                      "type": "string",
+                      "enum": ["pending", "ongoing", "complete"],
+                      "description": "Initial status (default: pending)."
+                    },
+                    "comments": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "Optional initial comments."
+                    }
+                  },
+                  "required": ["displayName", "taskCode"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "UpdateTodo",
+            Description =
+                "Update a todo on the current session by taskCode. " +
+                "Optional fields patch displayName / status; comments replaces the full list; appendComment adds one comment.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "taskCode": { "type": "string", "description": "Todo to update." },
+                    "displayName": { "type": "string", "description": "Optional new display name." },
+                    "status": {
+                      "type": "string",
+                      "enum": ["pending", "ongoing", "complete"],
+                      "description": "Optional new status."
+                    },
+                    "comments": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "Optional full replace of the comments list."
+                    },
+                    "appendComment": {
+                      "type": "string",
+                      "description": "Optional comment to append (after any replace)."
+                    }
+                  },
+                  "required": ["taskCode"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "DeleteTodo",
+            Description = "Delete a todo from the current session by taskCode.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "taskCode": { "type": "string", "description": "Todo to delete." }
+                  },
+                  "required": ["taskCode"]
                 }
                 """,
         };
@@ -210,6 +321,7 @@ public sealed class DysonMcpPipeline
             Description =
                 "Subagents must call this when finished (or blocked). " +
                 "Notifies the parent with the summary so the host can queue a parent turn. " +
+                "Complete all session todos (or pass skipTasksCheck) before finishing. " +
                 "Do not use from a root Work session unless debugging.",
             InputSchemaJson = """
                 {
@@ -223,6 +335,10 @@ public sealed class DysonMcpPipeline
                       "type": "string",
                       "enum": ["completed", "failed"],
                       "description": "Report outcome (default: completed)."
+                    },
+                    "skipTasksCheck": {
+                      "type": "boolean",
+                      "description": "When true, allow report despite incomplete session todos; incomplete todos are returned in the result."
                     }
                   },
                   "required": ["summary"]

@@ -36,6 +36,7 @@
                        GitBranch="@_gitBranch"
                        ShowBackToParent="Host.ActiveParentSessionId is not null"
                        OnBackToParent="NavigateToParentAsync" />
+        <SessionTodoOverview Session="Host.Session" />
         @if (!string.IsNullOrEmpty(Host.LastError))
         {
             <div class="error-banner">@Host.LastError</div>

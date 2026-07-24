@@ -15,7 +15,7 @@ Conceptual overview: [README.md](README.md).
 | `OpenAiCompatibleAgentSession` | Completions/Responses tool-loop session |
 | `OpenAiCompletionsClient` / `OpenAiResponsesClient` | Streaming SSE adapters (`StreamCreateAsync` → `OpenAiStreamChunk`) |
 | `OpenAiCacheFriendlyTranscriptBuilder` | Stable-prefix transcript + `prompt_cache_key` |
-| `DysonWorkspaceToolExecutor` | Workdir-scoped file tools + `RenameSession` + `GetDateTime` + `ShellExecute` + web search/fetch tools (tool-owned summarize) + **subagent tools** (`StartSubagent` / `WaitForSubagent` / `InspectSubagentLog` / `StopSubagent` / `SubmitSubagentReport`); stubs for the rest |
+| `DysonWorkspaceToolExecutor` | Workdir-scoped file tools + `RenameSession` + `GetDateTime` + `ShellExecute` + web search/fetch tools (tool-owned summarize) + **subagent tools** (`StartSubagent` / `WaitForSubagent` / `InspectSubagentLog` / `StopSubagent` / `SubmitSubagentReport`) + **session todo tools** (`ListTodos` / `CreateTodo` / `UpdateTodo` / `DeleteTodo`); stubs for the rest |
 | `DysonShell` / `DysonWindowsShell` | Shell runners (`ShellType` get); Windows: Pwsh / PowerShell / Cmd |
 | `DysonShellType` / `DysonShellRunResult` | Shell enum + process result |
 | `DysonOpenAiApiModes` | `Completions` / `Responses` constants |
@@ -26,9 +26,10 @@ Conceptual overview: [README.md](README.md).
 
 - Identity: `Id` (runtime int; root `0`)
 - Persistence (when wired): `PersistenceId` (`Guid`), `DisplayTitle`, `Turns`, `TurnAdded`, `AddTurn`, `RestoreFromPersisted`
+- Todos: `Todos` (`IReadOnlyList<DysonSessionTodo>`), `TodosChanged`, `RestoreTodos`, `ListTodosAsync` / `CreateTodoAsync` / `UpdateTodoAsync` / `DeleteTodoAsync` / `ReplaceTodosAsync` (persist when `PersistenceId` set)
 - Rename: `RenameAsync(title)` → validates (trim, max 120) → sets `DisplayTitle` → raises `SessionRenamed` (`DysonSessionRenamedEventArgs`: `PersistenceId`, `Title`); host/tool executor persists `sessions.Title`
 - Config / mode: `Config`, `Mode`, `SystemPrompt`, `McpPipeline`, `Provider`
-- Subagents: `Parent`, `SubSessions`, `RegisterSubagent`, `CreateChildAsync`, `WaitForSubagentAsync`, `InspectSubagentLog` (sync), `StopSubagentAsync`, `SubmitSubagentReportAsync`, `ValidateSubagentSpawn`
+- Subagents: `Parent`, `SubSessions`, `RegisterSubagent`, `CreateChildAsync` (optional `initialTodos` seed), `WaitForSubagentAsync`, `InspectSubagentLog` (sync), `StopSubagentAsync`, `SubmitSubagentReportAsync` (`skipTasksCheck` gates incomplete session todos), `ValidateSubagentSpawn`
 - Interrupts: `EnqueueInterrupt`, `TryDequeueInterrupt`, `WaitForInterruptAsync`; `NotifySubagentCompleted` / `Stopped` / `Failed` (include optional child `PersistenceId`)
 - Log: `AppendLog`, `SnapshotLog`, `LogAppended`
 - Turns / context: `CreateExpandThoughtProcessTurn`, completion-turn helpers, `OptimizeContextIfNeeded`
@@ -44,6 +45,9 @@ Conceptual overview: [README.md](README.md).
 | `DysonAgentSystemPrompts` | `ForMode` → system prompt text; Work/Explore/Drone orchestrator directives; `DroneFirstTurnContextMandate` |
 | `DysonStartSubagentResult` | StartSubagent / `CreateChildAsync` return: `SubagentId`, `PersistenceId`, `AgentMode`, `Title` |
 | `DysonSubagentSpawnGateSelfCheck` | Assert-only soft spawn gate checks (Work→Explore/Drone ok; Plan banned; Explore cannot spawn; Drone→Explore only) |
+| `DysonSessionTodo` | Runtime/UI/MCP mirror of a session todo (`TaskCode`, `DisplayName`, `Status`, `Comments`, `Sequence`, timestamps) |
+| `DysonSessionTodoStatus` | `Pending` / `Ongoing` / `Complete` (ints 0/1/2) |
+| `DysonSessionTodoSelfCheck` | Assert-only TaskCode uniqueness + status enum round-trip |
 
 ## Turns & tools
 
@@ -70,9 +74,11 @@ Conceptual overview: [README.md](README.md).
 | `DysonMcpTool` | Name, description, input schema JSON |
 | `DysonMcpAutoReviewProxy` | In-process review gate when mode is AutoReview |
 
-Default catalog includes session tools (`StartSubagent`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`), completion tools, workspace file tools, **`RenameSession`** (`{ "title": string }` required) for UI/list titles, **`GetDateTime`** (optional `timezone`: `"utc"` default | `"local"`; returns ISO + `dd/MM/yyyy HH:mm` display), **`ShellExecute`** (`shell` enum from session `AvailableShellTypes`, `command`, optional `timeoutMs` / `workingDirectory`) when shells are available, and **web search/fetch** tools: `FreeSearch`, `FreeSearchAdvanced`, `SearchWithSynthesis`, `FreeExtract`, `WebFetch`, `FetchGithubReadme` (see [README.md](README.md)#web-search--fetch-in-process). Call `RenameSession` only when the harness every-8 rename-review mandate asks, or when the user explicitly requests a rename. `DysonMcpPipeline.CreateDefault(accessMode, availableShellTypes)` builds the dynamic ShellExecute schema.
+Default catalog includes session tools (`StartSubagent`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`), **session todos** (`ListTodos`, `CreateTodo`, `UpdateTodo`, `DeleteTodo`), completion tools, workspace file tools, **`RenameSession`** (`{ "title": string }` required) for UI/list titles, **`GetDateTime`** (optional `timezone`: `"utc"` default | `"local"`; returns ISO + `dd/MM/yyyy HH:mm` display), **`ShellExecute`** (`shell` enum from session `AvailableShellTypes`, `command`, optional `timeoutMs` / `workingDirectory`) when shells are available, and **web search/fetch** tools: `FreeSearch`, `FreeSearchAdvanced`, `SearchWithSynthesis`, `FreeExtract`, `WebFetch`, `FetchGithubReadme` (see [README.md](README.md)#web-search--fetch-in-process). Call `RenameSession` only when the harness every-8 rename-review mandate asks, or when the user explicitly requests a rename. `DysonMcpPipeline.CreateDefault(accessMode, availableShellTypes)` builds the dynamic ShellExecute schema.
 
-**Subagent tools (see [README.md](README.md)#orchestrator-subagents):** `StartSubagent` is non-blocking (`agentMode` + `task`, optional `context`; Plan banned; Explore parents cannot spawn; Drone→Explore only). `WaitForSubagent` blocks for prerequisites only. `SubmitSubagentReport` (`summary`, optional `status`) is the child handoff that drives parent interrupts / host auto-turn.
+**Session todo tools:** operate on the current session’s list only (root and subagent each own a list). Status strings: `pending` / `ongoing` / `complete`. `CreateTodo` requires `displayName` + `taskCode` (unique per session); optional `status`, `comments`. `UpdateTodo` requires `taskCode`; optional patch `displayName` / `status`; `comments` replaces the full list; `appendComment` appends one. No comment-delete tool. `DeleteTodo` / `ListTodos` by current session.
+
+**Subagent tools (see [README.md](README.md)#orchestrator-subagents):** `StartSubagent` is non-blocking (`agentMode` + `task`, optional `context`, optional `todos` seed array with `displayName` / `taskCode` / optional `status` / `comments`; Plan banned; Explore parents cannot spawn; Drone→Explore only). `WaitForSubagent` blocks for prerequisites only. `SubmitSubagentReport` (`summary`, optional `status`, optional `skipTasksCheck`) is the child handoff that drives parent interrupts / host auto-turn. By default it **errors** (session stays non-terminal) when any session todo is still `Pending` or `Ongoing`; pass `skipTasksCheck: true` to override — success JSON then includes `incompleteTodos` (`taskCode`, `displayName`, `status`) and `skipTasksCheck: true`. Parent notification still uses the agent `summary` unchanged. Empty todo list always passes.
 
 ## Search (in-process)
 
@@ -124,4 +130,5 @@ Documented under [docs/storage](../storage/models.md), [sessions.md](../storage/
 - `DysonModelProviderEntity`, `DysonModelSlugEntity` (providers own `ApiKey` / `BaseUrl` / `ProviderKind`; slugs own `Slug` + `DisplayAlias`)
 - `DysonAppSettingEntity` / `DysonAppSettingKeys` (key/value prefs, e.g. web search summarizer slug)
 - `DysonWorkDirectoryEntity`, `DysonNativeFolderPicker`, `DysonGitInfo`
-- Session/turn/log entities and `DysonPersistedSession` (sessions reference `ModelSlugId` + optional `WorkDirectoryId`)
+- Session/turn/log entities and `DysonPersistedSession` (sessions reference `ModelSlugId` + optional `WorkDirectoryId`; aggregate includes todos)
+- `DysonSessionTodoEntity` / `DysonSessionTodo` / `DysonSessionTodoStatus` / todo request DTOs on `DysonSessionStore`

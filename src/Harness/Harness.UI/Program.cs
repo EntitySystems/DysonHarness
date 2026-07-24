@@ -11,6 +11,8 @@ var searchCheck = SearchSelfCheck.RunSsrfChecks();
 if (searchCheck.IsError)
     throw new InvalidOperationException(searchCheck.Error);
 
+DysonSessionTodoSelfCheck.Run();
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Without launchSettings (ASPNETCORE_ENVIRONMENT=Production), MapStaticAssets

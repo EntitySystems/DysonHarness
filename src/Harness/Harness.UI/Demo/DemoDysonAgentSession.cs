@@ -17,6 +17,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         : base(agentMode, config, provider)
     {
         _store = store;
+        SessionStore = store;
         _workDirectoryId = workDirectoryId;
     }
 
@@ -123,6 +124,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         string agentMode,
         string task,
         string? context = null,
+        IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentMode);
@@ -168,6 +170,13 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             return Result<DysonStartSubagentResult, string>.AsError(create.Error);
 
         child.SetPersistenceId(create.Value);
+
+        if (initialTodos is { Count: > 0 })
+        {
+            var seeded = await child.ReplaceTodosAsync(initialTodos, cancellationToken).ConfigureAwait(false);
+            if (seeded.IsError)
+                return Result<DysonStartSubagentResult, string>.AsError(seeded.Error);
+        }
 
         var createdLog = DysonSessionLogPayload.CreateEntry(
             create.Value,
@@ -381,10 +390,15 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                 var context = root.TryGetProperty("context", out var ctxProp)
                     ? ctxProp.GetString()
                     : null;
+                var todos = DysonWorkspaceToolExecutor.TryParseTodoSeedItems(root, "todos");
+                if (todos.IsError)
+                    return ToolError(call, todos.Error);
+
                 var started = await CreateChildAsync(
                         modeProp.GetString()!,
                         taskProp.GetString()!,
                         context,
+                        todos.Value,
                         cancellationToken)
                     .ConfigureAwait(false);
                 if (started.IsError)
@@ -469,8 +483,15 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                 }
             }
 
+            var skipTasksCheck = root.TryGetProperty("skipTasksCheck", out var skipProp)
+                && skipProp.ValueKind == JsonValueKind.True;
+
             var summary = summaryProp.GetString()!;
-            var submitted = await SubmitSubagentReportAsync(summary, failed, cancellationToken)
+            var submitted = await SubmitSubagentReportAsync(
+                    summary,
+                    failed,
+                    skipTasksCheck,
+                    cancellationToken)
                 .ConfigureAwait(false);
             if (submitted.IsError)
                 return ToolError(call, submitted.Error);

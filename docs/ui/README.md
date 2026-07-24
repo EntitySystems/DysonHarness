@@ -16,7 +16,7 @@ DI (scoped): `ThemeService`, `DysonDbContext`, `DysonModelStore`, `DysonSessionS
 
 On first open, a default **Demo Mock** provider + slug is seeded if none exists. SQLite lives under the platform app-data folder for the current `DysonAppMode` (see [storage/models](../storage/models.md)).
 
-`DysonUiHost` branches on effective `ProviderKind` (see below): `demo` (no credentials) → `DemoDysonAgentSession`; `OpenAICompatible` → `OpenAiCompatibleAgentSession` (engine). Anthropic is not wired yet. OpenAI-compatible sessions expose in-process web search MCP tools (`FreeSearch`, `WebFetch`, …) via the engine catalog — see [engine README](../engine/README.md)#web-search--fetch-in-process. Web tools summarize **inside** the executor (`DysonWebSearchSummarizer`); optional summarizer slug from Settings → General (empty ⇒ session model via `SummarizerProvider` null). On startup the UI runs `SearchSelfCheck.RunSsrfChecks()` and logs a warning if it fails.
+`DysonUiHost` branches on effective `ProviderKind` (see below): `demo` (no credentials) → `DemoDysonAgentSession`; `OpenAICompatible` → `OpenAiCompatibleAgentSession` (engine). Anthropic is not wired yet. OpenAI-compatible sessions expose in-process web search MCP tools (`FreeSearch`, `WebFetch`, …) via the engine catalog — see [engine README](../engine/README.md)#web-search--fetch-in-process. Web tools summarize **inside** the executor (`DysonWebSearchSummarizer`); optional summarizer slug from Settings → General (empty ⇒ session model via `SummarizerProvider` null). On startup the UI runs `SearchSelfCheck.RunSsrfChecks()` (throws on failure) and `DysonSessionTodoSelfCheck.Run()` (TaskCode uniqueness + status enum round-trip).
 
 **Provider routing:** session type follows the slug’s provider `ProviderKind`. Demo mode is for offline UI testing — `DemoDysonAgentSession` injects mock tools every turn (`read_file`, `grep`, `list_dir`) and mocks `RenameSession` only on rename-review turns (1, 9, 17, …), without calling an LLM. OpenAI-compatible providers call the real API and only run tools the model requests.
 
@@ -42,7 +42,7 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `Components/Layout/SettingsLayout.razor` | Settings side-nav shell |
 | `Components/Shell/` | `AppShell`, `Sidebar`, `SessionHeader` |
 | `Components/Sessions/` | `WorkDirectorySwitcher`, `SessionList` |
-| `Components/Chat/` | `ChatPanel`, `TurnBlock`, `SubagentCard`, `Composer`, `AgentModePicker` |
+| `Components/Chat/` | `ChatPanel`, `SessionTodoOverview`, `TurnBlock`, `SubagentCard`, `Composer`, `AgentModePicker` |
 | `Components/Tools/` | `ToolCallPanel`, `ToolCallRow` |
 | `Components/Models/` | `ModelsPanel` (settings CRUD), `ModelSlugPicker` (agent pick) |
 | `Components/Theme/` | `ThemeSwitcher` |
@@ -69,6 +69,7 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `ToolCallPanel` / `ToolCallRow` | Live tool status |
 | `ThemeSwitcher` | Light/Dark + Blue/Green/Red/Purple (settings → General) |
 | `SessionHeader` | Title (`DisplayTitle`), mode, ids, MCP, git branch, app mode; when viewing a child (`ParentSessionId` set), **← Parent** → `NavigateToParentAsync` |
+| `SessionTodoOverview` | Between `SessionHeader` and `ChatPanel`; hidden when the session todo list is empty; collapsed (default) shows `{complete}/{total} tasks done`; expanded lists DisplayName, TaskCode, status badge, comments; refreshes on `TodosChanged` via host `Notify` |
 | `ModelsPanel` | Provider/slug CRUD — settings → Models; OpenAICompatible shows Completions/Responses API mode toggle; **Repair mis-tagged providers** fixes demo rows that have credentials |
 | `SettingsLayout` | Settings side nav + content |
 
@@ -97,7 +98,8 @@ General also hosts **Web search summarizer**: optional slug stored in `app_setti
 - **Auto-turn on report:** on parent `SubagentCompleted` / `SubagentFailed` interrupt, enqueue a harness report prompt for that parent; when parent `!IsBusy`, FIFO `PromptAsync` with the `SubmitSubagentReport` summary (does not cancel in-flight parent work).
 - **New session:** `StartNewSessionAsync(agentMode, modelSlugId, workDirectoryId)` — workdir required → resolves provider kind → `OpenAiCompatibleAgentSession` or `DemoDysonAgentSession`
 - **Delete session:** `DeleteSessionAsync(sessionId)` — confirms in UI, then store delete (subtree + cascaded turns/logs); detaches if it was the active session
-- **Resume:** `GetFullSessionAsync` → re-resolves provider from `ModelSlugId` → same branch as new session
+- **Resume:** `GetFullSessionAsync` → re-resolves provider from `ModelSlugId` → same branch as new session; restores todos into the live session
+- **Todos:** host subscribes `TodosChanged` → `Notify()` so `SessionTodoOverview` refreshes without a full reload; MCP todo tools mutate the focused session’s own list
 - **Rename:** demo tool executor handles `RenameSession` → `RenameAsync` + persist `Title` + `SessionRenamed` log; host `SessionRenamed` notifies UI to refresh list/header
 - **Cancel prompt:** `CancelPrompt()` cancels the linked CTS used by the in-flight `PromptAsync`; latest busy turn spinner hover shows a danger cancel cross (`icons/cancel.svg`) and click invokes it
 - **Resubmit prompt:** idle user turns show a muted Retry control on `.turn-block__user` (`icons/retry.svg`); click re-sends that turn’s `Instruction` through `OnSubmit` / `PromptAsync` as a new turn (disabled while `SessionBusy`)

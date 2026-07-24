@@ -790,6 +790,107 @@ code, .mono {
   border: 1px solid var(--border);
 }
 
+/* Session todos overview (between header and chat) */
+.session-todos {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+}
+
+.session-todos__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-todos__toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.session-todos__chevron {
+  width: 1em;
+  color: var(--text-dim);
+}
+
+.session-todos__list {
+  list-style: none;
+  margin: 0;
+  padding: 0 14px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.session-todos__item {
+  padding: 4px 0;
+  border-top: 1px solid var(--border);
+}
+
+.session-todos__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.session-todos__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.session-todos__code {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.session-todos__status {
+  margin-left: auto;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+.session-todos__status--pending {
+  background: var(--bg-3);
+  color: var(--text-muted);
+}
+
+.session-todos__status--ongoing {
+  background: color-mix(in srgb, var(--warning) 18%, var(--bg-2));
+  color: var(--warning);
+}
+
+.session-todos__status--complete {
+  background: color-mix(in srgb, var(--success) 18%, var(--bg-2));
+  color: var(--success);
+}
+
+.session-todos__comments {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0 0 0 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-todos__comments li {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
 /* Parent → child subagent cards (inside TurnBlock) */
 .turn-block__subagents {
   display: flex;
