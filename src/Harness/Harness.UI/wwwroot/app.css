@@ -1204,16 +1204,42 @@ code, .mono {
 }
 
 .turn-block__tools {
-  flex: 0 1 30%;
-  max-width: 30%;
+  flex: 0 0 var(--tools-col-width, 30%);
+  width: var(--tools-col-width, 30%);
+  max-width: 50%;
   min-width: 0;
   padding: 10px;
   box-sizing: border-box;
 }
 
+.turn-block__tools-resizer {
+  flex: 0 0 5px;
+  align-self: stretch;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.turn-block__tools-resizer:hover,
+.turn-block__tools-resizer.is-dragging,
+.turn-block__tools-resizer:focus-visible {
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+  outline: none;
+}
+
 @media (max-width: 600px) {
   .turn-block__content {
     flex-direction: column;
+  }
+
+  .turn-block__tools-resizer {
+    display: none;
   }
 
   .turn-block__tools {
@@ -1824,6 +1850,11 @@ code, .mono {
   min-height: 0;
 }
 
+.turn-block__tools .tool-panel {
+  container-type: inline-size;
+  container-name: tool-panel;
+}
+
 .tool-panel__title {
   font-size: 11px;
   text-transform: uppercase;
@@ -1864,6 +1895,10 @@ code, .mono {
 
 .tool-row__name {
   font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tool-status {
@@ -1878,6 +1913,39 @@ code, .mono {
 .tool-status.working { color: var(--warning); }
 .tool-status.completed { color: var(--success); }
 .tool-status.failed { color: var(--danger); }
+
+/* Column-width responsive status (not viewport) */
+@container tool-panel (max-width: 160px) {
+  .tool-status {
+    font-size: 0;
+    letter-spacing: 0;
+  }
+
+  .tool-status::after {
+    content: attr(data-status-short);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+}
+
+@container tool-panel (max-width: 110px) {
+  .tool-status {
+    font-size: 0;
+    width: 8px;
+    height: 8px;
+    min-width: 8px;
+    padding: 0;
+    border-radius: 50%;
+    background: currentColor;
+    overflow: hidden;
+  }
+
+  .tool-status::after {
+    content: none;
+  }
+}
 
 .tool-row__body {
   display: none;

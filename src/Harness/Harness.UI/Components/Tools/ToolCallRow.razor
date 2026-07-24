@@ -7,7 +7,7 @@
             aria-expanded="@(_expanded ? "true" : "false")"
             @onclick="ToggleExpanded">
         <span class="tool-row__name mono">@Tracked.Call.ToolName</span>
-        <span class="tool-status @StatusClass">@Tracked.Status</span>
+        <span class="tool-status @StatusClass" data-status-short="@StatusShort">@Tracked.Status</span>
     </button>
     @if (_expanded)
     {
@@ -41,5 +41,14 @@
         DysonToolCallStatus.Completed => "completed",
         DysonToolCallStatus.Failed => "failed",
         _ => "queued",
+    };
+
+    private string StatusShort => Tracked.Status switch
+    {
+        DysonToolCallStatus.Queued => "QUE",
+        DysonToolCallStatus.Working => "WORK",
+        DysonToolCallStatus.Completed => "COMP",
+        DysonToolCallStatus.Failed => "FAIL",
+        _ => "QUE",
     };
 }

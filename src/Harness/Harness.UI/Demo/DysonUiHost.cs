@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Globalization;
 using DysonHarness;
 
 namespace Harness.UI.Demo;
@@ -10,6 +12,10 @@ namespace Harness.UI.Demo;
 /// </summary>
 public sealed class DysonUiHost : IAsyncDisposable
 {
+    public const double DefaultToolPanelWidthPercent = 30;
+    public const double MinToolPanelWidthPercent = 12;
+    public const double MaxToolPanelWidthPercent = 50;
+
     private readonly DysonSessionStore _sessions;
     private readonly DysonModelStore _models;
     private readonly DysonWorkDirectoryStore _workDirectories;
@@ -31,8 +37,17 @@ public sealed class DysonUiHost : IAsyncDisposable
     private DemoDysonEngine? _engine;
     private DysonAgentSession? _session;
     private bool _disposed;
+    private double _toolPanelWidthPercent = DefaultToolPanelWidthPercent;
+    private bool _toolPanelWidthLoaded;
+    private CancellationTokenSource? _toolPanelSaveCts;
 
-    static DysonUiHost() => DysonSubagentHostLogic.RunSelfCheck();
+    static DysonUiHost()
+    {
+        DysonSubagentHostLogic.RunSelfCheck();
+        Debug.Assert(ClampToolPanelWidthPercent(5) == MinToolPanelWidthPercent);
+        Debug.Assert(ClampToolPanelWidthPercent(60) == MaxToolPanelWidthPercent);
+        Debug.Assert(ClampToolPanelWidthPercent(30) == DefaultToolPanelWidthPercent);
+    }
 
     public DysonUiHost(
         DysonSessionStore sessions,
@@ -79,6 +94,113 @@ public sealed class DysonUiHost : IAsyncDisposable
         ActiveSessionId is Guid id && _busySessions.ContainsKey(id);
 
     public event Action? Changed;
+
+    /// <summary>Tools column width as a percent of the turn content row (12–50, default 30).</summary>
+    public double ToolPanelWidthPercent => _toolPanelWidthPercent;
+
+    public async Task EnsureToolPanelWidthLoadedAsync(CancellationToken cancellationToken = default)
+    {
+        if (_toolPanelWidthLoaded || _disposed)
+            return;
+
+        _toolPanelWidthLoaded = true;
+        var setting = await _appSettings
+            .GetAsync(DysonAppSettingKeys.ToolPanelWidthPercent, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!setting.IsError
+            && !string.IsNullOrWhiteSpace(setting.Value)
+            && double.TryParse(
+                setting.Value,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var parsed))
+        {
+            _toolPanelWidthPercent = ClampToolPanelWidthPercent(parsed);
+        }
+
+        Notify();
+    }
+
+    /// <summary>
+    /// Clamps and applies tools-column width in memory; debounces SQLite persist (~300ms).
+    /// Does not raise <see cref="Changed"/> — JS updates <c>--tools-col-width</c> live during drag;
+    /// call <see cref="FlushToolPanelWidthSaveAsync"/> on pointer-up to sync Blazor markup.
+    /// </summary>
+    public Task SetToolPanelWidthPercentAsync(double percent)
+    {
+        if (_disposed)
+            return Task.CompletedTask;
+
+        var clamped = ClampToolPanelWidthPercent(percent);
+        if (Math.Abs(clamped - _toolPanelWidthPercent) < 0.05)
+            return Task.CompletedTask;
+
+        _toolPanelWidthPercent = clamped;
+        ScheduleToolPanelWidthSave();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Cancels the debounce timer, raises <see cref="Changed"/>, and writes width to SQLite.</summary>
+    public Task FlushToolPanelWidthSaveAsync(CancellationToken cancellationToken = default)
+    {
+        CancelToolPanelWidthSaveTimer();
+        Notify();
+        return PersistToolPanelWidthAsync(cancellationToken);
+    }
+
+    internal static double ClampToolPanelWidthPercent(double percent) =>
+        Math.Clamp(percent, MinToolPanelWidthPercent, MaxToolPanelWidthPercent);
+
+    private void ScheduleToolPanelWidthSave()
+    {
+        CancelToolPanelWidthSaveTimer();
+        var cts = new CancellationTokenSource();
+        _toolPanelSaveCts = cts;
+        _ = DebouncedPersistToolPanelWidthAsync(cts.Token);
+    }
+
+    private void CancelToolPanelWidthSaveTimer()
+    {
+        var cts = Interlocked.Exchange(ref _toolPanelSaveCts, null);
+        if (cts is null)
+            return;
+
+        try
+        {
+            cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        cts.Dispose();
+    }
+
+    private async Task DebouncedPersistToolPanelWidthAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(300, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        await PersistToolPanelWidthAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task PersistToolPanelWidthAsync(CancellationToken cancellationToken)
+    {
+        if (_disposed)
+            return;
+
+        var value = _toolPanelWidthPercent.ToString("0.##", CultureInfo.InvariantCulture);
+        await _appSettings
+            .SetAsync(DysonAppSettingKeys.ToolPanelWidthPercent, value, cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     public async Task<VoidResult<string>> EnsureDefaultModelAsync(CancellationToken cancellationToken = default)
     {
@@ -1270,6 +1392,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return ValueTask.CompletedTask;
 
         _disposed = true;
+        CancelToolPanelWidthSaveTimer();
         ClearFocus();
         UnhookAllSessions();
         _persistGate.Dispose();

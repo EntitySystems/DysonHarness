@@ -46,7 +46,9 @@ Thin key/value store (`DysonAppSettingEntity` / `DysonAppSettingsStore`).
 | `Key` | string PK |
 | `Value` | text |
 
-Known keys (`DysonAppSettingKeys`): `web_search_summarizer_model_slug_id` — Guid string of the model slug for web-search/fetch summarization; empty / missing ⇒ session model.
+Known keys (`DysonAppSettingKeys`):
+- `web_search_summarizer_model_slug_id` — Guid string of the model slug for web-search/fetch summarization; empty / missing ⇒ session model.
+- `tool_panel_width_percent` — chat tools column width as a percent of the turn content row (clamped 12–50, default 30); empty / missing ⇒ 30.
 
 ## Model providers (`model_providers`)
 

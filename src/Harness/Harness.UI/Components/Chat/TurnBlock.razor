@@ -2,7 +2,11 @@
 @using System.Text.Json
 @using DysonHarness
 @using Harness.UI.Components.Tools
+@using Harness.UI.Demo
 @using Harness.UI.Markdown
+@implements IAsyncDisposable
+@inject IJSRuntime Js
+@inject DysonUiHost Host
 
 <article class="turn-block @(IsExpanded ? null : "turn-block--collapsed")">
     <header class="turn-block__header"
@@ -58,7 +62,7 @@
 
         @if (HasAssistantBody || HasTools)
         {
-            <div class="turn-block__content">
+            <div @ref="_contentEl" class="turn-block__content">
                 @if (Turn.IsStreaming && !string.IsNullOrEmpty(Turn.StreamingPreview))
                 {
                     <div class="turn-block__body turn-block__body--streaming">
@@ -72,6 +76,12 @@
 
                 @if (HasTools)
                 {
+                    <div @ref="_resizerEl"
+                         class="turn-block__tools-resizer"
+                         role="separator"
+                         aria-orientation="vertical"
+                         aria-label="Resize tools column"
+                         tabindex="0"></div>
                     <div class="turn-block__tools">
                         <ToolCallPanel Turn="Turn" />
                     </div>
@@ -92,6 +102,11 @@
 </article>
 
 @code {
+    private ElementReference _contentEl;
+    private ElementReference _resizerEl;
+    private DotNetObjectReference<TurnBlock>? _dotNetRef;
+    private bool _resizerAttached;
+
     [Parameter, EditorRequired] public DysonAgentTurn Turn { get; set; } = default!;
 
     /// <summary>True while the host is running a prompt on the active session.</summary>
@@ -169,6 +184,61 @@
         if (e.Key is not ("Enter" or " "))
             return;
         await OnToggleExpand.InvokeAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!IsExpanded || !HasTools)
+        {
+            await DetachResizerAsync();
+            return;
+        }
+
+        try
+        {
+            _dotNetRef ??= DotNetObjectReference.Create(this);
+            await Js.InvokeVoidAsync("dysonToolsCol.attach", _resizerEl, _contentEl, _dotNetRef);
+            _resizerAttached = true;
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    [JSInvokable]
+    public Task OnToolsColWidth(double percent) =>
+        Host.SetToolPanelWidthPercentAsync(percent);
+
+    [JSInvokable]
+    public Task OnToolsColResizeEnd() =>
+        Host.FlushToolPanelWidthSaveAsync();
+
+    private async Task DetachResizerAsync()
+    {
+        if (!_resizerAttached)
+            return;
+
+        _resizerAttached = false;
+        try
+        {
+            await Js.InvokeVoidAsync("dysonToolsCol.detach", _resizerEl);
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await DetachResizerAsync();
+        _dotNetRef?.Dispose();
+        _dotNetRef = null;
     }
 
     private static string ShortId(Guid id) => id.ToString("N")[..8];

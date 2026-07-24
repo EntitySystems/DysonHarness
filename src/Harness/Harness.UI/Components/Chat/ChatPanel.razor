@@ -1,8 +1,11 @@
 @namespace Harness.UI.Components.Chat
+@using System.Globalization
 @using DysonHarness
+@using Harness.UI.Demo
 @inject IJSRuntime Js
+@inject DysonUiHost Host
 
-<div class="chat-panel">
+<div class="chat-panel" style="--tools-col-width: @(Host.ToolPanelWidthPercent.ToString("0.##", CultureInfo.InvariantCulture))%">
     <div @ref="_turnsEl"
          class="chat-panel__turns">
         @if (Turns.Count == 0)
@@ -55,6 +58,9 @@
     [Parameter] public string? GitBranch { get; set; }
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
     [Parameter] public EventCallback OnNewSession { get; set; }
+
+    protected override async Task OnInitializedAsync() =>
+        await Host.EnsureToolPanelWidthLoadedAsync();
 
     protected override void OnParametersSet()
     {
