@@ -100,6 +100,7 @@ Task<VoidResult<string>> UpdateSessionMetaAsync(...);
 Task<VoidResult<string>> UpsertTurnAsync(DysonTurnEntity turn, CancellationToken ct = default);
 Task<VoidResult<string>> AppendLogAsync(DysonSessionLogEntry entry, CancellationToken ct = default);
 Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListSessionsAsync(Guid? workDirectoryId = null, bool rootsOnly = true, CancellationToken ct = default);
+Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListChildSessionsAsync(Guid parentSessionId, CancellationToken ct = default);
 Task<Result<DysonPersistedSession, string>> GetFullSessionAsync(Guid sessionId, CancellationToken ct = default);
 Task<VoidResult<string>> DeleteSessionAsync(Guid sessionId, CancellationToken ct = default);
 Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ListTodosAsync(Guid sessionId, CancellationToken ct = default);
@@ -109,7 +110,7 @@ Task<VoidResult<string>> DeleteTodoAsync(Guid sessionId, string taskCode, Cancel
 Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ReplaceTodosAsync(Guid sessionId, IReadOnlyList<DysonSessionTodoReplaceItem> items, CancellationToken ct = default);
 ```
 
-`ListSessionsAsync` optionally filters by `WorkDirectoryId`. `DysonSessionCreateRequest` / summaries include `WorkDirectoryId`.
+`ListSessionsAsync` optionally filters by `WorkDirectoryId`. `ListChildSessionsAsync` returns direct children of a parent ordered by `RuntimeId`. `DysonSessionCreateRequest` / summaries include `WorkDirectoryId`.
 
 `GetFullSessionAsync` returns session row + all turns (ordered) + all log entries (ordered by `Sequence`) + todos (ordered by `Sequence`).
 
@@ -126,8 +127,9 @@ Aggregate DTO: session entity + `IReadOnlyList` turns + `IReadOnlyList` log entr
 1. `GetFullSessionAsync(sessionId)`
 2. Construct concrete session with ephemeral provider (from selected model slug + parent provider)
 3. `RestoreFromPersisted(state)` — sets `PersistenceId`, rebuilds `TurnHistory` from turn rows (`ToolStateJson` → tool calls / tracked / response log), restores todos via `RestoreTodos`, restores mode/config snapshots as applicable
-4. Append `SessionResumed` log
-5. Session is ready for further `PromptAsync`
+4. Append `SessionResumed` log (skipped when the host hydrates a child quietly during parent resume)
+5. Host (`LoadAndFocusSessionAsync`) lists direct children via `ListChildSessionsAsync(parentId)`, loads each missing child (`appendResumeLog: false`), and calls `RestoreRegisteredSubagent` so `SubagentsById` / `SubSessions` are session-owned again (Wait / Inspect / Stop / ListSubagents work across turns and after cold resume)
+6. Session is ready for further `PromptAsync`
 
 Demo path: `DemoDysonAgentSession.LoadAsync(store, sessionId, provider)`.
 OpenAI-compatible path: `OpenAiCompatibleAgentSession.LoadAsync(store, sessionId, provider, http, workDirectoryAbsolutePath)`.
@@ -135,6 +137,8 @@ OpenAI-compatible path: `OpenAiCompatibleAgentSession.LoadAsync(store, sessionId
 ### Subagents
 
 Parent FK (`ParentSessionId`) links the graph. `CreateChildAsync` persists the child with `ParentSessionId = parent.PersistenceId`, allocates runtime id ≥ 1, optionally seeds the child todo list (`ReplaceTodosAsync` / in-memory hydrate from optional `initialTodos`), and starts a background prompt. Child status updates via `UpdateSessionMetaAsync` on `SubmitSubagentReport` / stop / fail.
+
+Subagents are **session-owned**: the live graph (`SubSessions` / `SubagentsById`) is rebuilt from DB children on parent load (not only from the spawning turn’s tool cards). `ListChildSessionsAsync` returns direct children ordered by `RuntimeId`. Grandchildren hydrate when that child session is opened.
 
 `ListSessionsAsync(..., rootsOnly: true)` (default) hides children from the sidebar; drill-in is UI navigation only (`NavigateToSessionAsync` / `NavigateToParentAsync`). Root resume loads root turns fully; live host keeps parent+children in a session registry so focus switches do not dispose running children.
 

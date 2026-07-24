@@ -7,8 +7,9 @@ namespace DysonHarness;
 
 /// <summary>
 /// Executes workspace-scoped MCP tools against a work directory root, plus RenameSession,
-/// GetDateTime, ShellExecute, subagent spawn/report tools, session todo CRUD, and in-process
-/// web search/fetch tools. Other catalog tools return a not-implemented stub result.
+/// GetDateTime, ShellExecute, subagent spawn/list/report tools, inter-agent events / AskQuestion,
+/// session todo CRUD, and in-process web search/fetch tools. Other catalog tools return a
+/// not-implemented stub result.
 /// </summary>
 public sealed class DysonWorkspaceToolExecutor
 {
@@ -43,10 +44,16 @@ public sealed class DysonWorkspaceToolExecutor
                 "RenameSession" => await RenameSessionAsync(call, cancellationToken).ConfigureAwait(false),
                 "GetDateTime" => await GetDateTimeAsync(call, cancellationToken).ConfigureAwait(false),
                 "StartSubagent" => await StartSubagentAsync(call, cancellationToken).ConfigureAwait(false),
+                "ListSubagents" => await ListSubagentsAsync(call, cancellationToken).ConfigureAwait(false),
                 "WaitForSubagent" => await WaitForSubagentAsync(call, cancellationToken).ConfigureAwait(false),
                 "InspectSubagentLog" => await InspectSubagentLogAsync(call, cancellationToken).ConfigureAwait(false),
                 "StopSubagent" => await StopSubagentAsync(call, cancellationToken).ConfigureAwait(false),
                 "SubmitSubagentReport" => await SubmitSubagentReportAsync(call, cancellationToken).ConfigureAwait(false),
+                "AskQuestion" => await AskQuestionAsync(call, cancellationToken).ConfigureAwait(false),
+                "AskQuestionFromParent" => await AskQuestionFromParentAsync(call, cancellationToken).ConfigureAwait(false),
+                "TriggerParentEvent" => await TriggerParentEventAsync(call, cancellationToken).ConfigureAwait(false),
+                "RespondToSubagentEvent" => RespondToSubagentEvent(call),
+                "TriggerSubagentEvent" => await TriggerSubagentEventAsync(call, cancellationToken).ConfigureAwait(false),
                 "ListTodos" => await ListTodosAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateTodo" => await CreateTodoAsync(call, cancellationToken).ConfigureAwait(false),
                 "UpdateTodo" => await UpdateTodoAsync(call, cancellationToken).ConfigureAwait(false),
@@ -246,6 +253,14 @@ public sealed class DysonWorkspaceToolExecutor
             modelSlug = r.ModelSlug,
             modelLabel = r.ModelLabel,
         }));
+    }
+
+    private Task<DysonToolCallResult> ListSubagentsAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(Ok(call, _session.FormatListSubagentsJson()));
     }
 
     private async Task<DysonToolCallResult> ListTodosAsync(
@@ -630,6 +645,143 @@ public sealed class DysonWorkspaceToolExecutor
         catch (JsonException)
         {
             return false;
+        }
+    }
+
+    private async Task<DysonToolCallResult> AskQuestionAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var questionsJson = ExtractQuestionsJson(call);
+        if (questionsJson.IsError)
+            return Error(call, questionsJson.Error);
+
+        var asked = await _session.AskQuestionAsync(questionsJson.Value, cancellationToken)
+            .ConfigureAwait(false);
+        return asked.IsError ? Error(call, asked.Error) : Ok(call, asked.Value);
+    }
+
+    private async Task<DysonToolCallResult> AskQuestionFromParentAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var questionsJson = ExtractQuestionsJson(call);
+        if (questionsJson.IsError)
+            return Error(call, questionsJson.Error);
+
+        var asked = await _session.AskQuestionFromParentAsync(questionsJson.Value, cancellationToken)
+            .ConfigureAwait(false);
+        return asked.IsError ? Error(call, asked.Error) : Ok(call, asked.Value);
+    }
+
+    private async Task<DysonToolCallResult> TriggerParentEventAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        string kind;
+        string payload;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var kindResult = RequireString(doc.RootElement, "kind");
+            if (kindResult.IsError)
+                return Error(call, kindResult.Error);
+            kind = kindResult.Value;
+
+            var payloadResult = RequireString(doc.RootElement, "payload");
+            if (payloadResult.IsError)
+                return Error(call, payloadResult.Error);
+            payload = payloadResult.Value;
+        }
+        catch (JsonException)
+        {
+            return Error(call, "TriggerParentEvent: invalid JSON arguments.");
+        }
+
+        var triggered = await _session.TriggerParentEventAsync(kind, payload, cancellationToken)
+            .ConfigureAwait(false);
+        return triggered.IsError ? Error(call, triggered.Error) : Ok(call, triggered.Value);
+    }
+
+    private DysonToolCallResult RespondToSubagentEvent(DysonToolCall call)
+    {
+        int subagentId;
+        Guid eventId;
+        string reply;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var id = GetInt(doc.RootElement, "subagentId");
+            if (id is null or < 1)
+                return Error(call, "RespondToSubagentEvent: subagentId (≥ 1) is required.");
+            subagentId = id.Value;
+
+            var eventIdResult = RequireString(doc.RootElement, "eventId");
+            if (eventIdResult.IsError)
+                return Error(call, eventIdResult.Error);
+            if (!Guid.TryParse(eventIdResult.Value, out eventId) || eventId == Guid.Empty)
+                return Error(call, "RespondToSubagentEvent: eventId must be a non-empty Guid.");
+
+            var replyResult = RequireString(doc.RootElement, "reply");
+            if (replyResult.IsError)
+                return Error(call, replyResult.Error);
+            reply = replyResult.Value;
+        }
+        catch (JsonException)
+        {
+            return Error(call, "RespondToSubagentEvent: invalid JSON arguments.");
+        }
+
+        var responded = _session.RespondToSubagentEvent(subagentId, eventId, reply);
+        return responded.IsError ? Error(call, responded.Error) : Ok(call, responded.Value);
+    }
+
+    private async Task<DysonToolCallResult> TriggerSubagentEventAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        int subagentId;
+        string payload;
+        var interrupt = false;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var id = GetInt(doc.RootElement, "subagentId");
+            if (id is null or < 1)
+                return Error(call, "TriggerSubagentEvent: subagentId (≥ 1) is required.");
+            subagentId = id.Value;
+
+            var payloadResult = RequireString(doc.RootElement, "payload");
+            if (payloadResult.IsError)
+                return Error(call, payloadResult.Error);
+            payload = payloadResult.Value;
+
+            interrupt = GetBool(doc.RootElement, "interruptSubagent");
+        }
+        catch (JsonException)
+        {
+            return Error(call, "TriggerSubagentEvent: invalid JSON arguments.");
+        }
+
+        var triggered = await _session
+            .TriggerSubagentEventAsync(subagentId, payload, interrupt, cancellationToken)
+            .ConfigureAwait(false);
+        return triggered.IsError ? Error(call, triggered.Error) : Ok(call, triggered.Value);
+    }
+
+    private static Result<string, string> ExtractQuestionsJson(DysonToolCall call)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            if (!doc.RootElement.TryGetProperty("questions", out var questions))
+                return Result<string, string>.AsError("questions is required.");
+
+            return Result<string, string>.AsValue(questions.GetRawText());
+        }
+        catch (JsonException)
+        {
+            return Result<string, string>.AsError("invalid JSON arguments.");
         }
     }
 

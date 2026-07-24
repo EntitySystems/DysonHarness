@@ -1,9 +1,13 @@
 @namespace Harness.UI.Components.Chat
+@using DysonHarness
 @using Harness.UI.Components.Models
+@using Harness.UI.Demo
 @inject DysonModelStore ModelStore
+@inject DysonUiHost Host
 @inject IJSRuntime Js
 
 <div class="composer">
+    <AskQuestionPopover Ask="Ask" OnSubmit="OnAskSubmit" />
     <div class="composer__prompt">
         @if (_slashOpen && _suggestions.Count > 0)
         {
@@ -21,6 +25,26 @@
                         <span class="composer-slash__token">@suggestion.Token</span>
                         <span class="composer-slash__desc">@suggestion.Label</span>
                     </button>
+                }
+            </div>
+        }
+        else if (Host.QueuedPrompts.Count > 0)
+        {
+            <div class="composer-queue" role="list" aria-label="Queued prompts">
+                @foreach (var item in Host.QueuedPrompts)
+                {
+                    var queued = item;
+                    <div class="composer-queue__item" role="listitem">
+                        <span class="composer-queue__text" title="@queued.FirstLine">@queued.FirstLine</span>
+                        <button type="button"
+                                class="composer-queue__remove"
+                                title="Remove from queue"
+                                aria-label="Remove queued prompt"
+                                @onmousedown:preventDefault="true"
+                                @onclick="() => Host.RemoveQueuedPrompt(queued.Id)">
+                            ×
+                        </button>
+                    </div>
                 }
             </div>
         }
@@ -83,6 +107,8 @@
     [Parameter] public string? GitBranch { get; set; }
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
     [Parameter] public EventCallback OnNewSession { get; set; }
+    [Parameter] public DysonAskUiState? Ask { get; set; }
+    [Parameter] public EventCallback<IReadOnlyList<DysonAskQuestionAnswer>> OnAskSubmit { get; set; }
 
     private string _effortDraft = "";
     private readonly Dictionary<Guid, IReadOnlyList<string>> _slugReasoningModes = new();

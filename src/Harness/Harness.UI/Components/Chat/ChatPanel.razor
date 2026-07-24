@@ -8,26 +8,36 @@
 <div class="chat-panel" style="--tools-col-width: @(Host.ToolPanelWidthPercent.ToString("0.##", CultureInfo.InvariantCulture))%">
     <div @ref="_turnsEl"
          class="chat-panel__turns">
-        @if (Turns.Count == 0)
+        @{
+            var timeline = BuildTimeline();
+            var lastTurnId = Turns.Count > 0 ? Turns[^1].Id : (Guid?)null;
+        }
+        @if (timeline.Count == 0)
         {
             <div class="empty-state">Start a session and send a prompt. Demo tools run staged mocks.</div>
         }
         else
         {
-            @for (var i = 0; i < Turns.Count; i++)
+            @foreach (var item in timeline)
             {
-                var turn = Turns[i];
-                <TurnBlock Turn="turn"
-                           SessionBusy="SessionBusy"
-                           IsLatestTurn="@(i == Turns.Count - 1)"
-                           IsExpanded="@(!_collapsedIds.Contains(turn.Id))"
-                           OnToggleExpand="() => ToggleExpand(turn.Id)"
-                           OnCancel="OnCancelPrompt"
-                           OnResubmit="HandleSubmitAsync" />
+                if (item.Turn is { } turn)
+                {
+                    <TurnBlock Turn="turn"
+                               SessionBusy="SessionBusy"
+                               IsLatestTurn="@(lastTurnId == turn.Id)"
+                               IsExpanded="@(!_collapsedIds.Contains(turn.Id))"
+                               OnToggleExpand="() => ToggleExpand(turn.Id)"
+                               OnCancel="OnCancelPrompt"
+                               OnResubmit="HandleSubmitAsync" />
+                }
+                else if (item.Event is { } evt)
+                {
+                    <SubagentEventBlock Item="evt" />
+                }
             }
         }
     </div>
-    <Composer Disabled="@Disabled"
+    <Composer Disabled="@(Disabled || Host.PendingAskUi is not null)"
               SelectedSlugId="SelectedSlugId"
               SelectedSlugIdChanged="SelectedSlugIdChanged"
               ReasoningEffort="ReasoningEffort"
@@ -36,7 +46,9 @@
               SelectedAgentModeChanged="SelectedAgentModeChanged"
               GitBranch="@GitBranch"
               OnSubmit="HandleSubmitAsync"
-              OnNewSession="OnNewSession" />
+              OnNewSession="OnNewSession"
+              Ask="Host.PendingAskUi"
+              OnAskSubmit="HandleAskSubmitAsync" />
 </div>
 
 @code {
@@ -62,6 +74,40 @@
     [Parameter] public string? GitBranch { get; set; }
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
     [Parameter] public EventCallback OnNewSession { get; set; }
+
+    private IEnumerable<DysonSubagentEventUiItem> FocusedSubagentEvents
+    {
+        get
+        {
+            var id = Host.ActiveSessionId;
+            if (id is null)
+                return [];
+
+            return Host.SubagentEventUi.Where(e => e.ParentPersistenceId == id.Value);
+        }
+    }
+
+    /// <summary>
+    /// Turns and focused Subagent events ordered by time; turns win ties.
+    /// </summary>
+    private List<(DysonAgentTurn? Turn, DysonSubagentEventUiItem? Event)> BuildTimeline()
+    {
+        var events = FocusedSubagentEvents.ToList();
+        var list = new List<(DateTime Utc, int Rank, DysonAgentTurn? Turn, DysonSubagentEventUiItem? Event)>(
+            Turns.Count + events.Count);
+        foreach (var turn in Turns)
+            list.Add((turn.StartedUtc, 0, turn, null));
+        foreach (var evt in events)
+            list.Add((evt.Timestamp.UtcDateTime, 1, null, evt));
+
+        list.Sort(static (a, b) =>
+        {
+            var cmp = a.Utc.CompareTo(b.Utc);
+            return cmp != 0 ? cmp : a.Rank.CompareTo(b.Rank);
+        });
+
+        return list.ConvertAll(static x => (x.Turn, x.Event));
+    }
 
     protected override async Task OnInitializedAsync() =>
         await Host.EnsureToolPanelWidthLoadedAsync();
@@ -129,5 +175,11 @@
     {
         _forceStick = true;
         await OnSubmit.InvokeAsync(prompt);
+    }
+
+    private Task HandleAskSubmitAsync(IReadOnlyList<DysonAskQuestionAnswer> answers)
+    {
+        Host.SubmitAskUiAnswers(answers);
+        return Task.CompletedTask;
     }
 }

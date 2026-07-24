@@ -891,6 +891,46 @@ code, .mono {
   line-height: 1.4;
 }
 
+/* Session subagent overview (between todos and chat) */
+.session-subagents {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+}
+
+.session-subagents__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-subagents__toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.session-subagents__chevron {
+  width: 1em;
+  color: var(--text-dim);
+}
+
+.session-subagents__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 14px 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
 /* Parent → child subagent cards (inside TurnBlock) */
 .turn-block__subagents {
   display: flex;
@@ -987,6 +1027,132 @@ code, .mono {
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: turn-block-spin 0.7s linear infinite;
+}
+
+/* Subagent event block — reuses .turn-block chrome; sibling gap from .chat-panel__turns */
+.subagent-event-block.is-addressed {
+  opacity: 0.72;
+}
+
+.subagent-event-block__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.subagent-event-block__chevron {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.subagent-event-block__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.subagent-event-block__row {
+  display: flex;
+  gap: 10px;
+}
+
+.subagent-event-block__label {
+  min-width: 64px;
+  color: var(--text-muted);
+}
+
+.subagent-event-block__payload pre {
+  margin: 4px 0 0;
+  padding: 8px;
+  max-height: 160px;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+}
+
+/* AskQuestion composer popover */
+.ask-popover {
+  margin-bottom: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg-2);
+}
+
+.ask-popover__header {
+  margin-bottom: 10px;
+}
+
+.ask-popover__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ask-popover__questions {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.ask-popover__prompt {
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.ask-popover__options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ask-popover__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ask-popover__custom {
+  margin-top: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.ask-popover__q-actions {
+  margin-top: 6px;
+}
+
+.ask-popover__skipped {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.ask-popover__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.ask-popover__error {
+  color: var(--danger);
+  font-size: 12px;
+  margin-right: auto;
 }
 
 .empty-state {
@@ -1542,6 +1708,69 @@ code, .mono {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-muted);
+}
+
+.composer-queue {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  z-index: 19;
+  margin-bottom: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 180px;
+  overflow: auto;
+  padding: 4px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.35);
+}
+
+.composer-queue__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 3px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.composer-queue__item:hover {
+  background: var(--accent-soft);
+}
+
+.composer-queue__text {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.composer-queue__remove {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.composer-queue__remove:hover {
+  background: var(--border);
+  color: var(--text);
 }
 
 .composer__toolbar {

@@ -16,6 +16,13 @@ public abstract class DysonAgentSession
     private readonly TaskCompletionSource<(DysonSessionStatus Status, string? Summary)> _terminalTcs =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private CancellationTokenSource? _runCts;
+    private readonly ConcurrentDictionary<Guid, DysonParentEvent> _pendingParentEvents = new();
+    private readonly HashSet<int> _waitingOnSubagentIds = [];
+    private readonly object _waitingOnGate = new();
+    private readonly ConcurrentQueue<string> _pendingInjectedPrompts = new();
+    private TaskCompletionSource<Result<string, string>>? _parentEventWaitTcs;
+    private TaskCompletionSource<Result<string, string>>? _askQuestionTcs;
+    private readonly object _askQuestionGate = new();
 
     protected DysonAgentSession(
         string agentMode,
@@ -36,7 +43,56 @@ public abstract class DysonAgentSession
             ? prompt.Value
             : prompt.Value + "\n\n" + systemPromptSuffix.Trim();
         McpPipeline = DysonMcpPipeline.CreateDefault(config.McpAccessMode, config.AvailableShellTypes);
+        // Do not gate as root here: Parent is always null in the ctor. Roots call
+        // ConfigureRootInterAgentTools from Create/Load; children get gated in Register/Restore.
     }
+
+    /// <summary>Root-only catalog gate (depth 0). Call from root Create/Load, never from child ctors.</summary>
+    protected void ConfigureRootInterAgentTools() =>
+        McpPipeline.ConfigureInterAgentTools(0);
+
+    /// <summary>0 = root, 1 = direct child of root, 2+ = deeper.</summary>
+    public int ComputeDepth()
+    {
+        var depth = 0;
+        for (var p = Parent; p is not null; p = p.Parent)
+            depth++;
+        return depth;
+    }
+
+    /// <summary>True while this session is blocked inside <see cref="WaitForSubagentAsync"/> on any child.</summary>
+    public bool IsWaitingOnAnySubagent
+    {
+        get
+        {
+            lock (_waitingOnGate)
+                return _waitingOnSubagentIds.Count > 0;
+        }
+    }
+
+    /// <summary>Subagent ids currently waited on by <see cref="WaitForSubagentAsync"/>.</summary>
+    public IReadOnlyList<int> WaitingOnSubagentIds
+    {
+        get
+        {
+            lock (_waitingOnGate)
+                return _waitingOnSubagentIds.OrderBy(id => id).ToArray();
+        }
+    }
+
+    /// <summary>True while this child is blocked in <see cref="TriggerParentEventAsync"/> awaiting a reply.</summary>
+    public bool HasPendingParentEventWait =>
+        _parentEventWaitTcs is { Task.IsCompleted: false };
+
+    /// <summary>Root AskQuestion pending questions (null when idle).</summary>
+    public IReadOnlyList<DysonAskQuestionItem>? PendingAskQuestions { get; private set; }
+
+    /// <summary>Pending + recently addressed inbound parent events (host Subagent-event UI).</summary>
+    public IReadOnlyList<DysonParentEvent> PendingOrRecentParentEvents =>
+        _pendingParentEvents.Values
+            .OrderByDescending(e => e.Timestamp)
+            .Take(20)
+            .ToArray();
 
     /// <summary>Session identity. Root sessions are 0; subagents are allocated from 1.</summary>
     public int Id { get; protected set; }
@@ -96,9 +152,65 @@ public abstract class DysonAgentSession
         child.Id = id;
         child.Parent = this;
         OmitRootTaskCompletionTools(child.McpPipeline);
+        child.McpPipeline.ConfigureInterAgentTools(child.ComputeDepth());
         SubagentsById[id] = child;
         SubSessions.Add(child);
         SubagentSpawned?.Invoke(this, child);
+    }
+
+    /// <summary>
+    /// Re-links a previously persisted child into <see cref="SubSessions"/> / <see cref="SubagentsById"/>
+    /// using the child's existing runtime <see cref="Id"/> (from DB <c>RuntimeId</c>).
+    /// Does not raise <see cref="SubagentSpawned"/> — hosts register explicitly after load.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Child id &lt; 1, or id/instance already registered to a different session.
+    /// </exception>
+    public void RestoreRegisteredSubagent(DysonAgentSession child)
+    {
+        ArgumentNullException.ThrowIfNull(child);
+
+        if (child.Id < 1)
+            throw new InvalidOperationException("Restored subagent must already have RuntimeId ≥ 1.");
+
+        if (SubagentsById.TryGetValue(child.Id, out var existingById))
+        {
+            if (!ReferenceEquals(existingById, child))
+            {
+                throw new InvalidOperationException(
+                    $"Subagent id {child.Id} is already registered to a different session.");
+            }
+
+            child.Parent = this;
+            OmitRootTaskCompletionTools(child.McpPipeline);
+            child.McpPipeline.ConfigureInterAgentTools(child.ComputeDepth());
+            BumpNextSubagentId(child.Id);
+            return;
+        }
+
+        if (SubagentsById.ContainsValue(child) || SubSessions.Contains(child))
+            throw new InvalidOperationException("Subagent is already registered under a different id.");
+
+        child.Parent = this;
+        OmitRootTaskCompletionTools(child.McpPipeline);
+        child.McpPipeline.ConfigureInterAgentTools(child.ComputeDepth());
+        SubagentsById[child.Id] = child;
+        SubSessions.Add(child);
+        BumpNextSubagentId(child.Id);
+    }
+
+    /// <summary>
+    /// Ensures the next <see cref="AllocateSubagentId"/> is strictly greater than <paramref name="seenId"/>.
+    /// </summary>
+    private void BumpNextSubagentId(int seenId)
+    {
+        int snapshot;
+        do
+        {
+            snapshot = Volatile.Read(ref _nextSubagentId);
+            if (snapshot >= seenId)
+                return;
+        } while (Interlocked.CompareExchange(ref _nextSubagentId, seenId, snapshot) != snapshot);
     }
 
     /// <summary>
@@ -114,6 +226,35 @@ public abstract class DysonAgentSession
     public bool TryGetSubagent(int subagentId, out DysonAgentSession child) =>
         SubagentsById.TryGetValue(subagentId, out child!);
 
+    /// <summary>
+    /// JSON array of direct children for the <c>ListSubagents</c> MCP tool
+    /// (<c>subagentId</c>, <c>persistenceId</c>, <c>agentMode</c>, <c>title</c>, <c>status</c>, optional <c>modelLabel</c>).
+    /// </summary>
+    public string FormatListSubagentsJson()
+    {
+        var items = SubSessions
+            .OrderBy(c => c.Id)
+            .Select(c => new
+            {
+                subagentId = c.Id,
+                persistenceId = c.PersistenceId,
+                agentMode = c.Mode,
+                title = c.DisplayTitle,
+                status = c.Status.ToString(),
+                modelLabel = FormatSubagentModelLabel(c.Provider),
+            });
+
+        return JsonSerializer.Serialize(items);
+    }
+
+    private static string? FormatSubagentModelLabel(DysonAgentProvider? provider) =>
+        provider switch
+        {
+            OpenAiCompatibleAgentProvider oai =>
+                $"{oai.DisplayAlias} · {oai.ProviderDisplayName} / {oai.Slug}",
+            _ => null,
+        };
+
     public void EnqueueInterrupt(DysonAgentInterrupt interrupt)
     {
         ArgumentNullException.ThrowIfNull(interrupt);
@@ -127,6 +268,9 @@ public abstract class DysonAgentSession
 
     /// <summary>Raised after <see cref="RegisterSubagent"/> (host session registry).</summary>
     public event EventHandler<DysonAgentSession>? SubagentSpawned;
+
+    /// <summary>Raised when inbound parent events or root AskQuestion pending state changes (UI).</summary>
+    public event EventHandler? ParentEventsChanged;
 
     public bool TryDequeueInterrupt(out DysonAgentInterrupt interrupt)
     {
@@ -250,6 +394,9 @@ public abstract class DysonAgentSession
 
         var effectiveTimeoutMs = timeoutMs ?? DefaultWaitForSubagentTimeoutMs;
 
+        lock (_waitingOnGate)
+            _waitingOnSubagentIds.Add(subagentId);
+
         try
         {
             (DysonSessionStatus Status, string? Summary) terminal;
@@ -284,6 +431,11 @@ public abstract class DysonAgentSession
         catch (OperationCanceledException)
         {
             return Result<string, string>.AsError("WaitForSubagent was cancelled.");
+        }
+        finally
+        {
+            lock (_waitingOnGate)
+                _waitingOnSubagentIds.Remove(subagentId);
         }
     }
 
@@ -325,6 +477,336 @@ public abstract class DysonAgentSession
             summary = child.LastReportSummary,
         })));
     }
+
+    /// <summary>
+    /// Child → parent: queue an event and block until <see cref="RespondToSubagentEvent"/>.
+    /// Fails immediately if the parent is inside <see cref="WaitForSubagentAsync"/> for any child.
+    /// </summary>
+    public async Task<Result<string, string>> TriggerParentEventAsync(
+        string kind,
+        string payload,
+        CancellationToken cancellationToken = default)
+    {
+        if (Parent is null)
+            return Result<string, string>.AsError("TriggerParentEvent: session has no parent.");
+
+        if (string.IsNullOrWhiteSpace(kind))
+            return Result<string, string>.AsError("TriggerParentEvent: kind is required.");
+
+        payload ??= "";
+
+        if (Parent.IsWaitingOnAnySubagent)
+        {
+            var ids = string.Join(", ", Parent.WaitingOnSubagentIds);
+            return Result<string, string>.AsError(
+                "TriggerParentEvent: parent is waiting on subagent id(s) [" + ids +
+                "] and cannot address new events (deadlock guard).");
+        }
+
+        var evt = new DysonParentEvent
+        {
+            EventId = Guid.NewGuid(),
+            SubagentId = Id,
+            PersistenceId = PersistenceId == Guid.Empty ? null : PersistenceId,
+            Kind = kind.Trim(),
+            Payload = payload,
+        };
+
+        if (!Parent._pendingParentEvents.TryAdd(evt.EventId, evt))
+            return Result<string, string>.AsError("TriggerParentEvent: failed to register event.");
+
+        var waitTcs = new TaskCompletionSource<Result<string, string>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _parentEventWaitTcs = waitTcs;
+
+        Parent.EnqueueInterrupt(new DysonAgentInterrupt
+        {
+            Kind = DysonAgentInterruptKind.SubagentEvent,
+            SubagentId = Id,
+            PersistenceId = evt.PersistenceId,
+            Summary = evt.Kind,
+            EventId = evt.EventId,
+            EventKind = evt.Kind,
+            Payload = evt.Payload,
+        });
+        Parent.RaiseParentEventsChanged();
+
+        try
+        {
+            using var reg = cancellationToken.Register(() =>
+            {
+                waitTcs.TrySetResult(Result<string, string>.AsError("TriggerParentEvent was cancelled."));
+                if (Parent._pendingParentEvents.TryGetValue(evt.EventId, out var pending)
+                    && pending.Status == DysonParentEventStatus.Pending)
+                {
+                    pending.Status = DysonParentEventStatus.Cancelled;
+                    pending.ReplyTcs.TrySetResult(
+                        Result<string, string>.AsError("TriggerParentEvent was cancelled."));
+                    Parent.RaiseParentEventsChanged();
+                }
+            });
+
+            var replyTask = evt.ReplyTcs.Task;
+            var cancelTask = waitTcs.Task;
+            var completed = await Task.WhenAny(replyTask, cancelTask).ConfigureAwait(false);
+            var result = await completed.ConfigureAwait(false);
+
+            if (!ReferenceEquals(completed, replyTask)
+                && pendingStillOpen())
+            {
+                evt.Status = DysonParentEventStatus.Cancelled;
+                evt.ReplyTcs.TrySetResult(result);
+                Parent.RaiseParentEventsChanged();
+            }
+
+            return result;
+
+            bool pendingStillOpen() =>
+                Parent._pendingParentEvents.TryGetValue(evt.EventId, out var p)
+                && p.Status == DysonParentEventStatus.Pending;
+        }
+        finally
+        {
+            if (ReferenceEquals(_parentEventWaitTcs, waitTcs))
+                _parentEventWaitTcs = null;
+        }
+    }
+
+    /// <summary>
+    /// Completes a pending inbound event. Not wait-gated — succeeds even mid-<see cref="WaitForSubagentAsync"/>.
+    /// </summary>
+    public Result<string, string> RespondToSubagentEvent(int subagentId, Guid eventId, string reply)
+    {
+        if (eventId == Guid.Empty)
+            return Result<string, string>.AsError("RespondToSubagentEvent: eventId is required.");
+
+        if (!_pendingParentEvents.TryGetValue(eventId, out var evt))
+            return Result<string, string>.AsError($"RespondToSubagentEvent: unknown eventId {eventId:D}.");
+
+        if (evt.SubagentId != subagentId)
+        {
+            return Result<string, string>.AsError(
+                $"RespondToSubagentEvent: eventId {eventId:D} belongs to subagent {evt.SubagentId}, not {subagentId}.");
+        }
+
+        if (evt.Status != DysonParentEventStatus.Pending)
+        {
+            return Result<string, string>.AsError(
+                $"RespondToSubagentEvent: eventId {eventId:D} is already {evt.Status}.");
+        }
+
+        reply ??= "";
+        evt.Status = DysonParentEventStatus.Addressed;
+        evt.ReplyTcs.TrySetResult(Result<string, string>.AsValue(reply));
+        RaiseParentEventsChanged();
+
+        return Result<string, string>.AsValue(JsonSerializer.Serialize(new
+        {
+            eventId = evt.EventId,
+            subagentId = evt.SubagentId,
+            status = "addressed",
+        }));
+    }
+
+    /// <summary>
+    /// Parent → child inject. Default queues next-turn prompt; <paramref name="interruptSubagent"/> cancels
+    /// in-flight turn (and any parent-event wait) then starts immediately.
+    /// </summary>
+    public Task<Result<string, string>> TriggerSubagentEventAsync(
+        int subagentId,
+        string payload,
+        bool interruptSubagent = false,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!TryGetSubagent(subagentId, out var child))
+            return Task.FromResult(Result<string, string>.AsError($"Unknown subagentId {subagentId}."));
+
+        if (string.IsNullOrWhiteSpace(payload))
+            return Task.FromResult(Result<string, string>.AsError("TriggerSubagentEvent: payload is required."));
+
+        var trimmed = payload.Trim();
+
+        if (child.HasPendingParentEventWait && !interruptSubagent)
+        {
+            return Task.FromResult(Result<string, string>.AsError(
+                "TriggerSubagentEvent: child is awaiting a parent-event reply; pass interruptSubagent=true to cancel that wait and inject."));
+        }
+
+        if (interruptSubagent)
+        {
+            child.CancelPendingParentEventWait(
+                "cancelled by parent TriggerSubagentEvent");
+            child.CancelBackgroundRun();
+            child.ClearPendingInjectedPrompts();
+            var runCts = new CancellationTokenSource();
+            child.AttachBackgroundRun(runCts);
+            KickOffChildPrompt(child, BuildInjectedSubagentPrompt(trimmed), runCts);
+
+            return Task.FromResult(Result<string, string>.AsValue(JsonSerializer.Serialize(new
+            {
+                subagentId,
+                persistenceId = child.PersistenceId,
+                status = "interrupted",
+            })));
+        }
+
+        child.EnqueueInjectedPrompt(trimmed);
+        if (!child.HasActiveBackgroundRun)
+        {
+            var runCts = new CancellationTokenSource();
+            child.AttachBackgroundRun(runCts);
+            if (child.TryDequeueInjectedPrompt(out var next))
+                KickOffChildPrompt(child, BuildInjectedSubagentPrompt(next), runCts);
+            else
+                runCts.Dispose();
+        }
+
+        return Task.FromResult(Result<string, string>.AsValue(JsonSerializer.Serialize(new
+        {
+            subagentId,
+            persistenceId = child.PersistenceId,
+            status = "queued",
+        })));
+    }
+
+    /// <summary>Root-only: block until the host UI answers (composer Ask popover).</summary>
+    public async Task<Result<string, string>> AskQuestionAsync(
+        string questionsJson,
+        CancellationToken cancellationToken = default)
+    {
+        if (Parent is not null)
+            return Result<string, string>.AsError("AskQuestion: root sessions only.");
+
+        var parsed = DysonAskQuestion.ParseQuestionsJson(questionsJson);
+        if (parsed.IsError)
+            return Result<string, string>.AsError(parsed.Error);
+
+        TaskCompletionSource<Result<string, string>> tcs;
+        lock (_askQuestionGate)
+        {
+            if (_askQuestionTcs is { Task.IsCompleted: false })
+                return Result<string, string>.AsError("AskQuestion: another question set is already pending.");
+
+            tcs = new TaskCompletionSource<Result<string, string>>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            _askQuestionTcs = tcs;
+            PendingAskQuestions = parsed.Value;
+        }
+
+        RaiseParentEventsChanged();
+
+        try
+        {
+            using var reg = cancellationToken.Register(() =>
+                tcs.TrySetResult(Result<string, string>.AsError("AskQuestion was cancelled.")));
+
+            return await tcs.Task.ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_askQuestionGate)
+            {
+                if (ReferenceEquals(_askQuestionTcs, tcs))
+                {
+                    _askQuestionTcs = null;
+                    PendingAskQuestions = null;
+                }
+            }
+
+            RaiseParentEventsChanged();
+        }
+    }
+
+    /// <summary>Completes a pending root <see cref="AskQuestionAsync"/> with a pre-formatted answer block.</summary>
+    public Result<string, string> RespondToAskQuestion(string formattedAnswers)
+    {
+        lock (_askQuestionGate)
+        {
+            if (_askQuestionTcs is null || _askQuestionTcs.Task.IsCompleted)
+                return Result<string, string>.AsError("RespondToAskQuestion: no pending AskQuestion.");
+
+            var body = formattedAnswers ?? "";
+            _askQuestionTcs.TrySetResult(Result<string, string>.AsValue(body));
+            PendingAskQuestions = null;
+            _askQuestionTcs = null;
+        }
+
+        RaiseParentEventsChanged();
+        return Result<string, string>.AsValue("ok");
+    }
+
+    /// <summary>L1 wrapper: <see cref="TriggerParentEventAsync"/> with kind askQuestion.</summary>
+    public Task<Result<string, string>> AskQuestionFromParentAsync(
+        string questionsJson,
+        CancellationToken cancellationToken = default)
+    {
+        var parsed = DysonAskQuestion.ParseQuestionsJson(questionsJson);
+        if (parsed.IsError)
+            return Task.FromResult(Result<string, string>.AsError(parsed.Error));
+
+        // Re-serialize normalized questions array as payload.
+        var payload = JsonSerializer.Serialize(parsed.Value.Select(q => new
+        {
+            prompt = q.Prompt,
+            options = q.Options,
+            allowMultiple = q.AllowMultiple,
+        }));
+
+        return TriggerParentEventAsync(DysonAskQuestion.AskQuestionKind, payload, cancellationToken);
+    }
+
+    internal void CancelPendingParentEventWait(string reason)
+    {
+        var tcs = _parentEventWaitTcs;
+        tcs?.TrySetResult(Result<string, string>.AsError(reason));
+
+        if (Parent is null)
+            return;
+
+        foreach (var evt in Parent._pendingParentEvents.Values)
+        {
+            if (evt.SubagentId != Id || evt.Status != DysonParentEventStatus.Pending)
+                continue;
+
+            evt.Status = DysonParentEventStatus.Cancelled;
+            evt.ReplyTcs.TrySetResult(Result<string, string>.AsError(reason));
+        }
+
+        Parent.RaiseParentEventsChanged();
+    }
+
+    internal bool HasActiveBackgroundRun
+    {
+        get
+        {
+            var cts = _runCts;
+            return cts is not null && !cts.IsCancellationRequested;
+        }
+    }
+
+    internal void EnqueueInjectedPrompt(string payload) =>
+        _pendingInjectedPrompts.Enqueue(payload);
+
+    internal bool TryDequeueInjectedPrompt(out string payload) =>
+        _pendingInjectedPrompts.TryDequeue(out payload!);
+
+    internal void ClearPendingInjectedPrompts()
+    {
+        while (_pendingInjectedPrompts.TryDequeue(out _))
+        {
+        }
+    }
+
+    private void RaiseParentEventsChanged() => ParentEventsChanged?.Invoke(this, EventArgs.Empty);
+
+    private static string BuildInjectedSubagentPrompt(string payload) =>
+        """
+        Harness injection: the parent sent instructions via TriggerSubagentEvent. Follow them and continue your task.
+
+        ## Injected instructions
+        """ + payload.Trim();
 
     public Task<Result<string, string>> SubmitSubagentReportAsync(
         string summary,
@@ -539,7 +1021,17 @@ public abstract class DysonAgentSession
             try
             {
                 var result = await child.PromptAsync(prompt, runCts.Token).ConfigureAwait(false);
-                if (runCts.IsCancellationRequested || child.IsTerminal)
+                if (runCts.IsCancellationRequested)
+                {
+                    // Interrupt / Stop owns follow-up; still drain injects if child stays active.
+                    TryDrainInjectedPrompt(child);
+                    return;
+                }
+
+                if (child.IsTerminal)
+                    return;
+
+                if (TryDrainInjectedPrompt(child))
                     return;
 
                 var failSummary = ResolveKickOffFailureSummary(child, result);
@@ -554,7 +1046,8 @@ public abstract class DysonAgentSession
             }
             catch (OperationCanceledException) when (runCts.IsCancellationRequested)
             {
-                // StopSubagent owns terminal state.
+                // StopSubagent / interrupt owns terminal state; drain queued injects if still active.
+                TryDrainInjectedPrompt(child);
             }
             catch (Exception ex)
             {
@@ -573,6 +1066,21 @@ public abstract class DysonAgentSession
                 runCts.Dispose();
             }
         });
+    }
+
+    /// <summary>Starts the next queued TriggerSubagentEvent prompt when the child is still Active.</summary>
+    private static bool TryDrainInjectedPrompt(DysonAgentSession child)
+    {
+        if (child.IsTerminal)
+            return false;
+
+        if (!child.TryDequeueInjectedPrompt(out var next))
+            return false;
+
+        var nextCts = new CancellationTokenSource();
+        child.AttachBackgroundRun(nextCts);
+        KickOffChildPrompt(child, BuildInjectedSubagentPrompt(next), nextCts);
+        return true;
     }
 
     /// <summary>

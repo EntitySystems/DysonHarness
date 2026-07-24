@@ -72,6 +72,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         var session = new OpenAiCompatibleAgentSession(
             agentMode, config, provider, http, workDirectoryAbsolutePath, store, workDirectoryId, models,
             modelsBlock);
+        session.ConfigureRootInterAgentTools();
         var initialTitle = title ?? "New session";
         session.SetDisplayTitle(initialTitle);
 
@@ -115,6 +116,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         string workDirectoryAbsolutePath,
         DysonAgentSessionConfig? config = null,
         DysonModelStore? models = null,
+        bool appendResumeLog = true,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -147,15 +149,20 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             models,
             modelsBlock);
         session.RestoreFromPersisted(state);
+        if (state.Session.ParentSessionId is null)
+            session.ConfigureRootInterAgentTools();
 
-        var resumedLog = DysonSessionLogPayload.CreateEntry(
-            sessionId,
-            DysonSessionLogKind.SessionResumed,
-            new DysonSessionLogSessionResumed(sessionId));
+        if (appendResumeLog)
+        {
+            var resumedLog = DysonSessionLogPayload.CreateEntry(
+                sessionId,
+                DysonSessionLogKind.SessionResumed,
+                new DysonSessionLogSessionResumed(sessionId));
 
-        var append = await store.AppendLogAsync(resumedLog, cancellationToken).ConfigureAwait(false);
-        if (append.IsError)
-            return Result<OpenAiCompatibleAgentSession, string>.AsError(append.Error);
+            var append = await store.AppendLogAsync(resumedLog, cancellationToken).ConfigureAwait(false);
+            if (append.IsError)
+                return Result<OpenAiCompatibleAgentSession, string>.AsError(append.Error);
+        }
 
         return Result<OpenAiCompatibleAgentSession, string>.AsValue(session);
     }

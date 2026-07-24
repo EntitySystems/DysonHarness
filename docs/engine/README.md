@@ -29,7 +29,7 @@ When `ProviderKind == OpenAICompatible`, the host builds `OpenAiCompatibleAgentP
 - **Streaming SSE** (`stream: true`) for assistant text and optional reasoning; Completions reads `choices[0].delta.content` and `delta.reasoning_content` (+ incremental `tool_calls`, `stream_options.include_usage`); Responses handles `response.output_text.delta`, `response.reasoning_summary_text.delta` / `response.reasoning_text.delta`, function-call assembly (`output_item.added` / `function_call_arguments.delta|done` / `output_item.done`), and `error` / `response.failed`. Session consumes chunks per tool-loop round; `AssistantText` + H1 title parse only on the final no-tool round (preview stays raw until then). Reasoning accumulates into `ReasoningText` (UI + persistence only — not injected into transcript builders). Cancel/error clears `StreamingPreview` and `ReasoningStreamingPreview`.
 - **Native function tools** with required harness `stage` on every schema.
 - **Tool loop** inside one `PromptAsync` (cap ~20 rounds): model tool_calls → staged executor (web tools summarize **inside** the tool) → feed results → call again.
-- **Executors (v1):** `DysonWorkspaceToolExecutor` — real `RenameSession`, **`GetDateTime`** (host clock; `timezone`: `"utc"` default or `"local"`), workdir-scoped file tools (`ReadFile`, `CreateFile`, `WriteFile`, `Grep`, `ListDirectory`, `CreateDirectory`), `ShellExecute` (session-available shells via `DysonShell`), in-process web search/fetch tools (`FreeSearch`, `FreeSearchAdvanced`, `SearchWithSynthesis`, `FreeExtract`, `WebFetch`, `FetchGithubReadme`), and **subagent tools** (`StartSubagent`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`); other catalog tools return “not implemented yet”.
+- **Executors (v1):** `DysonWorkspaceToolExecutor` — real `RenameSession`, **`GetDateTime`** (host clock; `timezone`: `"utc"` default or `"local"`), workdir-scoped file tools (`ReadFile`, `CreateFile`, `WriteFile`, `Grep`, `ListDirectory`, `CreateDirectory`), `ShellExecute` (session-available shells via `DysonShell`), in-process web search/fetch tools (`FreeSearch`, `FreeSearchAdvanced`, `SearchWithSynthesis`, `FreeExtract`, `WebFetch`, `FetchGithubReadme`), **subagent tools** (`StartSubagent`, `ListSubagents`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`), and **inter-agent / Ask** (`TriggerParentEvent`, `RespondToSubagentEvent`, `TriggerSubagentEvent`, `AskQuestion`, `AskQuestionFromParent`); other catalog tools return “not implemented yet”.
 - **RenameSession review:** every 8 turns (1-based indices **1, 9, 17, …** — when `TurnHistory.Count % 8 == 0` before adding the turn), the transcript builder appends an ephemeral yes/no `RenameSessionReviewMandate` on the **current incomplete** user message only. Turn 1 is `InitializeSession` via `DysonSessionInitialization.CreateTurn`; later review turns stay `Normal`. Completed/history turns always send clean `Instruction` — the mandate is never re-emitted. Soft every-turn rename nudges are not in system prompts; MCP description says rename only on harness review mandate or explicit user request.
 - **Cache-friendly requests** (`OpenAiCacheFriendlyTranscriptBuilder`):
   1. Stable prefix first: system/instructions (mode prompt + MCP catalog) → `tools[]` (stable sort) → prior transcript → new user/tool deltas last.
@@ -65,10 +65,16 @@ Primary flow: `StartSubagent` is **non-blocking**; the child runs in the backgro
 | Tool | Behavior |
 | ---- | -------- |
 | `StartSubagent` | `CreateChildAsync` — persist child (`ParentSessionId`), register runtime id, background `PromptAsync`. Soft gates via `ValidateSubagentSpawn`. Optional `modelSlug` (slug or display alias) resolves via `DysonModelStore.FindSlugByNameAsync`; omit inherits parent provider (same kind only). Optional `reasoningEffort` (freeform); omit/null → chosen slug’s `DefaultReasoningEffort`; when inheriting parent model, omit keeps the parent’s current effort |
+| `ListSubagents` | Session-owned roster of **direct** children (`SubSessions`): JSON array of `subagentId`, `persistenceId`, `agentMode`, `title`, `status`, optional `modelLabel`. Use before Wait/Inspect/Stop when ids are missing from recent context (resume / compaction) |
 | `WaitForSubagent` | Block until child terminal or `timeoutMs`. Wait **only** when the child’s result is a **blocker for the next automatic turn** (typically Explore-before-implementation); do **not** Wait on Drones — prefer the notification turn |
 | `InspectSubagentLog` | `SnapshotLog` for a subagent id |
 | `StopSubagent` | Cancel child CTS; mark `Stopped`; notify parent |
 | `SubmitSubagentReport` | Child-only handoff (`summary`, optional `status` completed\|failed, optional `skipTasksCheck`); **blocks** when the session has incomplete todos (`Pending`/`Ongoing`) unless `skipTasksCheck: true` (then success payload includes `incompleteTodos`); empty todo list passes; persists meta and notifies parent (parent summary stays the agent-provided `summary`). Summary may be a success handoff or, when `status` is `failed`, a concrete failure reason. If the child is already harness-`Failed` (e.g. kickoff missed a report), a later agent report **supersedes** that Failed status (`Completed`/`Failed` per tool `status`), replaces `LastReportSummary`, persists again, and **re-notifies** the parent. After a successful `completed` report, further `SubmitSubagentReport` calls are **idempotent** tool COMPLETED (`idempotent: true`, original summary; no re-notify). A first real `failed` report stays `Failed` (not rewritten to Completed). `Stopped` still rejects a second submit. |
+| `TriggerParentEvent` | Child → parent: queue event (`kind`, `payload`), **block** until `RespondToSubagentEvent`. Fails immediately if parent is inside `WaitForSubagent` for **any** child (deadlock guard). |
+| `RespondToSubagentEvent` | Parent completes a pending event (`subagentId`, `eventId`, `reply`). **Not** wait-gated — works mid-`WaitForSubagent` for already-pending events. |
+| `TriggerSubagentEvent` | Parent → child inject (`payload`, optional `interruptSubagent`). Default queues next-turn prompt; `interruptSubagent=true` cancels in-flight turn + any parent-event wait, then `PromptAsync` immediately. Non-interrupt fails if child is awaiting a parent-event reply. |
+| `AskQuestion` | Root-only: 1–8 questions via composer UI; blocks until answered (Q#/A# text; per-question Skip → `A# - [skipped]`). |
+| `AskQuestionFromParent` | L1 only: wraps `TriggerParentEvent(kind=askQuestion)`; host Auto UI answers via internal `RespondToSubagentEvent`. |
 
 **Spawn policy (prompt + soft enforce):**
 
@@ -79,7 +85,11 @@ Primary flow: `StartSubagent` is **non-blocking**; the child runs in the backgro
 - Prefer **Work-owned Explore → then Drone** over Drone-owned Explore when Work can supply context.
 - **Work context-before-drones:** estimate whether the brief is rich enough; if not, Explore first, then deploy Drones with a rich brief so they often skip their own Explore.
 
-Self-check: `DysonSubagentSpawnGateSelfCheck.Run()`. Return shape: `DysonStartSubagentResult` (`subagentId`, `persistenceId`, `agentMode`, `title`, optional `modelSlug` / `modelLabel`). Kickoff failures (no `SubmitSubagentReport`) mark the child `Failed`, persist status + parent interrupt, and notify with a non-empty reason (PromptAsync error → last turn snippet → harness message; exceptions as `{Type}: {Message}`). A later successful `SubmitSubagentReport` can supersede that harness Failed (see tool row above).
+**Layer catalog gating** (`ConfigureInterAgentTools(depth)`): root keeps `AskQuestion` / `RespondToSubagentEvent` / `TriggerSubagentEvent` (omits AskQuestionFromParent + TriggerParentEvent); L1 keeps AskQuestionFromParent + TriggerParentEvent + Respond + TriggerSubagentEvent (omits AskQuestion); deeper keeps TriggerParentEvent + Respond + TriggerSubagentEvent only.
+
+Self-check: `DysonSubagentSpawnGateSelfCheck.Run()`; restore wiring / ListSubagents shape: `DysonSubagentRestoreSelfCheck.Run()`; inter-agent events / Ask formatter / layer gate: `DysonParentEventSelfCheck.Run()`. Return shape: `DysonStartSubagentResult` (`subagentId`, `persistenceId`, `agentMode`, `title`, optional `modelSlug` / `modelLabel`). Kickoff failures (no `SubmitSubagentReport`) mark the child `Failed`, persist status + parent interrupt, and notify with a non-empty reason (PromptAsync error → last turn snippet → harness message; exceptions as `{Type}: {Message}`). A later successful `SubmitSubagentReport` can supersede that harness Failed (see tool row above).
+
+On parent resume the host hydrates direct DB children into `SubSessions` / `SubagentsById` via `RestoreRegisteredSubagent` (bumps next runtime id; does not raise `SubagentSpawned`).
 
 ## MCP access
 
@@ -90,7 +100,7 @@ Self-check: `DysonSubagentSpawnGateSelfCheck.Run()`. Return shape: `DysonStartSu
 
 `DysonMcpPipeline` holds the per-session tool catalog (`FormatToolsForPrompt`) and optional auto-review proxy. OpenAI-compatible sessions also expose the same tools as native function schemas (with required `stage`). Live remote MCP servers remain out of scope; workspace file tools, `ShellExecute`, and web search/fetch tools run locally via `DysonWorkspaceToolExecutor`.
 
-Default tools include subagent control (`StartSubagent`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`), task completion (`CompleteTask`, `ConfirmTaskComplete`, `ContinueWork`), workspace file tools, **`GetDateTime`**, **`ShellExecute`** (when the platform has available shells), **web search/fetch** tools (below), and related harness tools. Every call carries harness fields: optional `callId`, required `stage` (int).
+Default tools include subagent control (`StartSubagent`, `ListSubagents`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`), inter-agent events + Ask (`TriggerParentEvent`, `RespondToSubagentEvent`, `TriggerSubagentEvent`, `AskQuestion`, `AskQuestionFromParent` — layer-gated), task completion (`CompleteTask`, `ConfirmTaskComplete`, `ContinueWork`), workspace file tools, **`GetDateTime`**, **`ShellExecute`** (when the platform has available shells), **web search/fetch** tools (below), and related harness tools. Every call carries harness fields: optional `callId`, required `stage` (int).
 
 ### GetDateTime
 
@@ -141,12 +151,15 @@ Out of scope for this MVP: news tools, CSDN/Juejin, Baidu/Sogou/Yandex scrapers,
 
 ## Interrupts
 
-Parent sessions observe subagents via `DysonAgentInterrupt` (`SubagentCompleted` / `SubagentStopped` / `SubagentFailed`) with `SubagentId`, optional `PersistenceId`, and `Summary`.
+Parent sessions observe subagents via `DysonAgentInterrupt` (`SubagentCompleted` / `SubagentStopped` / `SubagentFailed` / `SubagentEvent`) with `SubagentId`, optional `PersistenceId`, and `Summary`. `SubagentEvent` also carries `EventId`, `EventKind`, and `Payload`.
 
 - `EnqueueInterrupt` / `TryDequeueInterrupt` / `WaitForInterruptAsync`
 - Concrete `WaitForNotifyAsync` should drain the interrupt queue so Work does not busy-poll
 - Hosts (e.g. `DysonUiHost`) watch completion interrupts and FIFO-auto-`PromptAsync` the parent with the report — preferred over `WaitForSubagent` when the parent can multitask
+- `SubagentEvent` (non-`askQuestion`): host shows an expandable **Subagent event** block (spinner while unaddressed) and FIFO-auto-prompts the parent to `RespondToSubagentEvent`
+- `askQuestion` events: same Subagent-event block + Ask popover Auto UI; parent LLM does **not** auto-Respond
 
+In-flight parent events are **not** persisted across process restart.
 ## Task completion flow
 
 After the model calls `CompleteTask`:

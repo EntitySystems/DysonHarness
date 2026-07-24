@@ -1,0 +1,78 @@
+@namespace Harness.UI.Components.Chat
+@using DysonHarness
+@using Harness.UI.Demo
+@implements IDisposable
+@inject DysonUiHost Host
+
+@if (_children.Count > 0)
+{
+    <div class="session-subagents">
+        <button type="button"
+                class="session-subagents__toggle"
+                aria-expanded="@_expanded"
+                @onclick="Toggle">
+            <span class="session-subagents__chevron" aria-hidden="true">@(_expanded ? "▾" : "▸")</span>
+            <span>@_children.Count subagents (@_activeCount active)</span>
+        </button>
+        @if (_expanded)
+        {
+            <div class="session-subagents__list">
+                @foreach (var id in _children)
+                {
+                    <SubagentCard PersistenceId="id" />
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public DysonAgentSession? Session { get; set; }
+
+    private Guid? _boundSessionId;
+    private bool _expanded;
+    private List<Guid> _children = [];
+    private int _activeCount;
+
+    protected override void OnInitialized() => Host.Changed += OnHostChanged;
+
+    protected override void OnParametersSet()
+    {
+        var sessionId = Session?.PersistenceId;
+        if (sessionId != _boundSessionId)
+        {
+            _boundSessionId = sessionId;
+            _expanded = false;
+        }
+
+        RefreshChildren();
+    }
+
+    private void OnHostChanged() => _ = InvokeAsync(() =>
+    {
+        RefreshChildren();
+        StateHasChanged();
+    });
+
+    private void RefreshChildren()
+    {
+        _children = [];
+        _activeCount = 0;
+        if (Session is null)
+            return;
+
+        foreach (var child in Session.SubSessions.OrderBy(c => c.Id))
+        {
+            if (child.PersistenceId == Guid.Empty)
+                continue;
+
+            _children.Add(child.PersistenceId);
+            if (child.Status == DysonSessionStatus.Active)
+                _activeCount++;
+        }
+    }
+
+    private void Toggle() => _expanded = !_expanded;
+
+    public void Dispose() => Host.Changed -= OnHostChanged;
+}

@@ -37,12 +37,13 @@
                        ShowBackToParent="Host.ActiveParentSessionId is not null"
                        OnBackToParent="NavigateToParentAsync" />
         <SessionTodoOverview Session="Host.Session" />
+        <SessionSubagentOverview Session="Host.Session" />
         @if (!string.IsNullOrEmpty(Host.LastError))
         {
             <div class="error-banner">@Host.LastError</div>
         }
         <ChatPanel Turns="@(Host.Session?.Turns ?? Array.Empty<DysonAgentTurn>())"
-                   Disabled="@(Host.Session is null || Host.IsBusy)"
+                   Disabled="@(Host.Session is null)"
                    SessionBusy="Host.IsBusy"
                    OnCancelPrompt="CancelPrompt"
                    SelectedSlugId="_selectedSlugId"

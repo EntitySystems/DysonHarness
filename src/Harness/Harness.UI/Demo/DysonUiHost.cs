@@ -27,12 +27,17 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly ConcurrentDictionary<Guid, byte> _busySessions = new();
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _promptGates = new();
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _promptCtsBySession = new();
+    private readonly Dictionary<Guid, List<QueuedPromptEntry>> _promptQueues = new();
+    private readonly object _promptQueueGate = new();
     private readonly ConcurrentDictionary<Guid, ConcurrentQueue<DysonAgentInterrupt>> _pendingReportsByParent = new();
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _autoTurnGates = new();
     private readonly ConcurrentDictionary<Guid, EventHandler<DysonToolCallStatusChangedEventArgs>> _toolHandlers = new();
     private readonly ConcurrentDictionary<Guid, EventHandler> _textHandlers = new();
     private readonly ConcurrentDictionary<Guid, StreamingNotifyState> _streamingNotify = new();
     private readonly ConcurrentDictionary<Guid, Guid?> _parentSessionIdByChild = new();
+    private readonly List<DysonSubagentEventUiItem> _subagentEventUi = [];
+    private readonly object _subagentEventUiGate = new();
+    private DysonAskUiState? _pendingAskUi;
 
     private DemoDysonEngine? _engine;
     private DysonAgentSession? _session;
@@ -107,7 +112,40 @@ public sealed class DysonUiHost : IAsyncDisposable
     public bool IsBusy =>
         ActiveSessionId is Guid id && _busySessions.ContainsKey(id);
 
+    /// <summary>Queued prompts for the focused session (FIFO; first-line previews).</summary>
+    public IReadOnlyList<QueuedPrompt> QueuedPrompts
+    {
+        get
+        {
+            if (ActiveSessionId is not Guid id)
+                return [];
+
+            lock (_promptQueueGate)
+            {
+                if (!_promptQueues.TryGetValue(id, out var list) || list.Count == 0)
+                    return [];
+
+                return list
+                    .Select(e => new QueuedPrompt(e.Id, e.FirstLine))
+                    .ToArray();
+            }
+        }
+    }
+
     public event Action? Changed;
+
+    /// <summary>Pending AskQuestion / askQuestion parent-event UI (null when idle).</summary>
+    public DysonAskUiState? PendingAskUi => _pendingAskUi;
+
+    /// <summary>Subagent event blocks for the focused session (pending + recent).</summary>
+    public IReadOnlyList<DysonSubagentEventUiItem> SubagentEventUi
+    {
+        get
+        {
+            lock (_subagentEventUiGate)
+                return _subagentEventUi.ToArray();
+        }
+    }
 
     /// <summary>Tools column width as a percent of the turn content row (12–50, default 30).</summary>
     public double ToolPanelWidthPercent => _toolPanelWidthPercent;
@@ -629,6 +667,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>Cancels the in-flight <see cref="PromptAsync"/> for the focused session when busy.</summary>
+    /// <remarks>Does not clear the per-session prompt queue; draining continues after cancel settles.</remarks>
     public void CancelPrompt()
     {
         if (ActiveSessionId is not Guid id)
@@ -636,6 +675,28 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (_promptCtsBySession.TryGetValue(id, out var cts))
             cts.Cancel();
+    }
+
+    /// <summary>Removes one queued prompt by id for the focused session (no-op if missing).</summary>
+    public void RemoveQueuedPrompt(Guid queuedId)
+    {
+        if (ActiveSessionId is not Guid sessionId || queuedId == Guid.Empty)
+            return;
+
+        lock (_promptQueueGate)
+        {
+            if (!_promptQueues.TryGetValue(sessionId, out var list))
+                return;
+
+            var removed = list.RemoveAll(e => e.Id == queuedId);
+            if (removed == 0)
+                return;
+
+            if (list.Count == 0)
+                _promptQueues.Remove(sessionId);
+        }
+
+        Notify();
     }
 
     public async Task<VoidResult<string>> PromptAsync(
@@ -656,7 +717,24 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(LastError);
         }
 
-        var result = await PromptOnSessionAsync(_session, prompt, cancellationToken)
+        var session = _session;
+        if (session.PersistenceId == Guid.Empty)
+        {
+            LastError = "Session is not persisted.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        var sessionId = session.PersistenceId;
+        if (_busySessions.ContainsKey(sessionId))
+        {
+            EnqueuePrompt(sessionId, prompt);
+            LastError = null;
+            Notify();
+            return VoidResult<string>.Success;
+        }
+
+        var result = await PromptOnSessionAsync(session, prompt, cancellationToken)
             .ConfigureAwait(false);
         if (result.IsError)
             LastError = result.Error;
@@ -669,14 +747,135 @@ public sealed class DysonUiHost : IAsyncDisposable
         Guid sessionId,
         CancellationToken cancellationToken)
     {
+        var loaded = await LoadSessionCoreAsync(
+                sessionId,
+                appendResumeLog: true,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (loaded.IsError)
+        {
+            LastError = loaded.Error;
+            Notify();
+            return new VoidResult<string>(loaded.Error);
+        }
+
+        var session = loaded.Value.Session;
+        var parentSessionId = loaded.Value.ParentSessionId;
+
+        // Cold-loaded children have Parent=null; re-link before focus so inter-agent tools gate correctly.
+        if (parentSessionId is Guid pid && pid != Guid.Empty)
+        {
+            var linked = await EnsureParentLinkedAsync(session, pid, cancellationToken)
+                .ConfigureAwait(false);
+            if (linked.IsError)
+            {
+                LastError = linked.Error;
+                Notify();
+                return linked;
+            }
+        }
+
+        FocusSession(session, parentSessionId);
+        await HydrateDirectChildrenAsync(session, cancellationToken).ConfigureAwait(false);
+        Notify();
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Ensures the parent (and its ancestors) are loaded, then <see cref="DysonAgentSession.RestoreRegisteredSubagent"/>.
+    /// </summary>
+    private async Task<VoidResult<string>> EnsureParentLinkedAsync(
+        DysonAgentSession child,
+        Guid parentSessionId,
+        CancellationToken cancellationToken)
+    {
+        var parentResult = await EnsureSessionLoadedLinkedAsync(parentSessionId, cancellationToken)
+            .ConfigureAwait(false);
+        if (parentResult.IsError)
+            return new VoidResult<string>(parentResult.Error);
+
+        var parent = parentResult.Value;
+        try
+        {
+            parent.RestoreRegisteredSubagent(child);
+        }
+        catch (Exception ex)
+        {
+            return new VoidResult<string>($"Failed to re-link subagent to parent: {ex.Message}");
+        }
+
+        RememberParentId(child, parent.PersistenceId);
+        EnsureRegistered(parent);
+        EnsureRegistered(child);
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Loads a session into the registry and re-links its parent chain when needed.
+    /// </summary>
+    private async Task<Result<DysonAgentSession, string>> EnsureSessionLoadedLinkedAsync(
+        Guid sessionId,
+        CancellationToken cancellationToken)
+    {
+        if (_sessionsById.TryGetValue(sessionId, out var live))
+        {
+            if (live.Parent is not null
+                || ResolveStoredParentId(live) is null)
+            {
+                EnsureRegistered(live);
+                return Result<DysonAgentSession, string>.AsValue(live);
+            }
+
+            // Live but Parent unset — re-link from stored/DB parent id.
+            var storedParent = ResolveStoredParentId(live);
+            if (storedParent is Guid sp)
+            {
+                var relink = await EnsureParentLinkedAsync(live, sp, cancellationToken)
+                    .ConfigureAwait(false);
+                if (relink.IsError)
+                    return Result<DysonAgentSession, string>.AsError(relink.Error);
+            }
+
+            return Result<DysonAgentSession, string>.AsValue(live);
+        }
+
+        var loaded = await LoadSessionCoreAsync(
+                sessionId,
+                appendResumeLog: false,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (loaded.IsError)
+            return Result<DysonAgentSession, string>.AsError(loaded.Error);
+
+        var session = loaded.Value.Session;
+        if (loaded.Value.ParentSessionId is Guid pid && pid != Guid.Empty)
+        {
+            var linked = await EnsureParentLinkedAsync(session, pid, cancellationToken)
+                .ConfigureAwait(false);
+            if (linked.IsError)
+                return Result<DysonAgentSession, string>.AsError(linked.Error);
+        }
+
+        EnsureRegistered(session);
+        RememberParentId(session, loaded.Value.ParentSessionId);
+        return Result<DysonAgentSession, string>.AsValue(session);
+    }
+
+    private sealed record LoadedSession(DysonAgentSession Session, Guid? ParentSessionId);
+
+    /// <summary>
+    /// Loads a persisted session into memory without focusing it.
+    /// When <paramref name="appendResumeLog"/> is false (child hydrate), skips the SessionResumed audit line.
+    /// </summary>
+    private async Task<Result<LoadedSession, string>> LoadSessionCoreAsync(
+        Guid sessionId,
+        bool appendResumeLog,
+        CancellationToken cancellationToken)
+    {
         var full = await _sessions.GetFullSessionAsync(sessionId, cancellationToken)
             .ConfigureAwait(false);
         if (full.IsError)
-        {
-            LastError = full.Error;
-            Notify();
-            return new VoidResult<string>(full.Error);
-        }
+            return Result<LoadedSession, string>.AsError(full.Error);
 
         var providerResult = await ResolveProviderAsync(
                 full.Value.Session.ModelSlugId,
@@ -684,34 +883,26 @@ public sealed class DysonUiHost : IAsyncDisposable
                 cancellationToken)
             .ConfigureAwait(false);
         if (providerResult.IsError)
-        {
-            LastError = providerResult.Error;
-            Notify();
-            return new VoidResult<string>(providerResult.Error);
-        }
+            return Result<LoadedSession, string>.AsError(providerResult.Error);
 
         string? workPath = null;
         if (full.Value.Session.WorkDirectoryId is Guid wdId)
         {
             var wd = await _workDirectories.GetAsync(wdId, cancellationToken).ConfigureAwait(false);
             if (wd.IsError)
-            {
-                LastError = wd.Error;
-                Notify();
-                return new VoidResult<string>(wd.Error);
-            }
+                return Result<LoadedSession, string>.AsError(wd.Error);
 
             workPath = wd.Value.AbsolutePath;
         }
 
         var kind = providerResult.Value.Kind;
+        DysonAgentSession session;
         if (string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
         {
             if (string.IsNullOrWhiteSpace(workPath))
             {
-                LastError = "Session has no work directory; cannot resume OpenAI-compatible session.";
-                Notify();
-                return new VoidResult<string>(LastError);
+                return Result<LoadedSession, string>.AsError(
+                    "Session has no work directory; cannot resume OpenAI-compatible session.");
             }
 
             var loaded = await OpenAiCompatibleAgentSession.LoadAsync(
@@ -723,39 +914,92 @@ public sealed class DysonUiHost : IAsyncDisposable
                 await BuildSessionConfigAsync(full.Value.Session.McpAccessMode, cancellationToken)
                     .ConfigureAwait(false),
                 models: _models,
+                appendResumeLog: appendResumeLog,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (loaded.IsError)
-            {
-                LastError = loaded.Error;
-                Notify();
-                return new VoidResult<string>(loaded.Error);
-            }
+                return Result<LoadedSession, string>.AsError(loaded.Error);
 
-            FocusSession(loaded.Value, full.Value.Session.ParentSessionId);
+            session = loaded.Value;
         }
         else
         {
-            var loaded = await DemoDysonAgentSession.LoadAsync(
+            var demoLoaded = await DemoDysonAgentSession.LoadAsync(
                 _sessions,
                 sessionId,
                 providerResult.Value.Demo!,
                 new DysonAgentSessionConfig { McpAccessMode = full.Value.Session.McpAccessMode },
                 models: _models,
+                appendResumeLog: appendResumeLog,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
-            if (loaded.IsError)
-            {
-                LastError = loaded.Error;
-                Notify();
-                return new VoidResult<string>(loaded.Error);
-            }
+            if (demoLoaded.IsError)
+                return Result<LoadedSession, string>.AsError(demoLoaded.Error);
 
-            FocusSession(loaded.Value, full.Value.Session.ParentSessionId);
+            session = demoLoaded.Value;
         }
 
-        Notify();
-        return VoidResult<string>.Success;
+        return Result<LoadedSession, string>.AsValue(
+            new LoadedSession(session, full.Value.Session.ParentSessionId));
+    }
+
+    /// <summary>
+    /// Rebuilds the parent's <see cref="DysonAgentSession.SubSessions"/> / Wait-Inspect-Stop map from DB children.
+    /// Per-child failures are recorded on <see cref="LastError"/> and skipped.
+    /// </summary>
+    private async Task HydrateDirectChildrenAsync(
+        DysonAgentSession parent,
+        CancellationToken cancellationToken)
+    {
+        if (parent.PersistenceId == Guid.Empty)
+            return;
+
+        var children = await _sessions
+            .ListChildSessionsAsync(parent.PersistenceId, cancellationToken)
+            .ConfigureAwait(false);
+        if (children.IsError)
+        {
+            LastError = children.Error;
+            return;
+        }
+
+        foreach (var summary in children.Value)
+        {
+            if (summary.RuntimeId < 1)
+                continue;
+
+            try
+            {
+                DysonAgentSession child;
+                if (_sessionsById.TryGetValue(summary.Id, out var live))
+                {
+                    child = live;
+                }
+                else
+                {
+                    var loaded = await LoadSessionCoreAsync(
+                            summary.Id,
+                            appendResumeLog: false,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    if (loaded.IsError)
+                    {
+                        LastError = loaded.Error;
+                        continue;
+                    }
+
+                    child = loaded.Value.Session;
+                }
+
+                parent.RestoreRegisteredSubagent(child);
+                RememberParentId(child, parent.PersistenceId);
+                EnsureRegistered(child);
+            }
+            catch (Exception ex)
+            {
+                LastError = $"Failed to restore subagent '{summary.Title ?? summary.Id.ToString()}': {ex.Message}";
+            }
+        }
     }
 
     private sealed record ResolvedProvider(
@@ -845,6 +1089,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         _session = session;
         _engine = new DemoDysonEngine(session);
+        SyncAskUiFromSession(session);
+        SyncSubagentEventUiFromSession(session);
     }
 
     private void ClearFocus()
@@ -896,6 +1142,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         session.SubagentSpawned += OnSubagentSpawned;
         session.InterruptEnqueued += OnInterruptEnqueued;
         session.TodosChanged += OnTodosChanged;
+        session.ParentEventsChanged += OnParentEventsChanged;
 
         foreach (var turn in session.Turns)
             HookTurn(turn);
@@ -971,6 +1218,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         session.SubagentSpawned -= OnSubagentSpawned;
         session.InterruptEnqueued -= OnInterruptEnqueued;
         session.TodosChanged -= OnTodosChanged;
+        session.ParentEventsChanged -= OnParentEventsChanged;
 
         foreach (var turn in session.Turns)
             UnhookTurn(turn);
@@ -985,6 +1233,11 @@ public sealed class DysonUiHost : IAsyncDisposable
         _parentSessionIdByChild.Clear();
         _pendingReportsByParent.Clear();
         _busySessions.Clear();
+        lock (_promptQueueGate)
+            _promptQueues.Clear();
+        lock (_subagentEventUiGate)
+            _subagentEventUi.Clear();
+        _pendingAskUi = null;
 
         foreach (var cts in _promptCtsBySession.Values)
         {
@@ -1148,6 +1401,28 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         RefreshRegistryKey(parent);
 
+        if (interrupt.Kind == DysonAgentInterruptKind.SubagentEvent)
+        {
+            UpsertSubagentEventUi(parent, interrupt);
+            MaybeOpenAskUiForEvent(parent, interrupt);
+            Notify();
+
+            // Ask UI only when kind=askQuestion AND payload parses as questions JSON.
+            // Plain-text askQuestion and all other kinds enqueue a parent auto-turn.
+            if (!DysonSubagentHostLogic.RequiresParentAutoTurn(interrupt.EventKind, interrupt.Payload))
+                return;
+
+            if (parent.PersistenceId == Guid.Empty)
+                return;
+
+            var eventQueue = _pendingReportsByParent.GetOrAdd(
+                parent.PersistenceId,
+                _ => new ConcurrentQueue<DysonAgentInterrupt>());
+            eventQueue.Enqueue(interrupt);
+            _ = DrainAutoTurnsAsync(parent.PersistenceId);
+            return;
+        }
+
         if (interrupt.Kind is not (
             DysonAgentInterruptKind.SubagentCompleted
             or DysonAgentInterruptKind.SubagentFailed
@@ -1165,6 +1440,221 @@ public sealed class DysonUiHost : IAsyncDisposable
         queue.Enqueue(interrupt);
         Notify();
         _ = DrainAutoTurnsAsync(parent.PersistenceId);
+    }
+
+    private void OnParentEventsChanged(object? sender, EventArgs e)
+    {
+        if (sender is not DysonAgentSession session)
+            return;
+
+        SyncAskUiFromSession(session);
+        SyncSubagentEventUiFromSession(session);
+        Notify();
+    }
+
+    private void UpsertSubagentEventUi(DysonAgentSession parent, DysonAgentInterrupt interrupt)
+    {
+        if (interrupt.EventId is not Guid eventId || eventId == Guid.Empty)
+            return;
+
+        string? title = null;
+        if (interrupt.PersistenceId is Guid childId
+            && childId != Guid.Empty
+            && _sessionsById.TryGetValue(childId, out var child))
+        {
+            title = child.DisplayTitle;
+        }
+        else if (parent.TryGetSubagent(interrupt.SubagentId, out var byRuntime))
+        {
+            title = byRuntime.DisplayTitle;
+        }
+
+        lock (_subagentEventUiGate)
+        {
+            var existing = _subagentEventUi.FirstOrDefault(x => x.EventId == eventId);
+            if (existing is not null)
+            {
+                existing.SubagentTitle = title ?? existing.SubagentTitle;
+                existing.Kind = interrupt.EventKind ?? existing.Kind;
+                existing.Payload = interrupt.Payload ?? existing.Payload;
+                return;
+            }
+
+            _subagentEventUi.Insert(0, new DysonSubagentEventUiItem
+            {
+                EventId = eventId,
+                ParentPersistenceId = parent.PersistenceId,
+                SubagentId = interrupt.SubagentId,
+                SubagentTitle = title,
+                Kind = interrupt.EventKind ?? "",
+                Payload = interrupt.Payload ?? "",
+                IsAddressed = false,
+                Timestamp = interrupt.Timestamp,
+            });
+
+            while (_subagentEventUi.Count > 20)
+                _subagentEventUi.RemoveAt(_subagentEventUi.Count - 1);
+        }
+    }
+
+    private void SyncSubagentEventUiFromSession(DysonAgentSession session)
+    {
+        foreach (var evt in session.PendingOrRecentParentEvents)
+        {
+            lock (_subagentEventUiGate)
+            {
+                var item = _subagentEventUi.FirstOrDefault(x => x.EventId == evt.EventId);
+                if (item is null)
+                {
+                    string? title = null;
+                    if (session.TryGetSubagent(evt.SubagentId, out var child))
+                        title = child.DisplayTitle;
+
+                    _subagentEventUi.Insert(0, new DysonSubagentEventUiItem
+                    {
+                        EventId = evt.EventId,
+                        ParentPersistenceId = session.PersistenceId,
+                        SubagentId = evt.SubagentId,
+                        SubagentTitle = title,
+                        Kind = evt.Kind,
+                        Payload = evt.Payload,
+                        IsAddressed = evt.Status != DysonParentEventStatus.Pending,
+                        Timestamp = evt.Timestamp,
+                    });
+                }
+                else
+                {
+                    item.IsAddressed = evt.Status != DysonParentEventStatus.Pending;
+                    item.Kind = evt.Kind;
+                    item.Payload = evt.Payload;
+                }
+            }
+        }
+    }
+
+    private void SyncAskUiFromSession(DysonAgentSession session)
+    {
+        // Root AskQuestion
+        if (session.Parent is null && session.PendingAskQuestions is { Count: > 0 } questions)
+        {
+            _pendingAskUi = new DysonAskUiState
+            {
+                Source = DysonAskUiSource.RootAskQuestion,
+                SessionPersistenceId = session.PersistenceId,
+                Questions = questions,
+            };
+            return;
+        }
+
+        // Parent-event askQuestion with valid questions JSON (Ask UI path)
+        foreach (var evt in session.PendingOrRecentParentEvents)
+        {
+            if (evt.Status != DysonParentEventStatus.Pending)
+                continue;
+            if (!DysonSubagentHostLogic.TryBuildAskUi(evt.Kind, evt.Payload, out var askQuestions))
+                continue;
+
+            _pendingAskUi = new DysonAskUiState
+            {
+                Source = DysonAskUiSource.ParentEventAskQuestion,
+                SessionPersistenceId = session.PersistenceId,
+                EventId = evt.EventId,
+                SubagentId = evt.SubagentId,
+                Questions = askQuestions,
+            };
+            return;
+        }
+
+        // Clear if this focused session no longer has pending ask
+        if (_pendingAskUi is not null
+            && _pendingAskUi.SessionPersistenceId == session.PersistenceId
+            && session.PendingAskQuestions is null)
+        {
+            _pendingAskUi = null;
+        }
+    }
+
+    private void MaybeOpenAskUiForEvent(DysonAgentSession parent, DysonAgentInterrupt interrupt)
+    {
+        if (!DysonSubagentHostLogic.TryBuildAskUi(interrupt.EventKind, interrupt.Payload, out var questions))
+            return;
+
+        _pendingAskUi = new DysonAskUiState
+        {
+            Source = DysonAskUiSource.ParentEventAskQuestion,
+            SessionPersistenceId = parent.PersistenceId,
+            EventId = interrupt.EventId,
+            SubagentId = interrupt.SubagentId,
+            Questions = questions,
+        };
+    }
+
+    /// <summary>Submit answers for the pending Ask UI (root AskQuestion or askQuestion parent event).</summary>
+    public Result<string, string> SubmitAskUiAnswers(IReadOnlyList<DysonAskQuestionAnswer> answers)
+    {
+        var ask = _pendingAskUi;
+        if (ask is null)
+            return Result<string, string>.AsError("No pending AskQuestion UI.");
+
+        if (!_sessionsById.TryGetValue(ask.SessionPersistenceId, out var session)
+            && !ReferenceEquals(_session, null)
+            && _session.PersistenceId == ask.SessionPersistenceId)
+        {
+            session = _session;
+        }
+
+        if (session is null && ask.SessionPersistenceId == Guid.Empty && _session is not null)
+            session = _session;
+
+        if (session is null)
+            return Result<string, string>.AsError("Ask session is not registered.");
+
+        string formatted;
+        try
+        {
+            formatted = DysonAskQuestion.FormatAnswers(ask.Questions, answers);
+        }
+        catch (Exception ex)
+        {
+            return Result<string, string>.AsError(ex.Message);
+        }
+
+        Result<string, string> result;
+        if (ask.Source == DysonAskUiSource.RootAskQuestion)
+        {
+            result = session.RespondToAskQuestion(formatted);
+        }
+        else
+        {
+            if (ask.EventId is not Guid eventId || ask.SubagentId is not int subagentId)
+                return Result<string, string>.AsError("Ask parent-event correlation missing.");
+
+            result = session.RespondToSubagentEvent(subagentId, eventId, formatted);
+            MarkSubagentEventAddressed(eventId);
+        }
+
+        if (result.IsSuccess)
+        {
+            _pendingAskUi = null;
+            Notify();
+        }
+        else
+        {
+            LastError = result.Error;
+            Notify();
+        }
+
+        return result;
+    }
+
+    private void MarkSubagentEventAddressed(Guid eventId)
+    {
+        lock (_subagentEventUiGate)
+        {
+            var item = _subagentEventUi.FirstOrDefault(x => x.EventId == eventId);
+            if (item is not null)
+                item.IsAddressed = true;
+        }
     }
 
     private async Task DrainAutoTurnsAsync(Guid parentPersistenceId)
@@ -1198,7 +1688,9 @@ public sealed class DysonUiHost : IAsyncDisposable
                     title = byRuntime.DisplayTitle;
                 }
 
-                var prompt = DysonSubagentHostLogic.BuildSubagentReportContinuationPrompt(interrupt, title);
+                var prompt = interrupt.Kind == DysonAgentInterruptKind.SubagentEvent
+                    ? DysonSubagentHostLogic.BuildSubagentEventContinuationPrompt(interrupt, title)
+                    : DysonSubagentHostLogic.BuildSubagentReportContinuationPrompt(interrupt, title);
                 var result = await PromptOnSessionAsync(parent, prompt, CancellationToken.None)
                     .ConfigureAwait(false);
                 if (result.IsError)
@@ -1292,8 +1784,65 @@ public sealed class DysonUiHost : IAsyncDisposable
 
             linked.Dispose();
             _ = DrainAutoTurnsAsync(sessionId);
+            _ = DrainQueuedPromptsAsync(sessionId);
         }
     }
+
+    private void EnqueuePrompt(Guid sessionId, string prompt)
+    {
+        var text = prompt.Trim();
+        var entry = new QueuedPromptEntry(Guid.NewGuid(), text, DysonSubagentHostLogic.PromptFirstLine(text));
+        lock (_promptQueueGate)
+        {
+            if (!_promptQueues.TryGetValue(sessionId, out var list))
+            {
+                list = [];
+                _promptQueues[sessionId] = list;
+            }
+
+            list.Add(entry);
+        }
+    }
+
+    private bool TryDequeuePrompt(Guid sessionId, out QueuedPromptEntry entry)
+    {
+        lock (_promptQueueGate)
+        {
+            if (!_promptQueues.TryGetValue(sessionId, out var list) || list.Count == 0)
+            {
+                entry = default!;
+                return false;
+            }
+
+            entry = list[0];
+            list.RemoveAt(0);
+            if (list.Count == 0)
+                _promptQueues.Remove(sessionId);
+            return true;
+        }
+    }
+
+    private async Task DrainQueuedPromptsAsync(Guid sessionId)
+    {
+        if (_disposed || _busySessions.ContainsKey(sessionId))
+            return;
+
+        if (!TryDequeuePrompt(sessionId, out var next))
+            return;
+
+        if (!_sessionsById.TryGetValue(sessionId, out var session))
+            return;
+
+        Notify();
+        var result = await PromptOnSessionAsync(session, next.Text, CancellationToken.None)
+            .ConfigureAwait(false);
+        if (result.IsError && ActiveSessionId == sessionId)
+            LastError = result.Error;
+
+        Notify();
+    }
+
+    private sealed record QueuedPromptEntry(Guid Id, string Text, string FirstLine);
 
     private async Task PersistTurnCompletedIfNeededAsync(DysonAgentTurn turn)
     {
@@ -1507,7 +2056,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         CancelToolPanelWidthSaveTimer();
         ClearFocus();
         UnhookAllSessions();
+        lock (_promptQueueGate)
+            _promptQueues.Clear();
         _persistGate.Dispose();
         return ValueTask.CompletedTask;
     }
 }
+
+/// <summary>Queued composer prompt preview for the active session.</summary>
+public readonly record struct QueuedPrompt(Guid Id, string FirstLine);

@@ -16,6 +16,8 @@ DysonSessionTodoSelfCheck.Run();
 OpenAiReasoningSelfCheck.Run();
 StringListJsonValueConverterSelfCheck.Run();
 DysonAvailableModelsPromptSelfCheck.Run();
+DysonSubagentRestoreSelfCheck.Run();
+DysonParentEventSelfCheck.Run();
 ComposerSlashCommands.SelfCheck();
 
 var builder = WebApplication.CreateBuilder(args);

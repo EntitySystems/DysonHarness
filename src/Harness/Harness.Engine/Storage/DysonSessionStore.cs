@@ -130,6 +130,14 @@ public sealed class DysonSessionStore(DysonDbContext db)
         CancellationToken cancellationToken = default)
         => RunSerializedAsync(ct => ListSessionsCoreAsync(workDirectoryId, rootsOnly, ct), cancellationToken);
 
+    /// <summary>
+    /// Direct child sessions for <paramref name="parentSessionId"/>, ordered by <see cref="DysonSessionSummary.RuntimeId"/>.
+    /// </summary>
+    public Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListChildSessionsAsync(
+        Guid parentSessionId,
+        CancellationToken cancellationToken = default)
+        => RunSerializedAsync(ct => ListChildSessionsCoreAsync(parentSessionId, ct), cancellationToken);
+
     public Task<Result<DysonPersistedSession, string>> GetFullSessionAsync(
         Guid sessionId,
         CancellationToken cancellationToken = default)
@@ -403,6 +411,41 @@ public sealed class DysonSessionStore(DysonDbContext db)
         {
             return Result<IReadOnlyList<DysonSessionSummary>, string>.AsError(
                 $"Failed to list sessions: {ex.Message}");
+        }
+    }
+
+    private async Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListChildSessionsCoreAsync(
+        Guid parentSessionId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var list = await _db.Sessions
+                .AsNoTracking()
+                .Where(s => s.ParentSessionId == parentSessionId)
+                .OrderBy(s => s.RuntimeId)
+                .Select(s => new DysonSessionSummary
+                {
+                    Id = s.Id,
+                    RuntimeId = s.RuntimeId,
+                    ParentSessionId = s.ParentSessionId,
+                    AgentMode = s.AgentMode,
+                    Status = s.Status,
+                    Title = s.Title,
+                    ModelSlugId = s.ModelSlugId,
+                    WorkDirectoryId = s.WorkDirectoryId,
+                    CreatedUtc = s.CreatedUtc,
+                    LastActivityUtc = s.LastActivityUtc,
+                })
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            return Result<IReadOnlyList<DysonSessionSummary>, string>.AsValue(list);
+        }
+        catch (Exception ex)
+        {
+            return Result<IReadOnlyList<DysonSessionSummary>, string>.AsError(
+                $"Failed to list child sessions: {ex.Message}");
         }
     }
 

@@ -103,8 +103,176 @@ public sealed class DysonMcpPipeline
         return sb.ToString().TrimEnd();
     }
 
+    /// <summary>
+    /// Layer catalog gating for inter-agent + Ask tools.
+    /// Depth 0 = root, 1 = L1 child, 2+ = deeper.
+    /// </summary>
+    public void ConfigureInterAgentTools(int depth)
+    {
+        // Ensure catalog tools exist (DefaultTools already added them; restore if removed).
+        EnsureInterAgentToolsPresent();
+
+        if (depth <= 0)
+        {
+            Tools.Remove("AskQuestionFromParent");
+            Tools.Remove("TriggerParentEvent");
+            // AskQuestion, RespondToSubagentEvent, TriggerSubagentEvent stay
+            return;
+        }
+
+        Tools.Remove("AskQuestion");
+
+        if (depth == 1)
+        {
+            // AskQuestionFromParent, TriggerParentEvent, Respond, TriggerSubagentEvent stay
+            return;
+        }
+
+        // Deeper: no AskQuestionFromParent
+        Tools.Remove("AskQuestionFromParent");
+    }
+
+    private void EnsureInterAgentToolsPresent()
+    {
+        foreach (var tool in InterAgentTools())
+        {
+            if (!Tools.ContainsKey(tool.Name))
+                Tools[tool.Name] = tool;
+        }
+    }
+
+    private static IEnumerable<DysonMcpTool> InterAgentTools()
+    {
+        var questionsSchema = DysonAskQuestion.SharedQuestionsSchemaJson();
+
+        yield return new DysonMcpTool
+        {
+            Name = "AskQuestion",
+            Description =
+                "Root-only: ask the user 1–8 clarifying questions via the composer UI and block until answered. " +
+                "Per-question Skip is allowed; allowMultiple permits multi-select; custom answers always allowed. " +
+                "Result is a Q#/A# text block.",
+            InputSchemaJson = $$"""
+                {
+                  "type": "object",
+                  "properties": {
+                    "questions": {{questionsSchema}}
+                  },
+                  "required": ["questions"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "AskQuestionFromParent",
+            Description =
+                "L1 subagent only: ask the parent user clarifying questions (wraps TriggerParentEvent kind=askQuestion). " +
+                "Blocks until the user answers in the Auto UI. Same questions schema as AskQuestion.",
+            InputSchemaJson = $$"""
+                {
+                  "type": "object",
+                  "properties": {
+                    "questions": {{questionsSchema}}
+                  },
+                  "required": ["questions"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "TriggerParentEvent",
+            Description =
+                "Subagent → parent: queue an event and block until the parent calls RespondToSubagentEvent. " +
+                "Fails immediately if the parent is inside WaitForSubagent for any child (deadlock guard). " +
+                "Prefer SubmitSubagentReport for final handoff; use this for mid-run coordination. " +
+                "For agent-to-agent text use kind like message or status (parent gets a harness continuation turn). " +
+                "askQuestion opens Ask UI only when payload is the AskQuestion questions schema — prefer AskQuestionFromParent for that; " +
+                "plain-text askQuestion is treated like other kinds (parent auto-turn).",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "description": "Event kind. Use message/status for agent-to-agent text. askQuestion only with AskQuestion questions JSON (prefer AskQuestionFromParent)."
+                    },
+                    "payload": {
+                      "type": "string",
+                      "description": "Event payload (JSON or text) for the parent. For askQuestion, must be AskQuestion questions schema to open Ask UI."
+                    }
+                  },
+                  "required": ["kind", "payload"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "RespondToSubagentEvent",
+            Description =
+                "Parent: complete a pending child event from TriggerParentEvent / AskQuestionFromParent. " +
+                "Always allowed for a matching pending eventId even while WaitForSubagent is in progress.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "subagentId": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Child subagent id that triggered the event."
+                    },
+                    "eventId": {
+                      "type": "string",
+                      "description": "Guid eventId from the harness continuation / Subagent event block."
+                    },
+                    "reply": {
+                      "type": "string",
+                      "description": "Reply payload returned to the child’s blocked tool call."
+                    }
+                  },
+                  "required": ["subagentId", "eventId", "reply"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "TriggerSubagentEvent",
+            Description =
+                "Parent → child: inject a prompt. Default (interruptSubagent=false) queues for the child’s next turn. " +
+                "interruptSubagent=true cancels the in-flight child turn (and any pending parent-event wait) and runs the payload immediately. " +
+                "Fails without interrupt when the child is awaiting a parent-event reply. Returns quickly (queued vs interrupted).",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "subagentId": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Id of the child to inject into."
+                    },
+                    "payload": {
+                      "type": "string",
+                      "description": "Prompt/instructions injected into the child."
+                    },
+                    "interruptSubagent": {
+                      "type": "boolean",
+                      "description": "If true, cancel in-flight child turn (and any pending parent-event wait) and run payload immediately. Default false = enqueue for next turn."
+                    }
+                  },
+                  "required": ["subagentId", "payload"]
+                }
+                """,
+        };
+    }
+
     private static IEnumerable<DysonMcpTool> DefaultTools(IReadOnlyList<DysonShellType> availableShellTypes)
     {
+        foreach (var tool in InterAgentTools())
+            yield return tool;
+
         yield return new DysonMcpTool
         {
             Name = "StartSubagent",
@@ -244,6 +412,22 @@ public sealed class DysonMcpPipeline
                     "taskCode": { "type": "string", "description": "Todo to delete." }
                   },
                   "required": ["taskCode"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ListSubagents",
+            Description =
+                "List this session’s direct child subagents (session-owned roster). " +
+                "Returns a JSON array with subagentId, persistenceId, agentMode, title, status, and optional modelLabel. " +
+                "Use before WaitForSubagent / InspectSubagentLog / StopSubagent when the id is not in recent context " +
+                "(e.g. after resume or compacted older StartSubagent results).",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {}
                 }
                 """,
         };

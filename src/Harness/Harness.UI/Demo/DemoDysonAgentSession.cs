@@ -54,6 +54,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             .ConfigureAwait(false);
         var session = new DemoDysonAgentSession(
             agentMode, config, provider, store, workDirectoryId, models, modelsBlock);
+        session.ConfigureRootInterAgentTools();
         var initialTitle = title ?? "New session";
         session.SetDisplayTitle(initialTitle);
 
@@ -90,7 +91,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
     }
 
     /// <summary>
-    /// Loads a persisted session, hydrates turns/logs, and appends a SessionResumed log.
+    /// Loads a persisted session, hydrates turns/logs, and optionally appends a SessionResumed log.
     /// </summary>
     public static async Task<Result<DemoDysonAgentSession, string>> LoadAsync(
         DysonSessionStore store,
@@ -98,6 +99,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         DemoDysonAgentProvider provider,
         DysonAgentSessionConfig? config = null,
         DysonModelStore? models = null,
+        bool appendResumeLog = true,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -127,15 +129,20 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             models,
             modelsBlock);
         session.RestoreFromPersisted(state);
+        if (state.Session.ParentSessionId is null)
+            session.ConfigureRootInterAgentTools();
 
-        var resumedLog = DysonSessionLogPayload.CreateEntry(
-            sessionId,
-            DysonSessionLogKind.SessionResumed,
-            new DysonSessionLogSessionResumed(sessionId));
+        if (appendResumeLog)
+        {
+            var resumedLog = DysonSessionLogPayload.CreateEntry(
+                sessionId,
+                DysonSessionLogKind.SessionResumed,
+                new DysonSessionLogSessionResumed(sessionId));
 
-        var append = await store.AppendLogAsync(resumedLog, cancellationToken).ConfigureAwait(false);
-        if (append.IsError)
-            return Result<DemoDysonAgentSession, string>.AsError(append.Error);
+            var append = await store.AppendLogAsync(resumedLog, cancellationToken).ConfigureAwait(false);
+            if (append.IsError)
+                return Result<DemoDysonAgentSession, string>.AsError(append.Error);
+        }
 
         return Result<DemoDysonAgentSession, string>.AsValue(session);
     }
@@ -437,6 +444,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             return await ExecuteRenameSessionAsync(call, cancellationToken).ConfigureAwait(false);
 
         if (string.Equals(call.ToolName, "StartSubagent", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(call.ToolName, "ListSubagents", StringComparison.OrdinalIgnoreCase)
             || string.Equals(call.ToolName, "WaitForSubagent", StringComparison.OrdinalIgnoreCase)
             || string.Equals(call.ToolName, "InspectSubagentLog", StringComparison.OrdinalIgnoreCase)
             || string.Equals(call.ToolName, "StopSubagent", StringComparison.OrdinalIgnoreCase)
@@ -522,6 +530,9 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                     modelLabel = r.ModelLabel,
                 }));
             }
+
+            if (string.Equals(call.ToolName, "ListSubagents", StringComparison.OrdinalIgnoreCase))
+                return ToolOk(call, FormatListSubagentsJson());
 
             if (string.Equals(call.ToolName, "WaitForSubagent", StringComparison.OrdinalIgnoreCase))
             {

@@ -1,0 +1,177 @@
+@namespace Harness.UI.Components.Chat
+@using DysonHarness
+@using Harness.UI.Demo
+
+@if (Ask is not null)
+{
+    <div class="ask-popover" role="dialog" aria-label="Agent questions">
+        <div class="ask-popover__header">
+            <span class="ask-popover__title">
+                @(Ask.Source == DysonAskUiSource.RootAskQuestion ? "AskQuestion" : "AskQuestion from subagent")
+            </span>
+        </div>
+        <div class="ask-popover__questions">
+            @for (var i = 0; i < Ask.Questions.Count; i++)
+            {
+                var qi = i;
+                var q = Ask.Questions[qi];
+                var draft = _drafts[qi];
+                <div class="ask-popover__question">
+                    <div class="ask-popover__prompt">Q@(qi + 1) — @q.Prompt</div>
+                    @if (draft.Skipped)
+                    {
+                        <div class="ask-popover__skipped">Skipped</div>
+                    }
+                    else
+                    {
+                        <div class="ask-popover__options">
+                            @foreach (var opt in q.Options)
+                            {
+                                var option = opt;
+                                if (q.AllowMultiple)
+                                {
+                                    <label class="ask-popover__option">
+                                        <input type="checkbox"
+                                               checked="@draft.Selected.Contains(option)"
+                                               @onchange="e => ToggleMulti(qi, option, e)" />
+                                        <span>@option</span>
+                                    </label>
+                                }
+                                else
+                                {
+                                    <label class="ask-popover__option">
+                                        <input type="radio"
+                                               name="@($"ask-q-{qi}")"
+                                               checked="@(draft.Selected.Count == 1 && draft.Selected[0] == option)"
+                                               @onchange="() => SelectSingle(qi, option)" />
+                                        <span>@option</span>
+                                    </label>
+                                }
+                            }
+                        </div>
+                        <input class="ask-popover__custom"
+                               type="text"
+                               placeholder="Custom answer (optional)"
+                               value="@draft.Custom"
+                               @oninput="e => SetCustom(qi, e.Value?.ToString())" />
+                    }
+                    <div class="ask-popover__q-actions">
+                        @if (draft.Skipped)
+                        {
+                            <button type="button" class="btn" @onclick="() => Unskip(qi)">Unskip</button>
+                        }
+                        else
+                        {
+                            <button type="button" class="btn" @onclick="() => Skip(qi)">Skip</button>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+        <div class="ask-popover__footer">
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <span class="ask-popover__error">@_error</span>
+            }
+            <button type="button"
+                    class="btn btn-primary"
+                    disabled="@(!AllResolved())"
+                    @onclick="SubmitAsync">
+                Submit answers
+            </button>
+        </div>
+    </div>
+}
+
+@code {
+    private DysonAskUiState? _boundAsk;
+    private List<Draft> _drafts = [];
+    private string? _error;
+
+    [Parameter] public DysonAskUiState? Ask { get; set; }
+    [Parameter] public EventCallback<IReadOnlyList<DysonAskQuestionAnswer>> OnSubmit { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(Ask, _boundAsk))
+            return;
+
+        _boundAsk = Ask;
+        _error = null;
+        _drafts = Ask is null
+            ? []
+            : Ask.Questions.Select(_ => new Draft()).ToList();
+    }
+
+    private void Skip(int i)
+    {
+        _drafts[i].Skipped = true;
+        _drafts[i].Selected.Clear();
+        _drafts[i].Custom = null;
+    }
+
+    private void Unskip(int i) => _drafts[i].Skipped = false;
+
+    private void SelectSingle(int i, string option)
+    {
+        _drafts[i].Selected.Clear();
+        _drafts[i].Selected.Add(option);
+    }
+
+    private void ToggleMulti(int i, string option, ChangeEventArgs e)
+    {
+        var on = e.Value is bool b ? b : string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+        if (on)
+        {
+            if (!_drafts[i].Selected.Contains(option))
+                _drafts[i].Selected.Add(option);
+        }
+        else
+        {
+            _drafts[i].Selected.Remove(option);
+        }
+    }
+
+    private void SetCustom(int i, string? value) => _drafts[i].Custom = value;
+
+    private bool AllResolved()
+    {
+        if (Ask is null || _drafts.Count != Ask.Questions.Count)
+            return false;
+
+        for (var i = 0; i < _drafts.Count; i++)
+        {
+            var d = _drafts[i];
+            if (d.Skipped)
+                continue;
+
+            if (d.Selected.Count == 0 && string.IsNullOrWhiteSpace(d.Custom))
+                return false;
+        }
+
+        return true;
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (Ask is null || !AllResolved())
+            return;
+
+        _error = null;
+        var answers = _drafts.Select(d => new DysonAskQuestionAnswer
+        {
+            Skipped = d.Skipped,
+            Selected = d.Selected.ToArray(),
+            Custom = d.Custom,
+        }).ToArray();
+
+        await OnSubmit.InvokeAsync(answers);
+    }
+
+    private sealed class Draft
+    {
+        public bool Skipped { get; set; }
+        public List<string> Selected { get; } = [];
+        public string? Custom { get; set; }
+    }
+}

@@ -42,7 +42,7 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `Components/Layout/SettingsLayout.razor` | Settings side-nav shell |
 | `Components/Shell/` | `AppShell`, `Sidebar`, `SessionHeader` |
 | `Components/Sessions/` | `WorkDirectorySwitcher`, `SessionList` |
-| `Components/Chat/` | `ChatPanel`, `SessionTodoOverview`, `TurnBlock`, `SubagentCard`, `Composer`, `AgentModePicker` |
+| `Components/Chat/` | `ChatPanel`, `SessionTodoOverview`, `SessionSubagentOverview`, `TurnBlock`, `SubagentCard`, `SubagentEventBlock`, `AskQuestionPopover`, `Composer`, `AgentModePicker` |
 | `Components/Tools/` | `ToolCallPanel`, `ToolCallRow` |
 | `Components/Models/` | `ModelsPanel` (settings CRUD), `ModelSlugPicker` (agent pick) |
 | `Components/Theme/` | `ThemeSwitcher` |
@@ -65,11 +65,14 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `ChatPanel` | Transcript (`.chat-panel__turns` flex-scrolls inside the main column; stick-to-bottom via `dysonChat` in `theme.js` while near bottom / on new turns); forwards model / effort / mode / git branch / `OnNewSession` to Composer |
 | `TurnBlock` | Single turn (title left; muted mono local `dd/MM/yyyy HH:mm` on header right from `StartedUtc`/`CompletedUtc` — start only while in progress, `{start} – {end}` when complete; not in model transcript; older turns collapse when a new turn starts — header click toggles expand/collapse; user prompt with right-side spinner while reply in flight; hover → danger cancel SVG click cancels; when idle, muted Retry (`icons/retry.svg`) resubmits the prompt; optional expandable **Thinking** section above the reply when the model emits reasoning (`ReasoningText` / live preview — auto-open while streaming, collapsed when finished); streaming plain-text preview while `IsStreaming`, Markdig assistant body when complete, tools; **`SubagentCard`** under each completed/working `StartSubagent` tool call) |
 | `SubagentCard` | Compact parent-turn card: child title + muted model label (`Alias · Provider / slug`, child provider with parent fallback) + latest child turn title + spinner while running; click → `NavigateToSessionAsync` |
+| `SubagentEventBlock` | Expandable “Subagent event” transcript block (kind, subagent, eventId, payload); spinner while unaddressed |
+| `AskQuestionPopover` | Composer overlay for root `AskQuestion` / L1 `askQuestion` parent events; per-question Skip; Submit when all resolved; disables Send while open |
 | `Composer` | Prompt + left-aligned toolbar (model chip, **Effort** `<select>` of the selected slug’s `ReasoningModes` plus **None** (null → omit; legacy current value kept as an extra option if not in the list), mode, git branch chip); typing `/` as the whole prompt token opens a dense slash-command overlay above the textarea (`/ask` `/plan` `/work` modes, `/new` → `OnNewSession` / `StartNewAsync`, `/[model]` fuzzy match on slug/alias like the model picker — applies to the live session via `SetSessionModelSlugAsync` when focused; max 5; ↑↓ Enter Esc; send strips+applies a leading command). Logic in `ComposerSlashCommands` (+ startup `SelfCheck`) |
 | `ToolCallPanel` / `ToolCallRow` | Live tool status |
 | `ThemeSwitcher` | Light/Dark + Blue/Green/Red/Purple (settings → General) |
 | `SessionHeader` | Title (`DisplayTitle`), mode, ids, MCP, git branch, app mode; when viewing a child (`ParentSessionId` set), **← Parent** → `NavigateToParentAsync` |
 | `SessionTodoOverview` | Between `SessionHeader` and `ChatPanel`; hidden when the session todo list is empty; collapsed (default) shows `{complete}/{total} tasks done`; expanded lists DisplayName, TaskCode, status badge, comments; refreshes on `TodosChanged` via host `Notify` |
+| `SessionSubagentOverview` | Below todos; session-level roster of direct children (not only spawn-turn cards); collapsed shows `{n} subagents ({active} active)`; expanded reuses `SubagentCard`; refreshes on host `Notify` after hydrate / spawn |
 | `ModelsPanel` | Provider/slug CRUD — settings → Models; OpenAICompatible shows Completions/Responses API mode toggle; slug create/edit **Reasoning modes** chip/list editor + default reasoning effort (new forms prefill `high`; blank = omit); **Repair mis-tagged providers** fixes demo rows that have credentials |
 | `SettingsLayout` | Settings side nav + content |
 
@@ -96,12 +99,15 @@ General also hosts **Web search summarizer**: optional slug stored in `app_setti
 - **Navigate:** `NavigateToSessionAsync(Guid)` / `NavigateToParentAsync()` — focus live registry entry or load from DB; sidebar stays **roots only** (children via cards / back, not listed).
 - **Subagent cards:** `GetSubagentCardState(persistenceId)` → title, `ModelLabel` (child `Provider`, else parent), latest turn `AgentTitle`, `IsRunning` / status for `SubagentCard`.
 - **Auto-turn on report:** on parent `SubagentCompleted` / `SubagentFailed` interrupt, enqueue a harness report prompt for that parent; when parent `!IsBusy`, FIFO `PromptAsync` with the report summary under `## Report` (does not cancel in-flight parent work). Kickoff failures also surface a concrete reason here.
+- **Subagent events:** on `SubagentEvent`, show `SubagentEventBlock`; general kinds FIFO-auto-prompt `RespondToSubagentEvent`; `askQuestion` opens `AskQuestionPopover` (no parent LLM auto-Respond).
+- **AskQuestion (root):** pending questions bind to composer popover; answers complete via `RespondToAskQuestion`.
 - **New session:** `StartNewSessionAsync(agentMode, modelSlugId, workDirectoryId)` — workdir required → resolves provider kind → `OpenAiCompatibleAgentSession` or `DemoDysonAgentSession`
 - **Switch model:** `SetSessionModelSlugAsync(modelSlugId)` — same provider kind only; swaps live `session.Provider`, resets effort to the slug’s `DefaultReasoningEffort`, and persists `ModelSlugId` + `ReasoningEffort`; cross-kind (demo ↔ OpenAI) rejected (`LastError`: start a new session); blocked while busy; with no session, updates pending effort for the next New session
 - **Session effort:** `SetSessionReasoningEffortAsync(effort)` — overrides session `ReasoningEffort` / live provider only (not the slug default); empty omits the request field; persists when a session is focused; blocked while busy
 - **Delete session:** `DeleteSessionAsync(sessionId)` — confirms in UI, then store delete (subtree + cascaded turns/logs); detaches if it was the active session
-- **Resume:** `GetFullSessionAsync` → re-resolves provider from `ModelSlugId` + session `ReasoningEffort` (null → slug default) → same branch as new session; restores todos into the live session
+- **Resume:** `GetFullSessionAsync` → re-resolves provider from `ModelSlugId` + session `ReasoningEffort` (null → slug default) → same branch as new session; restores todos into the live session; hydrates direct DB children into `SubSessions` / `SubagentsById` (quiet child loads skip `SessionResumed` logs) so Wait/Inspect/Stop and `SessionSubagentOverview` work after cold resume
 - **Todos:** host subscribes `TodosChanged` → `Notify()` so `SessionTodoOverview` refreshes without a full reload; MCP todo tools mutate the focused session’s own list
+- **Subagents overview:** `SessionSubagentOverview` binds to `Session.SubSessions` (session-owned roster); spawn-turn `SubagentCard`s remain under `TurnBlock`
 - **Rename:** demo tool executor handles `RenameSession` → `RenameAsync` + persist `Title` + `SessionRenamed` log; host `SessionRenamed` notifies UI to refresh list/header
 - **Cancel prompt:** `CancelPrompt()` cancels the linked CTS used by the in-flight `PromptAsync`; latest busy turn spinner hover shows a danger cancel cross (`icons/cancel.svg`) and click invokes it
 - **Resubmit prompt:** idle user turns show a muted Retry control on `.turn-block__user` (`icons/retry.svg`); click re-sends that turn’s `Instruction` through `OnSubmit` / `PromptAsync` as a new turn (disabled while `SessionBusy`)

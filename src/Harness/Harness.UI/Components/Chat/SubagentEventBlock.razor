@@ -1,0 +1,64 @@
+@namespace Harness.UI.Components.Chat
+@using Harness.UI.Demo
+
+<article class="turn-block subagent-event-block @(_expanded ? null : "turn-block--collapsed") @(Item.IsAddressed ? "is-addressed" : null)">
+    <header class="turn-block__header"
+            role="button"
+            tabindex="0"
+            aria-expanded="@_expanded"
+            @onclick="Toggle"
+            @onkeydown="HandleHeaderKeyDown">
+        <div class="turn-block__header-main">
+            <div class="turn-block__title">Subagent event</div>
+            <div class="turn-block__kind mono">@Item.Kind · @ShortId(Item.EventId)</div>
+        </div>
+        <div class="turn-block__timestamp mono subagent-event-block__meta">
+            @if (!Item.IsAddressed)
+            {
+                <span class="turn-block__spinner" aria-label="Waiting for response"></span>
+            }
+            <span>@FormatLocal(Item.Timestamp)</span>
+            <span class="subagent-event-block__chevron" aria-hidden="true">@(_expanded ? "▾" : "▸")</span>
+        </div>
+    </header>
+    @if (_expanded)
+    {
+        <div class="turn-block__body subagent-event-block__body">
+            <div class="subagent-event-block__row">
+                <span class="subagent-event-block__label">Subagent</span>
+                <span>@(Item.SubagentTitle ?? $"#{Item.SubagentId}") (@Item.SubagentId)</span>
+            </div>
+            <div class="subagent-event-block__row">
+                <span class="subagent-event-block__label">eventId</span>
+                <span class="mono">@Item.EventId.ToString("D")</span>
+            </div>
+            <div class="subagent-event-block__row">
+                <span class="subagent-event-block__label">kind</span>
+                <span>@Item.Kind</span>
+            </div>
+            <div class="subagent-event-block__payload">
+                <div class="subagent-event-block__label">payload</div>
+                <pre>@Item.Payload</pre>
+            </div>
+        </div>
+    }
+</article>
+
+@code {
+    private bool _expanded;
+
+    [Parameter, EditorRequired] public DysonSubagentEventUiItem Item { get; set; } = default!;
+
+    private void Toggle() => _expanded = !_expanded;
+
+    private void HandleHeaderKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is "Enter" or " ")
+            Toggle();
+    }
+
+    private static string ShortId(Guid id) => id.ToString("N")[..8];
+
+    private static string FormatLocal(DateTimeOffset timestamp) =>
+        timestamp.ToLocalTime().ToString("dd/MM/yyyy HH:mm");
+}
