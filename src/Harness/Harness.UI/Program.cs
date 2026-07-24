@@ -13,6 +13,11 @@ if (searchCheck.IsError)
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Without launchSettings (ASPNETCORE_ENVIRONMENT=Production), MapStaticAssets
+// looks under wwwroot and throws FileNotFoundException for scoped CSS / blazor.web.js.
+if (!builder.Environment.IsDevelopment())
+    builder.WebHost.UseStaticWebAssets();
+
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
@@ -26,6 +31,7 @@ builder.Services.AddScoped(_ =>
 builder.Services.AddScoped<DysonModelStore>();
 builder.Services.AddScoped<DysonSessionStore>();
 builder.Services.AddScoped<DysonWorkDirectoryStore>();
+builder.Services.AddScoped<DysonAppSettingsStore>();
 builder.Services.AddScoped(sp =>
 {
     var factory = sp.GetRequiredService<IHttpClientFactory>();

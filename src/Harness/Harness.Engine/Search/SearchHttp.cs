@@ -32,9 +32,13 @@ public static class SearchHttp
         {
             Timeout = TimeSpan.FromSeconds(15),
         };
+        // Browser UA keeps HTML SERP scrapes working; Api-User-Agent identifies us to Wikipedia.
+        // ponytail: if MediaWiki starts rejecting browser UA, switch User-Agent to the Api-User-Agent value.
+        const string identity = "DysonHarness/1.0 (+https://github.com/EntitySystems/DysonHarness)";
         client.DefaultRequestHeaders.TryAddWithoutValidation(
             "User-Agent",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Api-User-Agent", identity);
         return client;
     }
 

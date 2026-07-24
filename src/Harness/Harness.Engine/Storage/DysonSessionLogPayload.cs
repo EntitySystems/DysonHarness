@@ -26,7 +26,11 @@ public sealed record DysonSessionLogToolCall(
     string? ResultContent = null,
     bool? IsError = null);
 
-public sealed record DysonSessionLogInterrupt(string InterruptKind, int? SubagentId = null, string? Summary = null);
+public sealed record DysonSessionLogInterrupt(
+    string InterruptKind,
+    int? SubagentId = null,
+    string? Summary = null,
+    Guid? PersistenceId = null);
 
 public sealed record DysonSessionLogContextOptimized(int TurnsCompacted, int? TokenEstimate = null);
 

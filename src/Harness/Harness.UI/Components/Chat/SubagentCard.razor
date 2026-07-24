@@ -1,0 +1,60 @@
+@namespace Harness.UI.Components.Chat
+@using DysonHarness
+@using Harness.UI.Demo
+@implements IDisposable
+@inject DysonUiHost Host
+
+@if (PersistenceId != Guid.Empty)
+{
+    <button type="button"
+            class="subagent-card"
+            title="Open subagent session"
+            @onclick="NavigateAsync">
+        <div class="subagent-card__text">
+            <div class="subagent-card__title">@(_state?.Title ?? "Subagent")</div>
+            @if (!string.IsNullOrWhiteSpace(_state?.LatestTurnAgentTitle))
+            {
+                <div class="subagent-card__turn">@_state.LatestTurnAgentTitle</div>
+            }
+        </div>
+        @if (_state?.IsRunning == true)
+        {
+            <span class="subagent-card__spinner" aria-hidden="true"></span>
+        }
+    </button>
+}
+
+@code {
+    [Parameter, EditorRequired] public Guid PersistenceId { get; set; }
+
+    private DysonSubagentCardState? _state;
+
+    protected override void OnInitialized()
+    {
+        Host.Changed += OnHostChanged;
+        RefreshState();
+    }
+
+    protected override void OnParametersSet() => RefreshState();
+
+    private void OnHostChanged() => _ = InvokeAsync(() =>
+    {
+        RefreshState();
+        StateHasChanged();
+    });
+
+    private void RefreshState() =>
+        _state = PersistenceId == Guid.Empty
+            ? null
+            : Host.GetSubagentCardState(PersistenceId);
+
+    private async Task NavigateAsync()
+    {
+        if (PersistenceId == Guid.Empty)
+            return;
+
+        await Host.NavigateToSessionAsync(PersistenceId);
+    }
+
+    public void Dispose() => Host.Changed -= OnHostChanged;
+}

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -6,23 +7,26 @@ namespace DysonHarness;
 
 /// <summary>
 /// Executes workspace-scoped MCP tools against a work directory root, plus RenameSession,
-/// ShellExecute, and in-process web search/fetch tools.
+/// GetDateTime, ShellExecute, subagent spawn/report tools, and in-process web search/fetch tools.
 /// Other catalog tools return a not-implemented stub result.
 /// </summary>
 public sealed class DysonWorkspaceToolExecutor
 {
     private readonly DysonAgentSession _session;
     private readonly string _workRoot;
+    private readonly HttpClient _http;
     private readonly DysonSessionStore? _store;
 
     public DysonWorkspaceToolExecutor(
         DysonAgentSession session,
         string workDirectoryAbsolutePath,
+        HttpClient http,
         DysonSessionStore? store = null)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         ArgumentException.ThrowIfNullOrWhiteSpace(workDirectoryAbsolutePath);
         _workRoot = Path.GetFullPath(workDirectoryAbsolutePath);
+        _http = http ?? throw new ArgumentNullException(nameof(http));
         _store = store;
     }
 
@@ -37,6 +41,12 @@ public sealed class DysonWorkspaceToolExecutor
             return call.ToolName switch
             {
                 "RenameSession" => await RenameSessionAsync(call, cancellationToken).ConfigureAwait(false),
+                "GetDateTime" => await GetDateTimeAsync(call, cancellationToken).ConfigureAwait(false),
+                "StartSubagent" => await StartSubagentAsync(call, cancellationToken).ConfigureAwait(false),
+                "WaitForSubagent" => await WaitForSubagentAsync(call, cancellationToken).ConfigureAwait(false),
+                "InspectSubagentLog" => await InspectSubagentLogAsync(call, cancellationToken).ConfigureAwait(false),
+                "StopSubagent" => await StopSubagentAsync(call, cancellationToken).ConfigureAwait(false),
+                "SubmitSubagentReport" => await SubmitSubagentReportAsync(call, cancellationToken).ConfigureAwait(false),
                 "ReadFile" => await ReadFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateFile" => await CreateFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "WriteFile" => await WriteFileAsync(call, cancellationToken).ConfigureAwait(false),
@@ -135,6 +145,257 @@ public sealed class DysonWorkspaceToolExecutor
         }
 
         return Ok(call, $"Renamed session to \"{_session.DisplayTitle}\".");
+    }
+
+    private Task<DysonToolCallResult> GetDateTimeAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var timezone = "utc";
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            if (doc.RootElement.TryGetProperty("timezone", out var tzProp)
+                && tzProp.ValueKind == JsonValueKind.String)
+            {
+                var tz = tzProp.GetString();
+                if (string.Equals(tz, "local", StringComparison.OrdinalIgnoreCase))
+                    timezone = "local";
+                else if (!string.IsNullOrWhiteSpace(tz)
+                         && !string.Equals(tz, "utc", StringComparison.OrdinalIgnoreCase))
+                    return Task.FromResult(Error(call, "GetDateTime: timezone must be 'utc' or 'local'."));
+            }
+        }
+        catch (JsonException)
+        {
+            return Task.FromResult(Error(call, "GetDateTime: invalid JSON arguments."));
+        }
+
+        var now = timezone == "local" ? DateTimeOffset.Now : DateTimeOffset.UtcNow;
+        var iso = timezone == "utc"
+            ? now.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture)
+            : now.ToString("yyyy-MM-dd'T'HH:mm:ss.fffzzz", CultureInfo.InvariantCulture);
+        var display = now.ToString("dd/MM/yyyy HH:mm", CultureInfo.InvariantCulture);
+
+        var content = $"timezone: {timezone}\ndatetime: {iso}\ndisplay: {display}";
+        return Task.FromResult(Ok(call, content));
+    }
+
+    private async Task<DysonToolCallResult> StartSubagentAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        string? agentMode;
+        string? task;
+        string? context;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var root = doc.RootElement;
+            var mode = RequireString(root, "agentMode");
+            if (mode.IsError)
+                return Error(call, mode.Error);
+            var taskResult = RequireString(root, "task");
+            if (taskResult.IsError)
+                return Error(call, taskResult.Error);
+
+            agentMode = mode.Value;
+            task = taskResult.Value;
+            context = GetOptionalString(root, "context");
+        }
+        catch (JsonException)
+        {
+            return Error(call, "StartSubagent: invalid JSON arguments.");
+        }
+
+        var started = await _session.CreateChildAsync(agentMode, task, context, cancellationToken)
+            .ConfigureAwait(false);
+        if (started.IsError)
+            return Error(call, started.Error);
+
+        var r = started.Value;
+        return Ok(call, JsonSerializer.Serialize(new
+        {
+            subagentId = r.SubagentId,
+            persistenceId = r.PersistenceId,
+            agentMode = r.AgentMode,
+            title = r.Title,
+        }));
+    }
+
+    private async Task<DysonToolCallResult> WaitForSubagentAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        int subagentId;
+        int? timeoutMs;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var id = GetInt(doc.RootElement, "subagentId");
+            if (id is null or < 1)
+                return Error(call, "WaitForSubagent: subagentId (≥ 1) is required.");
+            subagentId = id.Value;
+            timeoutMs = GetInt(doc.RootElement, "timeoutMs");
+        }
+        catch (JsonException)
+        {
+            return Error(call, "WaitForSubagent: invalid JSON arguments.");
+        }
+
+        var waited = await _session.WaitForSubagentAsync(subagentId, timeoutMs, cancellationToken)
+            .ConfigureAwait(false);
+        return waited.IsError ? Error(call, waited.Error) : Ok(call, waited.Value);
+    }
+
+    private Task<DysonToolCallResult> InspectSubagentLogAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        int subagentId;
+        int? maxLines;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var id = GetInt(doc.RootElement, "subagentId");
+            if (id is null or < 1)
+                return Task.FromResult(Error(call, "InspectSubagentLog: subagentId (≥ 1) is required."));
+            subagentId = id.Value;
+            maxLines = GetInt(doc.RootElement, "maxLines");
+        }
+        catch (JsonException)
+        {
+            return Task.FromResult(Error(call, "InspectSubagentLog: invalid JSON arguments."));
+        }
+
+        var inspected = _session.InspectSubagentLog(subagentId, maxLines);
+        return Task.FromResult(
+            inspected.IsError ? Error(call, inspected.Error) : Ok(call, inspected.Value));
+    }
+
+    private async Task<DysonToolCallResult> StopSubagentAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        int subagentId;
+        string? reason;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var id = GetInt(doc.RootElement, "subagentId");
+            if (id is null or < 1)
+                return Error(call, "StopSubagent: subagentId (≥ 1) is required.");
+            subagentId = id.Value;
+            reason = GetOptionalString(doc.RootElement, "reason");
+        }
+        catch (JsonException)
+        {
+            return Error(call, "StopSubagent: invalid JSON arguments.");
+        }
+
+        if (!_session.TryGetSubagent(subagentId, out var child))
+            return Error(call, $"Unknown subagentId {subagentId}.");
+
+        var stopped = await _session.StopSubagentAsync(subagentId, reason, cancellationToken)
+            .ConfigureAwait(false);
+        if (stopped.IsError)
+            return Error(call, stopped.Error);
+
+        await PersistSessionStatusAsync(child, child.Status, reason, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Ok(call, stopped.Value);
+    }
+
+    private async Task<DysonToolCallResult> SubmitSubagentReportAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        string summary;
+        var failed = false;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var summaryResult = RequireString(doc.RootElement, "summary");
+            if (summaryResult.IsError)
+                return Error(call, summaryResult.Error);
+            summary = summaryResult.Value;
+
+            if (doc.RootElement.TryGetProperty("status", out var statusProp)
+                && statusProp.ValueKind == JsonValueKind.String)
+            {
+                var status = statusProp.GetString();
+                if (string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase))
+                    failed = true;
+                else if (!string.IsNullOrWhiteSpace(status)
+                         && !string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Error(call, "SubmitSubagentReport: status must be 'completed' or 'failed'.");
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            return Error(call, "SubmitSubagentReport: invalid JSON arguments.");
+        }
+
+        var submitted = await _session.SubmitSubagentReportAsync(summary, failed, cancellationToken)
+            .ConfigureAwait(false);
+        if (submitted.IsError)
+            return Error(call, submitted.Error);
+
+        await PersistSessionStatusAsync(_session, _session.Status, summary, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (_session.Parent is not null && _store is not null && _session.Parent.PersistenceId != Guid.Empty)
+        {
+            var interruptLog = DysonSessionLogPayload.CreateEntry(
+                _session.Parent.PersistenceId,
+                DysonSessionLogKind.Interrupt,
+                new DysonSessionLogInterrupt(
+                    failed
+                        ? DysonAgentInterruptKind.SubagentFailed.ToString()
+                        : DysonAgentInterruptKind.SubagentCompleted.ToString(),
+                    SubagentId: _session.Id,
+                    Summary: summary,
+                    PersistenceId: _session.PersistenceId == Guid.Empty ? null : _session.PersistenceId));
+
+            await _store.AppendLogAsync(interruptLog, cancellationToken).ConfigureAwait(false);
+        }
+
+        return Ok(call, submitted.Value);
+    }
+
+    private async Task PersistSessionStatusAsync(
+        DysonAgentSession session,
+        DysonSessionStatus status,
+        string? reason,
+        CancellationToken cancellationToken)
+    {
+        if (_store is null || session.PersistenceId == Guid.Empty)
+            return;
+
+        var persist = await _store.UpdateSessionMetaAsync(
+            new DysonSessionMetaUpdate
+            {
+                SessionId = session.PersistenceId,
+                Status = status,
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        if (persist.IsError)
+            return;
+
+        var statusLog = DysonSessionLogPayload.CreateEntry(
+            session.PersistenceId,
+            DysonSessionLogKind.SessionStatusChanged,
+            new DysonSessionLogSessionStatusChanged(status, reason));
+
+        await _store.AppendLogAsync(statusLog, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<DysonToolCallResult> ReadFileAsync(
@@ -516,9 +777,15 @@ public sealed class DysonWorkspaceToolExecutor
 
         var result = await SearchOrchestrator.FreeSearchAsync(options.Value, cancellationToken)
             .ConfigureAwait(false);
-        return result.IsError
-            ? Error(call, result.Error)
-            : Ok(call, SearchOrchestrator.ToJson(result.Value));
+        if (result.IsError)
+            return Error(call, result.Error);
+
+        return await SummarizeWebOkAsync(
+                call,
+                SearchOrchestrator.ToJson(result.Value),
+                ReadSummarizePrompt(call),
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task<DysonToolCallResult> FreeSearchAdvancedAsync(
@@ -531,9 +798,15 @@ public sealed class DysonWorkspaceToolExecutor
 
         var result = await SearchOrchestrator.FreeSearchAdvancedAsync(options.Value, cancellationToken)
             .ConfigureAwait(false);
-        return result.IsError
-            ? Error(call, result.Error)
-            : Ok(call, SearchOrchestrator.ToJson(result.Value));
+        if (result.IsError)
+            return Error(call, result.Error);
+
+        return await SummarizeWebOkAsync(
+                call,
+                SearchOrchestrator.ToJson(result.Value),
+                ReadSummarizePrompt(call),
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task<DysonToolCallResult> SearchWithSynthesisAsync(
@@ -546,9 +819,15 @@ public sealed class DysonWorkspaceToolExecutor
 
         var result = await SearchOrchestrator.SearchWithSynthesisAsync(options.Value, cancellationToken)
             .ConfigureAwait(false);
-        return result.IsError
-            ? Error(call, result.Error)
-            : Ok(call, SearchOrchestrator.ToJson(result.Value));
+        if (result.IsError)
+            return Error(call, result.Error);
+
+        return await SummarizeWebOkAsync(
+                call,
+                SearchOrchestrator.ToJson(result.Value),
+                ReadSummarizePrompt(call),
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task<DysonToolCallResult> FreeExtractAsync(
@@ -556,14 +835,20 @@ public sealed class DysonWorkspaceToolExecutor
         CancellationToken cancellationToken)
     {
         using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
-        var url = RequireString(doc.RootElement, "url");
+        var root = doc.RootElement;
+        var url = RequireString(root, "url");
         if (url.IsError)
             return Error(call, url.Error);
 
-        var maxLength = GetInt(doc.RootElement, "maxLength") ?? 5000;
+        var maxLength = GetInt(root, "maxLength") ?? 5000;
+        var summarizePrompt = GetOptionalString(root, "summarizePrompt");
         var result = await SearchFetch.FreeExtractAsync(url.Value, maxLength, cancellationToken)
             .ConfigureAwait(false);
-        return result.IsError ? Error(call, result.Error) : Ok(call, result.Value);
+        if (result.IsError)
+            return Error(call, result.Error);
+
+        return await SummarizeWebOkAsync(call, result.Value, summarizePrompt, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task<DysonToolCallResult> WebFetchAsync(
@@ -571,16 +856,26 @@ public sealed class DysonWorkspaceToolExecutor
         CancellationToken cancellationToken)
     {
         using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
-        var url = RequireString(doc.RootElement, "url");
+        var root = doc.RootElement;
+        var url = RequireString(root, "url");
         if (url.IsError)
             return Error(call, url.Error);
 
-        var maxBytes = GetInt(doc.RootElement, "maxBytes");
+        var fullHtml = GetBool(root, "fullHtml");
+        var summarizePrompt = GetOptionalString(root, "summarizePrompt");
+        // Explicit maxBytes wins; else 2MB for fullHtml, 64KB when summarizing.
+        var maxBytes = GetInt(root, "maxBytes") ?? (fullHtml ? 2_000_000 : 64_000);
         var result = await SearchFetch.WebFetchAsync(url.Value, maxBytes, cancellationToken)
             .ConfigureAwait(false);
-        return result.IsError
-            ? Error(call, result.Error)
-            : Ok(call, SearchFetch.WebFetchToJson(result.Value));
+        if (result.IsError)
+            return Error(call, result.Error);
+
+        var payload = SearchFetch.WebFetchToJson(result.Value);
+        if (fullHtml)
+            return Ok(call, payload);
+
+        return await SummarizeWebOkAsync(call, payload, summarizePrompt, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task<DysonToolCallResult> FetchGithubReadmeAsync(
@@ -588,13 +883,73 @@ public sealed class DysonWorkspaceToolExecutor
         CancellationToken cancellationToken)
     {
         using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
-        var url = RequireString(doc.RootElement, "url");
+        var root = doc.RootElement;
+        var url = RequireString(root, "url");
         if (url.IsError)
             return Error(call, url.Error);
 
+        var summarizePrompt = GetOptionalString(root, "summarizePrompt");
         var result = await SearchFetch.FetchGithubReadmeAsync(url.Value, cancellationToken)
             .ConfigureAwait(false);
-        return result.IsError ? Error(call, result.Error) : Ok(call, result.Value);
+        if (result.IsError)
+            return Error(call, result.Error);
+
+        return await SummarizeWebOkAsync(call, result.Value, summarizePrompt, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Returns summary-only MCP Content when policy says summarize; otherwise raw
+    /// (already ≤1500 tokens). Parent never sees raw when summarization runs.
+    /// </summary>
+    private async Task<DysonToolCallResult> SummarizeWebOkAsync(
+        DysonToolCall call,
+        string rawContent,
+        string? summarizePrompt,
+        CancellationToken cancellationToken)
+    {
+        var tokens = new DysonTiktokenTokenCounter();
+        if (!DysonWebSearchSummarizer.ShouldSummarize(call.ToolName, rawContent, tokens))
+            return Ok(call, rawContent);
+
+        var provider = ResolveSummarizerProvider();
+        if (provider is null)
+            return Ok(call, rawContent);
+
+        var summary = await DysonWebSearchSummarizer
+            .SummarizeAsync(
+                provider,
+                _http,
+                call.ToolName,
+                call.ArgumentsJson ?? "{}",
+                rawContent,
+                summarizePrompt,
+                tokens,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return Ok(call, summary);
+    }
+
+    private OpenAiCompatibleAgentProvider? ResolveSummarizerProvider()
+    {
+        if (_session.Config.SummarizerProvider is OpenAiCompatibleAgentProvider configured)
+            return configured;
+
+        return _session.Provider as OpenAiCompatibleAgentProvider;
+    }
+
+    private static string? ReadSummarizePrompt(DysonToolCall call)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            return GetOptionalString(doc.RootElement, "summarizePrompt");
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private Result<SearchOptions, string> ParseSearchOptions(
@@ -740,5 +1095,25 @@ public sealed class DysonWorkspaceToolExecutor
         if (prop.ValueKind == JsonValueKind.String && int.TryParse(prop.GetString(), out var parsed))
             return parsed;
         return null;
+    }
+
+    private static bool GetBool(JsonElement root, string name, bool defaultValue = false)
+    {
+        if (!root.TryGetProperty(name, out var prop))
+            return defaultValue;
+        return prop.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => defaultValue,
+        };
+    }
+
+    private static string? GetOptionalString(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var prop) || prop.ValueKind != JsonValueKind.String)
+            return null;
+        var value = prop.GetString();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 }

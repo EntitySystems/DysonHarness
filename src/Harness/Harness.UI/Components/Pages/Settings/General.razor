@@ -1,14 +1,74 @@
 @page "/settings/general"
 @layout SettingsLayout
+@using DysonHarness
+@using Harness.UI.Components.Models
+@inject DysonAppSettingsStore AppSettings
 
 <PageTitle>General — Settings</PageTitle>
 
 <div class="settings-page">
     <h1 class="settings-page__title">General</h1>
     <p class="settings-page__copy">
-        Choose the UI theme and accent color. Preferences are stored in this browser.
+        Choose the UI theme and accent color. Theme preferences are stored in this browser.
+        The web search summarizer model is stored in the local app database.
     </p>
     <div class="settings-page__panel panel">
         <ThemeSwitcher />
     </div>
+
+    <h2 class="settings-page__title" style="font-size:1.1rem;margin-top:1.5rem;">Web search summarizer</h2>
+    <p class="settings-page__copy">
+        Model used to compress FreeSearch / WebFetch / extract tool results before they enter the agent transcript.
+        Leave as “Use session model” to reuse the chat model.
+    </p>
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="error-banner">@_error</div>
+    }
+    <div class="settings-page__panel panel">
+        <ModelSlugPicker SelectedSlugId="_summarizerSlugId"
+                         SelectedSlugIdChanged="OnSummarizerSlugChangedAsync"
+                         AllowEmpty="true"
+                         EmptyLabel="Use session model" />
+        @if (_saved)
+        {
+            <p class="settings-page__copy" style="margin:8px 0 0;">Saved.</p>
+        }
+    </div>
 </div>
+
+@code {
+    private Guid? _summarizerSlugId;
+    private string? _error;
+    private bool _saved;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var get = await AppSettings.GetAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId);
+        if (get.IsError)
+        {
+            _error = get.Error;
+            return;
+        }
+
+        if (Guid.TryParse(get.Value, out var id) && id != Guid.Empty)
+            _summarizerSlugId = id;
+    }
+
+    private async Task OnSummarizerSlugChangedAsync(Guid? id)
+    {
+        _error = null;
+        _saved = false;
+        _summarizerSlugId = id;
+
+        var value = id is Guid g && g != Guid.Empty ? g.ToString("D") : null;
+        var set = await AppSettings.SetAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId, value);
+        if (set.IsError)
+        {
+            _error = set.Error;
+            return;
+        }
+
+        _saved = true;
+    }
+}

@@ -20,6 +20,7 @@ public sealed class DysonDbContext : DbContext
     public DbSet<DysonSessionEntity> Sessions => Set<DysonSessionEntity>();
     public DbSet<DysonTurnEntity> Turns => Set<DysonTurnEntity>();
     public DbSet<DysonSessionLogEntry> SessionLogs => Set<DysonSessionLogEntry>();
+    public DbSet<DysonAppSettingEntity> AppSettings => Set<DysonAppSettingEntity>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -127,6 +128,14 @@ public sealed class DysonDbContext : DbContext
                 .WithMany(s => s.Logs)
                 .HasForeignKey(x => x.SessionId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DysonAppSettingEntity>(e =>
+        {
+            e.ToTable("app_settings");
+            e.HasKey(x => x.Key);
+            e.Property(x => x.Key).IsRequired();
+            e.Property(x => x.Value).IsRequired();
         });
     }
 

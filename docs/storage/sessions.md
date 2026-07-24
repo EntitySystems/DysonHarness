@@ -82,11 +82,14 @@ Task<VoidResult<string>> UpsertTurnAsync(DysonTurnEntity turn, CancellationToken
 Task<VoidResult<string>> AppendLogAsync(DysonSessionLogEntry entry, CancellationToken ct = default);
 Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListSessionsAsync(Guid? workDirectoryId = null, bool rootsOnly = true, CancellationToken ct = default);
 Task<Result<DysonPersistedSession, string>> GetFullSessionAsync(Guid sessionId, CancellationToken ct = default);
+Task<VoidResult<string>> DeleteSessionAsync(Guid sessionId, CancellationToken ct = default);
 ```
 
 `ListSessionsAsync` optionally filters by `WorkDirectoryId`. `DysonSessionCreateRequest` / summaries include `WorkDirectoryId`.
 
 `GetFullSessionAsync` returns session row + all turns (ordered) + all log entries (ordered by `Sequence`).
+
+`DeleteSessionAsync` removes the session and descendant subagent sessions (`ParentSessionId` is Restrict, so children are deleted deepest-first). Turns and session logs cascade.
 
 ### `DysonPersistedSession`
 
@@ -105,7 +108,11 @@ OpenAI-compatible path: `OpenAiCompatibleAgentSession.LoadAsync(store, sessionId
 
 ### Subagents
 
-Parent FK (`ParentSessionId`) links the graph. Root resume loads root turns fully; subagent tree registration may be lazy / best-effort in the demo host.
+Parent FK (`ParentSessionId`) links the graph. `CreateChildAsync` persists the child with `ParentSessionId = parent.PersistenceId`, allocates runtime id ≥ 1, and starts a background prompt. Child status updates via `UpdateSessionMetaAsync` on `SubmitSubagentReport` / stop / fail.
+
+`ListSessionsAsync(..., rootsOnly: true)` (default) hides children from the sidebar; drill-in is UI navigation only (`NavigateToSessionAsync` / `NavigateToParentAsync`). Root resume loads root turns fully; live host keeps parent+children in a session registry so focus switches do not dispose running children.
+
+Orchestrator policy (engine soft gates + prompts): Plan banned as subagent; Explore never spawns; Drone may spawn Explore only; Wait only for prerequisites; completion via `SubmitSubagentReport` → parent interrupt → host FIFO auto-turn. See [engine README](../engine/README.md)#orchestrator-subagents.
 
 ## Live write hooks
 

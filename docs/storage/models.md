@@ -28,7 +28,7 @@ Prebuild scripts (`scripts/resolve-app-mode.sh` / `.ps1`) and MSBuild `GenerateA
 - `GetDatabasePath(mode)` → `{root}/dyson.db`
 - Ensure the directory exists on first open
 
-Single SQLite file holds providers, slugs, and sessions for that mode.
+Single SQLite file holds providers, slugs, sessions, and app settings for that mode.
 
 ## Database
 
@@ -36,6 +36,17 @@ Single SQLite file holds providers, slugs, and sessions for that mode.
 - `DysonDbContext` → `UseSqlite` at `DysonAppPaths.GetDatabasePath(DysonBuildInfo.Current)`
 - `Database.Migrate()` on open; migrations under `Harness.Engine/Migrations/`
 - Entity timestamps are `DateTime` (UTC). Do not use `DateTimeOffset` on EF entities or in EF `OrderBy` queries (SQLite limitation).
+
+## App settings (`app_settings`)
+
+Thin key/value store (`DysonAppSettingEntity` / `DysonAppSettingsStore`).
+
+| Property | Notes |
+| -------- | ----- |
+| `Key` | string PK |
+| `Value` | text |
+
+Known keys (`DysonAppSettingKeys`): `web_search_summarizer_model_slug_id` — Guid string of the model slug for web-search/fetch summarization; empty / missing ⇒ session model.
 
 ## Model providers (`model_providers`)
 

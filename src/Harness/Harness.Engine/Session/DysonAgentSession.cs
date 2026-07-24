@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Text;
+using System.Text.Json;
 
 namespace DysonHarness;
 
@@ -8,6 +10,10 @@ public abstract class DysonAgentSession
     private readonly ConcurrentQueue<DysonAgentInterrupt> _interrupts = new();
     private readonly SemaphoreSlim _interruptSignal = new(0);
     private readonly ConcurrentQueue<string> _logLines = new();
+    private readonly object _terminalGate = new();
+    private readonly TaskCompletionSource<(DysonSessionStatus Status, string? Summary)> _terminalTcs =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private CancellationTokenSource? _runCts;
 
     protected DysonAgentSession(
         string agentMode,
@@ -36,6 +42,18 @@ public abstract class DysonAgentSession
     /// <summary>UI/list title mirrored from persisted <c>sessions.Title</c>.</summary>
     public string? DisplayTitle { get; protected set; }
 
+    /// <summary>Live parent when this session was spawned via <see cref="RegisterSubagent"/>.</summary>
+    public DysonAgentSession? Parent { get; private set; }
+
+    /// <summary>Mirrored from persisted session status (Active until report/stop/fail).</summary>
+    public DysonSessionStatus Status { get; private set; } = DysonSessionStatus.Active;
+
+    /// <summary>Last SubmitSubagentReport / stop / fail summary when terminal.</summary>
+    public string? LastReportSummary { get; private set; }
+
+    public bool IsTerminal =>
+        Status is DysonSessionStatus.Completed or DysonSessionStatus.Stopped or DysonSessionStatus.Failed;
+
     public DysonAgentSessionConfig Config { get; }
 
     public string Mode { get; }
@@ -58,7 +76,7 @@ public abstract class DysonAgentSession
     protected int AllocateSubagentId() => Interlocked.Increment(ref _nextSubagentId);
 
     /// <summary>
-    /// Assigns a unique subagent Id (≥ 1), then registers the child in
+    /// Assigns a unique subagent Id (≥ 1), sets <see cref="Parent"/>, then registers the child in
     /// <see cref="SubSessions"/> and <see cref="SubagentsById"/>.
     /// </summary>
     /// <exception cref="InvalidOperationException">Child is already registered.</exception>
@@ -71,16 +89,39 @@ public abstract class DysonAgentSession
 
         var id = AllocateSubagentId();
         child.Id = id;
+        child.Parent = this;
+        OmitRootTaskCompletionTools(child.McpPipeline);
         SubagentsById[id] = child;
         SubSessions.Add(child);
+        SubagentSpawned?.Invoke(this, child);
     }
+
+    /// <summary>
+    /// Subagents finish via <c>SubmitSubagentReport</c>; hide root CompleteTask flow tools from their catalog.
+    /// </summary>
+    private static void OmitRootTaskCompletionTools(DysonMcpPipeline pipeline)
+    {
+        pipeline.Tools.Remove("CompleteTask");
+        pipeline.Tools.Remove("ConfirmTaskComplete");
+        pipeline.Tools.Remove("ContinueWork");
+    }
+
+    public bool TryGetSubagent(int subagentId, out DysonAgentSession child) =>
+        SubagentsById.TryGetValue(subagentId, out child!);
 
     public void EnqueueInterrupt(DysonAgentInterrupt interrupt)
     {
         ArgumentNullException.ThrowIfNull(interrupt);
         _interrupts.Enqueue(interrupt);
         _interruptSignal.Release();
+        InterruptEnqueued?.Invoke(this, interrupt);
     }
+
+    /// <summary>Raised after each <see cref="EnqueueInterrupt"/> (host auto-turn / cards).</summary>
+    public event EventHandler<DysonAgentInterrupt>? InterruptEnqueued;
+
+    /// <summary>Raised after <see cref="RegisterSubagent"/> (host session registry).</summary>
+    public event EventHandler<DysonAgentSession>? SubagentSpawned;
 
     public bool TryDequeueInterrupt(out DysonAgentInterrupt interrupt)
     {
@@ -117,13 +158,333 @@ public abstract class DysonAgentSession
             "Interrupt signal received but queue was empty.");
     }
 
-    protected void NotifySubagentCompleted(int subagentId, string? summary) =>
+    protected void NotifySubagentCompleted(int subagentId, string? summary, Guid? persistenceId = null) =>
         EnqueueInterrupt(new DysonAgentInterrupt
         {
             Kind = DysonAgentInterruptKind.SubagentCompleted,
             SubagentId = subagentId,
+            PersistenceId = persistenceId,
             Summary = summary,
         });
+
+    protected void NotifySubagentStopped(int subagentId, string? summary, Guid? persistenceId = null) =>
+        EnqueueInterrupt(new DysonAgentInterrupt
+        {
+            Kind = DysonAgentInterruptKind.SubagentStopped,
+            SubagentId = subagentId,
+            PersistenceId = persistenceId,
+            Summary = summary,
+        });
+
+    protected void NotifySubagentFailed(int subagentId, string? summary, Guid? persistenceId = null) =>
+        EnqueueInterrupt(new DysonAgentInterrupt
+        {
+            Kind = DysonAgentInterruptKind.SubagentFailed,
+            SubagentId = subagentId,
+            PersistenceId = persistenceId,
+            Summary = summary,
+        });
+
+    /// <summary>
+    /// Soft spawn policy: Plan banned; Explore never spawns; Drone may spawn Explore only
+    /// (Drone→Drone rejected). Child mode must resolve via <see cref="DysonAgentSystemPrompts.ForMode"/>.
+    /// </summary>
+    public static VoidResult<string> ValidateSubagentSpawn(
+        string parentMode,
+        string childMode,
+        IReadOnlyDictionary<string, string>? customAgents = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(parentMode);
+        ArgumentException.ThrowIfNullOrWhiteSpace(childMode);
+
+        if (string.Equals(parentMode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase))
+            return new VoidResult<string>("Explore cannot spawn subagents.");
+
+        if (string.Equals(childMode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase))
+            return new VoidResult<string>("Plan cannot be used as a subagent mode (top-level only).");
+
+        if (string.Equals(parentMode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.Equals(childMode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase))
+                return new VoidResult<string>("Drone cannot spawn another Drone by default; spawn Explore instead.");
+
+            if (!string.Equals(childMode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase))
+                return new VoidResult<string>("Drone may only spawn Explore subagents.");
+        }
+
+        var resolved = DysonAgentSystemPrompts.ForMode(childMode, customAgents);
+        if (resolved.IsError)
+            return new VoidResult<string>(resolved.Error);
+
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>Spawn a child session (non-blocking background prompt). Concrete providers implement persist + clone.</summary>
+    public abstract Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
+        string agentMode,
+        string task,
+        string? context = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Default WaitForSubagent timeout when the tool omits <c>timeoutMs</c> (5 minutes).</summary>
+    public const int DefaultWaitForSubagentTimeoutMs = 300_000;
+
+    public async Task<Result<string, string>> WaitForSubagentAsync(
+        int subagentId,
+        int? timeoutMs = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetSubagent(subagentId, out var child))
+            return Result<string, string>.AsError($"Unknown subagentId {subagentId}.");
+
+        var effectiveTimeoutMs = timeoutMs ?? DefaultWaitForSubagentTimeoutMs;
+
+        try
+        {
+            (DysonSessionStatus Status, string? Summary) terminal;
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            if (effectiveTimeoutMs >= 0)
+                timeoutCts.CancelAfter(effectiveTimeoutMs);
+
+            try
+            {
+                terminal = await child.WaitForTerminalAsync(timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return Result<string, string>.AsValue(JsonSerializer.Serialize(new
+                {
+                    subagentId,
+                    persistenceId = child.PersistenceId,
+                    status = "timeout",
+                    childStatus = child.Status.ToString(),
+                    summary = child.LastReportSummary,
+                }));
+            }
+
+            return Result<string, string>.AsValue(JsonSerializer.Serialize(new
+            {
+                subagentId,
+                persistenceId = child.PersistenceId,
+                status = terminal.Status.ToString(),
+                summary = terminal.Summary,
+            }));
+        }
+        catch (OperationCanceledException)
+        {
+            return Result<string, string>.AsError("WaitForSubagent was cancelled.");
+        }
+    }
+
+    public Result<string, string> InspectSubagentLog(int subagentId, int? maxLines = null)
+    {
+        if (!TryGetSubagent(subagentId, out var child))
+            return Result<string, string>.AsError($"Unknown subagentId {subagentId}.");
+
+        var lines = child.SnapshotLog(maxLines);
+        return Result<string, string>.AsValue(JsonSerializer.Serialize(new
+        {
+            subagentId,
+            persistenceId = child.PersistenceId,
+            status = child.Status.ToString(),
+            lines,
+        }));
+    }
+
+    public Task<Result<string, string>> StopSubagentAsync(
+        int subagentId,
+        string? reason = null,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!TryGetSubagent(subagentId, out var child))
+            return Task.FromResult(Result<string, string>.AsError($"Unknown subagentId {subagentId}."));
+
+        child.CancelBackgroundRun();
+        var summary = string.IsNullOrWhiteSpace(reason) ? "Stopped by parent." : reason.Trim();
+        if (child.TryMarkTerminal(DysonSessionStatus.Stopped, summary))
+            NotifySubagentStopped(child.Id, summary, child.PersistenceId == Guid.Empty ? null : child.PersistenceId);
+
+        return Task.FromResult(Result<string, string>.AsValue(JsonSerializer.Serialize(new
+        {
+            subagentId,
+            persistenceId = child.PersistenceId,
+            status = child.Status.ToString(),
+            summary = child.LastReportSummary,
+        })));
+    }
+
+    public Task<Result<string, string>> SubmitSubagentReportAsync(
+        string summary,
+        bool failed = false,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (string.IsNullOrWhiteSpace(summary))
+            return Task.FromResult(Result<string, string>.AsError("SubmitSubagentReport: summary is required."));
+
+        var trimmed = summary.Trim();
+        var status = failed ? DysonSessionStatus.Failed : DysonSessionStatus.Completed;
+        if (!TryMarkTerminal(status, trimmed))
+        {
+            return Task.FromResult(Result<string, string>.AsError(
+                $"SubmitSubagentReport: session already {Status}."));
+        }
+
+        if (Parent is not null)
+        {
+            if (failed)
+                Parent.NotifySubagentFailed(Id, trimmed, PersistenceId == Guid.Empty ? null : PersistenceId);
+            else
+                Parent.NotifySubagentCompleted(Id, trimmed, PersistenceId == Guid.Empty ? null : PersistenceId);
+        }
+
+        return Task.FromResult(Result<string, string>.AsValue(JsonSerializer.Serialize(new
+        {
+            subagentId = Id,
+            persistenceId = PersistenceId,
+            status = Status.ToString(),
+            summary = trimmed,
+        })));
+    }
+
+    public Task<(DysonSessionStatus Status, string? Summary)> WaitForTerminalAsync(
+        CancellationToken cancellationToken = default)
+    {
+        lock (_terminalGate)
+        {
+            if (IsTerminal)
+                return Task.FromResult((Status, LastReportSummary));
+        }
+
+        return _terminalTcs.Task.WaitAsync(cancellationToken);
+    }
+
+    /// <summary>Marks terminal status once; returns false if already terminal.</summary>
+    public bool TryMarkTerminal(DysonSessionStatus status, string? summary)
+    {
+        if (status is not (DysonSessionStatus.Completed or DysonSessionStatus.Stopped or DysonSessionStatus.Failed))
+            throw new ArgumentOutOfRangeException(nameof(status), status, "Must be a terminal status.");
+
+        lock (_terminalGate)
+        {
+            if (IsTerminal)
+                return false;
+
+            Status = status;
+            LastReportSummary = summary;
+            _terminalTcs.TrySetResult((status, summary));
+            return true;
+        }
+    }
+
+    /// <summary>Stores the CTS used to cancel the background <see cref="PromptAsync"/> for StopSubagent.</summary>
+    protected void AttachBackgroundRun(CancellationTokenSource runCts)
+    {
+        ArgumentNullException.ThrowIfNull(runCts);
+        _runCts = runCts;
+    }
+
+    protected void CancelBackgroundRun()
+    {
+        try
+        {
+            _runCts?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // already disposed
+        }
+    }
+
+    /// <summary>Builds the first-turn prompt for a spawned child (Explore/Drone get harness mandates).</summary>
+    protected static string BuildChildFirstPrompt(string agentMode, string task, string? context)
+    {
+        var sb = new StringBuilder();
+        if (string.Equals(agentMode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase))
+        {
+            sb.AppendLine(DysonAgentSystemPrompts.ExploreFirstTurnReportMandate.Trim());
+            sb.AppendLine();
+        }
+        else if (string.Equals(agentMode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase))
+        {
+            sb.AppendLine(DysonAgentSystemPrompts.DroneFirstTurnContextMandate.Trim());
+            sb.AppendLine();
+        }
+
+        sb.AppendLine(task.Trim());
+        if (!string.IsNullOrWhiteSpace(context))
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Context");
+            sb.AppendLine(context.Trim());
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    protected static string TitleFromTask(string task)
+    {
+        var t = task.Trim().Replace('\r', ' ').Replace('\n', ' ');
+        while (t.Contains("  ", StringComparison.Ordinal))
+            t = t.Replace("  ", " ", StringComparison.Ordinal);
+
+        if (t.Length <= 80)
+            return string.IsNullOrEmpty(t) ? "Subagent" : t;
+
+        return t[..80] + "…";
+    }
+
+    /// <summary>
+    /// Fire-and-forget child prompt; on unexpected failure marks Failed and notifies parent.
+    /// </summary>
+    protected static void KickOffChildPrompt(DysonAgentSession child, string prompt, CancellationTokenSource runCts)
+    {
+        ArgumentNullException.ThrowIfNull(child);
+        ArgumentNullException.ThrowIfNull(prompt);
+        ArgumentNullException.ThrowIfNull(runCts);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var result = await child.PromptAsync(prompt, runCts.Token).ConfigureAwait(false);
+                if (runCts.IsCancellationRequested || child.IsTerminal)
+                    return;
+
+                var failSummary = result.IsError
+                    ? result.Error
+                    : "Child finished without SubmitSubagentReport";
+                if (child.TryMarkTerminal(DysonSessionStatus.Failed, failSummary))
+                {
+                    child.Parent?.NotifySubagentFailed(
+                        child.Id,
+                        failSummary,
+                        child.PersistenceId == Guid.Empty ? null : child.PersistenceId);
+                }
+            }
+            catch (OperationCanceledException) when (runCts.IsCancellationRequested)
+            {
+                // StopSubagent owns terminal state.
+            }
+            catch (Exception ex)
+            {
+                if (child.TryMarkTerminal(DysonSessionStatus.Failed, ex.Message))
+                {
+                    child.Parent?.NotifySubagentFailed(
+                        child.Id,
+                        ex.Message,
+                        child.PersistenceId == Guid.Empty ? null : child.PersistenceId);
+                }
+            }
+            finally
+            {
+                runCts.Dispose();
+            }
+        });
+    }
 
     public void AppendLog(string line)
     {
@@ -183,6 +544,9 @@ public abstract class DysonAgentSession
         PersistenceId = state.Session.Id;
         Id = state.Session.RuntimeId;
         DisplayTitle = state.Session.Title;
+        Status = state.Session.Status;
+        if (IsTerminal)
+            _terminalTcs.TrySetResult((Status, LastReportSummary));
 
         TurnHistory.Clear();
         foreach (var row in state.Turns.OrderBy(t => t.Sequence))
@@ -196,8 +560,12 @@ public abstract class DysonAgentSession
                 AssistantText = row.AssistantText,
                 ToolHistoryOptimized = row.ToolHistoryOptimized,
                 CompactToolHistory = row.CompactToolHistory,
+                StartedUtc = row.CreatedUtc,
+                CompletedUtc = row.CompletedUtc,
             };
             DysonTurnToolStateSerializer.ApplyToTurn(turn, row.ToolStateJson);
+            turn.FinalizeIncompleteTools(
+                "Tool call did not complete (cancelled or interrupted).");
             TurnHistory.Add(turn);
         }
 

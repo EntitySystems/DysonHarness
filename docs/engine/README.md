@@ -27,8 +27,8 @@ When `ProviderKind == OpenAICompatible`, the host builds `OpenAiCompatibleAgentP
 - **API mode** (`OpenAiApiMode` on the provider entity): `Completions` (default) → `POST …/chat/completions`; `Responses` → `POST …/responses`.
 - **Streaming SSE** (`stream: true`) for assistant text; Completions reads `choices[0].delta.content` (+ incremental `tool_calls`, `stream_options.include_usage`); Responses handles `response.output_text.delta`, function-call assembly (`output_item.added` / `function_call_arguments.delta|done` / `output_item.done`), and `error` / `response.failed`. Session consumes chunks per tool-loop round; `AssistantText` + H1 title parse only on the final no-tool round (preview stays raw until then). Cancel/error clears `StreamingPreview`.
 - **Native function tools** with required harness `stage` on every schema.
-- **Tool loop** inside one `PromptAsync` (cap ~20 rounds): model tool_calls → staged executor → feed results → call again.
-- **Executors (v1):** `DysonWorkspaceToolExecutor` — real `RenameSession`, workdir-scoped file tools (`ReadFile`, `CreateFile`, `WriteFile`, `Grep`, `ListDirectory`, `CreateDirectory`), `ShellExecute` (session-available shells via `DysonShell`), and in-process web search/fetch tools (`FreeSearch`, `FreeSearchAdvanced`, `SearchWithSynthesis`, `FreeExtract`, `WebFetch`, `FetchGithubReadme`); other catalog tools return “not implemented yet”.
+- **Tool loop** inside one `PromptAsync` (cap ~20 rounds): model tool_calls → staged executor (web tools summarize **inside** the tool) → feed results → call again.
+- **Executors (v1):** `DysonWorkspaceToolExecutor` — real `RenameSession`, **`GetDateTime`** (host clock; `timezone`: `"utc"` default or `"local"`), workdir-scoped file tools (`ReadFile`, `CreateFile`, `WriteFile`, `Grep`, `ListDirectory`, `CreateDirectory`), `ShellExecute` (session-available shells via `DysonShell`), in-process web search/fetch tools (`FreeSearch`, `FreeSearchAdvanced`, `SearchWithSynthesis`, `FreeExtract`, `WebFetch`, `FetchGithubReadme`), and **subagent tools** (`StartSubagent`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`); other catalog tools return “not implemented yet”.
 - **RenameSession review:** every 8 turns (1-based indices **1, 9, 17, …** — when `TurnHistory.Count % 8 == 0` before adding the turn), the transcript builder appends an ephemeral yes/no `RenameSessionReviewMandate` on the **current incomplete** user message only. Turn 1 is `InitializeSession` via `DysonSessionInitialization.CreateTurn`; later review turns stay `Normal`. Completed/history turns always send clean `Instruction` — the mandate is never re-emitted. Soft every-turn rename nudges are not in system prompts; MCP description says rename only on harness review mandate or explicit user request.
 - **Cache-friendly requests** (`OpenAiCacheFriendlyTranscriptBuilder`):
   1. Stable prefix first: system/instructions (mode prompt + MCP catalog) → `tools[]` (stable sort) → prior transcript → new user/tool deltas last.
@@ -38,7 +38,7 @@ When `ProviderKind == OpenAICompatible`, the host builds `OpenAiCompatibleAgentP
   5. Completions always sends full local `messages[]`. Responses rebuilds full `input` after compaction / new user turns (`store: false`); within a tool loop may chain `previous_response_id` + `function_call_output` (`store: true` for that hop).
   6. User content for history turns is always `Instruction` only; rename-review mandate is appended only for the in-flight review turn.
 
-Root sessions have runtime `Id = 0`. Subagents get ids ≥ 1 via `RegisterSubagent`.
+Root sessions have runtime `Id = 0`. Subagents get ids ≥ 1 via `RegisterSubagent` (sets child `Parent`).
 
 ## Agent modes
 
@@ -47,15 +47,38 @@ Built-in names in `DysonAgentModes`:
 | Mode | Intent |
 | ---- | ------ |
 | `Ask` | Q&A without heavy mutation |
-| `Plan` | Planning / design |
-| `Work` | Primary work loop |
-| `Explore` | Codebase exploration |
-| `Drone` | Delegated subagent work |
+| `Plan` | Planning / design (**top-level only** — banned as a subagent mode) |
+| `Work` | Primary work loop / orchestrator |
+| `Explore` | Codebase exploration (never spawns subagents) |
+| `Drone` | Delegated implementation; may spawn **Explore** only |
 | `Security Review` | Security-focused review |
 | `Bug Review` | Bug-focused review |
 | `Custom` | Category label; lookup uses `Config.CustomAgents` keys |
 
-System prompts come from `DysonAgentSystemPrompts.ForMode`.
+System prompts come from `DysonAgentSystemPrompts.ForMode`. Work / Explore / Drone directives cover orchestrator routing, Wait-only-for-prerequisites, and `SubmitSubagentReport`. Drone children also get `DroneFirstTurnContextMandate` on the first turn (estimate brief quality; Explore if thin).
+
+## Orchestrator subagents
+
+Primary flow: `StartSubagent` is **non-blocking**; the child runs in the background; the child calls **`SubmitSubagentReport`**; the parent gets a `SubagentCompleted` / `SubagentFailed` interrupt; the host **auto-queues a parent turn** with the report (FIFO if the parent is busy — does not cancel in-flight parent work).
+
+| Tool | Behavior |
+| ---- | -------- |
+| `StartSubagent` | `CreateChildAsync` — persist child (`ParentSessionId`), register runtime id, background `PromptAsync`. Soft gates via `ValidateSubagentSpawn` |
+| `WaitForSubagent` | Block until child terminal or `timeoutMs`. Use **only** when the child’s result is a **prerequisite/blocker** for the next step |
+| `InspectSubagentLog` | `SnapshotLog` for a subagent id |
+| `StopSubagent` | Cancel child CTS; mark `Stopped`; notify parent |
+| `SubmitSubagentReport` | Child-only handoff (`summary`, optional `status` completed\|failed); persists meta and notifies parent |
+
+**Spawn policy (prompt + soft enforce):**
+
+- **Work** may start any built-in mode the task needs **except Plan**.
+- **Plan is banned** as `agentMode` — Plan exists only as a top-level session mode.
+- **Explore** never spawns.
+- **Drone** may spawn **Explore** only (Drone→Drone rejected by default).
+- Prefer **Work-owned Explore → then Drone** over Drone-owned Explore when Work can supply context.
+- **Work context-before-drones:** estimate whether the brief is rich enough; if not, Explore first, then deploy Drones with a rich brief so they often skip their own Explore.
+
+Self-check: `DysonSubagentSpawnGateSelfCheck.Run()`. Return shape: `DysonStartSubagentResult` (`subagentId`, `persistenceId`, `agentMode`, `title`).
 
 ## MCP access
 
@@ -66,7 +89,13 @@ System prompts come from `DysonAgentSystemPrompts.ForMode`.
 
 `DysonMcpPipeline` holds the per-session tool catalog (`FormatToolsForPrompt`) and optional auto-review proxy. OpenAI-compatible sessions also expose the same tools as native function schemas (with required `stage`). Live remote MCP servers remain out of scope; workspace file tools, `ShellExecute`, and web search/fetch tools run locally via `DysonWorkspaceToolExecutor`.
 
-Default tools include subagent control (`StartSubagent`, `WaitForSubagent`, …), task completion (`CompleteTask`, `ConfirmTaskComplete`, `ContinueWork`), workspace file tools, **`ShellExecute`** (when the platform has available shells), **web search/fetch** tools (below), and related harness tools. Every call carries harness fields: optional `callId`, required `stage` (int).
+Default tools include subagent control (`StartSubagent`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`), task completion (`CompleteTask`, `ConfirmTaskComplete`, `ContinueWork`), workspace file tools, **`GetDateTime`**, **`ShellExecute`** (when the platform has available shells), **web search/fetch** tools (below), and related harness tools. Every call carries harness fields: optional `callId`, required `stage` (int).
+
+### GetDateTime
+
+- Catalog tool (no work root). Optional `timezone`: `"utc"` (default) or `"local"` (host machine zone).
+- Executor returns plain text: `timezone`, ISO `datetime` (`Z` for UTC; offset for local), and `display` as `dd/MM/yyyy HH:mm`.
+- Use when the task needs an exact clock — do not guess from training data.
 
 ### ShellExecute
 
@@ -77,20 +106,22 @@ Default tools include subagent control (`StartSubagent`, `WaitForSubagent`, …)
 
 ### Web search / fetch (in-process)
 
-Port of [agent-search-mcp](https://github.com/lennney/agent-search-mcp) as catalog tools under `Search/` (not a Node MCP server). Engines MVP: **Bing** HTML SERP, **Wikipedia** OpenSearch, optional **Brave** when `BRAVE_API_KEY` or `DysonAgentSessionConfig.BraveApiKey` is set.
+Port of [agent-search-mcp](https://github.com/lennney/agent-search-mcp) as catalog tools under `Search/` (not a Node MCP server). Free engines (default order): **DuckDuckGo** HTML first, **Bing** RSS fallback (HTML SERP captcha-prone), **Wikipedia** OpenSearch tertiary; optional **Brave** when `BRAVE_API_KEY` or `DysonAgentSessionConfig.BraveApiKey` is set. Engine HTTP/parse failures surface in `meta.partial_failures` (e.g. `bing: HTTP 429`), not silent empty lists.
 
 | Tool | Behavior |
 | ---- | -------- |
-| `FreeSearch` | Parallel free engines; JSON results with confidence 1–3 |
-| `FreeSearchAdvanced` | Waterfall (Wikipedia+Bing → Brave if keyed), domain filters, optional Jina enrich |
-| `SearchWithSynthesis` | Waterfall search + string `prompt_hint` (no LLM call) |
-| `FreeExtract` | Jina `r.jina.ai/{url}` markdown extract; SSRF-guarded |
-| `WebFetch` | GET URL → `statusCode` / `contentType` / `finalUrl` / `html` (+ optional `maxBytes`); SSRF-guarded |
-| `FetchGithubReadme` | `raw.githubusercontent.com` README for a GitHub repo URL |
+| `FreeSearch` | Parallel free engines (`duckduckgo`, `bing`, `wikipedia`); tool-owned summary (skip if ≤~1500 tokens); optional `summarizePrompt` |
+| `FreeSearchAdvanced` | Waterfall (DDG+Bing+Wikipedia → Brave if keyed), domain filters, optional Jina enrich; tool-owned summary; optional `summarizePrompt` |
+| `SearchWithSynthesis` | Waterfall search + string `prompt_hint` (no LLM call for synthesis); tool-owned summary; optional `summarizePrompt` |
+| `FreeExtract` | Jina `r.jina.ai/{url}` markdown extract; SSRF-guarded; tool-owned summary; optional `summarizePrompt` |
+| `WebFetch` | GET URL. Default: summarize (always) → summary only (`maxBytes` default **64KB**). `fullHtml: true` → return HTML JSON to parent (`maxBytes` default **2MB**). Optional `summarizePrompt` (ignored when `fullHtml`). SSRF-guarded |
+| `FetchGithubReadme` | `raw.githubusercontent.com` README for a GitHub repo URL; tool-owned summary; optional `summarizePrompt` |
 
-SSRF validation lives in `SearchHttp.ValidateUrl` (blocks localhost, private IPs, metadata hosts). `SearchSelfCheck.RunSsrfChecks()` is a no-framework self-check (also run on UI startup).
+**Result summarization:** runs **inside** `DysonWorkspaceToolExecutor` via `DysonWebSearchSummarizer.SummarizeAsync` before MCP `Content` is returned. By default the parent session / UI never sees raw SERP dumps, Jina extracts, or HTML — not even transiently. **Exception:** `WebFetch` with `fullHtml: true` intentionally returns full HTML. Other web tools skip the LLM when already ≤ ~1500 tokens (`summarizePrompt` unused when skipped). Hard cap ≤ 10K tokens (`IDysonTokenCounter`); prompt text lives in `DysonWebSearchSummarizerPrompt` (editable constant; optional “Agent focus” from `summarizePrompt`). Optional dedicated model via `DysonAgentSessionConfig.SummarizerProvider` (null ⇒ session provider); UI: Settings → General → Web search summarizer.
 
-Out of scope for this MVP: news tools, CSDN/Juejin, Python DDG, Baidu/Sogou/Yandex scrapers, separate MCP process.
+SSRF validation lives in `SearchHttp.ValidateUrl` (blocks localhost, private IPs, metadata hosts). `SearchSelfCheck.RunSsrfChecks()` is a no-framework self-check (SSRF + DDG HTML / Bing RSS parser fixtures + summarizer policy checks; also run on UI startup).
+
+Out of scope for this MVP: news tools, CSDN/Juejin, Baidu/Sogou/Yandex scrapers, separate MCP process.
 
 ## Staged tool calls
 
@@ -103,12 +134,17 @@ Out of scope for this MVP: news tools, CSDN/Juejin, Python DDG, Baidu/Sogou/Yand
 
 `DysonToolCallScheduler.RunStagedAsync` drives this; results append to `ResponseLog`.
 
+### Turn timestamps
+
+`DysonAgentTurn` carries **`StartedUtc`** (set on live turn create; restored from `CreatedUtc`) and **`CompletedUtc`** (set when the host persists turn completion; null while streaming). UI shows these as transcript chrome only — not injected into model messages. Display format in the UI: local wall clock `dd/MM/yyyy HH:mm`.
+
 ## Interrupts
 
-Parent sessions observe subagents via `DysonAgentInterrupt` (`SubagentCompleted` / `SubagentStopped` / `SubagentFailed`).
+Parent sessions observe subagents via `DysonAgentInterrupt` (`SubagentCompleted` / `SubagentStopped` / `SubagentFailed`) with `SubagentId`, optional `PersistenceId`, and `Summary`.
 
 - `EnqueueInterrupt` / `TryDequeueInterrupt` / `WaitForInterruptAsync`
 - Concrete `WaitForNotifyAsync` should drain the interrupt queue so Work does not busy-poll
+- Hosts (e.g. `DysonUiHost`) watch completion interrupts and FIFO-auto-`PromptAsync` the parent with the report — preferred over `WaitForSubagent` when the parent can multitask
 
 ## Task completion flow
 

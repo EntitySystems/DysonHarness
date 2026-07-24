@@ -57,6 +57,17 @@
             </div>
 
             <div class="model-slug-modal__list" role="listbox">
+                @if (AllowEmpty)
+                {
+                    var emptySelected = SelectedSlugId is null;
+                    <div class="model-slug-modal__row @(emptySelected ? "is-selected" : null)" role="option" aria-selected="@emptySelected">
+                        <button type="button"
+                                class="model-slug-modal__option"
+                                @onclick="ClearAsync">
+                            <span class="model-slug-modal__option-label">@EmptyLabel</span>
+                        </button>
+                    </div>
+                }
                 @if (FilteredOptions.Count == 0)
                 {
                     <div class="model-slug-modal__empty">No matching models.</div>
@@ -103,9 +114,15 @@
 
     [Parameter] public Guid? SelectedSlugId { get; set; }
     [Parameter] public EventCallback<Guid?> SelectedSlugIdChanged { get; set; }
+    /// <summary>When true, null means “no selection” and is not replaced with a default slug.</summary>
+    [Parameter] public bool AllowEmpty { get; set; }
+    /// <summary>Label when <see cref="AllowEmpty"/> and <see cref="SelectedSlugId"/> is null.</summary>
+    [Parameter] public string EmptyLabel { get; set; } = "Use session model";
 
     private string CurrentLabel =>
-        _options.FirstOrDefault(o => o.Id == SelectedSlugId)?.Label ?? "Select model…";
+        SelectedSlugId is Guid id
+            ? (_options.FirstOrDefault(o => o.Id == id)?.Label ?? "Select model…")
+            : (AllowEmpty ? EmptyLabel : "Select model…");
 
     private IReadOnlyList<SlugOption> FilteredOptions
     {
@@ -193,6 +210,13 @@
         if (SelectedSlugId is Guid selected && _options.Any(o => o.Id == selected))
             return;
 
+        if (AllowEmpty)
+        {
+            if (SelectedSlugId is not null)
+                await SelectedSlugIdChanged.InvokeAsync(null);
+            return;
+        }
+
         var fallback = _options.FirstOrDefault(o => o.IsDefault) ?? _options[0];
         await SelectedSlugIdChanged.InvokeAsync(fallback.Id);
     }
@@ -228,6 +252,12 @@
     private async Task SelectAsync(Guid id)
     {
         await SelectedSlugIdChanged.InvokeAsync(id);
+        CloseModal();
+    }
+
+    private async Task ClearAsync()
+    {
+        await SelectedSlugIdChanged.InvokeAsync(null);
         CloseModal();
     }
 

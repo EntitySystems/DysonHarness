@@ -26,6 +26,7 @@ public static class DysonExpandThoughtProcess
         {
             Kind = DysonAgentTurnKind.ExpandThoughtProcess,
             Instruction = instruction,
+            StartedUtc = DateTime.UtcNow,
         };
     }
 }

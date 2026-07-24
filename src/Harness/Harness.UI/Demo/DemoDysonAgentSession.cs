@@ -6,16 +6,21 @@ namespace Harness.UI.Demo;
 public sealed class DemoDysonAgentSession : DysonAgentSession
 {
     private readonly DysonSessionStore? _store;
+    private Guid _workDirectoryId;
 
     public DemoDysonAgentSession(
         string agentMode,
         DysonAgentSessionConfig config,
         DysonAgentProvider provider,
-        DysonSessionStore? store = null)
+        DysonSessionStore? store = null,
+        Guid workDirectoryId = default)
         : base(agentMode, config, provider)
     {
         _store = store;
+        _workDirectoryId = workDirectoryId;
     }
+
+    public Guid WorkDirectoryId => _workDirectoryId;
 
     /// <summary>
     /// Creates a new persisted root session and assigns <see cref="DysonAgentSession.PersistenceId"/>.
@@ -36,7 +41,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             return Result<DemoDysonAgentSession, string>.AsError("Work directory is required.");
 
         config ??= new DysonAgentSessionConfig();
-        var session = new DemoDysonAgentSession(agentMode, config, provider, store);
+        var session = new DemoDysonAgentSession(agentMode, config, provider, store, workDirectoryId);
         var initialTitle = title ?? "New session";
         session.SetDisplayTitle(initialTitle);
 
@@ -94,7 +99,12 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             McpAccessMode = state.Session.McpAccessMode,
         };
 
-        var session = new DemoDysonAgentSession(state.Session.AgentMode, config, provider, store);
+        var session = new DemoDysonAgentSession(
+            state.Session.AgentMode,
+            config,
+            provider,
+            store,
+            state.Session.WorkDirectoryId ?? Guid.Empty);
         session.RestoreFromPersisted(state);
 
         var resumedLog = DysonSessionLogPayload.CreateEntry(
@@ -107,6 +117,80 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             return Result<DemoDysonAgentSession, string>.AsError(append.Error);
 
         return Result<DemoDysonAgentSession, string>.AsValue(session);
+    }
+
+    public override async Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
+        string agentMode,
+        string task,
+        string? context = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentMode);
+        ArgumentException.ThrowIfNullOrWhiteSpace(task);
+
+        var gate = ValidateSubagentSpawn(Mode, agentMode, Config.CustomAgents);
+        if (gate.IsError)
+            return Result<DysonStartSubagentResult, string>.AsError(gate.Error);
+
+        if (_store is null)
+            return Result<DysonStartSubagentResult, string>.AsError("Session store is required to spawn subagents.");
+
+        if (PersistenceId == Guid.Empty)
+            return Result<DysonStartSubagentResult, string>.AsError("Parent session must be persisted before spawning.");
+
+        if (_workDirectoryId == Guid.Empty)
+            return Result<DysonStartSubagentResult, string>.AsError("Work directory is required to spawn subagents.");
+
+        var child = new DemoDysonAgentSession(agentMode, Config, Provider, _store, _workDirectoryId);
+        RegisterSubagent(child);
+
+        var title = TitleFromTask(task);
+        child.SetDisplayTitle(title);
+
+        Guid? modelSlugId = Provider is DemoDysonAgentProvider demo ? demo.SlugId : null;
+
+        var create = await _store.CreateSessionAsync(
+            new DysonSessionCreateRequest
+            {
+                RuntimeId = child.Id,
+                ParentSessionId = PersistenceId,
+                AgentMode = agentMode,
+                ModelSlugId = modelSlugId,
+                WorkDirectoryId = _workDirectoryId,
+                McpAccessMode = Config.McpAccessMode,
+                Title = title,
+                SystemPromptSnapshot = child.SystemPrompt,
+                Status = DysonSessionStatus.Active,
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        if (create.IsError)
+            return Result<DysonStartSubagentResult, string>.AsError(create.Error);
+
+        child.SetPersistenceId(create.Value);
+
+        var createdLog = DysonSessionLogPayload.CreateEntry(
+            create.Value,
+            DysonSessionLogKind.SessionCreated,
+            new DysonSessionLogSessionCreated(create.Value, agentMode, RuntimeId: child.Id));
+
+        var append = await _store.AppendLogAsync(createdLog, cancellationToken).ConfigureAwait(false);
+        if (append.IsError)
+            return Result<DysonStartSubagentResult, string>.AsError(append.Error);
+
+        var runCts = new CancellationTokenSource();
+        child.AttachBackgroundRun(runCts);
+        KickOffChildPrompt(child, BuildChildFirstPrompt(agentMode, task, context), runCts);
+
+        AppendLog($"started subagent {child.Id} ({agentMode}): {title}");
+
+        return Result<DysonStartSubagentResult, string>.AsValue(new DysonStartSubagentResult
+        {
+            SubagentId = child.Id,
+            PersistenceId = child.PersistenceId,
+            AgentMode = agentMode,
+            Title = title,
+        });
     }
 
     public override Task<VoidResult<string>> LoadFunctionalContextAsync(
@@ -137,6 +221,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             {
                 Kind = DysonAgentTurnKind.Normal,
                 Instruction = prompt,
+                StartedUtc = DateTime.UtcNow,
             };
 
         // Mock RenameSession only on review cadence (turns 1, 9, 17, …) — not every turn.
@@ -247,6 +332,15 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         if (string.Equals(call.ToolName, "RenameSession", StringComparison.OrdinalIgnoreCase))
             return await ExecuteRenameSessionAsync(call, cancellationToken).ConfigureAwait(false);
 
+        if (string.Equals(call.ToolName, "StartSubagent", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(call.ToolName, "WaitForSubagent", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(call.ToolName, "InspectSubagentLog", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(call.ToolName, "StopSubagent", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(call.ToolName, "SubmitSubagentReport", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ExecuteSubagentToolAsync(call, cancellationToken).ConfigureAwait(false);
+        }
+
         var delayMs = 180 + (Math.Abs(call.ToolName.GetHashCode(StringComparison.Ordinal)) % 220);
         await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
 
@@ -259,6 +353,195 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             Content = $"[demo] {call.ToolName} ok — args={Truncate(call.ArgumentsJson, 80)}",
         };
     }
+
+    private async Task<DysonToolCallResult> ExecuteSubagentToolAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(
+                string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
+            var root = doc.RootElement;
+
+            if (string.Equals(call.ToolName, "StartSubagent", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!root.TryGetProperty("agentMode", out var modeProp)
+                    || string.IsNullOrWhiteSpace(modeProp.GetString()))
+                {
+                    return ToolError(call, "StartSubagent: agentMode is required.");
+                }
+
+                if (!root.TryGetProperty("task", out var taskProp)
+                    || string.IsNullOrWhiteSpace(taskProp.GetString()))
+                {
+                    return ToolError(call, "StartSubagent: task is required.");
+                }
+
+                var context = root.TryGetProperty("context", out var ctxProp)
+                    ? ctxProp.GetString()
+                    : null;
+                var started = await CreateChildAsync(
+                        modeProp.GetString()!,
+                        taskProp.GetString()!,
+                        context,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (started.IsError)
+                    return ToolError(call, started.Error);
+
+                var r = started.Value;
+                return ToolOk(call, JsonSerializer.Serialize(new
+                {
+                    subagentId = r.SubagentId,
+                    persistenceId = r.PersistenceId,
+                    agentMode = r.AgentMode,
+                    title = r.Title,
+                }));
+            }
+
+            if (string.Equals(call.ToolName, "WaitForSubagent", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryReadSubagentId(root, out var waitId))
+                    return ToolError(call, "WaitForSubagent: subagentId (≥ 1) is required.");
+
+                int? timeoutMs = null;
+                if (root.TryGetProperty("timeoutMs", out var tProp) && tProp.TryGetInt32(out var tVal))
+                    timeoutMs = tVal;
+
+                var waited = await WaitForSubagentAsync(waitId, timeoutMs, cancellationToken)
+                    .ConfigureAwait(false);
+                return waited.IsError ? ToolError(call, waited.Error) : ToolOk(call, waited.Value);
+            }
+
+            if (string.Equals(call.ToolName, "InspectSubagentLog", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryReadSubagentId(root, out var inspectId))
+                    return ToolError(call, "InspectSubagentLog: subagentId (≥ 1) is required.");
+
+                int? maxLines = null;
+                if (root.TryGetProperty("maxLines", out var mProp) && mProp.TryGetInt32(out var mVal))
+                    maxLines = mVal;
+
+                var inspected = InspectSubagentLog(inspectId, maxLines);
+                return inspected.IsError ? ToolError(call, inspected.Error) : ToolOk(call, inspected.Value);
+            }
+
+            if (string.Equals(call.ToolName, "StopSubagent", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryReadSubagentId(root, out var stopId))
+                    return ToolError(call, "StopSubagent: subagentId (≥ 1) is required.");
+
+                var reason = root.TryGetProperty("reason", out var reasonProp)
+                    ? reasonProp.GetString()
+                    : null;
+                if (!TryGetSubagent(stopId, out var child))
+                    return ToolError(call, $"Unknown subagentId {stopId}.");
+
+                var stopped = await StopSubagentAsync(stopId, reason, cancellationToken)
+                    .ConfigureAwait(false);
+                if (stopped.IsError)
+                    return ToolError(call, stopped.Error);
+
+                await PersistChildStatusAsync(child, child.Status, reason, cancellationToken)
+                    .ConfigureAwait(false);
+                return ToolOk(call, stopped.Value);
+            }
+
+            // SubmitSubagentReport
+            if (!root.TryGetProperty("summary", out var summaryProp)
+                || string.IsNullOrWhiteSpace(summaryProp.GetString()))
+            {
+                return ToolError(call, "SubmitSubagentReport: summary is required.");
+            }
+
+            var failed = false;
+            if (root.TryGetProperty("status", out var statusProp)
+                && statusProp.ValueKind == JsonValueKind.String)
+            {
+                var status = statusProp.GetString();
+                if (string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase))
+                    failed = true;
+                else if (!string.IsNullOrWhiteSpace(status)
+                         && !string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase))
+                {
+                    return ToolError(call, "SubmitSubagentReport: status must be 'completed' or 'failed'.");
+                }
+            }
+
+            var summary = summaryProp.GetString()!;
+            var submitted = await SubmitSubagentReportAsync(summary, failed, cancellationToken)
+                .ConfigureAwait(false);
+            if (submitted.IsError)
+                return ToolError(call, submitted.Error);
+
+            await PersistChildStatusAsync(this, Status, summary, cancellationToken).ConfigureAwait(false);
+            return ToolOk(call, submitted.Value);
+        }
+        catch (JsonException)
+        {
+            return ToolError(call, $"{call.ToolName}: invalid JSON arguments.");
+        }
+    }
+
+    private async Task PersistChildStatusAsync(
+        DysonAgentSession session,
+        DysonSessionStatus status,
+        string? reason,
+        CancellationToken cancellationToken)
+    {
+        if (_store is null || session.PersistenceId == Guid.Empty)
+            return;
+
+        await _store.UpdateSessionMetaAsync(
+            new DysonSessionMetaUpdate
+            {
+                SessionId = session.PersistenceId,
+                Status = status,
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        var statusLog = DysonSessionLogPayload.CreateEntry(
+            session.PersistenceId,
+            DysonSessionLogKind.SessionStatusChanged,
+            new DysonSessionLogSessionStatusChanged(status, reason));
+
+        await _store.AppendLogAsync(statusLog, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static bool TryReadSubagentId(JsonElement root, out int subagentId)
+    {
+        subagentId = 0;
+        if (!root.TryGetProperty("subagentId", out var prop))
+            return false;
+        if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var n) && n >= 1)
+        {
+            subagentId = n;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static DysonToolCallResult ToolOk(DysonToolCall call, string content) =>
+        new()
+        {
+            CallId = call.CallId,
+            ToolName = call.ToolName,
+            Stage = call.Stage,
+            IsError = false,
+            Content = content,
+        };
+
+    private static DysonToolCallResult ToolError(DysonToolCall call, string content) =>
+        new()
+        {
+            CallId = call.CallId,
+            ToolName = call.ToolName,
+            Stage = call.Stage,
+            IsError = true,
+            Content = content,
+        };
 
     private async Task<DysonToolCallResult> ExecuteRenameSessionAsync(
         DysonToolCall call,

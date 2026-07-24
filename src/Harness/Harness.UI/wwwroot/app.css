@@ -573,6 +573,44 @@ code, .mono {
   font-size: 11px;
 }
 
+.session-list .list-item {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.session-list .list-item__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-list .list-item__main:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.session-list .list-item__delete {
+  flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.session-list .list-item:hover .list-item__delete,
+.session-list .list-item:focus-within .list-item__delete,
+.session-list .list-item__delete:focus {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 /* Buttons / forms */
 .btn {
   display: inline-flex;
@@ -731,6 +769,12 @@ code, .mono {
   box-shadow: var(--shadow);
 }
 
+.session-header__back {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
 .session-header__meta {
   display: flex;
   flex-wrap: wrap;
@@ -744,6 +788,68 @@ code, .mono {
   border-radius: 3px;
   background: var(--bg-3);
   border: 1px solid var(--border);
+}
+
+/* Parent → child subagent cards (inside TurnBlock) */
+.turn-block__subagents {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* Match turn-block__body / __user vertical padding; keep 8px sides like tools wrapper */
+  padding: 10px 8px;
+}
+
+.subagent-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-2);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.subagent-card:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.subagent-card__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.subagent-card__title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subagent-card__turn {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subagent-card__spinner {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: turn-block-spin 0.7s linear infinite;
 }
 
 .empty-state {
@@ -790,16 +896,24 @@ code, .mono {
 
 .turn-block__header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
+  gap: 12px;
   padding: 8px 10px;
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
 }
 
+.turn-block__header-main {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .turn-block__title {
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .turn-block__user {
@@ -883,6 +997,44 @@ code, .mono {
 
 .turn-block__cancel:not(:disabled):hover .turn-block__cancel-icon {
   display: block;
+}
+
+.turn-block__user-retry {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0.45;
+  padding-top: 3px;
+}
+
+.turn-block__user-retry:disabled {
+  cursor: default;
+  pointer-events: none;
+  opacity: 0.25;
+}
+
+.turn-block__user-retry:not(:disabled):hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--text-muted) 14%, transparent);
+}
+
+.turn-block__retry-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  /* currentColor in standalone SVG resolves to black; lighten for dark UI */
+  filter: brightness(0) invert(0.82);
+}
+
+[data-theme="light"] .turn-block__retry-icon {
+  filter: none;
 }
 
 .turn-block__instruction {
@@ -1045,6 +1197,16 @@ code, .mono {
   color: var(--text-dim);
   font-size: 11px;
   text-transform: uppercase;
+}
+
+.turn-block__timestamp {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+  line-height: 1.4;
+  padding-top: 2px;
 }
 
 .composer {

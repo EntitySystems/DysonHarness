@@ -9,6 +9,15 @@
     }
     else
     {
+        @if (ShowBackToParent)
+        {
+            <button type="button"
+                    class="btn btn-ghost session-header__back"
+                    title="Back to parent session"
+                    @onclick="OnBackToParent">
+                ← Parent
+            </button>
+        }
         <strong>@(Title ?? Session.DisplayTitle ?? "Session")</strong>
         <div class="session-header__meta">
             <span>Mode @Session.Mode</span>
@@ -36,6 +45,8 @@
     [Parameter] public DysonAgentSession? Session { get; set; }
     [Parameter] public string? Title { get; set; }
     [Parameter] public string? GitBranch { get; set; }
+    [Parameter] public bool ShowBackToParent { get; set; }
+    [Parameter] public EventCallback OnBackToParent { get; set; }
 
     private static string ShortGuid(Guid id) =>
         id == Guid.Empty ? "—" : id.ToString("N")[..8];

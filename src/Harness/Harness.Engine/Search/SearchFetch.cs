@@ -22,7 +22,8 @@ public static class SearchFetch
         if (validation.IsError)
             return Result<WebFetchResult, string>.AsError(validation.Error);
 
-        var cap = Math.Clamp(maxBytes ?? 512_000, 1_024, 2_000_000);
+        // Default body cap when caller omits maxBytes (executor chooses 64KB vs 2MB for fullHtml).
+        var cap = Math.Clamp(maxBytes ?? 64_000, 1_024, 2_000_000);
 
         try
         {

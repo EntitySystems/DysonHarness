@@ -26,4 +26,10 @@ public class DysonAgentSessionConfig
     /// Falls back to env <c>BRAVE_API_KEY</c> when unset.
     /// </summary>
     public string? BraveApiKey { get; set; }
+
+    /// <summary>
+    /// Optional provider for web-search/fetch result summarization.
+    /// Null ⇒ use the session <see cref="DysonAgentSession.Provider"/>.
+    /// </summary>
+    public DysonAgentProvider? SummarizerProvider { get; set; }
 }

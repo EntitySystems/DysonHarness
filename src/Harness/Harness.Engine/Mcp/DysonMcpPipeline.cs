@@ -109,15 +109,16 @@ public sealed class DysonMcpPipeline
         {
             Name = "StartSubagent",
             Description =
-                "Spawn a nested agent session (Drone or another mode) for delegated work. " +
-                "The spawned agent receives a unique integer Id (≥ 1). " +
-                "Completion surfaces via parent interrupts or WaitForSubagent. " +
-                "Use when parallel or isolated work clearly helps; pass a clear task brief.",
+                "Spawn a nested agent session for delegated work (non-blocking). " +
+                "Returns immediately with subagentId / persistenceId; the child runs in the background. " +
+                "When the child calls SubmitSubagentReport, the parent is notified and the host queues a turn — " +
+                "do not WaitForSubagent unless that child’s result is a blocker. " +
+                "Plan is banned as a subagent mode. Explore cannot spawn. Drone may spawn Explore only (not another Drone).",
             InputSchemaJson = """
                 {
                   "type": "object",
                   "properties": {
-                    "agentMode": { "type": "string", "description": "Mode for the sub-agent (e.g. Drone)." },
+                    "agentMode": { "type": "string", "description": "Mode for the sub-agent (e.g. Explore, Drone). Not Plan." },
                     "task": { "type": "string", "description": "Assigned task brief for the sub-agent." },
                     "context": { "type": "string", "description": "Optional extra context or constraints." }
                   },
@@ -130,8 +131,10 @@ public sealed class DysonMcpPipeline
         {
             Name = "WaitForSubagent",
             Description =
-                "Block/wait until a subagent completes (or until timeout). " +
-                "Parent multitasking uses the interrupt queue under the hood later.",
+                "Block until this subagent finishes (completed / failed / stopped) or timeoutMs. " +
+                "Default timeout is 300000 ms (5 minutes) when timeoutMs is omitted. " +
+                "Use only when its result is required before the parent can proceed (prerequisite/blocker). " +
+                "If the parent can do other work, do not Wait — spawn and continue; the harness queues a turn when SubmitSubagentReport arrives.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -143,7 +146,7 @@ public sealed class DysonMcpPipeline
                     },
                     "timeoutMs": {
                       "type": "integer",
-                      "description": "Optional max wait in milliseconds before returning."
+                      "description": "Optional max wait in milliseconds before returning. Default 300000 (5 minutes) when omitted."
                     }
                   },
                   "required": ["subagentId"]
@@ -154,7 +157,9 @@ public sealed class DysonMcpPipeline
         yield return new DysonMcpTool
         {
             Name = "InspectSubagentLog",
-            Description = "Read recent log lines for a subagent by Id.",
+            Description =
+                "Read recent log lines for a running or finished subagent by Id. " +
+                "Use for progress checks; do not busy-poll in a tight loop.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -177,7 +182,9 @@ public sealed class DysonMcpPipeline
         yield return new DysonMcpTool
         {
             Name = "StopSubagent",
-            Description = "Request cooperative stop / cancel of a running subagent.",
+            Description =
+                "Cancel a running subagent (cooperative stop via its run CancellationToken). " +
+                "Marks the child Stopped and notifies the parent.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -193,6 +200,32 @@ public sealed class DysonMcpPipeline
                     }
                   },
                   "required": ["subagentId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "SubmitSubagentReport",
+            Description =
+                "Subagents must call this when finished (or blocked). " +
+                "Notifies the parent with the summary so the host can queue a parent turn. " +
+                "Do not use from a root Work session unless debugging.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "summary": {
+                      "type": "string",
+                      "description": "Crisp handoff for the parent (findings, outcome, blockers)."
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["completed", "failed"],
+                      "description": "Report outcome (default: completed)."
+                    }
+                  },
+                  "required": ["summary"]
                 }
                 """,
         };
@@ -298,6 +331,27 @@ public sealed class DysonMcpPipeline
                     }
                   },
                   "required": ["title"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "GetDateTime",
+            Description =
+                "Return the current date and time. Use when the task needs an exact clock " +
+                "(deadlines, \"today\", scheduling). Pass timezone: \"local\" for the host machine's local zone; " +
+                "default \"utc\" for UTC. Do not guess the time from training data.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "timezone": {
+                      "type": "string",
+                      "enum": ["utc", "local"],
+                      "description": "Clock zone: utc (default) or local (host machine)."
+                    }
+                  }
                 }
                 """,
         };
@@ -433,8 +487,8 @@ public sealed class DysonMcpPipeline
         {
             Name = "FreeSearch",
             Description =
-                "Web search across free engines (Bing + Wikipedia; Brave when BRAVE_API_KEY / config is set). " +
-                "Returns JSON results with title, url, snippet, and confidence 1–3. " +
+                "Web search across free engines (DuckDuckGo HTML first, then Bing RSS, Wikipedia; Brave when BRAVE_API_KEY / config is set). " +
+                "Raw SERP JSON stays inside the tool; the parent receives a harness summary (skipped when already ≤~1500 tokens). " +
                 "Prefer this over inventing URLs. Not for local codebase search (use Grep).",
             InputSchemaJson = """
                 {
@@ -444,8 +498,12 @@ public sealed class DysonMcpPipeline
                     "count": { "type": "integer", "description": "Max results (1-20, default 10)." },
                     "engines": {
                       "type": "array",
-                      "items": { "type": "string", "enum": ["bing", "wikipedia", "brave"] },
-                      "description": "Optional engine allowlist. Default: bing+wikipedia (+brave if keyed)."
+                      "items": { "type": "string", "enum": ["duckduckgo", "bing", "wikipedia", "brave"] },
+                      "description": "Optional engine allowlist. Default: duckduckgo+bing+wikipedia (+brave if keyed)."
+                    },
+                    "summarizePrompt": {
+                      "type": "string",
+                      "description": "Optional focus for the harness summarizer (e.g. what facts to keep). Raw payloads stay inside the tool; parent receives the summary."
                     }
                   },
                   "required": ["query"]
@@ -458,6 +516,7 @@ public sealed class DysonMcpPipeline
             Name = "FreeSearchAdvanced",
             Description =
                 "Advanced web search with waterfall phases, domain filters, min confidence, and optional Jina enrichment. " +
+                "Raw results stay inside the tool; parent gets a harness summary (skipped when already ≤~1500 tokens). " +
                 "Prefer FreeSearch for simple queries.",
             InputSchemaJson = """
                 {
@@ -472,7 +531,11 @@ public sealed class DysonMcpPipeline
                     "waterfallMinResults": { "type": "integer", "description": "Min results for early waterfall stop." },
                     "waterfallMinConfidence": { "type": "number", "description": "Min avg confidence (0-1) for early stop." },
                     "enrich": { "type": "boolean", "description": "Enrich low-confidence snippets via Jina Reader." },
-                    "enrichMax": { "type": "integer", "description": "Max results to enrich." }
+                    "enrichMax": { "type": "integer", "description": "Max results to enrich." },
+                    "summarizePrompt": {
+                      "type": "string",
+                      "description": "Optional focus for the harness summarizer (e.g. what facts to keep). Raw payloads stay inside the tool; parent receives the summary."
+                    }
                   },
                   "required": ["query"]
                 }
@@ -483,14 +546,19 @@ public sealed class DysonMcpPipeline
         {
             Name = "SearchWithSynthesis",
             Description =
-                "Waterfall search plus a string prompt_hint for the agent to synthesize an answer (no external LLM call).",
+                "Waterfall search plus a string prompt_hint for the agent to synthesize an answer (no external LLM call for synthesis). " +
+                "Raw results stay inside the tool; parent gets a harness summary (skipped when already ≤~1500 tokens).",
             InputSchemaJson = """
                 {
                   "type": "object",
                   "properties": {
                     "query": { "type": "string", "description": "Search query." },
                     "count": { "type": "integer", "description": "Max results (1-20, default 10)." },
-                    "minConfidence": { "type": "integer", "description": "Only return results with confidence >= N (1-3)." }
+                    "minConfidence": { "type": "integer", "description": "Only return results with confidence >= N (1-3)." },
+                    "summarizePrompt": {
+                      "type": "string",
+                      "description": "Optional focus for the harness summarizer (e.g. what facts to keep). Raw payloads stay inside the tool; parent receives the summary."
+                    }
                   },
                   "required": ["query"]
                 }
@@ -501,13 +569,18 @@ public sealed class DysonMcpPipeline
         {
             Name = "FreeExtract",
             Description =
-                "Extract page content as markdown via Jina Reader (r.jina.ai/{url}). SSRF-guarded.",
+                "Extract page content as markdown via Jina Reader (r.jina.ai/{url}). SSRF-guarded. " +
+                "Raw extract stays inside the tool; parent receives a harness summary (skipped when already ≤~1500 tokens).",
             InputSchemaJson = """
                 {
                   "type": "object",
                   "properties": {
                     "url": { "type": "string", "description": "Public http(s) URL to extract." },
-                    "maxLength": { "type": "integer", "description": "Max characters to return (default 5000)." }
+                    "maxLength": { "type": "integer", "description": "Max characters to return (default 5000)." },
+                    "summarizePrompt": {
+                      "type": "string",
+                      "description": "Optional focus for the harness summarizer (e.g. what facts to keep). Raw payloads stay inside the tool; parent receives the summary."
+                    }
                   },
                   "required": ["url"]
                 }
@@ -518,14 +591,26 @@ public sealed class DysonMcpPipeline
         {
             Name = "WebFetch",
             Description =
-                "HTTP GET a public URL and return raw HTML plus statusCode, contentType, finalUrl. SSRF-guarded. " +
-                "Prefer FreeExtract when you need readable markdown.",
+                "Fetch a URL. Default: load the page, summarize with the harness summarizer, return only the summary " +
+                "(HTML never enters the parent transcript). Use fullHtml only when the agent truly needs raw markup. " +
+                "Prefer FreeExtract for readable article text; use WebFetch when HTML structure or a directed summary is required. SSRF-guarded.",
             InputSchemaJson = """
                 {
                   "type": "object",
                   "properties": {
                     "url": { "type": "string", "description": "Public http(s) URL to fetch." },
-                    "maxBytes": { "type": "integer", "description": "Optional response body cap in bytes." }
+                    "fullHtml": {
+                      "type": "boolean",
+                      "description": "When true, return the fetched HTML body to the parent (capped by maxBytes / large default). When false/omitted, summarize and return summary only. Do not set true unless raw HTML is required for the task."
+                    },
+                    "summarizePrompt": {
+                      "type": "string",
+                      "description": "Extra instructions for the summarizer (ignored when fullHtml is true). Tell it what to extract (e.g. list Billboard Global 200 #1 song and artist with source URL). Improves over a generic summary."
+                    },
+                    "maxBytes": {
+                      "type": "integer",
+                      "description": "Body cap in bytes. Default 64000 when summarizing; default 2000000 when fullHtml is true. Explicit maxBytes always wins."
+                    }
                   },
                   "required": ["url"]
                 }
@@ -536,12 +621,17 @@ public sealed class DysonMcpPipeline
         {
             Name = "FetchGithubReadme",
             Description =
-                "Fetch README from a GitHub repository via raw.githubusercontent.com. Pass a github.com owner/repo URL.",
+                "Fetch README from a GitHub repository via raw.githubusercontent.com. Pass a github.com owner/repo URL. " +
+                "Raw README stays inside the tool; parent receives a harness summary (skipped when already ≤~1500 tokens).",
             InputSchemaJson = """
                 {
                   "type": "object",
                   "properties": {
-                    "url": { "type": "string", "description": "GitHub repository URL (https://github.com/owner/repo)." }
+                    "url": { "type": "string", "description": "GitHub repository URL (https://github.com/owner/repo)." },
+                    "summarizePrompt": {
+                      "type": "string",
+                      "description": "Optional focus for the harness summarizer (e.g. what facts to keep). Raw payloads stay inside the tool; parent receives the summary."
+                    }
                   },
                   "required": ["url"]
                 }

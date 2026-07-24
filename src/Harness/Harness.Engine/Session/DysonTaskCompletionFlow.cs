@@ -43,6 +43,7 @@ public static class DysonTaskCompletionFlow
         {
             Kind = DysonAgentTurnKind.TaskCompletionConfirm,
             Instruction = instruction,
+            StartedUtc = DateTime.UtcNow,
         };
     }
 
@@ -59,6 +60,7 @@ public static class DysonTaskCompletionFlow
         {
             Kind = DysonAgentTurnKind.Continuation,
             Instruction = instruction,
+            StartedUtc = DateTime.UtcNow,
         };
     }
 
@@ -73,6 +75,7 @@ public static class DysonTaskCompletionFlow
         {
             Kind = DysonAgentTurnKind.ReportSummary,
             Instruction = instruction,
+            StartedUtc = DateTime.UtcNow,
         };
     }
 }

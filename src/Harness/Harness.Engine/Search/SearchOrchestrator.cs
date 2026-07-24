@@ -5,7 +5,7 @@ namespace DysonHarness;
 
 /// <summary>
 /// In-process search orchestrator: parallel FreeSearch and waterfall FreeSearchAdvanced.
-/// ponytail: no DDG/Baidu/Sogou matrix — Bing+Wikipedia(+Brave) only; expand engines later if needed.
+/// ponytail: free order is DDG HTML → Bing RSS → Wikipedia; Brave optional when keyed.
 /// </summary>
 public static class SearchOrchestrator
 {
@@ -61,10 +61,10 @@ public static class SearchOrchestrator
         var used = new List<string>();
         var phases = 0;
 
-        // Phase 1: free engines
+        // Phase 1: free engines (DDG first, then Bing RSS, then Wikipedia)
         phases++;
         var phase1 = await RunEnginesAsync(
-            [SearchEngineIds.Wikipedia, SearchEngineIds.Bing],
+            SearchEngineIds.FreeDefault,
             options.Query, count, braveKey, cancellationToken).ConfigureAwait(false);
         allHits.AddRange(phase1.Hits);
         failures.AddRange(phase1.Failures);
@@ -213,13 +213,16 @@ public static class SearchOrchestrator
         var failures = new List<string>();
         var used = new List<string>();
 
+        // Preserve declared engine order in meta / aggregation (DDG hits first when FreeDefault).
         var tasks = engines.Select(async engine =>
         {
             try
             {
-                var results = await SearchEngines.SearchAsync(engine, query, count, braveKey, cancellationToken)
+                var result = await SearchEngines.SearchAsync(engine, query, count, braveKey, cancellationToken)
                     .ConfigureAwait(false);
-                return (engine, results, error: (string?)null);
+                if (result.IsError)
+                    return (engine, results: (IReadOnlyList<SearchHit>)[], error: $"{engine}: {result.Error}");
+                return (engine, results: result.Value, error: (string?)null);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

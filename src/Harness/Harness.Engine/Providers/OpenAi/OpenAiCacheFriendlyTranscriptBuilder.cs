@@ -10,6 +10,13 @@ namespace DysonHarness;
 /// </summary>
 public static class OpenAiCacheFriendlyTranscriptBuilder
 {
+    /// <summary>
+    /// Emitted when a tool_call / function_call has no matching ResponseLog / round result
+    /// (cancelled turn, abandoned WaitForSubagent, etc.). Keeps Completions/Responses transcripts paired.
+    /// </summary>
+    public const string IncompleteToolResultContent =
+        "Tool call did not complete (cancelled or interrupted).";
+
     public sealed record BuiltCompletionsRequest(
         JsonArray Messages,
         JsonArray Tools,
@@ -67,6 +74,13 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
         AppendHistoryMessages(messages, session.Turns, excludeLastIfCurrent: false);
 
+        if (inFlightRounds is not null)
+        {
+            foreach (var round in inFlightRounds)
+                AppendToolRoundCompletions(messages, round);
+        }
+
+        // After in-flight rounds so harness follow-ups (e.g. SubmitSubagentReport nudge) land last.
         if (!string.IsNullOrEmpty(currentUserPrompt))
         {
             messages.Add(new JsonObject
@@ -74,12 +88,6 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 ["role"] = "user",
                 ["content"] = FormatUserContent(currentUserPrompt, currentFilePaths),
             });
-        }
-
-        if (inFlightRounds is not null)
-        {
-            foreach (var round in inFlightRounds)
-                AppendToolRoundCompletions(messages, round);
         }
 
         return new BuiltCompletionsRequest(
@@ -108,6 +116,13 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
         AppendHistoryAsResponsesInput(input, session.Turns);
 
+        if (inFlightRounds is not null)
+        {
+            foreach (var round in inFlightRounds)
+                AppendToolRoundResponses(input, round);
+        }
+
+        // After in-flight rounds so harness follow-ups (e.g. SubmitSubagentReport nudge) land last.
         if (!string.IsNullOrEmpty(currentUserPrompt))
         {
             input.Add(new JsonObject
@@ -115,12 +130,6 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 ["role"] = "user",
                 ["content"] = FormatUserContent(currentUserPrompt, currentFilePaths),
             });
-        }
-
-        if (inFlightRounds is not null)
-        {
-            foreach (var round in inFlightRounds)
-                AppendToolRoundResponses(input, round);
         }
 
         return new BuiltResponsesRequest(
@@ -262,17 +271,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                     ["tool_calls"] = toolCalls,
                 });
 
-                foreach (var result in turn.ResponseLog)
-                {
-                    messages.Add(new JsonObject
-                    {
-                        ["role"] = "tool",
-                        ["tool_call_id"] = result.CallId,
-                        ["content"] = result.IsError
-                            ? $"[error] {result.Content}"
-                            : result.Content,
-                    });
-                }
+                AppendPairedToolResultsCompletions(messages, turn.ToolCalls, turn.ResponseLog);
             }
 
             if (!string.IsNullOrEmpty(turn.AssistantText))
@@ -329,17 +328,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                     });
                 }
 
-                foreach (var result in turn.ResponseLog)
-                {
-                    input.Add(new JsonObject
-                    {
-                        ["type"] = "function_call_output",
-                        ["call_id"] = result.CallId,
-                        ["output"] = result.IsError
-                            ? $"[error] {result.Content}"
-                            : result.Content,
-                    });
-                }
+                AppendPairedToolResultsResponses(input, turn.ToolCalls, turn.ResponseLog);
             }
 
             if (!string.IsNullOrEmpty(turn.AssistantText))
@@ -377,17 +366,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             ["tool_calls"] = toolCalls,
         });
 
-        foreach (var result in round.Results)
-        {
-            messages.Add(new JsonObject
-            {
-                ["role"] = "tool",
-                ["tool_call_id"] = result.CallId,
-                ["content"] = result.IsError
-                    ? $"[error] {result.Content}"
-                    : result.Content,
-            });
-        }
+        AppendPairedToolResultsCompletions(messages, round.Calls, round.Results);
     }
 
     private static void AppendToolRoundResponses(JsonArray input, InFlightToolRound round)
@@ -403,17 +382,62 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             });
         }
 
-        foreach (var result in round.Results)
+        AppendPairedToolResultsResponses(input, round.Calls, round.Results);
+    }
+
+    private static void AppendPairedToolResultsCompletions(
+        JsonArray messages,
+        IReadOnlyList<DysonToolCall> calls,
+        IEnumerable<DysonToolCallResult> results)
+    {
+        var byCallId = IndexResultsByCallId(results);
+        foreach (var call in calls)
         {
+            byCallId.TryGetValue(call.CallId, out var result);
+            messages.Add(new JsonObject
+            {
+                ["role"] = "tool",
+                ["tool_call_id"] = call.CallId,
+                ["content"] = FormatToolResultContent(result),
+            });
+        }
+    }
+
+    private static void AppendPairedToolResultsResponses(
+        JsonArray input,
+        IReadOnlyList<DysonToolCall> calls,
+        IEnumerable<DysonToolCallResult> results)
+    {
+        var byCallId = IndexResultsByCallId(results);
+        foreach (var call in calls)
+        {
+            byCallId.TryGetValue(call.CallId, out var result);
             input.Add(new JsonObject
             {
                 ["type"] = "function_call_output",
-                ["call_id"] = result.CallId,
-                ["output"] = result.IsError
-                    ? $"[error] {result.Content}"
-                    : result.Content,
+                ["call_id"] = call.CallId,
+                ["output"] = FormatToolResultContent(result),
             });
         }
+    }
+
+    private static Dictionary<string, DysonToolCallResult> IndexResultsByCallId(
+        IEnumerable<DysonToolCallResult> results)
+    {
+        var map = new Dictionary<string, DysonToolCallResult>();
+        foreach (var result in results)
+            map.TryAdd(result.CallId, result);
+        return map;
+    }
+
+    private static string FormatToolResultContent(DysonToolCallResult? result)
+    {
+        if (result is null)
+            return IncompleteToolResultContent;
+
+        return result.IsError
+            ? $"[error] {result.Content}"
+            : result.Content;
     }
 
     private static string MergeStageIntoArgs(DysonToolCall call)

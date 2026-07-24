@@ -19,10 +19,14 @@ public static class SearchAggregation
     public static IReadOnlyList<SearchHit> FilterLowQuality(IEnumerable<SearchHit> results) =>
         results.Where(r =>
         {
-            if (string.IsNullOrWhiteSpace(r.Snippet) || r.Snippet.Length < 10)
-                return false;
             if (!r.Url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
                 return false;
+
+            // Keep http(s) hits with a real title even when OpenSearch snippets are empty/short.
+            var weakSnippet = string.IsNullOrWhiteSpace(r.Snippet) || r.Snippet.Length < 10;
+            if (weakSnippet && string.IsNullOrWhiteSpace(r.Title))
+                return false;
+
             if (r.Url.Contains("y.js?", StringComparison.OrdinalIgnoreCase)
                 || r.Url.Contains("/ad/", StringComparison.OrdinalIgnoreCase)
                 || r.Url.Contains("duckduckgo.com/y.js", StringComparison.OrdinalIgnoreCase)

@@ -10,6 +10,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     private readonly DysonSessionStore? _store;
     private readonly HttpClient _http;
     private readonly string _workDirectoryPath;
+    private Guid _workDirectoryId;
     private readonly OpenAiCompletionsClient _completions;
     private readonly OpenAiResponsesClient _responses;
 
@@ -19,13 +20,15 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         OpenAiCompatibleAgentProvider provider,
         HttpClient http,
         string workDirectoryAbsolutePath,
-        DysonSessionStore? store = null)
+        DysonSessionStore? store = null,
+        Guid workDirectoryId = default)
         : base(agentMode, config, provider)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         ArgumentException.ThrowIfNullOrWhiteSpace(workDirectoryAbsolutePath);
         _workDirectoryPath = Path.GetFullPath(workDirectoryAbsolutePath);
         _store = store;
+        _workDirectoryId = workDirectoryId;
         _completions = new OpenAiCompletionsClient(_http);
         _responses = new OpenAiResponsesClient(_http);
     }
@@ -33,6 +36,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     public OpenAiCompatibleAgentProvider OpenAiProvider => (OpenAiCompatibleAgentProvider)Provider;
 
     public string WorkDirectoryPath => _workDirectoryPath;
+
+    public Guid WorkDirectoryId => _workDirectoryId;
 
     public static async Task<Result<OpenAiCompatibleAgentSession, string>> CreateAsync(
         DysonSessionStore store,
@@ -54,7 +59,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         config ??= new DysonAgentSessionConfig();
         var session = new OpenAiCompatibleAgentSession(
-            agentMode, config, provider, http, workDirectoryAbsolutePath, store);
+            agentMode, config, provider, http, workDirectoryAbsolutePath, store, workDirectoryId);
         var initialTitle = title ?? "New session";
         session.SetDisplayTitle(initialTitle);
 
@@ -113,7 +118,13 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         };
 
         var session = new OpenAiCompatibleAgentSession(
-            state.Session.AgentMode, config, provider, http, workDirectoryAbsolutePath, store);
+            state.Session.AgentMode,
+            config,
+            provider,
+            http,
+            workDirectoryAbsolutePath,
+            store,
+            state.Session.WorkDirectoryId ?? Guid.Empty);
         session.RestoreFromPersisted(state);
 
         var resumedLog = DysonSessionLogPayload.CreateEntry(
@@ -126,6 +137,86 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             return Result<OpenAiCompatibleAgentSession, string>.AsError(append.Error);
 
         return Result<OpenAiCompatibleAgentSession, string>.AsValue(session);
+    }
+
+    public override async Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
+        string agentMode,
+        string task,
+        string? context = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentMode);
+        ArgumentException.ThrowIfNullOrWhiteSpace(task);
+
+        var gate = ValidateSubagentSpawn(Mode, agentMode, Config.CustomAgents);
+        if (gate.IsError)
+            return Result<DysonStartSubagentResult, string>.AsError(gate.Error);
+
+        if (_store is null)
+            return Result<DysonStartSubagentResult, string>.AsError("Session store is required to spawn subagents.");
+
+        if (PersistenceId == Guid.Empty)
+            return Result<DysonStartSubagentResult, string>.AsError("Parent session must be persisted before spawning.");
+
+        if (_workDirectoryId == Guid.Empty)
+            return Result<DysonStartSubagentResult, string>.AsError("Work directory is required to spawn subagents.");
+
+        var child = new OpenAiCompatibleAgentSession(
+            agentMode,
+            Config,
+            OpenAiProvider,
+            _http,
+            _workDirectoryPath,
+            _store,
+            _workDirectoryId);
+
+        RegisterSubagent(child);
+
+        var title = TitleFromTask(task);
+        child.SetDisplayTitle(title);
+
+        var create = await _store.CreateSessionAsync(
+            new DysonSessionCreateRequest
+            {
+                RuntimeId = child.Id,
+                ParentSessionId = PersistenceId,
+                AgentMode = agentMode,
+                ModelSlugId = OpenAiProvider.SlugId,
+                WorkDirectoryId = _workDirectoryId,
+                McpAccessMode = Config.McpAccessMode,
+                Title = title,
+                SystemPromptSnapshot = child.SystemPrompt,
+                Status = DysonSessionStatus.Active,
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        if (create.IsError)
+            return Result<DysonStartSubagentResult, string>.AsError(create.Error);
+
+        child.SetPersistenceId(create.Value);
+
+        var createdLog = DysonSessionLogPayload.CreateEntry(
+            create.Value,
+            DysonSessionLogKind.SessionCreated,
+            new DysonSessionLogSessionCreated(create.Value, agentMode, RuntimeId: child.Id));
+
+        var append = await _store.AppendLogAsync(createdLog, cancellationToken).ConfigureAwait(false);
+        if (append.IsError)
+            return Result<DysonStartSubagentResult, string>.AsError(append.Error);
+
+        var runCts = new CancellationTokenSource();
+        child.AttachBackgroundRun(runCts);
+        KickOffChildPrompt(child, BuildChildFirstPrompt(agentMode, task, context), runCts);
+
+        AppendLog($"started subagent {child.Id} ({agentMode}): {title}");
+
+        return Result<DysonStartSubagentResult, string>.AsValue(new DysonStartSubagentResult
+        {
+            SubagentId = child.Id,
+            PersistenceId = child.PersistenceId,
+            AgentMode = agentMode,
+            Title = title,
+        });
     }
 
     public override Task<VoidResult<string>> LoadFunctionalContextAsync(
@@ -156,16 +247,25 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             {
                 Kind = DysonAgentTurnKind.Normal,
                 Instruction = prompt,
+                StartedUtc = DateTime.UtcNow,
             };
         AddTurn(turn);
 
-        var executor = new DysonWorkspaceToolExecutor(this, _workDirectoryPath, _store);
+        var executor = new DysonWorkspaceToolExecutor(this, _workDirectoryPath, _http, _store);
         var inFlight = new List<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound>();
         var useResponses = string.Equals(
             OpenAiProvider.OpenAiApiMode,
             DysonOpenAiApiModes.Responses,
             StringComparison.Ordinal);
         string? previousResponseId = null;
+        var childReportNudged = false;
+        string? harnessFollowUp = null;
+        const string incompleteToolReason =
+            OpenAiCacheFriendlyTranscriptBuilder.IncompleteToolResultContent;
+        const string childReportNudge =
+            "Harness: plain text does not finish this subagent. Call SubmitSubagentReport now with your findings (or blocker).";
+        const string childReportMissing =
+            "Child PromptAsync ended without SubmitSubagentReport.";
 
         try
         {
@@ -180,7 +280,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     // (store: false). Use previous_response_id only for same-PromptAsync deltas
                     // when we already have a response id from this loop.
                     OpenAiCacheFriendlyTranscriptBuilder.BuiltResponsesRequest built;
-                    if (previousResponseId is not null && inFlight.Count > 0)
+                    if (previousResponseId is not null && inFlight.Count > 0 && harnessFollowUp is null)
                     {
                         built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesDelta(
                             this,
@@ -191,7 +291,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     {
                         built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
                             this,
-                            currentUserPrompt: null,
+                            currentUserPrompt: harnessFollowUp,
                             currentFilePaths: null,
                             inFlightRounds: inFlight);
                         if (round == 0 && filePaths.Count > 0)
@@ -207,7 +307,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 {
                     var built = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
                         this,
-                        currentUserPrompt: null,
+                        currentUserPrompt: harnessFollowUp,
                         currentFilePaths: null,
                         inFlightRounds: inFlight);
                     if (round == 0 && filePaths.Count > 0)
@@ -222,6 +322,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 if (replyResult.IsError)
                 {
                     turn.ClearStreamingPreview();
+                    turn.FinalizeIncompleteTools(incompleteToolReason);
                     return new VoidResult<string>(replyResult.Error);
                 }
 
@@ -247,16 +348,30 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     if (staged.IsError)
                     {
                         turn.ClearStreamingPreview();
+                        turn.FinalizeIncompleteTools(incompleteToolReason);
                         return staged;
                     }
 
-                    var roundResults = new List<DysonToolCallResult>();
+                    var roundResults = new List<DysonToolCallResult>(reply.ToolCalls.Count);
                     foreach (var call in reply.ToolCalls)
                     {
                         var match = turn.ResponseLog.LastOrDefault(r =>
                             string.Equals(r.CallId, call.CallId, StringComparison.Ordinal));
                         if (match is not null)
+                        {
                             roundResults.Add(match);
+                            continue;
+                        }
+
+                        // Pad so in-flight Completions/Responses stay paired with tool_calls.
+                        roundResults.Add(new DysonToolCallResult
+                        {
+                            CallId = call.CallId,
+                            ToolName = call.ToolName,
+                            Stage = call.Stage,
+                            IsError = true,
+                            Content = incompleteToolReason,
+                        });
                     }
 
                     inFlight.Add(new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound(
@@ -271,6 +386,26 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     ? "# Empty reply\n\nThe model returned no content."
                     : reply.Content;
 
+                if (Parent is not null && !TurnHasSubmitSubagentReport(turn))
+                {
+                    if (!childReportNudged)
+                    {
+                        // Keep AssistantText unset so history stays incomplete and tools remain inFlight-only.
+                        turn.ClearStreamingPreview();
+                        previousResponseId = null;
+                        harnessFollowUp =
+                            $"Your previous assistant reply was not accepted as a finish:\n\n{text}\n\n{childReportNudge}";
+                        childReportNudged = true;
+                        AppendLog("child report gate: nudged for SubmitSubagentReport");
+                        continue;
+                    }
+
+                    turn.ClearStreamingPreview();
+                    turn.FinalizeIncompleteTools(incompleteToolReason);
+                    AppendLog("child report gate: missing SubmitSubagentReport after nudge");
+                    return new VoidResult<string>(childReportMissing);
+                }
+
                 // Title parse only at finalize — preview stays raw (incl. mid-stream H1) until then.
                 ApplyAssistantText(turn, text);
                 turn.FinishStreaming();
@@ -279,14 +414,20 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             }
 
             turn.ClearStreamingPreview();
+            turn.FinalizeIncompleteTools(incompleteToolReason);
             return new VoidResult<string>($"Tool loop exceeded {MaxToolRounds} rounds without a final reply.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             turn.ClearStreamingPreview();
+            turn.FinalizeIncompleteTools(incompleteToolReason);
             return new VoidResult<string>("Prompt was cancelled.");
         }
     }
+
+    private static bool TurnHasSubmitSubagentReport(DysonAgentTurn turn) =>
+        turn.ResponseLog.Any(r =>
+            string.Equals(r.ToolName, "SubmitSubagentReport", StringComparison.Ordinal));
 
     public override async Task<Result<DysonAgentSessionEvent, string>> WaitForNotifyAsync(
         CancellationToken cancellationToken = default)

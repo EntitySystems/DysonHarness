@@ -10,7 +10,7 @@
     <div class="composer__toolbar">
         <ModelSlugPicker SelectedSlugId="SelectedSlugId"
                          SelectedSlugIdChanged="SelectedSlugIdChanged" />
-        <AgentModePicker SelectedMode="SelectedAgentMode"
+        <AgentModePicker SelectedMode="@SelectedAgentMode"
                          SelectedModeChanged="SelectedAgentModeChanged" />
         <span class="composer-chip composer-chip--branch @(string.IsNullOrEmpty(GitBranch) ? "is-muted" : null)"
               title="@(GitBranch ?? "No git repo")">

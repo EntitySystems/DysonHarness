@@ -38,6 +38,12 @@ public sealed class DysonAgentTurn
     /// <summary>Assistant body text after title parse (persistence / UI).</summary>
     public string? AssistantText { get; set; }
 
+    /// <summary>UTC when this turn began (live create or restored from persistence).</summary>
+    public DateTime StartedUtc { get; set; }
+
+    /// <summary>UTC when this turn finished (null while streaming / in progress).</summary>
+    public DateTime? CompletedUtc { get; set; }
+
     private readonly StringBuilder _streamingPreview = new();
 
     /// <summary>Live streaming preview (transient; not persisted).</summary>
@@ -206,6 +212,83 @@ public sealed class DysonAgentTurn
 
         foreach (var result in results)
             ResponseLog.Enqueue(result);
+    }
+
+    /// <summary>
+    /// Marks Queued/Working tools (and any <see cref="ToolCalls"/> without a ResponseLog row)
+    /// as Failed with <paramref name="reason"/>, enqueueing synthetic results so transcripts stay paired.
+    /// </summary>
+    public void FinalizeIncompleteTools(string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+
+        var loggedIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in ResponseLog)
+        {
+            if (!string.IsNullOrEmpty(entry.CallId))
+                loggedIds.Add(entry.CallId);
+        }
+
+        foreach (var tracked in _tracked)
+        {
+            if (tracked.Status is DysonToolCallStatus.Completed or DysonToolCallStatus.Failed)
+                continue;
+
+            var result = new DysonToolCallResult
+            {
+                CallId = tracked.Call.CallId,
+                ToolName = tracked.Call.ToolName,
+                Stage = tracked.Call.Stage,
+                IsError = true,
+                Content = reason,
+            };
+            tracked.SetFailed(result);
+            if (loggedIds.Add(tracked.Call.CallId))
+                ResponseLog.Enqueue(result);
+        }
+
+        var trackedIds = _tracked
+            .Select(t => t.Call.CallId)
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var call in ToolCalls)
+        {
+            if (string.IsNullOrEmpty(call.CallId) || loggedIds.Contains(call.CallId))
+                continue;
+
+            if (!trackedIds.Contains(call.CallId))
+            {
+                var tracked = new DysonTrackedToolCall { Call = call };
+                tracked.Attach(this);
+                _tracked.Add(tracked);
+                trackedIds.Add(call.CallId);
+                NotifyStatusChanged(tracked, DysonToolCallStatus.Queued);
+
+                var result = new DysonToolCallResult
+                {
+                    CallId = call.CallId,
+                    ToolName = call.ToolName,
+                    Stage = call.Stage,
+                    IsError = true,
+                    Content = reason,
+                };
+                tracked.SetFailed(result);
+                ResponseLog.Enqueue(result);
+                loggedIds.Add(call.CallId);
+                continue;
+            }
+
+            // Tracked terminal but missing ResponseLog (restore skew) — pad log only.
+            ResponseLog.Enqueue(new DysonToolCallResult
+            {
+                CallId = call.CallId,
+                ToolName = call.ToolName,
+                Stage = call.Stage,
+                IsError = true,
+                Content = reason,
+            });
+            loggedIds.Add(call.CallId);
+        }
     }
 
     internal void NotifyStatusChanged(DysonTrackedToolCall tracked, DysonToolCallStatus previousStatus)

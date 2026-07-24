@@ -50,14 +50,79 @@ public sealed class DysonPersistedSession
 public sealed class DysonSessionStore(DysonDbContext db)
 {
     private readonly DysonDbContext _db = db ?? throw new ArgumentNullException(nameof(db));
-    private readonly SemaphoreSlim _sequenceGate = new(1, 1);
+    // ponytail: global lock serializes all session DbContext ops on the shared scoped context; upgrade path = IDbContextFactory per operation
+    private readonly SemaphoreSlim _dbGate = new(1, 1);
 
-    public async Task<Result<Guid, string>> CreateSessionAsync(
+    public Task<Result<Guid, string>> CreateSessionAsync(
         DysonSessionCreateRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        return RunSerializedAsync(ct => CreateSessionCoreAsync(request, ct), cancellationToken);
+    }
 
+    public Task<VoidResult<string>> UpdateSessionMetaAsync(
+        DysonSessionMetaUpdate update,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+        return RunSerializedAsync(ct => UpdateSessionMetaCoreAsync(update, ct), cancellationToken);
+    }
+
+    public Task<VoidResult<string>> UpsertTurnAsync(
+        DysonTurnEntity turn,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+        return RunSerializedAsync(ct => UpsertTurnCoreAsync(turn, ct), cancellationToken);
+    }
+
+    public Task<VoidResult<string>> AppendLogAsync(
+        DysonSessionLogEntry entry,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        return RunSerializedAsync(ct => AppendLogCoreAsync(entry, ct), cancellationToken);
+    }
+
+    public Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListSessionsAsync(
+        Guid? workDirectoryId = null,
+        bool rootsOnly = true,
+        CancellationToken cancellationToken = default)
+        => RunSerializedAsync(ct => ListSessionsCoreAsync(workDirectoryId, rootsOnly, ct), cancellationToken);
+
+    public Task<Result<DysonPersistedSession, string>> GetFullSessionAsync(
+        Guid sessionId,
+        CancellationToken cancellationToken = default)
+        => RunSerializedAsync(ct => GetFullSessionCoreAsync(sessionId, ct), cancellationToken);
+
+    /// <summary>
+    /// Deletes a session and its descendant subagent sessions. Turns and logs cascade.
+    /// </summary>
+    public Task<VoidResult<string>> DeleteSessionAsync(
+        Guid sessionId,
+        CancellationToken cancellationToken = default)
+        => RunSerializedAsync(ct => DeleteSessionCoreAsync(sessionId, ct), cancellationToken);
+
+    private async Task<T> RunSerializedAsync<T>(
+        Func<CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken)
+    {
+        await _dbGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await action(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _dbGate.Release();
+        }
+    }
+
+    private async Task<Result<Guid, string>> CreateSessionCoreAsync(
+        DysonSessionCreateRequest request,
+        CancellationToken cancellationToken)
+    {
         try
         {
             var now = DateTime.UtcNow;
@@ -88,12 +153,10 @@ public sealed class DysonSessionStore(DysonDbContext db)
         }
     }
 
-    public async Task<VoidResult<string>> UpdateSessionMetaAsync(
+    private async Task<VoidResult<string>> UpdateSessionMetaCoreAsync(
         DysonSessionMetaUpdate update,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(update);
-
         try
         {
             var entity = await _db.Sessions
@@ -127,12 +190,10 @@ public sealed class DysonSessionStore(DysonDbContext db)
         }
     }
 
-    public async Task<VoidResult<string>> UpsertTurnAsync(
+    private async Task<VoidResult<string>> UpsertTurnCoreAsync(
         DysonTurnEntity turn,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(turn);
-
         try
         {
             if (turn.Id == Guid.Empty)
@@ -183,12 +244,10 @@ public sealed class DysonSessionStore(DysonDbContext db)
         }
     }
 
-    public async Task<VoidResult<string>> AppendLogAsync(
+    private async Task<VoidResult<string>> AppendLogCoreAsync(
         DysonSessionLogEntry entry,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(entry);
-
         try
         {
             if (entry.Id == Guid.Empty)
@@ -223,10 +282,10 @@ public sealed class DysonSessionStore(DysonDbContext db)
         }
     }
 
-    public async Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListSessionsAsync(
-        Guid? workDirectoryId = null,
-        bool rootsOnly = true,
-        CancellationToken cancellationToken = default)
+    private async Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListSessionsCoreAsync(
+        Guid? workDirectoryId,
+        bool rootsOnly,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -264,9 +323,9 @@ public sealed class DysonSessionStore(DysonDbContext db)
         }
     }
 
-    public async Task<Result<DysonPersistedSession, string>> GetFullSessionAsync(
+    private async Task<Result<DysonPersistedSession, string>> GetFullSessionCoreAsync(
         Guid sessionId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -306,28 +365,71 @@ public sealed class DysonSessionStore(DysonDbContext db)
         }
     }
 
-    private async Task<long> NextLogSequenceAsync(Guid sessionId, CancellationToken cancellationToken)
+    private async Task<VoidResult<string>> DeleteSessionCoreAsync(
+        Guid sessionId,
+        CancellationToken cancellationToken)
     {
-        await _sequenceGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var dbMax = await _db.SessionLogs
-                .Where(l => l.SessionId == sessionId)
-                .Select(l => (long?)l.Sequence)
-                .MaxAsync(cancellationToken)
+            var root = await _db.Sessions
+                .FirstOrDefaultAsync(s => s.Id == sessionId, cancellationToken)
                 .ConfigureAwait(false);
 
-            var localMax = _db.SessionLogs.Local
-                .Where(l => l.SessionId == sessionId)
-                .Select(l => (long?)l.Sequence)
-                .DefaultIfEmpty()
-                .Max();
+            if (root is null)
+                return new VoidResult<string>($"Session '{sessionId}' not found.");
 
-            return Math.Max(dbMax ?? 0, localMax ?? 0) + 1;
+            // ParentSessionId is Restrict — remove descendants before the parent row.
+            var ordered = new List<Guid>();
+            var pending = new Queue<Guid>();
+            pending.Enqueue(sessionId);
+            while (pending.Count > 0)
+            {
+                var id = pending.Dequeue();
+                ordered.Add(id);
+                var childIds = await _db.Sessions
+                    .Where(s => s.ParentSessionId == id)
+                    .Select(s => s.Id)
+                    .ToListAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                foreach (var childId in childIds)
+                    pending.Enqueue(childId);
+            }
+
+            for (var i = ordered.Count - 1; i >= 0; i--)
+            {
+                var entity = i == 0
+                    ? root
+                    : await _db.Sessions
+                        .FirstOrDefaultAsync(s => s.Id == ordered[i], cancellationToken)
+                        .ConfigureAwait(false);
+                if (entity is not null)
+                    _db.Sessions.Remove(entity);
+            }
+
+            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            return VoidResult<string>.Success;
         }
-        finally
+        catch (Exception ex)
         {
-            _sequenceGate.Release();
+            return new VoidResult<string>($"Failed to delete session: {ex.Message}");
         }
+    }
+
+    /// <summary>Caller must already hold <see cref="_dbGate"/>.</summary>
+    private async Task<long> NextLogSequenceAsync(Guid sessionId, CancellationToken cancellationToken)
+    {
+        var dbMax = await _db.SessionLogs
+            .Where(l => l.SessionId == sessionId)
+            .Select(l => (long?)l.Sequence)
+            .MaxAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var localMax = _db.SessionLogs.Local
+            .Where(l => l.SessionId == sessionId)
+            .Select(l => (long?)l.Sequence)
+            .DefaultIfEmpty()
+            .Max();
+
+        return Math.Max(dbMax ?? 0, localMax ?? 0) + 1;
     }
 }

@@ -1,12 +1,19 @@
 @namespace Harness.UI.Components.Chat
+@using System.Text.Json
 @using DysonHarness
 @using Harness.UI.Components.Tools
 @using Harness.UI.Markdown
 
 <article class="turn-block">
     <header class="turn-block__header">
-        <div class="turn-block__title">@(Turn.AgentTitle ?? "Turn")</div>
-        <div class="turn-block__kind mono">@Turn.Kind · @ShortId(Turn.Id)</div>
+        <div class="turn-block__header-main">
+            <div class="turn-block__title">@(Turn.AgentTitle ?? "Turn")</div>
+            <div class="turn-block__kind mono">@Turn.Kind · @ShortId(Turn.Id)</div>
+        </div>
+        @if (Turn.StartedUtc != default)
+        {
+            <div class="turn-block__timestamp mono">@FormatTurnTimes()</div>
+        }
     </header>
     @if (IsUserTurn && !string.IsNullOrWhiteSpace(Turn.Instruction))
     {
@@ -22,6 +29,17 @@
                         @onclick="HandleCancelAsync">
                     <span class="turn-block__spinner" aria-hidden="true"></span>
                     <img class="turn-block__cancel-icon" src="icons/cancel.svg" alt="" />
+                </button>
+            }
+            else if (ShowResubmit)
+            {
+                <button type="button"
+                        class="turn-block__user-retry"
+                        disabled="@SessionBusy"
+                        title="Resubmit prompt"
+                        aria-label="Resubmit prompt"
+                        @onclick="HandleResubmitAsync">
+                    <img class="turn-block__retry-icon" src="icons/retry.svg" alt="" />
                 </button>
             }
         </div>
@@ -40,6 +58,19 @@
     else if (!string.IsNullOrWhiteSpace(Turn.AssistantText))
     {
         <div class="turn-block__body">@MarkdownRenderer.ToHtml(Turn.AssistantText)</div>
+    }
+
+    @{
+        var subagentIds = CollectSubagentPersistenceIds();
+    }
+    @if (subagentIds.Count > 0)
+    {
+        <div class="turn-block__subagents">
+            @foreach (var id in subagentIds)
+            {
+                <SubagentCard PersistenceId="id" />
+            }
+        </div>
     }
 
     @if (Turn.TrackedToolCalls.Count > 0 || Turn.ToolCalls.Count > 0)
@@ -62,10 +93,16 @@
     /// <summary>Cancels the in-flight prompt (wired only for the latest busy turn).</summary>
     [Parameter] public EventCallback OnCancel { get; set; }
 
+    /// <summary>Re-sends this turn's instruction as a new prompt when idle.</summary>
+    [Parameter] public EventCallback<string> OnResubmit { get; set; }
+
     private bool IsUserTurn =>
         Turn.Kind is DysonAgentTurnKind.Normal or DysonAgentTurnKind.InitializeSession;
 
     private bool CanCancel => SessionBusy && IsLatestTurn && OnCancel.HasDelegate;
+
+    private bool ShowResubmit =>
+        OnResubmit.HasDelegate && !string.IsNullOrWhiteSpace(Turn.Instruction);
 
     /// <summary>
     /// Compact loader on the user prompt row until the assistant reply is finalized.
@@ -99,5 +136,58 @@
 
     private Task HandleCancelAsync() => CanCancel ? OnCancel.InvokeAsync() : Task.CompletedTask;
 
+    private Task HandleResubmitAsync() =>
+        SessionBusy || !OnResubmit.HasDelegate
+            ? Task.CompletedTask
+            : OnResubmit.InvokeAsync(Turn.Instruction);
+
     private static string ShortId(Guid id) => id.ToString("N")[..8];
+
+    private string FormatTurnTimes()
+    {
+        var start = FormatLocal(Turn.StartedUtc);
+        return Turn.CompletedUtc is { } end
+            ? $"{start} – {FormatLocal(end)}"
+            : start;
+    }
+
+    private static string FormatLocal(DateTime utc) =>
+        utc.ToLocalTime().ToString("dd/MM/yyyy HH:mm");
+
+    private List<Guid> CollectSubagentPersistenceIds()
+    {
+        var ids = new List<Guid>();
+        foreach (var tracked in Turn.TrackedToolCalls)
+        {
+            if (!string.Equals(tracked.Call.ToolName, "StartSubagent", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (tracked.Result?.Content is not { Length: > 0 } content)
+                continue;
+            if (TryParsePersistenceId(content, out var id) && !ids.Contains(id))
+                ids.Add(id);
+        }
+
+        return ids;
+    }
+
+    private static bool TryParsePersistenceId(string content, out Guid persistenceId)
+    {
+        persistenceId = default;
+        try
+        {
+            using var doc = JsonDocument.Parse(content);
+            if (!doc.RootElement.TryGetProperty("persistenceId", out var prop))
+                return false;
+
+            return prop.ValueKind switch
+            {
+                JsonValueKind.String => Guid.TryParse(prop.GetString(), out persistenceId),
+                _ => prop.TryGetGuid(out persistenceId),
+            };
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 }

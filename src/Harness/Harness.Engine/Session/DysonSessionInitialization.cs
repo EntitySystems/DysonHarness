@@ -39,6 +39,7 @@ public static class DysonSessionInitialization
         {
             Kind = DysonAgentTurnKind.InitializeSession,
             Instruction = userPrompt,
+            StartedUtc = DateTime.UtcNow,
         };
     }
 }

@@ -1,5 +1,6 @@
 @namespace Harness.UI.Components.Sessions
 @using DysonHarness
+@inject IJSRuntime Js
 
 <div class="session-list">
     <div class="sidebar__section-label">Sessions</div>
@@ -42,15 +43,27 @@
             @foreach (var session in Sessions)
             {
                 var active = session.Id == ActiveSessionId;
-                <button type="button"
-                        class="list-item @(active ? "is-active" : null)"
-                        disabled="@Busy"
-                        @onclick="() => OnResumeAsync(session.Id)">
-                    <span class="list-item__title">@(session.Title ?? "Untitled")</span>
-                    <span class="list-item__meta mono">
-                        @session.AgentMode · @session.Status · @session.LastActivityUtc.ToLocalTime().ToString("g")
-                    </span>
-                </button>
+                var title = session.Title ?? "Untitled";
+                <div class="list-item @(active ? "is-active" : null)">
+                    <button type="button"
+                            class="list-item__main"
+                            disabled="@Busy"
+                            @onclick="() => OnResumeAsync(session.Id)">
+                        <span class="list-item__title">@title</span>
+                        <span class="list-item__meta mono">
+                            @session.AgentMode · @session.Status · @session.LastActivityUtc.ToLocalTime().ToString("g")
+                        </span>
+                    </button>
+                    <button type="button"
+                            class="btn btn-ghost btn-icon list-item__delete"
+                            disabled="@Busy"
+                            title="Delete session"
+                            aria-label="Delete @title"
+                            @onclick="() => OnDeleteClickAsync(session.Id, title)"
+                            @onclick:stopPropagation="true">
+                        <img src="icons/trash.svg" alt="" />
+                    </button>
+                </div>
             }
         }
     </div>
@@ -64,6 +77,7 @@
     [Parameter] public string? Error { get; set; }
     [Parameter] public EventCallback OnNew { get; set; }
     [Parameter] public EventCallback<Guid> OnResume { get; set; }
+    [Parameter] public EventCallback<Guid> OnDelete { get; set; }
     [Parameter] public EventCallback OnRefresh { get; set; }
 
     private Task OnNewAsync() => OnNew.InvokeAsync();
@@ -71,4 +85,12 @@
     private Task OnResumeAsync(Guid id) => OnResume.InvokeAsync(id);
 
     private Task OnRefreshAsync() => OnRefresh.InvokeAsync();
+
+    private async Task OnDeleteClickAsync(Guid id, string title)
+    {
+        var ok = await Js.InvokeAsync<bool>("confirm", $"Delete session '{title}'?");
+        if (!ok)
+            return;
+        await OnDelete.InvokeAsync(id);
+    }
 }

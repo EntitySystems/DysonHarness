@@ -2,12 +2,14 @@ namespace DysonHarness;
 
 public static class SearchEngineIds
 {
+    public const string DuckDuckGo = "duckduckgo";
     public const string Bing = "bing";
     public const string Wikipedia = "wikipedia";
     public const string Brave = "brave";
 
-    public static readonly string[] FreeDefault = [Bing, Wikipedia];
-    public static readonly string[] AllKnown = [Bing, Wikipedia, Brave];
+    /// <summary>Free engines in waterfall / default FreeSearch order: DDG first, then Bing RSS, then Wikipedia.</summary>
+    public static readonly string[] FreeDefault = [DuckDuckGo, Bing, Wikipedia];
+    public static readonly string[] AllKnown = [DuckDuckGo, Bing, Wikipedia, Brave];
 }
 
 public sealed class SearchHit

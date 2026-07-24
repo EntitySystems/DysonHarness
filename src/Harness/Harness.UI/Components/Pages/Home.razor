@@ -25,12 +25,17 @@
                              Error="@_listError"
                              OnNew="StartNewAsync"
                              OnResume="ResumeAsync"
+                             OnDelete="DeleteAsync"
                              OnRefresh="RefreshSessionsAsync" />
             </SessionList>
         </Sidebar>
     </Sidebar>
     <Main>
-        <SessionHeader Session="Host.Session" Title="@_activeTitle" GitBranch="@_gitBranch" />
+        <SessionHeader Session="Host.Session"
+                       Title="@_activeTitle"
+                       GitBranch="@_gitBranch"
+                       ShowBackToParent="Host.ActiveParentSessionId is not null"
+                       OnBackToParent="NavigateToParentAsync" />
         @if (!string.IsNullOrEmpty(Host.LastError))
         {
             <div class="error-banner">@Host.LastError</div>
@@ -40,9 +45,9 @@
                    SessionBusy="Host.IsBusy"
                    OnCancelPrompt="CancelPrompt"
                    @bind-SelectedSlugId="_selectedSlugId"
-                   SelectedAgentMode="_selectedAgentMode"
+                   SelectedAgentMode="@_selectedAgentMode"
                    SelectedAgentModeChanged="OnAgentModeChanged"
-                   GitBranch="_gitBranch"
+                   GitBranch="@_gitBranch"
                    OnSubmit="PromptAsync" />
     </Main>
     <Rail>
@@ -327,9 +332,25 @@
         await RefreshSessionsAsync();
     }
 
+    private async Task DeleteAsync(Guid sessionId)
+    {
+        var result = await Host.DeleteSessionAsync(sessionId);
+        if (result.IsError)
+            _listError = result.Error;
+        await RefreshSessionsAsync();
+    }
+
     private async Task PromptAsync(string prompt)
     {
         await Host.PromptAsync(prompt);
+        await RefreshSessionsAsync();
+    }
+
+    private async Task NavigateToParentAsync()
+    {
+        var result = await Host.NavigateToParentAsync();
+        if (result.IsError)
+            _listError = result.Error;
         await RefreshSessionsAsync();
     }
 

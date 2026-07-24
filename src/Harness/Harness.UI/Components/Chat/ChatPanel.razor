@@ -17,16 +17,17 @@
                 <TurnBlock Turn="turn"
                            SessionBusy="SessionBusy"
                            IsLatestTurn="@(i == Turns.Count - 1)"
-                           OnCancel="OnCancelPrompt" />
+                           OnCancel="OnCancelPrompt"
+                           OnResubmit="HandleSubmitAsync" />
             }
         }
     </div>
     <Composer Disabled="@Disabled"
               SelectedSlugId="SelectedSlugId"
               SelectedSlugIdChanged="SelectedSlugIdChanged"
-              SelectedAgentMode="SelectedAgentMode"
+              SelectedAgentMode="@SelectedAgentMode"
               SelectedAgentModeChanged="SelectedAgentModeChanged"
-              GitBranch="GitBranch"
+              GitBranch="@GitBranch"
               OnSubmit="HandleSubmitAsync" />
 </div>
 
