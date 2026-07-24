@@ -20,7 +20,8 @@ public abstract class DysonAgentSession
     protected DysonAgentSession(
         string agentMode,
         DysonAgentSessionConfig config,
-        DysonAgentProvider provider)
+        DysonAgentProvider provider,
+        string? systemPromptSuffix = null)
     {
         Config = config ?? throw new ArgumentNullException(nameof(config));
         Provider = provider ?? throw new ArgumentNullException(nameof(provider));
@@ -31,7 +32,9 @@ public abstract class DysonAgentSession
             throw new ArgumentOutOfRangeException(nameof(agentMode), agentMode, prompt.Error);
 
         Mode = agentMode;
-        SystemPrompt = prompt.Value;
+        SystemPrompt = string.IsNullOrWhiteSpace(systemPromptSuffix)
+            ? prompt.Value
+            : prompt.Value + "\n\n" + systemPromptSuffix.Trim();
         McpPipeline = DysonMcpPipeline.CreateDefault(config.McpAccessMode, config.AvailableShellTypes);
     }
 
@@ -224,12 +227,14 @@ public abstract class DysonAgentSession
     /// <summary>Spawn a child session (non-blocking background prompt). Concrete providers implement persist + clone.</summary>
     /// <param name="initialTodos">Optional seed for the child’s own todo list (applied after the child row is persisted).</param>
     /// <param name="modelSlug">Optional model slug/alias; omit to inherit the parent’s current provider.</param>
+    /// <param name="reasoningEffort">Optional effort override; null/omit → slug default when resolving a slug, else keep parent’s current effort.</param>
     public abstract Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
         string agentMode,
         string task,
         string? context = null,
         IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
         string? modelSlug = null,
+        string? reasoningEffort = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Default WaitForSubagent timeout when the tool omits <c>timeoutMs</c> (5 minutes).</summary>

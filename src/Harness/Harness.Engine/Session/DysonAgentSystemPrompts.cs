@@ -70,6 +70,7 @@ public static class DysonAgentSystemPrompts
         - After spawning a Drone: never WaitForSubagent; continue other work until the notification turn.
         - When spawning a child that should track a checklist, seed StartSubagent with optional todos (displayName + taskCode).
         - Optional modelSlug on StartSubagent when the child should use a different model (slug or display alias; omit to inherit yours).
+        - Optional reasoningEffort on StartSubagent (omit → slug defaultEffort; when inheriting, omit keeps your current effort).
         - Do the work yourself only when it is short, single-turn, and obvious (no exploration needed).
         - After spawn, prefer continuing other work; completion arrives as a harness turn with SubmitSubagentReport content — incorporate and proceed.
         - Call WaitForSubagent only when an Explore (or similar) child’s output blocks the next automatic turn. Otherwise do not Wait — keep multitasking until the notification turn.
@@ -103,6 +104,7 @@ public static class DysonAgentSystemPrompts
         - First turn: estimate whether the parent brief + context is sufficient. Prefer trusting a rich Work-provided brief. If context is still thin / the task is too large, StartSubagent one or more Explore agents before coding; WaitForSubagent only when those Explore reports block the next automatic turn. If context is already good, skip Explore and start implementation.
         - When spawning Explore children that should track a checklist, seed StartSubagent with optional todos (displayName + taskCode).
         - Optional modelSlug on StartSubagent when an Explore child should use a different model (omit to inherit yours).
+        - Optional reasoningEffort on StartSubagent (omit → slug defaultEffort; when inheriting, omit keeps your current effort).
         - May spawn Explore only — never another Drone by default.
         - Same Wait/notify rules as Work for any Explore children: Wait only when an Explore child’s output blocks the next automatic turn; otherwise continue and incorporate SubmitSubagentReport notification turns.
         - Do not ask the user clarifying questions; if blocked, SubmitSubagentReport with status failed and a concrete failure reason (missing context, agent/tool error), then stop.
@@ -198,6 +200,95 @@ public static class DysonAgentSystemPrompts
         }
 
         return Result<string, string>.AsError($"Unknown agent mode '{agentMode}'.");
+    }
+
+    /// <summary>
+    /// <see cref="ForMode"/> plus optional available-models catalog for the session’s provider kind.
+    /// When <paramref name="models"/> is null (tests/stubs), returns <see cref="ForMode"/> only.
+    /// </summary>
+    public static async Task<Result<string, string>> BuildSystemPromptWithModelsAsync(
+        string agentMode,
+        DysonAgentSessionConfig config,
+        string providerKind,
+        DysonModelStore? models,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        var basePrompt = ForMode(agentMode, config.CustomAgents);
+        if (basePrompt.IsError)
+            return basePrompt;
+
+        var block = await BuildAvailableModelsBlockAsync(models, providerKind, cancellationToken)
+            .ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(block))
+            return basePrompt;
+
+        return Result<string, string>.AsValue(basePrompt.Value + "\n\n" + block);
+    }
+
+    /// <summary>
+    /// Loads providers and formats a catalog block for slugs whose effective kind matches
+    /// <paramref name="providerKind"/> (same filter as child modelSlug resolution). Null store → null.
+    /// </summary>
+    public static async Task<string?> BuildAvailableModelsBlockAsync(
+        DysonModelStore? models,
+        string providerKind,
+        CancellationToken cancellationToken = default)
+    {
+        if (models is null)
+            return null;
+
+        var listed = await models.ListProvidersAsync(cancellationToken).ConfigureAwait(false);
+        if (listed.IsError)
+            return null;
+
+        return FormatAvailableModelsBlock(listed.Value, providerKind);
+    }
+
+    /// <summary>
+    /// Formats selectable model slugs for the system prompt (UI / <c>StartSubagent.modelSlug</c>).
+    /// Returns null when no slugs match <paramref name="providerKind"/>.
+    /// </summary>
+    public static string? FormatAvailableModelsBlock(
+        IReadOnlyList<DysonModelProviderEntity> providers,
+        string providerKind)
+    {
+        ArgumentNullException.ThrowIfNull(providers);
+
+        if (string.IsNullOrWhiteSpace(providerKind))
+            return null;
+
+        var lines = new List<string>();
+        foreach (var provider in providers)
+        {
+            var kind = DysonProviderKinds.EffectiveKind(
+                provider.ProviderKind, provider.BaseUrl, provider.ApiKey);
+            if (!string.Equals(kind, providerKind, StringComparison.Ordinal))
+                continue;
+
+            foreach (var slug in provider.Slugs)
+            {
+                var alias = string.IsNullOrWhiteSpace(slug.DisplayAlias) ? slug.Slug : slug.DisplayAlias.Trim();
+                var apiSlug = slug.Slug?.Trim() ?? "";
+                var defaultEffort = string.IsNullOrWhiteSpace(slug.DefaultReasoningEffort)
+                    ? "(omit)"
+                    : slug.DefaultReasoningEffort.Trim();
+                var modes = slug.ReasoningModes is { Count: > 0 }
+                    ? "[" + string.Join(", ", slug.ReasoningModes.Select(m => m.Trim()).Where(m => m.Length > 0)) + "]"
+                    : "[]";
+                lines.Add($"- {alias} (`{apiSlug}`) defaultEffort: {defaultEffort}; modes: {modes}");
+            }
+        }
+
+        if (lines.Count == 0)
+            return null;
+
+        return """
+            Available models (same provider kind as this session):
+            Selectable via UI model picker or StartSubagent.modelSlug (slug or display alias).
+            Effort tags are freeform values for API reasoning_effort / StartSubagent.reasoningEffort; omit reasoningEffort to use the slug’s defaultEffort.
+            """ + "\n" + string.Join("\n", lines);
     }
 
     private static bool TryGetBuiltInDirective(string agentMode, out string directive)

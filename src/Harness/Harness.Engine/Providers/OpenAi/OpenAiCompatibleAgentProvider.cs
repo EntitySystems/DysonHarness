@@ -32,6 +32,27 @@ public sealed class OpenAiCompatibleAgentProvider : DysonAgentProvider
     {
     }
 
+    /// <summary>Copy identity from <paramref name="source"/> with an explicit effort (no slug-default fallback).</summary>
+    public OpenAiCompatibleAgentProvider WithReasoningEffort(string? reasoningEffort)
+    {
+        return new OpenAiCompatibleAgentProvider(this, reasoningEffort);
+    }
+
+    private OpenAiCompatibleAgentProvider(OpenAiCompatibleAgentProvider source, string? reasoningEffort)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ProviderId = source.ProviderId;
+        SlugId = source.SlugId;
+        ApiKey = source.ApiKey;
+        Slug = source.Slug;
+        DisplayAlias = source.DisplayAlias;
+        ProviderKind = source.ProviderKind;
+        BaseUrl = source.BaseUrl;
+        ProviderDisplayName = source.ProviderDisplayName;
+        OpenAiApiMode = source.OpenAiApiMode;
+        ReasoningEffort = NormalizeReasoningEffort(reasoningEffort);
+    }
+
     public Guid? ProviderId { get; }
     public Guid? SlugId { get; }
     public string? ApiKey { get; }

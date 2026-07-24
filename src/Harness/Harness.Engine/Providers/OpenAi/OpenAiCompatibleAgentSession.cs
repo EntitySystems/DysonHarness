@@ -23,8 +23,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         string workDirectoryAbsolutePath,
         DysonSessionStore? store = null,
         Guid workDirectoryId = default,
-        DysonModelStore? models = null)
-        : base(agentMode, config, provider)
+        DysonModelStore? models = null,
+        string? systemPromptSuffix = null)
+        : base(agentMode, config, provider, systemPromptSuffix)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         ArgumentException.ThrowIfNullOrWhiteSpace(workDirectoryAbsolutePath);
@@ -63,8 +64,14 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             return Result<OpenAiCompatibleAgentSession, string>.AsError("Work directory is required.");
 
         config ??= new DysonAgentSessionConfig();
+        var providerKind = DysonProviderKinds.EffectiveKind(
+            provider.ProviderKind, provider.BaseUrl, provider.ApiKey);
+        var modelsBlock = await DysonAgentSystemPrompts.BuildAvailableModelsBlockAsync(
+                models, providerKind, cancellationToken)
+            .ConfigureAwait(false);
         var session = new OpenAiCompatibleAgentSession(
-            agentMode, config, provider, http, workDirectoryAbsolutePath, store, workDirectoryId, models);
+            agentMode, config, provider, http, workDirectoryAbsolutePath, store, workDirectoryId, models,
+            modelsBlock);
         var initialTitle = title ?? "New session";
         session.SetDisplayTitle(initialTitle);
 
@@ -124,6 +131,11 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             McpAccessMode = state.Session.McpAccessMode,
         };
 
+        var providerKind = DysonProviderKinds.EffectiveKind(
+            provider.ProviderKind, provider.BaseUrl, provider.ApiKey);
+        var modelsBlock = await DysonAgentSystemPrompts.BuildAvailableModelsBlockAsync(
+                models, providerKind, cancellationToken)
+            .ConfigureAwait(false);
         var session = new OpenAiCompatibleAgentSession(
             state.Session.AgentMode,
             config,
@@ -132,7 +144,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             workDirectoryAbsolutePath,
             store,
             state.Session.WorkDirectoryId ?? Guid.Empty,
-            models);
+            models,
+            modelsBlock);
         session.RestoreFromPersisted(state);
 
         var resumedLog = DysonSessionLogPayload.CreateEntry(
@@ -153,6 +166,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         string? context = null,
         IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
         string? modelSlug = null,
+        string? reasoningEffort = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentMode);
@@ -171,11 +185,18 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         if (_workDirectoryId == Guid.Empty)
             return Result<DysonStartSubagentResult, string>.AsError("Work directory is required to spawn subagents.");
 
-        var resolved = await ResolveChildProviderAsync(modelSlug, cancellationToken).ConfigureAwait(false);
+        var resolved = await ResolveChildProviderAsync(modelSlug, reasoningEffort, cancellationToken)
+            .ConfigureAwait(false);
         if (resolved.IsError)
             return Result<DysonStartSubagentResult, string>.AsError(resolved.Error);
 
         var childProvider = resolved.Value;
+
+        var providerKind = DysonProviderKinds.EffectiveKind(
+            childProvider.ProviderKind, childProvider.BaseUrl, childProvider.ApiKey);
+        var modelsBlock = await DysonAgentSystemPrompts.BuildAvailableModelsBlockAsync(
+                _models, providerKind, cancellationToken)
+            .ConfigureAwait(false);
 
         var child = new OpenAiCompatibleAgentSession(
             agentMode,
@@ -185,7 +206,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             _workDirectoryPath,
             _store,
             _workDirectoryId,
-            _models);
+            _models,
+            modelsBlock);
 
         RegisterSubagent(child);
 
@@ -248,10 +270,17 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
     private async Task<Result<OpenAiCompatibleAgentProvider, string>> ResolveChildProviderAsync(
         string? modelSlug,
+        string? reasoningEffort,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(modelSlug))
-            return Result<OpenAiCompatibleAgentProvider, string>.AsValue(OpenAiProvider);
+        {
+            if (reasoningEffort is null)
+                return Result<OpenAiCompatibleAgentProvider, string>.AsValue(OpenAiProvider);
+
+            return Result<OpenAiCompatibleAgentProvider, string>.AsValue(
+                OpenAiProvider.WithReasoningEffort(reasoningEffort));
+        }
 
         if (_models is null)
             return Result<OpenAiCompatibleAgentProvider, string>.AsError(
@@ -276,7 +305,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         }
 
         return Result<OpenAiCompatibleAgentProvider, string>.AsValue(
-            new OpenAiCompatibleAgentProvider(slug));
+            new OpenAiCompatibleAgentProvider(slug, reasoningEffort));
     }
 
     public override Task<VoidResult<string>> LoadFunctionalContextAsync(

@@ -28,6 +28,26 @@ public sealed class DemoDysonAgentProvider : DysonAgentProvider
     {
     }
 
+    /// <summary>Copy identity from <paramref name="source"/> with an explicit effort (no slug-default fallback).</summary>
+    public DemoDysonAgentProvider WithReasoningEffort(string? reasoningEffort)
+    {
+        return new DemoDysonAgentProvider(this, reasoningEffort);
+    }
+
+    private DemoDysonAgentProvider(DemoDysonAgentProvider source, string? reasoningEffort)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ProviderId = source.ProviderId;
+        SlugId = source.SlugId;
+        ApiKey = source.ApiKey;
+        Slug = source.Slug;
+        DisplayAlias = source.DisplayAlias;
+        ProviderKind = source.ProviderKind;
+        BaseUrl = source.BaseUrl;
+        ProviderDisplayName = source.ProviderDisplayName;
+        ReasoningEffort = OpenAiCompatibleAgentProvider.NormalizeReasoningEffort(reasoningEffort);
+    }
+
     public Guid? ProviderId { get; }
     public Guid? SlugId { get; }
     public string? ApiKey { get; }

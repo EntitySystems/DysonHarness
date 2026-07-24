@@ -111,6 +111,11 @@ Per-slug **default** (`DefaultReasoningEffort`) plus a **session override** (`se
 4. Composer can override for the current session only (does not rewrite the slug default).
 5. Live `OpenAiCompatibleAgentProvider.ReasoningEffort` is built as session value when set (including empty = omit); if session value is null (legacy rows), fall back to slug default.
 6. When non-empty, Completions and Responses request bodies include top-level `"reasoning_effort": "<value>"`; blank/null omits the field.
+7. `StartSubagent.reasoningEffort` (optional) sets the child’s effort; omit/null uses the chosen slug’s default (or keeps the parent’s current effort when inheriting the parent model).
+
+## System-prompt catalog
+
+At session create / load / child spawn (when a `DysonModelStore` is available), `DysonAgentSystemPrompts.FormatAvailableModelsBlock` appends a same-kind slug list to the system prompt: display alias, API slug, `defaultEffort`, and registered `modes`. That snapshot is persisted as `SystemPromptSnapshot`. Tests/stubs without a model store skip the block.
 
 ## OpenAI-compatible API mode
 

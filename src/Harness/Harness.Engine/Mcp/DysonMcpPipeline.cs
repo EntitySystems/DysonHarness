@@ -115,6 +115,7 @@ public sealed class DysonMcpPipeline
                 "Do not WaitForSubagent on Drones; Wait only on Explore (or other) children whose output blocks the next planned turn. " +
                 "Optional todos seeds the child’s own session todo list. " +
                 "Optional modelSlug picks a different model (slug or display alias; omit to inherit parent). " +
+                "Optional reasoningEffort overrides the child’s reasoning_effort (omit/null → chosen slug’s defaultEffort; when inheriting parent model, omit keeps the parent’s current effort). " +
                 "Plan is banned as a subagent mode. Explore cannot spawn. Drone may spawn Explore only (not another Drone).",
             InputSchemaJson = """
                 {
@@ -126,6 +127,10 @@ public sealed class DysonMcpPipeline
                     "modelSlug": {
                       "type": "string",
                       "description": "Optional model slug or display alias. Omit to inherit the parent session model. Same provider kind only."
+                    },
+                    "reasoningEffort": {
+                      "type": "string",
+                      "description": "Optional freeform reasoning_effort for the child. Omit/null → slug defaultEffort when modelSlug is set; when inheriting the parent model, omit keeps the parent’s current effort."
                     },
                     "todos": {
                       "type": "array",

@@ -265,6 +265,7 @@ public static class DysonSessionTodoSelfCheck
             string? context = null,
             IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
             string? modelSlug = null,
+            string? reasoningEffort = null,
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 

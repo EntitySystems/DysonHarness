@@ -56,7 +56,7 @@ Built-in names in `DysonAgentModes`:
 | `Bug Review` | Bug-focused review |
 | `Custom` | Category label; lookup uses `Config.CustomAgents` keys |
 
-System prompts come from `DysonAgentSystemPrompts.ForMode`. Work / Explore / Drone directives cover orchestrator routing, Wait-only-for-prerequisites, and mandatory `SubmitSubagentReport`. Explore/Drone directives harden “report is mandatory” / “complete or impossible”, including `failed` + failure-reason summaries. Every child first turn prepends `SubagentReportRequiredMandate` (failure-reason reports are valid finishes); Explore/Drone also get mode-specific first-turn blocks (`ExploreFirstTurnReportMandate`, `DroneFirstTurnContextMandate`). Security Review / Bug Review directives briefly mirror the same when used as subagents.
+System prompts come from `DysonAgentSystemPrompts.ForMode`, then (when a `DysonModelStore` is available) an **available-models catalog** is appended: slugs of the same effective provider kind as the session, each with display alias, API slug, `defaultEffort`, and registered `modes`. That catalog is what UI / `StartSubagent.modelSlug` can select; effort tags are freeform for API `reasoning_effort` / `StartSubagent.reasoningEffort`. Work / Explore / Drone directives cover orchestrator routing, Wait-only-for-prerequisites, and mandatory `SubmitSubagentReport`. Explore/Drone directives harden “report is mandatory” / “complete or impossible”, including `failed` + failure-reason summaries. Every child first turn prepends `SubagentReportRequiredMandate` (failure-reason reports are valid finishes); Explore/Drone also get mode-specific first-turn blocks (`ExploreFirstTurnReportMandate`, `DroneFirstTurnContextMandate`). Security Review / Bug Review directives briefly mirror the same when used as subagents.
 
 ## Orchestrator subagents
 
@@ -64,7 +64,7 @@ Primary flow: `StartSubagent` is **non-blocking**; the child runs in the backgro
 
 | Tool | Behavior |
 | ---- | -------- |
-| `StartSubagent` | `CreateChildAsync` — persist child (`ParentSessionId`), register runtime id, background `PromptAsync`. Soft gates via `ValidateSubagentSpawn`. Optional `modelSlug` (slug or display alias) resolves via `DysonModelStore.FindSlugByNameAsync`; omit inherits parent provider (same kind only) |
+| `StartSubagent` | `CreateChildAsync` — persist child (`ParentSessionId`), register runtime id, background `PromptAsync`. Soft gates via `ValidateSubagentSpawn`. Optional `modelSlug` (slug or display alias) resolves via `DysonModelStore.FindSlugByNameAsync`; omit inherits parent provider (same kind only). Optional `reasoningEffort` (freeform); omit/null → chosen slug’s `DefaultReasoningEffort`; when inheriting parent model, omit keeps the parent’s current effort |
 | `WaitForSubagent` | Block until child terminal or `timeoutMs`. Wait **only** when the child’s result is a **blocker for the next automatic turn** (typically Explore-before-implementation); do **not** Wait on Drones — prefer the notification turn |
 | `InspectSubagentLog` | `SnapshotLog` for a subagent id |
 | `StopSubagent` | Cancel child CTS; mark `Stopped`; notify parent |

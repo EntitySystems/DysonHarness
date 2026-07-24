@@ -15,8 +15,9 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         DysonAgentProvider provider,
         DysonSessionStore? store = null,
         Guid workDirectoryId = default,
-        DysonModelStore? models = null)
-        : base(agentMode, config, provider)
+        DysonModelStore? models = null,
+        string? systemPromptSuffix = null)
+        : base(agentMode, config, provider, systemPromptSuffix)
     {
         _store = store;
         SessionStore = store;
@@ -46,7 +47,13 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             return Result<DemoDysonAgentSession, string>.AsError("Work directory is required.");
 
         config ??= new DysonAgentSessionConfig();
-        var session = new DemoDysonAgentSession(agentMode, config, provider, store, workDirectoryId, models);
+        var providerKind = DysonProviderKinds.EffectiveKind(
+            provider.ProviderKind, provider.BaseUrl, provider.ApiKey);
+        var modelsBlock = await DysonAgentSystemPrompts.BuildAvailableModelsBlockAsync(
+                models, providerKind, cancellationToken)
+            .ConfigureAwait(false);
+        var session = new DemoDysonAgentSession(
+            agentMode, config, provider, store, workDirectoryId, models, modelsBlock);
         var initialTitle = title ?? "New session";
         session.SetDisplayTitle(initialTitle);
 
@@ -106,13 +113,19 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             McpAccessMode = state.Session.McpAccessMode,
         };
 
+        var providerKind = DysonProviderKinds.EffectiveKind(
+            provider.ProviderKind, provider.BaseUrl, provider.ApiKey);
+        var modelsBlock = await DysonAgentSystemPrompts.BuildAvailableModelsBlockAsync(
+                models, providerKind, cancellationToken)
+            .ConfigureAwait(false);
         var session = new DemoDysonAgentSession(
             state.Session.AgentMode,
             config,
             provider,
             store,
             state.Session.WorkDirectoryId ?? Guid.Empty,
-            models);
+            models,
+            modelsBlock);
         session.RestoreFromPersisted(state);
 
         var resumedLog = DysonSessionLogPayload.CreateEntry(
@@ -133,6 +146,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         string? context = null,
         IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
         string? modelSlug = null,
+        string? reasoningEffort = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentMode);
@@ -151,14 +165,22 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         if (_workDirectoryId == Guid.Empty)
             return Result<DysonStartSubagentResult, string>.AsError("Work directory is required to spawn subagents.");
 
-        var resolved = await ResolveChildProviderAsync(modelSlug, cancellationToken).ConfigureAwait(false);
+        var resolved = await ResolveChildProviderAsync(modelSlug, reasoningEffort, cancellationToken)
+            .ConfigureAwait(false);
         if (resolved.IsError)
             return Result<DysonStartSubagentResult, string>.AsError(resolved.Error);
 
         var childProvider = resolved.Value;
 
+        var providerKind = childProvider is DemoDysonAgentProvider demoKind
+            ? DysonProviderKinds.EffectiveKind(demoKind.ProviderKind, demoKind.BaseUrl, demoKind.ApiKey)
+            : DysonProviderKinds.Demo;
+        var modelsBlock = await DysonAgentSystemPrompts.BuildAvailableModelsBlockAsync(
+                _models, providerKind, cancellationToken)
+            .ConfigureAwait(false);
+
         var child = new DemoDysonAgentSession(
-            agentMode, Config, childProvider, _store, _workDirectoryId, _models);
+            agentMode, Config, childProvider, _store, _workDirectoryId, _models, modelsBlock);
         RegisterSubagent(child);
 
         var title = TitleFromTask(task);
@@ -232,10 +254,22 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
 
     private async Task<Result<DysonAgentProvider, string>> ResolveChildProviderAsync(
         string? modelSlug,
+        string? reasoningEffort,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(modelSlug))
+        {
+            if (reasoningEffort is null)
+                return Result<DysonAgentProvider, string>.AsValue(Provider);
+
+            if (Provider is DemoDysonAgentProvider demoParent)
+            {
+                return Result<DysonAgentProvider, string>.AsValue(
+                    demoParent.WithReasoningEffort(reasoningEffort));
+            }
+
             return Result<DysonAgentProvider, string>.AsValue(Provider);
+        }
 
         if (_models is null)
             return Result<DysonAgentProvider, string>.AsError(
@@ -259,7 +293,8 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                 $"modelSlug '{modelSlug.Trim()}' is not demo (same provider kind as parent required).");
         }
 
-        return Result<DysonAgentProvider, string>.AsValue(new DemoDysonAgentProvider(slugEntity));
+        return Result<DysonAgentProvider, string>.AsValue(
+            new DemoDysonAgentProvider(slugEntity, reasoningEffort));
     }
 
     public override Task<VoidResult<string>> LoadFunctionalContextAsync(
@@ -455,6 +490,11 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                     && !string.IsNullOrWhiteSpace(slugProp.GetString())
                     ? slugProp.GetString()
                     : null;
+                var reasoningEffort = root.TryGetProperty("reasoningEffort", out var effortProp)
+                    && effortProp.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(effortProp.GetString())
+                    ? effortProp.GetString()
+                    : null;
                 var todos = DysonWorkspaceToolExecutor.TryParseTodoSeedItems(root, "todos");
                 if (todos.IsError)
                     return ToolError(call, todos.Error);
@@ -465,6 +505,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                         context,
                         todos.Value,
                         modelSlug,
+                        reasoningEffort,
                         cancellationToken)
                     .ConfigureAwait(false);
                 if (started.IsError)

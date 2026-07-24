@@ -15,6 +15,7 @@ if (searchCheck.IsError)
 DysonSessionTodoSelfCheck.Run();
 OpenAiReasoningSelfCheck.Run();
 StringListJsonValueConverterSelfCheck.Run();
+DysonAvailableModelsPromptSelfCheck.Run();
 ComposerSlashCommands.SelfCheck();
 
 var builder = WebApplication.CreateBuilder(args);

@@ -195,6 +195,7 @@ public sealed class DysonWorkspaceToolExecutor
         string? task;
         string? context;
         string? modelSlug;
+        string? reasoningEffort;
         IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos;
         try
         {
@@ -211,6 +212,7 @@ public sealed class DysonWorkspaceToolExecutor
             task = taskResult.Value;
             context = GetOptionalString(root, "context");
             modelSlug = GetOptionalString(root, "modelSlug");
+            reasoningEffort = GetOptionalString(root, "reasoningEffort");
 
             var todos = TryParseTodoSeedItems(root, "todos");
             if (todos.IsError)
@@ -228,6 +230,7 @@ public sealed class DysonWorkspaceToolExecutor
                 context,
                 initialTodos,
                 modelSlug,
+                reasoningEffort,
                 cancellationToken)
             .ConfigureAwait(false);
         if (started.IsError)
