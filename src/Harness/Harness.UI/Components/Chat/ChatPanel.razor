@@ -30,7 +30,8 @@
               SelectedAgentMode="@SelectedAgentMode"
               SelectedAgentModeChanged="SelectedAgentModeChanged"
               GitBranch="@GitBranch"
-              OnSubmit="HandleSubmitAsync" />
+              OnSubmit="HandleSubmitAsync"
+              OnNewSession="OnNewSession" />
 </div>
 
 @code {
@@ -53,6 +54,7 @@
     [Parameter] public EventCallback<string> SelectedAgentModeChanged { get; set; }
     [Parameter] public string? GitBranch { get; set; }
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
+    [Parameter] public EventCallback OnNewSession { get; set; }
 
     protected override void OnParametersSet()
     {

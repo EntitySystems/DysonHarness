@@ -1,12 +1,38 @@
 @namespace Harness.UI.Components.Chat
 @using Harness.UI.Components.Models
+@inject DysonModelStore ModelStore
+@inject IJSRuntime Js
 
 <div class="composer">
-    <textarea @bind="_text"
-              @bind:event="oninput"
-              @onkeydown="OnKeyDown"
-              placeholder="Prompt the agent…"
-              disabled="@Disabled"></textarea>
+    <div class="composer__prompt">
+        @if (_slashOpen && _suggestions.Count > 0)
+        {
+            <div class="composer-slash" role="listbox" aria-label="Slash commands">
+                @for (var i = 0; i < _suggestions.Count; i++)
+                {
+                    var suggestion = _suggestions[i];
+                    var index = i;
+                    <button type="button"
+                            class="composer-slash__item @(index == _highlight ? "is-active" : null)"
+                            role="option"
+                            aria-selected="@(index == _highlight)"
+                            @onmousedown:preventDefault="true"
+                            @onclick="() => ApplySuggestionAsync(suggestion)">
+                        <span class="composer-slash__token">@suggestion.Token</span>
+                        <span class="composer-slash__desc">@suggestion.Label</span>
+                    </button>
+                }
+            </div>
+        }
+        <textarea @ref="_textarea"
+                  @bind="_text"
+                  @bind:event="oninput"
+                  @bind:after="OnTextChanged"
+                  @onkeydown="OnKeyDown"
+                  placeholder="Prompt the agent…"
+                  disabled="@Disabled"
+                  data-slash-open="@(_slashOpen ? "1" : null)"></textarea>
+    </div>
     <div class="composer__toolbar">
         <ModelSlugPicker SelectedSlugId="SelectedSlugId"
                          SelectedSlugIdChanged="SelectedSlugIdChanged" />
@@ -18,7 +44,7 @@
         </span>
     </div>
     <div class="composer__actions">
-        <span class="list-item__meta">Ctrl+Enter to send</span>
+        <span class="list-item__meta">Ctrl+Enter to send · / for commands</span>
         <button type="button" class="btn btn-primary" disabled="@(Disabled || string.IsNullOrWhiteSpace(_text))" @onclick="SubmitAsync">
             Send
         </button>
@@ -27,6 +53,12 @@
 
 @code {
     private string _text = "";
+    private ElementReference _textarea;
+    private bool _textareaBound;
+    private readonly List<ComposerSlashCommands.ModelOption> _models = [];
+    private IReadOnlyList<ComposerSlashCommands.Suggestion> _suggestions = [];
+    private bool _slashOpen;
+    private int _highlight;
 
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public Guid? SelectedSlugId { get; set; }
@@ -35,11 +67,132 @@
     [Parameter] public EventCallback<string> SelectedAgentModeChanged { get; set; }
     [Parameter] public string? GitBranch { get; set; }
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
+    [Parameter] public EventCallback OnNewSession { get; set; }
+
+    protected override async Task OnInitializedAsync() => await RefreshModelsAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_textareaBound)
+            return;
+
+        try
+        {
+            await Js.InvokeVoidAsync("dysonComposer.attachSlashGuard", _textarea);
+            _textareaBound = true;
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private async Task RefreshModelsAsync()
+    {
+        _models.Clear();
+        var result = await ModelStore.ListProvidersAsync();
+        if (result.IsError)
+            return;
+
+        foreach (var provider in result.Value)
+        {
+            foreach (var slug in provider.Slugs)
+            {
+                _models.Add(new ComposerSlashCommands.ModelOption(
+                    slug.Id,
+                    slug.DisplayAlias,
+                    provider.DisplayName,
+                    slug.Slug,
+                    $"{slug.DisplayAlias} · {provider.DisplayName} / {slug.Slug}"));
+            }
+        }
+    }
+
+    private void OnTextChanged()
+    {
+        RefreshSlashState();
+    }
+
+    private void RefreshSlashState()
+    {
+        if (!ComposerSlashCommands.TryGetActiveToken(_text, out var token))
+        {
+            _slashOpen = false;
+            _suggestions = [];
+            _highlight = 0;
+            return;
+        }
+
+        _suggestions = ComposerSlashCommands.Filter(token, _models);
+        _slashOpen = _suggestions.Count > 0;
+        _highlight = 0;
+    }
 
     private async Task OnKeyDown(KeyboardEventArgs e)
     {
+        if (_slashOpen && _suggestions.Count > 0)
+        {
+            if (e.Key == "ArrowDown")
+            {
+                _highlight = (_highlight + 1) % _suggestions.Count;
+                return;
+            }
+
+            if (e.Key == "ArrowUp")
+            {
+                _highlight = (_highlight - 1 + _suggestions.Count) % _suggestions.Count;
+                return;
+            }
+
+            if (e.Key == "Enter" && !e.CtrlKey && !e.ShiftKey)
+            {
+                await ApplySuggestionAsync(_suggestions[_highlight]);
+                return;
+            }
+
+            if (e.Key == "Escape")
+            {
+                _slashOpen = false;
+                _suggestions = [];
+                _highlight = 0;
+                return;
+            }
+        }
+
         if (e.Key == "Enter" && e.CtrlKey)
             await SubmitAsync();
+    }
+
+    private async Task ApplySuggestionAsync(ComposerSlashCommands.Suggestion suggestion)
+    {
+        await ApplyKindAsync(suggestion);
+
+        if (ComposerSlashCommands.TryGetLeadingToken(_text, out _, out var remainder))
+            _text = remainder;
+        else
+            _text = "";
+
+        _slashOpen = false;
+        _suggestions = [];
+        _highlight = 0;
+    }
+
+    private async Task ApplyKindAsync(ComposerSlashCommands.Suggestion suggestion)
+    {
+        switch (suggestion.Kind)
+        {
+            case ComposerSlashCommands.Kind.Mode when suggestion.Mode is not null:
+                await SelectedAgentModeChanged.InvokeAsync(suggestion.Mode);
+                break;
+            case ComposerSlashCommands.Kind.NewSession:
+                await OnNewSession.InvokeAsync();
+                break;
+            case ComposerSlashCommands.Kind.Model when suggestion.ModelSlugId is Guid id:
+                await SelectedSlugIdChanged.InvokeAsync(id);
+                break;
+        }
     }
 
     private async Task SubmitAsync()
@@ -47,8 +200,23 @@
         if (Disabled || string.IsNullOrWhiteSpace(_text))
             return;
 
-        var prompt = _text.Trim();
+        var raw = _text;
+
+        if (ComposerSlashCommands.TryResolve(raw, _models, out var parsed) && parsed is not null)
+        {
+            await ApplyKindAsync(parsed.Suggestion);
+            raw = parsed.Remainder;
+        }
+
         _text = "";
-        await OnSubmit.InvokeAsync(prompt);
+        _slashOpen = false;
+        _suggestions = [];
+        _highlight = 0;
+
+        // Empty after strip: apply-only (mode/model/new); composer never sends blank prompts.
+        if (string.IsNullOrWhiteSpace(raw))
+            return;
+
+        await OnSubmit.InvokeAsync(raw.Trim());
     }
 }

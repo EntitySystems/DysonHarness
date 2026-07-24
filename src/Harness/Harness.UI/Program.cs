@@ -1,5 +1,6 @@
 using DysonHarness;
 using Harness.UI.Components;
+using Harness.UI.Components.Chat;
 using Harness.UI.Demo;
 using Harness.UI.Theme;
 
@@ -12,6 +13,7 @@ if (searchCheck.IsError)
     throw new InvalidOperationException(searchCheck.Error);
 
 DysonSessionTodoSelfCheck.Run();
+ComposerSlashCommands.SelfCheck();
 
 var builder = WebApplication.CreateBuilder(args);
 

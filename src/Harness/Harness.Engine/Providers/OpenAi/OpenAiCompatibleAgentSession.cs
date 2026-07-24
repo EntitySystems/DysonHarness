@@ -13,6 +13,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     private Guid _workDirectoryId;
     private readonly OpenAiCompletionsClient _completions;
     private readonly OpenAiResponsesClient _responses;
+    private readonly DysonModelStore? _models;
 
     public OpenAiCompatibleAgentSession(
         string agentMode,
@@ -21,7 +22,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         HttpClient http,
         string workDirectoryAbsolutePath,
         DysonSessionStore? store = null,
-        Guid workDirectoryId = default)
+        Guid workDirectoryId = default,
+        DysonModelStore? models = null)
         : base(agentMode, config, provider)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -30,6 +32,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         _store = store;
         SessionStore = store;
         _workDirectoryId = workDirectoryId;
+        _models = models;
         _completions = new OpenAiCompletionsClient(_http);
         _responses = new OpenAiResponsesClient(_http);
     }
@@ -49,6 +52,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         string agentMode = DysonAgentModes.Work,
         DysonAgentSessionConfig? config = null,
         string? title = null,
+        DysonModelStore? models = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -60,7 +64,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         config ??= new DysonAgentSessionConfig();
         var session = new OpenAiCompatibleAgentSession(
-            agentMode, config, provider, http, workDirectoryAbsolutePath, store, workDirectoryId);
+            agentMode, config, provider, http, workDirectoryAbsolutePath, store, workDirectoryId, models);
         var initialTitle = title ?? "New session";
         session.SetDisplayTitle(initialTitle);
 
@@ -102,6 +106,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         HttpClient http,
         string workDirectoryAbsolutePath,
         DysonAgentSessionConfig? config = null,
+        DysonModelStore? models = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -125,7 +130,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             http,
             workDirectoryAbsolutePath,
             store,
-            state.Session.WorkDirectoryId ?? Guid.Empty);
+            state.Session.WorkDirectoryId ?? Guid.Empty,
+            models);
         session.RestoreFromPersisted(state);
 
         var resumedLog = DysonSessionLogPayload.CreateEntry(
@@ -145,6 +151,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         string task,
         string? context = null,
         IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
+        string? modelSlug = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentMode);
@@ -163,14 +170,21 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         if (_workDirectoryId == Guid.Empty)
             return Result<DysonStartSubagentResult, string>.AsError("Work directory is required to spawn subagents.");
 
+        var resolved = await ResolveChildProviderAsync(modelSlug, cancellationToken).ConfigureAwait(false);
+        if (resolved.IsError)
+            return Result<DysonStartSubagentResult, string>.AsError(resolved.Error);
+
+        var childProvider = resolved.Value;
+
         var child = new OpenAiCompatibleAgentSession(
             agentMode,
             Config,
-            OpenAiProvider,
+            childProvider,
             _http,
             _workDirectoryPath,
             _store,
-            _workDirectoryId);
+            _workDirectoryId,
+            _models);
 
         RegisterSubagent(child);
 
@@ -183,7 +197,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 RuntimeId = child.Id,
                 ParentSessionId = PersistenceId,
                 AgentMode = agentMode,
-                ModelSlugId = OpenAiProvider.SlugId,
+                ModelSlugId = childProvider.SlugId,
                 WorkDirectoryId = _workDirectoryId,
                 McpAccessMode = Config.McpAccessMode,
                 Title = title,
@@ -225,7 +239,42 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             PersistenceId = child.PersistenceId,
             AgentMode = agentMode,
             Title = title,
+            ModelSlug = childProvider.Slug,
+            ModelLabel = $"{childProvider.DisplayAlias} · {childProvider.ProviderDisplayName} / {childProvider.Slug}",
         });
+    }
+
+    private async Task<Result<OpenAiCompatibleAgentProvider, string>> ResolveChildProviderAsync(
+        string? modelSlug,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(modelSlug))
+            return Result<OpenAiCompatibleAgentProvider, string>.AsValue(OpenAiProvider);
+
+        if (_models is null)
+            return Result<OpenAiCompatibleAgentProvider, string>.AsError(
+                "Model store is required to resolve modelSlug.");
+
+        var found = await _models.FindSlugByNameAsync(modelSlug.Trim(), cancellationToken)
+            .ConfigureAwait(false);
+        if (found.IsError)
+            return Result<OpenAiCompatibleAgentProvider, string>.AsError(found.Error);
+
+        var slug = found.Value;
+        var provider = slug.Provider;
+        var kind = DysonProviderKinds.EffectiveKind(
+            provider?.ProviderKind ?? DysonProviderKinds.Demo,
+            provider?.BaseUrl,
+            provider?.ApiKey);
+
+        if (!string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
+        {
+            return Result<OpenAiCompatibleAgentProvider, string>.AsError(
+                $"modelSlug '{modelSlug.Trim()}' is not OpenAI-compatible (same provider kind as parent required).");
+        }
+
+        return Result<OpenAiCompatibleAgentProvider, string>.AsValue(
+            new OpenAiCompatibleAgentProvider(slug));
     }
 
     public override Task<VoidResult<string>> LoadFunctionalContextAsync(

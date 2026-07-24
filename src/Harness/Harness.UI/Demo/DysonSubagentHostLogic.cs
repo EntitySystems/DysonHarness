@@ -83,6 +83,30 @@ public static class DysonSubagentHostLogic
         {
             throw new InvalidOperationException("Continuation prompt missing expected fields.");
         }
+
+        AssertKickOffFailureSummaries();
+    }
+
+    /// <summary>Formats provider label like SessionHeader: <c>Alias · Provider / slug</c>.</summary>
+    public static string? FormatProviderModelLabel(DysonAgentProvider? provider) =>
+        provider switch
+        {
+            DemoDysonAgentProvider demo =>
+                $"{demo.DisplayAlias} · {demo.ProviderDisplayName} / {demo.Slug}",
+            OpenAiCompatibleAgentProvider oai =>
+                $"{oai.DisplayAlias} · {oai.ProviderDisplayName} / {oai.Slug}",
+            _ => null,
+        };
+
+    private static void AssertKickOffFailureSummaries()
+    {
+        var exSummary = DysonAgentSession.FormatKickOffExceptionSummary(
+            new InvalidOperationException("boom", new ArgumentException("inner")));
+        if (!exSummary.Contains("InvalidOperationException: boom", StringComparison.Ordinal)
+            || !exSummary.Contains("ArgumentException: inner", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"Exception summary shape wrong: {exSummary}");
+        }
     }
 }
 
@@ -92,6 +116,9 @@ public sealed class DysonSubagentCardState
     public required Guid PersistenceId { get; init; }
     public string? Title { get; init; }
     public string? LatestTurnAgentTitle { get; init; }
+    public string? ModelLabel { get; init; }
+    /// <summary>Child session agent mode (<see cref="DysonAgentSession.Mode"/>).</summary>
+    public string? AgentMode { get; init; }
     public bool IsRunning { get; init; }
     public DysonSessionStatus Status { get; init; }
 }

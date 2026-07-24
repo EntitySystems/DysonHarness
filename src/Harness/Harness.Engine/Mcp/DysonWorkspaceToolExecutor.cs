@@ -194,6 +194,7 @@ public sealed class DysonWorkspaceToolExecutor
         string? agentMode;
         string? task;
         string? context;
+        string? modelSlug;
         IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos;
         try
         {
@@ -209,6 +210,7 @@ public sealed class DysonWorkspaceToolExecutor
             agentMode = mode.Value;
             task = taskResult.Value;
             context = GetOptionalString(root, "context");
+            modelSlug = GetOptionalString(root, "modelSlug");
 
             var todos = TryParseTodoSeedItems(root, "todos");
             if (todos.IsError)
@@ -225,6 +227,7 @@ public sealed class DysonWorkspaceToolExecutor
                 task,
                 context,
                 initialTodos,
+                modelSlug,
                 cancellationToken)
             .ConfigureAwait(false);
         if (started.IsError)
@@ -237,6 +240,8 @@ public sealed class DysonWorkspaceToolExecutor
             persistenceId = r.PersistenceId,
             agentMode = r.AgentMode,
             title = r.Title,
+            modelSlug = r.ModelSlug,
+            modelLabel = r.ModelLabel,
         }));
     }
 

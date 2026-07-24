@@ -2,7 +2,7 @@ namespace DysonHarness;
 
 /// <summary>
 /// ponytail: assert-only self-check for session todo TaskCode uniqueness, status enum round-trip,
-/// and SubmitSubagentReport incomplete-todo gate (no test framework).
+/// SubmitSubagentReport incomplete-todo gate, and Failed-supersede report (no test framework).
 /// Run: <c>DysonSessionTodoSelfCheck.Run()</c> (also from UI <c>Program</c> startup).
 /// </summary>
 public static class DysonSessionTodoSelfCheck
@@ -12,6 +12,7 @@ public static class DysonSessionTodoSelfCheck
         AssertStatusRoundTrip();
         AssertTaskCodeUniqueness().GetAwaiter().GetResult();
         AssertSubmitSubagentReportTodoGate().GetAwaiter().GetResult();
+        AssertSubmitSubagentReportFailedSupersede().GetAwaiter().GetResult();
     }
 
     private static void AssertStatusRoundTrip()
@@ -159,6 +160,43 @@ public static class DysonSessionTodoSelfCheck
         }
     }
 
+    private static async Task AssertSubmitSubagentReportFailedSupersede()
+    {
+        // Harness Failed → agent SubmitSubagentReport(completed) supersedes
+        var failed = new StubSession();
+        if (!failed.TryMarkTerminal(DysonSessionStatus.Failed, "kickoff missed report"))
+            throw new InvalidOperationException("Expected TryMarkTerminal Failed to succeed.");
+
+        var supersede = await failed.SubmitSubagentReportAsync("agent handoff").ConfigureAwait(false);
+        if (supersede.IsError)
+            throw new InvalidOperationException($"Expected Failed supersede ok, got: {supersede.Error}");
+        if (failed.Status != DysonSessionStatus.Completed)
+            throw new InvalidOperationException("Expected Failed→Completed supersede.");
+        if (!string.Equals(failed.LastReportSummary, "agent handoff", StringComparison.Ordinal))
+            throw new InvalidOperationException("Expected LastReportSummary replaced on supersede.");
+
+        // Completed → second submit still rejected
+        var second = await failed.SubmitSubagentReportAsync("again").ConfigureAwait(false);
+        if (!second.IsError
+            || second.Error.IndexOf("already Completed", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            throw new InvalidOperationException(
+                $"Expected second submit rejected as already Completed, got: {(second.IsError ? second.Error : "ok")}");
+        }
+
+        // Stopped → SubmitSubagentReport rejected
+        var stopped = new StubSession();
+        if (!stopped.TryMarkTerminal(DysonSessionStatus.Stopped, "stopped by parent"))
+            throw new InvalidOperationException("Expected TryMarkTerminal Stopped to succeed.");
+        var stoppedReport = await stopped.SubmitSubagentReportAsync("should reject").ConfigureAwait(false);
+        if (!stoppedReport.IsError
+            || stoppedReport.Error.IndexOf("already Stopped", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            throw new InvalidOperationException(
+                $"Expected Stopped submit rejected, got: {(stoppedReport.IsError ? stoppedReport.Error : "ok")}");
+        }
+    }
+
     private sealed class StubProvider : DysonAgentProvider;
 
     private sealed class StubSession() : DysonAgentSession(
@@ -171,6 +209,7 @@ public static class DysonSessionTodoSelfCheck
             string task,
             string? context = null,
             IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
+            string? modelSlug = null,
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 

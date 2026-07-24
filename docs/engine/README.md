@@ -55,7 +55,7 @@ Built-in names in `DysonAgentModes`:
 | `Bug Review` | Bug-focused review |
 | `Custom` | Category label; lookup uses `Config.CustomAgents` keys |
 
-System prompts come from `DysonAgentSystemPrompts.ForMode`. Work / Explore / Drone directives cover orchestrator routing, Wait-only-for-prerequisites, and `SubmitSubagentReport`. Drone children also get `DroneFirstTurnContextMandate` on the first turn (estimate brief quality; Explore if thin).
+System prompts come from `DysonAgentSystemPrompts.ForMode`. Work / Explore / Drone directives cover orchestrator routing, Wait-only-for-prerequisites, and mandatory `SubmitSubagentReport`. Explore/Drone directives harden “report is mandatory” / “complete or impossible”. Every child first turn prepends `SubagentReportRequiredMandate`; Explore/Drone also get mode-specific first-turn blocks (`ExploreFirstTurnReportMandate`, `DroneFirstTurnContextMandate`).
 
 ## Orchestrator subagents
 
@@ -63,11 +63,11 @@ Primary flow: `StartSubagent` is **non-blocking**; the child runs in the backgro
 
 | Tool | Behavior |
 | ---- | -------- |
-| `StartSubagent` | `CreateChildAsync` — persist child (`ParentSessionId`), register runtime id, background `PromptAsync`. Soft gates via `ValidateSubagentSpawn` |
-| `WaitForSubagent` | Block until child terminal or `timeoutMs`. Use **only** when the child’s result is a **prerequisite/blocker** for the next step |
+| `StartSubagent` | `CreateChildAsync` — persist child (`ParentSessionId`), register runtime id, background `PromptAsync`. Soft gates via `ValidateSubagentSpawn`. Optional `modelSlug` (slug or display alias) resolves via `DysonModelStore.FindSlugByNameAsync`; omit inherits parent provider (same kind only) |
+| `WaitForSubagent` | Block until child terminal or `timeoutMs`. Wait **only** when the child’s result is a **blocker for the next automatic turn** (typically Explore-before-implementation); do **not** Wait on Drones — prefer the notification turn |
 | `InspectSubagentLog` | `SnapshotLog` for a subagent id |
 | `StopSubagent` | Cancel child CTS; mark `Stopped`; notify parent |
-| `SubmitSubagentReport` | Child-only handoff (`summary`, optional `status` completed\|failed, optional `skipTasksCheck`); **blocks** when the session has incomplete todos (`Pending`/`Ongoing`) unless `skipTasksCheck: true` (then success payload includes `incompleteTodos`); empty todo list passes; persists meta and notifies parent (parent summary stays the agent-provided `summary`) |
+| `SubmitSubagentReport` | Child-only handoff (`summary`, optional `status` completed\|failed, optional `skipTasksCheck`); **blocks** when the session has incomplete todos (`Pending`/`Ongoing`) unless `skipTasksCheck: true` (then success payload includes `incompleteTodos`); empty todo list passes; persists meta and notifies parent (parent summary stays the agent-provided `summary`). If the child is already harness-`Failed` (e.g. kickoff missed a report), a later agent report **supersedes** that Failed status (`Completed`/`Failed` per tool `status`), replaces `LastReportSummary`, persists again, and **re-notifies** the parent. `Completed` / `Stopped` still reject a second submit. |
 
 **Spawn policy (prompt + soft enforce):**
 
@@ -78,7 +78,7 @@ Primary flow: `StartSubagent` is **non-blocking**; the child runs in the backgro
 - Prefer **Work-owned Explore → then Drone** over Drone-owned Explore when Work can supply context.
 - **Work context-before-drones:** estimate whether the brief is rich enough; if not, Explore first, then deploy Drones with a rich brief so they often skip their own Explore.
 
-Self-check: `DysonSubagentSpawnGateSelfCheck.Run()`. Return shape: `DysonStartSubagentResult` (`subagentId`, `persistenceId`, `agentMode`, `title`).
+Self-check: `DysonSubagentSpawnGateSelfCheck.Run()`. Return shape: `DysonStartSubagentResult` (`subagentId`, `persistenceId`, `agentMode`, `title`, optional `modelSlug` / `modelLabel`). Kickoff failures (no `SubmitSubagentReport`) mark the child `Failed`, persist status + parent interrupt, and notify with a non-empty reason (PromptAsync error → last turn snippet → harness message; exceptions as `{Type}: {Message}`). A later successful `SubmitSubagentReport` can supersede that harness Failed (see tool row above).
 
 ## MCP access
 

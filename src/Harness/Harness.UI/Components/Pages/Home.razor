@@ -45,11 +45,13 @@
                    Disabled="@(Host.Session is null || Host.IsBusy)"
                    SessionBusy="Host.IsBusy"
                    OnCancelPrompt="CancelPrompt"
-                   @bind-SelectedSlugId="_selectedSlugId"
+                   SelectedSlugId="_selectedSlugId"
+                   SelectedSlugIdChanged="OnSelectedSlugIdChangedAsync"
                    SelectedAgentMode="@_selectedAgentMode"
                    SelectedAgentModeChanged="OnAgentModeChanged"
                    GitBranch="@_gitBranch"
-                   OnSubmit="PromptAsync" />
+                   OnSubmit="PromptAsync"
+                   OnNewSession="StartNewAsync" />
     </Main>
     <Rail>
         <div class="tool-panel">
@@ -160,12 +162,28 @@
 
     private void OnHostChanged() => _ = InvokeAsync(async () =>
     {
+        SyncSelectedSlugFromSession();
         UpdateActiveTitle();
         await RefreshSessionsQuietAsync();
         StateHasChanged();
     });
 
     private void OnThemeChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private async Task OnSelectedSlugIdChangedAsync(Guid? id)
+    {
+        _selectedSlugId = id;
+        if (Host.Session is not null)
+            await Host.SetSessionModelSlugAsync(id);
+    }
+
+    private void SyncSelectedSlugFromSession()
+    {
+        if (Host.Session?.Provider is OpenAiCompatibleAgentProvider oai)
+            _selectedSlugId = oai.SlugId;
+        else if (Host.Session?.Provider is DemoDysonAgentProvider demo)
+            _selectedSlugId = demo.SlugId;
+    }
 
     private Task OnAgentModeChanged(string mode)
     {
@@ -322,6 +340,7 @@
             _activeWorkDirectoryId);
         if (result.IsError)
             _listError = result.Error;
+        SyncSelectedSlugFromSession();
         await RefreshSessionsAsync();
     }
 
@@ -330,6 +349,7 @@
         var result = await Host.ResumeSessionAsync(sessionId);
         if (result.IsError)
             _listError = result.Error;
+        SyncSelectedSlugFromSession();
         await RefreshSessionsAsync();
     }
 
@@ -352,6 +372,7 @@
         var result = await Host.NavigateToParentAsync();
         if (result.IsError)
             _listError = result.Error;
+        SyncSelectedSlugFromSession();
         await RefreshSessionsAsync();
     }
 

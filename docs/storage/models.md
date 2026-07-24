@@ -94,7 +94,7 @@ Thin CRUD over `DysonDbContext` using the Result pattern (`Result` / `VoidResult
 
 - **Providers:** list (include slugs), get, create, update (incl. `ApiKey` / `BaseUrl` / `OpenAiApiMode`), delete
 - **Slugs:** add under a provider, update, remove
-- **Selection:** get/set default slug, get slug by id (with provider loaded)
+- **Selection:** get/set default slug, get slug by id (with provider loaded), `FindSlugByNameAsync` (case-insensitive exact match on `Slug` then `DisplayAlias`)
 - **Favorites:** `ListFavoriteSlugIdsAsync`, `AddFavoriteAsync`, `RemoveFavoriteAsync`, `IsFavoriteAsync`
 
 ## OpenAI-compatible API mode

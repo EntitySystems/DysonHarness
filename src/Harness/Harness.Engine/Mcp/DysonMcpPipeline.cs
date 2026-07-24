@@ -111,9 +111,10 @@ public sealed class DysonMcpPipeline
             Description =
                 "Spawn a nested agent session for delegated work (non-blocking). " +
                 "Returns immediately with subagentId / persistenceId; the child runs in the background. " +
-                "When the child calls SubmitSubagentReport, the parent is notified and the host queues a turn — " +
-                "do not WaitForSubagent unless that child’s result is a blocker. " +
+                "When the child calls SubmitSubagentReport, the parent is notified and the host queues a turn. " +
+                "Do not WaitForSubagent on Drones; Wait only on Explore (or other) children whose output blocks the next planned turn. " +
                 "Optional todos seeds the child’s own session todo list. " +
+                "Optional modelSlug picks a different model (slug or display alias; omit to inherit parent). " +
                 "Plan is banned as a subagent mode. Explore cannot spawn. Drone may spawn Explore only (not another Drone).",
             InputSchemaJson = """
                 {
@@ -122,6 +123,10 @@ public sealed class DysonMcpPipeline
                     "agentMode": { "type": "string", "description": "Mode for the sub-agent (e.g. Explore, Drone). Not Plan." },
                     "task": { "type": "string", "description": "Assigned task brief for the sub-agent." },
                     "context": { "type": "string", "description": "Optional extra context or constraints." },
+                    "modelSlug": {
+                      "type": "string",
+                      "description": "Optional model slug or display alias. Omit to inherit the parent session model. Same provider kind only."
+                    },
                     "todos": {
                       "type": "array",
                       "description": "Optional seed checklist for the child’s session todo list.",
@@ -244,8 +249,10 @@ public sealed class DysonMcpPipeline
             Description =
                 "Block until this subagent finishes (completed / failed / stopped) or timeoutMs. " +
                 "Default timeout is 300000 ms (5 minutes) when timeoutMs is omitted. " +
-                "Use only when its result is required before the parent can proceed (prerequisite/blocker). " +
-                "If the parent can do other work, do not Wait — spawn and continue; the harness queues a turn when SubmitSubagentReport arrives.",
+                "Wait only when the child’s result is a blocker for your next automatic turn in a multi-step plan " +
+                "(canonical case: one or more Explores must finish before implementation / before starting Drones). " +
+                "After launching a Drone, do not Wait — keep the session free; the harness queues a parent turn when SubmitSubagentReport arrives. " +
+                "Blocking the chat with Wait when you could multitask is incorrect.",
             InputSchemaJson = """
                 {
                   "type": "object",

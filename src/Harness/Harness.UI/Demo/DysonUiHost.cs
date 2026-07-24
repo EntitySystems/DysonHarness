@@ -198,6 +198,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 workDir.Value.AbsolutePath,
                 agentMode,
                 config: config,
+                models: _models,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (created.IsError)
@@ -216,6 +217,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 providerResult.Value.Demo!,
                 workDirectoryId.Value,
                 agentMode,
+                models: _models,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (created.IsError)
@@ -231,6 +233,88 @@ public sealed class DysonUiHost : IAsyncDisposable
         Notify();
         return VoidResult<string>.Success;
     }
+
+    /// <summary>
+    /// Apply a model slug to the focused session (same provider kind only).
+    /// With no session, preference is caller-owned (<c>_selectedSlugId</c>); this is a no-op.
+    /// </summary>
+    public async Task<VoidResult<string>> SetSessionModelSlugAsync(
+        Guid? modelSlugId,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+
+        if (_session is null)
+            return VoidResult<string>.Success;
+
+        if (IsBusy)
+        {
+            LastError = "Cannot switch model while a prompt is in flight.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        var providerResult = await ResolveProviderAsync(modelSlugId, cancellationToken)
+            .ConfigureAwait(false);
+        if (providerResult.IsError)
+        {
+            LastError = providerResult.Error;
+            Notify();
+            return new VoidResult<string>(providerResult.Error);
+        }
+
+        var currentKind = SessionProviderKind(_session.Provider);
+        var nextKind = providerResult.Value.Kind;
+        if (!string.Equals(currentKind, nextKind, StringComparison.Ordinal))
+        {
+            LastError = "Start a new session to switch provider kind";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        DysonAgentProvider nextProvider =
+            string.Equals(nextKind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal)
+                ? providerResult.Value.OpenAi!
+                : providerResult.Value.Demo!;
+
+        _session.Provider = nextProvider;
+
+        Guid? slugId = nextProvider switch
+        {
+            OpenAiCompatibleAgentProvider oai => oai.SlugId,
+            DemoDysonAgentProvider demo => demo.SlugId,
+            _ => null,
+        };
+
+        if (_session.PersistenceId != Guid.Empty)
+        {
+            var persist = await _sessions.UpdateSessionMetaAsync(
+                new DysonSessionMetaUpdate
+                {
+                    SessionId = _session.PersistenceId,
+                    ModelSlugId = slugId,
+                    ClearModelSlug = slugId is null,
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (persist.IsError)
+            {
+                LastError = persist.Error;
+                Notify();
+                return new VoidResult<string>(persist.Error);
+            }
+        }
+
+        Notify();
+        return VoidResult<string>.Success;
+    }
+
+    private static string SessionProviderKind(DysonAgentProvider provider) =>
+        provider switch
+        {
+            OpenAiCompatibleAgentProvider => DysonProviderKinds.OpenAICompatible,
+            _ => DysonProviderKinds.Demo,
+        };
 
     public async Task<VoidResult<string>> ResumeSessionAsync(
         Guid sessionId,
@@ -291,11 +375,27 @@ public sealed class DysonUiHost : IAsyncDisposable
             return null;
 
         var latest = session.Turns.Count > 0 ? session.Turns[^1] : null;
+        var modelLabel = DysonSubagentHostLogic.FormatProviderModelLabel(session.Provider);
+        if (string.IsNullOrWhiteSpace(modelLabel))
+        {
+            var parent = session.Parent;
+            if (parent is null
+                && ResolveStoredParentId(session) is Guid parentId
+                && _sessionsById.TryGetValue(parentId, out var registeredParent))
+            {
+                parent = registeredParent;
+            }
+
+            modelLabel = DysonSubagentHostLogic.FormatProviderModelLabel(parent?.Provider);
+        }
+
         return new DysonSubagentCardState
         {
             PersistenceId = persistenceId,
             Title = session.DisplayTitle,
             LatestTurnAgentTitle = latest?.AgentTitle,
+            ModelLabel = modelLabel,
+            AgentMode = session.Mode,
             IsRunning = DysonSubagentHostLogic.IsRunning(session.Status, latest),
             Status = session.Status,
         };
@@ -392,7 +492,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 workPath,
                 await BuildSessionConfigAsync(full.Value.Session.McpAccessMode, cancellationToken)
                     .ConfigureAwait(false),
-                cancellationToken).ConfigureAwait(false);
+                models: _models,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (loaded.IsError)
             {
@@ -410,7 +511,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 sessionId,
                 providerResult.Value.Demo!,
                 new DysonAgentSessionConfig { McpAccessMode = full.Value.Session.McpAccessMode },
-                cancellationToken).ConfigureAwait(false);
+                models: _models,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (loaded.IsError)
             {

@@ -223,11 +223,13 @@ public abstract class DysonAgentSession
 
     /// <summary>Spawn a child session (non-blocking background prompt). Concrete providers implement persist + clone.</summary>
     /// <param name="initialTodos">Optional seed for the child’s own todo list (applied after the child row is persisted).</param>
+    /// <param name="modelSlug">Optional model slug/alias; omit to inherit the parent’s current provider.</param>
     public abstract Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
         string agentMode,
         string task,
         string? context = null,
         IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
+        string? modelSlug = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Default WaitForSubagent timeout when the tool omits <c>timeoutMs</c> (5 minutes).</summary>
@@ -350,7 +352,7 @@ public abstract class DysonAgentSession
 
         var trimmed = summary.Trim();
         var status = failed ? DysonSessionStatus.Failed : DysonSessionStatus.Completed;
-        if (!TryMarkTerminal(status, trimmed))
+        if (!TryAcceptSubagentReport(status, trimmed))
         {
             return Task.FromResult(Result<string, string>.AsError(
                 $"SubmitSubagentReport: session already {Status}."));
@@ -416,6 +418,27 @@ public abstract class DysonAgentSession
         }
     }
 
+    /// <summary>
+    /// Accepts a child <c>SubmitSubagentReport</c>: first terminal mark, or supersede harness
+    /// <see cref="DysonSessionStatus.Failed"/> only (premature kickoff failure). Completed/Stopped stay locked.
+    /// </summary>
+    public bool TryAcceptSubagentReport(DysonSessionStatus status, string? summary)
+    {
+        if (status is not (DysonSessionStatus.Completed or DysonSessionStatus.Failed))
+            throw new ArgumentOutOfRangeException(nameof(status), status, "Must be Completed or Failed.");
+
+        lock (_terminalGate)
+        {
+            if (Status is DysonSessionStatus.Completed or DysonSessionStatus.Stopped)
+                return false;
+
+            Status = status;
+            LastReportSummary = summary;
+            _terminalTcs.TrySetResult((status, summary));
+            return true;
+        }
+    }
+
     /// <summary>Stores the CTS used to cancel the background <see cref="PromptAsync"/> for StopSubagent.</summary>
     protected void AttachBackgroundRun(CancellationTokenSource runCts)
     {
@@ -435,10 +458,16 @@ public abstract class DysonAgentSession
         }
     }
 
-    /// <summary>Builds the first-turn prompt for a spawned child (Explore/Drone get harness mandates).</summary>
+    /// <summary>
+    /// Builds the first-turn prompt for a spawned child. All modes get
+    /// <see cref="DysonAgentSystemPrompts.SubagentReportRequiredMandate"/>; Explore/Drone get extras.
+    /// </summary>
     protected static string BuildChildFirstPrompt(string agentMode, string task, string? context)
     {
         var sb = new StringBuilder();
+        sb.AppendLine(DysonAgentSystemPrompts.SubagentReportRequiredMandate.Trim());
+        sb.AppendLine();
+
         if (string.Equals(agentMode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase))
         {
             sb.AppendLine(DysonAgentSystemPrompts.ExploreFirstTurnReportMandate.Trim());
@@ -474,7 +503,7 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
-    /// Fire-and-forget child prompt; on unexpected failure marks Failed and notifies parent.
+    /// Fire-and-forget child prompt; on unexpected failure marks Failed, persists, and notifies parent.
     /// </summary>
     protected static void KickOffChildPrompt(DysonAgentSession child, string prompt, CancellationTokenSource runCts)
     {
@@ -490,11 +519,10 @@ public abstract class DysonAgentSession
                 if (runCts.IsCancellationRequested || child.IsTerminal)
                     return;
 
-                var failSummary = result.IsError
-                    ? result.Error
-                    : "Child finished without SubmitSubagentReport";
+                var failSummary = ResolveKickOffFailureSummary(child, result);
                 if (child.TryMarkTerminal(DysonSessionStatus.Failed, failSummary))
                 {
+                    await PersistKickOffFailureAsync(child, failSummary).ConfigureAwait(false);
                     child.Parent?.NotifySubagentFailed(
                         child.Id,
                         failSummary,
@@ -507,11 +535,13 @@ public abstract class DysonAgentSession
             }
             catch (Exception ex)
             {
-                if (child.TryMarkTerminal(DysonSessionStatus.Failed, ex.Message))
+                var failSummary = FormatKickOffExceptionSummary(ex);
+                if (child.TryMarkTerminal(DysonSessionStatus.Failed, failSummary))
                 {
+                    await PersistKickOffFailureAsync(child, failSummary).ConfigureAwait(false);
                     child.Parent?.NotifySubagentFailed(
                         child.Id,
-                        ex.Message,
+                        failSummary,
                         child.PersistenceId == Guid.Empty ? null : child.PersistenceId);
                 }
             }
@@ -520,6 +550,91 @@ public abstract class DysonAgentSession
                 runCts.Dispose();
             }
         });
+    }
+
+    /// <summary>
+    /// Non-empty failure reason for kickoff: PromptAsync error, else last turn snippet, else harness message.
+    /// </summary>
+    public static string ResolveKickOffFailureSummary(DysonAgentSession child, VoidResult<string> promptResult)
+    {
+        ArgumentNullException.ThrowIfNull(child);
+
+        if (promptResult.IsError && !string.IsNullOrWhiteSpace(promptResult.Error))
+            return promptResult.Error.Trim();
+
+        var snippet = TryGetLastTurnFailureSnippet(child);
+        if (!string.IsNullOrWhiteSpace(snippet))
+            return snippet;
+
+        return "Child finished without SubmitSubagentReport (no assistant output).";
+    }
+
+    /// <summary>Formats <c>{Type}: {Message}</c> (+ inner) for kickoff exception path.</summary>
+    public static string FormatKickOffExceptionSummary(Exception ex)
+    {
+        ArgumentNullException.ThrowIfNull(ex);
+        var summary = $"{ex.GetType().Name}: {ex.Message}";
+        if (ex.InnerException is { } inner && !string.IsNullOrWhiteSpace(inner.Message))
+            summary += $" ({inner.GetType().Name}: {inner.Message})";
+        return string.IsNullOrWhiteSpace(summary)
+            ? "Child prompt failed with an unexpected exception."
+            : summary;
+    }
+
+    private static string? TryGetLastTurnFailureSnippet(DysonAgentSession child, int maxChars = 500)
+    {
+        if (child.TurnHistory.Count == 0)
+            return null;
+
+        var turn = child.TurnHistory[^1];
+        var text = !string.IsNullOrWhiteSpace(turn.AssistantText)
+            ? turn.AssistantText
+            : turn.StreamingPreview;
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        var trimmed = text.Trim();
+        if (trimmed.Length <= maxChars)
+            return trimmed;
+
+        return trimmed[..maxChars] + "…";
+    }
+
+    /// <summary>
+    /// Persist child Failed status + parent interrupt log (mirrors SubmitSubagentReport executor path).
+    /// </summary>
+    private static async Task PersistKickOffFailureAsync(DysonAgentSession child, string summary)
+    {
+        var store = child.SessionStore;
+        if (store is null || child.PersistenceId == Guid.Empty)
+            return;
+
+        await store.UpdateSessionMetaAsync(
+            new DysonSessionMetaUpdate
+            {
+                SessionId = child.PersistenceId,
+                Status = DysonSessionStatus.Failed,
+            }).ConfigureAwait(false);
+
+        var statusLog = DysonSessionLogPayload.CreateEntry(
+            child.PersistenceId,
+            DysonSessionLogKind.SessionStatusChanged,
+            new DysonSessionLogSessionStatusChanged(DysonSessionStatus.Failed, summary));
+        await store.AppendLogAsync(statusLog).ConfigureAwait(false);
+
+        var parent = child.Parent;
+        if (parent is null || parent.PersistenceId == Guid.Empty)
+            return;
+
+        var interruptLog = DysonSessionLogPayload.CreateEntry(
+            parent.PersistenceId,
+            DysonSessionLogKind.Interrupt,
+            new DysonSessionLogInterrupt(
+                DysonAgentInterruptKind.SubagentFailed.ToString(),
+                SubagentId: child.Id,
+                Summary: summary,
+                PersistenceId: child.PersistenceId));
+        await store.AppendLogAsync(interruptLog).ConfigureAwait(false);
     }
 
     public void AppendLog(string line)

@@ -56,15 +56,27 @@
             <div class="turn-block__instruction">@MarkdownRenderer.ToHtml(Turn.Instruction)</div>
         }
 
-        @if (Turn.IsStreaming && !string.IsNullOrEmpty(Turn.StreamingPreview))
+        @if (HasAssistantBody || HasTools)
         {
-            <div class="turn-block__body turn-block__body--streaming">
-                @Turn.StreamingPreview<span class="turn-block__caret" aria-hidden="true"></span>
+            <div class="turn-block__content">
+                @if (Turn.IsStreaming && !string.IsNullOrEmpty(Turn.StreamingPreview))
+                {
+                    <div class="turn-block__body turn-block__body--streaming">
+                        @Turn.StreamingPreview<span class="turn-block__caret" aria-hidden="true"></span>
+                    </div>
+                }
+                else if (!string.IsNullOrWhiteSpace(Turn.AssistantText))
+                {
+                    <div class="turn-block__body">@MarkdownRenderer.ToHtml(Turn.AssistantText)</div>
+                }
+
+                @if (HasTools)
+                {
+                    <div class="turn-block__tools">
+                        <ToolCallPanel Turn="Turn" />
+                    </div>
+                }
             </div>
-        }
-        else if (!string.IsNullOrWhiteSpace(Turn.AssistantText))
-        {
-            <div class="turn-block__body">@MarkdownRenderer.ToHtml(Turn.AssistantText)</div>
         }
 
         @if (CollectSubagentPersistenceIds() is { Count: > 0 } subagentIds)
@@ -74,13 +86,6 @@
                 {
                     <SubagentCard PersistenceId="id" />
                 }
-            </div>
-        }
-
-        @if (Turn.TrackedToolCalls.Count > 0 || Turn.ToolCalls.Count > 0)
-        {
-            <div style="padding:0 8px 8px;">
-                <ToolCallPanel Turn="Turn" />
             </div>
         }
     }
@@ -139,6 +144,13 @@
             return false;
         }
     }
+
+    private bool HasAssistantBody =>
+        (Turn.IsStreaming && !string.IsNullOrEmpty(Turn.StreamingPreview))
+        || !string.IsNullOrWhiteSpace(Turn.AssistantText);
+
+    private bool HasTools =>
+        Turn.TrackedToolCalls.Count > 0 || Turn.ToolCalls.Count > 0;
 
     private bool HasPendingTools =>
         Turn.TrackedToolCalls.Any(t =>

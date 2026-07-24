@@ -314,6 +314,45 @@ public sealed class DysonModelStore(DysonDbContext db)
         }
     }
 
+    /// <summary>
+    /// Case-insensitive exact match on <see cref="DysonModelSlugEntity.Slug"/>, then
+    /// <see cref="DysonModelSlugEntity.DisplayAlias"/> (picker label fields).
+    /// </summary>
+    public async Task<Result<DysonModelSlugEntity, string>> FindSlugByNameAsync(
+        string name,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        try
+        {
+            var needle = name.Trim();
+            var slugs = await _db.ModelSlugs
+                .AsNoTracking()
+                .Include(s => s.Provider)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            var bySlug = slugs.FirstOrDefault(s =>
+                string.Equals(s.Slug, needle, StringComparison.OrdinalIgnoreCase));
+            if (bySlug is not null)
+                return Result<DysonModelSlugEntity, string>.AsValue(bySlug);
+
+            var byAlias = slugs.FirstOrDefault(s =>
+                string.Equals(s.DisplayAlias, needle, StringComparison.OrdinalIgnoreCase));
+            if (byAlias is not null)
+                return Result<DysonModelSlugEntity, string>.AsValue(byAlias);
+
+            return Result<DysonModelSlugEntity, string>.AsError(
+                $"Model slug '{needle}' not found.");
+        }
+        catch (Exception ex)
+        {
+            return Result<DysonModelSlugEntity, string>.AsError(
+                $"Failed to find model slug: {ex.Message}");
+        }
+    }
+
     public async Task<Result<IReadOnlyList<Guid>, string>> ListFavoriteSlugIdsAsync(
         CancellationToken cancellationToken = default)
     {

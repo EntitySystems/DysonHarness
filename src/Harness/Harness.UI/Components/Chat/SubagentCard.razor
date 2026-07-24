@@ -6,12 +6,20 @@
 
 @if (PersistenceId != Guid.Empty)
 {
+    var icon = ResolveModeIcon(_state?.AgentMode);
     <button type="button"
             class="subagent-card"
             title="Open subagent session"
             @onclick="NavigateAsync">
+        <span class="subagent-card__icon @icon.ColorClass"
+              style="--subagent-mode-icon: url('@icon.Url')"
+              aria-hidden="true"></span>
         <div class="subagent-card__text">
             <div class="subagent-card__title">@(_state?.Title ?? "Subagent")</div>
+            @if (!string.IsNullOrWhiteSpace(_state?.ModelLabel))
+            {
+                <div class="subagent-card__model">@_state.ModelLabel</div>
+            }
             @if (!string.IsNullOrWhiteSpace(_state?.LatestTurnAgentTitle))
             {
                 <div class="subagent-card__turn">@_state.LatestTurnAgentTitle</div>
@@ -57,4 +65,27 @@
     }
 
     public void Dispose() => Host.Changed -= OnHostChanged;
+
+    private static (string Url, string ColorClass) ResolveModeIcon(string? agentMode)
+    {
+        if (string.IsNullOrWhiteSpace(agentMode))
+            return ("icons/agent-modes/custom.svg", "subagent-card__icon--other");
+
+        if (string.Equals(agentMode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase))
+            return ("icons/agent-modes/explore.svg", "subagent-card__icon--explore");
+        if (string.Equals(agentMode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase))
+            return ("icons/agent-modes/drone.svg", "subagent-card__icon--drone");
+        if (string.Equals(agentMode, DysonAgentModes.SecurityReview, StringComparison.OrdinalIgnoreCase))
+            return ("icons/agent-modes/security-review.svg", "subagent-card__icon--review");
+        if (string.Equals(agentMode, DysonAgentModes.BugReview, StringComparison.OrdinalIgnoreCase))
+            return ("icons/agent-modes/bug-review.svg", "subagent-card__icon--review");
+        if (string.Equals(agentMode, DysonAgentModes.Ask, StringComparison.OrdinalIgnoreCase))
+            return ("icons/agent-modes/ask.svg", "subagent-card__icon--other");
+        if (string.Equals(agentMode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase))
+            return ("icons/agent-modes/plan.svg", "subagent-card__icon--other");
+        if (string.Equals(agentMode, DysonAgentModes.Work, StringComparison.OrdinalIgnoreCase))
+            return ("icons/agent-modes/work.svg", "subagent-card__icon--other");
+
+        return ("icons/agent-modes/custom.svg", "subagent-card__icon--other");
+    }
 }

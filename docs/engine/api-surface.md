@@ -29,7 +29,7 @@ Conceptual overview: [README.md](README.md).
 - Todos: `Todos` (`IReadOnlyList<DysonSessionTodo>`), `TodosChanged`, `RestoreTodos`, `ListTodosAsync` / `CreateTodoAsync` / `UpdateTodoAsync` / `DeleteTodoAsync` / `ReplaceTodosAsync` (persist when `PersistenceId` set)
 - Rename: `RenameAsync(title)` → validates (trim, max 120) → sets `DisplayTitle` → raises `SessionRenamed` (`DysonSessionRenamedEventArgs`: `PersistenceId`, `Title`); host/tool executor persists `sessions.Title`
 - Config / mode: `Config`, `Mode`, `SystemPrompt`, `McpPipeline`, `Provider`
-- Subagents: `Parent`, `SubSessions`, `RegisterSubagent`, `CreateChildAsync` (optional `initialTodos` seed), `WaitForSubagentAsync`, `InspectSubagentLog` (sync), `StopSubagentAsync`, `SubmitSubagentReportAsync` (`skipTasksCheck` gates incomplete session todos), `ValidateSubagentSpawn`
+- Subagents: `Parent`, `SubSessions`, `RegisterSubagent`, `CreateChildAsync` (optional `initialTodos` seed), `WaitForSubagentAsync`, `InspectSubagentLog` (sync), `StopSubagentAsync`, `SubmitSubagentReportAsync` (`skipTasksCheck` gates incomplete session todos; harness-`Failed` may be superseded by a later agent report), `TryAcceptSubagentReport`, `ValidateSubagentSpawn`
 - Interrupts: `EnqueueInterrupt`, `TryDequeueInterrupt`, `WaitForInterruptAsync`; `NotifySubagentCompleted` / `Stopped` / `Failed` (include optional child `PersistenceId`)
 - Log: `AppendLog`, `SnapshotLog`, `LogAppended`
 - Turns / context: `CreateExpandThoughtProcessTurn`, completion-turn helpers, `OptimizeContextIfNeeded`
@@ -42,12 +42,12 @@ Conceptual overview: [README.md](README.md).
 | `DysonAgentModes` | Built-in mode name constants (`Plan` top-level only) |
 | `DysonProviderKinds` | Known provider-kind strings (`demo`, `OpenAICompatible`, `Anthropic`) |
 | `DysonOpenAiApiModes` | OpenAICompatible API surface (`Completions` default, `Responses`) |
-| `DysonAgentSystemPrompts` | `ForMode` → system prompt text; Work/Explore/Drone orchestrator directives; `DroneFirstTurnContextMandate` |
-| `DysonStartSubagentResult` | StartSubagent / `CreateChildAsync` return: `SubagentId`, `PersistenceId`, `AgentMode`, `Title` |
+| `DysonAgentSystemPrompts` | `ForMode` → system prompt text; Work/Explore/Drone orchestrator directives; `SubagentReportRequiredMandate` (all children first turn); `ExploreFirstTurnReportMandate` / `DroneFirstTurnContextMandate` |
+| `DysonStartSubagentResult` | StartSubagent / `CreateChildAsync` return: `SubagentId`, `PersistenceId`, `AgentMode`, `Title`, optional `ModelSlug` / `ModelLabel` |
 | `DysonSubagentSpawnGateSelfCheck` | Assert-only soft spawn gate checks (Work→Explore/Drone ok; Plan banned; Explore cannot spawn; Drone→Explore only) |
 | `DysonSessionTodo` | Runtime/UI/MCP mirror of a session todo (`TaskCode`, `DisplayName`, `Status`, `Comments`, `Sequence`, timestamps) |
 | `DysonSessionTodoStatus` | `Pending` / `Ongoing` / `Complete` (ints 0/1/2) |
-| `DysonSessionTodoSelfCheck` | Assert-only TaskCode uniqueness + status enum round-trip |
+| `DysonSessionTodoSelfCheck` | Assert-only TaskCode uniqueness + status enum round-trip + SubmitSubagentReport todo gate + Failed-supersede |
 
 ## Turns & tools
 
@@ -78,7 +78,7 @@ Default catalog includes session tools (`StartSubagent`, `WaitForSubagent`, `Ins
 
 **Session todo tools:** operate on the current session’s list only (root and subagent each own a list). Status strings: `pending` / `ongoing` / `complete`. `CreateTodo` requires `displayName` + `taskCode` (unique per session); optional `status`, `comments`. `UpdateTodo` requires `taskCode`; optional patch `displayName` / `status`; `comments` replaces the full list; `appendComment` appends one. No comment-delete tool. `DeleteTodo` / `ListTodos` by current session.
 
-**Subagent tools (see [README.md](README.md)#orchestrator-subagents):** `StartSubagent` is non-blocking (`agentMode` + `task`, optional `context`, optional `todos` seed array with `displayName` / `taskCode` / optional `status` / `comments`; Plan banned; Explore parents cannot spawn; Drone→Explore only). `WaitForSubagent` blocks for prerequisites only. `SubmitSubagentReport` (`summary`, optional `status`, optional `skipTasksCheck`) is the child handoff that drives parent interrupts / host auto-turn. By default it **errors** (session stays non-terminal) when any session todo is still `Pending` or `Ongoing`; pass `skipTasksCheck: true` to override — success JSON then includes `incompleteTodos` (`taskCode`, `displayName`, `status`) and `skipTasksCheck: true`. Parent notification still uses the agent `summary` unchanged. Empty todo list always passes.
+**Subagent tools (see [README.md](README.md)#orchestrator-subagents):** `StartSubagent` is non-blocking (`agentMode` + `task`, optional `context`, optional `modelSlug` slug/display-alias — omit to inherit parent model, same provider kind only; optional `todos` seed array with `displayName` / `taskCode` / optional `status` / `comments`; Plan banned; Explore parents cannot spawn; Drone→Explore only). Success JSON includes `modelSlug` / `modelLabel` when known. `WaitForSubagent` blocks for prerequisites only. `SubmitSubagentReport` (`summary`, optional `status`, optional `skipTasksCheck`) is the child handoff that drives parent interrupts / host auto-turn. By default it **errors** (session stays non-terminal) when any session todo is still `Pending` or `Ongoing`; pass `skipTasksCheck: true` to override — success JSON then includes `incompleteTodos` (`taskCode`, `displayName`, `status`) and `skipTasksCheck: true`. Parent notification still uses the agent `summary` unchanged. Empty todo list always passes. If the child’s background prompt fails without a report, the harness notifies the parent with a concrete failure reason (PromptAsync error, last assistant/streaming snippet, or exception `{Type}: {Message}`) under `## Report`, and persists child `Failed` + parent interrupt log. A later agent `SubmitSubagentReport` **supersedes** that harness `Failed` (status + summary + persist + re-notify parent); `Completed` / `Stopped` still reject.
 
 ## Search (in-process)
 

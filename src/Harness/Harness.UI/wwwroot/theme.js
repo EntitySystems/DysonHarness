@@ -38,6 +38,23 @@ window.dysonWorkdir = {
   }
 };
 
+/** Prevent textarea default for overlay nav keys while data-slash-open is set. */
+window.dysonComposer = {
+  attachSlashGuard: function (el) {
+    if (!el || el._dysonSlashGuard) return;
+    el._dysonSlashGuard = true;
+    el.addEventListener("keydown", function (e) {
+      if (el.getAttribute("data-slash-open") !== "1") return;
+      if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "Escape") {
+        e.preventDefault();
+        return;
+      }
+      if (e.key === "Enter" && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey)
+        e.preventDefault();
+    });
+  }
+};
+
 /** Stick-to-bottom helpers for `.chat-panel__turns`. Stick flag lives on the element so scroll can clear it synchronously (Blazor @onscroll is too late vs streaming AfterRender). */
 window.dysonChat = {
   /** Default near-bottom threshold (px). Keep tight so a small upward scroll unsticks. */
