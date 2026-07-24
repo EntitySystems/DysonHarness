@@ -18,7 +18,8 @@
     <button type="button"
             class="btn plan-result-block__open"
             disabled="@(string.IsNullOrWhiteSpace(Turn.PlanRelativePath) || _opening)"
-            @onclick="OpenPlanAsync">
+            @onclick="OpenPlanAsync"
+            @onclick:stopPropagation="true">
         Open plan
     </button>
 </div>

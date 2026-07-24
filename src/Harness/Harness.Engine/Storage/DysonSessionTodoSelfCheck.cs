@@ -284,6 +284,12 @@ public static class DysonSessionTodoSelfCheck
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
+        public override Task<VoidResult<string>> PromptBeginBuildPlanAsync(
+            string planRelativePath,
+            IReadOnlyList<string>? reportBlocks = null,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
         public override Task<Result<DysonAgentSessionEvent, string>> WaitForNotifyAsync(
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();

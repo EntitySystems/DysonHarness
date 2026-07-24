@@ -2,6 +2,7 @@
 @using Harness.UI.Demo
 @using Harness.UI.Markdown
 @using Microsoft.AspNetCore.Components.Web
+@implements IDisposable
 @inject DysonUiHost Host
 
 @if (Host.FileViewer is { } viewer)
@@ -81,11 +82,15 @@
 @code {
     private int? _selectedBlock;
 
+    protected override void OnInitialized() => Host.Changed += OnHostChanged;
+
     protected override void OnParametersSet()
     {
         if (Host.FileViewer is null)
             _selectedBlock = null;
     }
+
+    private void OnHostChanged() => _ = InvokeAsync(StateHasChanged);
 
     private void Close()
     {
@@ -129,4 +134,6 @@
         for (var i = 0; i < lines.Length; i++)
             yield return (i, lines[i]);
     }
+
+    public void Dispose() => Host.Changed -= OnHostChanged;
 }

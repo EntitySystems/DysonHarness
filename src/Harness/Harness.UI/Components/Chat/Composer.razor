@@ -8,6 +8,7 @@
 
 <div class="composer">
     <AskQuestionPopover Ask="Ask" OnSubmit="OnAskSubmit" />
+    <PlanReadyPopover Pending="Host.PendingPlanReady" />
     <div class="composer__prompt">
         @if (_slashOpen && _suggestions.Count > 0)
         {

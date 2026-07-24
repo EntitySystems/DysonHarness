@@ -59,7 +59,7 @@
         {
             <PlanResultBlock Turn="Turn" />
         }
-        else if (!IsUserTurn && !string.IsNullOrWhiteSpace(Turn.Instruction))
+        else if (IsHarnessInstructionTurn && !string.IsNullOrWhiteSpace(Turn.Instruction))
         {
             <div class="turn-block__instruction">@MarkdownRenderer.ToHtml(Turn.Instruction)</div>
         }
@@ -152,6 +152,13 @@
 
     private bool IsUserTurn =>
         Turn.Kind is DysonAgentTurnKind.Normal or DysonAgentTurnKind.InitializeSession;
+
+    /// <summary>
+    /// Harness kinds (<see cref="DysonAgentTurnKind.BeginBuildPlan"/>, Continuation, …)
+    /// use the muted instruction strip via <c>!IsUserTurn</c>.
+    /// </summary>
+    private bool IsHarnessInstructionTurn =>
+        !IsUserTurn && Turn.Kind != DysonAgentTurnKind.PlanResult;
 
     private bool CanCancel => SessionBusy && IsLatestTurn && OnCancel.HasDelegate;
 

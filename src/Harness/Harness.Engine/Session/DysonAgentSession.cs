@@ -117,11 +117,43 @@ public abstract class DysonAgentSession
 
     public DysonAgentSessionConfig Config { get; }
 
-    public string Mode { get; }
+    public string Mode { get; private set; }
 
-    public string SystemPrompt { get; }
+    public string SystemPrompt { get; private set; }
+
+    /// <summary>
+    /// Bumped by <see cref="ApplyAgentMode"/> so OpenAI <c>prompt_cache_key</c> invalidates
+    /// after a mid-session system-prompt rebuild (cache loss is intentional).
+    /// </summary>
+    public int SystemPromptGeneration { get; private set; }
 
     public DysonMcpPipeline McpPipeline { get; }
+
+    /// <summary>
+    /// Rebuilds <see cref="Mode"/> / <see cref="SystemPrompt"/> for a mid-session mode switch.
+    /// No-op (no generation bump) when <paramref name="agentMode"/> matches current mode.
+    /// </summary>
+    public VoidResult<string> ApplyAgentMode(string agentMode, string? systemPromptSuffix = null)
+    {
+        if (string.IsNullOrWhiteSpace(agentMode))
+            return new VoidResult<string>("Agent mode is required.");
+
+        var trimmed = agentMode.Trim();
+        if (string.Equals(Mode, trimmed, StringComparison.OrdinalIgnoreCase))
+            return VoidResult<string>.Success;
+
+        var prompt = DysonAgentSystemPrompts.ForMode(trimmed, Config.CustomAgents);
+        if (prompt.IsError)
+            return new VoidResult<string>(prompt.Error);
+
+        Mode = trimmed;
+        SystemPrompt = string.IsNullOrWhiteSpace(systemPromptSuffix)
+            ? prompt.Value
+            : prompt.Value + "\n\n" + systemPromptSuffix.Trim();
+        SystemPromptGeneration++;
+        AppendLog($"mode → {Mode} (system prompt rebuilt)");
+        return VoidResult<string>.Success;
+    }
 
     public DysonAgentProvider Provider
     {
@@ -1700,6 +1732,16 @@ public abstract class DysonAgentSession
     public abstract Task<VoidResult<string>> PromptAsync(
         string prompt,
         IReadOnlyList<string> filePaths,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Work-mode Build plan: creates a <see cref="DysonAgentTurnKind.BeginBuildPlan"/> turn
+    /// and runs the same tool/reply loop as <see cref="PromptAsync"/>.
+    /// Optional <paramref name="reportBlocks"/> fold buffered Explore reports into the Instruction.
+    /// </summary>
+    public abstract Task<VoidResult<string>> PromptBeginBuildPlanAsync(
+        string planRelativePath,
+        IReadOnlyList<string>? reportBlocks = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

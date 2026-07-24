@@ -6,6 +6,13 @@ namespace DysonHarness;
 public static class DysonPlanResultFlow
 {
     /// <summary>
+    /// First-line marker on the legacy Build-plan user prompt. Kept for sticky dismissal of
+    /// old sessions — prefer <see cref="DysonAgentTurnKind.BeginBuildPlan"/> going forward
+    /// (see <see cref="DysonPlanReadyUi.TryGetPending"/>).
+    /// </summary>
+    public const string BuildPlanMarker = "[BuildPlan]";
+
+    /// <summary>
     /// Turn instruction mandate: single-file continuity for the published plan.
     /// Lives on the PlanResult turn (transcript history), not only in the system prompt.
     /// </summary>
@@ -19,6 +26,22 @@ public static class DysonPlanResultFlow
             - The active plan file is `{path}`.
             - Update that file via WriteFile (or equivalent) for all plan revisions.
             - Do not call SubmitPlan again / create another plan file unless the user explicitly asks for a new plan.
+            """;
+    }
+
+    /// <summary>
+    /// Legacy user prompt for Build plan (starts with <see cref="BuildPlanMarker"/>).
+    /// New builds use <see cref="DysonBeginBuildPlanFlow"/> / <c>PromptBeginBuildPlanAsync</c>.
+    /// </summary>
+    public static string BuildPlanUserPrompt(string planRelativePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(planRelativePath);
+        var path = planRelativePath.Trim().Replace('\\', '/');
+
+        return $"""
+            {BuildPlanMarker}
+            Implement the plan at `{path}`.
+            Read that plan file, then orchestrate implementation via one or more Drone subagents (Explore first only if context is still thin). Do not invent a new plan file.
             """;
     }
 

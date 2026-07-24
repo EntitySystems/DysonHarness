@@ -324,18 +324,13 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         CancellationToken cancellationToken = default) =>
         PromptAsync(prompt, [], cancellationToken);
 
-    public override async Task<VoidResult<string>> PromptAsync(
+    public override Task<VoidResult<string>> PromptAsync(
         string prompt,
         IReadOnlyList<string> filePaths,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(prompt);
         ArgumentNullException.ThrowIfNull(filePaths);
-
-        // Compaction before the next provider request so the new prefix stays byte-stable.
-        OptimizeContextIfNeeded();
-
-        AppendLog($"prompt: {Truncate(prompt, 120)}");
 
         var turn = TurnHistory.Count == 0
             ? DysonSessionInitialization.CreateTurn(prompt)
@@ -345,6 +340,31 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 Instruction = prompt,
                 StartedUtc = DateTime.UtcNow,
             };
+
+        return PromptWithTurnAsync(turn, filePaths, cancellationToken);
+    }
+
+    public override Task<VoidResult<string>> PromptBeginBuildPlanAsync(
+        string planRelativePath,
+        IReadOnlyList<string>? reportBlocks = null,
+        CancellationToken cancellationToken = default)
+    {
+        var turn = DysonBeginBuildPlanFlow.CreateTurn(planRelativePath, reportBlocks);
+        return PromptWithTurnAsync(turn, [], cancellationToken);
+    }
+
+    private async Task<VoidResult<string>> PromptWithTurnAsync(
+        DysonAgentTurn turn,
+        IReadOnlyList<string> filePaths,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+        ArgumentNullException.ThrowIfNull(filePaths);
+
+        // Compaction before the next provider request so the new prefix stays byte-stable.
+        OptimizeContextIfNeeded();
+
+        AppendLog($"prompt: {Truncate(turn.Instruction ?? turn.Kind.ToString(), 120)}");
         AddTurn(turn);
 
         var executor = new DysonWorkspaceToolExecutor(this, _workDirectoryPath, _http, _store);

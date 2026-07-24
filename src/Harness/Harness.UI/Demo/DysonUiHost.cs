@@ -142,6 +142,12 @@ public sealed class DysonUiHost : IAsyncDisposable
     public DysonFileViewerState? FileViewer => _fileViewer;
 
     /// <summary>
+    /// Latest unpublished plan for the focused session (composer Plan-ready sticky), or null.
+    /// </summary>
+    public DysonPlanReadyInfo? PendingPlanReady =>
+        _session is null ? null : DysonPlanReadyUi.TryGetPending(_session.Turns);
+
+    /// <summary>
     /// Opens the file viewer for a workspace-relative path under the focused session work root.
     /// Does not navigate away from chat.
     /// </summary>
@@ -151,7 +157,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
 
-        var workRoot = await TryResolveActiveWorkRootAsync(cancellationToken).ConfigureAwait(false);
+        // Stay on the Blazor sync context so Notify() paints FileViewerOverlay.
+        var workRoot = await TryResolveActiveWorkRootAsync(cancellationToken);
         if (workRoot is null)
         {
             _fileViewer = new DysonFileViewerState
@@ -212,8 +219,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (workDirectoryId is null || workDirectoryId == Guid.Empty)
             return null;
 
-        var wd = await _workDirectories.GetAsync(workDirectoryId.Value, cancellationToken)
-            .ConfigureAwait(false);
+        var wd = await _workDirectories.GetAsync(workDirectoryId.Value, cancellationToken);
         return wd.IsError ? null : wd.Value.AbsolutePath;
     }
 
@@ -487,6 +493,169 @@ public sealed class DysonUiHost : IAsyncDisposable
             }
 
             FocusSession(created.Value, parentSessionId: null);
+        }
+
+        Notify();
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Apply an agent mode to the focused session: rebuild system prompt, bump prompt-cache
+    /// generation, persist <c>AgentMode</c> + <c>SystemPromptSnapshot</c>. Busy-gated.
+    /// With no session, preference is caller-owned (composer picker).
+    /// </summary>
+    public async Task<VoidResult<string>> SetSessionAgentModeAsync(
+        string agentMode,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+
+        if (string.IsNullOrWhiteSpace(agentMode))
+        {
+            LastError = "Agent mode is required.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        if (_session is null)
+        {
+            Notify();
+            return VoidResult<string>.Success;
+        }
+
+        if (IsBusy)
+        {
+            LastError = "Cannot switch agent mode while a prompt is in flight.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        return await ApplyAgentModeCoreAsync(agentMode.Trim(), cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Consumes buffered Plan-mode Explore completion reports into a
+    /// <see cref="DysonAgentTurnKind.BeginBuildPlan"/> turn, then switches to Work.
+    /// Busy-rejects when a turn is in flight.
+    /// </summary>
+    public async Task<VoidResult<string>> BuildPendingPlanAsync(
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+
+        var pending = PendingPlanReady;
+        if (pending is null)
+        {
+            LastError = "No pending plan to build.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        if (IsBusy)
+        {
+            LastError = "Cannot build plan while a prompt is in flight.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        if (_session is null)
+        {
+            LastError = "No active session.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        // Take completion interrupts before leaving Plan so they fold into BeginBuildPlan
+        // instead of draining as Normal harness continuation turns.
+        var reportBlocks = TakeBufferedCompletionReportBlocks(_session.PersistenceId);
+
+        var mode = await SetSessionAgentModeAsync(DysonAgentModes.Work, cancellationToken)
+            .ConfigureAwait(false);
+        if (mode.IsError)
+            return mode;
+
+        if (_session is null)
+        {
+            LastError = "No active session.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        var path = pending.Path;
+        var result = await ExecutePromptOnSessionAsync(
+                _session,
+                (session, token) => session.PromptBeginBuildPlanAsync(
+                    path, reportBlocks, cancellationToken: token),
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (result.IsError)
+            LastError = result.Error;
+
+        Notify();
+        return result;
+    }
+
+    private async Task<VoidResult<string>> ApplyAgentModeCoreAsync(
+        string agentMode,
+        CancellationToken cancellationToken)
+    {
+        if (_session is null)
+            return new VoidResult<string>("No active session.");
+
+        if (string.Equals(_session.Mode, agentMode, StringComparison.OrdinalIgnoreCase))
+            return VoidResult<string>.Success;
+
+        var leavingPlan = string.Equals(
+            _session.Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase);
+
+        var providerKind = _session.Provider switch
+        {
+            OpenAiCompatibleAgentProvider oai => DysonProviderKinds.EffectiveKind(
+                oai.ProviderKind, oai.BaseUrl, oai.ApiKey),
+            DemoDysonAgentProvider demo => DysonProviderKinds.EffectiveKind(
+                demo.ProviderKind, demo.BaseUrl, demo.ApiKey),
+            _ => SessionProviderKind(_session.Provider),
+        };
+
+        var modelsBlock = await DysonAgentSystemPrompts.BuildAvailableModelsBlockAsync(
+                _models, providerKind, cancellationToken)
+            .ConfigureAwait(false);
+
+        var applied = _session.ApplyAgentMode(agentMode, modelsBlock);
+        if (applied.IsError)
+        {
+            LastError = applied.Error;
+            Notify();
+            return applied;
+        }
+
+        if (_session.PersistenceId != Guid.Empty)
+        {
+            var persist = await _sessions.UpdateSessionMetaAsync(
+                new DysonSessionMetaUpdate
+                {
+                    SessionId = _session.PersistenceId,
+                    AgentMode = _session.Mode,
+                    SystemPromptSnapshot = _session.SystemPrompt,
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (persist.IsError)
+            {
+                LastError = persist.Error;
+                Notify();
+                return persist;
+            }
+        }
+
+        // Leaving Plan without Build plan: surface buffered Explore completion auto-turns.
+        // BuildPendingPlanAsync takes completions first, so this only drains leftovers (e.g. events).
+        if (leavingPlan
+            && !string.Equals(_session.Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase)
+            && _session.PersistenceId != Guid.Empty)
+        {
+            _ = DrainAutoTurnsAsync(_session.PersistenceId);
         }
 
         Notify();
@@ -781,6 +950,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     public async Task<VoidResult<string>> PromptAsync(
         string prompt,
+        string? agentMode = null,
         CancellationToken cancellationToken = default)
     {
         if (_session is null)
@@ -803,6 +973,22 @@ public sealed class DysonUiHost : IAsyncDisposable
             LastError = "Session is not persisted.";
             Notify();
             return new VoidResult<string>(LastError);
+        }
+
+        if (!string.IsNullOrWhiteSpace(agentMode)
+            && !string.Equals(session.Mode, agentMode, StringComparison.OrdinalIgnoreCase))
+        {
+            if (IsBusy)
+            {
+                LastError = "Cannot switch agent mode while a prompt is in flight.";
+                Notify();
+                return new VoidResult<string>(LastError);
+            }
+
+            var modeResult = await ApplyAgentModeCoreAsync(agentMode.Trim(), cancellationToken)
+                .ConfigureAwait(false);
+            if (modeResult.IsError)
+                return modeResult;
         }
 
         var sessionId = session.PersistenceId;
@@ -1505,13 +1691,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
         }
 
-        if (interrupt.Kind is not (
-            DysonAgentInterruptKind.SubagentCompleted
-            or DysonAgentInterruptKind.SubagentFailed
-            or DysonAgentInterruptKind.SubagentStopped))
-        {
+        if (!DysonSubagentReportPrompt.IsCompletionInterrupt(interrupt.Kind))
             return;
-        }
 
         if (parent.PersistenceId == Guid.Empty)
             return;
@@ -1521,7 +1702,10 @@ public sealed class DysonUiHost : IAsyncDisposable
             _ => new ConcurrentQueue<DysonAgentInterrupt>());
         queue.Enqueue(interrupt);
         Notify();
-        _ = DrainAutoTurnsAsync(parent.PersistenceId);
+
+        // Plan mode: buffer for BeginBuildPlan (or flush on mode leave). Keep SubagentEvent drains.
+        if (DysonSubagentReportPrompt.ShouldDrainCompletionAutoTurn(parent.Mode))
+            _ = DrainAutoTurnsAsync(parent.PersistenceId);
     }
 
     private void OnParentEventsChanged(object? sender, EventArgs e)
@@ -1739,12 +1923,58 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Removes buffered completion interrupts for <paramref name="parentPersistenceId"/> and
+    /// formats report blocks for BeginBuildPlan. Leaves <see cref="DysonAgentInterruptKind.SubagentEvent"/> items.
+    /// </summary>
+    private List<string> TakeBufferedCompletionReportBlocks(Guid parentPersistenceId)
+    {
+        var blocks = new List<string>();
+        if (parentPersistenceId == Guid.Empty
+            || !_pendingReportsByParent.TryGetValue(parentPersistenceId, out var queue)
+            || queue.IsEmpty)
+        {
+            return blocks;
+        }
+
+        var kept = new List<DysonAgentInterrupt>();
+        while (queue.TryDequeue(out var interrupt))
+        {
+            if (!DysonSubagentReportPrompt.IsCompletionInterrupt(interrupt.Kind))
+            {
+                kept.Add(interrupt);
+                continue;
+            }
+
+            string? title = null;
+            if (interrupt.PersistenceId is Guid childId
+                && childId != Guid.Empty
+                && _sessionsById.TryGetValue(childId, out var child))
+            {
+                title = child.DisplayTitle;
+            }
+            else if (_sessionsById.TryGetValue(parentPersistenceId, out var parent)
+                && parent.TryGetSubagent(interrupt.SubagentId, out var byRuntime))
+            {
+                title = byRuntime.DisplayTitle;
+            }
+
+            blocks.Add(DysonSubagentReportPrompt.FormatReportBlock(interrupt, title));
+        }
+
+        foreach (var item in kept)
+            queue.Enqueue(item);
+
+        return blocks;
+    }
+
     private async Task DrainAutoTurnsAsync(Guid parentPersistenceId)
     {
         var gate = _autoTurnGates.GetOrAdd(parentPersistenceId, _ => new SemaphoreSlim(1, 1));
         if (!await gate.WaitAsync(0).ConfigureAwait(false))
             return;
 
+        var deferredCompletions = new List<DysonAgentInterrupt>();
         try
         {
             while (true)
@@ -1756,7 +1986,18 @@ public sealed class DysonUiHost : IAsyncDisposable
                 }
 
                 if (!_sessionsById.TryGetValue(parentPersistenceId, out var parent))
+                {
+                    deferredCompletions.Add(interrupt);
                     break;
+                }
+
+                // Belt-and-suspenders: while Plan, leave completion reports buffered; still drain events.
+                if (DysonSubagentReportPrompt.IsCompletionInterrupt(interrupt.Kind)
+                    && !DysonSubagentReportPrompt.ShouldDrainCompletionAutoTurn(parent.Mode))
+                {
+                    deferredCompletions.Add(interrupt);
+                    continue;
+                }
 
                 string? title = null;
                 if (interrupt.PersistenceId is Guid childId
@@ -1785,13 +2026,40 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
         finally
         {
+            if (deferredCompletions.Count > 0
+                && _pendingReportsByParent.TryGetValue(parentPersistenceId, out var requeue))
+            {
+                foreach (var item in deferredCompletions)
+                    requeue.Enqueue(item);
+            }
+
             gate.Release();
         }
 
         // Race: interrupt may enqueue after last empty check while gate was held.
-        if (_pendingReportsByParent.TryGetValue(parentPersistenceId, out var leftover)
-            && !leftover.IsEmpty)
+        if (_pendingReportsByParent.TryGetValue(parentPersistenceId, out var stillPending)
+            && !stillPending.IsEmpty)
         {
+            if (!_sessionsById.TryGetValue(parentPersistenceId, out var stillParent))
+                return;
+
+            // In Plan, only re-enter drain when an event may still be queued (completions stay buffered).
+            if (!DysonSubagentReportPrompt.ShouldDrainCompletionAutoTurn(stillParent.Mode))
+            {
+                var hasEvent = false;
+                foreach (var item in stillPending)
+                {
+                    if (item.Kind == DysonAgentInterruptKind.SubagentEvent)
+                    {
+                        hasEvent = true;
+                        break;
+                    }
+                }
+
+                if (!hasEvent)
+                    return;
+            }
+
             _ = DrainAutoTurnsAsync(parentPersistenceId);
         }
     }
@@ -1801,6 +2069,34 @@ public sealed class DysonUiHost : IAsyncDisposable
         string prompt,
         CancellationToken cancellationToken)
     {
+        return await ExecutePromptOnSessionAsync(
+                session,
+                async (s, token) =>
+                {
+                    var userLog = DysonSessionLogPayload.CreateEntry(
+                        s.PersistenceId,
+                        DysonSessionLogKind.UserPrompt,
+                        new DysonSessionLogUserPrompt(prompt));
+
+                    var appendUser = await PersistAsync(
+                        () => _sessions.AppendLogAsync(userLog, token),
+                        token).ConfigureAwait(false);
+                    if (appendUser.IsError)
+                        return appendUser;
+
+                    return await s.PromptAsync(prompt, token).ConfigureAwait(false);
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<VoidResult<string>> ExecutePromptOnSessionAsync(
+        DysonAgentSession session,
+        Func<DysonAgentSession, CancellationToken, Task<VoidResult<string>>> run,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
         if (session.PersistenceId == Guid.Empty)
             return new VoidResult<string>("Session is not persisted.");
 
@@ -1826,18 +2122,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
             try
             {
-                var userLog = DysonSessionLogPayload.CreateEntry(
-                    sessionId,
-                    DysonSessionLogKind.UserPrompt,
-                    new DysonSessionLogUserPrompt(prompt));
-
-                var appendUser = await PersistAsync(
-                    () => _sessions.AppendLogAsync(userLog, token),
-                    token).ConfigureAwait(false);
-                if (appendUser.IsError)
-                    return appendUser;
-
-                var result = await session.PromptAsync(prompt, token).ConfigureAwait(false);
+                var result = await run(session, token).ConfigureAwait(false);
                 if (result.IsError)
                     return result;
 

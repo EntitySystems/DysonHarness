@@ -28,6 +28,10 @@ public sealed class DysonSessionMetaUpdate
     /// <summary>When true, write <see cref="ReasoningEffort"/> (null/empty allowed).</summary>
     public bool UpdateReasoningEffort { get; init; }
     public string? ReasoningEffort { get; init; }
+    /// <summary>When set, updates persisted <c>AgentMode</c> (mid-session mode switch).</summary>
+    public string? AgentMode { get; init; }
+    /// <summary>When set, updates persisted <c>SystemPromptSnapshot</c>.</summary>
+    public string? SystemPromptSnapshot { get; init; }
 }
 
 public sealed class DysonSessionSummary
@@ -266,6 +270,12 @@ public sealed class DysonSessionStore(DysonDbContext db)
 
             if (update.UpdateReasoningEffort)
                 entity.ReasoningEffort = update.ReasoningEffort;
+
+            if (update.AgentMode is not null)
+                entity.AgentMode = update.AgentMode;
+
+            if (update.SystemPromptSnapshot is not null)
+                entity.SystemPromptSnapshot = update.SystemPromptSnapshot;
 
             var now = DateTime.UtcNow;
             entity.UpdatedUtc = now;

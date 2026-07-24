@@ -171,9 +171,17 @@
     {
         SyncSelectedSlugFromSession();
         SyncReasoningEffortFromHost();
+        SyncSelectedAgentModeFromSession();
         UpdateActiveTitle();
-        await RefreshSessionsQuietAsync();
-        StateHasChanged();
+        try
+        {
+            StateHasChanged();
+            await RefreshSessionsQuietAsync();
+        }
+        finally
+        {
+            StateHasChanged();
+        }
     });
 
     private void OnThemeChanged() => _ = InvokeAsync(StateHasChanged);
@@ -203,6 +211,12 @@
     private void SyncReasoningEffortFromHost()
     {
         _reasoningEffort = Host.SessionReasoningEffort;
+    }
+
+    private void SyncSelectedAgentModeFromSession()
+    {
+        if (Host.Session is { } session)
+            _selectedAgentMode = session.Mode;
     }
 
     private Task OnAgentModeChanged(string mode)
@@ -362,6 +376,7 @@
             _listError = result.Error;
         SyncSelectedSlugFromSession();
         SyncReasoningEffortFromHost();
+        SyncSelectedAgentModeFromSession();
         await RefreshSessionsAsync();
     }
 
@@ -372,6 +387,7 @@
             _listError = result.Error;
         SyncSelectedSlugFromSession();
         SyncReasoningEffortFromHost();
+        SyncSelectedAgentModeFromSession();
         await RefreshSessionsAsync();
     }
 
@@ -385,7 +401,8 @@
 
     private async Task PromptAsync(string prompt)
     {
-        await Host.PromptAsync(prompt);
+        await Host.PromptAsync(prompt, _selectedAgentMode);
+        SyncSelectedAgentModeFromSession();
         await RefreshSessionsAsync();
     }
 
@@ -396,6 +413,7 @@
             _listError = result.Error;
         SyncSelectedSlugFromSession();
         SyncReasoningEffortFromHost();
+        SyncSelectedAgentModeFromSession();
         await RefreshSessionsAsync();
     }
 

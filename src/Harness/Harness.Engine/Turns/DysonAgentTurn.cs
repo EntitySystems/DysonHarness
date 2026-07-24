@@ -12,6 +12,7 @@ public enum DysonAgentTurnKind
     ReportSummary = 4,
     InitializeSession = 5,
     PlanResult = 6,
+    BeginBuildPlan = 7,
 }
 
 public sealed class DysonToolCallStatusChangedEventArgs : EventArgs
@@ -32,7 +33,8 @@ public sealed class DysonAgentTurn
     public DysonAgentTurnKind Kind { get; init; }
 
     /// <summary>
-    /// Workspace-relative plan path for <see cref="DysonAgentTurnKind.PlanResult"/> turns
+    /// Workspace-relative plan path for <see cref="DysonAgentTurnKind.PlanResult"/> /
+    /// <see cref="DysonAgentTurnKind.BeginBuildPlan"/> turns
     /// (forward slashes, e.g. <c>.dyson/plans/slug-hash.md</c>).
     /// </summary>
     public string? PlanRelativePath { get; set; }

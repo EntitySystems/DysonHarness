@@ -93,7 +93,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         return new BuiltCompletionsRequest(
             messages,
             OpenAiCompatibleHttp.BuildToolsArray(session.McpPipeline),
-            OpenAiCompatibleHttp.PromptCacheKey(session.PersistenceId),
+            OpenAiCompatibleHttp.PromptCacheKey(session.PersistenceId, session.SystemPromptGeneration),
             includeBreakpoints);
     }
 
@@ -136,7 +136,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             instructions,
             input,
             OpenAiCompatibleHttp.BuildResponsesToolsArray(session.McpPipeline),
-            OpenAiCompatibleHttp.PromptCacheKey(session.PersistenceId),
+            OpenAiCompatibleHttp.PromptCacheKey(session.PersistenceId, session.SystemPromptGeneration),
             includeBreakpoints,
             PreviousResponseId: null,
             Store: false);
@@ -174,7 +174,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             BuildSystemText(session),
             input,
             OpenAiCompatibleHttp.BuildResponsesToolsArray(session.McpPipeline),
-            OpenAiCompatibleHttp.PromptCacheKey(session.PersistenceId),
+            OpenAiCompatibleHttp.PromptCacheKey(session.PersistenceId, session.SystemPromptGeneration),
             includeBreakpoints,
             PreviousResponseId: previousResponseId,
             Store: true);

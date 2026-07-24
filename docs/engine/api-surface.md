@@ -29,12 +29,12 @@ Conceptual overview: [README.md](README.md).
 - Persistence (when wired): `PersistenceId` (`Guid`), `DisplayTitle`, `Turns`, `TurnAdded`, `AddTurn`, `RestoreFromPersisted`
 - Todos: `Todos` (`IReadOnlyList<DysonSessionTodo>`), `TodosChanged`, `RestoreTodos`, `ListTodosAsync` / `CreateTodoAsync` / `UpdateTodoAsync` / `DeleteTodoAsync` / `ReplaceTodosAsync` (persist when `PersistenceId` set)
 - Rename: `RenameAsync(title)` → validates (trim, max 120) → sets `DisplayTitle` → raises `SessionRenamed` (`DysonSessionRenamedEventArgs`: `PersistenceId`, `Title`); host/tool executor persists `sessions.Title`
-- Config / mode: `Config`, `Mode`, `SystemPrompt`, `McpPipeline`, `Provider`
+- Config / mode: `Config`, `Mode`, `SystemPrompt`, `SystemPromptGeneration`, `ApplyAgentMode`, `McpPipeline`, `Provider`
 - Subagents: `Parent`, `SubSessions`, `RegisterSubagent`, `RestoreRegisteredSubagent` (resume re-link + next-id bump; no `SubagentSpawned`), `FormatListSubagentsJson`, `CreateChildAsync` (optional `initialTodos` seed), `WaitForSubagentAsync` (tracks `WaitingOnSubagentIds` / `IsWaitingOnAnySubagent`), `InspectSubagentLog` (sync), `StopSubagentAsync`, `SubmitSubagentReportAsync` (`skipTasksCheck` gates incomplete session todos; harness-`Failed` may be superseded by a later agent report; post-`Completed` retries are idempotent success), `TryAcceptSubagentReport`, `ValidateSubagentSpawn`, `TriggerParentEventAsync` / `RespondToSubagentEvent` / `TriggerSubagentEventAsync`, `AskQuestionAsync` / `AskQuestionFromParentAsync` / `RespondToAskQuestion`
 - Interrupts: `EnqueueInterrupt`, `TryDequeueInterrupt`, `WaitForInterruptAsync`; `NotifySubagentCompleted` / `Stopped` / `Failed` (include optional child `PersistenceId`); `SubagentEvent` kind with `EventId` / `EventKind` / `Payload`
 - Log: `AppendLog`, `SnapshotLog`, `LogAppended`
 - Turns / context: `CreateExpandThoughtProcessTurn`, completion-turn helpers, `OptimizeContextIfNeeded`
-- Loop: `LoadFunctionalContextAsync`, `PromptAsync`, `WaitForNotifyAsync`
+- Loop: `LoadFunctionalContextAsync`, `PromptAsync`, `PromptBeginBuildPlanAsync`, `WaitForNotifyAsync`
 
 ## Modes & prompts
 
@@ -56,10 +56,13 @@ Conceptual overview: [README.md](README.md).
 
 | Type | Notes |
 | ---- | ----- |
-| `DysonAgentTurn` | Turn kind, instruction, agent title, optional `PlanRelativePath` (PlanResult), `AssistantText`, `ReasoningText` (optional model thinking; UI + persist only, not in model transcript), `StartedUtc` / `CompletedUtc` (UI chrome + persistence; not in model transcript), live `StreamingPreview`/`IsStreaming` + `ReasoningStreamingPreview`/`IsReasoningStreaming`/`AssistantTextChanged`, tool calls, tracked status, response log, compact history |
-| `DysonAgentTurnKind` | `Normal`, `ExpandThoughtProcess`, `TaskCompletionConfirm`, `Continuation`, `ReportSummary`, `InitializeSession`, `PlanResult` |
-| `DysonPlanResultFlow` | Factory + Instruction continuity mandate after `SubmitPlan`; `AppendPlanResultTurn` on session |
-| `DysonFileManagerSelfCheck` / `DysonPlanResultSelfCheck` | Assert-only naming/sandbox + PlanResult persist/catalog checks (UI `Program` startup) |
+| `DysonAgentTurn` | Turn kind, instruction, agent title, optional `PlanRelativePath` (PlanResult / BeginBuildPlan), `AssistantText`, `ReasoningText` (optional model thinking; UI + persist only, not in model transcript), `StartedUtc` / `CompletedUtc` (UI chrome + persistence; not in model transcript), live `StreamingPreview`/`IsStreaming` + `ReasoningStreamingPreview`/`IsReasoningStreaming`/`AssistantTextChanged`, tool calls, tracked status, response log, compact history |
+| `DysonAgentTurnKind` | `Normal`, `ExpandThoughtProcess`, `TaskCompletionConfirm`, `Continuation`, `ReportSummary`, `InitializeSession`, `PlanResult`, `BeginBuildPlan` |
+| `DysonPlanResultFlow` | Factory + Instruction continuity mandate after `SubmitPlan`; legacy `BuildPlanMarker` / `BuildPlanUserPrompt` for sticky dismissal of old sessions; `AppendPlanResultTurn` on session |
+| `DysonBeginBuildPlanFlow` | Factory + Recap / Agent-actions Instruction for composer Build plan (`PromptBeginBuildPlanAsync`); optional Explore report blocks folded in from Plan-mode buffer |
+| `DysonSubagentReportPrompt` | Shared completion report block + harness continuation formatter; `ShouldDrainCompletionAutoTurn` (false in Plan) |
+| `DysonPlanReadyUi` / `DysonPlanReadyInfo` | Derive Plan-ready sticky from turns (`TryGetPending`) until a later `BeginBuildPlan` (or legacy `[BuildPlan]` user) turn |
+| `DysonFileManagerSelfCheck` / `DysonPlanResultSelfCheck` | Assert-only naming/sandbox + PlanResult / BeginBuildPlan (+ report injection / Plan deferral) + `ApplyAgentMode` / Plan-ready checks (UI `Program` startup) |
 | `DysonSessionInitialization` | First-turn factory (`CreateTurn` → `InitializeSession`); `RenameSessionReviewMandate` + `IsRenameReviewTurn` (every 8 turns: 1, 9, 17, …; mandate appended only for incomplete current turn) |
 | `DysonToolCall` | `CallId`, `ToolName`, `Stage`, `ArgumentsJson` |
 | `DysonToolCallStatus` | `Queued`, `Working`, `Completed`, `Failed` |

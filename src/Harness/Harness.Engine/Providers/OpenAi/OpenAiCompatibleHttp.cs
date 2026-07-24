@@ -44,10 +44,10 @@ public static class OpenAiCompatibleHttp
     public static StringContent JsonContent(object body) =>
         new(JsonSerializer.Serialize(body, JsonOptions), Encoding.UTF8, "application/json");
 
-    public static string PromptCacheKey(Guid persistenceId) =>
+    public static string PromptCacheKey(Guid persistenceId, int systemPromptGeneration = 0) =>
         persistenceId == Guid.Empty
             ? "dyson:ephemeral"
-            : $"dyson:{persistenceId:N}";
+            : $"dyson:{persistenceId:N}:sp{systemPromptGeneration}";
 
     /// <summary>
     /// True when the model slug looks like a GPT-5.6+ family that may accept

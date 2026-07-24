@@ -18,7 +18,7 @@ Durable session state lives in the same EF Core SQLite DB as model providers/slu
 | `McpAccessMode` | enum |
 | `Status` | `Active` / `Completed` / `Stopped` / `Failed` |
 | `Title` | Optional UI title (agent `RenameSession` / first prompt); mirrored live as `DysonAgentSession.DisplayTitle` |
-| `SystemPromptSnapshot` | Prompt at create time |
+| `SystemPromptSnapshot` | Prompt at create time; updated on mid-session `ApplyAgentMode` |
 | `CreatedUtc`, `UpdatedUtc`, `LastActivityUtc` | `DateTime` UTC |
 
 Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work directories: [work-directories.md](work-directories.md).
@@ -30,9 +30,9 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `Id` | Guid PK — also `DysonAgentTurn.Id` |
 | `SessionId` | Guid FK |
 | `Sequence` | Order within session |
-| `Kind` | `DysonAgentTurnKind` (`PlanResult` = 6) |
+| `Kind` | `DysonAgentTurnKind` (`PlanResult` = 6, `BeginBuildPlan` = 7) |
 | `AgentTitle` | Parsed H1 / plan title |
-| `PlanRelativePath` | Workspace-relative plan path for `PlanResult` (e.g. `.dyson/plans/…`); null otherwise |
+| `PlanRelativePath` | Workspace-relative plan path for `PlanResult` / `BeginBuildPlan` (e.g. `.dyson/plans/…`); null otherwise |
 | `Instruction` | Harness-injected instruction |
 | `AssistantText` | Agent body after title |
 | `ReasoningText` | Optional model reasoning / thinking (UI + reload; not replayed into transcripts) |
@@ -111,7 +111,7 @@ Task<VoidResult<string>> DeleteTodoAsync(Guid sessionId, string taskCode, Cancel
 Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ReplaceTodosAsync(Guid sessionId, IReadOnlyList<DysonSessionTodoReplaceItem> items, CancellationToken ct = default);
 ```
 
-`ListSessionsAsync` optionally filters by `WorkDirectoryId`. `ListChildSessionsAsync` returns direct children of a parent ordered by `RuntimeId`. `DysonSessionCreateRequest` / summaries include `WorkDirectoryId`.
+`ListSessionsAsync` optionally filters by `WorkDirectoryId`. `ListChildSessionsAsync` returns direct children of a parent ordered by `RuntimeId`. `DysonSessionCreateRequest` / summaries include `WorkDirectoryId`. `DysonSessionMetaUpdate` can patch status/title/model/effort and, on mid-session mode switch, `AgentMode` + `SystemPromptSnapshot`.
 
 `GetFullSessionAsync` returns session row + all turns (ordered) + all log entries (ordered by `Sequence`) + todos (ordered by `Sequence`).
 
@@ -143,7 +143,7 @@ Subagents are **session-owned**: the live graph (`SubSessions` / `SubagentsById`
 
 `ListSessionsAsync(..., rootsOnly: true)` (default) hides children from the sidebar; drill-in is UI navigation only (`NavigateToSessionAsync` / `NavigateToParentAsync`). Root resume loads root turns fully; live host keeps parent+children in a session registry so focus switches do not dispose running children.
 
-Orchestrator policy (engine soft gates + prompts): Plan banned as subagent; Explore never spawns; Drone may spawn Explore only; Wait only for prerequisites; completion via `SubmitSubagentReport` → parent interrupt → host FIFO auto-turn. See [engine README](../engine/README.md)#orchestrator-subagents.
+Orchestrator policy (engine soft gates + prompts): Plan banned as subagent; Explore never spawns; Drone may spawn Explore only; Wait only for prerequisites; completion via `SubmitSubagentReport` → parent interrupt → host FIFO auto-turn (buffered in Plan until BeginBuildPlan or mode leave). See [engine README](../engine/README.md)#orchestrator-subagents.
 
 ## Live write hooks
 

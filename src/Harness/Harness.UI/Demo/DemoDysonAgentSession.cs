@@ -313,17 +313,13 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         CancellationToken cancellationToken = default) =>
         PromptAsync(prompt, [], cancellationToken);
 
-    public override async Task<VoidResult<string>> PromptAsync(
+    public override Task<VoidResult<string>> PromptAsync(
         string prompt,
         IReadOnlyList<string> filePaths,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(prompt);
         ArgumentNullException.ThrowIfNull(filePaths);
-
-        OptimizeContextIfNeeded();
-
-        AppendLog($"prompt: {Truncate(prompt, 120)}");
 
         var isRenameReview = TurnHistory.Count % DysonSessionInitialization.RenameSessionReviewInterval == 0;
         var turn = TurnHistory.Count == 0
@@ -348,6 +344,22 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             });
         }
 
+        SeedDemoTools(turn);
+        return PromptWithTurnAsync(turn, prompt, cancellationToken);
+    }
+
+    public override Task<VoidResult<string>> PromptBeginBuildPlanAsync(
+        string planRelativePath,
+        IReadOnlyList<string>? reportBlocks = null,
+        CancellationToken cancellationToken = default)
+    {
+        var turn = DysonBeginBuildPlanFlow.CreateTurn(planRelativePath, reportBlocks);
+        SeedDemoTools(turn);
+        return PromptWithTurnAsync(turn, turn.Instruction ?? planRelativePath, cancellationToken);
+    }
+
+    private static void SeedDemoTools(DysonAgentTurn turn)
+    {
         turn.ToolCalls.Add(new DysonToolCall
         {
             CallId = "",
@@ -369,7 +381,18 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             Stage = 1,
             ArgumentsJson = """{"path":"src"}""",
         });
+    }
 
+    private async Task<VoidResult<string>> PromptWithTurnAsync(
+        DysonAgentTurn turn,
+        string promptForReply,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+
+        OptimizeContextIfNeeded();
+
+        AppendLog($"prompt: {Truncate(turn.Instruction ?? turn.Kind.ToString(), 120)}");
         AddTurn(turn);
 
         try
@@ -382,10 +405,25 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             if (staged.IsError)
                 return staged;
 
-            var reply =
-                $"# Demo turn\n\nProcessed: {Truncate(prompt, 200)}\n\n" +
-                $"Tools completed: {turn.TrackedToolCalls.Count} " +
-                $"(provider: {DescribeProvider()}).";
+            var reply = turn.Kind == DysonAgentTurnKind.BeginBuildPlan
+                ? $"""
+                    # Begin build plan
+
+                    Processed BeginBuildPlan for `{turn.PlanRelativePath}`.
+
+                    ## Recap
+                    Demo recap of the published plan (provider: {DescribeProvider()}).
+
+                    ## Agent actions
+                    1. Read `{turn.PlanRelativePath}` and confirm scope.
+                    2. Spawn Drone(s) for implementation slices.
+                    3. Verify outcomes before claiming done.
+
+                    Tools completed: {turn.TrackedToolCalls.Count}.
+                    """
+                : $"# Demo turn\n\nProcessed: {Truncate(promptForReply, 200)}\n\n" +
+                  $"Tools completed: {turn.TrackedToolCalls.Count} " +
+                  $"(provider: {DescribeProvider()}).";
 
             foreach (var chunk in ChunkForStreaming(reply, chunkSize: 12))
             {

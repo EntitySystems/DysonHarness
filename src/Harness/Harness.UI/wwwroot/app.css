@@ -1773,6 +1773,45 @@ code, .mono {
   color: var(--text);
 }
 
+.composer-plan-ready {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.composer-plan-ready__meta {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.composer-plan-ready__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.composer-plan-ready__path {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-plan-ready__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
 .composer__toolbar {
   display: flex;
   flex-wrap: wrap;

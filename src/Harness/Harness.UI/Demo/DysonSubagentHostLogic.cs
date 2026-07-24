@@ -9,40 +9,8 @@ public static class DysonSubagentHostLogic
     public static bool IsRunning(DysonSessionStatus status, DysonAgentTurn? latestTurn = null) =>
         status == DysonSessionStatus.Active;
 
-    public static string BuildSubagentReportContinuationPrompt(DysonAgentInterrupt interrupt, string? title)
-    {
-        ArgumentNullException.ThrowIfNull(interrupt);
-
-        var outcome = interrupt.Kind switch
-        {
-            DysonAgentInterruptKind.SubagentCompleted => "completed",
-            DysonAgentInterruptKind.SubagentFailed => "failed",
-            DysonAgentInterruptKind.SubagentStopped => "stopped",
-            _ => interrupt.Kind.ToString(),
-        };
-
-        var titleLine = string.IsNullOrWhiteSpace(title) ? "(untitled)" : title.Trim();
-        var summary = string.IsNullOrWhiteSpace(interrupt.Summary)
-            ? "(no summary)"
-            : interrupt.Summary.Trim();
-
-        var persistence = interrupt.PersistenceId is Guid pid && pid != Guid.Empty
-            ? pid.ToString("D")
-            : "(unknown)";
-
-        return
-            $"""
-            Harness continuation: a subagent finished and submitted a report. Incorporate it and continue the parent task.
-
-            - subagentId: {interrupt.SubagentId}
-            - persistenceId: {persistence}
-            - title: {titleLine}
-            - outcome: {outcome}
-
-            ## Report
-            {summary}
-            """;
-    }
+    public static string BuildSubagentReportContinuationPrompt(DysonAgentInterrupt interrupt, string? title) =>
+        DysonSubagentReportPrompt.BuildContinuationPrompt(interrupt, title);
 
     public static string BuildSubagentEventContinuationPrompt(DysonAgentInterrupt interrupt, string? title)
     {
