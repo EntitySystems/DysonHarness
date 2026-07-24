@@ -902,6 +902,12 @@ code, .mono {
   padding: 8px 10px;
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.turn-block--collapsed .turn-block__header {
+  border-bottom: none;
+  padding: 6px 10px;
 }
 
 .turn-block__header-main {

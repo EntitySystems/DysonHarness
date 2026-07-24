@@ -17,6 +17,8 @@
                 <TurnBlock Turn="turn"
                            SessionBusy="SessionBusy"
                            IsLatestTurn="@(i == Turns.Count - 1)"
+                           IsExpanded="@(!_collapsedIds.Contains(turn.Id))"
+                           OnToggleExpand="() => ToggleExpand(turn.Id)"
                            OnCancel="OnCancelPrompt"
                            OnResubmit="HandleSubmitAsync" />
             }
@@ -36,6 +38,8 @@
     private bool _forceStick;
     private bool _attached;
     private int _lastTurnCount;
+    private Guid? _firstTurnId;
+    private readonly HashSet<Guid> _collapsedIds = [];
 
     [Parameter] public IReadOnlyList<DysonAgentTurn> Turns { get; set; } = [];
     [Parameter] public bool Disabled { get; set; }
@@ -52,13 +56,34 @@
 
     protected override void OnParametersSet()
     {
-        // New turns (prompt send / resume) should re-attach to the bottom.
-        if (Turns.Count != _lastTurnCount)
+        var firstId = Turns.Count > 0 ? Turns[0].Id : (Guid?)null;
+        var identityChanged = firstId != _firstTurnId || Turns.Count != _lastTurnCount;
+        if (identityChanged)
         {
             if (Turns.Count > _lastTurnCount)
                 _forceStick = true;
+            _firstTurnId = firstId;
             _lastTurnCount = Turns.Count;
+            RebuildCollapsedDefaults();
         }
+    }
+
+    private void RebuildCollapsedDefaults()
+    {
+        _collapsedIds.Clear();
+        if (Turns.Count <= 1)
+            return;
+
+        var lastId = Turns[^1].Id;
+        for (var i = 0; i < Turns.Count - 1; i++)
+            _collapsedIds.Add(Turns[i].Id);
+        _collapsedIds.Remove(lastId);
+    }
+
+    private void ToggleExpand(Guid id)
+    {
+        if (!_collapsedIds.Add(id))
+            _collapsedIds.Remove(id);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

@@ -4,8 +4,13 @@
 @using Harness.UI.Components.Tools
 @using Harness.UI.Markdown
 
-<article class="turn-block">
-    <header class="turn-block__header">
+<article class="turn-block @(IsExpanded ? null : "turn-block--collapsed")">
+    <header class="turn-block__header"
+            role="button"
+            tabindex="0"
+            aria-expanded="@IsExpanded"
+            @onclick="OnToggleExpand"
+            @onkeydown="HandleHeaderKeyDown">
         <div class="turn-block__header-main">
             <div class="turn-block__title">@(Turn.AgentTitle ?? "Turn")</div>
             <div class="turn-block__kind mono">@Turn.Kind · @ShortId(Turn.Id)</div>
@@ -15,69 +20,69 @@
             <div class="turn-block__timestamp mono">@FormatTurnTimes()</div>
         }
     </header>
-    @if (IsUserTurn && !string.IsNullOrWhiteSpace(Turn.Instruction))
+    @if (IsExpanded)
     {
-        <div class="turn-block__user">
-            <div class="turn-block__user-prompt">@MarkdownRenderer.ToHtml(Turn.Instruction)</div>
-            @if (ShowPromptSpinner)
-            {
-                <button type="button"
-                        class="turn-block__user-spinner turn-block__cancel"
-                        disabled="@(!CanCancel)"
-                        title="Cancel"
-                        aria-label="Cancel prompt"
-                        @onclick="HandleCancelAsync">
-                    <span class="turn-block__spinner" aria-hidden="true"></span>
-                    <img class="turn-block__cancel-icon" src="icons/cancel.svg" alt="" />
-                </button>
-            }
-            else if (ShowResubmit)
-            {
-                <button type="button"
-                        class="turn-block__user-retry"
-                        disabled="@SessionBusy"
-                        title="Resubmit prompt"
-                        aria-label="Resubmit prompt"
-                        @onclick="HandleResubmitAsync">
-                    <img class="turn-block__retry-icon" src="icons/retry.svg" alt="" />
-                </button>
-            }
-        </div>
-    }
-    else if (!IsUserTurn && !string.IsNullOrWhiteSpace(Turn.Instruction))
-    {
-        <div class="turn-block__instruction">@MarkdownRenderer.ToHtml(Turn.Instruction)</div>
-    }
+        @if (IsUserTurn && !string.IsNullOrWhiteSpace(Turn.Instruction))
+        {
+            <div class="turn-block__user">
+                <div class="turn-block__user-prompt">@MarkdownRenderer.ToHtml(Turn.Instruction)</div>
+                @if (ShowPromptSpinner)
+                {
+                    <button type="button"
+                            class="turn-block__user-spinner turn-block__cancel"
+                            disabled="@(!CanCancel)"
+                            title="Cancel"
+                            aria-label="Cancel prompt"
+                            @onclick="HandleCancelAsync">
+                        <span class="turn-block__spinner" aria-hidden="true"></span>
+                        <img class="turn-block__cancel-icon" src="icons/cancel.svg" alt="" />
+                    </button>
+                }
+                else if (ShowResubmit)
+                {
+                    <button type="button"
+                            class="turn-block__user-retry"
+                            disabled="@SessionBusy"
+                            title="Resubmit prompt"
+                            aria-label="Resubmit prompt"
+                            @onclick="HandleResubmitAsync">
+                        <img class="turn-block__retry-icon" src="icons/retry.svg" alt="" />
+                    </button>
+                }
+            </div>
+        }
+        else if (!IsUserTurn && !string.IsNullOrWhiteSpace(Turn.Instruction))
+        {
+            <div class="turn-block__instruction">@MarkdownRenderer.ToHtml(Turn.Instruction)</div>
+        }
 
-    @if (Turn.IsStreaming && !string.IsNullOrEmpty(Turn.StreamingPreview))
-    {
-        <div class="turn-block__body turn-block__body--streaming">
-            @Turn.StreamingPreview<span class="turn-block__caret" aria-hidden="true"></span>
-        </div>
-    }
-    else if (!string.IsNullOrWhiteSpace(Turn.AssistantText))
-    {
-        <div class="turn-block__body">@MarkdownRenderer.ToHtml(Turn.AssistantText)</div>
-    }
+        @if (Turn.IsStreaming && !string.IsNullOrEmpty(Turn.StreamingPreview))
+        {
+            <div class="turn-block__body turn-block__body--streaming">
+                @Turn.StreamingPreview<span class="turn-block__caret" aria-hidden="true"></span>
+            </div>
+        }
+        else if (!string.IsNullOrWhiteSpace(Turn.AssistantText))
+        {
+            <div class="turn-block__body">@MarkdownRenderer.ToHtml(Turn.AssistantText)</div>
+        }
 
-    @{
-        var subagentIds = CollectSubagentPersistenceIds();
-    }
-    @if (subagentIds.Count > 0)
-    {
-        <div class="turn-block__subagents">
-            @foreach (var id in subagentIds)
-            {
-                <SubagentCard PersistenceId="id" />
-            }
-        </div>
-    }
+        @if (CollectSubagentPersistenceIds() is { Count: > 0 } subagentIds)
+        {
+            <div class="turn-block__subagents">
+                @foreach (var id in subagentIds)
+                {
+                    <SubagentCard PersistenceId="id" />
+                }
+            </div>
+        }
 
-    @if (Turn.TrackedToolCalls.Count > 0 || Turn.ToolCalls.Count > 0)
-    {
-        <div style="padding:0 8px 8px;">
-            <ToolCallPanel Turn="Turn" />
-        </div>
+        @if (Turn.TrackedToolCalls.Count > 0 || Turn.ToolCalls.Count > 0)
+        {
+            <div style="padding:0 8px 8px;">
+                <ToolCallPanel Turn="Turn" />
+            </div>
+        }
     }
 </article>
 
@@ -89,6 +94,12 @@
 
     /// <summary>True when this turn is the latest in the transcript (awaiting-model spinner).</summary>
     [Parameter] public bool IsLatestTurn { get; set; }
+
+    /// <summary>When false, only the header chrome is shown.</summary>
+    [Parameter] public bool IsExpanded { get; set; } = true;
+
+    /// <summary>Toggles expand/collapse from the turn header.</summary>
+    [Parameter] public EventCallback OnToggleExpand { get; set; }
 
     /// <summary>Cancels the in-flight prompt (wired only for the latest busy turn).</summary>
     [Parameter] public EventCallback OnCancel { get; set; }
@@ -140,6 +151,13 @@
         SessionBusy || !OnResubmit.HasDelegate
             ? Task.CompletedTask
             : OnResubmit.InvokeAsync(Turn.Instruction);
+
+    private async Task HandleHeaderKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is not ("Enter" or " "))
+            return;
+        await OnToggleExpand.InvokeAsync();
+    }
 
     private static string ShortId(Guid id) => id.ToString("N")[..8];
 
