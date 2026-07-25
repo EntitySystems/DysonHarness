@@ -15,19 +15,29 @@
     {
         <div class="plan-result-block__summary">@Turn.AssistantText</div>
     }
-    <button type="button"
-            class="btn plan-result-block__open"
-            disabled="@(string.IsNullOrWhiteSpace(Turn.PlanRelativePath) || _opening)"
-            @onclick="OpenPlanAsync"
-            @onclick:stopPropagation="true">
-        Open plan
-    </button>
+    <div class="plan-result-block__actions">
+        <button type="button"
+                class="btn plan-result-block__open"
+                disabled="@(string.IsNullOrWhiteSpace(Turn.PlanRelativePath) || _opening)"
+                @onclick="OpenPlanAsync"
+                @onclick:stopPropagation="true">
+            Open plan
+        </button>
+        <button type="button"
+                class="btn btn-primary"
+                disabled="@(_building || Host.IsBusy)"
+                @onclick="BuildPlanAsync"
+                @onclick:stopPropagation="true">
+            Build plan
+        </button>
+    </div>
 </div>
 
 @code {
     [Parameter, EditorRequired] public DysonAgentTurn Turn { get; set; } = default!;
 
     private bool _opening;
+    private bool _building;
 
     private async Task OpenPlanAsync()
     {
@@ -42,6 +52,22 @@
         finally
         {
             _opening = false;
+        }
+    }
+
+    private async Task BuildPlanAsync()
+    {
+        if (_building || Host.IsBusy)
+            return;
+
+        _building = true;
+        try
+        {
+            await Host.BuildPendingPlanAsync();
+        }
+        finally
+        {
+            _building = false;
         }
     }
 }

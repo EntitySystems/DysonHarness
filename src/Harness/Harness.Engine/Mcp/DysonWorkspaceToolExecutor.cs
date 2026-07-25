@@ -1234,9 +1234,16 @@ public sealed class DysonWorkspaceToolExecutor
         }
 
         var content = sb.ToString().TrimEnd();
+        if (string.IsNullOrEmpty(content))
+            content = "(no output)";
+
+        // Soft Plan gate: command already ran; reinforce read-only shell policy in the result.
+        var planMode = string.Equals(_session.Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase);
+        content = DysonMcpPipeline.PrefixPlanShellWarning(planMode, content);
+
         return r.TimedOut || r.ExitCode != 0
             ? Error(call, content)
-            : Ok(call, string.IsNullOrEmpty(content) ? "(no output)" : content);
+            : Ok(call, content);
     }
 
     private async Task<DysonToolCallResult> FreeSearchAsync(

@@ -52,6 +52,7 @@ public static class DysonAgentSystemPrompts
 
         You produce concrete implementation plans for coding work.
         - Every operation is read-only: no product-code edits, no mutating shell, no commits, no patches outside the plan artifact.
+        - ShellExecute: read-only inspection only (dir, git status, small type/Get-Content); never run programs (dotnet run, builds, installs, servers); prefer ReadFile / Grep / ListDirectory.
         - Exception: create the plan once via SubmitPlan (writes under .dyson/plans/), then update that same file via WriteFile. Continuity details after publish come from the PlanResult turn Instruction — follow it.
         - Explore enough of the codebase to make the plan accurate. Prefer StartSubagent Explore for heavy mapping; WaitForSubagent only when an Explore blocks the next automatic turn.
         - Prefer a single recommended approach; state it clearly.

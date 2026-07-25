@@ -28,52 +28,94 @@
             </div>
 
             <div class="file-viewer-modal__body">
-                @if (!string.IsNullOrEmpty(viewer.Error))
+                @if (_comments.Count > 0)
                 {
-                    <div class="error-banner">@viewer.Error</div>
+                    <div class="file-viewer-comments">
+                        <div class="file-viewer-comments__heading">Comments (@_comments.Count)</div>
+                        <ul class="file-viewer-comments__list">
+                            @foreach (var comment in _comments)
+                            {
+                                <li class="file-viewer-comments__row">
+                                    <div class="file-viewer-comments__excerpt mono">@comment.Excerpt</div>
+                                    <div class="file-viewer-comments__text">@comment.Text</div>
+                                    <div class="file-viewer-comments__actions">
+                                        <button type="button"
+                                                class="file-viewer-comments__edit"
+                                                title="Edit comment"
+                                                aria-label="Edit comment"
+                                                @onclick="@(() => OpenEdit(comment))">✎</button>
+                                        <button type="button"
+                                                class="file-viewer-comments__delete"
+                                                title="Delete comment"
+                                                aria-label="Delete comment"
+                                                @onclick="@(() => DeleteComment(comment))">×</button>
+                                    </div>
+                                </li>
+                            }
+                        </ul>
+                        <button type="button"
+                                class="btn btn-primary file-viewer-comments__submit"
+                                disabled="@(_submitting || _comments.Count == 0)"
+                                @onclick="SubmitCommentsAsync">
+                            Submit comments
+                        </button>
+                    </div>
                 }
-                else if (viewer.IsMarkdown)
-                {
-                    @* ponytail: selection is paragraph/heading/pre blocks only (split on blank lines), not AST-precise; upgrade to Markdig block walker when comments persist. *@
-                    <div class="file-viewer-modal__markdown turn-block__body">
-                        @foreach (var (index, block) in MarkdownBlocks(viewer.Content))
-                        {
-                            var selected = _selectedBlock == index;
-                            <div class="file-viewer-block @(selected ? "is-selected" : null)"
-                                 @onclick="@(() => SelectBlock(index))"
-                                 @onclick:stopPropagation="true">
-                                @MarkdownRenderer.ToHtml(block)
-                                @if (selected)
-                                {
+
+                <div class="file-viewer-modal__content">
+                    @if (!string.IsNullOrEmpty(viewer.Error))
+                    {
+                        <div class="error-banner">@viewer.Error</div>
+                    }
+                    else if (viewer.IsMarkdown)
+                    {
+                        @* ponytail: selection is paragraph/heading/pre blocks only (split on blank lines), not AST-precise; upgrade to Markdig block walker when comments persist. *@
+                        <div class="file-viewer-modal__markdown turn-block__body">
+                            @foreach (var (index, block) in MarkdownBlocks(viewer.Content))
+                            {
+                                var selected = _selectedBlock == index;
+                                var drafting = _draft is { } d && d.BlockIndex == index;
+                                <div class="file-viewer-block @(selected ? "is-selected" : null) @(drafting ? "is-drafting" : null)"
+                                     @onclick="@(() => SelectBlock(index))"
+                                     @onclick:stopPropagation="true">
+                                    @MarkdownRenderer.ToHtml(block)
                                     <button type="button"
                                             class="file-viewer-comment"
-                                            title="Comment (UI only — not submitted)"
+                                            title="Comment on this block"
+                                            @onclick="@(() => OpenDraft(index, block))"
                                             @onclick:stopPropagation="true">
                                         Comment
                                     </button>
-                                }
-                            </div>
-                        }
-                    </div>
-                }
-                else
-                {
-                    <pre class="file-viewer-modal__code mono">@foreach (var (index, line) in CodeLines(viewer.Content))
+                                    @if (drafting)
+                                    {
+                                        @RenderCommentPopup(_draft!)
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <pre class="file-viewer-modal__code mono">@foreach (var (index, line) in CodeLines(viewer.Content))
 {
     var selected = _selectedBlock == index;
-    <code class="file-viewer-line @(selected ? "is-selected" : null)"
+    var drafting = _draft is { } d && d.BlockIndex == index;
+    <code class="file-viewer-line @(selected ? "is-selected" : null) @(drafting ? "is-drafting" : null)"
           @onclick="@(() => SelectBlock(index))"
           @onclick:stopPropagation="true">@line
-@if (selected)
+<button type="button"
+        class="file-viewer-comment"
+        title="Comment on this line"
+        @onclick="@(() => OpenDraft(index, line))"
+        @onclick:stopPropagation="true">Comment</button>
+@if (drafting)
 {
-    <button type="button"
-            class="file-viewer-comment"
-            title="Comment (UI only — not submitted)"
-            @onclick:stopPropagation="true">Comment</button>
+    @RenderCommentPopup(_draft!)
 }
 </code>
 }</pre>
-                }
+                    }
+                </div>
             </div>
         </div>
     </div>
@@ -81,35 +123,223 @@
 
 @code {
     private int? _selectedBlock;
+    private readonly List<FileComment> _comments = [];
+    private CommentDraft? _draft;
+    private ElementReference _draftTextarea;
+    private bool _focusDraft;
+    private bool _submitting;
+
+    private sealed class FileComment
+    {
+        public Guid Id { get; init; }
+        public int BlockIndex { get; init; }
+        public string Excerpt { get; init; } = "";
+        public string Text { get; set; } = "";
+    }
+
+    private sealed class CommentDraft
+    {
+        public Guid? EditingId { get; init; }
+        public int BlockIndex { get; init; }
+        public string Excerpt { get; init; } = "";
+        public string Text { get; set; } = "";
+    }
 
     protected override void OnInitialized() => Host.Changed += OnHostChanged;
 
     protected override void OnParametersSet()
     {
         if (Host.FileViewer is null)
-            _selectedBlock = null;
+            ClearViewerState();
     }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_focusDraft)
+            return;
+
+        _focusDraft = false;
+        try
+        {
+            await _draftTextarea.FocusAsync();
+        }
+        catch
+        {
+            // Element may not be ready on first paint of the popup.
+        }
+    }
+
+    private RenderFragment RenderCommentPopup(CommentDraft draft) => __builder =>
+    {
+        <div class="file-viewer-comment-popup" @onclick:stopPropagation="true">
+            <textarea class="file-viewer-comment-popup__textarea"
+                      @ref="_draftTextarea"
+                      rows="3"
+                      placeholder="Add a comment…"
+                      @bind="draft.Text"
+                      @bind:event="oninput"
+                      @onkeydown="OnDraftKeyDown"></textarea>
+            <div class="file-viewer-comment-popup__actions">
+                <button type="button" class="btn btn-ghost" @onclick="CancelDraft">Cancel</button>
+                <button type="button"
+                        class="btn btn-primary"
+                        disabled="@string.IsNullOrWhiteSpace(draft.Text)"
+                        @onclick="AddOrSaveDraft">
+                    @(draft.EditingId is null ? "Add" : "Save")
+                </button>
+            </div>
+        </div>
+    };
 
     private void OnHostChanged() => _ = InvokeAsync(StateHasChanged);
 
-    private void Close()
+    private void ClearViewerState()
     {
         _selectedBlock = null;
+        _comments.Clear();
+        _draft = null;
+        _focusDraft = false;
+        _submitting = false;
+    }
+
+    private void Close()
+    {
+        ClearViewerState();
         Host.CloseFileViewer();
     }
 
-    private void SelectBlock(int index) =>
-        _selectedBlock = _selectedBlock == index ? null : index;
+    private void SelectBlock(int index)
+    {
+        if (_selectedBlock == index)
+        {
+            _selectedBlock = null;
+            CancelDraft();
+            return;
+        }
+
+        if (_draft is not null && _draft.BlockIndex != index)
+            CancelDraft();
+
+        _selectedBlock = index;
+    }
+
+    private void OpenDraft(int blockIndex, string blockOrLine)
+    {
+        _selectedBlock = blockIndex;
+        _draft = new CommentDraft
+        {
+            BlockIndex = blockIndex,
+            Excerpt = DysonFileViewerComments.FormatExcerpt(blockOrLine),
+            Text = "",
+        };
+        _focusDraft = true;
+    }
+
+    private void OpenEdit(FileComment comment)
+    {
+        _selectedBlock = comment.BlockIndex;
+        _draft = new CommentDraft
+        {
+            EditingId = comment.Id,
+            BlockIndex = comment.BlockIndex,
+            Excerpt = comment.Excerpt,
+            Text = comment.Text,
+        };
+        _focusDraft = true;
+    }
+
+    private void DeleteComment(FileComment comment)
+    {
+        _comments.Remove(comment);
+        if (_draft?.EditingId == comment.Id)
+            CancelDraft();
+    }
+
+    private void CancelDraft()
+    {
+        _draft = null;
+        _focusDraft = false;
+    }
+
+    private void AddOrSaveDraft()
+    {
+        if (_draft is null || string.IsNullOrWhiteSpace(_draft.Text))
+            return;
+
+        var text = _draft.Text.Trim();
+        if (_draft.EditingId is { } id)
+        {
+            var existing = _comments.FirstOrDefault(c => c.Id == id);
+            if (existing is not null)
+                existing.Text = text;
+        }
+        else
+        {
+            _comments.Add(new FileComment
+            {
+                Id = Guid.NewGuid(),
+                BlockIndex = _draft.BlockIndex,
+                Excerpt = _draft.Excerpt,
+                Text = text,
+            });
+        }
+
+        CancelDraft();
+    }
+
+    private async Task SubmitCommentsAsync()
+    {
+        if (_submitting || _comments.Count == 0 || Host.FileViewer is not { } viewer)
+            return;
+
+        _submitting = true;
+        try
+        {
+            var prompt = DysonFileViewerComments.FormatPrompt(
+                viewer.RelativePath,
+                _comments.Select(c => (c.Excerpt, c.Text)));
+
+            // PromptAsync sync-validates (and enqueues when busy) before awaiting the turn.
+            // Close once issued — do not keep the modal open through generation.
+            var issued = Host.PromptAsync(prompt);
+            if (issued.IsCompleted)
+            {
+                var result = await issued;
+                if (result.IsError)
+                    return;
+            }
+
+            Close();
+        }
+        finally
+        {
+            _submitting = false;
+        }
+    }
+
+    private void OnDraftKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            CancelDraft();
+    }
 
     private void OnBackdropKeyDown(KeyboardEventArgs e)
     {
-        if (e.Key == "Escape")
+        if (e.Key != "Escape")
+            return;
+        if (_draft is not null)
+            CancelDraft();
+        else
             Close();
     }
 
     private void OnModalKeyDown(KeyboardEventArgs e)
     {
-        if (e.Key == "Escape")
+        if (e.Key != "Escape")
+            return;
+        if (_draft is not null)
+            CancelDraft();
+        else
             Close();
     }
 

@@ -18,7 +18,8 @@ public static class DysonSubagentReportPrompt
         !string.Equals(parentMode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Shared report shape: subagentId / persistenceId / title / outcome + <c>## Report</c> body.
+    /// Shared report shape: subagentId / persistenceId / title / outcome + bold Report body
+    /// (no <c>##</c> heading — summaries can be long prose).
     /// </summary>
     public static string FormatReportBlock(DysonAgentInterrupt interrupt, string? title)
     {
@@ -48,7 +49,8 @@ public static class DysonSubagentReportPrompt
             - title: {titleLine}
             - outcome: {outcome}
 
-            ## Report
+            **Report**
+
             {summary}
             """;
     }

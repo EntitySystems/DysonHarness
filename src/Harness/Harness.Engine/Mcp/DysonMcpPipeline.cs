@@ -8,13 +8,26 @@ namespace DysonHarness;
 /// </summary>
 public sealed class DysonMcpPipeline
 {
+    /// <summary>
+    /// Soft Plan-mode ShellExecute warning (catalog description + result preamble).
+    /// Command still runs; this is prompt reinforcement only.
+    /// </summary>
+    public const string PlanShellExecuteWarning =
+        "WARNING: Plan mode — ShellExecute is for read-only inspection only " +
+        "(e.g. dir, git status, small type/Get-Content). " +
+        "Never execute programs (dotnet run, builds, installs, servers). " +
+        "Prefer ReadFile / Grep / ListDirectory.";
+
     public DysonMcpAccessMode AccessMode { get; }
     public Dictionary<string, DysonMcpTool> Tools { get; } = new(StringComparer.Ordinal);
     public DysonMcpAutoReviewProxy? AutoReviewProxy { get; }
 
-    private DysonMcpPipeline(DysonMcpAccessMode accessMode)
+    private readonly IReadOnlyList<DysonShellType> _availableShellTypes;
+
+    private DysonMcpPipeline(DysonMcpAccessMode accessMode, IReadOnlyList<DysonShellType> availableShellTypes)
     {
         AccessMode = accessMode;
+        _availableShellTypes = availableShellTypes;
         AutoReviewProxy = accessMode == DysonMcpAccessMode.AutoReview
             ? new DysonMcpAutoReviewProxy(this)
             : null;
@@ -25,17 +38,37 @@ public sealed class DysonMcpPipeline
         IReadOnlyList<DysonShellType>? availableShellTypes = null)
     {
         availableShellTypes ??= DysonShell.AvailableForCurrentPlatform();
-        var pipeline = new DysonMcpPipeline(accessMode);
+        var pipeline = new DysonMcpPipeline(accessMode, availableShellTypes);
         foreach (var tool in DefaultTools(availableShellTypes))
             pipeline.Tools[tool.Name] = tool;
         return pipeline;
     }
 
     /// <summary>
+    /// Rebuilds <c>ShellExecute</c> for the current agent mode.
+    /// Description is <c>init</c>-only on <see cref="DysonMcpTool"/>, so replace the catalog entry.
+    /// </summary>
+    public void ConfigureShellExecuteForMode(bool planMode)
+    {
+        var tool = CreateShellExecuteTool(_availableShellTypes, planMode);
+        if (tool is null)
+            Tools.Remove("ShellExecute");
+        else
+            Tools["ShellExecute"] = tool;
+    }
+
+    /// <summary>Prepends <see cref="PlanShellExecuteWarning"/> when <paramref name="planMode"/>.</summary>
+    public static string PrefixPlanShellWarning(bool planMode, string content) =>
+        planMode ? PlanShellExecuteWarning + "\n\n" + content : content;
+
+    /// <summary>
     /// Builds ShellExecute with a shell enum matching the session's available types.
     /// Returns null when no shells are available for the platform.
+    /// When <paramref name="planMode"/>, appends <see cref="PlanShellExecuteWarning"/> to Description.
     /// </summary>
-    public static DysonMcpTool? CreateShellExecuteTool(IReadOnlyList<DysonShellType> available)
+    public static DysonMcpTool? CreateShellExecuteTool(
+        IReadOnlyList<DysonShellType> available,
+        bool planMode = false)
     {
         ArgumentNullException.ThrowIfNull(available);
         if (available.Count == 0)
@@ -45,13 +78,17 @@ public sealed class DysonMcpPipeline
         var listed = string.Join(", ", names);
         var enumJson = string.Join(", ", names.Select(n => $"\"{n}\""));
 
+        var description =
+            "Run a command in the session work directory. " +
+            $"Available shells for this session: {listed}. " +
+            "You must pass shell as one of these. Prefer dedicated MCP file tools over shell when they fit.";
+        if (planMode)
+            description += " " + PlanShellExecuteWarning;
+
         return new DysonMcpTool
         {
             Name = "ShellExecute",
-            Description =
-                "Run a command in the session work directory. " +
-                $"Available shells for this session: {listed}. " +
-                "You must pass shell as one of these. Prefer dedicated MCP file tools over shell when they fit.",
+            Description = description,
             InputSchemaJson = $$"""
                 {
                   "type": "object",

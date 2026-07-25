@@ -43,6 +43,8 @@ public abstract class DysonAgentSession
             ? prompt.Value
             : prompt.Value + "\n\n" + systemPromptSuffix.Trim();
         McpPipeline = DysonMcpPipeline.CreateDefault(config.McpAccessMode, config.AvailableShellTypes);
+        McpPipeline.ConfigureShellExecuteForMode(
+            string.Equals(agentMode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase));
         // Do not gate as root here: Parent is always null in the ctor. Roots call
         // ConfigureRootInterAgentTools from Create/Load; children get gated in Register/Restore.
     }
@@ -150,6 +152,8 @@ public abstract class DysonAgentSession
         SystemPrompt = string.IsNullOrWhiteSpace(systemPromptSuffix)
             ? prompt.Value
             : prompt.Value + "\n\n" + systemPromptSuffix.Trim();
+        McpPipeline.ConfigureShellExecuteForMode(
+            string.Equals(Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase));
         SystemPromptGeneration++;
         AppendLog($"mode → {Mode} (system prompt rebuilt)");
         return VoidResult<string>.Success;

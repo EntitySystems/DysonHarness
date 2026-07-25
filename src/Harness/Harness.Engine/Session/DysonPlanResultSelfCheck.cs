@@ -13,6 +13,7 @@ public static class DysonPlanResultSelfCheck
         AssertCreateTurnFields();
         AssertBeginBuildPlanFields();
         AssertBeginBuildPlanWithReports();
+        AssertBeginBuildPlanContinuation();
         AssertCompletionAutoTurnPlanDeferral();
         AssertPersistenceRoundTrip();
         AssertSubmitPlanCatalog();
@@ -56,11 +57,33 @@ public static class DysonPlanResultSelfCheck
         if (turn.Kind != DysonAgentTurnKind.BeginBuildPlan
             || turn.PlanRelativePath != ".dyson/plans/build-abcdef0123.md"
             || string.IsNullOrWhiteSpace(turn.Instruction)
+            || !turn.Instruction.StartsWith("# Begin build plan", StringComparison.Ordinal)
             || !turn.Instruction.Contains(".dyson/plans/build-abcdef0123.md", StringComparison.Ordinal)
-            || !turn.Instruction.Contains("## Recap", StringComparison.Ordinal)
-            || !turn.Instruction.Contains("## Agent actions", StringComparison.Ordinal))
+            || !turn.Instruction.Contains("**`## Recap`**", StringComparison.Ordinal)
+            || !turn.Instruction.Contains("**`## Agent actions`**", StringComparison.Ordinal)
+            || !turn.Instruction.Contains("harness continuation", StringComparison.OrdinalIgnoreCase)
+            || turn.Instruction.Contains("\n## Recap\n", StringComparison.Ordinal)
+            || turn.Instruction.Contains("\n## Agent actions\n", StringComparison.Ordinal))
         {
             throw new InvalidOperationException("BeginBuildPlan CreateTurn fields mismatch.");
+        }
+    }
+
+    private static void AssertBeginBuildPlanContinuation()
+    {
+        if (DysonBeginBuildPlanFlow.ContinuationPrompt
+            != "Continue the plan implementation as per previous instructions")
+        {
+            throw new InvalidOperationException("BeginBuildPlan ContinuationPrompt text mismatch.");
+        }
+
+        if (!DysonBeginBuildPlanFlow.ShouldEnqueueBuildContinuation(DysonAgentTurnKind.BeginBuildPlan)
+            || DysonBeginBuildPlanFlow.ShouldEnqueueBuildContinuation(DysonAgentTurnKind.PlanResult)
+            || DysonBeginBuildPlanFlow.ShouldEnqueueBuildContinuation(DysonAgentTurnKind.Normal)
+            || DysonBeginBuildPlanFlow.ShouldEnqueueBuildContinuation(DysonAgentTurnKind.Continuation))
+        {
+            throw new InvalidOperationException(
+                "ShouldEnqueueBuildContinuation must be true only for BeginBuildPlan.");
         }
     }
 
@@ -74,17 +97,25 @@ public static class DysonPlanResultSelfCheck
             Summary = "Mapped AuthService and token refresh.",
         };
         var block = DysonSubagentReportPrompt.FormatReportBlock(interrupt, "Explore auth");
+        if (!block.Contains("**Report**", StringComparison.Ordinal)
+            || block.Contains("## Report", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("FormatReportBlock must use bold Report, not ## heading.");
+        }
+
         var turn = DysonBeginBuildPlanFlow.CreateTurn(
             ".dyson/plans/build-abcdef0123.md",
             reportBlocks: [block]);
 
         if (turn.Instruction is null
-            || !turn.Instruction.Contains("## Explore reports to incorporate", StringComparison.Ordinal)
+            || !turn.Instruction.Contains("**Explore reports to incorporate**", StringComparison.Ordinal)
             || !turn.Instruction.Contains("do not wait for another harness continuation turn", StringComparison.Ordinal)
             || !turn.Instruction.Contains("subagentId: 7", StringComparison.Ordinal)
             || !turn.Instruction.Contains("Mapped AuthService and token refresh.", StringComparison.Ordinal)
             || !turn.Instruction.Contains("Explore auth", StringComparison.Ordinal)
-            || !turn.Instruction.Contains("## Recap", StringComparison.Ordinal))
+            || !turn.Instruction.Contains("**`## Recap`**", StringComparison.Ordinal)
+            || turn.Instruction.Contains("## Explore reports", StringComparison.Ordinal)
+            || turn.Instruction.Contains("## Report", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 "BeginBuildPlan with report blocks must include Recap mandate + Explore report text.");
@@ -93,7 +124,8 @@ public static class DysonPlanResultSelfCheck
         var continuation = DysonSubagentReportPrompt.BuildContinuationPrompt(interrupt, "Explore auth");
         if (!continuation.Contains("Harness continuation:", StringComparison.Ordinal)
             || !continuation.Contains("subagentId: 7", StringComparison.Ordinal)
-            || !continuation.Contains(block.Trim(), StringComparison.Ordinal))
+            || !continuation.Contains(block.Trim(), StringComparison.Ordinal)
+            || continuation.Contains("## Report", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 "Continuation prompt must wrap the shared report block.");

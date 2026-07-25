@@ -2581,8 +2581,17 @@ code, .mono {
 
 .file-viewer-modal__body {
   flex: 1;
-  overflow: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 14px 16px 20px;
+}
+
+.file-viewer-modal__content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 
 .file-viewer-modal__markdown {
@@ -2636,7 +2645,139 @@ code, .mono {
   border-radius: 4px;
   background: var(--bg-2);
   color: var(--text);
-  cursor: default;
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.file-viewer-block:hover .file-viewer-comment,
+.file-viewer-line:hover .file-viewer-comment,
+.file-viewer-block.is-drafting .file-viewer-comment,
+.file-viewer-line.is-drafting .file-viewer-comment {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.file-viewer-comment-popup {
+  position: absolute;
+  top: 28px;
+  right: 4px;
+  z-index: 2;
+  width: min(320px, calc(100% - 8px));
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-1);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.file-viewer-comment-popup__textarea {
+  width: 100%;
+  min-height: 64px;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.file-viewer-comment-popup__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.file-viewer-comments {
+  flex-shrink: 0;
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.file-viewer-comments__heading {
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.file-viewer-comments__list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.file-viewer-comments__row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  row-gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-2);
+}
+
+.file-viewer-comments__excerpt {
+  grid-column: 1;
+  grid-row: 1;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-viewer-comments__text {
+  grid-column: 1;
+  grid-row: 2;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.file-viewer-comments__actions {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  display: flex;
+  gap: 2px;
+}
+
+.file-viewer-comments__edit,
+.file-viewer-comments__delete {
+  min-width: 28px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.file-viewer-comments__edit:hover,
+.file-viewer-comments__delete:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.file-viewer-comments__submit {
+  width: 100%;
 }
 
 .plan-result-block {
@@ -2666,7 +2807,10 @@ code, .mono {
   color: var(--text-muted);
 }
 
-.plan-result-block__open {
+.plan-result-block__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-top: 2px;
 }
 

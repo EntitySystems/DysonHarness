@@ -2140,6 +2140,10 @@ public sealed class DysonUiHost : IAsyncDisposable
                         if (complete.IsError)
                             return complete;
                     }
+
+                    // BeginBuildPlan → queue Normal continuation; finally drains after busy gate.
+                    if (DysonBeginBuildPlanFlow.ShouldEnqueueBuildContinuation(last.Kind))
+                        EnqueuePrompt(sessionId, DysonBeginBuildPlanFlow.ContinuationPrompt);
                 }
 
                 return VoidResult<string>.Success;
