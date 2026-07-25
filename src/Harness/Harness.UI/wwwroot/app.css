@@ -806,6 +806,61 @@ code, .mono {
   border-color: var(--text-muted);
 }
 
+.session-header__meta-pill.is-open {
+  background: var(--accent-soft);
+  border-color: var(--border-strong);
+}
+
+.session-header__tools {
+  position: relative;
+}
+
+.session-header__tools.is-open {
+  z-index: 41;
+}
+
+.session-header__tools-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: transparent;
+}
+
+.session-header__tools-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 42;
+  min-width: 148px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+.session-header__tools-menu-item {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.session-header__tools-menu-item:hover {
+  background: var(--accent-soft);
+}
+
 .shells-modal-backdrop {
   position: fixed;
   inset: 0;

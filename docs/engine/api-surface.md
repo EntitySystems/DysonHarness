@@ -15,14 +15,14 @@ Conceptual overview: [README.md](README.md).
 | `OpenAiCompatibleAgentSession` | Completions/Responses tool-loop session |
 | `OpenAiCompletionsClient` / `OpenAiResponsesClient` | Streaming SSE adapters (`StreamCreateAsync` → `OpenAiStreamChunk`) |
 | `OpenAiCacheFriendlyTranscriptBuilder` | Stable-prefix transcript + `prompt_cache_key` |
-| `DysonWorkspaceToolExecutor` | Workdir-scoped file tools + `RenameSession` + `GetDateTime` + `SubmitPlan` (Plan mode only → `.dyson/plans/` + PlanResult turn) + `ShellExecute` + **long-running shell tools** (`StartLongRunningShell` / `ListLongRunningShells` / `ReadLongRunningShellTail` / `AbortLongRunningShell` / `RequestLongRunningShellCancellation` / `LongRunningShellInteract` / `SubscribeToLongRunningShellCompletion`) + web search/fetch tools (tool-owned summarize) + **subagent tools** (`StartSubagent` / `ListSubagents` / `WaitForSubagent` / `InspectSubagentLog` / `StopSubagent` / `SubmitSubagentReport`) + **inter-agent / Ask** (`TriggerParentEvent` / `RespondToSubagentEvent` / `TriggerSubagentEvent` / `AskQuestion` / `AskQuestionFromParent`) + **session todo tools** (`ListTodos` / `CreateTodo` / `UpdateTodo` / `DeleteTodo`); stubs for the rest |
+| `DysonWorkspaceToolExecutor` | Workdir-scoped file tools + `RenameSession` + `GetDateTime` + `SubmitPlan` (Plan mode only → `.dyson/plans/` + PlanResult turn) + `ShellExecute` + **long-running shell tools** (`StartLongRunningShell` / `ListLongRunningShells` / `ReadLongRunningShellTail` / `AbortLongRunningShell` / `RequestLongRunningShellCancellation` / `LongRunningShellInteract` / `SubscribeToLongRunningShellCompletion`) + web search/fetch tools (tool-owned summarize) + **subagent tools** (`StartSubagent` / `ListSubagents` / `WaitForSubagent` / `InspectSubagentLog` / `StopSubagent` / `SubmitSubagentReport`) + **inter-agent / Ask** (`TriggerParentEvent` / `RespondToSubagentEvent` / `TriggerSubagentEvent` / `AskQuestion` / `AskQuestionFromParent`) + **session todo tools** (`ListTodos` / `CreateTodo` / `UpdateTodo` / `DeleteTodo`) + **browser tools** (when `BrowserControl` set: `OpenBrowser`, `ListBrowserWindows`, `CloseBrowser`, `ResizeBrowser`, tab/nav/click/type/JS/screenshot/log helpers); stubs for the rest |
 | `DysonFileManager` | Work-root sandbox helper: `WriteNewPlan` / `ReadText` / `EnsurePlansDirectory` under `.dyson/plans/` |
 | `DysonShell` / `DysonWindowsShell` | Shell runners (`ShellType` get); Windows: Pwsh / PowerShell / Cmd |
 | `DysonShellType` / `DysonShellRunResult` | Shell enum + process result |
 | `DysonLongRunningShellRegistry` / `DysonLongRunningShell` | Workdir-keyed in-memory background shells (rings, Abort/Cancel/Interact/List/Subscribe); not persisted across UI restart |
 | `DysonLongRunningShellStatus` / `DysonLongRunningShellInfo` / `DysonLongRunningShellTail` | Status enum + list/tail DTOs |
 | `DysonOpenAiApiModes` | `Completions` / `Responses` constants |
-| `DysonAgentSessionConfig` | `CustomAgents`, `McpAccessMode`, `AvailableShellTypes`, optional `BraveApiKey`, optional `SummarizerProvider` |
+| `DysonAgentSessionConfig` | `CustomAgents`, `McpAccessMode`, `AvailableShellTypes`, optional `BraveApiKey`, optional `SummarizerProvider`, optional `BrowserControl` (`IDysonBrowserControl`) |
 | `DysonAgentSessionEvent` | Abstract notify payload for `WaitForNotifyAsync` |
 
 ### Session members (high level)
@@ -83,11 +83,11 @@ Conceptual overview: [README.md](README.md).
 | Type | Notes |
 | ---- | ----- |
 | `DysonMcpAccessMode` | `FullAccess`, `AutoReview` |
-| `DysonMcpPipeline` | Tool catalog + optional auto-review proxy; `ConfigureShellExecuteForMode` / `CreateLongRunningShellTools` / `PlanShellExecuteWarning` for Plan soft shell gates |
+| `DysonMcpPipeline` | Tool catalog + optional auto-review proxy; `ConfigureShellExecuteForMode` / `CreateLongRunningShellTools` / `PlanShellExecuteWarning` for Plan soft shell gates; `CreateBrowserTools` when `browserControlAvailable` |
 | `DysonMcpTool` | Name, description, input schema JSON |
 | `DysonMcpAutoReviewProxy` | In-process review gate when mode is AutoReview |
 
-Default catalog includes session tools (`StartSubagent`, `ListSubagents`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`), inter-agent + Ask tools (`TriggerParentEvent`, `RespondToSubagentEvent`, `TriggerSubagentEvent`, `AskQuestion`, `AskQuestionFromParent` — gated by `ConfigureInterAgentTools(depth)`), **session todos** (`ListTodos`, `CreateTodo`, `UpdateTodo`, `DeleteTodo`), completion tools, workspace file tools, **`SubmitPlan`** (Plan mode only; `{ title, markdown }` → `.dyson/plans/{slug}-{hash}.md`, returns `planPath`, appends `PlanResult` turn with WriteFile continuity Instruction), **`RenameSession`** (`{ "title": string }` required) for UI/list titles, **`GetDateTime`** (optional `timezone`: `"utc"` default | `"local"`; returns ISO + `dd/MM/yyyy HH:mm` display), **`ShellExecute`** and **long-running shell tools** (`StartLongRunningShell`, `ListLongRunningShells`, `ReadLongRunningShellTail`, `AbortLongRunningShell`, `RequestLongRunningShellCancellation`, `LongRunningShellInteract`, `SubscribeToLongRunningShellCompletion`) when shells are available — Plan mode soft-warns ShellExecute + StartLongRunningShell (description + result preamble; command still runs; see [README.md](README.md)#shellexecute and [README.md](README.md)#long-running-shells) — and **web search/fetch** tools: `FreeSearch`, `FreeSearchAdvanced`, `SearchWithSynthesis`, `FreeExtract`, `WebFetch`, `FetchGithubReadme` (see [README.md](README.md)#web-search--fetch-in-process). Call `RenameSession` only when the harness every-8 rename-review mandate asks, or when the user explicitly requests a rename. `DysonMcpPipeline.CreateDefault(accessMode, availableShellTypes)` builds the dynamic ShellExecute / long-running schemas; `ApplyAgentMode` / create-load call `ConfigureShellExecuteForMode` so Plan vs non-Plan descriptions stay in sync; session construction / `RegisterSubagent` applies layer gating.
+Default catalog includes session tools (`StartSubagent`, `ListSubagents`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`), inter-agent + Ask tools (`TriggerParentEvent`, `RespondToSubagentEvent`, `TriggerSubagentEvent`, `AskQuestion`, `AskQuestionFromParent` — gated by `ConfigureInterAgentTools(depth)`), **session todos** (`ListTodos`, `CreateTodo`, `UpdateTodo`, `DeleteTodo`), completion tools, workspace file tools, **`SubmitPlan`** (Plan mode only; `{ title, markdown }` → `.dyson/plans/{slug}-{hash}.md`, returns `planPath`, appends `PlanResult` turn with WriteFile continuity Instruction), **`RenameSession`** (`{ "title": string }` required) for UI/list titles, **`GetDateTime`** (optional `timezone`: `"utc"` default | `"local"`; returns ISO + `dd/MM/yyyy HH:mm` display), **`ShellExecute`** and **long-running shell tools** (`StartLongRunningShell`, `ListLongRunningShells`, `ReadLongRunningShellTail`, `AbortLongRunningShell`, `RequestLongRunningShellCancellation`, `LongRunningShellInteract`, `SubscribeToLongRunningShellCompletion`) when shells are available — Plan mode soft-warns ShellExecute + StartLongRunningShell (description + result preamble; command still runs; see [README.md](README.md)#shellexecute and [README.md](README.md)#long-running-shells) — **browser tools** when `DysonAgentSessionConfig.BrowserControl` is set (`OpenBrowser`, `ListBrowserWindows`, `CloseBrowser`, `ResizeBrowser`, `ListBrowserTabs`, `NewBrowserTab`, `CloseBrowserTab`, `ActivateBrowserTab`, `BrowserNavigate`, `BrowserGoBack`, `BrowserGoForward`, `BrowserReload`, `BrowserClick`, `BrowserType`, `BrowserFill`, `BrowserHover`, `BrowserPressKey`, `BrowserWaitForSelector`, `BrowserWaitForNavigation`, `BrowserExecuteJavaScript`, `BrowserGetHtml`, `BrowserTakeScreenshot`, `BrowserReadConsoleLog`, `BrowserReadNetworkLog`; see [README.md](README.md)#browser-control and [packaging/webview](../packaging/webview.md)) — and **web search/fetch** tools: `FreeSearch`, `FreeSearchAdvanced`, `SearchWithSynthesis`, `FreeExtract`, `WebFetch`, `FetchGithubReadme` (see [README.md](README.md)#web-search--fetch-in-process). Call `RenameSession` only when the harness every-8 rename-review mandate asks, or when the user explicitly requests a rename. `DysonMcpPipeline.CreateDefault(accessMode, availableShellTypes, browserControlAvailable)` builds the dynamic ShellExecute / long-running / browser schemas; `ApplyAgentMode` / create-load call `ConfigureShellExecuteForMode` so Plan vs non-Plan descriptions stay in sync; session construction / `RegisterSubagent` applies layer gating.
 
 **Session todo tools:** operate on the current session’s list only (root and subagent each own a list). Status strings: `pending` / `ongoing` / `complete`. `CreateTodo` requires `displayName` + `taskCode` (unique per session); optional `status`, `comments`. `UpdateTodo` requires `taskCode`; optional patch `displayName` / `status`; `comments` replaces the full list; `appendComment` appends one. No comment-delete tool. `DeleteTodo` / `ListTodos` by current session.
 
@@ -127,12 +127,28 @@ Default catalog includes session tools (`StartSubagent`, `ListSubagents`, `WaitF
 
 ## Result types
 
+Live in `Harness.Abstractions` (namespace `DysonHarness`).
+
 | Type | Notes |
 | ---- | ----- |
-| `Result<TValue, TError>` | Value or error |
-| `VoidResult<TError>` | Side-effect success or error |
+| `Result<TValue, TError>` | Value or error; error path has optional `Exception` (null on success). `AsError(error)`, `AsError(error, exception)`, `AsError(error, debugCode, exception = null)` |
+| `VoidResult<TError>` | Side-effect success or error; same optional `Exception` + matching `AsError` overloads / constructors |
 | `ValueResult<TValue>` | Success value vs error flag |
 | `DebugCodes` | Optional debug code on error results |
+
+Keep `TError` / user-facing messages clean — do not stringify exceptions into `Error` by default. Call sites that need detail read `result.Exception` (e.g. host logging).
+
+## Browser (Abstractions)
+
+| Type | Notes |
+| ---- | ----- |
+| `IDysonBrowserControl` | Process-wide singleton: `OpenBrowserAsync` / `ListWindowsAsync` / `GetWindowAsync` |
+| `IDysonBrowserWindow` | Tabs + close/resize/bring-to-front |
+| `IDysonBrowserTab` | Navigate, interact, JS, screenshot, console/network logs |
+| `DysonBrowserClickRequest` / `DysonBrowserTypeRequest` / `DysonBrowserKeyRequest` | Interaction DTOs |
+| `DysonBrowserConsoleEntry` / `DysonBrowserNetworkEntry` | Log DTOs |
+| `DysonNullBrowserControl` | All methods → `"browser control unavailable"` |
+| `DysonCefBrowserControl` | Windows CefSharp impl in `Harness.WindowsBrowser` (not referenced by Engine) |
 
 ## Persistence-facing types
 

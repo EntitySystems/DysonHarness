@@ -52,6 +52,9 @@ builder.Services.AddScoped(sp =>
     var factory = sp.GetRequiredService<IHttpClientFactory>();
     return factory.CreateClient();
 });
+#if WINDOWS
+builder.Services.AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>();
+#endif
 builder.Services.AddScoped<DysonUiHost>();
 builder.Services.AddScoped<ThemeService>();
 

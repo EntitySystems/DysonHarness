@@ -21,6 +21,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly DysonWorkDirectoryStore _workDirectories;
     private readonly DysonAppSettingsStore _appSettings;
     private readonly HttpClient _http;
+    private readonly IDysonBrowserControl? _browserControl;
     private readonly SemaphoreSlim _persistGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, DysonAgentSession> _sessionsById = new();
     private readonly ConcurrentDictionary<DysonAgentSession, byte> _hookedSessions = new();
@@ -62,13 +63,15 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonModelStore models,
         DysonWorkDirectoryStore workDirectories,
         DysonAppSettingsStore appSettings,
-        HttpClient http)
+        HttpClient http,
+        IDysonBrowserControl? browserControl = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
         _workDirectories = workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         _http = http ?? throw new ArgumentNullException(nameof(http));
+        _browserControl = browserControl;
         DysonLongRunningShellRegistry.Changed += OnLongRunningShellRegistryChanged;
     }
 
@@ -152,6 +155,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         _ => null,
     };
 
+    /// <summary>True when a process-wide browser control is registered (Windows CefSharp).</summary>
+    public bool IsBrowserControlAvailable => _browserControl is not null;
+
     /// <summary>True when the long-running shells modal is open.</summary>
     public bool LongRunningShellsModalOpen { get; private set; }
 
@@ -169,6 +175,30 @@ public sealed class DysonUiHost : IAsyncDisposable
         ActiveWorkDirectoryId is Guid wd
             ? DysonLongRunningShellRegistry.List(wd)
             : [];
+
+    /// <summary>Opens a CefSharp browser window (default blank page). Maps failures to <see cref="LastError"/>.</summary>
+    public async Task OpenBrowserAsync(CancellationToken cancellationToken = default)
+    {
+        if (_browserControl is null)
+        {
+            LastError = "Browser control is not available.";
+            Notify();
+            return;
+        }
+
+        LastError = null;
+        var opened = await _browserControl
+            .OpenBrowserAsync(cancellationToken: cancellationToken)
+            .ConfigureAwait(true);
+        if (opened.IsError)
+        {
+            LastError = opened.Error;
+            if (opened.Exception is not null)
+                Trace.WriteLine(opened.Exception);
+        }
+
+        Notify();
+    }
 
     public void OpenLongRunningShellsModal()
     {
@@ -1265,7 +1295,11 @@ public sealed class DysonUiHost : IAsyncDisposable
                 _sessions,
                 sessionId,
                 providerResult.Value.Demo!,
-                new DysonAgentSessionConfig { McpAccessMode = full.Value.Session.McpAccessMode },
+                new DysonAgentSessionConfig
+                {
+                    McpAccessMode = full.Value.Session.McpAccessMode,
+                    BrowserControl = _browserControl,
+                },
                 models: _models,
                 appendResumeLog: appendResumeLog,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -1348,7 +1382,10 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonMcpAccessMode? mcpAccessMode = null,
         CancellationToken cancellationToken = default)
     {
-        var config = new DysonAgentSessionConfig();
+        var config = new DysonAgentSessionConfig
+        {
+            BrowserControl = _browserControl,
+        };
         if (mcpAccessMode is { } mode)
             config.McpAccessMode = mode;
 

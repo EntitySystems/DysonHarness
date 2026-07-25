@@ -10,7 +10,7 @@ When code changes, **update the matching docs in the same change** (or immediate
 | Storage | [`docs/storage/`](../docs/storage/) | App mode, paths, SQLite, model profiles → `models.md`; sessions, turns, log kinds, `GetFullSession` / resume → `sessions.md` |
 | Inference providers | [`docs/inference-providers/`](../docs/inference-providers/) | Provider slug catalogs, auth/base URLs, thinking/effort params → `README.md` + per-provider pages |
 | UI | [`docs/ui/`](../docs/ui/) | Blazor project layout, components, theme, how to run → `README.md` |
-| Packaging | [`docs/packaging/`](../docs/packaging/) | Desktop / WebView2 (or other) host packaging → e.g. `webview.md` |
+| Packaging | [`docs/packaging/`](../docs/packaging/) | Desktop CefSharp WPF host + agent browser → e.g. `webview.md` |
 
 Index links: [`AGENTS.md`](../AGENTS.md), [`README.md`](../README.md).
 

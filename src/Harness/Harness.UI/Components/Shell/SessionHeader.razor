@@ -36,6 +36,34 @@
                     @onclick="OpenShellsModal">
                 Shells @Host.LongRunningShellRunningCount
             </button>
+            @if (Host.IsBrowserControlAvailable)
+            {
+                <div class="session-header__tools @(_toolsMenuOpen ? "is-open" : null)">
+                    <button type="button"
+                            class="session-header__meta-pill @(_toolsMenuOpen ? "is-open" : null)"
+                            title="Tools"
+                            aria-haspopup="menu"
+                            aria-expanded="@_toolsMenuOpen"
+                            @onclick="ToggleToolsMenu"
+                            @onclick:stopPropagation="true">
+                        Tools ▾
+                    </button>
+                    @if (_toolsMenuOpen)
+                    {
+                        <div class="session-header__tools-menu"
+                             role="menu"
+                             aria-label="Tools"
+                             @onclick:stopPropagation="true">
+                            <button type="button"
+                                    class="session-header__tools-menu-item"
+                                    role="menuitem"
+                                    @onclick="OpenBrowserAsync">
+                                Open Browser
+                            </button>
+                        </div>
+                    }
+                </div>
+            }
             <span class="badge">@DysonBuildInfo.Current</span>
             @if (Session.Provider is DemoDysonAgentProvider demo)
             {
@@ -48,6 +76,14 @@
         </div>
     }
 </div>
+
+@if (_toolsMenuOpen)
+{
+    <div class="session-header__tools-backdrop"
+         tabindex="-1"
+         @onclick="CloseToolsMenu"
+         @onkeydown="OnToolsBackdropKeyDown"></div>
+}
 
 @if (Host.LongRunningShellsModalOpen)
 {
@@ -134,6 +170,7 @@
     private string? _logText;
     private CancellationTokenSource? _pollCts;
     private bool _hostHooked;
+    private bool _toolsMenuOpen;
 
     protected override void OnInitialized()
     {
@@ -156,6 +193,23 @@
         StopPoll();
         Host.CloseLongRunningShellsModal();
         _logText = null;
+    }
+
+    private void ToggleToolsMenu() => _toolsMenuOpen = !_toolsMenuOpen;
+
+    private void CloseToolsMenu() => _toolsMenuOpen = false;
+
+    private void OnToolsBackdropKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            CloseToolsMenu();
+    }
+
+    private async Task OpenBrowserAsync()
+    {
+        await Host.OpenBrowserAsync();
+        if (Host.LastError is null)
+            CloseToolsMenu();
     }
 
     private void BackToList()

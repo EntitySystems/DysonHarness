@@ -32,4 +32,10 @@ public class DysonAgentSessionConfig
     /// Null ⇒ use the session <see cref="DysonAgentSession.Provider"/>.
     /// </summary>
     public DysonAgentProvider? SummarizerProvider { get; set; }
+
+    /// <summary>
+    /// Optional process-wide browser control (Windows CefSharp host).
+    /// Null ⇒ browser MCP tools are omitted from the catalog.
+    /// </summary>
+    public IDysonBrowserControl? BrowserControl { get; set; }
 }

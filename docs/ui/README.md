@@ -1,6 +1,6 @@
 # UI
 
-Landing project: [`src/Harness/Harness.UI`](../../src/Harness/Harness.UI) — Blazor Interactive Server (`net10.0`), references `Harness.Engine`.
+Landing project: [`src/Harness/Harness.UI`](../../src/Harness/Harness.UI) — Blazor Interactive Server (`net10.0-windows` on Windows, else `net10.0`), references `Harness.Engine` and (Windows only) `Harness.WindowsBrowser`.
 
 ## How to run
 
@@ -13,6 +13,8 @@ dotnet run --project src/Harness/Harness.UI --urls http://localhost:5180
 Or open the solution and set **Harness.UI** as the startup project. The app uses Interactive Server rendering globally.
 
 DI (scoped): `ThemeService`, `DysonDbContext`, `DysonModelStore`, `DysonSessionStore`, `DysonWorkDirectoryStore`, `DysonAppSettingsStore`, `HttpClient` (via `IHttpClientFactory`), `DysonUiHost`.
+
+**Windows only:** `Program.cs` also registers `AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>()`. `DysonUiHost` injects that singleton into every `DysonAgentSessionConfig.BrowserControl` (new + resume). When set, the engine MCP catalog includes browser tools (`OpenBrowser`, …) that open in-process CefSharp WPF windows. See [packaging/webview](../packaging/webview.md).
 
 On first open, a default **Demo Mock** provider + slug is seeded if none exists. SQLite lives under the platform app-data folder for the current `DysonAppMode` (see [storage/models](../storage/models.md)).
 
@@ -74,7 +76,7 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `Composer` | Prompt + left-aligned toolbar (model chip, **Effort** `<select>` of the selected slug’s `ReasoningModes` plus **None** (null → omit; legacy current value kept as an extra option if not in the list), mode, git branch chip); **PlanReadyPopover** above the textarea when `Host.PendingPlanReady` is set; typing `/` as the whole prompt token opens a dense slash-command overlay above the textarea (`/ask` `/plan` `/work` modes, `/new` → `OnNewSession` / `StartNewAsync`, `/[model]` fuzzy match on slug/alias like the model picker — applies to the live session via `SetSessionModelSlugAsync` when focused; max 5; ↑↓ Enter Esc; send strips+applies a leading command). Logic in `ComposerSlashCommands` (+ startup `SelfCheck`) |
 | `ToolCallPanel` / `ToolCallRow` / `QueuedToolCallRow` | Live tool status; shared expand chrome with tool-specific collapsed summaries and expanded bodies (`Components/Tools/Variants/`), generic args/result fallback for unknown tools |
 | `ThemeSwitcher` | Light/Dark + Blue/Green/Red/Purple (settings → General) |
-| `SessionHeader` | Title (`DisplayTitle`), mode, ids, MCP, git branch, **Shells N** count pill (running long-running shells for the workdir; opens list/log modal with Force stop → Abort), app mode; when viewing a child (`ParentSessionId` set), **← Parent** → `NavigateToParentAsync` |
+| `SessionHeader` | Title (`DisplayTitle`), mode, ids, MCP, git branch, **Shells N** count pill (running long-running shells for the workdir; opens list/log modal with Force stop → Abort), **Tools** menu → Open Browser when `IDysonBrowserControl` is registered (Windows), app mode; when viewing a child (`ParentSessionId` set), **← Parent** → `NavigateToParentAsync` |
 | `SessionTodoOverview` | Between `SessionHeader` and `ChatPanel`; hidden when the session todo list is empty; collapsed (default) shows `{complete}/{total} tasks done`; expanded lists DisplayName, TaskCode, status badge, comments; refreshes on `TodosChanged` via host `Notify` |
 | `SessionSubagentOverview` | Below todos; session-level roster of direct children (not only spawn-turn cards); collapsed shows `{n} subagents ({active} active)`; expanded reuses `SubagentCard`; refreshes on host `Notify` after hydrate / spawn |
 | `ModelsPanel` | Provider/slug CRUD — settings → Models; OpenAICompatible shows Completions/Responses API mode toggle; slug create/edit **Reasoning modes** chip/list editor + default reasoning effort (new forms prefill `high`; blank = omit); **Repair mis-tagged providers** fixes demo rows that have credentials |

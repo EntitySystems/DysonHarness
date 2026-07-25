@@ -42,7 +42,10 @@ public abstract class DysonAgentSession
         SystemPrompt = string.IsNullOrWhiteSpace(systemPromptSuffix)
             ? prompt.Value
             : prompt.Value + "\n\n" + systemPromptSuffix.Trim();
-        McpPipeline = DysonMcpPipeline.CreateDefault(config.McpAccessMode, config.AvailableShellTypes);
+        McpPipeline = DysonMcpPipeline.CreateDefault(
+            config.McpAccessMode,
+            config.AvailableShellTypes,
+            browserControlAvailable: config.BrowserControl is not null);
         McpPipeline.ConfigureShellExecuteForMode(
             string.Equals(agentMode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase));
         // Do not gate as root here: Parent is always null in the ctor. Roots call

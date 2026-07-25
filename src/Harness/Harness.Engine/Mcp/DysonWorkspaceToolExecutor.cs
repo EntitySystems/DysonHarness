@@ -8,10 +8,11 @@ namespace DysonHarness;
 /// <summary>
 /// Executes workspace-scoped MCP tools against a work directory root, plus RenameSession,
 /// GetDateTime, ShellExecute, long-running shell tools, subagent spawn/list/report tools,
-/// inter-agent events / AskQuestion, session todo CRUD, and in-process web search/fetch tools.
+/// inter-agent events / AskQuestion, session todo CRUD, in-process web search/fetch tools,
+/// and browser control tools (when <see cref="DysonAgentSessionConfig.BrowserControl"/> is set).
 /// Other catalog tools return a not-implemented stub result.
 /// </summary>
-public sealed class DysonWorkspaceToolExecutor
+public sealed partial class DysonWorkspaceToolExecutor
 {
     private readonly DysonAgentSession _session;
     private readonly string _workRoot;
@@ -82,6 +83,14 @@ public sealed class DysonWorkspaceToolExecutor
                 "FreeExtract" => await FreeExtractAsync(call, cancellationToken).ConfigureAwait(false),
                 "WebFetch" => await WebFetchAsync(call, cancellationToken).ConfigureAwait(false),
                 "FetchGithubReadme" => await FetchGithubReadmeAsync(call, cancellationToken).ConfigureAwait(false),
+                "OpenBrowser" or "ListBrowserWindows" or "CloseBrowser" or "ResizeBrowser"
+                    or "ListBrowserTabs" or "NewBrowserTab" or "CloseBrowserTab" or "ActivateBrowserTab"
+                    or "BrowserNavigate" or "BrowserGoBack" or "BrowserGoForward" or "BrowserReload"
+                    or "BrowserClick" or "BrowserType" or "BrowserFill" or "BrowserHover" or "BrowserPressKey"
+                    or "BrowserWaitForSelector" or "BrowserWaitForNavigation"
+                    or "BrowserExecuteJavaScript" or "BrowserGetHtml" or "BrowserTakeScreenshot"
+                    or "BrowserReadConsoleLog" or "BrowserReadNetworkLog"
+                    => await ExecuteBrowserToolAsync(call, cancellationToken).ConfigureAwait(false),
                 _ => Stub(call),
             };
         }

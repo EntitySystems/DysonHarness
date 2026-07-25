@@ -9,7 +9,7 @@ For C# in this repository:
 - Use `VoidResult<TError>` for side-effect-only public APIs; `Result<TValue, TError>` when both value and error matter; `ValueResult<TValue>` when only success-value vs error-flag is needed.
 - Do not use exceptions for ordinary control flow; reserve exceptions for truly unexpected bugs.
 
-Types live under [`src/Harness/Harness.Engine/`](../src/Harness/Harness.Engine/).
+Types live under [`src/Harness/Harness.Abstractions/Result/`](../src/Harness/Harness.Abstractions/Result/) (shared by Engine and platform hosts).
 
 ## Modern C# practice
 

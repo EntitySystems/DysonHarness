@@ -23,11 +23,16 @@ public sealed class DysonMcpPipeline
     public DysonMcpAutoReviewProxy? AutoReviewProxy { get; }
 
     private readonly IReadOnlyList<DysonShellType> _availableShellTypes;
+    private readonly bool _browserControlAvailable;
 
-    private DysonMcpPipeline(DysonMcpAccessMode accessMode, IReadOnlyList<DysonShellType> availableShellTypes)
+    private DysonMcpPipeline(
+        DysonMcpAccessMode accessMode,
+        IReadOnlyList<DysonShellType> availableShellTypes,
+        bool browserControlAvailable)
     {
         AccessMode = accessMode;
         _availableShellTypes = availableShellTypes;
+        _browserControlAvailable = browserControlAvailable;
         AutoReviewProxy = accessMode == DysonMcpAccessMode.AutoReview
             ? new DysonMcpAutoReviewProxy(this)
             : null;
@@ -35,11 +40,12 @@ public sealed class DysonMcpPipeline
 
     public static DysonMcpPipeline CreateDefault(
         DysonMcpAccessMode accessMode,
-        IReadOnlyList<DysonShellType>? availableShellTypes = null)
+        IReadOnlyList<DysonShellType>? availableShellTypes = null,
+        bool browserControlAvailable = false)
     {
         availableShellTypes ??= DysonShell.AvailableForCurrentPlatform();
-        var pipeline = new DysonMcpPipeline(accessMode, availableShellTypes);
-        foreach (var tool in DefaultTools(availableShellTypes))
+        var pipeline = new DysonMcpPipeline(accessMode, availableShellTypes, browserControlAvailable);
+        foreach (var tool in DefaultTools(availableShellTypes, browserControlAvailable))
             pipeline.Tools[tool.Name] = tool;
         return pipeline;
     }
@@ -525,10 +531,436 @@ public sealed class DysonMcpPipeline
         };
     }
 
-    private static IEnumerable<DysonMcpTool> DefaultTools(IReadOnlyList<DysonShellType> availableShellTypes)
+    /// <summary>
+    /// Browser MCP tools when <see cref="DysonAgentSessionConfig.BrowserControl"/> is registered.
+    /// </summary>
+    public static IEnumerable<DysonMcpTool> CreateBrowserTools()
+    {
+        yield return new DysonMcpTool
+        {
+            Name = "OpenBrowser",
+            Description =
+                "Open a new agent browser window (Windows CefSharp WPF chrome). " +
+                "Optional url, width, height. Returns windowId and initial tabId.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "url": { "type": "string", "description": "Optional initial URL." },
+                    "width": { "type": "integer", "description": "Optional window width (default 1280)." },
+                    "height": { "type": "integer", "description": "Optional window height (default 800)." }
+                  }
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ListBrowserWindows",
+            Description = "List open agent browser windows (windowId).",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {}
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "CloseBrowser",
+            Description = "Close an agent browser window by windowId.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string", "description": "Window id from OpenBrowser / ListBrowserWindows." }
+                  },
+                  "required": ["windowId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ResizeBrowser",
+            Description = "Resize an agent browser window (ResizeWebView).",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "width": { "type": "integer" },
+                    "height": { "type": "integer" }
+                  },
+                  "required": ["windowId", "width", "height"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ListBrowserTabs",
+            Description = "List tabs in a browser window.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" }
+                  },
+                  "required": ["windowId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "NewBrowserTab",
+            Description = "Open a new tab in a browser window. Optional url.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "url": { "type": "string" }
+                  },
+                  "required": ["windowId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "CloseBrowserTab",
+            Description = "Close a tab. Closing the last tab closes the window.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" }
+                  },
+                  "required": ["windowId", "tabId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ActivateBrowserTab",
+            Description = "Activate (focus) a tab in a browser window.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" }
+                  },
+                  "required": ["windowId", "tabId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "BrowserNavigate",
+            Description = "Navigate a tab to a URL.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" },
+                    "url": { "type": "string" }
+                  },
+                  "required": ["windowId", "tabId", "url"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "BrowserGoBack",
+            Description = "Navigate back in a tab (PopNavigation).",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" }
+                  },
+                  "required": ["windowId", "tabId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "BrowserGoForward",
+            Description = "Navigate forward in a tab.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" }
+                  },
+                  "required": ["windowId", "tabId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "BrowserReload",
+            Description = "Reload the current page in a tab.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" }
+                  },
+                  "required": ["windowId", "tabId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "BrowserClick",
+            Description =
+                "Click in a tab via selector and/or x/y coordinates. Optional button (left|middle|right) and modifiers.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" },
+                    "selector": { "type": "string" },
+                    "x": { "type": "number" },
+                    "y": { "type": "number" },
+                    "button": { "type": "string", "enum": ["left", "middle", "right"] },
+                    "ctrlKey": { "type": "boolean" },
+                    "shiftKey": { "type": "boolean" },
+                    "altKey": { "type": "boolean" },
+                    "metaKey": { "type": "boolean" },
+                    "timeoutMs": { "type": "integer" }
+                  },
+                  "required": ["windowId", "tabId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "BrowserType",
+            Description = "Type text into a selector or the focused element. Optional clearFirst.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" },
+                    "text": { "type": "string" },
+                    "selector": { "type": "string" },
+                    "clearFirst": { "type": "boolean" },
+                    "delayMs": { "type": "integer" },
+                    "timeoutMs": { "type": "integer" }
+                  },
+                  "required": ["windowId", "tabId", "text"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "BrowserFill",
+            Description = "Clear and fill an input matching selector.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" },
+                    "selector": { "type": "string" },
+                    "value": { "type": "string" }
+                  },
+                  "required": ["windowId", "tabId", "selector", "value"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "BrowserHover",
+            Description = "Hover a selector in a tab.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" },
+                    "selector": { "type": "string" }
+                  },
+                  "required": ["windowId", "tabId", "selector"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "BrowserPressKey",
+            Description = "Press a key (optionally targeting a selector) with modifiers.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" },
+                    "key": { "type": "string" },
+                    "selector": { "type": "string" },
+                    "ctrlKey": { "type": "boolean" },
+                    "shiftKey": { "type": "boolean" },
+                    "altKey": { "type": "boolean" },
+                    "metaKey": { "type": "boolean" },
+                    "timeoutMs": { "type": "integer" }
+                  },
+                  "required": ["windowId", "tabId", "key"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "BrowserWaitForSelector",
+            Description = "Wait until a CSS selector matches in the tab.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" },
+                    "selector": { "type": "string" },
+                    "timeoutMs": { "type": "integer" }
+                  },
+                  "required": ["windowId", "tabId", "selector"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "BrowserWaitForNavigation",
+            Description = "Wait for the next navigation/load to finish in a tab.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" },
+                    "timeoutMs": { "type": "integer" }
+                  },
+                  "required": ["windowId", "tabId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "BrowserExecuteJavaScript",
+            Description = "Evaluate JavaScript in the tab and return the result as text.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" },
+                    "code": { "type": "string" }
+                  },
+                  "required": ["windowId", "tabId", "code"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "BrowserGetHtml",
+            Description = "Return document.documentElement.outerHTML for a tab.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" }
+                  },
+                  "required": ["windowId", "tabId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "BrowserTakeScreenshot",
+            Description = "Capture a PNG screenshot of the tab (base64 in the tool result).",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" }
+                  },
+                  "required": ["windowId", "tabId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "BrowserReadConsoleLog",
+            Description = "Read collected console messages for a tab (thin collector until CDP deepens).",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" }
+                  },
+                  "required": ["windowId", "tabId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "BrowserReadNetworkLog",
+            Description =
+                "Read collected network entries for a tab (main-frame loads only until CDP request logging).",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "windowId": { "type": "string" },
+                    "tabId": { "type": "string" }
+                  },
+                  "required": ["windowId", "tabId"]
+                }
+                """,
+        };
+    }
+
+    private static IEnumerable<DysonMcpTool> DefaultTools(
+        IReadOnlyList<DysonShellType> availableShellTypes,
+        bool browserControlAvailable)
     {
         foreach (var tool in InterAgentTools())
             yield return tool;
+
+        if (browserControlAvailable)
+        {
+            foreach (var tool in CreateBrowserTools())
+                yield return tool;
+        }
 
         yield return new DysonMcpTool
         {
