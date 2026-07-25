@@ -21,6 +21,7 @@ DysonParentEventSelfCheck.Run();
 DysonFileManagerSelfCheck.Run();
 DysonPlanResultSelfCheck.Run();
 DysonShellExecutePlanWarningSelfCheck.Run();
+DysonLongRunningShellSelfCheck.Run();
 ComposerSlashCommands.SelfCheck();
 DysonFileViewerComments.SelfCheck();
 DysonToolCallUi.SelfCheck();

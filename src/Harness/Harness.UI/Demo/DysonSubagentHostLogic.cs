@@ -109,7 +109,10 @@ public static class DysonSubagentHostLogic
         if (!prompt.Contains("subagentId: 2", StringComparison.Ordinal)
             || !prompt.Contains("outcome: completed", StringComparison.Ordinal)
             || !prompt.Contains("Found 3 files.", StringComparison.Ordinal)
-            || !prompt.Contains("Explore README", StringComparison.Ordinal))
+            || !prompt.Contains("Explore README", StringComparison.Ordinal)
+            || !prompt.Contains("# Subagent report", StringComparison.Ordinal)
+            || !prompt.Contains("concrete technical continuation", StringComparison.OrdinalIgnoreCase)
+            || !prompt.Contains("Do not wait for another harness turn", StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Continuation prompt missing expected fields.");
         }

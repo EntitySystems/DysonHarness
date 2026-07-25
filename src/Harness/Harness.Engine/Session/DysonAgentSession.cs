@@ -1749,6 +1749,24 @@ public abstract class DysonAgentSession
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Parent auto-turn after subagent completion: creates a
+    /// <see cref="DysonAgentTurnKind.SubagentReportProcessing"/> turn and runs the same
+    /// tool/reply loop as <see cref="PromptAsync"/> (analyze report, then continue — one turn).
+    /// </summary>
+    public abstract Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
+        DysonAgentInterrupt interrupt,
+        string? title = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Prompt-queue drain path when Instruction is already built
+    /// (<see cref="DysonAgentTurnKind.SubagentReportProcessing"/>).
+    /// </summary>
+    public abstract Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
+        string instruction,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Prefer draining the interrupt queue (see <see cref="WaitForInterruptAsync"/> /
     /// <see cref="TryDequeueInterrupt"/>) when mapping notify events, so Work’s async loop
     /// observes subagent completions without busy-polling.

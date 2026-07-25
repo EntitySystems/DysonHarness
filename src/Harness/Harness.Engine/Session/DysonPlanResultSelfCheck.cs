@@ -27,6 +27,8 @@ public static class DysonPlanResultSelfCheck
             throw new InvalidOperationException("DysonAgentTurnKind.PlanResult must be 6.");
         if ((int)DysonAgentTurnKind.BeginBuildPlan != 7)
             throw new InvalidOperationException("DysonAgentTurnKind.BeginBuildPlan must be 7.");
+        if ((int)DysonAgentTurnKind.SubagentReportProcessing != 8)
+            throw new InvalidOperationException("DysonAgentTurnKind.SubagentReportProcessing must be 8.");
     }
 
     private static void AssertCreateTurnFields()
@@ -132,13 +134,24 @@ public static class DysonPlanResultSelfCheck
         }
 
         var continuation = DysonSubagentReportPrompt.BuildContinuationPrompt(interrupt, "Explore auth");
-        if (!continuation.Contains("Harness continuation:", StringComparison.Ordinal)
+        if (!continuation.Contains("# Subagent report", StringComparison.Ordinal)
+            || !continuation.Contains("concrete technical continuation", StringComparison.OrdinalIgnoreCase)
+            || !continuation.Contains("Do not wait for another harness turn", StringComparison.Ordinal)
             || !continuation.Contains("subagentId: 7", StringComparison.Ordinal)
             || !continuation.Contains(block.Trim(), StringComparison.Ordinal)
             || continuation.Contains("## Report", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "Continuation prompt must wrap the shared report block.");
+                "Continuation prompt must wrap the shared report block with SubagentReport mandate.");
+        }
+
+        var reportTurn = DysonSubagentReportPrompt.CreateTurn(interrupt, "Explore auth");
+        if (reportTurn.Kind != DysonAgentTurnKind.SubagentReportProcessing
+            || reportTurn.Instruction != continuation
+            || reportTurn.CompletedUtc is not null)
+        {
+            throw new InvalidOperationException(
+                "CreateTurn must be SubagentReportProcessing with BuildContinuationPrompt Instruction.");
         }
     }
 
@@ -314,6 +327,17 @@ public static class DysonPlanResultSelfCheck
         public override Task<VoidResult<string>> PromptBeginBuildPlanAsync(
             string planRelativePath,
             IReadOnlyList<string>? reportBlocks = null,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public override Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
+            DysonAgentInterrupt interrupt,
+            string? title = null,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public override Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
+            string instruction,
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 

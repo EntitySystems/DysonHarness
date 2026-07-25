@@ -30,7 +30,7 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `Id` | Guid PK — also `DysonAgentTurn.Id` |
 | `SessionId` | Guid FK |
 | `Sequence` | Order within session |
-| `Kind` | `DysonAgentTurnKind` (`PlanResult` = 6, `BeginBuildPlan` = 7) |
+| `Kind` | `DysonAgentTurnKind` (`PlanResult` = 6, `BeginBuildPlan` = 7, `SubagentReportProcessing` = 8) |
 | `AgentTitle` | Parsed H1 / plan title |
 | `PlanRelativePath` | Workspace-relative plan path for `PlanResult` / `BeginBuildPlan` (e.g. `.dyson/plans/…`); null otherwise |
 | `Instruction` | Harness-injected instruction |
@@ -143,7 +143,7 @@ Subagents are **session-owned**: the live graph (`SubSessions` / `SubagentsById`
 
 `ListSessionsAsync(..., rootsOnly: true)` (default) hides children from the sidebar; drill-in is UI navigation only (`NavigateToSessionAsync` / `NavigateToParentAsync`). Root resume loads root turns fully; live host keeps parent+children in a session registry so focus switches do not dispose running children.
 
-Orchestrator policy (engine soft gates + prompts): Plan banned as subagent; Explore never spawns; Drone may spawn Explore only; Wait only for prerequisites; completion via `SubmitSubagentReport` → parent interrupt → host FIFO auto-turn (buffered in Plan until BeginBuildPlan or mode leave). See [engine README](../engine/README.md)#orchestrator-subagents.
+Orchestrator policy (engine soft gates + prompts): Plan banned as subagent; Explore never spawns; Drone may spawn Explore only; Wait only for prerequisites; completion via `SubmitSubagentReport` → parent interrupt → host FIFO `SubagentReportProcessing` auto-turn (buffered in Plan until BeginBuildPlan or mode leave). See [engine README](../engine/README.md)#orchestrator-subagents.
 
 ## Live write hooks
 

@@ -7,14 +7,15 @@ namespace DysonHarness;
 
 /// <summary>
 /// Executes workspace-scoped MCP tools against a work directory root, plus RenameSession,
-/// GetDateTime, ShellExecute, subagent spawn/list/report tools, inter-agent events / AskQuestion,
-/// session todo CRUD, and in-process web search/fetch tools. Other catalog tools return a
-/// not-implemented stub result.
+/// GetDateTime, ShellExecute, long-running shell tools, subagent spawn/list/report tools,
+/// inter-agent events / AskQuestion, session todo CRUD, and in-process web search/fetch tools.
+/// Other catalog tools return a not-implemented stub result.
 /// </summary>
 public sealed class DysonWorkspaceToolExecutor
 {
     private readonly DysonAgentSession _session;
     private readonly string _workRoot;
+    private readonly Guid _workDirectoryId;
     private readonly HttpClient _http;
     private readonly DysonSessionStore? _store;
 
@@ -22,11 +23,13 @@ public sealed class DysonWorkspaceToolExecutor
         DysonAgentSession session,
         string workDirectoryAbsolutePath,
         HttpClient http,
-        DysonSessionStore? store = null)
+        DysonSessionStore? store = null,
+        Guid workDirectoryId = default)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         ArgumentException.ThrowIfNullOrWhiteSpace(workDirectoryAbsolutePath);
         _workRoot = Path.GetFullPath(workDirectoryAbsolutePath);
+        _workDirectoryId = workDirectoryId;
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _store = store;
     }
@@ -66,6 +69,11 @@ public sealed class DysonWorkspaceToolExecutor
                 "ListDirectory" => await ListDirectoryAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateDirectory" => await CreateDirectoryAsync(call, cancellationToken).ConfigureAwait(false),
                 "ShellExecute" => await ShellExecuteAsync(call, cancellationToken).ConfigureAwait(false),
+                "StartLongRunningShell" => await StartLongRunningShellAsync(call, cancellationToken).ConfigureAwait(false),
+                "ReadLongRunningShellTail" => await ReadLongRunningShellTailAsync(call, cancellationToken).ConfigureAwait(false),
+                "AbortLongRunningShell" => await AbortLongRunningShellAsync(call, cancellationToken).ConfigureAwait(false),
+                "RequestLongRunningShellCancellation" => await RequestLongRunningShellCancellationAsync(call, cancellationToken).ConfigureAwait(false),
+                "LongRunningShellInteract" => await LongRunningShellInteractAsync(call, cancellationToken).ConfigureAwait(false),
                 "FreeSearch" => await FreeSearchAsync(call, cancellationToken).ConfigureAwait(false),
                 "FreeSearchAdvanced" => await FreeSearchAdvancedAsync(call, cancellationToken).ConfigureAwait(false),
                 "SearchWithSynthesis" => await SearchWithSynthesisAsync(call, cancellationToken).ConfigureAwait(false),
@@ -1244,6 +1252,181 @@ public sealed class DysonWorkspaceToolExecutor
         return r.TimedOut || r.ExitCode != 0
             ? Error(call, content)
             : Ok(call, content);
+    }
+
+    private async Task<DysonToolCallResult> StartLongRunningShellAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        if (_workDirectoryId == Guid.Empty)
+            return Error(call, "Work directory id is required for long-running shells.");
+
+        using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+        var shellName = RequireString(doc.RootElement, "shell");
+        if (shellName.IsError)
+            return Error(call, shellName.Error);
+
+        var command = RequireString(doc.RootElement, "command");
+        if (command.IsError)
+            return Error(call, command.Error);
+
+        if (!Enum.TryParse<DysonShellType>(shellName.Value, ignoreCase: true, out var shellType))
+            return Error(call, $"Unknown shell '{shellName.Value}'.");
+
+        var available = _session.Config.AvailableShellTypes;
+        if (!available.Contains(shellType))
+        {
+            var listed = string.Join(", ", available);
+            return Error(call, $"Shell '{shellType}' is not available for this session. Available: {listed}.");
+        }
+
+        var workDirRel = doc.RootElement.TryGetProperty("workingDirectory", out var wdProp)
+            ? wdProp.GetString()
+            : null;
+        var workDir = string.IsNullOrWhiteSpace(workDirRel)
+            ? Result<string, string>.AsValue(_workRoot)
+            : ResolveUnderWorkRoot(workDirRel);
+        if (workDir.IsError)
+            return Error(call, workDir.Error);
+
+        if (!Directory.Exists(workDir.Value))
+            return Error(call, $"Working directory not found: {workDirRel ?? "."}");
+
+        var started = await DysonLongRunningShellRegistry
+            .StartAsync(_workDirectoryId, shellType, command.Value, workDir.Value, cancellationToken)
+            .ConfigureAwait(false);
+        if (started.IsError)
+            return Error(call, started.Error);
+
+        var info = started.Value;
+        var content =
+            $"longRunningShellId={info.Id}\nstatus={info.Status}\nshell={info.ShellType}\ncommand={info.Command}";
+
+        var planMode = string.Equals(_session.Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase);
+        content = DysonMcpPipeline.PrefixPlanShellWarning(planMode, content);
+        return Ok(call, content);
+    }
+
+    private async Task<DysonToolCallResult> ReadLongRunningShellTailAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        if (_workDirectoryId == Guid.Empty)
+            return Error(call, "Work directory id is required for long-running shells.");
+
+        using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+        var id = GetInt(doc.RootElement, "longRunningShellId");
+        if (id is null)
+            return Error(call, "Missing required integer field 'longRunningShellId'.");
+
+        var maxChars = GetInt(doc.RootElement, "maxChars") ?? 8 * 1024;
+        var timeoutMs = GetInt(doc.RootElement, "timeoutMs") ?? 0;
+
+        var tail = await DysonLongRunningShellRegistry
+            .ReadTailAsync(_workDirectoryId, id.Value, maxChars, sinceOffset: null, timeoutMs, cancellationToken)
+            .ConfigureAwait(false);
+        if (tail.IsError)
+            return Error(call, tail.Error);
+
+        var t = tail.Value;
+        var sb = new StringBuilder();
+        sb.Append("longRunningShellId=");
+        sb.Append(id.Value);
+        sb.Append(" status=");
+        sb.Append(t.Status);
+        if (t.ExitCode is int code)
+        {
+            sb.Append(" exitCode=");
+            sb.Append(code);
+        }
+
+        sb.Append(" nextOffset=");
+        sb.Append(t.NextOffset);
+        sb.AppendLine();
+        if (!string.IsNullOrEmpty(t.Text))
+            sb.Append(t.Text.TrimEnd());
+        else
+            sb.Append("(no output)");
+
+        return Ok(call, sb.ToString());
+    }
+
+    private async Task<DysonToolCallResult> AbortLongRunningShellAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        if (_workDirectoryId == Guid.Empty)
+            return Error(call, "Work directory id is required for long-running shells.");
+
+        using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+        var id = GetInt(doc.RootElement, "longRunningShellId");
+        if (id is null)
+            return Error(call, "Missing required integer field 'longRunningShellId'.");
+
+        var timeoutMs = GetInt(doc.RootElement, "timeoutMs") ?? 10_000;
+        var result = await DysonLongRunningShellRegistry
+            .AbortAsync(_workDirectoryId, id.Value, timeoutMs, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (result.IsError)
+            return Error(call, result.Error);
+
+        var status = DysonLongRunningShellRegistry.TryGet(_workDirectoryId, id.Value, out var shell) && shell is not null
+            ? shell.Status.ToString()
+            : "Aborted";
+        return Ok(call, $"longRunningShellId={id.Value} status={status} aborted=true");
+    }
+
+    private async Task<DysonToolCallResult> RequestLongRunningShellCancellationAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        if (_workDirectoryId == Guid.Empty)
+            return Error(call, "Work directory id is required for long-running shells.");
+
+        using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+        var id = GetInt(doc.RootElement, "longRunningShellId");
+        if (id is null)
+            return Error(call, "Missing required integer field 'longRunningShellId'.");
+
+        var timeoutMs = GetInt(doc.RootElement, "timeoutMs") ?? 10_000;
+        var result = await DysonLongRunningShellRegistry
+            .RequestCancellationAsync(_workDirectoryId, id.Value, timeoutMs, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (result.IsError)
+            return Error(call, result.Error);
+
+        var status = DysonLongRunningShellRegistry.TryGet(_workDirectoryId, id.Value, out var shell) && shell is not null
+            ? shell.Status.ToString()
+            : "unknown";
+        return Ok(call, $"longRunningShellId={id.Value} status={status} cancelRequested=true");
+    }
+
+    private async Task<DysonToolCallResult> LongRunningShellInteractAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        if (_workDirectoryId == Guid.Empty)
+            return Error(call, "Work directory id is required for long-running shells.");
+
+        using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+        var id = GetInt(doc.RootElement, "longRunningShellId");
+        if (id is null)
+            return Error(call, "Missing required integer field 'longRunningShellId'.");
+
+        var input = RequireString(doc.RootElement, "input");
+        if (input.IsError)
+            return Error(call, input.Error);
+
+        var timeoutMs = GetInt(doc.RootElement, "timeoutMs") ?? 5_000;
+        var result = await DysonLongRunningShellRegistry
+            .InteractAsync(_workDirectoryId, id.Value, input.Value, timeoutMs, cancellationToken)
+            .ConfigureAwait(false);
+
+        return result.IsError
+            ? Error(call, result.Error)
+            : Ok(call, $"longRunningShellId={id.Value} written=true");
     }
 
     private async Task<DysonToolCallResult> FreeSearchAsync(

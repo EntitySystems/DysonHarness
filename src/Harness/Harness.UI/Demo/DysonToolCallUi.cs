@@ -55,6 +55,11 @@ public static class DysonToolCallUi
             "ListDirectory" => SummarizeListDirectory(argumentsJson, resultContent, hasResult),
             "CreateDirectory" => TextSummary(Truncate(GetString(argumentsJson, "path"), SummaryMaxLength)),
             "ShellExecute" => SummarizeShellExecute(argumentsJson, resultContent, hasResult),
+            "StartLongRunningShell" => SummarizeStartLongRunningShell(argumentsJson, resultContent, hasResult),
+            "ReadLongRunningShellTail" => SummarizeReadLongRunningShellTail(argumentsJson, resultContent, hasResult),
+            "AbortLongRunningShell" => SummarizeLongRunningShellId(argumentsJson, "abort"),
+            "RequestLongRunningShellCancellation" => SummarizeLongRunningShellId(argumentsJson, "cancel"),
+            "LongRunningShellInteract" => SummarizeLongRunningShellInteract(argumentsJson),
             "RenameSession" => TextSummary(Quote(Truncate(GetString(argumentsJson, "title"), SummaryMaxLength - 2))),
             "GetDateTime" => SummarizeGetDateTime(argumentsJson, resultContent, hasResult),
             "SubmitPlan" => TextSummary(Truncate(GetString(argumentsJson, "title"), SummaryMaxLength)),
@@ -445,6 +450,16 @@ public static class DysonToolCallUi
             throw new InvalidOperationException($"ShellExecute summary mismatch: {shellSummary.Text}");
         }
 
+        var lrsArgs = """{"shell":"pwsh","command":"dotnet run --urls http://localhost:5180"}""";
+        var lrsResult = "longRunningShellId=3\nstatus=Running\nshell=Pwsh\ncommand=dotnet run";
+        var lrsSummary = GetCollapsedSummary("StartLongRunningShell", lrsArgs, lrsResult, hasResult: true);
+        if (lrsSummary.Text is null
+            || !lrsSummary.Text.Contains("#3", StringComparison.Ordinal)
+            || !lrsSummary.Text.Contains("pwsh", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"StartLongRunningShell summary mismatch: {lrsSummary.Text}");
+        }
+
         if (Basename("src/foo/bar.cs") != "bar.cs")
             throw new InvalidOperationException("Basename failed.");
         if (GetString("""{"path":"a/b"}""", "path") != "a/b")
@@ -561,6 +576,110 @@ public static class DysonToolCallUi
         }
 
         return TextSummary(Truncate(sb.ToString(), SummaryMaxLength));
+    }
+
+    private static CollapsedSummary SummarizeStartLongRunningShell(
+        string? argumentsJson,
+        string? resultContent,
+        bool hasResult)
+    {
+        var shell = GetString(argumentsJson, "shell");
+        var cmd = FirstLine(GetString(argumentsJson, "command"), 36);
+        var id = hasResult ? TryParseLongRunningShellId(resultContent) : null;
+        var sb = new StringBuilder();
+        if (id is int n)
+            sb.Append('#').Append(n);
+        if (!string.IsNullOrEmpty(shell))
+        {
+            if (sb.Length > 0)
+                sb.Append(" · ");
+            sb.Append(shell);
+        }
+
+        if (!string.IsNullOrEmpty(cmd))
+        {
+            if (sb.Length > 0)
+                sb.Append(" · ");
+            sb.Append(cmd);
+        }
+
+        return TextSummary(Truncate(sb.ToString(), SummaryMaxLength));
+    }
+
+    private static CollapsedSummary SummarizeReadLongRunningShellTail(
+        string? argumentsJson,
+        string? resultContent,
+        bool hasResult)
+    {
+        var id = GetInt(argumentsJson, "longRunningShellId");
+        var status = hasResult ? TryParseStatusToken(resultContent) : null;
+        var sb = new StringBuilder();
+        if (id is int n)
+            sb.Append('#').Append(n);
+        if (!string.IsNullOrEmpty(status))
+        {
+            if (sb.Length > 0)
+                sb.Append(" · ");
+            sb.Append(status);
+        }
+        else if (sb.Length == 0)
+            sb.Append("tail");
+
+        return TextSummary(Truncate(sb.ToString(), SummaryMaxLength));
+    }
+
+    private static CollapsedSummary SummarizeLongRunningShellId(string? argumentsJson, string verb)
+    {
+        var id = GetInt(argumentsJson, "longRunningShellId");
+        return TextSummary(id is int n ? $"#{n} · {verb}" : verb);
+    }
+
+    private static CollapsedSummary SummarizeLongRunningShellInteract(string? argumentsJson)
+    {
+        var id = GetInt(argumentsJson, "longRunningShellId");
+        var input = FirstLine(GetString(argumentsJson, "input"), 28);
+        var sb = new StringBuilder();
+        if (id is int n)
+            sb.Append('#').Append(n);
+        if (!string.IsNullOrEmpty(input))
+        {
+            if (sb.Length > 0)
+                sb.Append(" · ");
+            sb.Append(input);
+        }
+
+        return TextSummary(Truncate(sb.Length == 0 ? "interact" : sb.ToString(), SummaryMaxLength));
+    }
+
+    private static int? TryParseLongRunningShellId(string? resultContent)
+    {
+        if (string.IsNullOrEmpty(resultContent))
+            return null;
+        foreach (var line in resultContent.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        {
+            const string prefix = "longRunningShellId=";
+            if (line.StartsWith(prefix, StringComparison.Ordinal)
+                && int.TryParse(line.AsSpan(prefix.Length).Trim(), out var id))
+            {
+                return id;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? TryParseStatusToken(string? resultContent)
+    {
+        if (string.IsNullOrEmpty(resultContent))
+            return null;
+        foreach (var part in resultContent.Replace('\n', ' ').Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            const string prefix = "status=";
+            if (part.StartsWith(prefix, StringComparison.Ordinal))
+                return part[prefix.Length..];
+        }
+
+        return null;
     }
 
     private static CollapsedSummary SummarizeGetDateTime(string? argumentsJson, string? resultContent, bool hasResult)

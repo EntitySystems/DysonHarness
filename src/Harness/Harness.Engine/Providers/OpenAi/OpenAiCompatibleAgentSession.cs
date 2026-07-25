@@ -353,6 +353,23 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         return PromptWithTurnAsync(turn, [], cancellationToken);
     }
 
+    public override Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
+        DysonAgentInterrupt interrupt,
+        string? title = null,
+        CancellationToken cancellationToken = default)
+    {
+        var turn = DysonSubagentReportPrompt.CreateTurn(interrupt, title);
+        return PromptWithTurnAsync(turn, [], cancellationToken);
+    }
+
+    public override Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
+        string instruction,
+        CancellationToken cancellationToken = default)
+    {
+        var turn = DysonSubagentReportPrompt.CreateTurn(instruction);
+        return PromptWithTurnAsync(turn, [], cancellationToken);
+    }
+
     private async Task<VoidResult<string>> PromptWithTurnAsync(
         DysonAgentTurn turn,
         IReadOnlyList<string> filePaths,
@@ -367,7 +384,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         AppendLog($"prompt: {Truncate(turn.Instruction ?? turn.Kind.ToString(), 120)}");
         AddTurn(turn);
 
-        var executor = new DysonWorkspaceToolExecutor(this, _workDirectoryPath, _http, _store);
+        var executor = new DysonWorkspaceToolExecutor(this, _workDirectoryPath, _http, _store, _workDirectoryId);
         var inFlight = new List<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound>();
         var useResponses = string.Equals(
             OpenAiProvider.OpenAiApiMode,

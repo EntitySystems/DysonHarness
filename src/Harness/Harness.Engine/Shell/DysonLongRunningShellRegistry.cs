@@ -1,0 +1,217 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Text;
+
+namespace DysonHarness;
+
+/// <summary>
+/// Workdir-keyed in-memory registry of long-running shells.
+/// Shared by parent/child sessions in the same work directory. Not persisted across UI restart
+/// (restart orphans OS processes; only Abort/Cancel kill them).
+/// </summary>
+public static class DysonLongRunningShellRegistry
+{
+    private static readonly ConcurrentDictionary<Guid, WorkdirBucket> Buckets = new();
+
+    /// <summary>Raised when any shell is started, updated, or stops (UI Notify / poll).</summary>
+    public static event Action? Changed;
+
+    internal static void RaiseChanged() => Changed?.Invoke();
+
+    public static async Task<Result<DysonLongRunningShellInfo, string>> StartAsync(
+        Guid workDirectoryId,
+        DysonShellType shellType,
+        string command,
+        string workingDirectory,
+        CancellationToken cancellationToken = default)
+    {
+        if (workDirectoryId == Guid.Empty)
+            return Result<DysonLongRunningShellInfo, string>.AsError("Work directory id is required.");
+        if (string.IsNullOrWhiteSpace(command))
+            return Result<DysonLongRunningShellInfo, string>.AsError("Command is empty.");
+        if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
+            return Result<DysonLongRunningShellInfo, string>.AsError("Working directory does not exist.");
+
+        if (shellType is not (DysonShellType.Pwsh or DysonShellType.PowerShell or DysonShellType.Cmd))
+            return Result<DysonLongRunningShellInfo, string>.AsError($"Shell '{shellType}' is not supported for long-running shells yet.");
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var bucket = Buckets.GetOrAdd(workDirectoryId, static id => new WorkdirBucket(id));
+        var id = bucket.NextId();
+
+        var (fileName, fixedArgs) = DysonWindowsShell.MapArgs(shellType);
+        Process? process = null;
+        try
+        {
+            process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = fileName,
+                    WorkingDirectory = workingDirectory,
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8,
+                },
+            };
+
+            foreach (var arg in fixedArgs)
+                process.StartInfo.ArgumentList.Add(arg);
+            process.StartInfo.ArgumentList.Add(command);
+
+            if (!process.Start())
+            {
+                process.Dispose();
+                return Result<DysonLongRunningShellInfo, string>.AsError($"Failed to start {fileName}.");
+            }
+
+            // Do not dispose stdin with the Process; shell owns it for Interact/Cancel.
+            var stdin = process.StandardInput;
+            stdin.AutoFlush = true;
+
+            var shell = new DysonLongRunningShell
+            {
+                Id = id,
+                WorkDirectoryId = workDirectoryId,
+                ShellType = shellType,
+                Command = command,
+                WorkingDirectory = workingDirectory,
+                StartedUtc = DateTime.UtcNow,
+            };
+
+            var attach = shell.Attach(process, stdin);
+            if (attach.IsError)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* ignore */ }
+                process.Dispose();
+                shell.Dispose();
+                return Result<DysonLongRunningShellInfo, string>.AsError(attach.Error);
+            }
+
+            // Process lifetime owned by shell; clear local so catch doesn't dispose twice.
+            process = null;
+            bucket.Shells[id] = shell;
+            RaiseChanged();
+            return Result<DysonLongRunningShellInfo, string>.AsValue(shell.ToInfo());
+        }
+        catch (Exception ex)
+        {
+            try { process?.Kill(entireProcessTree: true); } catch { /* ignore */ }
+            process?.Dispose();
+            return Result<DysonLongRunningShellInfo, string>.AsError($"Failed to start long-running shell: {ex.Message}");
+        }
+    }
+
+    public static bool TryGet(Guid workDirectoryId, int id, out DysonLongRunningShell? shell)
+    {
+        shell = null;
+        if (!Buckets.TryGetValue(workDirectoryId, out var bucket))
+            return false;
+        return bucket.Shells.TryGetValue(id, out shell);
+    }
+
+    /// <summary>All shells for a workdir (Running + exited), newest id last.</summary>
+    public static IReadOnlyList<DysonLongRunningShellInfo> List(Guid workDirectoryId)
+    {
+        if (!Buckets.TryGetValue(workDirectoryId, out var bucket))
+            return [];
+
+        return bucket.Shells.Values
+            .Select(s => s.ToInfo())
+            .OrderBy(s => s.Id)
+            .ToArray();
+    }
+
+    public static int CountRunning(Guid workDirectoryId)
+    {
+        if (!Buckets.TryGetValue(workDirectoryId, out var bucket))
+            return 0;
+
+        var n = 0;
+        foreach (var s in bucket.Shells.Values)
+        {
+            if (s.Status is DysonLongRunningShellStatus.Running or DysonLongRunningShellStatus.CancelRequested)
+                n++;
+        }
+
+        return n;
+    }
+
+    public static async Task<Result<DysonLongRunningShellTail, string>> ReadTailAsync(
+        Guid workDirectoryId,
+        int id,
+        int maxChars = 8 * 1024,
+        long? sinceOffset = null,
+        int timeoutMs = 0,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGet(workDirectoryId, id, out var shell) || shell is null)
+            return Result<DysonLongRunningShellTail, string>.AsError($"Long-running shell #{id} not found.");
+
+        return await shell.ReadTailAsync(maxChars, sinceOffset, timeoutMs, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public static async Task<VoidResult<string>> RequestCancellationAsync(
+        Guid workDirectoryId,
+        int id,
+        int timeoutMs = 10_000,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGet(workDirectoryId, id, out var shell) || shell is null)
+            return new VoidResult<string>($"Long-running shell #{id} not found.");
+
+        return await shell.RequestCancellationAsync(timeoutMs, cancellationToken).ConfigureAwait(false);
+    }
+
+    public static async Task<VoidResult<string>> AbortAsync(
+        Guid workDirectoryId,
+        int id,
+        int timeoutMs = 10_000,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGet(workDirectoryId, id, out var shell) || shell is null)
+            return new VoidResult<string>($"Long-running shell #{id} not found.");
+
+        return await shell.AbortAsync(timeoutMs, cancellationToken).ConfigureAwait(false);
+    }
+
+    public static async Task<VoidResult<string>> InteractAsync(
+        Guid workDirectoryId,
+        int id,
+        string input,
+        int timeoutMs = 5_000,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGet(workDirectoryId, id, out var shell) || shell is null)
+            return new VoidResult<string>($"Long-running shell #{id} not found.");
+
+        return await shell.InteractAsync(input, timeoutMs, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Test/self-check helper: drop a workdir bucket (does not kill processes).</summary>
+    internal static void ClearForTests(Guid workDirectoryId)
+    {
+        if (!Buckets.TryRemove(workDirectoryId, out var bucket))
+            return;
+
+        foreach (var shell in bucket.Shells.Values)
+        {
+            try { shell.Dispose(); } catch { /* ignore */ }
+        }
+    }
+
+    private sealed class WorkdirBucket(Guid workDirectoryId)
+    {
+        public Guid WorkDirectoryId { get; } = workDirectoryId;
+        public ConcurrentDictionary<int, DysonLongRunningShell> Shells { get; } = new();
+        private int _nextId;
+
+        public int NextId() => Interlocked.Increment(ref _nextId);
+    }
+}

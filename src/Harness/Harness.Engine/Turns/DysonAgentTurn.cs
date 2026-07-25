@@ -13,6 +13,7 @@ public enum DysonAgentTurnKind
     InitializeSession = 5,
     PlanResult = 6,
     BeginBuildPlan = 7,
+    SubagentReportProcessing = 8,
 }
 
 public sealed class DysonToolCallStatusChangedEventArgs : EventArgs

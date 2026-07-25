@@ -42,11 +42,23 @@ public static class DysonShellExecutePlanWarningSelfCheck
             throw new InvalidOperationException("ConfigureShellExecuteForMode(true) must set Plan warning description.");
         }
 
+        if (!pipeline.Tools.TryGetValue("StartLongRunningShell", out var planStart)
+            || !planStart.Description.Contains(DysonMcpPipeline.PlanShellExecuteWarning, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("ConfigureShellExecuteForMode(true) must Plan-warn StartLongRunningShell.");
+        }
+
         pipeline.ConfigureShellExecuteForMode(planMode: false);
         if (!pipeline.Tools.TryGetValue("ShellExecute", out var workTool)
             || workTool.Description.Contains(DysonMcpPipeline.PlanShellExecuteWarning, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("ConfigureShellExecuteForMode(false) must clear Plan warning description.");
+        }
+
+        if (!pipeline.Tools.TryGetValue("StartLongRunningShell", out var workStart)
+            || workStart.Description.Contains(DysonMcpPipeline.PlanShellExecuteWarning, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("ConfigureShellExecuteForMode(false) must clear Plan warning on StartLongRunningShell.");
         }
     }
 

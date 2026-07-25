@@ -290,6 +290,17 @@ public static class DysonSessionTodoSelfCheck
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
+        public override Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
+            DysonAgentInterrupt interrupt,
+            string? title = null,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public override Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
+            string instruction,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
         public override Task<Result<DysonAgentSessionEvent, string>> WaitForNotifyAsync(
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();

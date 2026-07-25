@@ -358,6 +358,25 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         return PromptWithTurnAsync(turn, turn.Instruction ?? planRelativePath, cancellationToken);
     }
 
+    public override Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
+        DysonAgentInterrupt interrupt,
+        string? title = null,
+        CancellationToken cancellationToken = default)
+    {
+        var turn = DysonSubagentReportPrompt.CreateTurn(interrupt, title);
+        SeedDemoTools(turn);
+        return PromptWithTurnAsync(turn, turn.Instruction ?? "Subagent report", cancellationToken);
+    }
+
+    public override Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
+        string instruction,
+        CancellationToken cancellationToken = default)
+    {
+        var turn = DysonSubagentReportPrompt.CreateTurn(instruction);
+        SeedDemoTools(turn);
+        return PromptWithTurnAsync(turn, turn.Instruction ?? instruction, cancellationToken);
+    }
+
     private static void SeedDemoTools(DysonAgentTurn turn)
     {
         turn.ToolCalls.Add(new DysonToolCall

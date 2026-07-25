@@ -45,8 +45,8 @@ public sealed class DysonMcpPipeline
     }
 
     /// <summary>
-    /// Rebuilds <c>ShellExecute</c> for the current agent mode.
-    /// Description is <c>init</c>-only on <see cref="DysonMcpTool"/>, so replace the catalog entry.
+    /// Rebuilds <c>ShellExecute</c> and long-running shell tools for the current agent mode.
+    /// Description is <c>init</c>-only on <see cref="DysonMcpTool"/>, so replace catalog entries.
     /// </summary>
     public void ConfigureShellExecuteForMode(bool planMode)
     {
@@ -55,6 +55,28 @@ public sealed class DysonMcpPipeline
             Tools.Remove("ShellExecute");
         else
             Tools["ShellExecute"] = tool;
+
+        ConfigureLongRunningShellTools(planMode);
+    }
+
+    /// <summary>
+    /// Adds/removes long-running shell tools (same platform gate as ShellExecute).
+    /// Plan mode soft-warns on <c>StartLongRunningShell</c> only.
+    /// </summary>
+    public void ConfigureLongRunningShellTools(bool planMode)
+    {
+        if (_availableShellTypes.Count == 0)
+        {
+            Tools.Remove("StartLongRunningShell");
+            Tools.Remove("ReadLongRunningShellTail");
+            Tools.Remove("AbortLongRunningShell");
+            Tools.Remove("RequestLongRunningShellCancellation");
+            Tools.Remove("LongRunningShellInteract");
+            return;
+        }
+
+        foreach (var t in CreateLongRunningShellTools(_availableShellTypes, planMode))
+            Tools[t.Name] = t;
     }
 
     /// <summary>Prepends <see cref="PlanShellExecuteWarning"/> when <paramref name="planMode"/>.</summary>
@@ -112,6 +134,161 @@ public sealed class DysonMcpPipeline
                     }
                   },
                   "required": ["shell", "command"]
+                }
+                """,
+        };
+    }
+
+    /// <summary>
+    /// Long-running shell tools when the platform has available shells; empty otherwise.
+    /// When <paramref name="planMode"/>, <c>StartLongRunningShell</c> description includes the Plan soft warning.
+    /// </summary>
+    public static IEnumerable<DysonMcpTool> CreateLongRunningShellTools(
+        IReadOnlyList<DysonShellType> available,
+        bool planMode = false)
+    {
+        ArgumentNullException.ThrowIfNull(available);
+        if (available.Count == 0)
+            yield break;
+
+        var names = available.Select(t => t.ToString()).ToArray();
+        var listed = string.Join(", ", names);
+        var enumJson = string.Join(", ", names.Select(n => $"\"{n}\""));
+
+        var startDescription =
+            "Start a background long-running shell in the session work directory (dev servers, watchers). " +
+            $"Available shells: {listed}. Returns longRunningShellId. " +
+            "Use ReadLongRunningShellTail / LongRunningShellInteract / RequestLongRunningShellCancellation / AbortLongRunningShell to manage it. " +
+            "Not persisted across UI restart (orphans OS processes). Prefer ShellExecute for one-shot commands.";
+        if (planMode)
+            startDescription += " " + PlanShellExecuteWarning;
+
+        yield return new DysonMcpTool
+        {
+            Name = "StartLongRunningShell",
+            Description = startDescription,
+            InputSchemaJson = $$"""
+                {
+                  "type": "object",
+                  "properties": {
+                    "shell": {
+                      "type": "string",
+                      "enum": [{{enumJson}}],
+                      "description": "Shell to use (must be one of the available shells for this session)."
+                    },
+                    "command": {
+                      "type": "string",
+                      "description": "Command line to run in the background."
+                    },
+                    "workingDirectory": {
+                      "type": "string",
+                      "description": "Optional subdirectory under the work root (default: work root)."
+                    }
+                  },
+                  "required": ["shell", "command"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ReadLongRunningShellTail",
+            Description =
+                "Read recent output from a long-running shell. " +
+                "Optional timeoutMs > 0 waits for new output; default 0 returns immediately.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "longRunningShellId": {
+                      "type": "integer",
+                      "description": "Id returned by StartLongRunningShell."
+                    },
+                    "maxChars": {
+                      "type": "integer",
+                      "description": "Max characters of combined output to return (default 8192)."
+                    },
+                    "timeoutMs": {
+                      "type": "integer",
+                      "description": "Optional wait for new output in milliseconds (default 0 = immediate)."
+                    }
+                  },
+                  "required": ["longRunningShellId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "AbortLongRunningShell",
+            Description =
+                "Force-kill a long-running shell process tree (same as UI Force stop). " +
+                "Waits until exited or timeoutMs (default 10000).",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "longRunningShellId": {
+                      "type": "integer",
+                      "description": "Id returned by StartLongRunningShell."
+                    },
+                    "timeoutMs": {
+                      "type": "integer",
+                      "description": "Max wait for exit in milliseconds (default 10000)."
+                    }
+                  },
+                  "required": ["longRunningShellId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "RequestLongRunningShellCancellation",
+            Description =
+                "Soft-cancel a long-running shell (Ctrl+C on stdin, else CloseMainWindow). " +
+                "Waits until exited or timeoutMs (default 10000). Prefer AbortLongRunningShell to force-kill.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "longRunningShellId": {
+                      "type": "integer",
+                      "description": "Id returned by StartLongRunningShell."
+                    },
+                    "timeoutMs": {
+                      "type": "integer",
+                      "description": "Max wait for exit in milliseconds (default 10000)."
+                    }
+                  },
+                  "required": ["longRunningShellId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "LongRunningShellInteract",
+            Description =
+                "Write a line to a long-running shell's stdin. timeoutMs waits for write/flush only (default 5000).",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "longRunningShellId": {
+                      "type": "integer",
+                      "description": "Id returned by StartLongRunningShell."
+                    },
+                    "input": {
+                      "type": "string",
+                      "description": "Text to write to stdin (newline appended if missing)."
+                    },
+                    "timeoutMs": {
+                      "type": "integer",
+                      "description": "Max wait for write/flush in milliseconds (default 5000)."
+                    }
+                  },
+                  "required": ["longRunningShellId", "input"]
                 }
                 """,
         };
@@ -858,6 +1035,9 @@ public sealed class DysonMcpPipeline
         var shellExecute = CreateShellExecuteTool(availableShellTypes);
         if (shellExecute is not null)
             yield return shellExecute;
+
+        foreach (var longRunning in CreateLongRunningShellTools(availableShellTypes, planMode: false))
+            yield return longRunning;
 
         yield return new DysonMcpTool
         {

@@ -69,7 +69,10 @@ public sealed class DysonUiHost : IAsyncDisposable
         _workDirectories = workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         _http = http ?? throw new ArgumentNullException(nameof(http));
+        DysonLongRunningShellRegistry.Changed += OnLongRunningShellRegistryChanged;
     }
+
+    private void OnLongRunningShellRegistryChanged() => Notify();
 
     public DemoDysonEngine? Engine => _engine;
     public DysonAgentSession? Session => _session;
@@ -141,6 +144,80 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// <summary>Open file viewer overlay (null when closed).</summary>
     public DysonFileViewerState? FileViewer => _fileViewer;
 
+    /// <summary>Work directory of the focused session, if any.</summary>
+    public Guid? ActiveWorkDirectoryId => _session switch
+    {
+        DemoDysonAgentSession demo => demo.WorkDirectoryId == Guid.Empty ? null : demo.WorkDirectoryId,
+        OpenAiCompatibleAgentSession openAi => openAi.WorkDirectoryId == Guid.Empty ? null : openAi.WorkDirectoryId,
+        _ => null,
+    };
+
+    /// <summary>True when the long-running shells modal is open.</summary>
+    public bool LongRunningShellsModalOpen { get; private set; }
+
+    /// <summary>Selected shell id in the shells modal (null = list view).</summary>
+    public int? SelectedLongRunningShellId { get; private set; }
+
+    /// <summary>Running long-running shell count for the active workdir (badge).</summary>
+    public int LongRunningShellRunningCount =>
+        ActiveWorkDirectoryId is Guid wd
+            ? DysonLongRunningShellRegistry.CountRunning(wd)
+            : 0;
+
+    /// <summary>All long-running shells for the active workdir (Running + exited).</summary>
+    public IReadOnlyList<DysonLongRunningShellInfo> ListLongRunningShells() =>
+        ActiveWorkDirectoryId is Guid wd
+            ? DysonLongRunningShellRegistry.List(wd)
+            : [];
+
+    public void OpenLongRunningShellsModal()
+    {
+        LongRunningShellsModalOpen = true;
+        SelectedLongRunningShellId = null;
+        Notify();
+    }
+
+    public void CloseLongRunningShellsModal()
+    {
+        if (!LongRunningShellsModalOpen && SelectedLongRunningShellId is null)
+            return;
+        LongRunningShellsModalOpen = false;
+        SelectedLongRunningShellId = null;
+        Notify();
+    }
+
+    public void SelectLongRunningShell(int? id)
+    {
+        SelectedLongRunningShellId = id;
+        Notify();
+    }
+
+    public async Task<string> ReadSelectedLongRunningShellTailAsync(
+        int maxChars = 32 * 1024,
+        CancellationToken cancellationToken = default)
+    {
+        if (ActiveWorkDirectoryId is not Guid wd || SelectedLongRunningShellId is not int id)
+            return "";
+
+        var tail = await DysonLongRunningShellRegistry
+            .ReadTailAsync(wd, id, maxChars, sinceOffset: null, timeoutMs: 0, cancellationToken)
+            .ConfigureAwait(true);
+        return tail.IsError ? $"(error: {tail.Error})" : tail.Value.Text;
+    }
+
+    public async Task AbortLongRunningShellAsync(
+        int id,
+        CancellationToken cancellationToken = default)
+    {
+        if (ActiveWorkDirectoryId is not Guid wd)
+            return;
+
+        _ = await DysonLongRunningShellRegistry
+            .AbortAsync(wd, id, timeoutMs: 10_000, cancellationToken)
+            .ConfigureAwait(true);
+        Notify();
+    }
+
     /// <summary>
     /// Latest unpublished plan for the focused session (composer Plan-ready sticky), or null.
     /// </summary>
@@ -209,14 +286,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private async Task<string?> TryResolveActiveWorkRootAsync(CancellationToken cancellationToken)
     {
-        Guid? workDirectoryId = _session switch
-        {
-            DemoDysonAgentSession demo => demo.WorkDirectoryId,
-            OpenAiCompatibleAgentSession openAi => openAi.WorkDirectoryId,
-            _ => null,
-        };
-
-        if (workDirectoryId is null || workDirectoryId == Guid.Empty)
+        var workDirectoryId = ActiveWorkDirectoryId;
+        if (workDirectoryId is null)
             return null;
 
         var wd = await _workDirectories.GetAsync(workDirectoryId.Value, cancellationToken);
@@ -567,7 +638,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         // Take completion interrupts before leaving Plan so they fold into BeginBuildPlan
-        // instead of draining as Normal harness continuation turns.
+        // instead of draining as SubagentReportProcessing harness turns.
         var reportBlocks = TakeBufferedCompletionReportBlocks(_session.PersistenceId);
 
         var mode = await SetSessionAgentModeAsync(DysonAgentModes.Work, cancellationToken)
@@ -2011,10 +2082,29 @@ public sealed class DysonUiHost : IAsyncDisposable
                     title = byRuntime.DisplayTitle;
                 }
 
-                var prompt = interrupt.Kind == DysonAgentInterruptKind.SubagentEvent
-                    ? DysonSubagentHostLogic.BuildSubagentEventContinuationPrompt(interrupt, title)
-                    : DysonSubagentHostLogic.BuildSubagentReportContinuationPrompt(interrupt, title);
-                var result = await PromptOnSessionAsync(parent, prompt, CancellationToken.None)
+                if (interrupt.Kind == DysonAgentInterruptKind.SubagentEvent)
+                {
+                    var prompt = DysonSubagentHostLogic.BuildSubagentEventContinuationPrompt(
+                        interrupt, title);
+                    var eventResult = await PromptOnSessionAsync(
+                            parent, prompt, CancellationToken.None)
+                        .ConfigureAwait(false);
+                    if (eventResult.IsError)
+                    {
+                        LastError = eventResult.Error;
+                        Notify();
+                        break;
+                    }
+
+                    continue;
+                }
+
+                // Completion: SubagentReportProcessing turn (not Normal).
+                var result = await ExecutePromptOnSessionAsync(
+                        parent,
+                        (session, token) => session.PromptSubagentReportProcessingAsync(
+                            interrupt, title, token),
+                        CancellationToken.None)
                     .ConfigureAwait(false);
                 if (result.IsError)
                 {
@@ -2166,10 +2256,17 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
     }
 
-    private void EnqueuePrompt(Guid sessionId, string prompt)
+    private void EnqueuePrompt(
+        Guid sessionId,
+        string prompt,
+        DysonAgentTurnKind kind = DysonAgentTurnKind.Normal)
     {
         var text = prompt.Trim();
-        var entry = new QueuedPromptEntry(Guid.NewGuid(), text, DysonSubagentHostLogic.PromptFirstLine(text));
+        var entry = new QueuedPromptEntry(
+            Guid.NewGuid(),
+            text,
+            DysonSubagentHostLogic.PromptFirstLine(text),
+            kind);
         lock (_promptQueueGate)
         {
             if (!_promptQueues.TryGetValue(sessionId, out var list))
@@ -2212,15 +2309,33 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
 
         Notify();
-        var result = await PromptOnSessionAsync(session, next.Text, CancellationToken.None)
-            .ConfigureAwait(false);
+        VoidResult<string> result;
+        if (next.Kind == DysonAgentTurnKind.SubagentReportProcessing)
+        {
+            // Defensive: primary path is DrainAutoTurns → PromptSubagentReportProcessingAsync(interrupt).
+            result = await ExecutePromptOnSessionAsync(
+                    session,
+                    (s, token) => s.PromptSubagentReportProcessingAsync(next.Text, token),
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            result = await PromptOnSessionAsync(session, next.Text, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+
         if (result.IsError && ActiveSessionId == sessionId)
             LastError = result.Error;
 
         Notify();
     }
 
-    private sealed record QueuedPromptEntry(Guid Id, string Text, string FirstLine);
+    private sealed record QueuedPromptEntry(
+        Guid Id,
+        string Text,
+        string FirstLine,
+        DysonAgentTurnKind Kind = DysonAgentTurnKind.Normal);
 
     private async Task PersistTurnCompletedIfNeededAsync(DysonAgentTurn turn)
     {
@@ -2433,6 +2548,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _disposed = true;
         CancelToolPanelWidthSaveTimer();
         ClearFocus();
+        DysonLongRunningShellRegistry.Changed -= OnLongRunningShellRegistryChanged;
         UnhookAllSessions();
         lock (_promptQueueGate)
             _promptQueues.Clear();

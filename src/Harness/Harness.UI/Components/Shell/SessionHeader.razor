@@ -1,6 +1,8 @@
 @namespace Harness.UI.Components.Shell
 @using DysonHarness
 @using Harness.UI.Demo
+@implements IDisposable
+@inject DysonUiHost Host
 
 <div class="session-header">
     @if (Session is null)
@@ -28,6 +30,12 @@
             {
                 <span class="mono" title="Active work directory branch">⎇ @GitBranch</span>
             }
+            <button type="button"
+                    class="session-header__meta-pill"
+                    title="Long-running shells in this work directory"
+                    @onclick="OpenShellsModal">
+                Shells @Host.LongRunningShellRunningCount
+            </button>
             <span class="badge">@DysonBuildInfo.Current</span>
             @if (Session.Provider is DemoDysonAgentProvider demo)
             {
@@ -41,6 +49,81 @@
     }
 </div>
 
+@if (Host.LongRunningShellsModalOpen)
+{
+    <div class="shells-modal-backdrop"
+         @onclick="CloseShellsModal">
+        <div class="shells-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="shells-modal-title"
+             @onclick:stopPropagation="true">
+            <div class="shells-modal__header">
+                <h3 id="shells-modal-title">
+                    @if (Host.SelectedLongRunningShellId is int selectedId)
+                    {
+                        <text>Shell #@selectedId</text>
+                    }
+                    else
+                    {
+                        <text>Long-running shells</text>
+                    }
+                </h3>
+                <div class="shells-modal__header-actions">
+                    @if (Host.SelectedLongRunningShellId is not null)
+                    {
+                        <button type="button" class="btn btn-ghost" @onclick="BackToList">← List</button>
+                    }
+                    <button type="button" class="btn btn-ghost shells-modal__close" @onclick="CloseShellsModal" aria-label="Close">×</button>
+                </div>
+            </div>
+
+            @if (Host.SelectedLongRunningShellId is int shellId)
+            {
+                var info = Host.ListLongRunningShells().FirstOrDefault(s => s.Id == shellId);
+                <div class="shells-modal__log-meta">
+                    <span class="mono">@info?.Status</span>
+                    @if (info?.ExitCode is int exitCode)
+                    {
+                        <span class="mono">exit @exitCode</span>
+                    }
+                    <span class="mono" title="@info?.Command">@ShortCommand(info?.Command)</span>
+                    @if (info is not null
+                         && info.Status is DysonLongRunningShellStatus.Running or DysonLongRunningShellStatus.CancelRequested)
+                    {
+                        <button type="button" class="btn btn-ghost shells-modal__force-stop" @onclick="() => ForceStopAsync(shellId)">Force stop</button>
+                    }
+                </div>
+                <pre class="shells-modal__log mono">@(_logText ?? "(no output)")</pre>
+            }
+            else
+            {
+                var shells = Host.ListLongRunningShells();
+                <div class="shells-modal__list" role="listbox">
+                    @if (shells.Count == 0)
+                    {
+                        <div class="shells-modal__empty">No long-running shells in this work directory.</div>
+                    }
+                    else
+                    {
+                        @foreach (var shell in shells)
+                        {
+                            <button type="button"
+                                    class="shells-modal__row"
+                                    role="option"
+                                    @onclick="() => SelectShellAsync(shell.Id)">
+                                <span class="mono shells-modal__id">#@shell.Id</span>
+                                <span class="shells-modal__status">@shell.Status</span>
+                                <span class="mono shells-modal__cmd" title="@shell.Command">@ShortCommand(shell.Command)</span>
+                            </button>
+                        }
+                    }
+                </div>
+            }
+        </div>
+    </div>
+}
+
 @code {
     [Parameter] public DysonAgentSession? Session { get; set; }
     [Parameter] public string? Title { get; set; }
@@ -48,6 +131,111 @@
     [Parameter] public bool ShowBackToParent { get; set; }
     [Parameter] public EventCallback OnBackToParent { get; set; }
 
+    private string? _logText;
+    private CancellationTokenSource? _pollCts;
+    private bool _hostHooked;
+
+    protected override void OnInitialized()
+    {
+        Host.Changed += OnHostChanged;
+        _hostHooked = true;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Host.LongRunningShellsModalOpen && Host.SelectedLongRunningShellId is not null)
+            await RefreshLogAsync();
+    }
+
+    private void OnHostChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void OpenShellsModal() => Host.OpenLongRunningShellsModal();
+
+    private void CloseShellsModal()
+    {
+        StopPoll();
+        Host.CloseLongRunningShellsModal();
+        _logText = null;
+    }
+
+    private void BackToList()
+    {
+        StopPoll();
+        Host.SelectLongRunningShell(null);
+        _logText = null;
+    }
+
+    private async Task SelectShellAsync(int id)
+    {
+        Host.SelectLongRunningShell(id);
+        await RefreshLogAsync();
+        StartPoll();
+    }
+
+    private async Task ForceStopAsync(int id)
+    {
+        await Host.AbortLongRunningShellAsync(id);
+        await RefreshLogAsync();
+    }
+
+    private async Task RefreshLogAsync()
+    {
+        if (Host.SelectedLongRunningShellId is null)
+            return;
+        _logText = await Host.ReadSelectedLongRunningShellTailAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void StartPoll()
+    {
+        StopPoll();
+        // ponytail: 500ms UI poll while log pane open; upgrade to buffer-append events if needed.
+        _pollCts = new CancellationTokenSource();
+        var token = _pollCts.Token;
+        _ = Task.Run(async () =>
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(500, token);
+                    if (token.IsCancellationRequested)
+                        break;
+                    await InvokeAsync(RefreshLogAsync);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+            }
+        }, token);
+    }
+
+    private void StopPoll()
+    {
+        try { _pollCts?.Cancel(); } catch { /* ignore */ }
+        try { _pollCts?.Dispose(); } catch { /* ignore */ }
+        _pollCts = null;
+    }
+
+    public void Dispose()
+    {
+        StopPoll();
+        if (_hostHooked)
+        {
+            Host.Changed -= OnHostChanged;
+            _hostHooked = false;
+        }
+    }
+
     private static string ShortGuid(Guid id) =>
         id == Guid.Empty ? "—" : id.ToString("N")[..8];
+
+    private static string ShortCommand(string? command)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+            return "—";
+        var line = command.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n')[0].Trim();
+        return line.Length <= 64 ? line : line[..61] + "…";
+    }
 }
