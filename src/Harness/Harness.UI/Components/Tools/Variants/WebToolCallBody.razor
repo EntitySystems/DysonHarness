@@ -1,0 +1,91 @@
+@namespace Harness.UI.Components.Tools.Variants
+@using Harness.UI.Demo
+
+@if (ToolName is "FreeSearch" or "FreeSearchAdvanced" or "SearchWithSynthesis")
+{
+    var query = DysonToolCallUi.GetString(ArgumentsJson, "query");
+    var count = DysonToolCallUi.GetInt(ArgumentsJson, "count");
+    var summarize = DysonToolCallUi.GetString(ArgumentsJson, "summarizePrompt");
+    <div class="tool-section">
+        <div class="tool-section__label">Query</div>
+        <div class="tool-kv">@(query ?? "")</div>
+        <div class="tool-section__meta mono">
+            @if (count is int c)
+            {
+                <text>count @c</text>
+            }
+            @if (ToolName == "FreeSearchAdvanced")
+            {
+                <text> · advanced</text>
+            }
+            else if (ToolName == "SearchWithSynthesis")
+            {
+                <text> · synthesis</text>
+            }
+        </div>
+        @if (!string.IsNullOrEmpty(summarize))
+        {
+            <div class="tool-section__sublabel">Summarize focus</div>
+            <pre class="tool-scroll mono">@summarize</pre>
+        }
+    </div>
+}
+else if (ToolName is "FreeExtract" or "WebFetch")
+{
+    var url = DysonToolCallUi.GetString(ArgumentsJson, "url");
+    var summarize = DysonToolCallUi.GetString(ArgumentsJson, "summarizePrompt");
+    var fullHtml = ToolName == "WebFetch" && DysonToolCallUi.GetBool(ArgumentsJson, "fullHtml");
+    <div class="tool-section">
+        <div class="tool-section__label">URL</div>
+        @if (!string.IsNullOrEmpty(url))
+        {
+            <a class="tool-ext-link mono" href="@url" target="_blank" rel="noopener noreferrer" @onclick:stopPropagation="true">@url</a>
+        }
+        <div class="tool-section__meta mono">
+            @if (ToolName == "WebFetch")
+            {
+                <text>@(fullHtml ? "full HTML" : "summarized")</text>
+            }
+        </div>
+        @if (!string.IsNullOrEmpty(summarize))
+        {
+            <div class="tool-section__sublabel">Summarize focus</div>
+            <pre class="tool-scroll mono">@summarize</pre>
+        }
+    </div>
+}
+else if (ToolName == "FetchGithubReadme")
+{
+    var url = DysonToolCallUi.GetString(ArgumentsJson, "url");
+    var repo = DysonToolCallUi.GithubOwnerRepo(url);
+    var summarize = DysonToolCallUi.GetString(ArgumentsJson, "summarizePrompt");
+    <div class="tool-section">
+        <div class="tool-section__label">Repo</div>
+        <div class="tool-kv mono">@(repo ?? "")</div>
+        @if (!string.IsNullOrEmpty(url))
+        {
+            <a class="tool-ext-link mono" href="@url" target="_blank" rel="noopener noreferrer" @onclick:stopPropagation="true">@url</a>
+        }
+        @if (!string.IsNullOrEmpty(summarize))
+        {
+            <div class="tool-section__sublabel">Summarize focus</div>
+            <pre class="tool-scroll mono">@summarize</pre>
+        }
+    </div>
+}
+
+@if (!ArgsOnly && ResultContent is not null)
+{
+    <div class="tool-section">
+        <div class="tool-section__label">Result</div>
+        <pre class="tool-scroll tool-scroll--tall mono @(IsError ? "tool-scroll--danger" : null)">@ResultContent</pre>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public string ToolName { get; set; } = "";
+    [Parameter] public string? ArgumentsJson { get; set; }
+    [Parameter] public string? ResultContent { get; set; }
+    [Parameter] public bool IsError { get; set; }
+    [Parameter] public bool ArgsOnly { get; set; }
+}

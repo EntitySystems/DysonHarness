@@ -1,0 +1,42 @@
+@namespace Harness.UI.Components.Tools.Variants
+@inject DysonUiHost Host
+
+@if (string.IsNullOrWhiteSpace(Path))
+{
+    <span class="tool-path tool-path--muted mono">@(Fallback ?? "(no path)")</span>
+}
+else
+{
+    <button type="button"
+            class="tool-path-link mono"
+            title="@Path"
+            disabled="@_opening"
+            @onclick="OpenAsync"
+            @onclick:stopPropagation="true">
+        @(Label ?? Path)
+    </button>
+}
+
+@code {
+    [Parameter] public string? Path { get; set; }
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public string? Fallback { get; set; }
+
+    private bool _opening;
+
+    private async Task OpenAsync()
+    {
+        if (string.IsNullOrWhiteSpace(Path) || _opening)
+            return;
+
+        _opening = true;
+        try
+        {
+            await Host.OpenFileViewerAsync(Path);
+        }
+        finally
+        {
+            _opening = false;
+        }
+    }
+}

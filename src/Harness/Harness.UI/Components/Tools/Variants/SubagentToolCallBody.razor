@@ -1,0 +1,178 @@
+@namespace Harness.UI.Components.Tools.Variants
+@using System.Text.Json
+@using Harness.UI.Demo
+
+@if (ToolName == "StartSubagent")
+{
+    var mode = DysonToolCallUi.GetString(ArgumentsJson, "agentMode");
+    var task = DysonToolCallUi.GetString(ArgumentsJson, "task");
+    var context = DysonToolCallUi.GetString(ArgumentsJson, "context");
+    var model = DysonToolCallUi.GetString(ArgumentsJson, "modelSlug");
+    var effort = DysonToolCallUi.GetString(ArgumentsJson, "reasoningEffort");
+    var seedCount = 0;
+    try
+    {
+        if (!string.IsNullOrWhiteSpace(ArgumentsJson))
+        {
+            using var doc = JsonDocument.Parse(ArgumentsJson);
+            if (doc.RootElement.TryGetProperty("todos", out var todos) && todos.ValueKind == JsonValueKind.Array)
+                seedCount = todos.GetArrayLength();
+        }
+    }
+    catch (JsonException) { }
+
+    <div class="tool-section">
+        <div class="tool-section__label">
+            Spawn
+            @if (!string.IsNullOrEmpty(mode))
+            {
+                <span class="tool-chip">@mode</span>
+            }
+        </div>
+        <div class="tool-kv">@(task ?? "")</div>
+        <div class="tool-section__meta mono">
+            @if (!string.IsNullOrEmpty(model))
+            {
+                <text>@model</text>
+            }
+            @if (!string.IsNullOrEmpty(effort))
+            {
+                <text> · @effort</text>
+            }
+            @if (seedCount > 0)
+            {
+                <text> · @seedCount seed todos</text>
+            }
+        </div>
+        @if (!string.IsNullOrEmpty(context))
+        {
+            <pre class="tool-scroll mono">@DysonToolCallUi.Truncate(context, 800)</pre>
+        }
+    </div>
+    @if (!ArgsOnly && ResultContent is not null)
+    {
+        <div class="tool-section">
+            <div class="tool-section__label">Result</div>
+            @if (IsError)
+            {
+                <pre class="tool-result tool-result--danger mono">@ResultContent</pre>
+            }
+            else
+            {
+                <div class="tool-kv mono">
+                    id @JsonField(ResultContent, "subagentId")
+                    · persistence @JsonField(ResultContent, "persistenceId")
+                    · @JsonField(ResultContent, "title")
+                </div>
+            }
+        </div>
+    }
+}
+else if (ToolName == "ListSubagents")
+{
+    <div class="tool-section">
+        <div class="tool-section__label">Children</div>
+        @if (ArgsOnly)
+        {
+            <div class="tool-section__meta">Pending…</div>
+        }
+        else if (IsError && ResultContent is not null)
+        {
+            <pre class="tool-result tool-result--danger mono">@ResultContent</pre>
+        }
+        else if (ResultContent is not null)
+        {
+            <div class="tool-scroll">
+                @foreach (var row in ParseSubagents(ResultContent))
+                {
+                    <div class="tool-match mono">
+                        <span class="tool-chip">#@row.Id</span>
+                        <span class="tool-chip">@row.Mode</span>
+                        <span>@row.Title</span>
+                        <span class="tool-section__meta">@row.Status</span>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
+else if (ToolName is "WaitForSubagent" or "InspectSubagentLog" or "StopSubagent")
+{
+    var id = DysonToolCallUi.GetInt(ArgumentsJson, "subagentId");
+    var extra = ToolName switch
+    {
+        "WaitForSubagent" => DysonToolCallUi.GetInt(ArgumentsJson, "timeoutMs") is int t ? $"timeout {t}ms" : null,
+        "InspectSubagentLog" => DysonToolCallUi.GetInt(ArgumentsJson, "maxLines") is int m ? $"max {m} lines" : null,
+        "StopSubagent" => DysonToolCallUi.GetString(ArgumentsJson, "reason"),
+        _ => null,
+    };
+    <div class="tool-section">
+        <div class="tool-section__label">@ToolName</div>
+        <div class="tool-kv mono">subagent #@(id?.ToString() ?? "?")</div>
+        @if (!string.IsNullOrEmpty(extra))
+        {
+            <div class="tool-section__meta mono">@extra</div>
+        }
+    </div>
+    @if (!ArgsOnly && ResultContent is not null)
+    {
+        <div class="tool-section">
+            <div class="tool-section__label">@(ToolName == "InspectSubagentLog" ? "Log" : "Result")</div>
+            <pre class="tool-scroll tool-scroll--tall mono @(IsError ? "tool-scroll--danger" : null)">@ResultContent</pre>
+        </div>
+    }
+}
+else if (ToolName == "SubmitSubagentReport")
+{
+    var summary = DysonToolCallUi.GetString(ArgumentsJson, "summary");
+    var status = DysonToolCallUi.GetString(ArgumentsJson, "status") ?? "completed";
+    <div class="tool-section">
+        <div class="tool-section__label">
+            Report
+            <span class="tool-chip @(string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase) ? "tool-chip--danger" : "tool-chip--ok")">@status</span>
+        </div>
+        <pre class="tool-scroll tool-scroll--tall mono">@(summary ?? "")</pre>
+    </div>
+    @if (!ArgsOnly && ResultContent is not null)
+    {
+        <div class="tool-section">
+            <div class="tool-section__label">Result</div>
+            <pre class="tool-result mono @(IsError ? "tool-result--danger" : null)">@ResultContent</pre>
+        </div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public string ToolName { get; set; } = "";
+    [Parameter] public string? ArgumentsJson { get; set; }
+    [Parameter] public string? ResultContent { get; set; }
+    [Parameter] public bool IsError { get; set; }
+    [Parameter] public bool ArgsOnly { get; set; }
+
+    private static string JsonField(string? json, string name) =>
+        DysonToolCallUi.GetJsonProperty(json, name) ?? "—";
+
+    private static IEnumerable<(string Id, string Mode, string Title, string Status)> ParseSubagents(string json)
+    {
+        List<(string, string, string, string)> items = [];
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                return items;
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                var id = el.TryGetProperty("subagentId", out var i)
+                    ? i.ToString()
+                    : "?";
+                var mode = el.TryGetProperty("agentMode", out var m) ? m.GetString() ?? "" : "";
+                var title = el.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
+                var status = el.TryGetProperty("status", out var s) ? s.GetString() ?? "" : "";
+                items.Add((id, mode, title, status));
+            }
+        }
+        catch (JsonException) { }
+
+        return items;
+    }
+}

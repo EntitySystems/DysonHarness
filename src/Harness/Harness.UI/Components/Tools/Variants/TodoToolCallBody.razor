@@ -1,0 +1,105 @@
+@namespace Harness.UI.Components.Tools.Variants
+@using System.Text.Json
+@using Harness.UI.Demo
+
+@if (ToolName == "ListTodos")
+{
+    <div class="tool-section">
+        <div class="tool-section__label">Todos</div>
+        @if (ArgsOnly)
+        {
+            <div class="tool-section__meta">Pending list…</div>
+        }
+        else if (IsError && ResultContent is not null)
+        {
+            <pre class="tool-result tool-result--danger mono">@ResultContent</pre>
+        }
+        else if (ResultContent is not null)
+        {
+            <div class="tool-scroll">
+                @foreach (var item in ParseTodoList(ResultContent))
+                {
+                    <div class="tool-todo mono">
+                        <span class="tool-chip">@item.Status</span>
+                        <span>@item.DisplayName</span>
+                        <span class="tool-section__meta">@item.TaskCode</span>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
+else if (ToolName is "CreateTodo" or "UpdateTodo")
+{
+    var displayName = DysonToolCallUi.GetString(ArgumentsJson, "displayName");
+    var taskCode = DysonToolCallUi.GetString(ArgumentsJson, "taskCode");
+    var status = DysonToolCallUi.GetString(ArgumentsJson, "status");
+    <div class="tool-section">
+        <div class="tool-section__label">@(ToolName == "CreateTodo" ? "New todo" : "Update")</div>
+        <div class="tool-kv">@(displayName ?? taskCode ?? "")</div>
+        <div class="tool-section__meta mono">
+            @if (!string.IsNullOrEmpty(taskCode))
+            {
+                <text>@taskCode</text>
+            }
+            @if (!string.IsNullOrEmpty(status))
+            {
+                <text> · @status</text>
+            }
+        </div>
+    </div>
+    @if (!ArgsOnly && ResultContent is not null)
+    {
+        <div class="tool-section">
+            <div class="tool-section__label">Result</div>
+            <pre class="tool-result mono @(IsError ? "tool-result--danger" : null)">@ResultContent</pre>
+        </div>
+    }
+}
+else if (ToolName == "DeleteTodo")
+{
+    var taskCode = DysonToolCallUi.GetString(ArgumentsJson, "taskCode");
+    <div class="tool-section">
+        <div class="tool-section__label">Delete</div>
+        <div class="tool-kv mono">@(taskCode ?? "")</div>
+    </div>
+    @if (!ArgsOnly && ResultContent is not null)
+    {
+        <div class="tool-section">
+            <div class="tool-section__label">Result</div>
+            <pre class="tool-result mono @(IsError ? "tool-result--danger" : null)">@ResultContent</pre>
+        </div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public string ToolName { get; set; } = "";
+    [Parameter] public string? ArgumentsJson { get; set; }
+    [Parameter] public string? ResultContent { get; set; }
+    [Parameter] public bool IsError { get; set; }
+    [Parameter] public bool ArgsOnly { get; set; }
+
+    private static IEnumerable<(string DisplayName, string TaskCode, string Status)> ParseTodoList(string json)
+    {
+        List<(string, string, string)> items = [];
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                return items;
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                var name = el.TryGetProperty("displayName", out var n) ? n.GetString() ?? "" : "";
+                var code = el.TryGetProperty("taskCode", out var c) ? c.GetString() ?? "" : "";
+                var status = el.TryGetProperty("status", out var s) ? s.GetString() ?? "" : "";
+                items.Add((name, code, status));
+            }
+        }
+        catch (JsonException)
+        {
+            // fall through empty
+        }
+
+        return items;
+    }
+}

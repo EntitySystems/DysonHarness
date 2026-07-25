@@ -1,0 +1,145 @@
+@namespace Harness.UI.Components.Tools.Variants
+@using System.Text.Json
+@using Harness.UI.Demo
+
+@if (ToolName is "AskQuestion" or "AskQuestionFromParent")
+{
+    <div class="tool-section">
+        <div class="tool-section__label">
+            Questions
+            @if (ToolName == "AskQuestionFromParent")
+            {
+                <span class="tool-chip">via parent</span>
+            }
+        </div>
+        <ol class="tool-questions">
+            @foreach (var q in ParseQuestions(ArgumentsJson))
+            {
+                <li>
+                    <div class="tool-kv">@q.Prompt</div>
+                    @if (q.Options.Count > 0)
+                    {
+                        <div class="tool-option-row">
+                            @foreach (var opt in q.Options)
+                            {
+                                <span class="tool-chip">@opt</span>
+                            }
+                        </div>
+                    }
+                </li>
+            }
+        </ol>
+    </div>
+    @if (!ArgsOnly && ResultContent is not null)
+    {
+        <div class="tool-section">
+            <div class="tool-section__label">Answers</div>
+            <pre class="tool-scroll mono @(IsError ? "tool-scroll--danger" : null)">@ResultContent</pre>
+        </div>
+    }
+}
+else if (ToolName == "TriggerParentEvent")
+{
+    var kind = DysonToolCallUi.GetString(ArgumentsJson, "kind");
+    var payload = DysonToolCallUi.GetString(ArgumentsJson, "payload");
+    <div class="tool-section">
+        <div class="tool-section__label">Event <span class="tool-chip">@(kind ?? "")</span></div>
+        <pre class="tool-scroll tool-scroll--tall mono">@(payload ?? "")</pre>
+    </div>
+    @if (!ArgsOnly && ResultContent is not null)
+    {
+        <div class="tool-section">
+            <div class="tool-section__label">Reply</div>
+            <pre class="tool-scroll mono @(IsError ? "tool-scroll--danger" : null)">@ResultContent</pre>
+        </div>
+    }
+}
+else if (ToolName == "RespondToSubagentEvent")
+{
+    var id = DysonToolCallUi.GetInt(ArgumentsJson, "subagentId");
+    var eventId = DysonToolCallUi.GetString(ArgumentsJson, "eventId");
+    var reply = DysonToolCallUi.GetString(ArgumentsJson, "reply");
+    <div class="tool-section">
+        <div class="tool-section__label">Reply</div>
+        <div class="tool-section__meta mono">
+            #@(id?.ToString() ?? "?") · @DysonToolCallUi.Truncate(eventId, 36)
+        </div>
+        <pre class="tool-scroll mono">@(reply ?? "")</pre>
+    </div>
+    @if (!ArgsOnly && ResultContent is not null)
+    {
+        <div class="tool-section">
+            <div class="tool-section__label">Result</div>
+            <pre class="tool-result mono @(IsError ? "tool-result--danger" : null)">@ResultContent</pre>
+        </div>
+    }
+}
+else if (ToolName == "TriggerSubagentEvent")
+{
+    var id = DysonToolCallUi.GetInt(ArgumentsJson, "subagentId");
+    var payload = DysonToolCallUi.GetString(ArgumentsJson, "payload");
+    var interrupt = DysonToolCallUi.GetBool(ArgumentsJson, "interruptSubagent");
+    <div class="tool-section">
+        <div class="tool-section__label">
+            Inject
+            <span class="tool-chip">#@(id?.ToString() ?? "?")</span>
+            <span class="tool-chip">@(interrupt ? "interrupt" : "queue")</span>
+        </div>
+        <pre class="tool-scroll tool-scroll--tall mono">@(payload ?? "")</pre>
+    </div>
+    @if (!ArgsOnly && ResultContent is not null)
+    {
+        <div class="tool-section">
+            <div class="tool-section__label">Result</div>
+            <pre class="tool-result mono @(IsError ? "tool-result--danger" : null)">@ResultContent</pre>
+        </div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public string ToolName { get; set; } = "";
+    [Parameter] public string? ArgumentsJson { get; set; }
+    [Parameter] public string? ResultContent { get; set; }
+    [Parameter] public bool IsError { get; set; }
+    [Parameter] public bool ArgsOnly { get; set; }
+
+    private static IEnumerable<(string Prompt, IReadOnlyList<string> Options)> ParseQuestions(string? args)
+    {
+        List<(string, IReadOnlyList<string>)> items = [];
+        if (string.IsNullOrWhiteSpace(args))
+            return items;
+        try
+        {
+            using var doc = JsonDocument.Parse(args);
+            if (!doc.RootElement.TryGetProperty("questions", out var qs) || qs.ValueKind != JsonValueKind.Array)
+                return items;
+            foreach (var q in qs.EnumerateArray())
+            {
+                var prompt = q.TryGetProperty("prompt", out var p) ? p.GetString() ?? ""
+                    : q.TryGetProperty("question", out var qn) ? qn.GetString() ?? ""
+                    : q.TryGetProperty("text", out var t) ? t.GetString() ?? ""
+                    : "";
+                List<string> options = [];
+                if (q.TryGetProperty("options", out var opts) && opts.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var o in opts.EnumerateArray())
+                    {
+                        if (o.ValueKind == JsonValueKind.String)
+                            options.Add(o.GetString() ?? "");
+                        else if (o.ValueKind == JsonValueKind.Object
+                                 && o.TryGetProperty("label", out var label)
+                                 && label.ValueKind == JsonValueKind.String)
+                        {
+                            options.Add(label.GetString() ?? "");
+                        }
+                    }
+                }
+
+                items.Add((prompt, options));
+            }
+        }
+        catch (JsonException) { }
+
+        return items;
+    }
+}

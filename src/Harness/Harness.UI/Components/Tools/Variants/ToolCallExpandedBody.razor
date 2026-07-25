@@ -1,0 +1,84 @@
+@namespace Harness.UI.Components.Tools.Variants
+
+@switch (ToolName)
+{
+    case "WriteFile":
+        <WriteFileToolCallBody ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
+        break;
+    case "CreateFile":
+        <CreateFileToolCallBody ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
+        break;
+    case "ReadFile":
+        <ReadFileToolCallBody ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
+        break;
+    case "Grep":
+        <GrepToolCallBody ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
+        break;
+    case "ListDirectory":
+        <ListDirectoryToolCallBody ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
+        break;
+    case "CreateDirectory":
+        <CreateDirectoryToolCallBody ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
+        break;
+    case "ShellExecute":
+        <ShellExecuteToolCallBody ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
+        break;
+    case "RenameSession":
+    case "GetDateTime":
+    case "SubmitPlan":
+        <SessionPlanToolCallBody ToolName="@ToolName" ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
+        break;
+    case "ListTodos":
+    case "CreateTodo":
+    case "UpdateTodo":
+    case "DeleteTodo":
+        <TodoToolCallBody ToolName="@ToolName" ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
+        break;
+    case "StartSubagent":
+    case "ListSubagents":
+    case "WaitForSubagent":
+    case "InspectSubagentLog":
+    case "StopSubagent":
+    case "SubmitSubagentReport":
+        <SubagentToolCallBody ToolName="@ToolName" ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
+        break;
+    case "AskQuestion":
+    case "AskQuestionFromParent":
+    case "TriggerParentEvent":
+    case "RespondToSubagentEvent":
+    case "TriggerSubagentEvent":
+        <InterAgentToolCallBody ToolName="@ToolName" ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
+        break;
+    case "CompleteTask":
+    case "ConfirmTaskComplete":
+    case "ContinueWork":
+    case "ExpandThoughtProcess":
+        <LifecycleToolCallBody ToolName="@ToolName" ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
+        break;
+    case "FreeSearch":
+    case "FreeSearchAdvanced":
+    case "SearchWithSynthesis":
+    case "FreeExtract":
+    case "WebFetch":
+    case "FetchGithubReadme":
+        <WebToolCallBody ToolName="@ToolName" ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
+        break;
+    default:
+        <GenericToolCallBody CallId="@CallId"
+                             Stage="@Stage"
+                             ArgumentsJson="@ArgumentsJson"
+                             ResultContent="@ResultContent"
+                             IsError="@IsError"
+                             ArgsOnly="@ArgsOnly" />
+        break;
+}
+
+@code {
+    [Parameter, EditorRequired] public string ToolName { get; set; } = "";
+    [Parameter] public string? CallId { get; set; }
+    [Parameter] public int? Stage { get; set; }
+    [Parameter] public string? ArgumentsJson { get; set; }
+    [Parameter] public string? ResultContent { get; set; }
+    [Parameter] public bool IsError { get; set; }
+    [Parameter] public bool ArgsOnly { get; set; }
+}

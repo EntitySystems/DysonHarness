@@ -1,28 +1,45 @@
 @namespace Harness.UI.Components.Tools
 @using DysonHarness
+@using Harness.UI.Components.Tools.Variants
+@using Harness.UI.Demo
 
 <div class="tool-row @(_expanded ? "tool-row--expanded" : null)">
     <button type="button"
             class="tool-row__header"
             aria-expanded="@(_expanded ? "true" : "false")"
             @onclick="ToggleExpanded">
-        <span class="tool-row__name mono">@Tracked.Call.ToolName</span>
+        <span class="tool-row__lead">
+            <span class="tool-row__name mono">@Tracked.Call.ToolName</span>
+            @if (_summary.HasLineDelta)
+            {
+                <span class="tool-row__summary">
+                    @if (_summary.LinesAdded is int added)
+                    {
+                        <span class="tool-delta tool-delta--add">+@added</span>
+                    }
+                    @if (_summary.LinesRemoved is int removed)
+                    {
+                        <span class="tool-delta tool-delta--del">−@removed</span>
+                    }
+                </span>
+            }
+            else if (!string.IsNullOrEmpty(_summary.Text))
+            {
+                <span class="tool-row__summary mono">@_summary.Text</span>
+            }
+        </span>
         <span class="tool-status @StatusClass" data-status-short="@StatusShort">@Tracked.Status</span>
     </button>
     @if (_expanded)
     {
         <div class="tool-row__body">
-            <div class="tool-row__meta mono">
-                #@Tracked.Call.CallId · stage @Tracked.Call.Stage
-                @if (!string.IsNullOrWhiteSpace(Tracked.Call.ArgumentsJson))
-                {
-                    <text> · @Tracked.Call.ArgumentsJson</text>
-                }
-            </div>
-            @if (Tracked.Result is not null)
-            {
-                <div class="tool-row__result mono">@Tracked.Result.Content</div>
-            }
+            <ToolCallExpandedBody ToolName="@Tracked.Call.ToolName"
+                                  CallId="@Tracked.Call.CallId"
+                                  Stage="@Tracked.Call.Stage"
+                                  ArgumentsJson="@Tracked.Call.ArgumentsJson"
+                                  ResultContent="@(Tracked.Result?.Content)"
+                                  IsError="@(Tracked.Result?.IsError == true || Tracked.Status == DysonToolCallStatus.Failed)"
+                                  ArgsOnly="false" />
         </div>
     }
 </div>
@@ -31,6 +48,16 @@
     [Parameter, EditorRequired] public DysonTrackedToolCall Tracked { get; set; } = default!;
 
     private bool _expanded;
+    private DysonToolCallUi.CollapsedSummary _summary = new();
+
+    protected override void OnParametersSet()
+    {
+        _summary = DysonToolCallUi.GetCollapsedSummary(
+            Tracked.Call.ToolName,
+            Tracked.Call.ArgumentsJson,
+            Tracked.Result?.Content,
+            hasResult: Tracked.Result is not null);
+    }
 
     private void ToggleExpanded() => _expanded = !_expanded;
 

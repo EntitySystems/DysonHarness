@@ -1,0 +1,76 @@
+@namespace Harness.UI.Components.Tools.Variants
+@using Harness.UI.Demo
+
+@{
+    var pattern = DysonToolCallUi.GetString(ArgumentsJson, "pattern");
+    var path = DysonToolCallUi.GetString(ArgumentsJson, "path");
+    var glob = DysonToolCallUi.GetString(ArgumentsJson, "glob");
+    var caseInsensitive = DysonToolCallUi.GetBool(ArgumentsJson, "caseInsensitive");
+}
+
+<div class="tool-section">
+    <div class="tool-section__label">Pattern</div>
+    <div class="tool-kv mono">@pattern</div>
+    <div class="tool-section__meta mono">
+        @if (!string.IsNullOrEmpty(path))
+        {
+            <text>path @path</text>
+        }
+        @if (!string.IsNullOrEmpty(glob))
+        {
+            <text>@(string.IsNullOrEmpty(path) ? null : " · ")glob @glob</text>
+        }
+        @if (caseInsensitive)
+        {
+            <text> · case-insensitive</text>
+        }
+    </div>
+</div>
+@if (!ArgsOnly && ResultContent is not null)
+{
+    <div class="tool-section">
+        <div class="tool-section__label">Matches</div>
+        @if (IsError)
+        {
+            <pre class="tool-scroll tool-scroll--danger mono">@ResultContent</pre>
+        }
+        else if (ResultContent.StartsWith("No matches.", StringComparison.Ordinal))
+        {
+            <div class="tool-section__meta">No matches.</div>
+        }
+        else
+        {
+            <div class="tool-scroll tool-scroll--tall">
+                @foreach (var line in ResultContent.Replace("\r\n", "\n").Split('\n'))
+                {
+                    if (string.IsNullOrWhiteSpace(line) || line.StartsWith('…'))
+                    {
+                        <div class="tool-match mono">@line</div>
+                        continue;
+                    }
+
+                    var (matchPath, matchLine, rest) = DysonToolCallUi.ParseGrepMatchLine(line);
+                    if (matchPath is null)
+                    {
+                        <div class="tool-match mono">@line</div>
+                    }
+                    else
+                    {
+                        <div class="tool-match mono">
+                            <ToolPathLink Path="@matchPath" Label="@matchPath" />
+                            <span>:@matchLine:</span>
+                            <span>@rest</span>
+                        </div>
+                    }
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string? ArgumentsJson { get; set; }
+    [Parameter] public string? ResultContent { get; set; }
+    [Parameter] public bool IsError { get; set; }
+    [Parameter] public bool ArgsOnly { get; set; }
+}

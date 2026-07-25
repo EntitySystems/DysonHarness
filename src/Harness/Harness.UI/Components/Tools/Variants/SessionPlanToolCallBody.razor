@@ -1,0 +1,81 @@
+@namespace Harness.UI.Components.Tools.Variants
+@using System.Text.Json
+@using Harness.UI.Demo
+
+@if (ToolName == "RenameSession")
+{
+    var title = DysonToolCallUi.GetString(ArgumentsJson, "title");
+    <div class="tool-section">
+        <div class="tool-section__label">Title</div>
+        <div class="tool-kv mono">"@(title ?? "")"</div>
+    </div>
+    @if (!ArgsOnly && ResultContent is not null)
+    {
+        <div class="tool-section">
+            <div class="tool-section__label">Result</div>
+            <pre class="tool-result mono @(IsError ? "tool-result--danger" : null)">@ResultContent</pre>
+        </div>
+    }
+}
+else if (ToolName == "GetDateTime")
+{
+    var tz = DysonToolCallUi.GetString(ArgumentsJson, "timezone") ?? "utc";
+    <div class="tool-section">
+        <div class="tool-section__label">Timezone</div>
+        <div class="tool-kv mono">@tz</div>
+    </div>
+    @if (!ArgsOnly && ResultContent is not null)
+    {
+        <div class="tool-section">
+            <div class="tool-section__label">Clock</div>
+            <pre class="tool-result mono @(IsError ? "tool-result--danger" : null)">@ResultContent</pre>
+        </div>
+    }
+}
+else if (ToolName == "SubmitPlan")
+{
+    var title = DysonToolCallUi.GetString(ArgumentsJson, "title");
+    var planPath = DysonToolCallUi.GetJsonProperty(ResultContent, "planPath");
+    <div class="tool-section">
+        <div class="tool-section__label">Plan</div>
+        <div class="tool-kv">@(title ?? "")</div>
+        @if (!string.IsNullOrEmpty(planPath))
+        {
+            <div class="tool-section__meta">
+                <ToolPathLink Path="@planPath" />
+            </div>
+        }
+    </div>
+    @if (!ArgsOnly && ResultContent is not null)
+    {
+        <div class="tool-section">
+            <div class="tool-section__label">Result</div>
+            @if (IsError)
+            {
+                <pre class="tool-result tool-result--danger mono">@ResultContent</pre>
+            }
+            else
+            {
+                <div class="tool-section__meta mono">
+                    @if (!string.IsNullOrEmpty(planPath))
+                    {
+                        <text>planPath </text>
+                        <ToolPathLink Path="@planPath" Label="@planPath" />
+                    }
+                    else
+                    {
+                        <pre class="tool-result mono">@ResultContent</pre>
+                    }
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public string ToolName { get; set; } = "";
+    [Parameter] public string? ArgumentsJson { get; set; }
+    [Parameter] public string? ResultContent { get; set; }
+    [Parameter] public bool IsError { get; set; }
+    [Parameter] public bool ArgsOnly { get; set; }
+}

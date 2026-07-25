@@ -1,0 +1,75 @@
+@namespace Harness.UI.Components.Tools.Variants
+@using Harness.UI.Demo
+
+@{
+    var parsed = DysonToolCallUi.ParseShellExecute(ArgumentsJson, ArgsOnly ? null : ResultContent);
+}
+
+<div class="tool-section">
+    <div class="tool-section__label">Command</div>
+    <div class="tool-section__meta mono">
+        @if (!string.IsNullOrEmpty(parsed.Shell))
+        {
+            <span class="tool-chip">@parsed.Shell</span>
+        }
+        @if (!string.IsNullOrEmpty(parsed.WorkingDirectory))
+        {
+            <span>cwd @parsed.WorkingDirectory</span>
+        }
+    </div>
+    <pre class="tool-command mono">@(parsed.Command ?? "")</pre>
+</div>
+@if (!ArgsOnly)
+{
+    @if (!string.IsNullOrEmpty(parsed.PlanWarning))
+    {
+        <div class="tool-notice">@parsed.PlanWarning</div>
+    }
+    <div class="tool-section">
+        <div class="tool-section__label">
+            Output
+            @if (parsed.ExitCode is int code)
+            {
+                <span class="tool-chip @(IsError || code != 0 ? "tool-chip--danger" : "tool-chip--ok")">
+                    exit @(code)
+                </span>
+            }
+            @if (parsed.TimedOut)
+            {
+                <span class="tool-chip tool-chip--danger">timeout</span>
+            }
+        </div>
+        @if (IsError && string.IsNullOrEmpty(parsed.Stdout) && string.IsNullOrEmpty(parsed.Stderr) && ResultContent is not null)
+        {
+            <pre class="tool-scroll tool-scroll--tall tool-scroll--danger mono">@ResultContent</pre>
+        }
+        else
+        {
+            @if (!string.IsNullOrEmpty(parsed.Stdout))
+            {
+                <div class="tool-section__sublabel mono">stdout</div>
+                <pre class="tool-scroll tool-scroll--tall mono">@parsed.Stdout</pre>
+            }
+            @if (!string.IsNullOrEmpty(parsed.Stderr))
+            {
+                <div class="tool-section__sublabel mono">stderr</div>
+                <pre class="tool-scroll tool-scroll--tall tool-scroll--danger mono">@parsed.Stderr</pre>
+            }
+            @if (string.IsNullOrEmpty(parsed.Stdout) && string.IsNullOrEmpty(parsed.Stderr) && ResultContent is not null)
+            {
+                <pre class="tool-scroll tool-scroll--tall mono @(IsError ? "tool-scroll--danger" : null)">@ResultContent</pre>
+            }
+            else if (string.IsNullOrEmpty(parsed.Stdout) && string.IsNullOrEmpty(parsed.Stderr))
+            {
+                <div class="tool-section__meta">(no output)</div>
+            }
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string? ArgumentsJson { get; set; }
+    [Parameter] public string? ResultContent { get; set; }
+    [Parameter] public bool IsError { get; set; }
+    [Parameter] public bool ArgsOnly { get; set; }
+}

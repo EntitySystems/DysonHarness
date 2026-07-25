@@ -1,0 +1,80 @@
+@namespace Harness.UI.Components.Tools.Variants
+@using Harness.UI.Demo
+
+@if (ToolName == "CompleteTask")
+{
+    var summary = DysonToolCallUi.GetString(ArgumentsJson, "summary");
+    var files = DysonToolCallUi.GetStringArray(ArgumentsJson, "filesTouched");
+    var risks = DysonToolCallUi.GetString(ArgumentsJson, "residualRisks");
+    <div class="tool-section">
+        <div class="tool-section__label">Summary</div>
+        <pre class="tool-scroll mono">@(summary ?? "")</pre>
+    </div>
+    @if (files.Count > 0)
+    {
+        <div class="tool-section">
+            <div class="tool-section__label">Files touched</div>
+            <div class="tool-scroll">
+                @foreach (var f in files)
+                {
+                    <div class="tool-match"><ToolPathLink Path="@f" Label="@f" /></div>
+                }
+            </div>
+        </div>
+    }
+    @if (!string.IsNullOrEmpty(risks))
+    {
+        <div class="tool-section">
+            <div class="tool-section__label">Residual risks</div>
+            <pre class="tool-scroll mono">@risks</pre>
+        </div>
+    }
+}
+else if (ToolName == "ConfirmTaskComplete")
+{
+    var rationale = DysonToolCallUi.GetString(ArgumentsJson, "rationale");
+    <div class="tool-section">
+        <div class="tool-section__label">Confirmed</div>
+        <pre class="tool-scroll mono">@(string.IsNullOrEmpty(rationale) ? "(no rationale)" : rationale)</pre>
+    </div>
+}
+else if (ToolName == "ContinueWork")
+{
+    var reason = DysonToolCallUi.GetString(ArgumentsJson, "reason");
+    var remaining = DysonToolCallUi.GetString(ArgumentsJson, "remainingWork");
+    <div class="tool-section">
+        <div class="tool-section__label">Reason</div>
+        <pre class="tool-scroll mono">@(reason ?? "")</pre>
+    </div>
+    @if (!string.IsNullOrEmpty(remaining))
+    {
+        <div class="tool-section">
+            <div class="tool-section__label">Remaining work</div>
+            <pre class="tool-scroll mono">@remaining</pre>
+        </div>
+    }
+}
+else if (ToolName == "ExpandThoughtProcess")
+{
+    var focus = DysonToolCallUi.GetString(ArgumentsJson, "focus");
+    <div class="tool-section">
+        <div class="tool-section__label">Focus</div>
+        <pre class="tool-scroll mono">@(string.IsNullOrEmpty(focus) ? "reformulate" : focus)</pre>
+    </div>
+}
+
+@if (!ArgsOnly && ResultContent is not null && ToolName is not null)
+{
+    <div class="tool-section">
+        <div class="tool-section__label">Result</div>
+        <pre class="tool-result mono @(IsError ? "tool-result--danger" : null)">@ResultContent</pre>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public string ToolName { get; set; } = "";
+    [Parameter] public string? ArgumentsJson { get; set; }
+    [Parameter] public string? ResultContent { get; set; }
+    [Parameter] public bool IsError { get; set; }
+    [Parameter] public bool ArgsOnly { get; set; }
+}

@@ -1,0 +1,67 @@
+@namespace Harness.UI.Components.Tools.Variants
+@using Harness.UI.Demo
+
+@{
+    var path = DysonToolCallUi.GetString(ArgumentsJson, "path");
+    var recursive = DysonToolCallUi.GetBool(ArgumentsJson, "recursive");
+}
+
+<div class="tool-section">
+    <div class="tool-section__label">Directory</div>
+    <ToolPathLink Path="@path" />
+    @if (recursive)
+    {
+        <div class="tool-section__meta mono">recursive</div>
+    }
+</div>
+@if (!ArgsOnly && ResultContent is not null)
+{
+    <div class="tool-section">
+        <div class="tool-section__label">Entries</div>
+        @if (IsError)
+        {
+            <pre class="tool-scroll tool-scroll--danger mono">@ResultContent</pre>
+        }
+        else if (ResultContent == "(empty)")
+        {
+            <div class="tool-section__meta">(empty)</div>
+        }
+        else
+        {
+            <div class="tool-scroll tool-scroll--tall">
+                @foreach (var line in ResultContent.Replace("\r\n", "\n").Split('\n'))
+                {
+                    if (string.IsNullOrWhiteSpace(line))
+                        continue;
+                    var entry = DysonToolCallUi.ParseListEntryLine(line);
+                    if (entry is null)
+                    {
+                        <div class="tool-match mono">@line</div>
+                    }
+                    else
+                    {
+                        var (kind, entryPath) = entry.Value;
+                        <div class="tool-match mono">
+                            <span class="tool-chip">@kind</span>
+                            @if (kind == "file")
+                            {
+                                <ToolPathLink Path="@entryPath" Label="@entryPath" />
+                            }
+                            else
+                            {
+                                <span>@entryPath</span>
+                            }
+                        </div>
+                    }
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string? ArgumentsJson { get; set; }
+    [Parameter] public string? ResultContent { get; set; }
+    [Parameter] public bool IsError { get; set; }
+    [Parameter] public bool ArgsOnly { get; set; }
+}

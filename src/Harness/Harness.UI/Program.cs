@@ -23,6 +23,7 @@ DysonPlanResultSelfCheck.Run();
 DysonShellExecutePlanWarningSelfCheck.Run();
 ComposerSlashCommands.SelfCheck();
 DysonFileViewerComments.SelfCheck();
+DysonToolCallUi.SelfCheck();
 
 var builder = WebApplication.CreateBuilder(args);
 

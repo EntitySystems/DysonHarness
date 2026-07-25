@@ -1,18 +1,43 @@
 @namespace Harness.UI.Components.Tools
 @using DysonHarness
+@using Harness.UI.Components.Tools.Variants
+@using Harness.UI.Demo
 
 <div class="tool-row @(_expanded ? "tool-row--expanded" : null)">
     <button type="button"
             class="tool-row__header"
             aria-expanded="@(_expanded ? "true" : "false")"
             @onclick="ToggleExpanded">
-        <span class="tool-row__name mono">@Call.ToolName</span>
+        <span class="tool-row__lead">
+            <span class="tool-row__name mono">@Call.ToolName</span>
+            @if (_summary.HasLineDelta)
+            {
+                <span class="tool-row__summary">
+                    @if (_summary.LinesAdded is int added)
+                    {
+                        <span class="tool-delta tool-delta--add">+@added</span>
+                    }
+                    @if (_summary.LinesRemoved is int removed)
+                    {
+                        <span class="tool-delta tool-delta--del">−@removed</span>
+                    }
+                </span>
+            }
+            else if (!string.IsNullOrEmpty(_summary.Text))
+            {
+                <span class="tool-row__summary mono">@_summary.Text</span>
+            }
+        </span>
         <span class="tool-status queued" data-status-short="QUE">Queued</span>
     </button>
     @if (_expanded)
     {
         <div class="tool-row__body">
-            <div class="tool-row__meta mono">stage @Call.Stage · @Call.ArgumentsJson</div>
+            <ToolCallExpandedBody ToolName="@Call.ToolName"
+                                  CallId="@Call.CallId"
+                                  Stage="@Call.Stage"
+                                  ArgumentsJson="@Call.ArgumentsJson"
+                                  ArgsOnly="true" />
         </div>
     }
 </div>
@@ -21,6 +46,16 @@
     [Parameter, EditorRequired] public DysonToolCall Call { get; set; } = default!;
 
     private bool _expanded;
+    private DysonToolCallUi.CollapsedSummary _summary = new();
+
+    protected override void OnParametersSet()
+    {
+        _summary = DysonToolCallUi.GetCollapsedSummary(
+            Call.ToolName,
+            Call.ArgumentsJson,
+            resultContent: null,
+            hasResult: false);
+    }
 
     private void ToggleExpanded() => _expanded = !_expanded;
 }
