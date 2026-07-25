@@ -73,7 +73,9 @@ Conceptual overview: [README.md](README.md).
 | `DysonToolCall` | `CallId`, `ToolName`, `Stage`, `ArgumentsJson` |
 | `DysonToolCallStatus` | `Queued`, `Working`, `Completed`, `Failed` |
 | `DysonTrackedToolCall` | Live status + result for UI rows |
-| `DysonToolCallResult` | Completed/failed payload (`IsError`, `Content`, …) |
+| `DysonToolCallResult` | Completed/failed payload (`IsError`, `Content`, optional `BinaryAttachment`) |
+| `DysonBinaryAttachment` | LoadBinary media (`FileName` with ext, `Extension`, `MimeType`, `Base64Data`); transcript builder emits Completions/Responses multimodal parts |
+| `DysonGrepLoadBinarySelfCheck` | Assert-only Grep text-only / binary path-only + LoadBinary filename+ext multimodal JSON (UI `Program` startup) |
 | `DysonToolCallStatusChangedEventArgs` | Previous/new status + tracked row |
 | `DysonToolCallScheduler` | `RunStagedAsync` — concurrent same-stage, barrier across stages; multi-round Queued-only runs |
 

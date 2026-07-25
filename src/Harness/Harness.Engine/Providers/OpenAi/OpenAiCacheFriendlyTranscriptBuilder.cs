@@ -168,6 +168,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                     ? $"[error] {result.Content}"
                     : result.Content,
             });
+
+            if (!result.IsError && result.BinaryAttachment is { } attachment)
+                AppendResponsesBinaryAttachment(input, attachment);
         }
 
         return new BuiltResponsesRequest(
@@ -404,6 +407,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 ["tool_call_id"] = call.CallId,
                 ["content"] = FormatToolResultContent(result),
             });
+
+            if (result is { IsError: false, BinaryAttachment: { } attachment })
+                AppendCompletionsBinaryAttachment(messages, attachment);
         }
     }
 
@@ -422,8 +428,108 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 ["call_id"] = call.CallId,
                 ["output"] = FormatToolResultContent(result),
             });
+
+            if (result is { IsError: false, BinaryAttachment: { } attachment })
+                AppendResponsesBinaryAttachment(input, attachment);
         }
     }
+
+    /// <summary>
+    /// Completions: short tool ack already emitted; follow with a user multimodal message
+    /// carrying filename+extension on the file/image part.
+    /// </summary>
+    private static void AppendCompletionsBinaryAttachment(
+        JsonArray messages,
+        DysonBinaryAttachment attachment)
+    {
+        var dataUrl = BuildDataUrl(attachment);
+        var parts = new JsonArray
+        {
+            new JsonObject
+            {
+                ["type"] = "text",
+                ["text"] = $"Loaded binary attachment: {attachment.FileName}",
+            },
+        };
+
+        if (attachment.IsImage)
+        {
+            parts.Add(new JsonObject
+            {
+                ["type"] = "image_url",
+                ["image_url"] = new JsonObject
+                {
+                    ["url"] = dataUrl,
+                },
+                // Some OpenAI-compatible hosts accept filename alongside image_url.
+                ["filename"] = attachment.FileName,
+            });
+        }
+        else
+        {
+            parts.Add(new JsonObject
+            {
+                ["type"] = "file",
+                ["file"] = new JsonObject
+                {
+                    ["filename"] = attachment.FileName,
+                    ["file_data"] = dataUrl,
+                },
+            });
+        }
+
+        messages.Add(new JsonObject
+        {
+            ["role"] = "user",
+            ["content"] = parts,
+        });
+    }
+
+    /// <summary>
+    /// Responses: follow function_call_output with input_image / input_file (filename = name+ext).
+    /// </summary>
+    private static void AppendResponsesBinaryAttachment(
+        JsonArray input,
+        DysonBinaryAttachment attachment)
+    {
+        var dataUrl = BuildDataUrl(attachment);
+        var parts = new JsonArray
+        {
+            new JsonObject
+            {
+                ["type"] = "input_text",
+                ["text"] = $"Loaded binary attachment: {attachment.FileName}",
+            },
+        };
+
+        if (attachment.IsImage)
+        {
+            parts.Add(new JsonObject
+            {
+                ["type"] = "input_image",
+                ["image_url"] = dataUrl,
+                ["filename"] = attachment.FileName,
+            });
+        }
+        else
+        {
+            parts.Add(new JsonObject
+            {
+                ["type"] = "input_file",
+                ["filename"] = attachment.FileName,
+                ["file_data"] = dataUrl,
+            });
+        }
+
+        input.Add(new JsonObject
+        {
+            ["role"] = "user",
+            ["content"] = parts,
+        });
+    }
+
+    private static string BuildDataUrl(DysonBinaryAttachment attachment) =>
+        $"data:{attachment.MimeType};base64,{attachment.Base64Data}";
 
     private static Dictionary<string, DysonToolCallResult> IndexResultsByCallId(
         IEnumerable<DysonToolCallResult> results)

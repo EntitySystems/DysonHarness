@@ -215,7 +215,11 @@ public sealed class DysonContextOptimizer
         }
 
         if (content.Length == 0)
-            return "(empty)";
+        {
+            return result.BinaryAttachment is { } att
+                ? $"(attachment {att.FileName}, {att.MimeType})"
+                : "(empty)";
+        }
 
         var line = FirstLine(content);
         if (content.Length <= MaxResultSummaryChars && line == content)

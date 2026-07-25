@@ -23,6 +23,7 @@ DysonPlanResultSelfCheck.Run();
 DysonTaskCompletionSelfCheck.Run();
 DysonShellExecutePlanWarningSelfCheck.Run();
 DysonLongRunningShellSelfCheck.Run();
+DysonGrepLoadBinarySelfCheck.Run();
 DysonAgentTurnKindDisplay.SelfCheck();
 ComposerSlashCommands.SelfCheck();
 DysonFileViewerComments.SelfCheck();

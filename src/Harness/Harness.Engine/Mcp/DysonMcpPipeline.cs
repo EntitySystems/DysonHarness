@@ -1456,7 +1456,11 @@ public sealed class DysonMcpPipeline
         yield return new DysonMcpTool
         {
             Name = "Grep",
-            Description = "Search file contents by regex/pattern with optional path and glob filters.",
+            Description =
+                "Search text file contents by regex/pattern with optional path and glob filters. " +
+                "Text-only: never returns binary/image bytes. Skips .git/bin/obj/node_modules/.vs and similar. " +
+                "Binary/image hits are path-only lines (binary\\t… / image\\t…) when the relative path matches; " +
+                "use LoadBinary to inspect those files.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1468,6 +1472,28 @@ public sealed class DysonMcpPipeline
                     "maxMatches": { "type": "integer", "description": "Optional cap on matches returned." }
                   },
                   "required": ["pattern"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "LoadBinary",
+            Description =
+                "Load a binary or image file from the work directory into the next provider request. " +
+                "Tool result Content is a short JSON ack (path, fileName, extension, mimeType, byteLength) — no base64. " +
+                "Bytes are attached with the original filename+extension for Completions/Responses multimodal parts. " +
+                "Use after Grep returns binary\\t / image\\t path lines. Max size 5 MB.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "Work-directory-relative path to the binary or image file."
+                    }
+                  },
+                  "required": ["path"]
                 }
                 """,
         };

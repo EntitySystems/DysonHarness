@@ -71,6 +71,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "CreateFile" => await CreateFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "WriteFile" => await WriteFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "Grep" => await GrepAsync(call, cancellationToken).ConfigureAwait(false),
+                "LoadBinary" => await LoadBinaryAsync(call, cancellationToken).ConfigureAwait(false),
                 "ListDirectory" => await ListDirectoryAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateDirectory" => await CreateDirectoryAsync(call, cancellationToken).ConfigureAwait(false),
                 "ShellExecute" => await ShellExecuteAsync(call, cancellationToken).ConfigureAwait(false),
@@ -118,7 +119,10 @@ public sealed partial class DysonWorkspaceToolExecutor
             Content = $"{call.ToolName} is not implemented yet.",
         };
 
-    private static DysonToolCallResult Ok(DysonToolCall call, string content) =>
+    private static DysonToolCallResult Ok(
+        DysonToolCall call,
+        string content,
+        DysonBinaryAttachment? binaryAttachment = null) =>
         new()
         {
             CallId = call.CallId,
@@ -126,6 +130,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             Stage = call.Stage,
             IsError = false,
             Content = content,
+            BinaryAttachment = binaryAttachment,
         };
 
     private static DysonToolCallResult Error(DysonToolCall call, string content) =>
@@ -1150,6 +1155,32 @@ public sealed partial class DysonWorkspaceToolExecutor
         return Ok(call, $"Applied {applied} edit(s) to {path.Value}.");
     }
 
+    private const int GrepMaxLineChars = 400;
+    private const int GrepMaxResultChars = 48 * 1024;
+    private const int LoadBinaryMaxBytes = 5 * 1024 * 1024;
+    private const int GrepBinarySniffBytes = 512;
+
+    private static readonly HashSet<string> GrepExcludedDirNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".git", "bin", "obj", "node_modules", ".vs", "packages", ".idea", "dist",
+        "__pycache__", ".hg", ".svn", ".tox", ".venv", "venv",
+    };
+
+    private static readonly HashSet<string> GrepImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".tif", ".tiff",
+    };
+
+    private static readonly HashSet<string> GrepBinaryExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".dll", ".exe", ".pdb", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp",
+        ".tif", ".tiff", ".pak", ".bin", ".so", ".dylib", ".o", ".a", ".lib", ".wasm",
+        ".zip", ".7z", ".rar", ".gz", ".tar", ".bz2", ".xz", ".class", ".jar", ".nupkg",
+        ".snupkg", ".ttf", ".otf", ".woff", ".woff2", ".eot", ".mp3", ".mp4", ".wav",
+        ".avi", ".mov", ".webm", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+        ".sqlite", ".db", ".dat", ".cache", ".ilk", ".exp", ".suo", ".user", ".vsidx",
+    };
+
     private async Task<DysonToolCallResult> GrepAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)
@@ -1194,10 +1225,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
         else if (Directory.Exists(resolved.Value))
         {
-            var option = SearchOption.AllDirectories;
-            files = string.IsNullOrWhiteSpace(glob)
-                ? Directory.EnumerateFiles(resolved.Value, "*", option)
-                : Directory.EnumerateFiles(resolved.Value, glob, option);
+            files = EnumerateFilesSkippingExcluded(resolved.Value, glob);
         }
         else
         {
@@ -1206,11 +1234,38 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         var sb = new StringBuilder();
         var matches = 0;
+        var binaryHits = 0;
+        var cappedByChars = false;
+
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsUnderWorkRoot(file))
                 continue;
+
+            var rel = Path.GetRelativePath(_workRoot, file).Replace('\\', '/');
+            var kind = ClassifyGrepFile(file);
+            if (kind is GrepFileKind.Binary or GrepFileKind.Image)
+            {
+                // Path-only: never inline binary/image bytes. Emit when the relative path matches.
+                if (!regex.IsMatch(rel))
+                    continue;
+
+                var label = kind == GrepFileKind.Image ? "image" : "binary";
+                var line = $"{label}\t{rel}";
+                if (sb.Length + line.Length + 1 > GrepMaxResultChars)
+                {
+                    cappedByChars = true;
+                    break;
+                }
+
+                sb.AppendLine(line);
+                matches++;
+                binaryHits++;
+                if (matches >= maxMatches)
+                    break;
+                continue;
+            }
 
             string[] lines;
             try
@@ -1222,24 +1277,208 @@ public sealed partial class DysonWorkspaceToolExecutor
                 continue;
             }
 
-            var rel = Path.GetRelativePath(_workRoot, file);
             for (var i = 0; i < lines.Length; i++)
             {
                 if (!regex.IsMatch(lines[i]))
                     continue;
 
-                sb.Append(rel);
-                sb.Append(':');
-                sb.Append(i + 1);
-                sb.Append(':');
-                sb.AppendLine(lines[i]);
+                var content = TruncateGrepLine(lines[i], GrepMaxLineChars);
+                var line = $"{rel}:{i + 1}:{content}";
+                if (sb.Length + line.Length + 1 > GrepMaxResultChars)
+                {
+                    cappedByChars = true;
+                    break;
+                }
+
+                sb.AppendLine(line);
                 matches++;
                 if (matches >= maxMatches)
-                    return Ok(call, sb.ToString().TrimEnd() + $"\n… capped at {maxMatches} matches");
+                    break;
             }
+
+            if (matches >= maxMatches || cappedByChars)
+                break;
         }
 
-        return Ok(call, matches == 0 ? "No matches." : sb.ToString().TrimEnd());
+        if (matches == 0)
+            return Ok(call, "No matches.");
+
+        if (binaryHits > 0)
+            sb.AppendLine("Use LoadBinary to inspect binary/image files.");
+
+        var text = sb.ToString().TrimEnd();
+        if (matches >= maxMatches)
+            text += $"\n… capped at {maxMatches} matches";
+        else if (cappedByChars)
+            text += $"\n… capped at {GrepMaxResultChars} chars";
+
+        return Ok(call, text);
+    }
+
+    private async Task<DysonToolCallResult> LoadBinaryAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+        var path = RequireString(doc.RootElement, "path");
+        if (path.IsError)
+            return Error(call, path.Error);
+
+        var resolved = ResolveUnderWorkRoot(path.Value);
+        if (resolved.IsError)
+            return Error(call, resolved.Error);
+
+        if (!File.Exists(resolved.Value))
+            return Error(call, $"File not found: {path.Value}");
+
+        var info = new FileInfo(resolved.Value);
+        if (info.Length > LoadBinaryMaxBytes)
+        {
+            return Error(call,
+                $"LoadBinary: file is {info.Length} bytes; max is {LoadBinaryMaxBytes} bytes.");
+        }
+
+        var bytes = await File.ReadAllBytesAsync(resolved.Value, cancellationToken).ConfigureAwait(false);
+        var fileName = Path.GetFileName(resolved.Value);
+        var extension = Path.GetExtension(resolved.Value);
+        var mimeType = MimeTypeFromExtension(extension);
+        var attachment = new DysonBinaryAttachment
+        {
+            FileName = fileName,
+            Extension = extension,
+            MimeType = mimeType,
+            Base64Data = Convert.ToBase64String(bytes),
+        };
+
+        var ack = JsonSerializer.Serialize(new
+        {
+            path = path.Value.Replace('\\', '/'),
+            fileName,
+            extension,
+            mimeType,
+            byteLength = bytes.Length,
+        });
+
+        return Ok(call, ack, attachment);
+    }
+
+    private enum GrepFileKind
+    {
+        Text,
+        Binary,
+        Image,
+    }
+
+    internal static string MimeTypeFromExtension(string? extension)
+    {
+        if (string.IsNullOrEmpty(extension))
+            return "application/octet-stream";
+
+        return extension.ToLowerInvariant() switch
+        {
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            ".ico" => "image/x-icon",
+            ".bmp" => "image/bmp",
+            ".tif" or ".tiff" => "image/tiff",
+            ".pdf" => "application/pdf",
+            ".svg" => "image/svg+xml",
+            ".json" => "application/json",
+            ".txt" => "text/plain",
+            ".html" or ".htm" => "text/html",
+            ".css" => "text/css",
+            ".js" => "application/javascript",
+            ".wasm" => "application/wasm",
+            ".zip" => "application/zip",
+            ".dll" or ".exe" => "application/octet-stream",
+            _ => "application/octet-stream",
+        };
+    }
+
+    private static GrepFileKind ClassifyGrepFile(string absolutePath)
+    {
+        var ext = Path.GetExtension(absolutePath);
+        if (GrepImageExtensions.Contains(ext))
+            return GrepFileKind.Image;
+        if (GrepBinaryExtensions.Contains(ext))
+            return GrepFileKind.Binary;
+
+        if (FileLooksBinaryByNulSniff(absolutePath))
+            return GrepFileKind.Binary;
+
+        return GrepFileKind.Text;
+    }
+
+    private static bool FileLooksBinaryByNulSniff(string absolutePath)
+    {
+        try
+        {
+            using var stream = File.OpenRead(absolutePath);
+            var buf = new byte[GrepBinarySniffBytes];
+            var read = stream.Read(buf, 0, buf.Length);
+            for (var i = 0; i < read; i++)
+            {
+                if (buf[i] == 0)
+                    return true;
+            }
+        }
+        catch
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<string> EnumerateFilesSkippingExcluded(string rootDir, string? glob)
+    {
+        var pattern = string.IsNullOrWhiteSpace(glob) ? "*" : glob;
+        var stack = new Stack<string>();
+        stack.Push(rootDir);
+
+        while (stack.Count > 0)
+        {
+            var dir = stack.Pop();
+            IEnumerable<string> subdirs;
+            try
+            {
+                subdirs = Directory.EnumerateDirectories(dir);
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (var sub in subdirs)
+            {
+                var name = Path.GetFileName(sub);
+                if (GrepExcludedDirNames.Contains(name))
+                    continue;
+                stack.Push(sub);
+            }
+
+            IEnumerable<string> files;
+            try
+            {
+                files = Directory.EnumerateFiles(dir, pattern);
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (var file in files)
+                yield return file;
+        }
+    }
+
+    private static string TruncateGrepLine(string line, int maxChars)
+    {
+        if (line.Length <= maxChars)
+            return line;
+        return line[..maxChars] + "…";
     }
 
     private Task<DysonToolCallResult> ListDirectoryAsync(
