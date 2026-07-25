@@ -39,3 +39,7 @@ Desktop.ini
 ## Local verify / publish outputs
 artifacts/
 
+## Harness runtime logs
+.ui-*.err.log
+.ui-*.out.log
+
