@@ -61,7 +61,12 @@ public static class DysonPlanResultSelfCheck
             || !turn.Instruction.Contains(".dyson/plans/build-abcdef0123.md", StringComparison.Ordinal)
             || !turn.Instruction.Contains("**`## Recap`**", StringComparison.Ordinal)
             || !turn.Instruction.Contains("**`## Agent actions`**", StringComparison.Ordinal)
-            || !turn.Instruction.Contains("harness continuation", StringComparison.OrdinalIgnoreCase)
+            || !turn.Instruction.Contains("layout-only", StringComparison.OrdinalIgnoreCase)
+            || !turn.Instruction.Contains("Do not call tools this turn", StringComparison.Ordinal)
+            || !turn.Instruction.Contains(
+                "next harness turn will automatically continue and run the implementation",
+                StringComparison.OrdinalIgnoreCase)
+            || turn.Instruction.Contains("same turn after the sections is OK", StringComparison.Ordinal)
             || turn.Instruction.Contains("\n## Recap\n", StringComparison.Ordinal)
             || turn.Instruction.Contains("\n## Agent actions\n", StringComparison.Ordinal))
         {
@@ -109,7 +114,12 @@ public static class DysonPlanResultSelfCheck
 
         if (turn.Instruction is null
             || !turn.Instruction.Contains("**Explore reports to incorporate**", StringComparison.Ordinal)
-            || !turn.Instruction.Contains("do not wait for another harness continuation turn", StringComparison.Ordinal)
+            || !turn.Instruction.Contains(
+                "do not start implementation this turn",
+                StringComparison.OrdinalIgnoreCase)
+            || turn.Instruction.Contains(
+                "do not wait for another harness continuation turn",
+                StringComparison.Ordinal)
             || !turn.Instruction.Contains("subagentId: 7", StringComparison.Ordinal)
             || !turn.Instruction.Contains("Mapped AuthService and token refresh.", StringComparison.Ordinal)
             || !turn.Instruction.Contains("Explore auth", StringComparison.Ordinal)

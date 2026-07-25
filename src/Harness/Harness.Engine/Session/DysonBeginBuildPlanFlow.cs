@@ -20,9 +20,9 @@ public static class DysonBeginBuildPlanFlow
         kind == DysonAgentTurnKind.BeginBuildPlan;
 
     /// <summary>
-    /// Harness mandate: read the plan, then emit Recap + Agent actions as the durable
-    /// reference for later Work turns. Optional Explore report blocks are folded in when
-    /// the host buffered completions during Plan mode.
+    /// Harness mandate: layout-only turn — read the plan, emit Recap + Agent actions.
+    /// No tools / implementation this turn; the host enqueues a Normal continuation next.
+    /// Optional Explore report blocks are folded into the layout when Plan-mode buffered them.
     /// </summary>
     public static string BuildInstruction(
         string planRelativePath,
@@ -39,15 +39,14 @@ public static class DysonBeginBuildPlanFlow
             Begin build of the published plan at `{path}`.
             Read that plan file first.
 
-            Your primary deliverable this turn is a reply with exactly these markdown sections:
+            This turn is layout-only. Your only deliverable is a reply with exactly these markdown sections:
 
             - **`## Recap`** — Brief restatement of the plan goal and constraints (enough for later turns without re-reading the whole file).
             - **`## Agent actions`** — An ordered, concrete checklist of who/what comes next (e.g. Drone briefs, solution setup, verify steps).
 
-            Later Work turns must treat that Agent actions set as the living reference.
-            Spawn Drones only after those sections are written in your reply (same turn after the sections is OK, or next turns).
-            Do not invent a new plan file; revise `{path}` via WriteFile only if the actions set requires plan edits.
-            A harness continuation turn will follow automatically to start Work from that Agent actions set.
+            Do not call tools this turn: no `StartSubagent` / Drones, no `WriteFile`, no shell, no product work.
+            Layout the functional instructions only; do not invent a new plan file.
+            The next harness turn will automatically continue and run the implementation from that Agent actions set.
             """;
 
         if (reportBlocks is null || reportBlocks.Count == 0)
@@ -58,7 +57,7 @@ public static class DysonBeginBuildPlanFlow
             """
             **Explore reports to incorporate**
 
-            Incorporate these Explore findings into Recap / Agent actions; do not wait for another harness continuation turn.
+            Incorporate these Explore findings into Recap / Agent actions only; do not start implementation this turn.
             """);
 
         foreach (var block in reportBlocks)
