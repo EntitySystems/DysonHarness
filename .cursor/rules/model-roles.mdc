@@ -1,0 +1,17 @@
+---
+description: Allowed Cursor models for explore vs coding subagent roles
+alwaysApply: true
+---
+
+# Model roles
+
+Default models for Task/subagent work (unless the user overrides in-session):
+
+| Role | Model | Slug |
+|------|--------|------|
+| Explore / research | Composer 2.5 (not Fast) | `composer-2.5` |
+| Coding / implementation | Grok 4.5 High (not Fast) | `cursor-grok-4.5-high` |
+
+- Do **not** use Fast variants (`composer-2.5-fast`, `*-fast`) for these roles unless the user explicitly overrides in the session.
+- If the user names a different model for a task in-session, honor that override for that session/task.
+- Parent/coordinator turns use the same defaults when spawning those roles.

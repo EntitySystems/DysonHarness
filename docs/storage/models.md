@@ -2,6 +2,8 @@
 
 EF Core SQLite under platform app data stores **model providers** and their **model slugs** (and sessions — see [sessions.md](sessions.md)). Providers stay **ephemeral**: build a live `DysonAgentProvider` from a selected slug (credentials via the parent provider) when starting or resuming a session; do not persist provider instances.
 
+For provider-specific slug catalogs, auth, and thinking/effort contracts, see [inference-providers/](../inference-providers/). This page remains the harness data model for providers and slugs.
+
 ## App mode
 
 ```csharp
