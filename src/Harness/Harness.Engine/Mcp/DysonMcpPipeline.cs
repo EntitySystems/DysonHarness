@@ -1387,7 +1387,10 @@ public sealed class DysonMcpPipeline
         yield return new DysonMcpTool
         {
             Name = "ReadFile",
-            Description = "Read workspace file contents by path. Prefer this over shell for reading files.",
+            Description =
+                "Read workspace file contents by path. Prefer this over shell for reading files. " +
+                "Each line is formatted as lineNumber|content (e.g. '42|    foo();'). " +
+                "When copying into WriteFile old_text/new_text, use only the content after the first '|' — never include the line-number prefix.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1422,23 +1425,34 @@ public sealed class DysonMcpPipeline
         {
             Name = "WriteFile",
             Description =
-                "Update an existing file using diff-oriented edits. Prefer patch/hunk-style or targeted span updates " +
-                "(old_text/new_text or edits[]) over full-file rewrites when possible.",
+                "Update a workspace file. Prefer targeted old_text/new_text (or edits[]) after ReadFile — not full-file rewrites. " +
+                "Never include ReadFile line prefixes (e.g. '123|') in old_text/new_text; copy only the content after '|'. " +
+                "The match must be unique unless replace_all is true. " +
+                "Fuzzy matching tolerates whitespace, indentation, and EOL (CRLF/LF) differences when the match is unique. " +
+                "Use content only for create-like full rewrites when targeted edits are impractical.",
             InputSchemaJson = """
                 {
                   "type": "object",
                   "properties": {
                     "path": { "type": "string", "description": "Path of the file to update." },
-                    "old_text": { "type": "string", "description": "Exact text span to replace (single edit)." },
+                    "old_text": {
+                      "type": "string",
+                      "description": "Text span to replace (single edit). Must be unique unless replace_all. Do not include ReadFile 'N|' prefixes."
+                    },
                     "new_text": { "type": "string", "description": "Replacement text for old_text." },
+                    "replace_all": {
+                      "type": "boolean",
+                      "description": "If true, replace every occurrence of old_text (default false). Also applies as default for edits[] items unless overridden."
+                    },
                     "edits": {
                       "type": "array",
                       "description": "Ordered list of targeted replacements when multiple hunks are needed.",
                       "items": {
                         "type": "object",
                         "properties": {
-                          "old_text": { "type": "string" },
-                          "new_text": { "type": "string" }
+                          "old_text": { "type": "string", "description": "Text span to replace. No ReadFile 'N|' prefixes." },
+                          "new_text": { "type": "string" },
+                          "replace_all": { "type": "boolean", "description": "Replace every occurrence for this edit (default: top-level replace_all)." }
                         },
                         "required": ["old_text", "new_text"]
                       }

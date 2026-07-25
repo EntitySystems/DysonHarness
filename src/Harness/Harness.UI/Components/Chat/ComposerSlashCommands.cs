@@ -105,7 +105,7 @@ public static class ComposerSlashCommands
                 break;
             results.Add(new Suggestion(
                 "/" + model.Slug,
-                model.Label,
+                $"{model.DisplayAlias} · {model.ProviderName}",
                 Kind.Model,
                 ModelSlugId: model.Id));
         }
@@ -114,7 +114,7 @@ public static class ComposerSlashCommands
     }
 
     /// <summary>
-    /// Resolve a leading command for send: exact built-in/model, else first filtered suggestion.
+    /// Resolve a leading command for send: exact built-in/display-alias, else first filtered suggestion.
     /// </summary>
     public static bool TryResolve(string? text, IReadOnlyList<ModelOption> models, out ParseResult? result)
     {
@@ -133,14 +133,13 @@ public static class ComposerSlashCommands
         }
 
         var modelExact = models.FirstOrDefault(m =>
-            string.Equals(m.Slug, name, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(m.DisplayAlias, name, StringComparison.OrdinalIgnoreCase));
+            string.Equals(m.DisplayAlias, name, StringComparison.OrdinalIgnoreCase));
         if (modelExact is not null)
         {
             result = new ParseResult(
                 new Suggestion(
                     "/" + modelExact.Slug,
-                    modelExact.Label,
+                    $"{modelExact.DisplayAlias} · {modelExact.ProviderName}",
                     Kind.Model,
                     ModelSlugId: modelExact.Id),
                 remainder);
@@ -172,30 +171,29 @@ public static class ComposerSlashCommands
         if (filter.Length == 0)
         {
             return models
-                .OrderBy(m => m.DisplayAlias, StringComparer.OrdinalIgnoreCase);
+                .OrderBy(m => m.ProviderName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(m => m.DisplayAlias, StringComparer.OrdinalIgnoreCase);
         }
 
         return models
             .Select(m => (Model: m, Score: ScoreModel(m, filter)))
             .Where(x => x.Score > 0)
             .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Model.ProviderName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(x => x.Model.DisplayAlias, StringComparer.OrdinalIgnoreCase)
             .Select(x => x.Model);
     }
 
     private static int ScoreModel(ModelOption m, string filter)
     {
-        if (string.Equals(m.Slug, filter, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(m.DisplayAlias, filter, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(m.DisplayAlias, filter, StringComparison.OrdinalIgnoreCase))
             return 300;
-        if (m.Slug.StartsWith(filter, StringComparison.OrdinalIgnoreCase)
-            || m.DisplayAlias.StartsWith(filter, StringComparison.OrdinalIgnoreCase))
+        if (m.DisplayAlias.StartsWith(filter, StringComparison.OrdinalIgnoreCase))
             return 200;
         // ponytail: ceiling = contains only for 3+ chars (avoids /as matching "fast").
+        // Do not match Label — it embeds " / {slug}", which would accept raw slug-only input.
         if (filter.Length >= 3
-            && (m.Slug.Contains(filter, StringComparison.OrdinalIgnoreCase)
-                || m.DisplayAlias.Contains(filter, StringComparison.OrdinalIgnoreCase)
-                || m.Label.Contains(filter, StringComparison.OrdinalIgnoreCase)
+            && (m.DisplayAlias.Contains(filter, StringComparison.OrdinalIgnoreCase)
                 || m.ProviderName.Contains(filter, StringComparison.OrdinalIgnoreCase)))
             return 100;
         return 0;
@@ -231,18 +229,33 @@ public static class ComposerSlashCommands
 
         var gpt = Filter("/gpt", models);
         if (gpt.Count != 1 || gpt[0].ModelSlugId != models[0].Id)
-            throw new InvalidOperationException("Filter(/gpt) should match gpt-fast.");
+            throw new InvalidOperationException("Filter(/gpt) should match GPT Fast.");
 
         if (!TryResolve("/new do stuff", models, out var parsed)
             || parsed!.Suggestion.Kind != Kind.NewSession
             || parsed.Remainder != "do stuff")
             throw new InvalidOperationException("TryResolve(/new) failed.");
 
-        if (!TryResolve("/gpt-fast", models, out var modelParsed)
+        if (!TryResolve("/GPT Fast", models, out var modelParsed)
             || modelParsed!.Suggestion.ModelSlugId != models[0].Id)
-            throw new InvalidOperationException("TryResolve model slug failed.");
+            throw new InvalidOperationException("TryResolve display alias failed.");
+
+        if (TryResolve("/gpt-fast", models, out _))
+            throw new InvalidOperationException("TryResolve should reject raw slug-only input.");
 
         if (TryResolve("/zzzz-nope", models, out _))
             throw new InvalidOperationException("TryResolve should reject unknown token.");
+
+        // Provider tie-break: same alias across providers should order alphabetically by provider name.
+        var duplicateAliasModels = new List<ModelOption>
+        {
+            new(Guid.Parse("33333333-3333-3333-3333-333333333333"), "GPT-4o", "Beta Provider", "gpt-4o-beta", "GPT-4o · Beta Provider / gpt-4o-beta"),
+            new(Guid.Parse("44444444-4444-4444-4444-444444444444"), "GPT-4o", "Alpha Provider", "gpt-4o-alpha", "GPT-4o · Alpha Provider / gpt-4o-alpha"),
+        };
+        var duplicateResults = Filter("/gpt-4o", duplicateAliasModels);
+        if (duplicateResults.Count != 2)
+            throw new InvalidOperationException("Filter(/gpt-4o) should return both duplicate-alias models.");
+        if (duplicateResults[0].Label != "GPT-4o · Alpha Provider")
+            throw new InvalidOperationException("Filter should order duplicate aliases by provider name.");
     }
 }

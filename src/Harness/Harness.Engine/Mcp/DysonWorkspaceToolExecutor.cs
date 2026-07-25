@@ -1115,12 +1115,13 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
 
         var text = await File.ReadAllTextAsync(resolved.Value, cancellationToken).ConfigureAwait(false);
-        var edits = new List<(string Old, string New)>();
+        var edits = new List<(string Old, string New, bool ReplaceAll)>();
+        var defaultReplaceAll = GetBool(doc.RootElement, "replace_all");
 
         if (doc.RootElement.TryGetProperty("old_text", out var oldProp)
             && doc.RootElement.TryGetProperty("new_text", out var newProp))
         {
-            edits.Add((oldProp.GetString() ?? "", newProp.GetString() ?? ""));
+            edits.Add((oldProp.GetString() ?? "", newProp.GetString() ?? "", defaultReplaceAll));
         }
 
         if (doc.RootElement.TryGetProperty("edits", out var editsArr)
@@ -1130,29 +1131,39 @@ public sealed partial class DysonWorkspaceToolExecutor
             {
                 if (!edit.TryGetProperty("old_text", out var o) || !edit.TryGetProperty("new_text", out var n))
                     continue;
-                edits.Add((o.GetString() ?? "", n.GetString() ?? ""));
+                var itemReplaceAll = edit.TryGetProperty("replace_all", out var ra)
+                    ? ra.ValueKind == JsonValueKind.True
+                    : defaultReplaceAll;
+                edits.Add((o.GetString() ?? "", n.GetString() ?? "", itemReplaceAll));
             }
         }
 
         if (edits.Count == 0)
             return Error(call, "WriteFile: provide content, or old_text/new_text, or edits[].");
 
-        var applied = 0;
-        foreach (var (oldText, newText) in edits)
+        var appliedEdits = 0;
+        var replacementCount = 0;
+        foreach (var (oldText, newText, replaceAll) in edits)
         {
             if (string.IsNullOrEmpty(oldText))
                 return Error(call, "WriteFile: old_text must be non-empty.");
 
-            var idx = text.IndexOf(oldText, StringComparison.Ordinal);
-            if (idx < 0)
-                return Error(call, $"WriteFile: old_text not found in {path.Value}.");
+            var result = DysonTextEditApplier.TryReplace(text, oldText, newText, replaceAll);
+            if (result.IsError)
+            {
+                var failure = result.Error;
+                return Error(call, $"WriteFile: {failure.Message} ({path.Value})");
+            }
 
-            text = string.Concat(text.AsSpan(0, idx), newText, text.AsSpan(idx + oldText.Length));
-            applied++;
+            text = result.Value.Content;
+            appliedEdits++;
+            replacementCount += result.Value.ReplacementCount;
         }
 
         await File.WriteAllTextAsync(resolved.Value, text, cancellationToken).ConfigureAwait(false);
-        return Ok(call, $"Applied {applied} edit(s) to {path.Value}.");
+        return Ok(
+            call,
+            $"Applied {appliedEdits} edit(s) ({replacementCount} replacement(s)) to {path.Value}.");
     }
 
     private const int GrepMaxLineChars = 400;
