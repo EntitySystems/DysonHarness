@@ -1762,6 +1762,21 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
         }
 
+        // Shell exited: always drain (no Plan buffer).
+        if (interrupt.Kind == DysonAgentInterruptKind.LongRunningShellExited)
+        {
+            if (parent.PersistenceId == Guid.Empty)
+                return;
+
+            var shellQueue = _pendingReportsByParent.GetOrAdd(
+                parent.PersistenceId,
+                _ => new ConcurrentQueue<DysonAgentInterrupt>());
+            shellQueue.Enqueue(interrupt);
+            Notify();
+            _ = DrainAutoTurnsAsync(parent.PersistenceId);
+            return;
+        }
+
         if (!DysonSubagentReportPrompt.IsCompletionInterrupt(interrupt.Kind))
             return;
 
@@ -2062,7 +2077,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     break;
                 }
 
-                // Belt-and-suspenders: while Plan, leave completion reports buffered; still drain events.
+                // Belt-and-suspenders: while Plan, leave completion reports buffered; still drain events + shell exits.
                 if (DysonSubagentReportPrompt.IsCompletionInterrupt(interrupt.Kind)
                     && !DysonSubagentReportPrompt.ShouldDrainCompletionAutoTurn(parent.Mode))
                 {
@@ -2092,6 +2107,23 @@ public sealed class DysonUiHost : IAsyncDisposable
                     if (eventResult.IsError)
                     {
                         LastError = eventResult.Error;
+                        Notify();
+                        break;
+                    }
+
+                    continue;
+                }
+
+                if (interrupt.Kind == DysonAgentInterruptKind.LongRunningShellExited)
+                {
+                    var shellResult = await ExecutePromptOnSessionAsync(
+                            parent,
+                            (session, token) => session.PromptShellExitedAsync(interrupt, token),
+                            CancellationToken.None)
+                        .ConfigureAwait(false);
+                    if (shellResult.IsError)
+                    {
+                        LastError = shellResult.Error;
                         Notify();
                         break;
                     }
@@ -2133,20 +2165,21 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (!_sessionsById.TryGetValue(parentPersistenceId, out var stillParent))
                 return;
 
-            // In Plan, only re-enter drain when an event may still be queued (completions stay buffered).
+            // In Plan, only re-enter drain when an event or shell exit may still be queued (completions stay buffered).
             if (!DysonSubagentReportPrompt.ShouldDrainCompletionAutoTurn(stillParent.Mode))
             {
-                var hasEvent = false;
+                var hasDrainable = false;
                 foreach (var item in stillPending)
                 {
-                    if (item.Kind == DysonAgentInterruptKind.SubagentEvent)
+                    if (item.Kind is DysonAgentInterruptKind.SubagentEvent
+                        or DysonAgentInterruptKind.LongRunningShellExited)
                     {
-                        hasEvent = true;
+                        hasDrainable = true;
                         break;
                     }
                 }
 
-                if (!hasEvent)
+                if (!hasDrainable)
                     return;
             }
 
@@ -2219,6 +2252,10 @@ public sealed class DysonUiHost : IAsyncDisposable
                 var last = session.Turns.Count > 0 ? session.Turns[^1] : null;
                 if (last is not null)
                 {
+                    // ShellExited: drop auto-read tail from Instruction before persist (transcript hygiene).
+                    if (last.Kind == DysonAgentTurnKind.ShellExited)
+                        DysonLongRunningShellExitedFlow.TrimInstructionAfterCompletion(last);
+
                     // Persist every unfinished turn (PlanResult may append after the prompt turn).
                     foreach (var turn in session.Turns)
                     {

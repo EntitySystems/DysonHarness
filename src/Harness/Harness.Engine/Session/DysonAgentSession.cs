@@ -1767,6 +1767,15 @@ public abstract class DysonAgentSession
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Parent auto-turn after a subscribed long-running shell exits: creates a
+    /// <see cref="DysonAgentTurnKind.ShellExited"/> turn with auto-read tail and runs the same
+    /// tool/reply loop as <see cref="PromptAsync"/>.
+    /// </summary>
+    public abstract Task<VoidResult<string>> PromptShellExitedAsync(
+        DysonAgentInterrupt interrupt,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Prefer draining the interrupt queue (see <see cref="WaitForInterruptAsync"/> /
     /// <see cref="TryDequeueInterrupt"/>) when mapping notify events, so Work’s async loop
     /// observes subagent completions without busy-polling.

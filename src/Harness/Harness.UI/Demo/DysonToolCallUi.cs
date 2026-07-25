@@ -56,10 +56,12 @@ public static class DysonToolCallUi
             "CreateDirectory" => TextSummary(Truncate(GetString(argumentsJson, "path"), SummaryMaxLength)),
             "ShellExecute" => SummarizeShellExecute(argumentsJson, resultContent, hasResult),
             "StartLongRunningShell" => SummarizeStartLongRunningShell(argumentsJson, resultContent, hasResult),
+            "ListLongRunningShells" => SummarizeListLongRunningShells(resultContent, hasResult),
             "ReadLongRunningShellTail" => SummarizeReadLongRunningShellTail(argumentsJson, resultContent, hasResult),
             "AbortLongRunningShell" => SummarizeLongRunningShellId(argumentsJson, "abort"),
             "RequestLongRunningShellCancellation" => SummarizeLongRunningShellId(argumentsJson, "cancel"),
             "LongRunningShellInteract" => SummarizeLongRunningShellInteract(argumentsJson),
+            "SubscribeToLongRunningShellCompletion" => SummarizeLongRunningShellId(argumentsJson, "subscribe"),
             "RenameSession" => TextSummary(Quote(Truncate(GetString(argumentsJson, "title"), SummaryMaxLength - 2))),
             "GetDateTime" => SummarizeGetDateTime(argumentsJson, resultContent, hasResult),
             "SubmitPlan" => TextSummary(Truncate(GetString(argumentsJson, "title"), SummaryMaxLength)),
@@ -604,6 +606,25 @@ public static class DysonToolCallUi
         }
 
         return TextSummary(Truncate(sb.ToString(), SummaryMaxLength));
+    }
+
+    private static CollapsedSummary SummarizeListLongRunningShells(string? resultContent, bool hasResult)
+    {
+        if (!hasResult || string.IsNullOrWhiteSpace(resultContent))
+            return TextSummary("list");
+
+        var trimmed = resultContent.Trim();
+        if (trimmed == "[]")
+            return TextSummary("0 shells");
+
+        var count = 0;
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            if (trimmed[i] == '{')
+                count++;
+        }
+
+        return TextSummary(count > 0 ? $"{count} shells" : "list");
     }
 
     private static CollapsedSummary SummarizeReadLongRunningShellTail(

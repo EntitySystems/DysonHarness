@@ -14,6 +14,7 @@ public enum DysonAgentTurnKind
     PlanResult = 6,
     BeginBuildPlan = 7,
     SubagentReportProcessing = 8,
+    ShellExited = 9,
 }
 
 public sealed class DysonToolCallStatusChangedEventArgs : EventArgs
@@ -30,7 +31,8 @@ public sealed class DysonAgentTurn
     /// <summary>Stable turn identity for persistence / UI binding.</summary>
     public Guid Id { get; init; } = Guid.NewGuid();
 
-    public string? Instruction { get; init; }
+    /// <summary>Harness / user instruction for this turn (may be trimmed after completion for history hygiene).</summary>
+    public string? Instruction { get; set; }
     public DysonAgentTurnKind Kind { get; init; }
 
     /// <summary>

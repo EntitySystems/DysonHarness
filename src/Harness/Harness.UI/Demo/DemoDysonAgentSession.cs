@@ -377,6 +377,51 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         return PromptWithTurnAsync(turn, turn.Instruction ?? instruction, cancellationToken);
     }
 
+    public override async Task<VoidResult<string>> PromptShellExitedAsync(
+        DysonAgentInterrupt interrupt,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(interrupt);
+
+        var workDir = interrupt.WorkDirectoryId ?? _workDirectoryId;
+        var shellId = interrupt.LongRunningShellId
+            ?? throw new ArgumentException("LongRunningShellId is required.", nameof(interrupt));
+        var maxChars = interrupt.IncludeTailMaxChars > 0
+            ? interrupt.IncludeTailMaxChars
+            : DysonLongRunningShellExitedFlow.DefaultIncludeTailMaxChars;
+
+        string? tailText = null;
+        DysonLongRunningShellInfo info;
+        if (DysonLongRunningShellRegistry.TryGet(workDir, shellId, out var shell) && shell is not null)
+        {
+            info = shell.ToInfo();
+            var tailResult = await DysonLongRunningShellRegistry
+                .ReadTailAsync(workDir, shellId, maxChars, sinceOffset: null, timeoutMs: 0, cancellationToken)
+                .ConfigureAwait(false);
+            if (!tailResult.IsError)
+                tailText = tailResult.Value.Text;
+        }
+        else
+        {
+            info = new DysonLongRunningShellInfo
+            {
+                Id = shellId,
+                WorkDirectoryId = workDir,
+                ShellType = DysonShellType.Cmd,
+                Command = "(unknown)",
+                WorkingDirectory = "(unknown)",
+                StartedUtc = DateTime.UtcNow,
+                Status = DysonLongRunningShellStatus.Exited,
+                ExitCode = interrupt.ExitCode,
+            };
+        }
+
+        var turn = DysonLongRunningShellExitedFlow.CreateTurn(interrupt, info, tailText);
+        SeedDemoTools(turn);
+        return await PromptWithTurnAsync(turn, turn.Instruction ?? "Shell exited", cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     private static void SeedDemoTools(DysonAgentTurn turn)
     {
         turn.ToolCalls.Add(new DysonToolCall

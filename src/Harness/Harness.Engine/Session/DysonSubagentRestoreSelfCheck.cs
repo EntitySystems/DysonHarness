@@ -142,6 +142,11 @@ public static class DysonSubagentRestoreSelfCheck
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
+        public override Task<VoidResult<string>> PromptShellExitedAsync(
+            DysonAgentInterrupt interrupt,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
         public override Task<Result<DysonAgentSessionEvent, string>> WaitForNotifyAsync(
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();

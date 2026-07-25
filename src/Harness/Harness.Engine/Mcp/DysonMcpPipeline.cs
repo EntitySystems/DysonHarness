@@ -68,10 +68,12 @@ public sealed class DysonMcpPipeline
         if (_availableShellTypes.Count == 0)
         {
             Tools.Remove("StartLongRunningShell");
+            Tools.Remove("ListLongRunningShells");
             Tools.Remove("ReadLongRunningShellTail");
             Tools.Remove("AbortLongRunningShell");
             Tools.Remove("RequestLongRunningShellCancellation");
             Tools.Remove("LongRunningShellInteract");
+            Tools.Remove("SubscribeToLongRunningShellCompletion");
             return;
         }
 
@@ -156,9 +158,11 @@ public sealed class DysonMcpPipeline
         var enumJson = string.Join(", ", names.Select(n => $"\"{n}\""));
 
         var startDescription =
-            "Start a background long-running shell in the session work directory (dev servers, watchers). " +
+            "Recommended for E2E test runs, large application builds, and keeping development servers running. " +
+            "Start a background long-running shell in the session work directory. " +
             $"Available shells: {listed}. Returns longRunningShellId. " +
-            "Use ReadLongRunningShellTail / LongRunningShellInteract / RequestLongRunningShellCancellation / AbortLongRunningShell to manage it. " +
+            "Use ListLongRunningShells / ReadLongRunningShellTail / LongRunningShellInteract / " +
+            "SubscribeToLongRunningShellCompletion / RequestLongRunningShellCancellation / AbortLongRunningShell to manage it. " +
             "Not persisted across UI restart (orphans OS processes). Prefer ShellExecute for one-shot commands.";
         if (planMode)
             startDescription += " " + PlanShellExecuteWarning;
@@ -186,6 +190,20 @@ public sealed class DysonMcpPipeline
                     }
                   },
                   "required": ["shell", "command"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ListLongRunningShells",
+            Description =
+                "List long-running shells for this session work directory " +
+                "(id, status, shell, short command, exitCode if terminal, startedUtc).",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {}
                 }
                 """,
         };
@@ -289,6 +307,31 @@ public sealed class DysonMcpPipeline
                     }
                   },
                   "required": ["longRunningShellId", "input"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "SubscribeToLongRunningShellCompletion",
+            Description =
+                "Subscribe the current session to a one-shot ShellExited harness turn when a long-running shell " +
+                "exits/aborts. Returns immediately (subscribed=true). If already terminal, fires once now. " +
+                "Optional includeTailMaxChars (default 8000) caps the auto-read tail in that turn.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "longRunningShellId": {
+                      "type": "integer",
+                      "description": "Id returned by StartLongRunningShell."
+                    },
+                    "includeTailMaxChars": {
+                      "type": "integer",
+                      "description": "Max characters of auto-read tail for the ShellExited Instruction (default 8000)."
+                    }
+                  },
+                  "required": ["longRunningShellId"]
                 }
                 """,
         };

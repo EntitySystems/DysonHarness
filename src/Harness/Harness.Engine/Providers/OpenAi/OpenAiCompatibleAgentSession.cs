@@ -370,6 +370,32 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         return PromptWithTurnAsync(turn, [], cancellationToken);
     }
 
+    public override async Task<VoidResult<string>> PromptShellExitedAsync(
+        DysonAgentInterrupt interrupt,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(interrupt);
+
+        var workDir = interrupt.WorkDirectoryId ?? _workDirectoryId;
+        var shellId = interrupt.LongRunningShellId
+            ?? throw new ArgumentException("LongRunningShellId is required.", nameof(interrupt));
+        var maxChars = interrupt.IncludeTailMaxChars > 0
+            ? interrupt.IncludeTailMaxChars
+            : DysonLongRunningShellExitedFlow.DefaultIncludeTailMaxChars;
+
+        if (!DysonLongRunningShellRegistry.TryGet(workDir, shellId, out var shell) || shell is null)
+            return new VoidResult<string>($"Long-running shell #{shellId} not found.");
+
+        var info = shell.ToInfo();
+        var tailResult = await DysonLongRunningShellRegistry
+            .ReadTailAsync(workDir, shellId, maxChars, sinceOffset: null, timeoutMs: 0, cancellationToken)
+            .ConfigureAwait(false);
+        var tailText = tailResult.IsError ? null : tailResult.Value.Text;
+
+        var turn = DysonLongRunningShellExitedFlow.CreateTurn(interrupt, info, tailText);
+        return await PromptWithTurnAsync(turn, [], cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task<VoidResult<string>> PromptWithTurnAsync(
         DysonAgentTurn turn,
         IReadOnlyList<string> filePaths,

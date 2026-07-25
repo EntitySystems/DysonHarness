@@ -1,7 +1,7 @@
 namespace DysonHarness;
 
 /// <summary>
-/// ponytail: assert-only long-running shell id allocation + abort (no test framework).
+/// ponytail: assert-only long-running shell id allocation + abort + list/subscribe/ShellExited (no test framework).
 /// Run: <c>DysonLongRunningShellSelfCheck.Run()</c> (also from UI <c>Program</c> startup).
 /// </summary>
 public static class DysonLongRunningShellSelfCheck
@@ -9,7 +9,9 @@ public static class DysonLongRunningShellSelfCheck
     public static void Run()
     {
         AssertCatalogGate();
-        AssertIdAllocationAndAbort();
+        AssertShellExitedPromptAndTrim();
+        AssertOutcomeMapping();
+        AssertIdAllocationListAndAbort();
     }
 
     private static void AssertCatalogGate()
@@ -19,25 +21,105 @@ public static class DysonLongRunningShellSelfCheck
             throw new InvalidOperationException("Long-running shell tools must be omitted when no shells available.");
 
         var tools = DysonMcpPipeline.CreateLongRunningShellTools([DysonShellType.Pwsh], planMode: false).ToArray();
-        if (tools.Length != 5)
-            throw new InvalidOperationException($"Expected 5 long-running shell tools, got {tools.Length}.");
+        if (tools.Length != 7)
+            throw new InvalidOperationException($"Expected 7 long-running shell tools, got {tools.Length}.");
 
         var names = tools.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
         foreach (var required in new[]
                  {
                      "StartLongRunningShell",
+                     "ListLongRunningShells",
                      "ReadLongRunningShellTail",
                      "AbortLongRunningShell",
                      "RequestLongRunningShellCancellation",
                      "LongRunningShellInteract",
+                     "SubscribeToLongRunningShellCompletion",
                  })
         {
             if (!names.Contains(required))
                 throw new InvalidOperationException($"Missing long-running shell tool '{required}'.");
         }
+
+        var start = tools.First(t => t.Name == "StartLongRunningShell");
+        if (!start.Description.Contains("E2E", StringComparison.Ordinal)
+            || !start.Description.Contains("ListLongRunningShells", StringComparison.Ordinal)
+            || !start.Description.Contains("SubscribeToLongRunningShellCompletion", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("StartLongRunningShell description must mention E2E and List/Subscribe tools.");
+        }
     }
 
-    private static void AssertIdAllocationAndAbort()
+    private static void AssertShellExitedPromptAndTrim()
+    {
+        if ((int)DysonAgentTurnKind.ShellExited != 9)
+            throw new InvalidOperationException("DysonAgentTurnKind.ShellExited must be 9.");
+
+        const string fatTail = "BUILD FAILED: sample-error-token-xyz\nline2\nline3";
+        var turn = DysonLongRunningShellExitedFlow.CreateTurn(
+            id: 42,
+            outcome: "failure",
+            exitCode: 1,
+            shell: "Cmd",
+            command: "dotnet build",
+            cwd: @"C:\tmp",
+            tail: fatTail);
+
+        if (turn.Kind != DysonAgentTurnKind.ShellExited)
+            throw new InvalidOperationException("CreateTurn must set Kind=ShellExited.");
+        if (turn.Instruction is null
+            || !turn.Instruction.Contains("longRunningShellId: 42", StringComparison.Ordinal)
+            || !turn.Instruction.Contains(DysonLongRunningShellExitedFlow.TailSectionMarker, StringComparison.Ordinal)
+            || !turn.Instruction.Contains("sample-error-token-xyz", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("BuildInstruction must include id + auto-read tail marker + sample output.");
+        }
+
+        DysonLongRunningShellExitedFlow.TrimInstructionAfterCompletion(turn);
+        if (turn.Instruction is null
+            || turn.Instruction.Contains(DysonLongRunningShellExitedFlow.TailSectionMarker, StringComparison.Ordinal)
+            || turn.Instruction.Contains("sample-error-token-xyz", StringComparison.Ordinal)
+            || !turn.Instruction.Contains("id: 42", StringComparison.Ordinal)
+            || !turn.Instruction.Contains("outcome: failure", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("TrimInstructionAfterCompletion must drop tail and keep id/outcome.");
+        }
+    }
+
+    private static void AssertOutcomeMapping()
+    {
+        if (DysonLongRunningShellExitedFlow.MapOutcome(DysonLongRunningShellStatus.Aborted, exitCode: 1)
+            != "cancelled")
+        {
+            throw new InvalidOperationException("Aborted must map to cancelled.");
+        }
+
+        if (DysonLongRunningShellExitedFlow.MapOutcome(
+                DysonLongRunningShellStatus.Exited, exitCode: 0, wasCancelRequested: true)
+            != "cancelled")
+        {
+            throw new InvalidOperationException("Soft-cancel then exit must map to cancelled.");
+        }
+
+        if (DysonLongRunningShellExitedFlow.MapOutcome(DysonLongRunningShellStatus.Exited, exitCode: 0)
+            != "success")
+        {
+            throw new InvalidOperationException("Exited 0 must map to success.");
+        }
+
+        if (DysonLongRunningShellExitedFlow.MapOutcome(DysonLongRunningShellStatus.Exited, exitCode: 7)
+            != "failure")
+        {
+            throw new InvalidOperationException("Exited non-zero must map to failure.");
+        }
+
+        if (DysonLongRunningShellExitedFlow.MapOutcome(DysonLongRunningShellStatus.Exited, exitCode: null)
+            != "failure")
+        {
+            throw new InvalidOperationException("Exited unknown code must map to failure.");
+        }
+    }
+
+    private static void AssertIdAllocationListAndAbort()
     {
         if (!OperatingSystem.IsWindows())
             return; // runners are Windows-only for now
@@ -73,6 +155,10 @@ public static class DysonLongRunningShellSelfCheck
 
             if (DysonLongRunningShellRegistry.CountRunning(workDirId) != 2)
                 throw new InvalidOperationException("CountRunning should be 2 after two starts.");
+
+            var listed = DysonLongRunningShellRegistry.List(workDirId);
+            if (listed.Count != 2 || listed[0].Id != 1 || listed[1].Id != 2)
+                throw new InvalidOperationException("List after start must return both shells in id order.");
 
             var abort = DysonLongRunningShellRegistry
                 .AbortAsync(workDirId, a.Value.Id, timeoutMs: 10_000)

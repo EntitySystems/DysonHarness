@@ -29,7 +29,7 @@ When `ProviderKind == OpenAICompatible`, the host builds `OpenAiCompatibleAgentP
 - **Streaming SSE** (`stream: true`) for assistant text and optional reasoning; Completions reads `choices[0].delta.content` and `delta.reasoning_content` (+ incremental `tool_calls`, `stream_options.include_usage`); Responses handles `response.output_text.delta`, `response.reasoning_summary_text.delta` / `response.reasoning_text.delta`, function-call assembly (`output_item.added` / `function_call_arguments.delta|done` / `output_item.done`), and `error` / `response.failed`. Session consumes chunks per tool-loop round; `AssistantText` + H1 title parse only on the final no-tool round (preview stays raw until then). Reasoning accumulates into `ReasoningText` (UI + persistence only — not injected into transcript builders). Cancel/error clears `StreamingPreview` and `ReasoningStreamingPreview`.
 - **Native function tools** with required harness `stage` on every schema.
 - **Tool loop** inside one `PromptAsync` (cap ~20 rounds): model tool_calls → staged executor (web tools summarize **inside** the tool) → feed results → call again.
-- **Executors (v1):** `DysonWorkspaceToolExecutor` — real `RenameSession`, **`GetDateTime`** (host clock; `timezone`: `"utc"` default or `"local"`), workdir-scoped file tools (`ReadFile`, `CreateFile`, `WriteFile`, `Grep`, `ListDirectory`, `CreateDirectory`), `ShellExecute` (session-available shells via `DysonShell`), **long-running shell tools** (`StartLongRunningShell`, `ReadLongRunningShellTail`, `AbortLongRunningShell`, `RequestLongRunningShellCancellation`, `LongRunningShellInteract`), in-process web search/fetch tools (`FreeSearch`, `FreeSearchAdvanced`, `SearchWithSynthesis`, `FreeExtract`, `WebFetch`, `FetchGithubReadme`), **subagent tools** (`StartSubagent`, `ListSubagents`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`), and **inter-agent / Ask** (`TriggerParentEvent`, `RespondToSubagentEvent`, `TriggerSubagentEvent`, `AskQuestion`, `AskQuestionFromParent`); other catalog tools return “not implemented yet”.
+- **Executors (v1):** `DysonWorkspaceToolExecutor` — real `RenameSession`, **`GetDateTime`** (host clock; `timezone`: `"utc"` default or `"local"`), workdir-scoped file tools (`ReadFile`, `CreateFile`, `WriteFile`, `Grep`, `ListDirectory`, `CreateDirectory`), `ShellExecute` (session-available shells via `DysonShell`), **long-running shell tools** (`StartLongRunningShell`, `ListLongRunningShells`, `ReadLongRunningShellTail`, `AbortLongRunningShell`, `RequestLongRunningShellCancellation`, `LongRunningShellInteract`, `SubscribeToLongRunningShellCompletion`), in-process web search/fetch tools (`FreeSearch`, `FreeSearchAdvanced`, `SearchWithSynthesis`, `FreeExtract`, `WebFetch`, `FetchGithubReadme`), **subagent tools** (`StartSubagent`, `ListSubagents`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`), and **inter-agent / Ask** (`TriggerParentEvent`, `RespondToSubagentEvent`, `TriggerSubagentEvent`, `AskQuestion`, `AskQuestionFromParent`); other catalog tools return “not implemented yet”.
 - **RenameSession review:** every 8 turns (1-based indices **1, 9, 17, …** — when `TurnHistory.Count % 8 == 0` before adding the turn), the transcript builder appends an ephemeral yes/no `RenameSessionReviewMandate` on the **current incomplete** user message only. Turn 1 is `InitializeSession` via `DysonSessionInitialization.CreateTurn`; later review turns stay `Normal`. Completed/history turns always send clean `Instruction` — the mandate is never re-emitted. Soft every-turn rename nudges are not in system prompts; MCP description says rename only on harness review mandate or explicit user request.
 - **Cache-friendly requests** (`OpenAiCacheFriendlyTranscriptBuilder`):
   1. Stable prefix first: system/instructions (mode prompt + MCP catalog) → `tools[]` (stable sort) → prior transcript → new user/tool deltas last.
@@ -124,17 +124,20 @@ Default tools include subagent control (`StartSubagent`, `ListSubagents`, `WaitF
 
 ### Long-running shells
 
-Workdir-scoped background processes for servers/watchers (in-memory only — UI restart orphans OS children; only Abort/Cancel kill them).
+Workdir-scoped background processes for E2E runs, large builds, and keeping development servers running (in-memory only — UI restart orphans OS children; only Abort/Cancel kill them). Prefer `ShellExecute` for one-shot commands.
 
 | Type / tool | Role |
 | ----------- | ---- |
-| `DysonLongRunningShellRegistry` | Static workdir buckets; incremental `longRunningShellId` ints per workdir; shared by parent/child sessions |
+| `DysonLongRunningShellRegistry` | Static workdir buckets; incremental `longRunningShellId` ints per workdir; shared by parent/child sessions; completion subscribers |
 | `DysonLongRunningShell` | Process + stdin + stdout/stderr/combined rings (~256KB each) |
+| `DysonLongRunningShellExitedFlow` | `ShellExited` turn Instruction (auto-read tail) + trim after completion |
 | `StartLongRunningShell` | `shell` + `command` (+ optional `workingDirectory`) → `longRunningShellId` |
+| `ListLongRunningShells` | Compact roster for the workdir (`id`, `status`, `shell`, short `command`, `exitCode`, `startedUtc`) |
 | `ReadLongRunningShellTail` | Tail combined output; optional `timeoutMs` wait for new bytes |
 | `AbortLongRunningShell` | Kill process tree (same as UI Force stop) |
 | `RequestLongRunningShellCancellation` | Soft cancel (`\x03` stdin, else `CloseMainWindow`) |
 | `LongRunningShellInteract` | Write stdin (+ newline if missing) |
+| `SubscribeToLongRunningShellCompletion` | Non-blocking subscribe → on terminal, `LongRunningShellExited` interrupt → host `ShellExited` auto-turn (always drained, including Plan); Instruction auto-reads tail then trims it after the turn |
 
 Same platform gate as `ShellExecute` (omitted when no shells). Plan soft-warns on `StartLongRunningShell` (description + result preamble). Self-check: `DysonLongRunningShellSelfCheck.Run()` (UI startup).
 

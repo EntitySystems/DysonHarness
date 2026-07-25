@@ -337,6 +337,8 @@ public sealed class DysonLongRunningShell : IDisposable
 
     private void MarkExitedIfNeeded(bool aborted)
     {
+        bool becameTerminal;
+        bool wasCancelRequested;
         lock (_gate)
         {
             if (Status is DysonLongRunningShellStatus.Exited
@@ -344,6 +346,8 @@ public sealed class DysonLongRunningShell : IDisposable
             {
                 return;
             }
+
+            wasCancelRequested = Status == DysonLongRunningShellStatus.CancelRequested;
 
             int? code = null;
             try
@@ -361,10 +365,14 @@ public sealed class DysonLongRunningShell : IDisposable
                 Status = aborted ? DysonLongRunningShellStatus.Aborted : DysonLongRunningShellStatus.Exited;
             else if (aborted)
                 Status = DysonLongRunningShellStatus.Aborted;
+
+            becameTerminal = true;
         }
 
         try { _combinedSignal.Release(); } catch (SemaphoreFullException) { /* ignore */ } catch (ObjectDisposedException) { /* ignore */ }
         DysonLongRunningShellRegistry.RaiseChanged();
+        if (becameTerminal)
+            DysonLongRunningShellRegistry.NotifyShellTerminal(this, wasCancelRequested);
     }
 
     private async Task PumpAsync(StreamReader reader, bool isStderr)

@@ -70,10 +70,12 @@ public sealed class DysonWorkspaceToolExecutor
                 "CreateDirectory" => await CreateDirectoryAsync(call, cancellationToken).ConfigureAwait(false),
                 "ShellExecute" => await ShellExecuteAsync(call, cancellationToken).ConfigureAwait(false),
                 "StartLongRunningShell" => await StartLongRunningShellAsync(call, cancellationToken).ConfigureAwait(false),
+                "ListLongRunningShells" => ListLongRunningShells(call),
                 "ReadLongRunningShellTail" => await ReadLongRunningShellTailAsync(call, cancellationToken).ConfigureAwait(false),
                 "AbortLongRunningShell" => await AbortLongRunningShellAsync(call, cancellationToken).ConfigureAwait(false),
                 "RequestLongRunningShellCancellation" => await RequestLongRunningShellCancellationAsync(call, cancellationToken).ConfigureAwait(false),
                 "LongRunningShellInteract" => await LongRunningShellInteractAsync(call, cancellationToken).ConfigureAwait(false),
+                "SubscribeToLongRunningShellCompletion" => SubscribeToLongRunningShellCompletion(call),
                 "FreeSearch" => await FreeSearchAsync(call, cancellationToken).ConfigureAwait(false),
                 "FreeSearchAdvanced" => await FreeSearchAdvancedAsync(call, cancellationToken).ConfigureAwait(false),
                 "SearchWithSynthesis" => await SearchWithSynthesisAsync(call, cancellationToken).ConfigureAwait(false),
@@ -1307,6 +1309,38 @@ public sealed class DysonWorkspaceToolExecutor
         return Ok(call, content);
     }
 
+    private DysonToolCallResult ListLongRunningShells(DysonToolCall call)
+    {
+        if (_workDirectoryId == Guid.Empty)
+            return Error(call, "Work directory id is required for long-running shells.");
+
+        var list = DysonLongRunningShellRegistry.List(_workDirectoryId);
+        if (list.Count == 0)
+            return Ok(call, "[]");
+
+        var sb = new StringBuilder();
+        sb.Append('[');
+        for (var i = 0; i < list.Count; i++)
+        {
+            if (i > 0)
+                sb.Append(',');
+            var s = list[i];
+            var cmd = s.Command.Length > 80 ? s.Command[..80] + "…" : s.Command;
+            sb.Append('{');
+            sb.Append("\"id\":").Append(s.Id);
+            sb.Append(",\"status\":\"").Append(s.Status).Append('"');
+            sb.Append(",\"shell\":\"").Append(s.ShellType).Append('"');
+            sb.Append(",\"command\":").Append(JsonSerializer.Serialize(cmd));
+            if (s.ExitCode is int code)
+                sb.Append(",\"exitCode\":").Append(code);
+            sb.Append(",\"startedUtc\":\"").Append(s.StartedUtc.ToString("O")).Append('"');
+            sb.Append('}');
+        }
+
+        sb.Append(']');
+        return Ok(call, sb.ToString());
+    }
+
     private async Task<DysonToolCallResult> ReadLongRunningShellTailAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)
@@ -1427,6 +1461,26 @@ public sealed class DysonWorkspaceToolExecutor
         return result.IsError
             ? Error(call, result.Error)
             : Ok(call, $"longRunningShellId={id.Value} written=true");
+    }
+
+    private DysonToolCallResult SubscribeToLongRunningShellCompletion(DysonToolCall call)
+    {
+        if (_workDirectoryId == Guid.Empty)
+            return Error(call, "Work directory id is required for long-running shells.");
+
+        using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+        var id = GetInt(doc.RootElement, "longRunningShellId");
+        if (id is null)
+            return Error(call, "Missing required integer field 'longRunningShellId'.");
+
+        var maxChars = GetInt(doc.RootElement, "includeTailMaxChars")
+            ?? DysonLongRunningShellExitedFlow.DefaultIncludeTailMaxChars;
+
+        var result = DysonLongRunningShellRegistry.SubscribeToCompletion(
+            _workDirectoryId, id.Value, _session, maxChars);
+        return result.IsError
+            ? Error(call, result.Error)
+            : Ok(call, $"longRunningShellId={id.Value} subscribed=true includeTailMaxChars={maxChars}");
     }
 
     private async Task<DysonToolCallResult> FreeSearchAsync(

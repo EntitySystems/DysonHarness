@@ -13,6 +13,12 @@ public static class DysonLongRunningShellRegistry
 {
     private static readonly ConcurrentDictionary<Guid, WorkdirBucket> Buckets = new();
 
+    /// <summary>
+    /// (workdir, shellId) → session → includeTailMaxChars for SubscribeToLongRunningShellCompletion.
+    /// </summary>
+    private static readonly ConcurrentDictionary<(Guid WorkDir, int ShellId), ConcurrentDictionary<DysonAgentSession, int>>
+        Subscribers = new();
+
     /// <summary>Raised when any shell is started, updated, or stops (UI Notify / poll).</summary>
     public static event Action? Changed;
 
@@ -194,6 +200,75 @@ public static class DysonLongRunningShellRegistry
         return await shell.InteractAsync(input, timeoutMs, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Register <paramref name="session"/> for a one-shot <see cref="DysonAgentInterruptKind.LongRunningShellExited"/>
+    /// when the shell becomes terminal. If already terminal, fires the interrupt immediately.
+    /// </summary>
+    public static VoidResult<string> SubscribeToCompletion(
+        Guid workDirectoryId,
+        int shellId,
+        DysonAgentSession session,
+        int includeTailMaxChars = DysonLongRunningShellExitedFlow.DefaultIncludeTailMaxChars)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        if (workDirectoryId == Guid.Empty)
+            return new VoidResult<string>("Work directory id is required.");
+        if (!TryGet(workDirectoryId, shellId, out var shell) || shell is null)
+            return new VoidResult<string>($"Long-running shell #{shellId} not found.");
+
+        if (includeTailMaxChars <= 0)
+            includeTailMaxChars = DysonLongRunningShellExitedFlow.DefaultIncludeTailMaxChars;
+
+        if (shell.Status is DysonLongRunningShellStatus.Exited or DysonLongRunningShellStatus.Aborted)
+        {
+            FireShellExitedInterrupt(session, shell, wasCancelRequested: false, includeTailMaxChars);
+            return VoidResult<string>.Success;
+        }
+
+        var map = Subscribers.GetOrAdd(
+            (workDirectoryId, shellId),
+            static _ => new ConcurrentDictionary<DysonAgentSession, int>());
+        map[session] = includeTailMaxChars;
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>Notify subscribers once when a shell becomes terminal, then clear that shell's list.</summary>
+    internal static void NotifyShellTerminal(DysonLongRunningShell shell, bool wasCancelRequested)
+    {
+        ArgumentNullException.ThrowIfNull(shell);
+
+        if (!Subscribers.TryRemove((shell.WorkDirectoryId, shell.Id), out var map) || map.IsEmpty)
+            return;
+
+        foreach (var (session, maxChars) in map)
+            FireShellExitedInterrupt(session, shell, wasCancelRequested, maxChars);
+    }
+
+    private static void FireShellExitedInterrupt(
+        DysonAgentSession session,
+        DysonLongRunningShell shell,
+        bool wasCancelRequested,
+        int includeTailMaxChars)
+    {
+        var outcome = DysonLongRunningShellExitedFlow.MapOutcome(
+            shell.Status, shell.ExitCode, wasCancelRequested);
+        var exitText = shell.ExitCode is int code ? code.ToString() : "unknown";
+
+        session.EnqueueInterrupt(new DysonAgentInterrupt
+        {
+            Kind = DysonAgentInterruptKind.LongRunningShellExited,
+            SubagentId = 0, // ponytail: required field; unused for shell interrupts
+            WorkDirectoryId = shell.WorkDirectoryId,
+            LongRunningShellId = shell.Id,
+            ExitCode = shell.ExitCode,
+            ShellOutcome = outcome,
+            IncludeTailMaxChars = includeTailMaxChars > 0
+                ? includeTailMaxChars
+                : DysonLongRunningShellExitedFlow.DefaultIncludeTailMaxChars,
+            Summary = $"Long-running shell #{shell.Id} {outcome} (exitCode={exitText})",
+        });
+    }
+
     /// <summary>Test/self-check helper: drop a workdir bucket (does not kill processes).</summary>
     internal static void ClearForTests(Guid workDirectoryId)
     {
@@ -203,6 +278,12 @@ public static class DysonLongRunningShellRegistry
         foreach (var shell in bucket.Shells.Values)
         {
             try { shell.Dispose(); } catch { /* ignore */ }
+        }
+
+        foreach (var key in Subscribers.Keys)
+        {
+            if (key.WorkDir == workDirectoryId)
+                Subscribers.TryRemove(key, out _);
         }
     }
 

@@ -305,6 +305,11 @@ public static class DysonParentEventSelfCheck
             CancellationToken cancellationToken = default)
             => Task.FromResult(VoidResult<string>.Success);
 
+        public override Task<VoidResult<string>> PromptShellExitedAsync(
+            DysonAgentInterrupt interrupt,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
         public override Task<Result<DysonAgentSessionEvent, string>> WaitForNotifyAsync(
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
