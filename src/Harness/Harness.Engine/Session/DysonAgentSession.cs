@@ -19,7 +19,7 @@ public abstract class DysonAgentSession
     private readonly ConcurrentDictionary<Guid, DysonParentEvent> _pendingParentEvents = new();
     private readonly HashSet<int> _waitingOnSubagentIds = [];
     private readonly object _waitingOnGate = new();
-    private readonly ConcurrentQueue<string> _pendingInjectedPrompts = new();
+    private readonly ConcurrentQueue<DysonAgentTurn> _pendingTurns = new();
     private TaskCompletionSource<Result<string, string>>? _parentEventWaitTcs;
     private TaskCompletionSource<Result<string, string>>? _askQuestionTcs;
     private readonly object _askQuestionGate = new();
@@ -678,10 +678,10 @@ public abstract class DysonAgentSession
             child.CancelPendingParentEventWait(
                 "cancelled by parent TriggerSubagentEvent");
             child.CancelBackgroundRun();
-            child.ClearPendingInjectedPrompts();
+            child.ClearPendingTurns();
             var runCts = new CancellationTokenSource();
             child.AttachBackgroundRun(runCts);
-            KickOffChildPrompt(child, BuildInjectedSubagentPrompt(trimmed), runCts);
+            KickOffChildPrompt(child, CreateInjectedSubagentTurn(trimmed), runCts);
 
             return Task.FromResult(Result<string, string>.AsValue(JsonSerializer.Serialize(new
             {
@@ -691,13 +691,13 @@ public abstract class DysonAgentSession
             })));
         }
 
-        child.EnqueueInjectedPrompt(trimmed);
+        child.EnqueuePendingTurn(CreateInjectedSubagentTurn(trimmed));
         if (!child.HasActiveBackgroundRun)
         {
             var runCts = new CancellationTokenSource();
             child.AttachBackgroundRun(runCts);
-            if (child.TryDequeueInjectedPrompt(out var next))
-                KickOffChildPrompt(child, BuildInjectedSubagentPrompt(next), runCts);
+            if (child.TryDequeuePendingTurn(out var next))
+                KickOffChildPrompt(child, next, runCts);
             else
                 runCts.Dispose();
         }
@@ -825,16 +825,39 @@ public abstract class DysonAgentSession
         }
     }
 
-    internal void EnqueueInjectedPrompt(string payload) =>
-        _pendingInjectedPrompts.Enqueue(payload);
-
-    internal bool TryDequeueInjectedPrompt(out string payload) =>
-        _pendingInjectedPrompts.TryDequeue(out payload!);
-
-    internal void ClearPendingInjectedPrompts()
+    /// <summary>Queues a harness follow-up turn (completion confirm, report, inject, etc.).</summary>
+    public void EnqueuePendingTurn(DysonAgentTurn turn)
     {
-        while (_pendingInjectedPrompts.TryDequeue(out _))
+        ArgumentNullException.ThrowIfNull(turn);
+        _pendingTurns.Enqueue(turn);
+    }
+
+    /// <summary>Dequeues the next pending harness turn, if any.</summary>
+    public bool TryDequeuePendingTurn(out DysonAgentTurn turn) =>
+        _pendingTurns.TryDequeue(out turn!);
+
+    /// <summary>Drops all queued harness turns (e.g. on interrupt).</summary>
+    public void ClearPendingTurns()
+    {
+        while (_pendingTurns.TryDequeue(out _))
         {
+        }
+    }
+
+    /// <summary>
+    /// True while the in-flight turn is <see cref="DysonAgentTurnKind.TaskCompletionConfirm"/>
+    /// (ConfirmTaskComplete / ContinueWork phase guard).
+    /// </summary>
+    public bool IsInTaskCompletionConfirmPhase
+    {
+        get
+        {
+            if (TurnHistory.Count == 0)
+                return false;
+
+            var current = TurnHistory[^1];
+            return current.Kind == DysonAgentTurnKind.TaskCompletionConfirm
+                   && current.CompletedUtc is null;
         }
     }
 
@@ -846,6 +869,26 @@ public abstract class DysonAgentSession
 
         ## Injected instructions
         """ + payload.Trim();
+
+    private static DysonAgentTurn CreateInjectedSubagentTurn(string payload) =>
+        new()
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = BuildInjectedSubagentPrompt(payload),
+            StartedUtc = DateTime.UtcNow,
+        };
+
+    /// <summary>Normal turn for host/user text or BeginBuildPlan continuation.</summary>
+    public static DysonAgentTurn CreateNormalTurn(string instruction)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(instruction);
+        return new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = instruction.Trim(),
+            StartedUtc = DateTime.UtcNow,
+        };
+    }
 
     public Task<Result<string, string>> SubmitSubagentReportAsync(
         string summary,
@@ -1047,30 +1090,33 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
-    /// Fire-and-forget child prompt; on unexpected failure marks Failed, persists, and notifies parent.
+    /// Fire-and-forget child turn; on unexpected failure marks Failed, persists, and notifies parent.
     /// </summary>
-    protected static void KickOffChildPrompt(DysonAgentSession child, string prompt, CancellationTokenSource runCts)
+    protected static void KickOffChildPrompt(
+        DysonAgentSession child,
+        DysonAgentTurn turn,
+        CancellationTokenSource runCts)
     {
         ArgumentNullException.ThrowIfNull(child);
-        ArgumentNullException.ThrowIfNull(prompt);
+        ArgumentNullException.ThrowIfNull(turn);
         ArgumentNullException.ThrowIfNull(runCts);
 
         _ = Task.Run(async () =>
         {
             try
             {
-                var result = await child.PromptAsync(prompt, runCts.Token).ConfigureAwait(false);
+                var result = await child.PromptHarnessTurnAsync(turn, runCts.Token).ConfigureAwait(false);
                 if (runCts.IsCancellationRequested)
                 {
-                    // Interrupt / Stop owns follow-up; still drain injects if child stays active.
-                    TryDrainInjectedPrompt(child);
+                    // Interrupt / Stop owns follow-up; still drain pending turns if child stays active.
+                    TryDrainPendingTurn(child);
                     return;
                 }
 
                 if (child.IsTerminal)
                     return;
 
-                if (TryDrainInjectedPrompt(child))
+                if (TryDrainPendingTurn(child))
                     return;
 
                 var failSummary = ResolveKickOffFailureSummary(child, result);
@@ -1085,8 +1131,8 @@ public abstract class DysonAgentSession
             }
             catch (OperationCanceledException) when (runCts.IsCancellationRequested)
             {
-                // StopSubagent / interrupt owns terminal state; drain queued injects if still active.
-                TryDrainInjectedPrompt(child);
+                // StopSubagent / interrupt owns terminal state; drain queued turns if still active.
+                TryDrainPendingTurn(child);
             }
             catch (Exception ex)
             {
@@ -1107,18 +1153,18 @@ public abstract class DysonAgentSession
         });
     }
 
-    /// <summary>Starts the next queued TriggerSubagentEvent prompt when the child is still Active.</summary>
-    private static bool TryDrainInjectedPrompt(DysonAgentSession child)
+    /// <summary>Starts the next queued pending turn when the child is still Active.</summary>
+    private static bool TryDrainPendingTurn(DysonAgentSession child)
     {
         if (child.IsTerminal)
             return false;
 
-        if (!child.TryDequeueInjectedPrompt(out var next))
+        if (!child.TryDequeuePendingTurn(out var next))
             return false;
 
         var nextCts = new CancellationTokenSource();
         child.AttachBackgroundRun(nextCts);
-        KickOffChildPrompt(child, BuildInjectedSubagentPrompt(next), nextCts);
+        KickOffChildPrompt(child, next, nextCts);
         return true;
     }
 
@@ -1739,6 +1785,14 @@ public abstract class DysonAgentSession
     public abstract Task<VoidResult<string>> PromptAsync(
         string prompt,
         IReadOnlyList<string> filePaths,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Runs a pre-built harness/user turn (preserves <see cref="DysonAgentTurn.Kind"/>).
+    /// Used for completion confirm / report / continuation and host queue drain.
+    /// </summary>
+    public abstract Task<VoidResult<string>> PromptHarnessTurnAsync(
+        DysonAgentTurn turn,
         CancellationToken cancellationToken = default);
 
     /// <summary>

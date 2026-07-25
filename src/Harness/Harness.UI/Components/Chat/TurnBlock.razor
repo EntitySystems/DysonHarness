@@ -16,8 +16,8 @@
             @onclick="OnToggleExpand"
             @onkeydown="HandleHeaderKeyDown">
         <div class="turn-block__header-main">
-            <div class="turn-block__title">@(Turn.AgentTitle ?? "Turn")</div>
-            <div class="turn-block__kind mono">@Turn.Kind · @ShortId(Turn.Id)</div>
+            <div class="turn-block__title">@(Turn.AgentTitle ?? DysonAgentTurnKindDisplay.GetDisplayName(Turn.Kind))</div>
+            <div class="turn-block__kind mono">@DysonAgentTurnKindDisplay.GetDisplayName(Turn.Kind) · @ShortId(Turn.Id)</div>
         </div>
         @if (Turn.StartedUtc != default)
         {

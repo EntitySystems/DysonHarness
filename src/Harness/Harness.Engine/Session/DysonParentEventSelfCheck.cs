@@ -288,6 +288,11 @@ public static class DysonParentEventSelfCheck
             CancellationToken cancellationToken = default)
             => Task.FromResult(VoidResult<string>.Success);
 
+        public override Task<VoidResult<string>> PromptHarnessTurnAsync(
+            DysonAgentTurn turn,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
         public override Task<VoidResult<string>> PromptBeginBuildPlanAsync(
             string planRelativePath,
             IReadOnlyList<string>? reportBlocks = null,

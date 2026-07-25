@@ -4,7 +4,7 @@ namespace DysonHarness;
 /// Factories and instruction text for CompleteTask confirmation, continuation, and ReportSummary turns.
 /// </summary>
 /// <remarks>
-/// Future loop wiring:
+/// Wired loop:
 /// <list type="number">
 /// <item><c>CompleteTask</c> → enqueue <see cref="DysonAgentTurnKind.TaskCompletionConfirm"/>.</item>
 /// <item><c>ConfirmTaskComplete</c> → enqueue <see cref="DysonAgentTurnKind.ReportSummary"/> (last); after that reply, mark session task complete.</item>
@@ -13,6 +13,13 @@ namespace DysonHarness;
 /// </remarks>
 public static class DysonTaskCompletionFlow
 {
+    /// <summary>
+    /// Whether the host should <c>TryMarkTerminal(Completed)</c> after this turn finishes
+    /// successfully. True only for <see cref="DysonAgentTurnKind.ReportSummary"/>.
+    /// </summary>
+    public static bool ShouldMarkTerminalAfterTurn(DysonAgentTurnKind kind) =>
+        kind == DysonAgentTurnKind.ReportSummary;
+
     public const string ConfirmInstruction = """
         You previously called CompleteTask. Before the harness accepts completion, confirm carefully.
         Re-check: was the user request fully satisfied? Were required verifications run? Are residual blockers unresolved?

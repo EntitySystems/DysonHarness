@@ -8,8 +8,9 @@ namespace DysonHarness;
 /// <summary>
 /// Executes workspace-scoped MCP tools against a work directory root, plus RenameSession,
 /// GetDateTime, ShellExecute, long-running shell tools, subagent spawn/list/report tools,
-/// inter-agent events / AskQuestion, session todo CRUD, in-process web search/fetch tools,
-/// and browser control tools (when <see cref="DysonAgentSessionConfig.BrowserControl"/> is set).
+/// inter-agent events / AskQuestion, session todo CRUD, task completion tools,
+/// in-process web search/fetch tools, and browser control tools (when
+/// <see cref="DysonAgentSessionConfig.BrowserControl"/> is set).
 /// Other catalog tools return a not-implemented stub result.
 /// </summary>
 public sealed partial class DysonWorkspaceToolExecutor
@@ -59,6 +60,9 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "TriggerParentEvent" => await TriggerParentEventAsync(call, cancellationToken).ConfigureAwait(false),
                 "RespondToSubagentEvent" => RespondToSubagentEvent(call),
                 "TriggerSubagentEvent" => await TriggerSubagentEventAsync(call, cancellationToken).ConfigureAwait(false),
+                "CompleteTask" => CompleteTask(call),
+                "ConfirmTaskComplete" => ConfirmTaskComplete(call),
+                "ContinueWork" => ContinueWork(call),
                 "ListTodos" => await ListTodosAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateTodo" => await CreateTodoAsync(call, cancellationToken).ConfigureAwait(false),
                 "UpdateTodo" => await UpdateTodoAsync(call, cancellationToken).ConfigureAwait(false),
@@ -843,6 +847,121 @@ public sealed partial class DysonWorkspaceToolExecutor
             .TriggerSubagentEventAsync(subagentId, payload, interrupt, cancellationToken)
             .ConfigureAwait(false);
         return triggered.IsError ? Error(call, triggered.Error) : Ok(call, triggered.Value);
+    }
+
+    private DysonToolCallResult CompleteTask(DysonToolCall call)
+    {
+        if (_session.Parent is not null)
+            return Error(call, "CompleteTask: root sessions only.");
+
+        if (_session.IsTerminal)
+            return Error(call, $"CompleteTask: session already {_session.Status}.");
+
+        string summary;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var summaryResult = RequireString(doc.RootElement, "summary");
+            if (summaryResult.IsError)
+                return Error(call, summaryResult.Error);
+            summary = summaryResult.Value;
+        }
+        catch (JsonException)
+        {
+            return Error(call, "CompleteTask: invalid JSON arguments.");
+        }
+
+        var incomplete = _session.Todos
+            .Where(t => t.Status is DysonSessionTodoStatus.Pending or DysonSessionTodoStatus.Ongoing)
+            .Select(t => $"{t.TaskCode} ({t.DisplayName})={t.Status}")
+            .ToArray();
+        if (incomplete.Length > 0)
+        {
+            return Error(call,
+                "CompleteTask: incomplete todos: " + string.Join("; ", incomplete));
+        }
+
+        var turn = DysonTaskCompletionFlow.CreateCompletionConfirmTurn(summary);
+        _session.EnqueuePendingTurn(turn);
+
+        return Ok(call, JsonSerializer.Serialize(new
+        {
+            status = "queued",
+            nextTurnKind = DysonAgentTurnKind.TaskCompletionConfirm.ToString(),
+            summary,
+        }));
+    }
+
+    private DysonToolCallResult ConfirmTaskComplete(DysonToolCall call)
+    {
+        if (_session.Parent is not null)
+            return Error(call, "ConfirmTaskComplete: root sessions only.");
+
+        if (!_session.IsInTaskCompletionConfirmPhase)
+        {
+            return Error(call,
+                "ConfirmTaskComplete: only valid during a TaskCompletionConfirm turn after CompleteTask.");
+        }
+
+        string? rationale = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            rationale = GetOptionalString(doc.RootElement, "rationale");
+        }
+        catch (JsonException)
+        {
+            return Error(call, "ConfirmTaskComplete: invalid JSON arguments.");
+        }
+
+        var turn = DysonTaskCompletionFlow.CreateReportSummaryTurn(rationale);
+        _session.EnqueuePendingTurn(turn);
+
+        return Ok(call, JsonSerializer.Serialize(new
+        {
+            status = "queued",
+            nextTurnKind = DysonAgentTurnKind.ReportSummary.ToString(),
+            rationale,
+        }));
+    }
+
+    private DysonToolCallResult ContinueWork(DysonToolCall call)
+    {
+        if (_session.Parent is not null)
+            return Error(call, "ContinueWork: root sessions only.");
+
+        if (!_session.IsInTaskCompletionConfirmPhase)
+        {
+            return Error(call,
+                "ContinueWork: only valid during a TaskCompletionConfirm turn after CompleteTask.");
+        }
+
+        string? reason = null;
+        string? remainingWork = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            reason = GetOptionalString(doc.RootElement, "reason");
+            remainingWork = GetOptionalString(doc.RootElement, "remainingWork");
+        }
+        catch (JsonException)
+        {
+            return Error(call, "ContinueWork: invalid JSON arguments.");
+        }
+
+        if (string.IsNullOrWhiteSpace(reason) && string.IsNullOrWhiteSpace(remainingWork))
+            return Error(call, "ContinueWork: reason or remainingWork is required.");
+
+        var turn = DysonTaskCompletionFlow.CreateContinuationTurn(reason, remainingWork);
+        _session.EnqueuePendingTurn(turn);
+
+        return Ok(call, JsonSerializer.Serialize(new
+        {
+            status = "queued",
+            nextTurnKind = DysonAgentTurnKind.Continuation.ToString(),
+            reason,
+            remainingWork,
+        }));
     }
 
     private static Result<string, string> ExtractQuestionsJson(DysonToolCall call)

@@ -1095,7 +1095,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         var sessionId = session.PersistenceId;
         if (_busySessions.ContainsKey(sessionId))
         {
-            EnqueuePrompt(sessionId, prompt);
+            EnqueuePrompt(sessionId, DysonAgentSession.CreateNormalTurn(prompt));
             LastError = null;
             Notify();
             return VoidResult<string>.Success;
@@ -2307,7 +2307,31 @@ public sealed class DysonUiHost : IAsyncDisposable
 
                     // BeginBuildPlan → queue Normal continuation; finally drains after busy gate.
                     if (DysonBeginBuildPlanFlow.ShouldEnqueueBuildContinuation(last.Kind))
-                        EnqueuePrompt(sessionId, DysonBeginBuildPlanFlow.ContinuationPrompt);
+                    {
+                        EnqueuePrompt(
+                            sessionId,
+                            DysonAgentSession.CreateNormalTurn(DysonBeginBuildPlanFlow.ContinuationPrompt));
+                    }
+
+                    // CompleteTask / Confirm / Continue enqueue onto session pending turns;
+                    // move them onto the host queue so DrainQueuedPrompts preserves Kind.
+                    while (session.TryDequeuePendingTurn(out var pending))
+                        EnqueuePrompt(sessionId, pending);
+
+                    if (DysonTaskCompletionFlow.ShouldMarkTerminalAfterTurn(last.Kind)
+                        && !session.IsTerminal)
+                    {
+                        var summary = string.IsNullOrWhiteSpace(last.AssistantText)
+                            ? "Task completed."
+                            : last.AssistantText.Trim();
+                        if (session.TryMarkTerminal(DysonSessionStatus.Completed, summary))
+                        {
+                            var marked = await PersistRootTerminalAsync(session, summary, token)
+                                .ConfigureAwait(false);
+                            if (marked.IsError)
+                                return marked;
+                        }
+                    }
                 }
 
                 return VoidResult<string>.Success;
@@ -2330,17 +2354,14 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
     }
 
-    private void EnqueuePrompt(
-        Guid sessionId,
-        string prompt,
-        DysonAgentTurnKind kind = DysonAgentTurnKind.Normal)
+    private void EnqueuePrompt(Guid sessionId, DysonAgentTurn turn)
     {
-        var text = prompt.Trim();
+        ArgumentNullException.ThrowIfNull(turn);
+        var instruction = turn.Instruction ?? turn.Kind.ToString();
         var entry = new QueuedPromptEntry(
             Guid.NewGuid(),
-            text,
-            DysonSubagentHostLogic.PromptFirstLine(text),
-            kind);
+            turn,
+            DysonSubagentHostLogic.PromptFirstLine(instruction));
         lock (_promptQueueGate)
         {
             if (!_promptQueues.TryGetValue(sessionId, out var list))
@@ -2383,21 +2404,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
 
         Notify();
-        VoidResult<string> result;
-        if (next.Kind == DysonAgentTurnKind.SubagentReportProcessing)
-        {
-            // Defensive: primary path is DrainAutoTurns → PromptSubagentReportProcessingAsync(interrupt).
-            result = await ExecutePromptOnSessionAsync(
-                    session,
-                    (s, token) => s.PromptSubagentReportProcessingAsync(next.Text, token),
-                    CancellationToken.None)
-                .ConfigureAwait(false);
-        }
-        else
-        {
-            result = await PromptOnSessionAsync(session, next.Text, CancellationToken.None)
-                .ConfigureAwait(false);
-        }
+        var result = await PromptHarnessTurnOnSessionAsync(session, next.Turn, CancellationToken.None)
+            .ConfigureAwait(false);
 
         if (result.IsError && ActiveSessionId == sessionId)
             LastError = result.Error;
@@ -2405,11 +2413,73 @@ public sealed class DysonUiHost : IAsyncDisposable
         Notify();
     }
 
+    private async Task<VoidResult<string>> PromptHarnessTurnOnSessionAsync(
+        DysonAgentSession session,
+        DysonAgentTurn turn,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+
+        return await ExecutePromptOnSessionAsync(
+                session,
+                async (s, token) =>
+                {
+                    if (turn.Kind is DysonAgentTurnKind.Normal or DysonAgentTurnKind.InitializeSession)
+                    {
+                        var userLog = DysonSessionLogPayload.CreateEntry(
+                            s.PersistenceId,
+                            DysonSessionLogKind.UserPrompt,
+                            new DysonSessionLogUserPrompt(turn.Instruction ?? string.Empty));
+
+                        var appendUser = await PersistAsync(
+                            () => _sessions.AppendLogAsync(userLog, token),
+                            token).ConfigureAwait(false);
+                        if (appendUser.IsError)
+                            return appendUser;
+                    }
+
+                    return await s.PromptHarnessTurnAsync(turn, token).ConfigureAwait(false);
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<VoidResult<string>> PersistRootTerminalAsync(
+        DysonAgentSession session,
+        string summary,
+        CancellationToken cancellationToken)
+    {
+        if (session.PersistenceId == Guid.Empty)
+            return VoidResult<string>.Success;
+
+        var persist = await PersistAsync(
+                () => _sessions.UpdateSessionMetaAsync(
+                    new DysonSessionMetaUpdate
+                    {
+                        SessionId = session.PersistenceId,
+                        Status = DysonSessionStatus.Completed,
+                    },
+                    cancellationToken),
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (persist.IsError)
+            return persist;
+
+        var statusLog = DysonSessionLogPayload.CreateEntry(
+            session.PersistenceId,
+            DysonSessionLogKind.SessionStatusChanged,
+            new DysonSessionLogSessionStatusChanged(DysonSessionStatus.Completed, summary));
+
+        return await PersistAsync(
+                () => _sessions.AppendLogAsync(statusLog, cancellationToken),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     private sealed record QueuedPromptEntry(
         Guid Id,
-        string Text,
-        string FirstLine,
-        DysonAgentTurnKind Kind = DysonAgentTurnKind.Normal);
+        DysonAgentTurn Turn,
+        string FirstLine);
 
     private async Task PersistTurnCompletedIfNeededAsync(DysonAgentTurn turn)
     {

@@ -29,7 +29,7 @@ When `ProviderKind == OpenAICompatible`, the host builds `OpenAiCompatibleAgentP
 - **Streaming SSE** (`stream: true`) for assistant text and optional reasoning; Completions reads `choices[0].delta.content` and `delta.reasoning_content` (+ incremental `tool_calls`, `stream_options.include_usage`); Responses handles `response.output_text.delta`, `response.reasoning_summary_text.delta` / `response.reasoning_text.delta`, function-call assembly (`output_item.added` / `function_call_arguments.delta|done` / `output_item.done`), and `error` / `response.failed`. Session consumes chunks per tool-loop round; `AssistantText` + H1 title parse only on the final no-tool round (preview stays raw until then). Reasoning accumulates into `ReasoningText` (UI + persistence only — not injected into transcript builders). Cancel/error clears `StreamingPreview` and `ReasoningStreamingPreview`.
 - **Native function tools** with required harness `stage` on every schema.
 - **Tool loop** inside one `PromptAsync` (cap ~20 rounds): model tool_calls → staged executor (web tools summarize **inside** the tool) → feed results → call again.
-- **Executors (v1):** `DysonWorkspaceToolExecutor` — real `RenameSession`, **`GetDateTime`** (host clock; `timezone`: `"utc"` default or `"local"`), workdir-scoped file tools (`ReadFile`, `CreateFile`, `WriteFile`, `Grep`, `ListDirectory`, `CreateDirectory`), `ShellExecute` (session-available shells via `DysonShell`), **long-running shell tools** (`StartLongRunningShell`, `ListLongRunningShells`, `ReadLongRunningShellTail`, `AbortLongRunningShell`, `RequestLongRunningShellCancellation`, `LongRunningShellInteract`, `SubscribeToLongRunningShellCompletion`), in-process web search/fetch tools (`FreeSearch`, `FreeSearchAdvanced`, `SearchWithSynthesis`, `FreeExtract`, `WebFetch`, `FetchGithubReadme`), **browser tools** (when `BrowserControl` set), **subagent tools** (`StartSubagent`, `ListSubagents`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`), and **inter-agent / Ask** (`TriggerParentEvent`, `RespondToSubagentEvent`, `TriggerSubagentEvent`, `AskQuestion`, `AskQuestionFromParent`); other catalog tools return “not implemented yet”.
+- **Executors (v1):** `DysonWorkspaceToolExecutor` — real `RenameSession`, **`GetDateTime`** (host clock; `timezone`: `"utc"` default or `"local"`), workdir-scoped file tools (`ReadFile`, `CreateFile`, `WriteFile`, `Grep`, `ListDirectory`, `CreateDirectory`), `ShellExecute` (session-available shells via `DysonShell`), **long-running shell tools** (`StartLongRunningShell`, `ListLongRunningShells`, `ReadLongRunningShellTail`, `AbortLongRunningShell`, `RequestLongRunningShellCancellation`, `LongRunningShellInteract`, `SubscribeToLongRunningShellCompletion`), in-process web search/fetch tools (`FreeSearch`, `FreeSearchAdvanced`, `SearchWithSynthesis`, `FreeExtract`, `WebFetch`, `FetchGithubReadme`), **browser tools** (when `BrowserControl` set), **subagent tools** (`StartSubagent`, `ListSubagents`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`), **inter-agent / Ask** (`TriggerParentEvent`, `RespondToSubagentEvent`, `TriggerSubagentEvent`, `AskQuestion`, `AskQuestionFromParent`), and **task completion** (`CompleteTask`, `ConfirmTaskComplete`, `ContinueWork`); other catalog tools return “not implemented yet”.
 - **RenameSession review:** every 8 turns (1-based indices **1, 9, 17, …** — when `TurnHistory.Count % 8 == 0` before adding the turn), the transcript builder appends an ephemeral yes/no `RenameSessionReviewMandate` on the **current incomplete** user message only. Turn 1 is `InitializeSession` via `DysonSessionInitialization.CreateTurn`; later review turns stay `Normal`. Completed/history turns always send clean `Instruction` — the mandate is never re-emitted. Soft every-turn rename nudges are not in system prompts; MCP description says rename only on harness review mandate or explicit user request.
 - **Cache-friendly requests** (`OpenAiCacheFriendlyTranscriptBuilder`):
   1. Stable prefix first: system/instructions (mode prompt + MCP catalog) → `tools[]` (stable sort) → prior transcript → new user/tool deltas last.
@@ -205,13 +205,15 @@ Parent sessions observe subagents via `DysonAgentInterrupt` (`SubagentCompleted`
 In-flight parent events are **not** persisted across process restart.
 ## Task completion flow
 
+Root sessions only (subagents use `SubmitSubagentReport`). Pending follow-ups live on the session **`ConcurrentQueue<DysonAgentTurn>`** (`EnqueuePendingTurn` / `TryDequeuePendingTurn`); the UI host drains them into its prompt queue and runs each via **`PromptHarnessTurnAsync`** so kinds stay intact.
+
 After the model calls `CompleteTask`:
 
-1. **Confirm** — `TaskCompletionConfirm` turn (`ConfirmTaskComplete` or `ContinueWork`)
-2. **Continue** — `Continuation` turn if work remains
-3. **Report** — `ReportSummary` turn after confirm (final handoff)
+1. **Confirm** — enqueue **`TaskCompletionConfirm`** (`DysonTaskCompletionFlow.CreateCompletionConfirmTurn`); on that turn only, `ConfirmTaskComplete` or `ContinueWork` are valid
+2. **Continue** — `ContinueWork` enqueues a **`Continuation`** turn if work remains
+3. **Report** — `ConfirmTaskComplete` enqueues a **`ReportSummary`** turn (final handoff); after that reply the host calls `TryMarkTerminal(Completed)` + persists
 
-Factories: `DysonTaskCompletionFlow` and session helpers `CreateCompletionConfirmTurn` / `CreateContinuationTurn` / `CreateReportSummaryTurn`.
+Factories: `DysonTaskCompletionFlow` and session helpers `CreateCompletionConfirmTurn` / `CreateContinuationTurn` / `CreateReportSummaryTurn`. Self-check: `DysonTaskCompletionSelfCheck.Run()`.
 
 ## Expand thought process
 

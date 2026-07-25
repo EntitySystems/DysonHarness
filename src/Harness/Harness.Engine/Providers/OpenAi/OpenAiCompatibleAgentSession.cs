@@ -260,7 +260,10 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         var runCts = new CancellationTokenSource();
         child.AttachBackgroundRun(runCts);
-        KickOffChildPrompt(child, BuildChildFirstPrompt(agentMode, task, context), runCts);
+        KickOffChildPrompt(
+            child,
+            DysonSessionInitialization.CreateTurn(BuildChildFirstPrompt(agentMode, task, context)),
+            runCts);
 
         AppendLog($"started subagent {child.Id} ({agentMode}): {title}");
 
@@ -342,6 +345,14 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             };
 
         return PromptWithTurnAsync(turn, filePaths, cancellationToken);
+    }
+
+    public override Task<VoidResult<string>> PromptHarnessTurnAsync(
+        DysonAgentTurn turn,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+        return PromptWithTurnAsync(turn, [], cancellationToken);
     }
 
     public override Task<VoidResult<string>> PromptBeginBuildPlanAsync(

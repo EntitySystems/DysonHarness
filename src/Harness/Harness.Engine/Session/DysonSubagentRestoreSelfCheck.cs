@@ -125,6 +125,11 @@ public static class DysonSubagentRestoreSelfCheck
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
+        public override Task<VoidResult<string>> PromptHarnessTurnAsync(
+            DysonAgentTurn turn,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
         public override Task<VoidResult<string>> PromptBeginBuildPlanAsync(
             string planRelativePath,
             IReadOnlyList<string>? reportBlocks = null,
