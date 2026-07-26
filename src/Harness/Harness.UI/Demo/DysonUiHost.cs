@@ -257,15 +257,29 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// Opens the file viewer for a workspace-relative path under the focused session work root.
     /// Does not navigate away from chat.
     /// </summary>
+    public Task OpenFileViewerAsync(
+        string relativePath,
+        CancellationToken cancellationToken = default) =>
+        OpenFileViewerAsync(relativePath, workRoot: null, cancellationToken);
+
+    /// <summary>
+    /// Opens the file viewer for a workspace-relative path.
+    /// When <paramref name="workRoot"/> is set (e.g. FILES rail), uses that root;
+    /// otherwise resolves from the focused session work directory.
+    /// </summary>
     public async Task OpenFileViewerAsync(
         string relativePath,
+        string? workRoot,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
 
         // Stay on the Blazor sync context so Notify() paints FileViewerOverlay.
-        var workRoot = await TryResolveActiveWorkRootAsync(cancellationToken);
-        if (workRoot is null)
+        var resolvedRoot = workRoot;
+        if (string.IsNullOrWhiteSpace(resolvedRoot))
+            resolvedRoot = await TryResolveActiveWorkRootAsync(cancellationToken);
+
+        if (resolvedRoot is null)
         {
             _fileViewer = new DysonFileViewerState
             {
@@ -280,7 +294,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         var path = relativePath.Trim().Replace('\\', '/');
-        var fm = new DysonFileManager(workRoot);
+        var fm = new DysonFileManager(resolvedRoot);
         var read = fm.ReadText(path);
         var title = Path.GetFileName(path) ?? path;
         var isMd = path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)

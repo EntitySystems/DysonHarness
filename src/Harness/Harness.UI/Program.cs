@@ -1,6 +1,7 @@
 using DysonHarness;
 using Harness.UI.Components;
 using Harness.UI.Demo;
+using Harness.UI.Files;
 using Harness.UI.Theme;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -35,6 +36,7 @@ builder.Services.AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>();
 #endif
 builder.Services.AddScoped<DysonUiHost>();
 builder.Services.AddScoped<ThemeService>();
+builder.Services.AddSingleton<DysonFileTreeService>();
 
 var app = builder.Build();
 

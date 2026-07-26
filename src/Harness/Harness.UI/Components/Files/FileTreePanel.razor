@@ -1,0 +1,89 @@
+@namespace Harness.UI.Components.Files
+@using Harness.UI.Demo
+@using Harness.UI.Files
+@implements IDisposable
+@inject DysonFileTreeService FileTree
+@inject DysonUiHost Host
+
+<div class="file-tree">
+    @if (ActiveWorkDirectoryId is null)
+    {
+        <div class="file-tree__empty">Select a work directory</div>
+    }
+    else if (FileTree.Active is null)
+    {
+        <div class="file-tree__empty">Loading…</div>
+    }
+    else if (FileTree.Active.Error is { } error && !FileTree.Active.SkeletonComplete)
+    {
+        <div class="file-tree__error">@error</div>
+    }
+    else
+    {
+        var state = FileTree.Active;
+        @if (state.SkeletonRunning && !state.SkeletonComplete)
+        {
+            <div class="file-tree__status">Scanning folders…</div>
+        }
+        else if (state.Error is { } warn)
+        {
+            <div class="file-tree__status file-tree__status--warn">@warn</div>
+        }
+
+        var rootChildren = state.SnapshotChildren(state.Root);
+        <ul class="file-tree__list" role="tree">
+            @foreach (var child in rootChildren)
+            {
+                <FileTreeNodeView Node="child" Depth="0" OnToggle="ToggleAsync" OnOpenFile="OpenFileAsync" />
+            }
+        </ul>
+
+        @if (state.SkeletonComplete && rootChildren.Length == 0)
+        {
+            <div class="file-tree__empty">Empty folder</div>
+        }
+    }
+</div>
+
+@code {
+    private Guid? _boundWorkDirectoryId;
+
+    [Parameter] public Guid? ActiveWorkDirectoryId { get; set; }
+
+    protected override void OnInitialized() => FileTree.Changed += OnTreeChanged;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_boundWorkDirectoryId == ActiveWorkDirectoryId)
+            return;
+
+        _boundWorkDirectoryId = ActiveWorkDirectoryId;
+        await FileTree.SetActiveAsync(ActiveWorkDirectoryId);
+    }
+
+    public void Dispose() => FileTree.Changed -= OnTreeChanged;
+
+    private void OnTreeChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private async Task ToggleAsync(DysonFileTreeNode node)
+    {
+        if (!node.IsDirectory)
+            return;
+
+        if (node.IsExpanded)
+        {
+            FileTree.Collapse(node);
+            return;
+        }
+
+        await FileTree.ExpandAsync(node);
+    }
+
+    private async Task OpenFileAsync(DysonFileTreeNode node)
+    {
+        if (node.IsDirectory || string.IsNullOrWhiteSpace(node.RelativePath))
+            return;
+
+        await Host.OpenFileViewerAsync(node.RelativePath, FileTree.Active?.AbsolutePath);
+    }
+}

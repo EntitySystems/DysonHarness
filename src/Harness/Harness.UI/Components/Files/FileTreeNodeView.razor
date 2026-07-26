@@ -1,0 +1,59 @@
+@namespace Harness.UI.Components.Files
+@using Harness.UI.Files
+@inject DysonFileTreeService FileTree
+
+<li class="file-tree__item" role="treeitem" aria-expanded="@(Node.IsDirectory ? Node.IsExpanded : null)">
+    <div class="file-tree__row"
+         style="--file-tree-depth:@Depth"
+         @onclick="OnRowClickAsync"
+         @onkeydown="OnKeyDownAsync"
+         tabindex="0"
+         role="button">
+        @if (Node.IsDirectory)
+        {
+            <span class="file-tree__chevron" aria-hidden="true">@(Node.IsLoading ? "…" : Node.IsExpanded ? "▾" : "▸")</span>
+        }
+        else
+        {
+            <span class="file-tree__chevron file-tree__chevron--spacer" aria-hidden="true"></span>
+        }
+        <span class="file-tree__name@(Node.IsDirectory ? " file-tree__name--dir" : null)" title="@Node.RelativePath">@Node.Name</span>
+    </div>
+
+    @if (Node.IsDirectory && Node.IsExpanded)
+    {
+        var children = FileTree.Active?.SnapshotChildren(Node) ?? [];
+        @if (children.Length > 0)
+        {
+            <ul class="file-tree__list" role="group">
+                @foreach (var child in children)
+                {
+                    <FileTreeNodeView Node="child" Depth="Depth + 1" OnToggle="OnToggle" OnOpenFile="OnOpenFile" />
+                }
+            </ul>
+        }
+    }
+</li>
+
+@code {
+    [Parameter, EditorRequired] public DysonFileTreeNode Node { get; set; } = default!;
+    [Parameter] public int Depth { get; set; }
+    [Parameter] public EventCallback<DysonFileTreeNode> OnToggle { get; set; }
+    [Parameter] public EventCallback<DysonFileTreeNode> OnOpenFile { get; set; }
+
+    private async Task OnRowClickAsync()
+    {
+        if (Node.IsDirectory)
+            await OnToggle.InvokeAsync(Node);
+        else
+            await OnOpenFile.InvokeAsync(Node);
+    }
+
+    private async Task OnKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key is not ("Enter" or " "))
+            return;
+
+        await OnRowClickAsync();
+    }
+}

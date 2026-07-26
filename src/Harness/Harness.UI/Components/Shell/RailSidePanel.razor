@@ -1,4 +1,5 @@
 @namespace Harness.UI.Components.Shell
+@using Harness.UI.Components.Files
 
 <div class="tool-panel rail-tabs">
     <div class="rail-tabs__tabs" role="tablist" aria-label="Rail panels">
@@ -24,8 +25,15 @@
             Usage
         </button>
     </div>
-    <div class="rail-tabs__body" role="tabpanel">
-        <div class="rail-tabs__placeholder">coming soon</div>
+    <div class="rail-tabs__body@(_activeTab == RailTab.Files ? " rail-tabs__body--files" : null)" role="tabpanel">
+        @if (_activeTab == RailTab.Files)
+        {
+            <FileTreePanel ActiveWorkDirectoryId="ActiveWorkDirectoryId" />
+        }
+        else
+        {
+            <div class="rail-tabs__placeholder">coming soon</div>
+        }
     </div>
 </div>
 
@@ -38,6 +46,8 @@
     }
 
     private RailTab _activeTab = RailTab.Files;
+
+    [Parameter] public Guid? ActiveWorkDirectoryId { get; set; }
 
     private void Select(RailTab tab) => _activeTab = tab;
 }

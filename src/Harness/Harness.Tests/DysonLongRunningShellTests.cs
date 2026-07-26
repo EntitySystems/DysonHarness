@@ -14,6 +14,7 @@ public class DysonLongRunningShellTests
         AssertShellExitedPromptAndTrim();
         AssertOutcomeMapping();
         AssertIdAllocationListAndAbort();
+        AssertStartIncludesEarlyOutput();
     }
 
     private static void AssertCatalogGate()
@@ -45,9 +46,11 @@ public class DysonLongRunningShellTests
         var start = tools.First(t => t.Name == "StartLongRunningShell");
         if (!start.Description.Contains("E2E", StringComparison.Ordinal)
             || !start.Description.Contains("ListLongRunningShells", StringComparison.Ordinal)
-            || !start.Description.Contains("SubscribeToLongRunningShellCompletion", StringComparison.Ordinal))
+            || !start.Description.Contains("SubscribeToLongRunningShellCompletion", StringComparison.Ordinal)
+            || !start.Description.Contains("~1s", StringComparison.Ordinal))
         {
-            throw new InvalidOperationException("StartLongRunningShell description must mention E2E and List/Subscribe tools.");
+            throw new InvalidOperationException(
+                "StartLongRunningShell description must mention E2E, List/Subscribe tools, and ~1s output.");
         }
     }
 
@@ -188,5 +191,122 @@ public class DysonLongRunningShellTests
         {
             DysonLongRunningShellRegistry.ClearForTests(workDirId);
         }
+    }
+
+    private static void AssertStartIncludesEarlyOutput()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var workDirId = Guid.NewGuid();
+        var cwd = Path.Combine(Path.GetTempPath(), "dyson-lrs-start-tail-" + workDirId.ToString("N"));
+        Directory.CreateDirectory(cwd);
+        const string marker = "start-shell-tail-marker-xyz";
+
+        try
+        {
+            var session = new StubSession();
+            using var http = new HttpClient();
+            var executor = new DysonWorkspaceToolExecutor(session, cwd, http, store: null, workDirId);
+            var call = new DysonToolCall
+            {
+                CallId = "lrs-start-tail",
+                ToolName = "StartLongRunningShell",
+                Stage = 0,
+                ArgumentsJson = $$"""{"shell":"Cmd","command":"echo {{marker}}"}""",
+            };
+
+            var result = executor.ExecuteAsync(call).GetAwaiter().GetResult();
+            if (result.IsError)
+                throw new InvalidOperationException($"StartLongRunningShell failed: {result.Content}");
+
+            var content = result.Content;
+            if (!content.Contains("longRunningShellId=", StringComparison.Ordinal)
+                || !content.Contains("status=", StringComparison.Ordinal)
+                || !content.Contains("shell=", StringComparison.Ordinal)
+                || !content.Contains("command=", StringComparison.Ordinal)
+                || !content.Contains("---", StringComparison.Ordinal)
+                || !content.Contains(marker, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "StartLongRunningShell result must include metadata and early output after ~1s. Got:\n" + content);
+            }
+        }
+        finally
+        {
+            DysonLongRunningShellRegistry.ClearForTests(workDirId);
+            try
+            {
+                Directory.Delete(cwd, recursive: true);
+            }
+            catch
+            {
+                // best-effort temp cleanup
+            }
+        }
+    }
+
+    private sealed class StubProvider : DysonAgentProvider;
+
+    private sealed class StubSession() : DysonAgentSession(
+        DysonAgentModes.Work,
+        new DysonAgentSessionConfig { AvailableShellTypes = [DysonShellType.Cmd] },
+        new StubProvider())
+    {
+        public override Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
+            string agentMode,
+            string task,
+            string? context = null,
+            IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
+            string? modelSlug = null,
+            string? reasoningEffort = null,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public override Task<VoidResult<string>> LoadFunctionalContextAsync(
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
+        public override Task<VoidResult<string>> PromptAsync(
+            string prompt,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
+        public override Task<VoidResult<string>> PromptAsync(
+            string prompt,
+            IReadOnlyList<string> filePaths,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
+        public override Task<VoidResult<string>> PromptHarnessTurnAsync(
+            DysonAgentTurn turn,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
+        public override Task<VoidResult<string>> PromptBeginBuildPlanAsync(
+            string planRelativePath,
+            IReadOnlyList<string>? reportBlocks = null,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
+        public override Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
+            DysonAgentInterrupt interrupt,
+            string? title = null,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
+        public override Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
+            string instruction,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
+        public override Task<VoidResult<string>> PromptShellExitedAsync(
+            DysonAgentInterrupt interrupt,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
+        public override Task<Result<DysonAgentSessionEvent, string>> WaitForNotifyAsync(
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
     }
 }

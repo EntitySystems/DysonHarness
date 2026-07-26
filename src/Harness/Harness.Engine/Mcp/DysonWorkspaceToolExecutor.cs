@@ -1992,8 +1992,27 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Error(call, started.Error);
 
         var info = started.Value;
+        // Wall-clock 1s so early boot output lands in the ring (not ReadTail timeoutMs=1000,
+        // which returns on the first pump signal).
+        await Task.Delay(1000, cancellationToken).ConfigureAwait(false);
+
+        var tailText = "(no output)";
+        var tail = await DysonLongRunningShellRegistry
+            .ReadTailAsync(
+                _workDirectoryId,
+                info.Id,
+                maxChars: 8 * 1024,
+                sinceOffset: null,
+                timeoutMs: 0,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (!tail.IsError && !string.IsNullOrEmpty(tail.Value.Text))
+            tailText = tail.Value.Text.TrimEnd();
+
         var content =
-            $"longRunningShellId={info.Id}\nstatus={info.Status}\nshell={info.ShellType}\ncommand={info.Command}";
+            $"longRunningShellId={info.Id}\nstatus={info.Status}\nshell={info.ShellType}\ncommand={info.Command}" +
+            "\n---\n" +
+            tailText;
 
         var planMode = string.Equals(_session.Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase);
         content = DysonMcpPipeline.PrefixPlanShellWarning(planMode, content);

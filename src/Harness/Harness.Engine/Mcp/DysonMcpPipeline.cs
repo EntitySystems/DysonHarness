@@ -166,7 +166,7 @@ public sealed class DysonMcpPipeline
         var startDescription =
             "Recommended for E2E test runs, large application builds, and keeping development servers running. " +
             "Start a background long-running shell in the session work directory. " +
-            $"Available shells: {listed}. Returns longRunningShellId. " +
+            $"Available shells: {listed}. Returns longRunningShellId and the first ~1s of combined output. " +
             "Use ListLongRunningShells / ReadLongRunningShellTail / LongRunningShellInteract / " +
             "SubscribeToLongRunningShellCompletion / RequestLongRunningShellCancellation / AbortLongRunningShell to manage it. " +
             "Not persisted across UI restart (orphans OS processes). Prefer ShellExecute for one-shot commands.";
