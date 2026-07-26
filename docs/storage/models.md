@@ -61,7 +61,7 @@ Credentials and endpoint live on the provider only. Slugs are children; add/remo
 | `Id` | Guid PK |
 | `DisplayName` | UI label (e.g. “OpenAI work”) |
 | `ProviderKind` | Provider family string from `DysonProviderKinds` (`demo`, `OpenAICompatible`, `Anthropic`) |
-| `BaseUrl` | Optional endpoint override (OpenAI-compatible default `https://api.openai.com/v1`) |
+| `BaseUrl` | Optional API root (OpenAI-compatible default `https://api.openai.com/v1`; keep `/vN` if already present, else `/v1` is appended) |
 | `ApiKey` | Optional; **plaintext-local** (no OS keychain yet) |
 | `OpenAiApiMode` | OpenAICompatible only: `Completions` (default) or `Responses` — see `DysonOpenAiApiModes` |
 | `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
@@ -128,7 +128,7 @@ Per-provider setting (`OpenAiApiMode`), not per slug. UI shows the Completions |
 | `Completions` (default) | `POST …/chat/completions` |
 | `Responses` | `POST …/responses` |
 
-Normalize BaseUrl to an absolute `…/v1` root (default `https://api.openai.com/v1`). Auth: `Authorization: Bearer {ApiKey}` when set.
+Normalize BaseUrl to an absolute API root with no trailing slash (default `https://api.openai.com/v1`). If BaseUrl already ends with `/vN` (e.g. `/v1`, `/v4/`), keep that version; otherwise append `/v1` for OpenAI default compatibility. Clients then append `/chat/completions` or `/responses` only — never a second version segment. Auth: `Authorization: Bearer {ApiKey}` when set.
 
 ## Ephemeral providers
 

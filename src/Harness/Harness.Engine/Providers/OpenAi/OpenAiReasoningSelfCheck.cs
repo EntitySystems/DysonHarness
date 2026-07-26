@@ -3,16 +3,46 @@ using System.Text.Json.Nodes;
 namespace DysonHarness;
 
 /// <summary>
-/// ponytail: assert Completions/Responses reasoning parse + turn preview handoff (no test framework).
-/// Run: <c>OpenAiReasoningSelfCheck.Run()</c> (also from UI <c>Program</c> startup).
+/// ponytail: assert Completions/Responses reasoning parse, BaseUrl normalize, turn preview handoff
+/// (no test framework). Run: <c>OpenAiReasoningSelfCheck.Run()</c> (also from UI <c>Program</c> startup).
 /// </summary>
 public static class OpenAiReasoningSelfCheck
 {
     public static void Run()
     {
+        AssertNormalizeBaseUrl();
         AssertCompletionsParseReasoning();
         AssertResponsesParseReasoning();
         AssertTurnReasoningPreviewHandoff();
+    }
+
+    private static void AssertNormalizeBaseUrl()
+    {
+        static void Expect(string? input, string expectedRoot)
+        {
+            var actual = OpenAiCompatibleHttp.NormalizeBaseUrl(input);
+            if (!string.Equals(actual, expectedRoot, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"NormalizeBaseUrl({input ?? "null"}) => '{actual}', expected '{expectedRoot}'.");
+            }
+        }
+
+        Expect("https://api.openai.com", "https://api.openai.com/v1");
+        Expect("https://api.z.ai/api/paas/v4/", "https://api.z.ai/api/paas/v4");
+        Expect("https://api.openai.com/v1", "https://api.openai.com/v1");
+
+        var openaiChat = $"{OpenAiCompatibleHttp.NormalizeBaseUrl("https://api.openai.com")}/chat/completions";
+        if (!string.Equals(openaiChat, "https://api.openai.com/v1/chat/completions", StringComparison.Ordinal))
+            throw new InvalidOperationException($"OpenAI chat URL was '{openaiChat}'.");
+
+        var zaiChat = $"{OpenAiCompatibleHttp.NormalizeBaseUrl("https://api.z.ai/api/paas/v4/")}/chat/completions";
+        if (!string.Equals(zaiChat, "https://api.z.ai/api/paas/v4/chat/completions", StringComparison.Ordinal))
+            throw new InvalidOperationException($"Z.AI chat URL was '{zaiChat}' (must not insert /v1).");
+
+        var zaiResponses = $"{OpenAiCompatibleHttp.NormalizeBaseUrl("https://api.z.ai/api/paas/v4/")}/responses";
+        if (!string.Equals(zaiResponses, "https://api.z.ai/api/paas/v4/responses", StringComparison.Ordinal))
+            throw new InvalidOperationException($"Z.AI responses URL was '{zaiResponses}'.");
     }
 
     private static void AssertCompletionsParseReasoning()

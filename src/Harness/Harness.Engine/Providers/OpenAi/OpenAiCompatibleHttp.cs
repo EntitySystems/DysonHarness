@@ -17,7 +17,11 @@ public static class OpenAiCompatibleHttp
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
     };
 
-    /// <summary>Normalize provider BaseUrl to an absolute .../v1 root (no trailing slash).</summary>
+    /// <summary>
+    /// Normalize provider BaseUrl to an absolute API root (no trailing slash).
+    /// If the URL already ends with <c>/vN</c> (e.g. <c>/v1</c>, <c>/v4</c>), keep that version;
+    /// otherwise append <c>/v1</c> for OpenAI default compatibility.
+    /// </summary>
     public static string NormalizeBaseUrl(string? baseUrl)
     {
         var raw = string.IsNullOrWhiteSpace(baseUrl) ? DefaultBaseUrl : baseUrl.Trim();
@@ -28,8 +32,15 @@ public static class OpenAiCompatibleHttp
         }
 
         raw = raw.TrimEnd('/');
-        if (!raw.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+        // Keep existing /vN roots (OpenAI /v1, Z.AI /v4, …); only invent /v1 when absent.
+        if (!System.Text.RegularExpressions.Regex.IsMatch(
+                raw,
+                @"/v\d+$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                | System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+        {
             raw += "/v1";
+        }
 
         return raw;
     }

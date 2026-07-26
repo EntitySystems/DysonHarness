@@ -43,3 +43,6 @@ artifacts/
 .ui-*.err.log
 .ui-*.out.log
 
+
+## Workspace plan artifacts (local; see docs/storage/work-directories.md)
+.dyson/plans/
