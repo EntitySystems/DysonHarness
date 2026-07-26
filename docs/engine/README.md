@@ -235,7 +235,11 @@ On the rethink turn only: readonly tools when a peek is needed; optional `StartS
 
 `ExpandThoughtProcess` MCP queues an `ExpandThoughtProcess` turn via `CreateExpandThoughtProcessTurn` / `DysonExpandThoughtProcess`, sets `EndsCurrentTurn` on the tool result, and the OpenAI tool loop soft-closes the calling turn (`SoftCloseAfterEndsCurrentTurn`) — no further model rounds. Recursion on an in-flight expand turn is rejected.
 
-During the expand turn the model may call **`DropTurnContext`** (`turnIds` from `[turnId=…]` history headers) to set `IsExcludedFromContext` on prior turns. Excluded turns stay in the UI (Dropped badge + Restore) but are omitted from Completions/Responses transcripts and context-optimizer walks. After expand completes, the host enqueues a Normal continuation (`ShouldEnqueueContinuation` / `ContinuationPrompt`). Covered by `DysonExpandThoughtProcessTests` in `Harness.Tests`.
+## Start new turn
+
+`StartNewTurn(promptInstructions)` hard-ends the current turn (`EndsCurrentTurn`) and enqueues a **Normal** turn whose `Instruction` is the provided text (e.g. “write the second 50-word paragraph”). Callable anytime; not a substitute for ExpandThoughtProcess. Soft-close keeps same-round `reply.Content` when non-empty; otherwise uses a tool-specific harness note (`StartNewTurn` / `ExpandThoughtProcess` / generic). Host drains pending turns the same way as other queued follow-ups. Covered by `DysonStartNewTurnTests` / soft-close asserts in `DysonExpandThoughtProcessTests`.
+
+During any turn the model may call **`DropTurnContext`** (`turnIds` from `[turnId=…]` history headers, required `reason`) to set `IsExcludedFromContext` on prior turns; each newly dropped turn appends a session log line `Turn {id} dropped, reason: …`. **`RestoreTurnContext`** (same args shape) clears the flag and logs `Turn {id} restored, reason: …` — available but not mandated. Excluded turns stay in the UI (Dropped badge + Restore) but are omitted from Completions/Responses transcripts and context-optimizer walks. After expand completes, the host enqueues a Normal continuation (`ShouldEnqueueContinuation` / `ContinuationPrompt`). Covered by `DysonExpandThoughtProcessTests` in `Harness.Tests`.
 
 ## Context optimizer
 

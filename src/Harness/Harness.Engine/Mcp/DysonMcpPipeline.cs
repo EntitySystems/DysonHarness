@@ -1349,7 +1349,7 @@ public sealed class DysonMcpPipeline
             Description =
                 "Queue an ExpandThoughtProcess reformulation turn, hard-end the current turn, then auto-continue with a Normal turn. " +
                 "Use when context is noisy or the plan is unclear. Optional focus clarifies what to reformulate. " +
-                "During the expand turn the model may optionally call DropTurnContext for true noise only.",
+                "DropTurnContext is optional hygiene anytime (not phase-gated); use for true noise only.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1365,10 +1365,31 @@ public sealed class DysonMcpPipeline
 
         yield return new DysonMcpTool
         {
+            Name = "StartNewTurn",
+            Description =
+                "Hard-end the current turn and queue a Normal follow-up whose Instruction is promptInstructions. " +
+                "Use when you need a clean new turn with specific instructions (e.g. continue a multi-part reply). " +
+                "Not a substitute for ExpandThoughtProcess (reformulation). Callable anytime.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "promptInstructions": {
+                      "type": "string",
+                      "description": "Non-empty instruction for the next Normal turn."
+                    }
+                  },
+                  "required": ["promptInstructions"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
             Name = "DropTurnContext",
             Description =
-                "ExpandThoughtProcess phase only: exclude listed turn ids (from [turnId=…] history headers) " +
-                "from future provider transcripts. Does not delete turns; UI can restore. Prefer keep when unsure.",
+                "Exclude listed turn ids (from [turnId=…] history headers) from future provider transcripts. " +
+                "Callable anytime. Requires reason. Does not delete turns; RestoreTurnContext or UI can restore. Prefer keep when unsure.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1377,9 +1398,38 @@ public sealed class DysonMcpPipeline
                       "type": "array",
                       "items": { "type": "string" },
                       "description": "Turn Guids from [turnId=…] transcript headers to exclude from future model context."
+                    },
+                    "reason": {
+                      "type": "string",
+                      "description": "Why these turns should be excluded from future model context."
                     }
                   },
-                  "required": ["turnIds"]
+                  "required": ["turnIds", "reason"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "RestoreTurnContext",
+            Description =
+                "Re-include previously dropped turn ids in future provider transcripts (undo DropTurnContext). " +
+                "Callable anytime. Requires reason. Prefer keep when unsure; do not restore casually.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "turnIds": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "Turn Guids from [turnId=…] transcript headers to re-include in future model context."
+                    },
+                    "reason": {
+                      "type": "string",
+                      "description": "Why these turns should be restored into future model context."
+                    }
+                  },
+                  "required": ["turnIds", "reason"]
                 }
                 """,
         };

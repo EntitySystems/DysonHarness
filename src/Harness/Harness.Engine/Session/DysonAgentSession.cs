@@ -893,7 +893,7 @@ public abstract class DysonAgentSession
 
     /// <summary>
     /// True while the in-flight turn is <see cref="DysonAgentTurnKind.ExpandThoughtProcess"/>
-    /// (DropTurnContext phase guard).
+    /// (blocks nested ExpandThoughtProcess).
     /// </summary>
     public bool IsInExpandThoughtProcessPhase
     {

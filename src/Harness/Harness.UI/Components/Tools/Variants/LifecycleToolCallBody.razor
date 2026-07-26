@@ -62,9 +62,21 @@ else if (ToolName == "ExpandThoughtProcess")
         <pre class="tool-scroll mono">@(string.IsNullOrEmpty(focus) ? "reformulate" : focus)</pre>
     </div>
 }
-else if (ToolName == "DropTurnContext")
+else if (ToolName == "StartNewTurn")
+{
+    var instructions = DysonToolCallUi.GetString(ArgumentsJson, "promptInstructions");
+    var display = string.IsNullOrEmpty(instructions)
+        ? "(none)"
+        : DysonToolCallUi.Truncate(instructions, 400);
+    <div class="tool-section">
+        <div class="tool-section__label">Prompt instructions</div>
+        <pre class="tool-scroll mono">@display</pre>
+    </div>
+}
+else if (ToolName == "DropTurnContext" || ToolName == "RestoreTurnContext")
 {
     var ids = DysonToolCallUi.GetStringArray(ArgumentsJson, "turnIds");
+    var reason = DysonToolCallUi.GetString(ArgumentsJson, "reason");
     <div class="tool-section">
         <div class="tool-section__label">Turn ids</div>
         <div class="tool-scroll mono">
@@ -80,6 +92,10 @@ else if (ToolName == "DropTurnContext")
                 }
             }
         </div>
+    </div>
+    <div class="tool-section">
+        <div class="tool-section__label">Reason</div>
+        <pre class="tool-scroll mono">@(string.IsNullOrEmpty(reason) ? "(none)" : reason)</pre>
     </div>
 }
 

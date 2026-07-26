@@ -24,7 +24,8 @@ public static class DysonAgentSystemPrompts
         - Each turn you may and are encouraged to issue multiple tool calls in a single turn when that advances the task.
         - Every tool call includes a stage integer: lower stages run first; calls with the same stage run concurrently; after a stage finishes, the next stage runs; then the turn ends.
         - Prefer batching independent reads/searches on the same stage; use later stages for dependent writes or follow-ups.
-        - When context grows noisy or the plan is unclear, call ExpandThoughtProcess to reformulate before continuing. Calling it ends the current turn; the harness runs an ExpandThoughtProcess turn (optional DropTurnContext for true noise only), then auto-continues with a Normal turn.
+        - When context grows noisy or the plan is unclear, call ExpandThoughtProcess to reformulate before continuing. Calling it ends the current turn; the harness runs an ExpandThoughtProcess turn, then auto-continues with a Normal turn. DropTurnContext (with reason) is available anytime for true noise; RestoreTurnContext can undo a drop when needed.
+        - When you need a clean new turn with specific instructions (not reformulation), call StartNewTurn(promptInstructions). Calling it ends the current turn and queues a Normal turn with those instructions. Not a substitute for ExpandThoughtProcess.
 
         Agent turn title (required):
         - Every agent-authored reply must start with a single Markdown H1 title you generate for that turn, e.g. # Searching for related files, # Expanding database directory, # Looking at payment provider schemas.

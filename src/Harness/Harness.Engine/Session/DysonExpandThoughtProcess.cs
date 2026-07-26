@@ -11,12 +11,13 @@ public static class DysonExpandThoughtProcess
         Use this turn to reformulate the problem so you do not get confused as context grows.
         Stay concise and actionable. Do not call tools unless essential to clarify a factual gap or to drop truly irrelevant context; prefer writing the plan in your reply.
 
-        Context hygiene (optional DropTurnContext):
-        - Each prior turn in history is labeled with its turn id (see turn header in the transcript). Use those ids with DropTurnContext.
+        Context hygiene (optional DropTurnContext — also available on Normal turns):
+        - Each prior turn in history is labeled with its turn id (see turn header in the transcript). Use those ids with DropTurnContext (requires reason).
         - If earlier turns in this session are entirely irrelevant to the current problem and would cause major confusion if kept in the model context, call DropTurnContext with those turn ids to exclude them from future provider transcripts.
         - Only drop turns that are true noise with no remaining purpose for this task (wrong rabbit hole, obsolete exploration, superseded dead end).
         - If a turn still contains any useful facts, decisions, paths, or constraints — do not drop it.
         - When in doubt, do not drop anything. Prefer keeping context over aggressive pruning.
+        - RestoreTurnContext is available to undo a drop if you need those turns back; do not treat restore as required hygiene.
         - After dropping (if any), write your reformulation assuming excluded turns will not appear in later prompts.
         """;
 

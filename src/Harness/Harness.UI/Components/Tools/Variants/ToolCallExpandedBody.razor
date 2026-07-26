@@ -53,7 +53,9 @@
     case "ConfirmTaskComplete":
     case "ContinueWork":
     case "ExpandThoughtProcess":
+    case "StartNewTurn":
     case "DropTurnContext":
+    case "RestoreTurnContext":
         <LifecycleToolCallBody ToolName="@ToolName" ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
         break;
     case "FreeSearch":

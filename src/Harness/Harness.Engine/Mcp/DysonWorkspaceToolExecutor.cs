@@ -9,8 +9,8 @@ namespace DysonHarness;
 /// Executes workspace-scoped MCP tools against a work directory root, plus RenameSession,
 /// GetDateTime, WaitForSeconds, ShellExecute, long-running shell tools, subagent spawn/list/report tools,
 /// inter-agent events / AskQuestion, session todo CRUD, task completion tools, ResumeCurrentTask,
-/// ExpandThoughtProcess / DropTurnContext, in-process web search/fetch tools, and browser control tools (when
-/// <see cref="DysonAgentSessionConfig.BrowserControl"/> is set).
+/// ExpandThoughtProcess / StartNewTurn / DropTurnContext / RestoreTurnContext, in-process web search/fetch tools, and browser
+/// control tools (when <see cref="DysonAgentSessionConfig.BrowserControl"/> is set).
 /// Other catalog tools return a not-implemented stub result.
 /// </summary>
 public sealed partial class DysonWorkspaceToolExecutor
@@ -73,7 +73,9 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "ContinueWork" => ContinueWork(call),
                 "ResumeCurrentTask" => ResumeCurrentTask(call),
                 "ExpandThoughtProcess" => ExpandThoughtProcess(call),
+                "StartNewTurn" => StartNewTurn(call),
                 "DropTurnContext" => await DropTurnContextAsync(call, cancellationToken).ConfigureAwait(false),
+                "RestoreTurnContext" => await RestoreTurnContextAsync(call, cancellationToken).ConfigureAwait(false),
                 "WaitForSeconds" => await WaitForSecondsAsync(call, cancellationToken).ConfigureAwait(false),
                 "ListTodos" => await ListTodosAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateTodo" => await CreateTodoAsync(call, cancellationToken).ConfigureAwait(false),
@@ -1052,17 +1054,42 @@ public sealed partial class DysonWorkspaceToolExecutor
             endsCurrentTurn: true);
     }
 
+    private DysonToolCallResult StartNewTurn(DysonToolCall call)
+    {
+        string promptInstructions;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var required = RequireString(doc.RootElement, "promptInstructions");
+            if (required.IsError)
+                return Error(call, "StartNewTurn: promptInstructions (non-empty string) is required.");
+            promptInstructions = required.Value;
+        }
+        catch (JsonException)
+        {
+            return Error(call, "StartNewTurn: invalid JSON arguments.");
+        }
+
+        var turn = DysonAgentSession.CreateNormalTurn(promptInstructions);
+        _session.EnqueuePendingTurn(turn);
+
+        return Ok(
+            call,
+            JsonSerializer.Serialize(new
+            {
+                status = "queued",
+                nextTurnKind = DysonAgentTurnKind.Normal.ToString(),
+                promptInstructions = turn.Instruction,
+            }),
+            endsCurrentTurn: true);
+    }
+
     private async Task<DysonToolCallResult> DropTurnContextAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
-        if (!_session.IsInExpandThoughtProcessPhase)
-        {
-            return Error(call,
-                "DropTurnContext: only valid during an ExpandThoughtProcess turn.");
-        }
-
         IReadOnlyList<string>? turnIdStrings;
+        string reason;
         try
         {
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
@@ -1070,6 +1097,11 @@ public sealed partial class DysonWorkspaceToolExecutor
             if (parsed.IsError)
                 return Error(call, parsed.Error);
             turnIdStrings = parsed.Value;
+
+            var reasonResult = RequireString(doc.RootElement, "reason");
+            if (reasonResult.IsError)
+                return Error(call, "DropTurnContext: reason (non-empty string) is required.");
+            reason = reasonResult.Value;
         }
         catch (JsonException)
         {
@@ -1079,7 +1111,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (turnIdStrings is null || turnIdStrings.Count == 0)
             return Error(call, "DropTurnContext: turnIds (non-empty array) is required.");
 
-        var currentId = _session.Turns[^1].Id;
+        var currentId = _session.Turns.Count > 0 ? _session.Turns[^1].Id : Guid.Empty;
         var dropped = new List<string>();
         var skipped = new List<string>();
 
@@ -1093,14 +1125,14 @@ public sealed partial class DysonWorkspaceToolExecutor
 
             if (id == currentId)
             {
-                skipped.Add($"{id}: cannot drop the in-flight ExpandThoughtProcess turn");
+                skipped.Add($"{id:D}: cannot drop the in-flight turn");
                 continue;
             }
 
             var match = _session.Turns.FirstOrDefault(t => t.Id == id);
             if (match is null)
             {
-                skipped.Add($"{id}: unknown turn id");
+                skipped.Add($"{id:D}: unknown turn id");
                 continue;
             }
 
@@ -1112,19 +1144,11 @@ public sealed partial class DysonWorkspaceToolExecutor
 
             match.IsExcludedFromContext = true;
             dropped.Add(id.ToString("D"));
+            _session.AppendLog($"Turn {id:D} dropped, reason: {reason}");
 
             if (_store is not null && _session.PersistenceId != Guid.Empty)
             {
-                var sequence = -1;
-                for (var i = 0; i < _session.Turns.Count; i++)
-                {
-                    if (ReferenceEquals(_session.Turns[i], match) || _session.Turns[i].Id == match.Id)
-                    {
-                        sequence = i;
-                        break;
-                    }
-                }
-
+                var sequence = IndexOfTurn(match);
                 var entity = DysonTurnPersistence.ToEntity(match, _session.PersistenceId, sequence);
                 var upserted = await _store.UpsertTurnAsync(entity, cancellationToken).ConfigureAwait(false);
                 if (upserted.IsError)
@@ -1135,9 +1159,95 @@ public sealed partial class DysonWorkspaceToolExecutor
         return Ok(call, JsonSerializer.Serialize(new
         {
             status = skipped.Count == 0 ? "ok" : "partial",
+            reason,
             dropped,
             skipped,
         }));
+    }
+
+    private async Task<DysonToolCallResult> RestoreTurnContextAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<string>? turnIdStrings;
+        string reason;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var parsed = TryParseOptionalStringArray(doc.RootElement, "turnIds");
+            if (parsed.IsError)
+                return Error(call, parsed.Error);
+            turnIdStrings = parsed.Value;
+
+            var reasonResult = RequireString(doc.RootElement, "reason");
+            if (reasonResult.IsError)
+                return Error(call, "RestoreTurnContext: reason (non-empty string) is required.");
+            reason = reasonResult.Value;
+        }
+        catch (JsonException)
+        {
+            return Error(call, "RestoreTurnContext: invalid JSON arguments.");
+        }
+
+        if (turnIdStrings is null || turnIdStrings.Count == 0)
+            return Error(call, "RestoreTurnContext: turnIds (non-empty array) is required.");
+
+        var restored = new List<string>();
+        var skipped = new List<string>();
+
+        foreach (var raw in turnIdStrings)
+        {
+            if (!Guid.TryParse(raw, out var id))
+            {
+                skipped.Add($"{raw}: invalid guid");
+                continue;
+            }
+
+            var match = _session.Turns.FirstOrDefault(t => t.Id == id);
+            if (match is null)
+            {
+                skipped.Add($"{id:D}: unknown turn id");
+                continue;
+            }
+
+            if (!match.IsExcludedFromContext)
+            {
+                restored.Add(id.ToString("D"));
+                continue;
+            }
+
+            match.IsExcludedFromContext = false;
+            restored.Add(id.ToString("D"));
+            _session.AppendLog($"Turn {id:D} restored, reason: {reason}");
+
+            if (_store is not null && _session.PersistenceId != Guid.Empty)
+            {
+                var sequence = IndexOfTurn(match);
+                var entity = DysonTurnPersistence.ToEntity(match, _session.PersistenceId, sequence);
+                var upserted = await _store.UpsertTurnAsync(entity, cancellationToken).ConfigureAwait(false);
+                if (upserted.IsError)
+                    return Error(call, upserted.Error);
+            }
+        }
+
+        return Ok(call, JsonSerializer.Serialize(new
+        {
+            status = skipped.Count == 0 ? "ok" : "partial",
+            reason,
+            restored,
+            skipped,
+        }));
+    }
+
+    private int IndexOfTurn(DysonAgentTurn match)
+    {
+        for (var i = 0; i < _session.Turns.Count; i++)
+        {
+            if (ReferenceEquals(_session.Turns[i], match) || _session.Turns[i].Id == match.Id)
+                return i;
+        }
+
+        return -1;
     }
 
     private async Task<DysonToolCallResult> WaitForSecondsAsync(

@@ -483,9 +483,20 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
 
             if (turn.ResponseLog.Any(r => r.EndsCurrentTurn && !r.IsError))
             {
-                const string endNote =
-                    "# Expanding thought process\n\n" +
-                    "ExpandThoughtProcess was called; this turn ends. A reformulation turn will run next.";
+                var ending = turn.ResponseLog.Last(r => r.EndsCurrentTurn && !r.IsError);
+                // Demo path has no same-round model Content; soft-close uses tool-specific harness notes.
+                var endNote = ending.ToolName switch
+                {
+                    "StartNewTurn" =>
+                        "# Starting new turn\n\n" +
+                        "StartNewTurn was called; this turn ends. A Normal turn with the provided instructions will run next.",
+                    "ExpandThoughtProcess" =>
+                        "# Expanding thought process\n\n" +
+                        "ExpandThoughtProcess was called; this turn ends. A reformulation turn will run next.",
+                    _ =>
+                        "# Turn ended\n\n" +
+                        "An end-turn tool was called; this turn ends.",
+                };
                 var parsedEnd = DysonAgentTurn.TryParseAgentTitle(endNote);
                 if (parsedEnd.IsSuccess)
                 {

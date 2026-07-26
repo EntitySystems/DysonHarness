@@ -96,7 +96,11 @@ public static class DysonToolCallUi
             "ExpandThoughtProcess" => TextSummary(Truncate(
                 GetString(argumentsJson, "focus") ?? "reformulate",
                 SummaryMaxLength)),
+            "StartNewTurn" => TextSummary(Truncate(
+                GetString(argumentsJson, "promptInstructions") ?? "new turn",
+                SummaryMaxLength)),
             "DropTurnContext" => TextSummary(SummarizeDropTurnContext(argumentsJson)),
+            "RestoreTurnContext" => TextSummary(SummarizeRestoreTurnContext(argumentsJson)),
             "FreeSearch" or "FreeSearchAdvanced" or "SearchWithSynthesis"
                 => TextSummary(Truncate(GetString(argumentsJson, "query"), SummaryMaxLength)),
             "FreeExtract" => TextSummary(Truncate(UrlHost(GetString(argumentsJson, "url")), SummaryMaxLength)),
@@ -794,11 +798,29 @@ public static class DysonToolCallUi
     private static string SummarizeDropTurnContext(string? argumentsJson)
     {
         var ids = GetStringArray(argumentsJson, "turnIds");
-        if (ids.Count == 0)
-            return "drop turns";
-        if (ids.Count == 1)
-            return Truncate($"drop {ids[0]}", SummaryMaxLength);
-        return Truncate($"drop {ids.Count} turns", SummaryMaxLength);
+        var reason = Truncate(GetString(argumentsJson, "reason"), 24);
+        var countPart = ids.Count == 0
+            ? "drop turns"
+            : ids.Count == 1
+                ? Truncate($"drop {ids[0]}", 40)
+                : $"drop {ids.Count} turns";
+        if (string.IsNullOrEmpty(reason))
+            return Truncate(countPart, SummaryMaxLength);
+        return Truncate($"{countPart} · {reason}", SummaryMaxLength);
+    }
+
+    private static string SummarizeRestoreTurnContext(string? argumentsJson)
+    {
+        var ids = GetStringArray(argumentsJson, "turnIds");
+        var reason = Truncate(GetString(argumentsJson, "reason"), 24);
+        var countPart = ids.Count == 0
+            ? "restore turns"
+            : ids.Count == 1
+                ? Truncate($"restore {ids[0]}", 40)
+                : $"restore {ids.Count} turns";
+        if (string.IsNullOrEmpty(reason))
+            return Truncate(countPart, SummaryMaxLength);
+        return Truncate($"{countPart} · {reason}", SummaryMaxLength);
     }
 
     private static CollapsedSummary SummarizeWebFetch(string? argumentsJson)
