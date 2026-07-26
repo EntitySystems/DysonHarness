@@ -1,16 +1,33 @@
 # DysonHarness
 
-AI coding-agent harness from [EntitySystems](https://github.com/EntitySystems): a desktop/web agent shell and .NET engine with OpenAI-compatible providers, work-directory sessions, MCP-shaped tools, and orchestrator subagents.
+**DysonHarness** is a multitasking orchestrator of smaller agents for large-scale work — not a single-agent chat wrapper. From [EntitySystems](https://github.com/EntitySystems).
+
+> **Early development.** This project is still in early production / active development and is **not even in beta**. Expect change, rough edges, and incomplete surfaces.
 
 ![DysonHarness agent shell showing Work mode, Explore subagent results, and live tools](docs/images/ui-agent-shell.png)
 
 ## What it does
 
-- Work / Explore / Drone (and other) agent modes
-- Subagent spawn/report (`StartSubagent`, `SubmitSubagentReport`) with UI cards and parent navigation
-- Workspace file tools, shell, and in-process web search/fetch
-- SQLite session persistence and resume
-- Demo and OpenAI-compatible model providers
+- Modes for orchestrating, planning, exploring, and delegated implementation
+- Spawns focused subagents that report back into the parent session
+- Workspace editing, shell, and web research; browser control on Windows
+- Plan → review → build flow for larger changes
+- Per-mode tool limits in Settings (see Usage guidance)
+- Drop noisy turns from model context when conversations get heavy
+- Sessions persist and resume; works with OpenAI-compatible providers
+
+## Tested models
+
+- GLM 5.2
+- GLM 4.7
+- Kimi K2.7 Code
+- Kimi K3
+
+## Usage guidance
+
+Built for **capable** models. Multi-agent state can overwhelm smaller self-hosted models (for example Gemma 4 32B or Qwen 3.6 27B). Limiting tools per mode helps a little, but it is only a **stopgap**.
+
+Practical defaults: use Work to orchestrate, Explore to research, and Drone to implement. Configure models under **Settings**.
 
 ## Quick start
 
@@ -26,21 +43,21 @@ Contributor and agent notes: [AGENTS.md](AGENTS.md).
 
 ## Planned
 
-- **Coding agent CLI** — a terminal client that drives the same engine (sessions, tools, subagents) without the graphical shell, for scripting, CI, and headless workflows.
+- **Coding agent CLI** — a terminal client that drives the same engine without the graphical shell, for scripting, CI, and headless workflows (optional one-line desktop shell later).
 
 ## Documentation
 
-- [Engine](docs/engine/README.md) — session loop, modes, MCP, tools, completion, optimizer
+- [Engine](docs/engine/README.md) — session loop, modes, tools, completion, optimizer
 - [Engine API surface](docs/engine/api-surface.md) — public bindable types
-- [Model profiles & app data](docs/storage/models.md) — app mode, SQLite paths, ephemeral providers
-- [Sessions & resume](docs/storage/sessions.md) — turns, session log, `GetFullSession`
+- [Model profiles & app data](docs/storage/models.md) — app mode, providers, persistence
+- [Sessions & resume](docs/storage/sessions.md) — turns, session log, resume
 - [Work directories](docs/storage/work-directories.md) — registered workspace roots
-- [UI](docs/ui/README.md) — agent shell (`Harness.UI`)
-- [WebView2 packaging](docs/packaging/webview.md) — future Windows host
+- [UI](docs/ui/README.md) — agent shell
+- [Windows packaging](docs/packaging/webview.md) — desktop / browser packaging
 
 ## Rules
 
-- [C#](rules/rules_csharp.md) · [Skills](rules/rules_skills.md) · [Docs](rules/rules_docs.md)
+See [AGENTS.md](AGENTS.md) for contributor and agent rules. Short index: [C#](rules/rules_csharp.md) · [Skills](rules/rules_skills.md) · [Docs](rules/rules_docs.md).
 
 ## License
 
