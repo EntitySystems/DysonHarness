@@ -58,17 +58,7 @@
                    OnNewSession="StartNewAsync" />
     </Main>
     <Rail>
-        <div class="tool-panel">
-            <div class="tool-panel__title">Live tools</div>
-            @if (_latestTurn is null || (_latestTurn.TrackedToolCalls.Count == 0 && _latestTurn.ToolCalls.Count == 0))
-            {
-                <div class="empty-state" style="padding:12px 0;">No tool activity</div>
-            }
-            else
-            {
-                <ToolCallPanel Turn="_latestTurn" />
-            }
-        </div>
+        <RailSidePanel />
         <div class="tool-panel" style="border-top:1px solid var(--border);">
             <div class="tool-panel__title">Session log</div>
             <div class="list" style="max-height:240px;">
@@ -101,9 +91,6 @@
     private string? _gitBranch;
     private bool _workdirHydrated;
     private WorkDirectorySwitcher? _workdirSwitcher;
-
-    private DysonAgentTurn? _latestTurn =>
-        Host.Session?.Turns is { Count: > 0 } turns ? turns[^1] : null;
 
     protected override async Task OnInitializedAsync()
     {

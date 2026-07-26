@@ -42,7 +42,7 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `Components/Pages/Home.razor` | Agent IDE shell |
 | `Components/Pages/Settings/` | Settings pages (`Index`, `General`, `Models`) |
 | `Components/Layout/SettingsLayout.razor` | Settings side-nav shell |
-| `Components/Shell/` | `AppShell`, `Sidebar`, `SessionHeader` |
+| `Components/Shell/` | `AppShell`, `Sidebar`, `SessionHeader`, `RailSidePanel` |
 | `Components/Sessions/` | `WorkDirectorySwitcher`, `SessionList` |
 | `Components/Chat/` | `ChatPanel`, `SessionTodoOverview`, `SessionSubagentOverview`, `TurnBlock`, `PlanResultBlock`, `PlanReadyPopover`, `SubagentCard`, `SubagentEventBlock`, `AskQuestionPopover`, `Composer`, `AgentModePicker` |
 | `Components/Files/` | `FileViewerOverlay` (chat-preserving plan/file viewer) |
@@ -60,6 +60,7 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | Component | Role |
 | --------- | ---- |
 | `AppShell` | Sidebar \| main \| right rail |
+| `RailSidePanel` | Right-rail Files / Git / Usage tabs (placeholders for now); Session log stays as a sibling panel on `Home` |
 | `Sidebar` | Work directory switcher, sessions, Settings link, app-mode badge |
 | `WorkDirectorySwitcher` | Register/switch/remove workdirs; native folder pick via `DysonNativeFolderPicker` |
 | `SessionList` | Sessions for active workdir; click a row to resume/load it; hover (or focus) shows a trash icon that confirms then deletes via `DysonUiHost.DeleteSessionAsync`; **New** disabled until a workdir is selected |

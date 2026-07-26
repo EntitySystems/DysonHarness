@@ -1,0 +1,43 @@
+@namespace Harness.UI.Components.Shell
+
+<div class="tool-panel rail-tabs">
+    <div class="rail-tabs__tabs" role="tablist" aria-label="Rail panels">
+        <button type="button"
+                role="tab"
+                class="rail-tabs__tab@(_activeTab == RailTab.Files ? " rail-tabs__tab--active" : null)"
+                aria-selected="@(_activeTab == RailTab.Files)"
+                @onclick="() => Select(RailTab.Files)">
+            Files
+        </button>
+        <button type="button"
+                role="tab"
+                class="rail-tabs__tab@(_activeTab == RailTab.Git ? " rail-tabs__tab--active" : null)"
+                aria-selected="@(_activeTab == RailTab.Git)"
+                @onclick="() => Select(RailTab.Git)">
+            Git
+        </button>
+        <button type="button"
+                role="tab"
+                class="rail-tabs__tab@(_activeTab == RailTab.Usage ? " rail-tabs__tab--active" : null)"
+                aria-selected="@(_activeTab == RailTab.Usage)"
+                @onclick="() => Select(RailTab.Usage)">
+            Usage
+        </button>
+    </div>
+    <div class="rail-tabs__body" role="tabpanel">
+        <div class="rail-tabs__placeholder">coming soon</div>
+    </div>
+</div>
+
+@code {
+    private enum RailTab
+    {
+        Files,
+        Git,
+        Usage,
+    }
+
+    private RailTab _activeTab = RailTab.Files;
+
+    private void Select(RailTab tab) => _activeTab = tab;
+}
