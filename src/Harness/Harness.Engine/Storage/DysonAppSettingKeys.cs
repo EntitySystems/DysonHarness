@@ -14,4 +14,10 @@ public static class DysonAppSettingKeys
     /// Empty / missing ⇒ default 30%.
     /// </summary>
     public const string ToolPanelWidthPercent = "tool_panel_width_percent";
+
+    /// <summary>
+    /// JSON <see cref="DysonToolPolicyDocument"/> — per-mode (and future per-model) tool denylists.
+    /// Empty / missing ⇒ all tools enabled.
+    /// </summary>
+    public const string AgentModeToolPolicy = "agent_mode_tool_policy";
 }

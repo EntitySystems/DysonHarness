@@ -1,0 +1,165 @@
+@page "/settings/agent-modes/{Mode}"
+@layout SettingsLayout
+@using DysonHarness
+@inject DysonToolPolicyStore PolicyStore
+
+<PageTitle>@(DisplayMode) tools — Settings</PageTitle>
+
+<div class="settings-page">
+    <p class="settings-page__copy">
+        <a href="/settings/agent-modes">← Agent modes</a>
+    </p>
+    <h1 class="settings-page__title">@DisplayMode</h1>
+    <p class="settings-page__copy">
+        Uncheck a tool to omit it from the session MCP catalog (prompt text and provider <code>tools[]</code>)
+        for this mode. Defaults: all enabled.
+    </p>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="error-banner">@_error</div>
+    }
+    else if (_unknownMode)
+    {
+        <div class="error-banner">Unknown built-in agent mode.</div>
+    }
+    else
+    {
+        <div class="settings-page__panel panel">
+            <div class="agent-mode-tools__search">
+                <input type="search"
+                       placeholder="Search tools…"
+                       value="@_search"
+                       @oninput="OnSearchInput" />
+            </div>
+            <div class="agent-mode-tools">
+                @if (FilteredTools.Count == 0)
+                {
+                    <div class="agent-mode-tools__empty">No tools match.</div>
+                }
+                else
+                {
+                    @foreach (var tool in FilteredTools)
+                    {
+                        <label class="agent-mode-tool-card">
+                            <input type="checkbox"
+                                   checked="@(!_disabled.Contains(tool.Name))"
+                                   @onchange="e => OnToggle(tool.Name, e.Value)" />
+                            <span class="agent-mode-tool-card__body">
+                                <span class="agent-mode-tool-card__name mono">@tool.Name</span>
+                                <span class="agent-mode-tool-card__desc">@tool.Description</span>
+                            </span>
+                        </label>
+                    }
+                }
+            </div>
+            <div class="agent-mode-tools__actions">
+                <button type="button" class="btn" disabled="@_saving" @onclick="SaveAsync">
+                    @(_saving ? "Saving…" : "Save")
+                </button>
+                @if (_saved)
+                {
+                    <span class="settings-page__copy" style="margin:0;">Saved.</span>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Mode { get; set; } = "";
+
+    private string DisplayMode => _resolvedMode ?? Mode;
+    private string? _resolvedMode;
+    private bool _unknownMode;
+    private string? _error;
+    private bool _saved;
+    private bool _saving;
+    private string _search = "";
+    private IReadOnlyList<DysonMcpTool> _tools = [];
+    private HashSet<string> _disabled = new(StringComparer.Ordinal);
+
+    private IReadOnlyList<DysonMcpTool> FilteredTools
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(_search))
+                return _tools;
+
+            var term = _search.Trim();
+            return _tools
+                .Where(t =>
+                    t.Name.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                    (t.Description?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false))
+                .ToList();
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _error = null;
+        _saved = false;
+        _search = "";
+        _unknownMode = false;
+        _resolvedMode = null;
+
+        var decoded = Uri.UnescapeDataString(Mode ?? "");
+        _resolvedMode = DysonAgentModes.BuiltIns
+            .FirstOrDefault(m => string.Equals(m, decoded, StringComparison.OrdinalIgnoreCase));
+
+        if (_resolvedMode is null)
+        {
+            _unknownMode = true;
+            return;
+        }
+
+        _tools = DysonSessionToolsetBuilder.AllCatalogTools();
+
+        var get = await PolicyStore.GetModeDisabledToolsAsync(_resolvedMode);
+        if (get.IsError)
+        {
+            _error = get.Error;
+            return;
+        }
+
+        _disabled = new HashSet<string>(get.Value, StringComparer.Ordinal);
+    }
+
+    private void OnSearchInput(ChangeEventArgs args) =>
+        _search = args.Value?.ToString() ?? "";
+
+    private void OnToggle(string tool, object? value)
+    {
+        _saved = false;
+        var enabled = value is bool b && b;
+        if (enabled)
+            _disabled.Remove(tool);
+        else
+            _disabled.Add(tool);
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_resolvedMode is null || _saving)
+            return;
+
+        _saving = true;
+        _error = null;
+        _saved = false;
+        try
+        {
+            var set = await PolicyStore.SetModeDisabledToolsAsync(_resolvedMode, _disabled);
+            if (set.IsError)
+            {
+                _error = set.Error;
+                return;
+            }
+
+            _saved = true;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+}

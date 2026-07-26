@@ -35,5 +35,11 @@ public sealed class DysonToolCallResult
     /// </summary>
     public DysonBinaryAttachment? BinaryAttachment { get; init; }
 
+    /// <summary>
+    /// When true (and not <see cref="IsError"/>), the tool loop soft-closes the calling turn
+    /// after the staged round — no further model rounds on that turn.
+    /// </summary>
+    public bool EndsCurrentTurn { get; init; }
+
     public DateTimeOffset CompletedAt { get; init; } = DateTimeOffset.UtcNow;
 }

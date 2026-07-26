@@ -24,6 +24,7 @@ builder.Services.AddScoped<DysonModelStore>();
 builder.Services.AddScoped<DysonSessionStore>();
 builder.Services.AddScoped<DysonWorkDirectoryStore>();
 builder.Services.AddScoped<DysonAppSettingsStore>();
+builder.Services.AddScoped<DysonToolPolicyStore>();
 builder.Services.AddScoped(sp =>
 {
     var factory = sp.GetRequiredService<IHttpClientFactory>();

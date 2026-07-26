@@ -1,0 +1,344 @@
+using DysonHarness;
+
+namespace Harness.Tests;
+
+/// <summary>
+/// ponytail: assert-only ExpandThoughtProcess MCP enqueue / EndsCurrentTurn / DropTurnContext /
+/// turnId transcript headers / continuation gate (Xunit Fact).
+/// </summary>
+public class DysonExpandThoughtProcessTests
+{
+    [Fact]
+    public void Run()
+    {
+        AssertInstructionAndContinuation();
+        AssertExpandEnqueuesAndEndsTurn();
+        AssertExpandRecursionBlocked();
+        AssertDropTurnContextPhaseAndExclude();
+        AssertTranscriptTurnIdAndOmitExcluded();
+        AssertSoftCloseEndsCurrentTurn();
+    }
+
+    private static void AssertInstructionAndContinuation()
+    {
+        if (!DysonExpandThoughtProcess.Instruction.Contains("DropTurnContext", StringComparison.Ordinal)
+            || !DysonExpandThoughtProcess.Instruction.Contains("turn id", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "ExpandThoughtProcess Instruction must mention DropTurnContext and turn ids.");
+        }
+
+        var turn = DysonExpandThoughtProcess.CreateTurn("clarify auth");
+        if (turn.Kind != DysonAgentTurnKind.ExpandThoughtProcess
+            || turn.Instruction is null
+            || !turn.Instruction.Contains("Focus: clarify auth", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("CreateTurn must set ExpandThoughtProcess + Focus appendix.");
+        }
+
+        if (!DysonExpandThoughtProcess.ShouldEnqueueContinuation(DysonAgentTurnKind.ExpandThoughtProcess)
+            || DysonExpandThoughtProcess.ShouldEnqueueContinuation(DysonAgentTurnKind.Normal)
+            || DysonExpandThoughtProcess.ShouldEnqueueContinuation(DysonAgentTurnKind.BeginBuildPlan))
+        {
+            throw new InvalidOperationException(
+                "ShouldEnqueueContinuation must be true only for ExpandThoughtProcess.");
+        }
+
+        if (string.IsNullOrWhiteSpace(DysonExpandThoughtProcess.ContinuationPrompt))
+            throw new InvalidOperationException("ContinuationPrompt must be non-empty.");
+
+        var preamble = DysonAgentSystemPrompts.SharedPreamble;
+        if (preamble.IndexOf("ends the current turn", StringComparison.OrdinalIgnoreCase) < 0
+            || preamble.IndexOf("DropTurnContext", StringComparison.Ordinal) < 0)
+        {
+            throw new InvalidOperationException(
+                "SharedPreamble must note ExpandThoughtProcess ends the turn and DropTurnContext.");
+        }
+    }
+
+    private static void AssertExpandEnqueuesAndEndsTurn()
+    {
+        var session = new StubSession(DysonAgentModes.Work);
+        session.ConfigureRootForTest();
+        using var http = new HttpClient();
+        var executor = new DysonWorkspaceToolExecutor(session, Path.GetTempPath(), http);
+
+        session.AddTurnForTest(new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "do work",
+            StartedUtc = DateTime.UtcNow,
+        });
+
+        var result = executor.ExecuteAsync(new DysonToolCall
+        {
+            CallId = "e1",
+            ToolName = "ExpandThoughtProcess",
+            Stage = 0,
+            ArgumentsJson = """{"focus":"noise"}""",
+        }).GetAwaiter().GetResult();
+
+        if (result.IsError)
+            throw new InvalidOperationException("ExpandThoughtProcess should succeed: " + result.Content);
+
+        if (!result.EndsCurrentTurn)
+            throw new InvalidOperationException("ExpandThoughtProcess must set EndsCurrentTurn.");
+
+        if (!session.TryDequeuePendingTurn(out var pending)
+            || pending.Kind != DysonAgentTurnKind.ExpandThoughtProcess
+            || pending.Instruction is null
+            || !pending.Instruction.Contains("Focus: noise", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "ExpandThoughtProcess must enqueue ExpandThoughtProcess with focus.");
+        }
+
+        if (!result.Content.Contains("ExpandThoughtProcess", StringComparison.Ordinal))
+            throw new InvalidOperationException("Success JSON should note nextTurnKind.");
+    }
+
+    private static void AssertExpandRecursionBlocked()
+    {
+        var session = new StubSession(DysonAgentModes.Work);
+        session.ConfigureRootForTest();
+        using var http = new HttpClient();
+        var executor = new DysonWorkspaceToolExecutor(session, Path.GetTempPath(), http);
+
+        session.AddTurnForTest(DysonExpandThoughtProcess.CreateTurn());
+        if (!session.IsInExpandThoughtProcessPhase)
+            throw new InvalidOperationException("Expected IsInExpandThoughtProcessPhase.");
+
+        var blocked = executor.ExecuteAsync(new DysonToolCall
+        {
+            CallId = "e2",
+            ToolName = "ExpandThoughtProcess",
+            Stage = 0,
+            ArgumentsJson = "{}",
+        }).GetAwaiter().GetResult();
+
+        if (!blocked.IsError
+            || blocked.Content.IndexOf("recursion", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            throw new InvalidOperationException(
+                "Nested ExpandThoughtProcess must fail: " + blocked.Content);
+        }
+    }
+
+    private static void AssertDropTurnContextPhaseAndExclude()
+    {
+        var session = new StubSession(DysonAgentModes.Work);
+        session.ConfigureRootForTest();
+        using var http = new HttpClient();
+        var executor = new DysonWorkspaceToolExecutor(session, Path.GetTempPath(), http);
+
+        var noisy = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "rabbit hole",
+            AssistantText = "dead end",
+            StartedUtc = DateTime.UtcNow,
+            CompletedUtc = DateTime.UtcNow,
+        };
+        session.AddTurnForTest(noisy);
+
+        var outside = executor.ExecuteAsync(new DysonToolCall
+        {
+            CallId = "d0",
+            ToolName = "DropTurnContext",
+            Stage = 0,
+            ArgumentsJson = $$"""{"turnIds":["{{noisy.Id}}"]}""",
+        }).GetAwaiter().GetResult();
+        if (!outside.IsError
+            || outside.Content.IndexOf("ExpandThoughtProcess", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            throw new InvalidOperationException(
+                "DropTurnContext must fail outside expand phase: " + outside.Content);
+        }
+
+        var expand = DysonExpandThoughtProcess.CreateTurn();
+        session.AddTurnForTest(expand);
+
+        var refuseSelf = executor.ExecuteAsync(new DysonToolCall
+        {
+            CallId = "d1",
+            ToolName = "DropTurnContext",
+            Stage = 0,
+            ArgumentsJson = $$"""{"turnIds":["{{expand.Id}}"]}""",
+        }).GetAwaiter().GetResult();
+        if (refuseSelf.IsError)
+            throw new InvalidOperationException("Self-drop should soft-skip, not hard-fail: " + refuseSelf.Content);
+        if (expand.IsExcludedFromContext)
+            throw new InvalidOperationException("In-flight expand turn must not be excluded.");
+        if (refuseSelf.Content.IndexOf("skipped", StringComparison.OrdinalIgnoreCase) < 0
+            && refuseSelf.Content.IndexOf("partial", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            throw new InvalidOperationException("Self-drop should report skipped/partial: " + refuseSelf.Content);
+        }
+
+        var drop = executor.ExecuteAsync(new DysonToolCall
+        {
+            CallId = "d2",
+            ToolName = "DropTurnContext",
+            Stage = 0,
+            ArgumentsJson = $$"""{"turnIds":["{{noisy.Id}}","{{Guid.NewGuid()}}"]}""",
+        }).GetAwaiter().GetResult();
+        if (drop.IsError)
+            throw new InvalidOperationException("DropTurnContext should succeed: " + drop.Content);
+        if (!noisy.IsExcludedFromContext)
+            throw new InvalidOperationException("DropTurnContext must set IsExcludedFromContext.");
+        if (drop.Content.IndexOf("partial", StringComparison.OrdinalIgnoreCase) < 0)
+            throw new InvalidOperationException("Unknown id should yield partial status: " + drop.Content);
+
+        noisy.IsExcludedFromContext = false;
+        if (noisy.IsExcludedFromContext)
+            throw new InvalidOperationException("Restore must clear IsExcludedFromContext.");
+    }
+
+    private static void AssertTranscriptTurnIdAndOmitExcluded()
+    {
+        var session = new StubSession(DysonAgentModes.Work);
+        var kept = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "keep me",
+            AssistantText = "kept reply",
+            StartedUtc = DateTime.UtcNow,
+            CompletedUtc = DateTime.UtcNow,
+        };
+        var dropped = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "drop me",
+            AssistantText = "dropped reply",
+            StartedUtc = DateTime.UtcNow,
+            CompletedUtc = DateTime.UtcNow,
+            IsExcludedFromContext = true,
+        };
+        session.AddTurnForTest(kept);
+        session.AddTurnForTest(dropped);
+
+        var completions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null,
+            inFlightRounds: []);
+        var json = completions.Messages.ToJsonString();
+        var header = $"[turnId={kept.Id:D}]";
+        if (!json.Contains(header, StringComparison.Ordinal)
+            || !json.Contains("keep me", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Completions history must include [turnId=…] header for kept turns.");
+        }
+
+        if (json.Contains($"[turnId={dropped.Id:D}]", StringComparison.Ordinal)
+            || json.Contains("drop me", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Completions history must omit excluded turns entirely.");
+        }
+
+        var responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null,
+            inFlightRounds: []);
+        var responsesJson = responses.Input.ToJsonString();
+        if (!responsesJson.Contains(header, StringComparison.Ordinal)
+            || responsesJson.Contains("drop me", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Responses history must include turnId for kept turns and omit excluded.");
+        }
+    }
+
+    private static void AssertSoftCloseEndsCurrentTurn()
+    {
+        var turn = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "working",
+            StartedUtc = DateTime.UtcNow,
+        };
+        turn.AppendStreamingDelta("partial");
+
+        var result = OpenAiCompatibleAgentSession.SoftCloseAfterEndsCurrentTurn(turn);
+        if (result.IsError)
+            throw new InvalidOperationException("SoftCloseAfterEndsCurrentTurn must succeed.");
+        if (string.IsNullOrWhiteSpace(turn.AssistantText)
+            || turn.AgentTitle is null
+            || turn.IsStreaming)
+        {
+            throw new InvalidOperationException(
+                "SoftCloseAfterEndsCurrentTurn must finalize assistant text and stop streaming.");
+        }
+    }
+
+    private sealed class StubProvider : DysonAgentProvider;
+
+    private sealed class StubSession(string mode) : DysonAgentSession(
+        mode,
+        new DysonAgentSessionConfig(),
+        new StubProvider())
+    {
+        public void ConfigureRootForTest() => ConfigureRootInterAgentTools();
+
+        public void AddTurnForTest(DysonAgentTurn turn) => AddTurn(turn);
+
+        public override Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
+            string agentMode,
+            string task,
+            string? context = null,
+            IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
+            string? modelSlug = null,
+            string? reasoningEffort = null,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public override Task<VoidResult<string>> LoadFunctionalContextAsync(
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
+        public override Task<VoidResult<string>> PromptAsync(
+            string prompt,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
+        public override Task<VoidResult<string>> PromptAsync(
+            string prompt,
+            IReadOnlyList<string> filePaths,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
+        public override Task<VoidResult<string>> PromptHarnessTurnAsync(
+            DysonAgentTurn turn,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
+        public override Task<VoidResult<string>> PromptBeginBuildPlanAsync(
+            string planRelativePath,
+            IReadOnlyList<string>? reportBlocks = null,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
+        public override Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
+            DysonAgentInterrupt interrupt,
+            string? title = null,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
+        public override Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
+            string instruction,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
+        public override Task<VoidResult<string>> PromptShellExitedAsync(
+            DysonAgentInterrupt interrupt,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(VoidResult<string>.Success);
+
+        public override Task<Result<DysonAgentSessionEvent, string>> WaitForNotifyAsync(
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+    }
+}

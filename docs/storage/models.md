@@ -51,6 +51,7 @@ Thin key/value store (`DysonAppSettingEntity` / `DysonAppSettingsStore`).
 Known keys (`DysonAppSettingKeys`):
 - `web_search_summarizer_model_slug_id` — Guid string of the model slug for web-search/fetch summarization; empty / missing ⇒ session model.
 - `tool_panel_width_percent` — chat tools column width as a percent of the turn content row (clamped 12–50, default 30); empty / missing ⇒ 30.
+- `agent_mode_tool_policy` — JSON `DysonToolPolicyDocument`: `modes.{Mode}.disabledTools` string arrays (denylist); optional `models.{slugGuid}.modes.{Mode}.disabledTools` plumbing for future per-model overlays (resolver ignores `models` in v1). Missing document / mode ⇒ all tools enabled. Edited via Settings → Agent modes (`DysonToolPolicyStore`).
 
 ## Model providers (`model_providers`)
 

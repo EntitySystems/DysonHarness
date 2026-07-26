@@ -52,7 +52,7 @@ public sealed class DysonContextOptimizer
         for (var i = 0; i < compactUntil; i++)
         {
             var turn = turns[i];
-            if (turn.ToolHistoryOptimized)
+            if (turn.IsExcludedFromContext || turn.ToolHistoryOptimized)
                 continue;
 
             turn.CompactToolHistory = BuildCompactHistory(turn);
@@ -92,7 +92,7 @@ public sealed class DysonContextOptimizer
         for (var i = 0; i < compactUntil; i++)
         {
             var turn = turns[i];
-            if (turn.ToolHistoryOptimized)
+            if (turn.IsExcludedFromContext || turn.ToolHistoryOptimized)
                 continue;
 
             foreach (var call in turn.ToolCalls)

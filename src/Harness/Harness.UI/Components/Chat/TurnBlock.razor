@@ -8,7 +8,7 @@
 @inject IJSRuntime Js
 @inject DysonUiHost Host
 
-<article class="turn-block @(IsExpanded ? null : "turn-block--collapsed")">
+<article class="turn-block @(IsExpanded ? null : "turn-block--collapsed") @(Turn.IsExcludedFromContext ? "turn-block--dropped" : null)">
     <header class="turn-block__header"
             role="button"
             tabindex="0"
@@ -16,7 +16,21 @@
             @onclick="OnToggleExpand"
             @onkeydown="HandleHeaderKeyDown">
         <div class="turn-block__header-main">
-            <div class="turn-block__title">@(Turn.AgentTitle ?? DysonAgentTurnKindDisplay.GetDisplayName(Turn.Kind))</div>
+            <div class="turn-block__title-row">
+                <div class="turn-block__title">@(Turn.AgentTitle ?? DysonAgentTurnKindDisplay.GetDisplayName(Turn.Kind))</div>
+                @if (Turn.IsExcludedFromContext)
+                {
+                    <span class="turn-block__dropped-badge">Dropped</span>
+                    <button type="button"
+                            class="turn-block__restore"
+                            title="Restore this turn to model context"
+                            aria-label="Restore turn to context"
+                            @onclick:stopPropagation="true"
+                            @onclick="HandleRestoreAsync">
+                        Restore
+                    </button>
+                }
+            </div>
             <div class="turn-block__kind mono">@DysonAgentTurnKindDisplay.GetDisplayName(Turn.Kind) · @ShortId(Turn.Id)</div>
         </div>
         @if (Turn.StartedUtc != default)
@@ -221,6 +235,15 @@
         SessionBusy || !OnResubmit.HasDelegate
             ? Task.CompletedTask
             : OnResubmit.InvokeAsync(Turn.Instruction);
+
+    private async Task HandleRestoreAsync()
+    {
+        var session = Host.Session;
+        if (session is null)
+            return;
+
+        await Host.RestoreTurnContextAsync(session.PersistenceId, Turn.Id);
+    }
 
     private async Task HandleHeaderKeyDown(KeyboardEventArgs e)
     {

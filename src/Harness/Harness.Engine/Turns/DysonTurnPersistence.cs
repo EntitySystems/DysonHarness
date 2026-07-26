@@ -26,6 +26,7 @@ public static class DysonTurnPersistence
             ToolStateJson = DysonTurnToolStateSerializer.CaptureFromTurn(turn),
             ToolHistoryOptimized = turn.ToolHistoryOptimized,
             CompactToolHistory = turn.CompactToolHistory,
+            IsExcludedFromContext = turn.IsExcludedFromContext,
             CreatedUtc = createdUtc ?? (turn.StartedUtc != default ? turn.StartedUtc : DateTime.UtcNow),
             CompletedUtc = completedUtc ?? turn.CompletedUtc,
         };

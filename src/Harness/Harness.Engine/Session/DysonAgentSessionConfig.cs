@@ -38,4 +38,16 @@ public class DysonAgentSessionConfig
     /// Null ⇒ browser MCP tools are omitted from the catalog.
     /// </summary>
     public IDysonBrowserControl? BrowserControl { get; set; }
+
+    /// <summary>
+    /// Pre-resolved tool denylist for this session's current mode.
+    /// Used when <see cref="ToolPolicy"/> is null (tests / hosts that resolve once).
+    /// </summary>
+    public IReadOnlySet<string>? DisabledTools { get; set; }
+
+    /// <summary>
+    /// Full policy document for re-resolve on mode switch and child spawn.
+    /// When set, preferred over <see cref="DisabledTools"/> for catalog builds.
+    /// </summary>
+    public DysonToolPolicyDocument? ToolPolicy { get; set; }
 }

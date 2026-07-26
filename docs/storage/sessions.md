@@ -40,6 +40,7 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `ToolHistoryOptimized` | bool |
 | `CompactToolHistory` | string? |
 | `CreatedUtc`, `CompletedUtc`? | `DateTime` UTC |
+| `IsExcludedFromContext` | bool — when true, omitted from provider transcripts; UI still shows Dropped + Restore |
 
 ### `session_todos`
 

@@ -108,6 +108,11 @@ public sealed class DysonAgentTurn
     /// </summary>
     public string? CompactToolHistory { get; set; }
 
+    /// <summary>
+    /// When true, provider transcripts omit this turn (UI still shows it; restore clears the flag).
+    /// </summary>
+    public bool IsExcludedFromContext { get; set; }
+
     public string FormatResponseLog()
     {
         var sb = new StringBuilder();

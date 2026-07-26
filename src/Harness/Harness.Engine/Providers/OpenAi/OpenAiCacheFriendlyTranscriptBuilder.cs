@@ -227,6 +227,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 break;
 
             var turn = turns[i];
+            if (turn.IsExcludedFromContext)
+                continue;
+
             // In-progress current turn: user content may get ephemeral rename / Plan mandates;
             // tool rounds come from inFlightRounds. PlanResult may append after the live turn.
             var incompleteCurrent = i == incompleteIndex;
@@ -299,6 +302,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         for (var i = 0; i < turns.Count; i++)
         {
             var turn = turns[i];
+            if (turn.IsExcludedFromContext)
+                continue;
+
             var incompleteCurrent = i == incompleteIndex;
             if (!string.IsNullOrEmpty(turn.Instruction))
             {
@@ -586,8 +592,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     }
 
     /// <summary>
-    /// History turns always send clean <see cref="DysonAgentTurn.Instruction"/>.
-    /// Incomplete current turn may append ephemeral mandates (rename review; Plan first-turn Explore).
+    /// History turns always send clean <see cref="DysonAgentTurn.Instruction"/> with a
+    /// <c>[turnId=…]</c> header. Incomplete current turn may append ephemeral mandates
+    /// (rename review; Plan first-turn Explore).
     /// </summary>
     private static string FormatTurnUserContent(
         DysonAgentSession session,
@@ -595,11 +602,15 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         int zeroBasedIndex,
         bool incompleteCurrent)
     {
-        var instruction = turn.Instruction!;
-        if (!incompleteCurrent)
-            return instruction;
+        var sb = new StringBuilder();
+        sb.Append("[turnId=");
+        sb.Append(turn.Id.ToString("D"));
+        sb.AppendLine("]");
+        sb.Append(turn.Instruction!);
 
-        var sb = new StringBuilder(instruction);
+        if (!incompleteCurrent)
+            return sb.ToString();
+
         if (zeroBasedIndex == 0
             && string.Equals(session.Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase))
         {

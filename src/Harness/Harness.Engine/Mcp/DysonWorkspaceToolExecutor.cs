@@ -9,7 +9,7 @@ namespace DysonHarness;
 /// Executes workspace-scoped MCP tools against a work directory root, plus RenameSession,
 /// GetDateTime, WaitForSeconds, ShellExecute, long-running shell tools, subagent spawn/list/report tools,
 /// inter-agent events / AskQuestion, session todo CRUD, task completion tools, ResumeCurrentTask,
-/// in-process web search/fetch tools, and browser control tools (when
+/// ExpandThoughtProcess / DropTurnContext, in-process web search/fetch tools, and browser control tools (when
 /// <see cref="DysonAgentSessionConfig.BrowserControl"/> is set).
 /// Other catalog tools return a not-implemented stub result.
 /// </summary>
@@ -42,6 +42,14 @@ public sealed partial class DysonWorkspaceToolExecutor
     {
         ArgumentNullException.ThrowIfNull(call);
 
+        if (!_session.McpPipeline.Tools.ContainsKey(call.ToolName))
+        {
+            return Error(
+                call,
+                $"Tool '{call.ToolName}' is not available in this session's catalog " +
+                "(disabled by agent-mode policy or structural gate).");
+        }
+
         try
         {
             return call.ToolName switch
@@ -64,6 +72,8 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "ConfirmTaskComplete" => ConfirmTaskComplete(call),
                 "ContinueWork" => ContinueWork(call),
                 "ResumeCurrentTask" => ResumeCurrentTask(call),
+                "ExpandThoughtProcess" => ExpandThoughtProcess(call),
+                "DropTurnContext" => await DropTurnContextAsync(call, cancellationToken).ConfigureAwait(false),
                 "WaitForSeconds" => await WaitForSecondsAsync(call, cancellationToken).ConfigureAwait(false),
                 "ListTodos" => await ListTodosAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateTodo" => await CreateTodoAsync(call, cancellationToken).ConfigureAwait(false),
@@ -124,7 +134,8 @@ public sealed partial class DysonWorkspaceToolExecutor
     private static DysonToolCallResult Ok(
         DysonToolCall call,
         string content,
-        DysonBinaryAttachment? binaryAttachment = null) =>
+        DysonBinaryAttachment? binaryAttachment = null,
+        bool endsCurrentTurn = false) =>
         new()
         {
             CallId = call.CallId,
@@ -133,6 +144,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             IsError = false,
             Content = content,
             BinaryAttachment = binaryAttachment,
+            EndsCurrentTurn = endsCurrentTurn,
         };
 
     private static DysonToolCallResult Error(DysonToolCall call, string content) =>
@@ -1004,6 +1016,127 @@ public sealed partial class DysonWorkspaceToolExecutor
             nextTurnKind = DysonAgentTurnKind.Normal.ToString(),
             rationale,
             continuationInstructions,
+        }));
+    }
+
+    private DysonToolCallResult ExpandThoughtProcess(DysonToolCall call)
+    {
+        if (_session.IsInExpandThoughtProcessPhase)
+        {
+            return Error(call,
+                "ExpandThoughtProcess: already on an ExpandThoughtProcess turn; recursion is not allowed.");
+        }
+
+        string? focus = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            focus = GetOptionalString(doc.RootElement, "focus");
+        }
+        catch (JsonException)
+        {
+            return Error(call, "ExpandThoughtProcess: invalid JSON arguments.");
+        }
+
+        var turn = _session.CreateExpandThoughtProcessTurn(focus);
+        _session.EnqueuePendingTurn(turn);
+
+        return Ok(
+            call,
+            JsonSerializer.Serialize(new
+            {
+                status = "queued",
+                nextTurnKind = DysonAgentTurnKind.ExpandThoughtProcess.ToString(),
+                focus,
+            }),
+            endsCurrentTurn: true);
+    }
+
+    private async Task<DysonToolCallResult> DropTurnContextAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        if (!_session.IsInExpandThoughtProcessPhase)
+        {
+            return Error(call,
+                "DropTurnContext: only valid during an ExpandThoughtProcess turn.");
+        }
+
+        IReadOnlyList<string>? turnIdStrings;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var parsed = TryParseOptionalStringArray(doc.RootElement, "turnIds");
+            if (parsed.IsError)
+                return Error(call, parsed.Error);
+            turnIdStrings = parsed.Value;
+        }
+        catch (JsonException)
+        {
+            return Error(call, "DropTurnContext: invalid JSON arguments.");
+        }
+
+        if (turnIdStrings is null || turnIdStrings.Count == 0)
+            return Error(call, "DropTurnContext: turnIds (non-empty array) is required.");
+
+        var currentId = _session.Turns[^1].Id;
+        var dropped = new List<string>();
+        var skipped = new List<string>();
+
+        foreach (var raw in turnIdStrings)
+        {
+            if (!Guid.TryParse(raw, out var id))
+            {
+                skipped.Add($"{raw}: invalid guid");
+                continue;
+            }
+
+            if (id == currentId)
+            {
+                skipped.Add($"{id}: cannot drop the in-flight ExpandThoughtProcess turn");
+                continue;
+            }
+
+            var match = _session.Turns.FirstOrDefault(t => t.Id == id);
+            if (match is null)
+            {
+                skipped.Add($"{id}: unknown turn id");
+                continue;
+            }
+
+            if (match.IsExcludedFromContext)
+            {
+                dropped.Add(id.ToString("D"));
+                continue;
+            }
+
+            match.IsExcludedFromContext = true;
+            dropped.Add(id.ToString("D"));
+
+            if (_store is not null && _session.PersistenceId != Guid.Empty)
+            {
+                var sequence = -1;
+                for (var i = 0; i < _session.Turns.Count; i++)
+                {
+                    if (ReferenceEquals(_session.Turns[i], match) || _session.Turns[i].Id == match.Id)
+                    {
+                        sequence = i;
+                        break;
+                    }
+                }
+
+                var entity = DysonTurnPersistence.ToEntity(match, _session.PersistenceId, sequence);
+                var upserted = await _store.UpsertTurnAsync(entity, cancellationToken).ConfigureAwait(false);
+                if (upserted.IsError)
+                    return Error(call, upserted.Error);
+            }
+        }
+
+        return Ok(call, JsonSerializer.Serialize(new
+        {
+            status = skipped.Count == 0 ? "ok" : "partial",
+            dropped,
+            skipped,
         }));
     }
 

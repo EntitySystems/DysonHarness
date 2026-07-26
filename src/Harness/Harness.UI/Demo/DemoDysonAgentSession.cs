@@ -481,6 +481,27 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             if (staged.IsError)
                 return staged;
 
+            if (turn.ResponseLog.Any(r => r.EndsCurrentTurn && !r.IsError))
+            {
+                const string endNote =
+                    "# Expanding thought process\n\n" +
+                    "ExpandThoughtProcess was called; this turn ends. A reformulation turn will run next.";
+                var parsedEnd = DysonAgentTurn.TryParseAgentTitle(endNote);
+                if (parsedEnd.IsSuccess)
+                {
+                    turn.AgentTitle = parsedEnd.Value.Title;
+                    turn.AssistantText = parsedEnd.Value.Body;
+                }
+                else
+                {
+                    turn.AssistantText = endNote;
+                }
+
+                turn.FinishStreaming();
+                AppendLog($"turn complete (ends current turn): {turn.AgentTitle ?? turn.Id.ToString("N")[..8]}");
+                return VoidResult<string>.Success;
+            }
+
             var reply = turn.Kind == DysonAgentTurnKind.BeginBuildPlan
                 ? $"""
                     # Begin build plan

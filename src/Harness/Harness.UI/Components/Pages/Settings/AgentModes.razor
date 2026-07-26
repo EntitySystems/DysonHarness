@@ -1,0 +1,28 @@
+@page "/settings/agent-modes"
+@layout SettingsLayout
+@using DysonHarness
+
+<PageTitle>Agent modes — Settings</PageTitle>
+
+<div class="settings-page">
+    <h1 class="settings-page__title">Agent modes</h1>
+    <p class="settings-page__copy">
+        Enable or disable MCP tools per built-in agent mode. Changes apply to new sessions and when you
+        switch mode on an existing session — not mid-turn on a running catalog.
+    </p>
+
+    <div class="settings-page__panel panel">
+        <ul class="agent-modes-list">
+            @foreach (var mode in DysonAgentModes.BuiltIns)
+            {
+                <li>
+                    <a class="agent-modes-list__link"
+                       href="@($"/settings/agent-modes/{Uri.EscapeDataString(mode)}")">
+                        <span class="agent-modes-list__name">@mode</span>
+                        <span class="agent-modes-list__hint">Edit tools →</span>
+                    </a>
+                </li>
+            }
+        </ul>
+    </div>
+</div>

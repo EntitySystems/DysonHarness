@@ -16,6 +16,8 @@ public sealed class DysonTurnEntity
     public string ToolStateJson { get; set; } = "{}";
     public bool ToolHistoryOptimized { get; set; }
     public string? CompactToolHistory { get; set; }
+    /// <summary>When true, omitted from provider transcripts (UI may still show + restore).</summary>
+    public bool IsExcludedFromContext { get; set; }
     /// <summary>UTC.</summary>
     public DateTime CreatedUtc { get; set; }
     /// <summary>UTC.</summary>

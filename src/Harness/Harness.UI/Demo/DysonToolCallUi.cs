@@ -96,6 +96,7 @@ public static class DysonToolCallUi
             "ExpandThoughtProcess" => TextSummary(Truncate(
                 GetString(argumentsJson, "focus") ?? "reformulate",
                 SummaryMaxLength)),
+            "DropTurnContext" => TextSummary(SummarizeDropTurnContext(argumentsJson)),
             "FreeSearch" or "FreeSearchAdvanced" or "SearchWithSynthesis"
                 => TextSummary(Truncate(GetString(argumentsJson, "query"), SummaryMaxLength)),
             "FreeExtract" => TextSummary(Truncate(UrlHost(GetString(argumentsJson, "url")), SummaryMaxLength)),
@@ -788,6 +789,16 @@ public static class DysonToolCallUi
     {
         var seconds = GetInt(argumentsJson, "seconds");
         return seconds is null ? "Wait" : $"Wait {seconds}s";
+    }
+
+    private static string SummarizeDropTurnContext(string? argumentsJson)
+    {
+        var ids = GetStringArray(argumentsJson, "turnIds");
+        if (ids.Count == 0)
+            return "drop turns";
+        if (ids.Count == 1)
+            return Truncate($"drop {ids[0]}", SummaryMaxLength);
+        return Truncate($"drop {ids.Count} turns", SummaryMaxLength);
     }
 
     private static CollapsedSummary SummarizeWebFetch(string? argumentsJson)

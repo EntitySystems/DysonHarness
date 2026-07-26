@@ -552,7 +552,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         var kind = providerResult.Value.Kind;
         if (string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
         {
-            var config = await BuildSessionConfigAsync(cancellationToken: cancellationToken)
+            var config = await BuildSessionConfigAsync(agentMode, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
             var created = await OpenAiCompatibleAgentSession.CreateAsync(
@@ -708,6 +708,24 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         var leavingPlan = string.Equals(
             _session.Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase);
+
+        // Refresh denylist for the target mode before ApplyAgentMode rebuilds the catalog.
+        if (_session.Config.ToolPolicy is not null)
+        {
+            _session.Config.DisabledTools = DysonToolPolicyResolver.Resolve(
+                _session.Config.ToolPolicy, agentMode);
+        }
+        else
+        {
+            var policyStore = new DysonToolPolicyStore(_appSettings);
+            var policy = await policyStore.GetDocumentAsync(cancellationToken).ConfigureAwait(false);
+            if (!policy.IsError)
+            {
+                _session.Config.ToolPolicy = policy.Value;
+                _session.Config.DisabledTools = DysonToolPolicyResolver.Resolve(
+                    policy.Value, agentMode);
+            }
+        }
 
         var providerKind = _session.Provider switch
         {
@@ -944,6 +962,67 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         return await LoadAndFocusSessionAsync(sessionId, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Clears <see cref="DysonAgentTurn.IsExcludedFromContext"/> on a dropped turn and persists.
+    /// </summary>
+    public async Task<VoidResult<string>> RestoreTurnContextAsync(
+        Guid sessionId,
+        Guid turnId,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+
+        DysonAgentSession? session = null;
+        if (sessionId != Guid.Empty && _sessionsById.TryGetValue(sessionId, out var byId))
+            session = byId;
+        else if (_session is not null
+                 && (sessionId == Guid.Empty || _session.PersistenceId == sessionId))
+            session = _session;
+
+        if (session is null)
+        {
+            LastError = "Session not found.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        var turn = session.Turns.FirstOrDefault(t => t.Id == turnId);
+        if (turn is null)
+        {
+            LastError = "Turn not found.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        if (!turn.IsExcludedFromContext)
+        {
+            Notify();
+            return VoidResult<string>.Success;
+        }
+
+        turn.IsExcludedFromContext = false;
+
+        if (session.PersistenceId != Guid.Empty)
+        {
+            var sequence = IndexOfTurn(session, turn);
+            var entity = DysonTurnPersistence.ToEntity(turn, session.PersistenceId, sequence);
+            var upserted = await PersistAsync(
+                    () => _sessions.UpsertTurnAsync(entity, cancellationToken),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (upserted.IsError)
+            {
+                turn.IsExcludedFromContext = true;
+                LastError = upserted.Error;
+                Notify();
+                return upserted;
+            }
+        }
+
+        Notify();
+        return VoidResult<string>.Success;
     }
 
     /// <summary>Switch UI focus to a live or persisted session without disposing other registry entries.</summary>
@@ -1277,7 +1356,10 @@ public sealed class DysonUiHost : IAsyncDisposable
                 providerResult.Value.OpenAi!,
                 _http,
                 workPath,
-                await BuildSessionConfigAsync(full.Value.Session.McpAccessMode, cancellationToken)
+                await BuildSessionConfigAsync(
+                        full.Value.Session.AgentMode,
+                        full.Value.Session.McpAccessMode,
+                        cancellationToken)
                     .ConfigureAwait(false),
                 models: _models,
                 appendResumeLog: appendResumeLog,
@@ -1294,11 +1376,11 @@ public sealed class DysonUiHost : IAsyncDisposable
                 _sessions,
                 sessionId,
                 providerResult.Value.Demo!,
-                new DysonAgentSessionConfig
-                {
-                    McpAccessMode = full.Value.Session.McpAccessMode,
-                    BrowserControl = _browserControl,
-                },
+                await BuildSessionConfigAsync(
+                        full.Value.Session.AgentMode,
+                        full.Value.Session.McpAccessMode,
+                        cancellationToken)
+                    .ConfigureAwait(false),
                 models: _models,
                 appendResumeLog: appendResumeLog,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -1378,6 +1460,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         OpenAiCompatibleAgentProvider? OpenAi);
 
     private async Task<DysonAgentSessionConfig> BuildSessionConfigAsync(
+        string? agentMode = null,
         DysonMcpAccessMode? mcpAccessMode = null,
         CancellationToken cancellationToken = default)
     {
@@ -1387,6 +1470,18 @@ public sealed class DysonUiHost : IAsyncDisposable
         };
         if (mcpAccessMode is { } mode)
             config.McpAccessMode = mode;
+
+        var policyStore = new DysonToolPolicyStore(_appSettings);
+        var policy = await policyStore.GetDocumentAsync(cancellationToken).ConfigureAwait(false);
+        if (!policy.IsError)
+        {
+            config.ToolPolicy = policy.Value;
+            if (!string.IsNullOrWhiteSpace(agentMode))
+            {
+                config.DisabledTools = DysonToolPolicyResolver.Resolve(
+                    policy.Value, agentMode.Trim());
+            }
+        }
 
         var setting = await _appSettings
             .GetAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId, cancellationToken)
@@ -2310,6 +2405,14 @@ public sealed class DysonUiHost : IAsyncDisposable
                         EnqueuePrompt(
                             sessionId,
                             DysonAgentSession.CreateNormalTurn(DysonBeginBuildPlanFlow.ContinuationPrompt));
+                    }
+
+                    // ExpandThoughtProcess → queue Normal continuation after reformulation.
+                    if (DysonExpandThoughtProcess.ShouldEnqueueContinuation(last.Kind))
+                    {
+                        EnqueuePrompt(
+                            sessionId,
+                            DysonAgentSession.CreateNormalTurn(DysonExpandThoughtProcess.ContinuationPrompt));
                     }
 
                     // CompleteTask / Confirm / Continue enqueue onto session pending turns;

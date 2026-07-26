@@ -106,6 +106,8 @@ On parent resume the host hydrates direct DB children into `SubSessions` / `Suba
 
 `DysonMcpPipeline` holds the per-session tool catalog (`FormatToolsForPrompt`) and optional auto-review proxy. OpenAI-compatible sessions also expose the same tools as native function schemas (with required `stage`). Live remote MCP servers remain out of scope; workspace file tools, `ShellExecute`, web search/fetch, and browser tools run locally via `DysonWorkspaceToolExecutor`.
 
+**Toolset builder / mode policy:** `DysonSessionToolsetBuilder` builds the catalog (`CreateDefault` → shell/Plan + inter-agent + subagent omit → mode denylist). `DysonAgentSessionConfig.ToolPolicy` / `DisabledTools` come from `app_settings` (`agent_mode_tool_policy`) via the UI host; `ApplyAgentMode` **rebuilds** the pipeline so re-enabled tools return. Structural gates (no shells, browser null, inter-agent depth, subagent completion omit) still win for availability. Per-model overlays exist on the document and resolver signature but are not applied yet. Executor rejects calls whose tool name is absent from the current catalog.
+
 Default tools include subagent control (`StartSubagent`, `ListSubagents`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`), inter-agent events + Ask (`TriggerParentEvent`, `RespondToSubagentEvent`, `TriggerSubagentEvent`, `AskQuestion`, `AskQuestionFromParent` — layer-gated), task completion (`CompleteTask`, `ConfirmTaskComplete`, `ContinueWork`), rethink resume (`ResumeCurrentTask`), workspace file tools, **`GetDateTime`**, **`WaitForSeconds`**, **`ShellExecute`** and **long-running shell tools** (when the platform has available shells), **browser tools** (when `BrowserControl` is set), **web search/fetch** tools (below), and related harness tools. Every call carries harness fields: optional `callId`, required `stage` (int).
 
 ### GetDateTime
@@ -231,7 +233,9 @@ On the rethink turn only: readonly tools when a peek is needed; optional `StartS
 
 ## Expand thought process
 
-`DysonExpandThoughtProcess` / `CreateExpandThoughtProcessTurn` inserts an `ExpandThoughtProcess` turn so the agent reformulates before heavy work continues.
+`ExpandThoughtProcess` MCP queues an `ExpandThoughtProcess` turn via `CreateExpandThoughtProcessTurn` / `DysonExpandThoughtProcess`, sets `EndsCurrentTurn` on the tool result, and the OpenAI tool loop soft-closes the calling turn (`SoftCloseAfterEndsCurrentTurn`) — no further model rounds. Recursion on an in-flight expand turn is rejected.
+
+During the expand turn the model may call **`DropTurnContext`** (`turnIds` from `[turnId=…]` history headers) to set `IsExcludedFromContext` on prior turns. Excluded turns stay in the UI (Dropped badge + Restore) but are omitted from Completions/Responses transcripts and context-optimizer walks. After expand completes, the host enqueues a Normal continuation (`ShouldEnqueueContinuation` / `ContinuationPrompt`). Covered by `DysonExpandThoughtProcessTests` in `Harness.Tests`.
 
 ## Context optimizer
 

@@ -70,6 +70,27 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         return VoidResult<string>.Success;
     }
 
+    /// <summary>
+    /// Soft-closes <paramref name="turn"/> after a tool result with
+    /// <see cref="DysonToolCallResult.EndsCurrentTurn"/> (e.g. ExpandThoughtProcess).
+    /// Always returns Success; does not enqueue rethink.
+    /// </summary>
+    public static VoidResult<string> SoftCloseAfterEndsCurrentTurn(DysonAgentTurn turn)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+
+        turn.ClearStreamingPreview();
+        turn.ClearReasoningPreview();
+
+        const string text =
+            "# Expanding thought process\n\n" +
+            "ExpandThoughtProcess was called; this turn ends. A reformulation turn will run next.";
+        ApplyAssistantText(turn, text);
+        turn.FinishStreaming();
+        turn.FinishReasoningStreaming();
+        return VoidResult<string>.Success;
+    }
+
     private readonly DysonSessionStore? _store;
     private readonly HttpClient _http;
     private readonly string _workDirectoryPath;
@@ -616,6 +637,13 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                         roundResults));
 
                     AppendLog($"tool round {round + 1}: {reply.ToolCalls.Count} call(s)");
+
+                    if (roundResults.Any(r => r.EndsCurrentTurn && !r.IsError))
+                    {
+                        AppendLog($"tool round {round + 1}: ends current turn");
+                        return SoftCloseAfterEndsCurrentTurn(turn);
+                    }
+
                     continue;
                 }
 

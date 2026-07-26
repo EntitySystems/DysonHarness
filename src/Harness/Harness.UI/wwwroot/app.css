@@ -757,6 +757,111 @@ code, .mono {
   margin: 6px 0 10px;
 }
 
+.agent-modes-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.agent-modes-list li + li {
+  border-top: 1px solid var(--border);
+}
+
+.agent-modes-list__link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 4px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.agent-modes-list__link:hover {
+  color: var(--accent);
+}
+
+.agent-modes-list__name {
+  font-weight: 600;
+}
+
+.agent-modes-list__hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.agent-mode-tools__search {
+  margin-bottom: 10px;
+}
+
+.agent-mode-tools__search input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg-2);
+  color: var(--text);
+}
+
+.agent-mode-tools__search input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.agent-mode-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: min(60vh, 520px);
+  overflow: auto;
+  margin-bottom: 12px;
+}
+
+.agent-mode-tools__empty {
+  padding: 16px 10px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.agent-mode-tool-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.agent-mode-tool-card input {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.agent-mode-tool-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agent-mode-tool-card__name {
+  font-weight: 600;
+}
+
+.agent-mode-tool-card__desc {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: normal;
+  word-break: break-word;
+}
+
+.agent-mode-tools__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 /* Session header */
 .session-header {
   display: flex;
@@ -1432,6 +1537,68 @@ code, .mono {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.turn-block__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.turn-block__title-row .turn-block__title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Mute dropped turns without washing out the Restore action (parent opacity can't be escaped). */
+.turn-block--dropped > *:not(.turn-block__header) {
+  opacity: 0.55;
+}
+
+.turn-block--dropped .turn-block__title,
+.turn-block--dropped .turn-block__kind,
+.turn-block--dropped .turn-block__timestamp,
+.turn-block--dropped .turn-block__dropped-badge {
+  opacity: 0.55;
+}
+
+.turn-block__dropped-badge {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 6px;
+}
+
+.turn-block__restore {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 2px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: var(--accent);
+  color: #0b0d10;
+  cursor: pointer;
+  opacity: 1;
+  transition: filter 0.12s ease;
+}
+
+[data-theme="light"] .turn-block__restore {
+  color: #fff;
+}
+
+.turn-block__restore:hover {
+  filter: brightness(1.08);
 }
 
 .turn-block__user {

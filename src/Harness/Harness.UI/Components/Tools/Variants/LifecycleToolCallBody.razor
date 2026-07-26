@@ -62,6 +62,26 @@ else if (ToolName == "ExpandThoughtProcess")
         <pre class="tool-scroll mono">@(string.IsNullOrEmpty(focus) ? "reformulate" : focus)</pre>
     </div>
 }
+else if (ToolName == "DropTurnContext")
+{
+    var ids = DysonToolCallUi.GetStringArray(ArgumentsJson, "turnIds");
+    <div class="tool-section">
+        <div class="tool-section__label">Turn ids</div>
+        <div class="tool-scroll mono">
+            @if (ids.Count == 0)
+            {
+                <div>(none)</div>
+            }
+            else
+            {
+                @foreach (var id in ids)
+                {
+                    <div>@id</div>
+                }
+            }
+        </div>
+    </div>
+}
 
 @if (!ArgsOnly && ResultContent is not null && ToolName is not null)
 {

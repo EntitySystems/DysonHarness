@@ -323,6 +323,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 existing.ToolStateJson = turn.ToolStateJson;
                 existing.ToolHistoryOptimized = turn.ToolHistoryOptimized;
                 existing.CompactToolHistory = turn.CompactToolHistory;
+                existing.IsExcludedFromContext = turn.IsExcludedFromContext;
                 existing.CompletedUtc = turn.CompletedUtc;
             }
 

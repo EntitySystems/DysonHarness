@@ -42,19 +42,21 @@ public abstract class DysonAgentSession
         SystemPrompt = string.IsNullOrWhiteSpace(systemPromptSuffix)
             ? prompt.Value
             : prompt.Value + "\n\n" + systemPromptSuffix.Trim();
-        McpPipeline = DysonMcpPipeline.CreateDefault(
-            config.McpAccessMode,
-            config.AvailableShellTypes,
-            browserControlAvailable: config.BrowserControl is not null);
-        McpPipeline.ConfigureShellExecuteForMode(
-            string.Equals(agentMode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase));
         // Do not gate as root here: Parent is always null in the ctor. Roots call
         // ConfigureRootInterAgentTools from Create/Load; children get gated in Register/Restore.
+        McpPipeline = DysonSessionToolsetBuilder.BuildInitial(config, agentMode, ResolveModelSlugId());
     }
 
     /// <summary>Root-only catalog gate (depth 0). Call from root Create/Load, never from child ctors.</summary>
-    protected void ConfigureRootInterAgentTools() =>
+    protected void ConfigureRootInterAgentTools()
+    {
         McpPipeline.ConfigureInterAgentTools(0);
+        DysonSessionToolsetBuilder.ReapplyDisabledTools(
+            McpPipeline, Config, Mode, ResolveModelSlugId());
+    }
+
+    private Guid? ResolveModelSlugId() =>
+        Provider is OpenAiCompatibleAgentProvider oai ? oai.SlugId : null;
 
     /// <summary>0 = root, 1 = direct child of root, 2+ = deeper.</summary>
     public int ComputeDepth()
@@ -132,10 +134,11 @@ public abstract class DysonAgentSession
     /// </summary>
     public int SystemPromptGeneration { get; private set; }
 
-    public DysonMcpPipeline McpPipeline { get; }
+    public DysonMcpPipeline McpPipeline { get; private set; }
 
     /// <summary>
-    /// Rebuilds <see cref="Mode"/> / <see cref="SystemPrompt"/> for a mid-session mode switch.
+    /// Rebuilds <see cref="Mode"/> / <see cref="SystemPrompt"/> and the MCP catalog for a
+    /// mid-session mode switch (full rebuild so re-enabled tools return).
     /// No-op (no generation bump) when <paramref name="agentMode"/> matches current mode.
     /// </summary>
     public VoidResult<string> ApplyAgentMode(string agentMode, string? systemPromptSuffix = null)
@@ -155,10 +158,21 @@ public abstract class DysonAgentSession
         SystemPrompt = string.IsNullOrWhiteSpace(systemPromptSuffix)
             ? prompt.Value
             : prompt.Value + "\n\n" + systemPromptSuffix.Trim();
-        McpPipeline.ConfigureShellExecuteForMode(
-            string.Equals(Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase));
+
+        if (Config.ToolPolicy is not null)
+        {
+            Config.DisabledTools = DysonToolPolicyResolver.Resolve(
+                Config.ToolPolicy, Mode, ResolveModelSlugId());
+        }
+
+        McpPipeline = DysonSessionToolsetBuilder.Build(
+            Config,
+            Mode,
+            interAgentDepth: ComputeDepth(),
+            omitRootTaskCompletionTools: Parent is not null,
+            modelSlugId: ResolveModelSlugId());
         SystemPromptGeneration++;
-        AppendLog($"mode → {Mode} (system prompt rebuilt)");
+        AppendLog($"mode → {Mode} (system prompt + toolset rebuilt)");
         return VoidResult<string>.Success;
     }
 
@@ -190,8 +204,7 @@ public abstract class DysonAgentSession
         var id = AllocateSubagentId();
         child.Id = id;
         child.Parent = this;
-        OmitRootTaskCompletionTools(child.McpPipeline);
-        child.McpPipeline.ConfigureInterAgentTools(child.ComputeDepth());
+        ApplyChildStructuralGates(child);
         SubagentsById[id] = child;
         SubSessions.Add(child);
         SubagentSpawned?.Invoke(this, child);
@@ -221,8 +234,7 @@ public abstract class DysonAgentSession
             }
 
             child.Parent = this;
-            OmitRootTaskCompletionTools(child.McpPipeline);
-            child.McpPipeline.ConfigureInterAgentTools(child.ComputeDepth());
+            ApplyChildStructuralGates(child);
             BumpNextSubagentId(child.Id);
             return;
         }
@@ -231,8 +243,7 @@ public abstract class DysonAgentSession
             throw new InvalidOperationException("Subagent is already registered under a different id.");
 
         child.Parent = this;
-        OmitRootTaskCompletionTools(child.McpPipeline);
-        child.McpPipeline.ConfigureInterAgentTools(child.ComputeDepth());
+        ApplyChildStructuralGates(child);
         SubagentsById[child.Id] = child;
         SubSessions.Add(child);
         BumpNextSubagentId(child.Id);
@@ -254,12 +265,14 @@ public abstract class DysonAgentSession
 
     /// <summary>
     /// Subagents finish via <c>SubmitSubagentReport</c>; hide root CompleteTask flow tools from their catalog.
+    /// Re-applies mode denylist after structural Ensure* so policy stays authoritative.
     /// </summary>
-    private static void OmitRootTaskCompletionTools(DysonMcpPipeline pipeline)
+    private static void ApplyChildStructuralGates(DysonAgentSession child)
     {
-        pipeline.Tools.Remove("CompleteTask");
-        pipeline.Tools.Remove("ConfirmTaskComplete");
-        pipeline.Tools.Remove("ContinueWork");
+        DysonSessionToolsetBuilder.OmitRootTaskCompletionTools(child.McpPipeline);
+        child.McpPipeline.ConfigureInterAgentTools(child.ComputeDepth());
+        DysonSessionToolsetBuilder.ReapplyDisabledTools(
+            child.McpPipeline, child.Config, child.Mode, child.ResolveModelSlugId());
     }
 
     public bool TryGetSubagent(int subagentId, out DysonAgentSession child) =>
@@ -878,6 +891,23 @@ public abstract class DysonAgentSession
         }
     }
 
+    /// <summary>
+    /// True while the in-flight turn is <see cref="DysonAgentTurnKind.ExpandThoughtProcess"/>
+    /// (DropTurnContext phase guard).
+    /// </summary>
+    public bool IsInExpandThoughtProcessPhase
+    {
+        get
+        {
+            if (TurnHistory.Count == 0)
+                return false;
+
+            var current = TurnHistory[^1];
+            return current.Kind == DysonAgentTurnKind.ExpandThoughtProcess
+                   && current.CompletedUtc is null;
+        }
+    }
+
     private void RaiseParentEventsChanged() => ParentEventsChanged?.Invoke(this, EventArgs.Empty);
 
     private static string BuildInjectedSubagentPrompt(string payload) =>
@@ -1364,6 +1394,7 @@ public abstract class DysonAgentSession
                 ReasoningText = row.ReasoningText,
                 ToolHistoryOptimized = row.ToolHistoryOptimized,
                 CompactToolHistory = row.CompactToolHistory,
+                IsExcludedFromContext = row.IsExcludedFromContext,
                 StartedUtc = row.CreatedUtc,
                 CompletedUtc = row.CompletedUtc,
             };

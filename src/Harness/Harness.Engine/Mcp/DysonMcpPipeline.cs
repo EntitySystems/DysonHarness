@@ -1347,8 +1347,9 @@ public sealed class DysonMcpPipeline
         {
             Name = "ExpandThoughtProcess",
             Description =
-                "Request a special reformulation turn before continuing heavy work. " +
-                "Use when context is noisy or the plan is unclear.",
+                "Queue an ExpandThoughtProcess reformulation turn, hard-end the current turn, then auto-continue with a Normal turn. " +
+                "Use when context is noisy or the plan is unclear. Optional focus clarifies what to reformulate. " +
+                "During the expand turn the model may optionally call DropTurnContext for true noise only.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1358,6 +1359,27 @@ public sealed class DysonMcpPipeline
                       "description": "Optional focus: what to clarify or reformulate."
                     }
                   }
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "DropTurnContext",
+            Description =
+                "ExpandThoughtProcess phase only: exclude listed turn ids (from [turnId=…] history headers) " +
+                "from future provider transcripts. Does not delete turns; UI can restore. Prefer keep when unsure.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "turnIds": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "Turn Guids from [turnId=…] transcript headers to exclude from future model context."
+                    }
+                  },
+                  "required": ["turnIds"]
                 }
                 """,
         };
