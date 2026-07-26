@@ -1,12 +1,14 @@
-namespace DysonHarness;
+using DysonHarness;
+
+namespace Harness.Tests;
 
 /// <summary>
 /// ponytail: assert available-models system-prompt catalog filters by kind and formats effort/modes.
-/// Run: <c>DysonAvailableModelsPromptSelfCheck.Run()</c> (also from UI <c>Program</c> startup).
-/// </summary>
-public static class DysonAvailableModelsPromptSelfCheck
+/// /// </summary>
+public class DysonAvailableModelsPromptTests
 {
-    public static void Run()
+    [Fact]
+    public void Run()
     {
         var providers = new List<DysonModelProviderEntity>
         {

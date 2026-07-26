@@ -11,6 +11,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Harness.Abstractions", "Har
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Harness.WindowsBrowser", "Harness.WindowsBrowser\Harness.WindowsBrowser.csproj", "{E03180CB-8CC9-4DC1-9BD9-5F6365E3D60D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Harness.Tests", "Harness.Tests\Harness.Tests.csproj", "{B0EEA764-8C95-464C-BED8-0340A14393B1}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -69,6 +71,18 @@ Global
 		{E03180CB-8CC9-4DC1-9BD9-5F6365E3D60D}.Release|x64.Build.0 = Release|Any CPU
 		{E03180CB-8CC9-4DC1-9BD9-5F6365E3D60D}.Release|x86.ActiveCfg = Release|Any CPU
 		{E03180CB-8CC9-4DC1-9BD9-5F6365E3D60D}.Release|x86.Build.0 = Release|Any CPU
+		{B0EEA764-8C95-464C-BED8-0340A14393B1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B0EEA764-8C95-464C-BED8-0340A14393B1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B0EEA764-8C95-464C-BED8-0340A14393B1}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{B0EEA764-8C95-464C-BED8-0340A14393B1}.Debug|x64.Build.0 = Debug|Any CPU
+		{B0EEA764-8C95-464C-BED8-0340A14393B1}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{B0EEA764-8C95-464C-BED8-0340A14393B1}.Debug|x86.Build.0 = Debug|Any CPU
+		{B0EEA764-8C95-464C-BED8-0340A14393B1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B0EEA764-8C95-464C-BED8-0340A14393B1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B0EEA764-8C95-464C-BED8-0340A14393B1}.Release|x64.ActiveCfg = Release|Any CPU
+		{B0EEA764-8C95-464C-BED8-0340A14393B1}.Release|x64.Build.0 = Release|Any CPU
+		{B0EEA764-8C95-464C-BED8-0340A14393B1}.Release|x86.ActiveCfg = Release|Any CPU
+		{B0EEA764-8C95-464C-BED8-0340A14393B1}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

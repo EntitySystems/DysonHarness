@@ -52,7 +52,6 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     static DysonUiHost()
     {
-        DysonSubagentHostLogic.RunSelfCheck();
         Debug.Assert(ClampToolPanelWidthPercent(5) == MinToolPanelWidthPercent);
         Debug.Assert(ClampToolPanelWidthPercent(60) == MaxToolPanelWidthPercent);
         Debug.Assert(ClampToolPanelWidthPercent(30) == DefaultToolPanelWidthPercent);

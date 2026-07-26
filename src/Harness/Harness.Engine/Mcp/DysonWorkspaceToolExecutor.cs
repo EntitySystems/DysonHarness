@@ -7,8 +7,8 @@ namespace DysonHarness;
 
 /// <summary>
 /// Executes workspace-scoped MCP tools against a work directory root, plus RenameSession,
-/// GetDateTime, ShellExecute, long-running shell tools, subagent spawn/list/report tools,
-/// inter-agent events / AskQuestion, session todo CRUD, task completion tools,
+/// GetDateTime, WaitForSeconds, ShellExecute, long-running shell tools, subagent spawn/list/report tools,
+/// inter-agent events / AskQuestion, session todo CRUD, task completion tools, ResumeCurrentTask,
 /// in-process web search/fetch tools, and browser control tools (when
 /// <see cref="DysonAgentSessionConfig.BrowserControl"/> is set).
 /// Other catalog tools return a not-implemented stub result.
@@ -63,6 +63,8 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "CompleteTask" => CompleteTask(call),
                 "ConfirmTaskComplete" => ConfirmTaskComplete(call),
                 "ContinueWork" => ContinueWork(call),
+                "ResumeCurrentTask" => ResumeCurrentTask(call),
+                "WaitForSeconds" => await WaitForSecondsAsync(call, cancellationToken).ConfigureAwait(false),
                 "ListTodos" => await ListTodosAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateTodo" => await CreateTodoAsync(call, cancellationToken).ConfigureAwait(false),
                 "UpdateTodo" => await UpdateTodoAsync(call, cancellationToken).ConfigureAwait(false),
@@ -966,6 +968,74 @@ public sealed partial class DysonWorkspaceToolExecutor
             nextTurnKind = DysonAgentTurnKind.Continuation.ToString(),
             reason,
             remainingWork,
+        }));
+    }
+
+    private DysonToolCallResult ResumeCurrentTask(DysonToolCall call)
+    {
+        if (!_session.IsInRethinkToolUsagePhase)
+        {
+            return Error(call,
+                "ResumeCurrentTask: only valid during a RethinkToolUsage turn after a tool-round soft-pause.");
+        }
+
+        string? rationale = null;
+        string? continuationInstructions = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            rationale = GetOptionalString(doc.RootElement, "rationale");
+            continuationInstructions = GetOptionalString(doc.RootElement, "continuationInstructions");
+        }
+        catch (JsonException)
+        {
+            return Error(call, "ResumeCurrentTask: invalid JSON arguments.");
+        }
+
+        if (string.IsNullOrWhiteSpace(rationale) && string.IsNullOrWhiteSpace(continuationInstructions))
+            return Error(call, "ResumeCurrentTask: rationale or continuationInstructions is required.");
+
+        var turn = DysonRethinkToolUsageFlow.CreateResumeTurn(rationale, continuationInstructions);
+        _session.EnqueuePendingTurn(turn);
+
+        return Ok(call, JsonSerializer.Serialize(new
+        {
+            status = "queued",
+            nextTurnKind = DysonAgentTurnKind.Normal.ToString(),
+            rationale,
+            continuationInstructions,
+        }));
+    }
+
+    private async Task<DysonToolCallResult> WaitForSecondsAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        int seconds;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            if (!doc.RootElement.TryGetProperty("seconds", out var secondsProp)
+                || secondsProp.ValueKind != JsonValueKind.Number
+                || !secondsProp.TryGetInt32(out seconds))
+            {
+                return Error(call, "WaitForSeconds: seconds (integer) is required.");
+            }
+        }
+        catch (JsonException)
+        {
+            return Error(call, "WaitForSeconds: invalid JSON arguments.");
+        }
+
+        if (seconds < 1 || seconds > 300)
+            return Error(call, "WaitForSeconds: seconds must be between 1 and 300.");
+
+        await Task.Delay(TimeSpan.FromSeconds(seconds), cancellationToken).ConfigureAwait(false);
+
+        return Ok(call, JsonSerializer.Serialize(new
+        {
+            status = "ok",
+            waitedSeconds = seconds,
         }));
     }
 

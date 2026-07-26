@@ -1,12 +1,15 @@
-namespace DysonHarness;
+using DysonHarness;
+
+namespace Harness.Tests;
 
 /// <summary>
-/// ponytail: assert-only Plan-mode ShellExecute soft warning gate (no test framework).
-/// Run: <c>DysonShellExecutePlanWarningSelfCheck.Run()</c> (register from UI Program in Phase 2).
+/// ponytail: assert-only Plan-mode ShellExecute soft warning gate (Xunit Fact).
+/// 
 /// </summary>
-public static class DysonShellExecutePlanWarningSelfCheck
+public class DysonShellExecutePlanWarningTests
 {
-    public static void Run()
+    [Fact]
+    public void Run()
     {
         AssertDescriptions();
         AssertConfigureForMode();

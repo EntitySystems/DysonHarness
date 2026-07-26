@@ -1,12 +1,14 @@
-namespace DysonHarness;
+using DysonHarness;
+
+namespace Harness.Tests;
 
 /// <summary>
 /// ponytail: assert normalize + JSON round-trip for slug ReasoningModes converter.
-/// Run: <c>StringListJsonValueConverterSelfCheck.Run()</c> (also from UI <c>Program</c> startup).
-/// </summary>
-public static class StringListJsonValueConverterSelfCheck
+/// /// </summary>
+public class StringListJsonValueConverterTests
 {
-    public static void Run()
+    [Fact]
+    public void Run()
     {
         var converter = new StringListJsonValueConverter();
 

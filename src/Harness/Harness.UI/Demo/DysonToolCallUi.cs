@@ -87,6 +87,12 @@ public static class DysonToolCallUi
             "ContinueWork" => TextSummary(Truncate(
                 GetString(argumentsJson, "reason") ?? GetString(argumentsJson, "remainingWork") ?? "continue",
                 SummaryMaxLength)),
+            "ResumeCurrentTask" => TextSummary(Truncate(
+                GetString(argumentsJson, "rationale")
+                ?? GetString(argumentsJson, "continuationInstructions")
+                ?? "resume",
+                SummaryMaxLength)),
+            "WaitForSeconds" => TextSummary(SummarizeWaitForSeconds(argumentsJson)),
             "ExpandThoughtProcess" => TextSummary(Truncate(
                 GetString(argumentsJson, "focus") ?? "reformulate",
                 SummaryMaxLength)),
@@ -401,77 +407,6 @@ public static class DysonToolCallUi
         if (tab <= 0)
             return null;
         return (line[..tab], line[(tab + 1)..]);
-    }
-
-    /// <summary>ponytail: assert-only self-check (no test framework). Run from UI <c>Program</c>.</summary>
-    public static void SelfCheck()
-    {
-        var writeArgs = """
-            {"path":"src/A.cs","edits":[{"old_text":"a\nb\nc","new_text":"a\nx\ny\nz"},{"old_text":"old","new_text":"new1\nnew2"}]}
-            """;
-        var write = TryParseWriteFile(writeArgs)
-            ?? throw new InvalidOperationException("TryParseWriteFile must parse edits.");
-        if (write.Path != "src/A.cs" || write.LinesAdded != 6 || write.LinesRemoved != 4 || write.EditCount != 2)
-            throw new InvalidOperationException($"WriteFile edit deltas mismatch: +{write.LinesAdded} -{write.LinesRemoved} edits={write.EditCount}");
-
-        var rewrite = TryParseWriteFile("""{"path":"f.txt","content":"one\ntwo\nthree"}""")
-            ?? throw new InvalidOperationException("TryParseWriteFile must parse content rewrite.");
-        if (!rewrite.IsFullRewrite || rewrite.LinesAdded != 3 || rewrite.LinesRemoved != 0)
-            throw new InvalidOperationException("WriteFile full rewrite must be +N only.");
-
-        var writeSummary = GetCollapsedSummary("WriteFile", writeArgs, null, hasResult: false);
-        if (!writeSummary.HasLineDelta || writeSummary.LinesAdded != 6 || writeSummary.LinesRemoved != 4)
-            throw new InvalidOperationException("WriteFile collapsed summary must expose line deltas.");
-        if (!string.IsNullOrEmpty(writeSummary.Text))
-            throw new InvalidOperationException("WriteFile collapsed summary must not include path text.");
-
-        var shellArgs = """{"shell":"pwsh","command":"dotnet build","workingDirectory":"src"}""";
-        // Use the real constant so the check stays aligned with the engine preamble.
-        var shellResult =
-            DysonMcpPipeline.PlanShellExecuteWarning
-            + "\n\nexitCode=1 timedOut=true\n--- stdout ---\nhello\n--- stderr ---\nboom";
-        var shell = ParseShellExecute(shellArgs, shellResult);
-        if (shell.Shell != "pwsh"
-            || shell.Command != "dotnet build"
-            || shell.WorkingDirectory != "src"
-            || shell.ExitCode != 1
-            || !shell.TimedOut
-            || shell.Stdout != "hello"
-            || shell.Stderr != "boom"
-            || string.IsNullOrEmpty(shell.PlanWarning))
-        {
-            throw new InvalidOperationException("ShellExecute parse mismatch.");
-        }
-
-        var shellSummary = GetCollapsedSummary("ShellExecute", shellArgs, shellResult, hasResult: true);
-        if (shellSummary.Text is null
-            || !shellSummary.Text.Contains("pwsh", StringComparison.Ordinal)
-            || !shellSummary.Text.Contains("dotnet build", StringComparison.Ordinal)
-            || !shellSummary.Text.Contains("exit 1", StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException($"ShellExecute summary mismatch: {shellSummary.Text}");
-        }
-
-        var lrsArgs = """{"shell":"pwsh","command":"dotnet run --urls http://localhost:5180"}""";
-        var lrsResult = "longRunningShellId=3\nstatus=Running\nshell=Pwsh\ncommand=dotnet run";
-        var lrsSummary = GetCollapsedSummary("StartLongRunningShell", lrsArgs, lrsResult, hasResult: true);
-        if (lrsSummary.Text is null
-            || !lrsSummary.Text.Contains("#3", StringComparison.Ordinal)
-            || !lrsSummary.Text.Contains("pwsh", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException($"StartLongRunningShell summary mismatch: {lrsSummary.Text}");
-        }
-
-        if (Basename("src/foo/bar.cs") != "bar.cs")
-            throw new InvalidOperationException("Basename failed.");
-        if (GetString("""{"path":"a/b"}""", "path") != "a/b")
-            throw new InvalidOperationException("GetString path extraction failed.");
-        if (GithubOwnerRepo("https://github.com/acme/widget") != "acme/widget")
-            throw new InvalidOperationException("GithubOwnerRepo failed.");
-        if (CountGrepMatches("src/A.cs:12:hit\nNo matches.") != 1)
-            throw new InvalidOperationException("CountGrepMatches failed.");
-        if (CountLines("a\nb") != 2 || CountLines("") != 0 || CountLines("solo") != 1)
-            throw new InvalidOperationException("CountLines failed.");
     }
 
     private static CollapsedSummary TextSummary(string? text) => new() { Text = string.IsNullOrEmpty(text) ? null : text };
@@ -847,6 +782,12 @@ public static class DysonToolCallUi
     {
         var rationale = Truncate(GetString(argumentsJson, "rationale"), 40);
         return TextSummary(string.IsNullOrEmpty(rationale) ? "Confirmed" : $"Confirmed · {rationale}");
+    }
+
+    private static string SummarizeWaitForSeconds(string? argumentsJson)
+    {
+        var seconds = GetInt(argumentsJson, "seconds");
+        return seconds is null ? "Wait" : $"Wait {seconds}s";
     }
 
     private static CollapsedSummary SummarizeWebFetch(string? argumentsJson)

@@ -861,6 +861,23 @@ public abstract class DysonAgentSession
         }
     }
 
+    /// <summary>
+    /// True while the in-flight turn is <see cref="DysonAgentTurnKind.RethinkToolUsage"/>
+    /// (ResumeCurrentTask phase guard).
+    /// </summary>
+    public bool IsInRethinkToolUsagePhase
+    {
+        get
+        {
+            if (TurnHistory.Count == 0)
+                return false;
+
+            var current = TurnHistory[^1];
+            return current.Kind == DysonAgentTurnKind.RethinkToolUsage
+                   && current.CompletedUtc is null;
+        }
+    }
+
     private void RaiseParentEventsChanged() => ParentEventsChanged?.Invoke(this, EventArgs.Empty);
 
     private static string BuildInjectedSubagentPrompt(string payload) =>

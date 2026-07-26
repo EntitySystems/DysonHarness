@@ -1,34 +1,7 @@
 using DysonHarness;
 using Harness.UI.Components;
-using Harness.UI.Components.Chat;
 using Harness.UI.Demo;
 using Harness.UI.Theme;
-
-var shellCheck = DysonWindowsShell.SelfCheckArgMap();
-if (shellCheck.IsError)
-    throw new InvalidOperationException(shellCheck.Error);
-
-var searchCheck = SearchSelfCheck.RunSsrfChecks();
-if (searchCheck.IsError)
-    throw new InvalidOperationException(searchCheck.Error);
-
-DysonSessionTodoSelfCheck.Run();
-OpenAiReasoningSelfCheck.Run();
-StringListJsonValueConverterSelfCheck.Run();
-DysonAvailableModelsPromptSelfCheck.Run();
-DysonSubagentRestoreSelfCheck.Run();
-DysonParentEventSelfCheck.Run();
-DysonFileManagerSelfCheck.Run();
-DysonPlanResultSelfCheck.Run();
-DysonTaskCompletionSelfCheck.Run();
-DysonShellExecutePlanWarningSelfCheck.Run();
-DysonLongRunningShellSelfCheck.Run();
-DysonGrepLoadBinarySelfCheck.Run();
-DysonTextEditApplierSelfCheck.Run();
-DysonAgentTurnKindDisplay.SelfCheck();
-ComposerSlashCommands.SelfCheck();
-DysonFileViewerComments.SelfCheck();
-DysonToolCallUi.SelfCheck();
 
 var builder = WebApplication.CreateBuilder(args);
 

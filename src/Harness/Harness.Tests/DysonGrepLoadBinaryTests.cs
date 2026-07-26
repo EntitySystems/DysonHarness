@@ -1,15 +1,18 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace DysonHarness;
+using DysonHarness;
+
+namespace Harness.Tests;
 
 /// <summary>
 /// ponytail: assert-only Grep text-only / binary path-only + LoadBinary filename+ext multimodal wiring.
-/// Run: <c>DysonGrepLoadBinarySelfCheck.Run()</c> (UI <c>Program</c> startup).
+/// 
 /// </summary>
-public static class DysonGrepLoadBinarySelfCheck
+public class DysonGrepLoadBinaryTests
 {
-    public static void Run()
+    [Fact]
+    public void Run()
     {
         AssertCatalog();
         AssertMimeMap();

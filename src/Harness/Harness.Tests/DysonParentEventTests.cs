@@ -1,15 +1,18 @@
 using System.Linq;
 
-namespace DysonHarness;
+using DysonHarness;
+
+namespace Harness.Tests;
 
 /// <summary>
-/// ponytail: assert-only checks for inter-agent events + AskQuestion (no test framework).
+/// ponytail: assert-only checks for inter-agent events + AskQuestion (Xunit Fact).
 /// Covers: any-wait deadlock on TriggerParentEvent only; Respond while waiting; interrupt cancels
 /// event wait; non-interrupt fails while child waiting; layer omit; Q/A formatter.
 /// </summary>
-public static class DysonParentEventSelfCheck
+public class DysonParentEventTests
 {
-    public static void Run()
+    [Fact]
+    public void Run()
     {
         AssertLayerGating();
         AssertReparentRestoresChildTools();

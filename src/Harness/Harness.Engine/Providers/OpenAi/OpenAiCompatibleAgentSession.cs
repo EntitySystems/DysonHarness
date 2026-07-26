@@ -5,7 +5,70 @@ namespace DysonHarness;
 /// </summary>
 public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 {
-    public const int MaxToolRounds = 20;
+    /// <summary>Default tool-round budget per turn (non-Explore modes).</summary>
+    public const int MaxToolRounds = 35;
+
+    /// <summary>Explore-mode tool-round budget per turn.</summary>
+    public const int MaxToolRoundsExplore = 120;
+
+    /// <summary>Resolves the tool-round budget for <paramref name="mode"/>.</summary>
+    public static int ResolveMaxToolRounds(string mode) =>
+        string.Equals(mode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase)
+            ? MaxToolRoundsExplore
+            : MaxToolRounds;
+
+    /// <summary>Resolves the tool-round budget for this session's <see cref="DysonAgentSession.Mode"/>.</summary>
+    public int ResolveMaxToolRounds() => ResolveMaxToolRounds(Mode);
+
+    /// <summary>
+    /// Soft-closes <paramref name="turn"/> after tool-round budget exhaustion and optionally enqueues
+    /// a <see cref="DysonAgentTurnKind.RethinkToolUsage"/> follow-up. Always returns Success
+    /// (never an exhaustion error string). Does not enqueue rethink when already on rethink, or when
+    /// session mode is Explore (Explore uses a no-tools recap instead).
+    /// </summary>
+    public static VoidResult<string> SoftPauseAfterToolLoopExhaustion(
+        DysonAgentSession session,
+        DysonAgentTurn turn,
+        int maxRounds)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(turn);
+
+        turn.ClearStreamingPreview();
+        turn.ClearReasoningPreview();
+        turn.FinalizeIncompleteTools(OpenAiCacheFriendlyTranscriptBuilder.IncompleteToolResultContent);
+
+        var isRethink = turn.Kind == DysonAgentTurnKind.RethinkToolUsage;
+        var isExplore = string.Equals(
+            session.Mode,
+            DysonAgentModes.Explore,
+            StringComparison.OrdinalIgnoreCase);
+
+        string text;
+        if (isRethink)
+        {
+            text =
+                $"# Rethink budget exhausted\n\nThis rethink turn hit the {maxRounds}-round tool budget without ResumeCurrentTask or a concluding reply. No further rethink was scheduled.";
+        }
+        else if (isExplore)
+        {
+            text = DysonRethinkToolUsageFlow.ExploreBudgetExhaustedFallback;
+        }
+        else
+        {
+            text =
+                $"# Tool rounds paused\n\nTool loop reached the {maxRounds}-round budget without a final reply. A rethink turn will analyze whether to call ResumeCurrentTask or stop.";
+        }
+
+        ApplyAssistantText(turn, text);
+        turn.FinishStreaming();
+        turn.FinishReasoningStreaming();
+
+        if (!isRethink && !isExplore)
+            session.EnqueuePendingTurn(DysonRethinkToolUsageFlow.CreateTurn());
+
+        return VoidResult<string>.Success;
+    }
 
     private readonly DysonSessionStore? _store;
     private readonly HttpClient _http;
@@ -436,10 +499,11 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             "Harness: plain text does not finish this subagent. Call SubmitSubagentReport now with your findings (or blocker).";
         const string childReportMissing =
             "Child PromptAsync ended without SubmitSubagentReport.";
+        var maxRounds = ResolveMaxToolRounds();
 
         try
         {
-            for (var round = 0; round < MaxToolRounds; round++)
+            for (var round = 0; round < maxRounds; round++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -590,10 +654,16 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 return VoidResult<string>.Success;
             }
 
-            turn.ClearStreamingPreview();
-            turn.ClearReasoningPreview();
-            turn.FinalizeIncompleteTools(incompleteToolReason);
-            return new VoidResult<string>($"Tool loop exceeded {MaxToolRounds} rounds without a final reply.");
+            AppendLog($"tool loop soft-pause after {maxRounds} round(s)");
+            if (string.Equals(Mode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase))
+                return await ExploreBudgetRecapAsync(
+                    turn,
+                    inFlight,
+                    useResponses,
+                    incompleteToolReason,
+                    cancellationToken).ConfigureAwait(false);
+
+            return SoftPauseAfterToolLoopExhaustion(this, turn, maxRounds);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -602,6 +672,78 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             turn.FinalizeIncompleteTools(incompleteToolReason);
             return new VoidResult<string>("Prompt was cancelled.");
         }
+    }
+
+    /// <summary>
+    /// Explore-only post-budget path: one Completions/Responses call with tools cleared so the
+    /// model cannot burn more rounds; applies recap text or a harness incomplete-findings fallback.
+    /// Does not enqueue <see cref="DysonAgentTurnKind.RethinkToolUsage"/>.
+    /// </summary>
+    private async Task<VoidResult<string>> ExploreBudgetRecapAsync(
+        DysonAgentTurn turn,
+        List<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound> inFlight,
+        bool useResponses,
+        string incompleteToolReason,
+        CancellationToken cancellationToken)
+    {
+        turn.ClearStreamingPreview();
+        turn.ClearReasoningPreview();
+        turn.FinalizeIncompleteTools(incompleteToolReason);
+
+        Result<OpenAiModelReply, string> replyResult;
+        if (useResponses)
+        {
+            var built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+                this,
+                currentUserPrompt: DysonRethinkToolUsageFlow.ExploreBudgetRecapInstruction,
+                currentFilePaths: null,
+                inFlightRounds: inFlight);
+            built.Tools.Clear();
+            replyResult = await ConsumeStreamAsync(
+                _responses.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
+                turn,
+                cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            var built = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+                this,
+                currentUserPrompt: DysonRethinkToolUsageFlow.ExploreBudgetRecapInstruction,
+                currentFilePaths: null,
+                inFlightRounds: inFlight);
+            built.Tools.Clear();
+            replyResult = await ConsumeStreamAsync(
+                _completions.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
+                turn,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        if (replyResult.IsError)
+        {
+            turn.ClearStreamingPreview();
+            turn.ClearReasoningPreview();
+            ApplyAssistantText(turn, DysonRethinkToolUsageFlow.ExploreBudgetExhaustedFallback);
+            turn.FinishStreaming();
+            turn.FinishReasoningStreaming();
+            AppendLog("explore budget recap: provider error; applied harness fallback");
+            return VoidResult<string>.Success;
+        }
+
+        var reply = replyResult.Value;
+        if (!string.IsNullOrEmpty(reply.UsageCacheHint))
+            AppendLog(reply.UsageCacheHint);
+
+        // Ignore tool_calls on this no-tools recap — budget is already exhausted.
+        var text = string.IsNullOrWhiteSpace(reply.Content)
+            ? DysonRethinkToolUsageFlow.ExploreBudgetExhaustedFallback
+            : reply.Content;
+
+        ApplyAssistantText(turn, text);
+        ApplyReasoningText(turn, reply);
+        turn.FinishStreaming();
+        turn.FinishReasoningStreaming();
+        AppendLog($"explore budget recap complete: {turn.AgentTitle ?? turn.Id.ToString("N")[..8]}");
+        return VoidResult<string>.Success;
     }
 
     private static bool TurnHasSubmitSubagentReport(DysonAgentTurn turn) =>

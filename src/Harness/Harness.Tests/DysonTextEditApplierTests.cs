@@ -1,12 +1,15 @@
-namespace DysonHarness;
+using DysonHarness;
+
+namespace Harness.Tests;
 
 /// <summary>
 /// ponytail: assert-only WriteFile cascade (exact, CRLF, indent, ambiguous, replace_all, prefix miss).
-/// Run: <c>DysonTextEditApplierSelfCheck.Run()</c> (UI <c>Program</c> startup).
+/// 
 /// </summary>
-public static class DysonTextEditApplierSelfCheck
+public class DysonTextEditApplierTests
 {
-    public static void Run()
+    [Fact]
+    public void Run()
     {
         AssertCatalog();
         AssertExactHit();

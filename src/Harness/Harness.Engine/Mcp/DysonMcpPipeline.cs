@@ -1300,6 +1300,51 @@ public sealed class DysonMcpPipeline
 
         yield return new DysonMcpTool
         {
+            Name = "ResumeCurrentTask",
+            Description =
+                "After a tool-round soft-pause rethink turn, continue the unfinished task with a fresh tool-round budget. " +
+                "Only valid during a RethinkToolUsage turn. Provide rationale and/or continuationInstructions.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "rationale": {
+                      "type": "string",
+                      "description": "Optional why continuing is justified (not a doom loop)."
+                    },
+                    "continuationInstructions": {
+                      "type": "string",
+                      "description": "Optional brief guidance for the next Normal turn."
+                    }
+                  }
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "WaitForSeconds",
+            Description =
+                "Block until the given number of seconds elapses (1–300). " +
+                "Use for short deliberate delays; prompt cancel aborts the wait.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "seconds": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 300,
+                      "description": "Seconds to wait (1–300)."
+                    }
+                  },
+                  "required": ["seconds"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
             Name = "ExpandThoughtProcess",
             Description =
                 "Request a special reformulation turn before continuing heavy work. " +

@@ -28,8 +28,8 @@ When `ProviderKind == OpenAICompatible`, the host builds `OpenAiCompatibleAgentP
 - **Reasoning effort:** when `OpenAiCompatibleAgentProvider.ReasoningEffort` is non-empty, both Completions and Responses send top-level `"reasoning_effort"`; blank/null omits the field (provider default). Sourced from slug `DefaultReasoningEffort` with optional session override.
 - **Streaming SSE** (`stream: true`) for assistant text and optional reasoning; Completions reads `choices[0].delta.content` and `delta.reasoning_content` (+ incremental `tool_calls`, `stream_options.include_usage`); Responses handles `response.output_text.delta`, `response.reasoning_summary_text.delta` / `response.reasoning_text.delta`, function-call assembly (`output_item.added` / `function_call_arguments.delta|done` / `output_item.done`), and `error` / `response.failed`. Session consumes chunks per tool-loop round; `AssistantText` + H1 title parse only on the final no-tool round (preview stays raw until then). Reasoning accumulates into `ReasoningText` (UI + persistence only — not injected into transcript builders). Cancel/error clears `StreamingPreview` and `ReasoningStreamingPreview`.
 - **Native function tools** with required harness `stage` on every schema.
-- **Tool loop** inside one `PromptAsync` (cap ~20 rounds): model tool_calls → staged executor (web tools summarize **inside** the tool) → feed results → call again.
-- **Executors (v1):** `DysonWorkspaceToolExecutor` — real `RenameSession`, **`GetDateTime`** (host clock; `timezone`: `"utc"` default or `"local"`), workdir-scoped file tools (`ReadFile` as `lineNumber|content`, `CreateFile`, `WriteFile` via `DysonTextEditApplier` cascade + optional `replace_all`, `Grep` text-only with binary/image path-only hits + dir excludes, **`LoadBinary`** short ack + `BinaryAttachment` for provider multimodal parts with filename+ext, `ListDirectory`, `CreateDirectory`), `ShellExecute` (session-available shells via `DysonShell`), **long-running shell tools** (`StartLongRunningShell`, `ListLongRunningShells`, `ReadLongRunningShellTail`, `AbortLongRunningShell`, `RequestLongRunningShellCancellation`, `LongRunningShellInteract`, `SubscribeToLongRunningShellCompletion`), in-process web search/fetch tools (`FreeSearch`, `FreeSearchAdvanced`, `SearchWithSynthesis`, `FreeExtract`, `WebFetch`, `FetchGithubReadme`), **browser tools** (when `BrowserControl` set), **subagent tools** (`StartSubagent`, `ListSubagents`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`), **inter-agent / Ask** (`TriggerParentEvent`, `RespondToSubagentEvent`, `TriggerSubagentEvent`, `AskQuestion`, `AskQuestionFromParent`), and **task completion** (`CompleteTask`, `ConfirmTaskComplete`, `ContinueWork`); other catalog tools return “not implemented yet”.
+- **Tool loop** inside one `PromptAsync` (cap **35** rounds; **Explore 120** via `ResolveMaxToolRounds`): model tool_calls → staged executor (web tools summarize **inside** the tool) → feed results → call again. Non-Explore: hitting the budget soft-pauses the turn (Success + harness H1 note) and enqueues a **`RethinkToolUsage`** turn (no second rethink if already on rethink). On rethink, `ResumeCurrentTask` enqueues a Normal turn with a fresh budget; text-only ends the pause. Explore: no rethink — one final no-tools recap reply (findings may be incomplete).
+- **Executors (v1):** `DysonWorkspaceToolExecutor` — real `RenameSession`, **`GetDateTime`** (host clock; `timezone`: `"utc"` default or `"local"`), **`WaitForSeconds`** (1–300s blocking delay), workdir-scoped file tools (`ReadFile` as `lineNumber|content`, `CreateFile`, `WriteFile` via `DysonTextEditApplier` cascade + optional `replace_all`, `Grep` text-only with binary/image path-only hits + dir excludes, **`LoadBinary`** short ack + `BinaryAttachment` for provider multimodal parts with filename+ext, `ListDirectory`, `CreateDirectory`), `ShellExecute` (session-available shells via `DysonShell`), **long-running shell tools** (`StartLongRunningShell`, `ListLongRunningShells`, `ReadLongRunningShellTail`, `AbortLongRunningShell`, `RequestLongRunningShellCancellation`, `LongRunningShellInteract`, `SubscribeToLongRunningShellCompletion`), in-process web search/fetch tools (`FreeSearch`, `FreeSearchAdvanced`, `SearchWithSynthesis`, `FreeExtract`, `WebFetch`, `FetchGithubReadme`), **browser tools** (when `BrowserControl` set), **subagent tools** (`StartSubagent`, `ListSubagents`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`), **inter-agent / Ask** (`TriggerParentEvent`, `RespondToSubagentEvent`, `TriggerSubagentEvent`, `AskQuestion`, `AskQuestionFromParent`), **task completion** (`CompleteTask`, `ConfirmTaskComplete`, `ContinueWork`), and **rethink resume** (`ResumeCurrentTask`); other catalog tools return “not implemented yet”.
 - **RenameSession review:** every 8 turns (1-based indices **1, 9, 17, …** — when `TurnHistory.Count % 8 == 0` before adding the turn), the transcript builder appends an ephemeral yes/no `RenameSessionReviewMandate` on the **current incomplete** user message only. Turn 1 is `InitializeSession` via `DysonSessionInitialization.CreateTurn`; later review turns stay `Normal`. Completed/history turns always send clean `Instruction` — the mandate is never re-emitted. Soft every-turn rename nudges are not in system prompts; MCP description says rename only on harness review mandate or explicit user request.
 - **Cache-friendly requests** (`OpenAiCacheFriendlyTranscriptBuilder`):
   1. Stable prefix first: system/instructions (mode prompt + MCP catalog) → `tools[]` (stable sort) → prior transcript → new user/tool deltas last.
@@ -93,7 +93,7 @@ Primary flow: `StartSubagent` is **non-blocking**; the child runs in the backgro
 
 **Layer catalog gating** (`ConfigureInterAgentTools(depth)`): root keeps `AskQuestion` / `RespondToSubagentEvent` / `TriggerSubagentEvent` (omits AskQuestionFromParent + TriggerParentEvent); L1 keeps AskQuestionFromParent + TriggerParentEvent + Respond + TriggerSubagentEvent (omits AskQuestion); deeper keeps TriggerParentEvent + Respond + TriggerSubagentEvent only.
 
-Self-check: `DysonSubagentSpawnGateSelfCheck.Run()`; restore wiring / ListSubagents shape: `DysonSubagentRestoreSelfCheck.Run()`; inter-agent events / Ask formatter / layer gate: `DysonParentEventSelfCheck.Run()`. Return shape: `DysonStartSubagentResult` (`subagentId`, `persistenceId`, `agentMode`, `title`, optional `modelSlug` / `modelLabel`). Kickoff failures (no `SubmitSubagentReport`) mark the child `Failed`, persist status + parent interrupt, and notify with a non-empty reason (PromptAsync error → last turn snippet → harness message; exceptions as `{Type}: {Message}`). A later successful `SubmitSubagentReport` can supersede that harness Failed (see tool row above).
+Soft spawn / restore / inter-agent event coverage: `Harness.Tests` (`DysonSubagentSpawnGateTests`, `DysonSubagentRestoreTests`, `DysonParentEventTests`) — `dotnet test src/Harness/Harness.Tests/Harness.Tests.csproj`. Return shape: `DysonStartSubagentResult` (`subagentId`, `persistenceId`, `agentMode`, `title`, optional `modelSlug` / `modelLabel`). Kickoff failures (no `SubmitSubagentReport`) mark the child `Failed`, persist status + parent interrupt, and notify with a non-empty reason (PromptAsync error → last turn snippet → harness message; exceptions as `{Type}: {Message}`). A later successful `SubmitSubagentReport` can supersede that harness Failed (see tool row above).
 
 On parent resume the host hydrates direct DB children into `SubSessions` / `SubagentsById` via `RestoreRegisteredSubagent` (bumps next runtime id; does not raise `SubagentSpawned`).
 
@@ -106,7 +106,7 @@ On parent resume the host hydrates direct DB children into `SubSessions` / `Suba
 
 `DysonMcpPipeline` holds the per-session tool catalog (`FormatToolsForPrompt`) and optional auto-review proxy. OpenAI-compatible sessions also expose the same tools as native function schemas (with required `stage`). Live remote MCP servers remain out of scope; workspace file tools, `ShellExecute`, web search/fetch, and browser tools run locally via `DysonWorkspaceToolExecutor`.
 
-Default tools include subagent control (`StartSubagent`, `ListSubagents`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`), inter-agent events + Ask (`TriggerParentEvent`, `RespondToSubagentEvent`, `TriggerSubagentEvent`, `AskQuestion`, `AskQuestionFromParent` — layer-gated), task completion (`CompleteTask`, `ConfirmTaskComplete`, `ContinueWork`), workspace file tools, **`GetDateTime`**, **`ShellExecute`** and **long-running shell tools** (when the platform has available shells), **browser tools** (when `BrowserControl` is set), **web search/fetch** tools (below), and related harness tools. Every call carries harness fields: optional `callId`, required `stage` (int).
+Default tools include subagent control (`StartSubagent`, `ListSubagents`, `WaitForSubagent`, `InspectSubagentLog`, `StopSubagent`, `SubmitSubagentReport`), inter-agent events + Ask (`TriggerParentEvent`, `RespondToSubagentEvent`, `TriggerSubagentEvent`, `AskQuestion`, `AskQuestionFromParent` — layer-gated), task completion (`CompleteTask`, `ConfirmTaskComplete`, `ContinueWork`), rethink resume (`ResumeCurrentTask`), workspace file tools, **`GetDateTime`**, **`WaitForSeconds`**, **`ShellExecute`** and **long-running shell tools** (when the platform has available shells), **browser tools** (when `BrowserControl` is set), **web search/fetch** tools (below), and related harness tools. Every call carries harness fields: optional `callId`, required `stage` (int).
 
 ### GetDateTime
 
@@ -114,13 +114,19 @@ Default tools include subagent control (`StartSubagent`, `ListSubagents`, `WaitF
 - Executor returns plain text: `timezone`, ISO `datetime` (`Z` for UTC; offset for local), and `display` as `dd/MM/yyyy HH:mm`.
 - Use when the task needs an exact clock — do not guess from training data.
 
+### WaitForSeconds
+
+- Required integer `seconds` in **1–300** (reject out of range; do not clamp).
+- Blocks the tool call via `Task.Delay` until the wait finishes; prompt cancel aborts with a tool error.
+- Success JSON: `{ status: "ok", waitedSeconds: N }`. Available to root and subagents.
+
 ### ShellExecute
 
 - Session config `AvailableShellTypes` defaults from `DysonShell.AvailableForCurrentPlatform()` (Windows: `Pwsh`, `PowerShell`, `Cmd`; other platforms: none yet).
 - MCP schema `shell` enum + description list those types; the model must pass `shell` plus `command` (optional `timeoutMs`, `workingDirectory` under the work root).
 - Executor rejects shells outside the session list, then `DysonShell.Create` → `DysonWindowsShell` (Windows arg map: `pwsh`/`powershell.exe` `-NoProfile -NonInteractive -Command`, `cmd.exe` `/d /c`).
 - Abstraction: `DysonShellType`, abstract `DysonShell` (`ShellType` get + `ExecuteAsync`), `DysonShellRunResult`, `DysonShell.Create` / `AvailableForCurrentPlatform`.
-- **Plan soft warning:** in Plan mode, `ConfigureShellExecuteForMode(true)` appends a read-only-inspection warning to the tool description (prefer `dir` / `git status` / small reads; never run builds/installs/servers; prefer `ReadFile` / `Grep` / `ListDirectory`). The executor still runs the command but prepends the same WARNING to Ok/Error content. Non-Plan modes use the plain description. Self-check: `DysonShellExecutePlanWarningSelfCheck.Run()` (UI startup).
+- **Plan soft warning:** in Plan mode, `ConfigureShellExecuteForMode(true)` appends a read-only-inspection warning to the tool description (prefer `dir` / `git status` / small reads; never run builds/installs/servers; prefer `ReadFile` / `Grep` / `ListDirectory`). The executor still runs the command but prepends the same WARNING to Ok/Error content. Non-Plan modes use the plain description. Covered by `DysonShellExecutePlanWarningTests` in `Harness.Tests`.
 
 ### Long-running shells
 
@@ -139,7 +145,7 @@ Workdir-scoped background processes for E2E runs, large builds, and keeping deve
 | `LongRunningShellInteract` | Write stdin (+ newline if missing) |
 | `SubscribeToLongRunningShellCompletion` | Non-blocking subscribe → on terminal, `LongRunningShellExited` interrupt → host `ShellExited` auto-turn (always drained, including Plan); Instruction auto-reads tail then trims it after the turn |
 
-Same platform gate as `ShellExecute` (omitted when no shells). Plan soft-warns on `StartLongRunningShell` (description + result preamble). Self-check: `DysonLongRunningShellSelfCheck.Run()` (UI startup).
+Same platform gate as `ShellExecute` (omitted when no shells). Plan soft-warns on `StartLongRunningShell` (description + result preamble). Covered by `DysonLongRunningShellTests` in `Harness.Tests`.
 
 ### Browser control
 
@@ -173,7 +179,7 @@ Port of [agent-search-mcp](https://github.com/lennney/agent-search-mcp) as catal
 
 **Result summarization:** runs **inside** `DysonWorkspaceToolExecutor` via `DysonWebSearchSummarizer.SummarizeAsync` before MCP `Content` is returned. By default the parent session / UI never sees raw SERP dumps, Jina extracts, or HTML — not even transiently. **Exception:** `WebFetch` with `fullHtml: true` intentionally returns full HTML. Other web tools skip the LLM when already ≤ ~1500 tokens (`summarizePrompt` unused when skipped). Hard cap ≤ 10K tokens (`IDysonTokenCounter`); prompt text lives in `DysonWebSearchSummarizerPrompt` (editable constant; optional “Agent focus” from `summarizePrompt`). Optional dedicated model via `DysonAgentSessionConfig.SummarizerProvider` (null ⇒ session provider); UI: Settings → General → Web search summarizer.
 
-SSRF validation lives in `SearchHttp.ValidateUrl` (blocks localhost, private IPs, metadata hosts). `SearchSelfCheck.RunSsrfChecks()` is a no-framework self-check (SSRF + DDG HTML / Bing RSS parser fixtures + summarizer policy checks; also run on UI startup).
+SSRF validation lives in `SearchHttp.ValidateUrl` (blocks localhost, private IPs, metadata hosts). Covered by `SearchTests` in `Harness.Tests` (SSRF + DDG HTML / Bing RSS parser fixtures + summarizer policy).
 
 Out of scope for this MVP: news tools, CSDN/Juejin, Baidu/Sogou/Yandex scrapers, separate MCP process.
 
@@ -213,7 +219,15 @@ After the model calls `CompleteTask`:
 2. **Continue** — `ContinueWork` enqueues a **`Continuation`** turn if work remains
 3. **Report** — `ConfirmTaskComplete` enqueues a **`ReportSummary`** turn (final handoff); after that reply the host calls `TryMarkTerminal(Completed)` + persists
 
-Factories: `DysonTaskCompletionFlow` and session helpers `CreateCompletionConfirmTurn` / `CreateContinuationTurn` / `CreateReportSummaryTurn`. Self-check: `DysonTaskCompletionSelfCheck.Run()`.
+Factories: `DysonTaskCompletionFlow` and session helpers `CreateCompletionConfirmTurn` / `CreateContinuationTurn` / `CreateReportSummaryTurn`. Covered by `DysonTaskCompletionTests` in `Harness.Tests`.
+
+## Rethink tool usage
+
+When a non-Explore OpenAI-compatible turn exhausts its tool-round budget (**35**), the session soft-pauses (Success, harness H1 note) and enqueues **`RethinkToolUsage`** via `DysonRethinkToolUsageFlow.CreateTurn` — unless the exhausted turn was already rethink (no double-rethink). Pending turns drain through the same host queue as CompleteTask.
+
+On the rethink turn only: readonly tools when a peek is needed; optional `StartSubagent` Explore with mandatory `WaitForSubagent` this turn; **`ResumeCurrentTask`** (`rationale` and/or `continuationInstructions` required) enqueues a **`Normal`** turn (`CreateResumeTurn`) with a fresh budget. Text-only reply means stop. Available to root and subagents.
+
+**Explore** budget is **120**. Explore sessions never enqueue `RethinkToolUsage`; hitting the budget runs one final Completions/Responses call with tools cleared (`ExploreBudgetRecapInstruction`) so the model recaps findings and notes they may be incomplete. Covered by `DysonRethinkToolUsageTests` in `Harness.Tests`.
 
 ## Expand thought process
 

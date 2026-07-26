@@ -1,13 +1,15 @@
-namespace DysonHarness;
+using DysonHarness;
+
+namespace Harness.Tests;
 
 /// <summary>
 /// ponytail: assert-only CompleteTask → TaskCompletionConfirm → Confirm/Continue → ReportSummary/Continuation
-/// queue wiring (no test framework). Run: <c>DysonTaskCompletionSelfCheck.Run()</c>
-/// (also from UI <c>Program</c> startup).
+/// queue wiring (Xunit Fact). /// 
 /// </summary>
-public static class DysonTaskCompletionSelfCheck
+public class DysonTaskCompletionTests
 {
-    public static void Run()
+    [Fact]
+    public void Run()
     {
         AssertFactoriesAndTerminalGate();
         AssertCompleteTaskEnqueuesConfirm();

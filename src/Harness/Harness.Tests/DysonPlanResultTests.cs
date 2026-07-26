@@ -1,13 +1,15 @@
-namespace DysonHarness;
+using DysonHarness;
+
+namespace Harness.Tests;
 
 /// <summary>
 /// ponytail: assert-only PlanResult / BeginBuildPlan kinds + PlanRelativePath restore + SubmitPlan path shape
 /// + ApplyAgentMode generation bump + Plan-ready sticky visibility + Plan-mode report deferral.
-/// Run: <c>DysonPlanResultSelfCheck.Run()</c> (also from UI <c>Program</c> startup).
-/// </summary>
-public static class DysonPlanResultSelfCheck
+/// /// </summary>
+public class DysonPlanResultTests
 {
-    public static void Run()
+    [Fact]
+    public void Run()
     {
         AssertKindValue();
         AssertCreateTurnFields();

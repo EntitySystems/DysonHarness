@@ -1,12 +1,14 @@
-namespace DysonHarness;
+using DysonHarness;
+
+namespace Harness.Tests;
 
 /// <summary>
-/// ponytail: assert-only long-running shell id allocation + abort + list/subscribe/ShellExited (no test framework).
-/// Run: <c>DysonLongRunningShellSelfCheck.Run()</c> (also from UI <c>Program</c> startup).
-/// </summary>
-public static class DysonLongRunningShellSelfCheck
+/// ponytail: assert-only long-running shell id allocation + abort + list/subscribe/ShellExited (Xunit Fact).
+/// /// </summary>
+public class DysonLongRunningShellTests
 {
-    public static void Run()
+    [Fact]
+    public void Run()
     {
         AssertCatalogGate();
         AssertShellExitedPromptAndTrim();

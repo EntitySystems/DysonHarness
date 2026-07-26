@@ -35,6 +35,12 @@ public static class DysonAgentSystemPrompts
         - Calling CompleteTask does not end the session immediately; the harness schedules a confirmation turn.
         - On that turn, call ConfirmTaskComplete if the work is truly done, or ContinueWork if anything remains.
         - After ConfirmTaskComplete, the harness schedules a final ReportSummary turn; write a brief handoff summary for a parent agent (outcome, key files/changes, verification, residual risks). Prefer writing the summary in your reply; avoid further work tools unless essential.
+
+        Tool-round budget and rethink:
+        - Each turn has a tool-round budget (35 by default; Explore mode 120). Hitting it soft-pauses the turn.
+        - Non-Explore: schedules a RethinkToolUsage turn. On rethink, use readonly tools only when a peek is needed; if justified you may StartSubagent Explore and must WaitForSubagent until it finishes this turn before resume vs stop. Call ResumeCurrentTask if continuing is justified, or reply with text only if stuck (do not resume a doom loop).
+        - Explore sessions do not get rethink turns: hitting the budget yields one final no-tools recap reply (findings may be incomplete).
+        - WaitForSeconds (1–300) blocks until the wait finishes; use for short deliberate delays.
         """;
 
     public const string AskDirective = """

@@ -1,14 +1,16 @@
 using System.Text.Json.Nodes;
 
-namespace DysonHarness;
+using DysonHarness;
+
+namespace Harness.Tests;
 
 /// <summary>
 /// ponytail: assert Completions/Responses reasoning parse, BaseUrl normalize, turn preview handoff
-/// (no test framework). Run: <c>OpenAiReasoningSelfCheck.Run()</c> (also from UI <c>Program</c> startup).
-/// </summary>
-public static class OpenAiReasoningSelfCheck
+/// (Xunit Fact). /// </summary>
+public class OpenAiReasoningTests
 {
-    public static void Run()
+    [Fact]
+    public void Run()
     {
         AssertNormalizeBaseUrl();
         AssertCompletionsParseReasoning();

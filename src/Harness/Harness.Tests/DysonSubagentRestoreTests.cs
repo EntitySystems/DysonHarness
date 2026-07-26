@@ -1,14 +1,16 @@
 using System.Text.Json;
 
-namespace DysonHarness;
+using DysonHarness;
+
+namespace Harness.Tests;
 
 /// <summary>
 /// ponytail: assert-only self-check for restore registration / next-id bump and ListSubagents JSON shape.
-/// Run: <c>DysonSubagentRestoreSelfCheck.Run()</c> (also from UI <c>Program</c> startup).
-/// </summary>
-public static class DysonSubagentRestoreSelfCheck
+/// /// </summary>
+public class DysonSubagentRestoreTests
 {
-    public static void Run()
+    [Fact]
+    public void Run()
     {
         AssertRestoreRegistrationAndIdBump();
         AssertListSubagentsJsonShape();

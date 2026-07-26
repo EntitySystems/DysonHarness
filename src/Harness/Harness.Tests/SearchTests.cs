@@ -1,12 +1,25 @@
-namespace DysonHarness;
+using DysonHarness;
 
-/// <summary>
-/// Minimal self-check for SSRF URL validation + free-engine parsers (no test framework).
-/// Call from demo host or a one-shot console path when verifying search tooling.
-/// </summary>
-public static class SearchSelfCheck
+namespace Harness.Tests;
+
+/// <summary>SSRF URL validation + free-engine parsers + summarizer policy (Xunit).</summary>
+public class SearchTests
 {
-    public static VoidResult<string> RunSsrfChecks()
+    [Fact]
+    public void RunSsrfChecks()
+    {
+        var result = RunSsrfChecksCore();
+        Assert.False(result.IsError, result.Error);
+    }
+
+    [Fact]
+    public void RunSummarizerPolicyChecks()
+    {
+        var result = RunSummarizerPolicyChecksCore();
+        Assert.False(result.IsError, result.Error);
+    }
+
+    private static VoidResult<string> RunSsrfChecksCore()
     {
         string[] mustBlock =
         [
@@ -66,7 +79,7 @@ public static class SearchSelfCheck
             return new VoidResult<string>("Bing RSS parser self-check failed.");
         }
 
-        var summarizer = RunSummarizerPolicyChecks();
+        var summarizer = RunSummarizerPolicyChecksCore();
         if (summarizer.IsError)
             return summarizer;
 
@@ -74,7 +87,7 @@ public static class SearchSelfCheck
     }
 
     /// <summary>Policy checks for web-tool summarizer (no LLM call).</summary>
-    public static VoidResult<string> RunSummarizerPolicyChecks()
+    private static VoidResult<string> RunSummarizerPolicyChecksCore()
     {
         var tokens = new DysonTiktokenTokenCounter();
 

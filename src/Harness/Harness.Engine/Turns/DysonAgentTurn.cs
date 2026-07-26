@@ -15,6 +15,7 @@ public enum DysonAgentTurnKind
     BeginBuildPlan = 7,
     SubagentReportProcessing = 8,
     ShellExited = 9,
+    RethinkToolUsage = 10,
 }
 
 public sealed class DysonToolCallStatusChangedEventArgs : EventArgs

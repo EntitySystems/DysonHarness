@@ -1,12 +1,15 @@
-namespace DysonHarness;
+using DysonHarness;
+
+namespace Harness.Tests;
 
 /// <summary>
-/// ponytail: assert-only self-check for soft spawn gates (no test framework).
-/// Run: <c>DysonSubagentSpawnGateSelfCheck.Run()</c> from a scratch console if needed.
+/// ponytail: assert-only self-check for soft spawn gates (Xunit Fact).
+/// via <c>dotnet test</c>.
 /// </summary>
-public static class DysonSubagentSpawnGateSelfCheck
+public class DysonSubagentSpawnGateTests
 {
-    public static void Run()
+    [Fact]
+    public void Run()
     {
         AssertOk(DysonAgentSession.ValidateSubagentSpawn(DysonAgentModes.Work, DysonAgentModes.Explore));
         AssertOk(DysonAgentSession.ValidateSubagentSpawn(DysonAgentModes.Work, DysonAgentModes.Drone));

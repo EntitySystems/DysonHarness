@@ -1,14 +1,16 @@
-namespace DysonHarness;
+using DysonHarness;
+
+namespace Harness.Tests;
 
 /// <summary>
 /// ponytail: assert-only self-check for session todo TaskCode uniqueness, status enum round-trip,
 /// SubmitSubagentReport incomplete-todo gate, Failed-supersede, idempotent Completed retry,
-/// and first-failed stays Failed (no test framework).
-/// Run: <c>DysonSessionTodoSelfCheck.Run()</c> (also from UI <c>Program</c> startup).
-/// </summary>
-public static class DysonSessionTodoSelfCheck
+/// and first-failed stays Failed (Xunit Fact).
+/// /// </summary>
+public class DysonSessionTodoTests
 {
-    public static void Run()
+    [Fact]
+    public void Run()
     {
         AssertStatusRoundTrip();
         AssertTaskCodeUniqueness().GetAwaiter().GetResult();

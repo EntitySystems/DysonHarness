@@ -116,30 +116,6 @@ public sealed class DysonWindowsShell : DysonShell
         _ => throw new ArgumentOutOfRangeException(nameof(type), type, "Not a Windows shell type."),
     };
 
-    /// <summary>Small self-check that the Windows arg map stays as documented.</summary>
-    public static VoidResult<string> SelfCheckArgMap()
-    {
-        var pwsh = MapArgs(DysonShellType.Pwsh);
-        if (pwsh.FileName != "pwsh"
-            || pwsh.FixedArgs is not ["-NoProfile", "-NonInteractive", "-Command"])
-        {
-            return new VoidResult<string>("Pwsh arg map mismatch.");
-        }
-
-        var ps = MapArgs(DysonShellType.PowerShell);
-        if (ps.FileName != "powershell.exe"
-            || ps.FixedArgs is not ["-NoProfile", "-NonInteractive", "-Command"])
-        {
-            return new VoidResult<string>("PowerShell arg map mismatch.");
-        }
-
-        var cmd = MapArgs(DysonShellType.Cmd);
-        if (cmd.FileName != "cmd.exe" || cmd.FixedArgs is not ["/d", "/c"])
-            return new VoidResult<string>("Cmd arg map mismatch.");
-
-        return VoidResult<string>.Success;
-    }
-
     private static void TryKill(Process process)
     {
         try
