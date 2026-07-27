@@ -1,6 +1,6 @@
 # Qwen Coding Plan
 
-Research date: **2026-07-25**.
+Research date: **2026-07-27**.
 
 ## Product
 
@@ -91,9 +91,9 @@ Wire as `ProviderKind=OpenAICompatible` with Coding Plan intl (or China) `BaseUr
 
 | Upstream field | Dyson today |
 | -------------- | ----------- |
-| Top-level `reasoning_effort` | Sent when slug/session effort is non-empty — useful for GLM/DeepSeek on Completions; **not** the primary Qwen Completions contract |
+| Top-level `reasoning_effort` | Completions: sent when slug/session effort is non-empty — useful for GLM/DeepSeek; **not** the primary Qwen Completions contract |
 | `enable_thinking` / `thinking_budget` | **not wired yet** |
-| Responses nested `reasoning.effort` | **not wired yet** (Dyson sends top-level `reasoning_effort` only) |
+| Responses nested `reasoning.effort` | Wired when `OpenAiApiMode=Responses` (`OpenAiResponsesClient` → `reasoning: { effort }`) |
 | `preserve_thinking` | **not wired yet** |
 | Anthropic Messages dialect | **not wired yet** |
 

@@ -11,10 +11,10 @@ Conceptual overview: [README.md](README.md).
 | `DysonEngine` | Abstract; exposes `RootSession` |
 | `DysonAgentSession` | Abstract session: mode, prompt, MCP pipeline, subagents, interrupts, log, turns, optimizer hooks |
 | `DysonAgentProvider` | Abstract ephemeral model provider (no durable state) |
-| `OpenAiCompatibleAgentProvider` | OpenAI-compatible ephemeral provider (`BaseUrl`, `ApiKey`, `Slug`, `OpenAiApiMode`, optional `ReasoningEffort`, …) |
+| `OpenAiCompatibleAgentProvider` | OpenAI-compatible ephemeral provider (`BaseUrl`, `ApiKey`, `Slug`, `OpenAiApiMode`, optional `ManagedSource`, optional `ReasoningEffort`, …). Completions send top-level `reasoning_effort`; Responses send nested `reasoning.effort` |
 | `OpenAiCompatibleAgentSession` | Completions/Responses tool-loop session; `MaxToolRounds` 35 / Explore 120 (`ResolveMaxToolRounds`); soft-pause → `RethinkToolUsage` via `SoftPauseAfterToolLoopExhaustion` (non-Explore); Explore budget hit → no-tools recap |
-| `OpenAiCompletionsClient` / `OpenAiResponsesClient` | Streaming SSE adapters (`StreamCreateAsync` → `OpenAiStreamChunk`) |
-| `OpenAiCacheFriendlyTranscriptBuilder` | Stable-prefix transcript + `prompt_cache_key`; each history turn’s user content is prefixed with `[turnId={guid}]`; skips `IsExcludedFromContext` turns |
+| `OpenAiCompletionsClient` / `OpenAiResponsesClient` | Streaming SSE adapters (`StreamCreateAsync` → `OpenAiStreamChunk`); Responses body uses nested `reasoning.effort` + always `store: true` |
+| `OpenAiCacheFriendlyTranscriptBuilder` | Stable-prefix transcript + `prompt_cache_key`; each history turn’s user content is prefixed with `[turnId={guid}]`; skips `IsExcludedFromContext` turns. Responses: always `store: true`; `previous_response_id` omitted on first full rebuild, required on delta hops, passed on mid-loop full rebuilds when known. Explicit breakpoints via `SupportsExplicitPromptCache` (GPT-5.6+ and not managed) |
 | `DysonWorkspaceToolExecutor` | Workdir-scoped file tools + `RenameSession` + `GetDateTime` + `WaitForSeconds` (1–300) + `SubmitPlan` (Plan mode only → `.dyson/plans/` + PlanResult turn) + `ShellExecute` + **long-running shell tools** (`StartLongRunningShell` / `ListLongRunningShells` / `ReadLongRunningShellTail` / `AbortLongRunningShell` / `RequestLongRunningShellCancellation` / `LongRunningShellInteract` / `SubscribeToLongRunningShellCompletion`) + web search/fetch tools (tool-owned summarize) + **subagent tools** (`StartSubagent` / `ListSubagents` / `WaitForSubagent` / `InspectSubagentLog` / `StopSubagent` / `SubmitSubagentReport`) + **inter-agent / Ask** (`TriggerParentEvent` / `RespondToSubagentEvent` / `TriggerSubagentEvent` / `AskQuestion` / `AskQuestionFromParent`) + **task completion** (`CompleteTask` / `ConfirmTaskComplete` / `ContinueWork`) + **`ResumeCurrentTask`** (rethink phase) + **session todo tools** (`ListTodos` / `CreateTodo` / `UpdateTodo` / `DeleteTodo`) + **browser tools** (when `BrowserControl` set: `OpenBrowser`, `ListBrowserWindows`, `CloseBrowser`, `ResizeBrowser`, tab/nav/click/type/JS/screenshot/log helpers); stubs for the rest |
 | `DysonFileManager` | Work-root sandbox helper: `WriteNewPlan` / `ReadText` / `EnsurePlansDirectory` under `.dyson/plans/` |
 | `DysonShell` / `DysonWindowsShell` | Shell runners; path-based execute + basename fixed-arg heuristics; legacy `DysonShellType` map kept for tests |
@@ -25,6 +25,22 @@ Conceptual overview: [README.md](README.md).
 | `DysonOpenAiApiModes` | `Completions` / `Responses` constants |
 | `DysonAgentSessionConfig` | `CustomAgents`, `McpAccessMode`, `AvailableShells`, optional `BraveApiKey`, optional `SummarizerProvider`, optional `BrowserControl` (`IDysonBrowserControl`), optional `DisabledTools` / `ToolPolicy` (mode denylist; see MCP) |
 | `DysonAgentSessionEvent` | Abstract notify payload for `WaitForNotifyAsync` |
+
+### Managed / CLIProxy
+
+| Type | Notes |
+| ---- | ----- |
+| `DysonManagedSources` | Managed-source constants (`cliproxy-codex`, `cliproxy-grok`) |
+| `ManagedEndpointKind` | `OpenAiCompatible` / `AnthropicCompatible` (Anthropic reserved, not shipped) |
+| `ManagedInferenceProviderBase` | Shared Import / BeginConnection / CompleteConnection / VerifyConnection for CLIProxy-backed providers |
+| `ManagedCodexInferenceProvider` | ChatGPT Codex managed path (`ManagedSource=cliproxy-codex`, `codex-auth-url?is_webui=true`, OAuth port 1455 preflight) |
+| `ManagedGrokInferenceProvider` | Grok Build managed path (`ManagedSource=cliproxy-grok`, `xai-auth-url`) |
+| `ManagedInferenceProviderCatalog` | DI catalog of managed providers; `FindBySource` |
+| `ManagedConnectionBegin` / `Complete` / `Verify` | Connection-flow DTOs |
+| `DysonCliProxyHost` | Local CLIProxy process host (`IsInstalled`, `EnsureInstalledAsync`, `EnsureRunningAsync`, `LocalBaseUrl`) |
+| `DysonCliProxyDownloader` / `DysonCliProxyPaths` / `DysonCliProxyAssetResolver` | Download, unpack paths, asset URL resolution |
+| `DysonThirdPartyResources` | Pinned third-party release URLs (`CliProxyApi.ReleaseTagUrl` / `Version`) |
+| `OpenAiCompatibleHttp.SupportsExplicitPromptCache` | True for direct GPT-5.6+ slugs when `ManagedSource` is unset |
 
 ### Session members (high level)
 
@@ -158,8 +174,10 @@ Documented under [docs/storage](../storage/models.md), [sessions.md](../storage/
 
 - `DysonAppMode`, `DysonAppPaths`, `DysonBuildInfo`
 - `DysonDbContext`, `DysonModelStore`, `DysonSessionStore`, `DysonWorkDirectoryStore`, `DysonAppSettingsStore`
-- `DysonModelProviderEntity`, `DysonModelSlugEntity` (providers own `ApiKey` / `BaseUrl` / `ProviderKind`; slugs own `Slug` + `DisplayAlias` + optional `DefaultReasoningEffort` + `ReasoningModes`)
-- `DysonAppSettingEntity` / `DysonAppSettingKeys` (key/value prefs, e.g. web search summarizer slug)
+- `DysonModelProviderEntity` (providers own `ApiKey` / `BaseUrl` / `ProviderKind` / optional `ManagedSource` / `OpenAiApiMode`)
+- `DysonModelSlugEntity` (slugs own `Slug` + `DisplayAlias` + `IsEnabled` + optional `DefaultReasoningEffort` + `ReasoningModes`)
+- `DysonModelStore.UpsertManagedProviderAsync` / `SetSlugEnabledAsync` — managed import + per-slug enable (see [storage/models.md](../storage/models.md)#managed-providers-cliproxy)
+- `DysonAppSettingEntity` / `DysonAppSettingKeys` (key/value prefs, e.g. web search summarizer slug; `cliproxy_*` mirrors)
 - `DysonWorkDirectoryEntity`, `DysonNativeFolderPicker`, `DysonGitInfo`
 - Session/turn/log entities and `DysonPersistedSession` (sessions reference `ModelSlugId`, optional `ReasoningEffort`, + optional `WorkDirectoryId`; aggregate includes todos)
 - `DysonSessionTodoEntity` / `DysonSessionTodo` / `DysonSessionTodoStatus` / todo request DTOs on `DysonSessionStore`

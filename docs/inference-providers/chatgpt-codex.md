@@ -2,7 +2,7 @@
 
 OpenAI Codex via ChatGPT subscription (Plus/Pro/Business/Enterprise) or platform API key. Model catalogs and effort enums rotate quickly; prefer live `/models` over hardcoded lists.
 
-Research date: **2026-07-25**.
+Research date: **2026-07-27**.
 
 ## Product
 
@@ -101,7 +101,8 @@ Documented HTTP paths:
 | ChatGPT OAuth + `ChatGPT-Account-ID` (direct) | Prefer CLIProxy managed provider; direct harness OAuth **not wired** |
 | Base `https://chatgpt.com/backend-api/codex` | **not wired** as a first-party Dyson endpoint (CLIProxy mediates) |
 | Codex SDK / `codex exec` host | **not wired yet** |
-| `include: ["reasoning.encrypted_content"]` / `store: false` | Codex client defaults for multi-turn; **not wired yet** as Codex-specific request shaping |
+| `store: true` | Dyson always sends `store: true` on Responses so tool-loop `previous_response_id` chaining works |
+| `include: ["reasoning.encrypted_content"]` / `store: false` | Codex-CLI-style multi-turn defaults; **not wired** as Codex-specific request shaping (Dyson keeps `store: true`) |
 
 ## Gotchas
 

@@ -2,7 +2,7 @@
 
 Local (and optional cloud) model runner with an OpenAI-compatible `/v1` surface. Catalogs drift; treat pulled local tags as runtime truth.
 
-Research date: **2026-07-25**.
+Research date: **2026-07-27**.
 
 ## Product
 
@@ -57,8 +57,8 @@ Map as `ProviderKind=OpenAICompatible` with `BaseUrl=http://localhost:11434/v1`,
 | Dyson field | Ollama mapping |
 | ----------- | -------------- |
 | `Slug` | Full `[namespace/]model[:tag]` string already pulled locally |
-| `DefaultReasoningEffort` / `ReasoningModes` | Prefer `high` / `medium` / `low` / `max` / `none` — Dyson sends top-level `reasoning_effort` today |
-| Nested `reasoning.effort` | Upstream accepts it; **not wired yet** (Dyson only sends top-level) |
+| `DefaultReasoningEffort` / `ReasoningModes` | Prefer `high` / `medium` / `low` / `max` / `none` — Completions (default) send top-level `reasoning_effort` |
+| Nested `reasoning.effort` | Wired if `OpenAiApiMode=Responses` (not the usual Ollama path; `/v1/responses` is non-stateful) |
 | Native `think` | **not wired yet** |
 | `message.reasoning` parse / echo | **not wired yet** — stream parsers expecting OpenAI-only shapes will miss the trace |
 

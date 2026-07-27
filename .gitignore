@@ -6,6 +6,8 @@ obj/
 
 ## Visual Studio / VS Code
 .vs/
+**/.idea/
+**/.junie/
 *.user
 *.suo
 *.user

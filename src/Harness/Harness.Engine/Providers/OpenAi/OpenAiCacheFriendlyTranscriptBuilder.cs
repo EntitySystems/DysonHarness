@@ -104,13 +104,16 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     }
 
     /// <summary>
-    /// Full Responses rebuild (after compaction or new user turn). Prefer <c>store: false</c>.
+    /// Full Responses rebuild (after compaction, new user turn, or mid-loop fallback).
+    /// Always <c>store: true</c> so a later tool-loop hop can chain via <c>previous_response_id</c>.
+    /// Pass <paramref name="previousResponseId"/> when known so mid-loop full rebuilds keep chaining.
     /// </summary>
     public static BuiltResponsesRequest BuildResponsesFull(
         DysonAgentSession session,
         string? currentUserPrompt,
         IReadOnlyList<string>? currentFilePaths,
-        IReadOnlyList<InFlightToolRound>? inFlightRounds = null)
+        IReadOnlyList<InFlightToolRound>? inFlightRounds = null,
+        string? previousResponseId = null)
     {
         ArgumentNullException.ThrowIfNull(session);
 
@@ -149,8 +152,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             OpenAiCompatibleHttp.BuildResponsesToolsArray(session.McpPipeline),
             OpenAiCompatibleHttp.PromptCacheKey(session.PersistenceId, session.SystemPromptGeneration),
             includeBreakpoints,
-            PreviousResponseId: null,
-            Store: false);
+            PreviousResponseId: previousResponseId,
+            Store: true);
     }
 
     /// <summary>

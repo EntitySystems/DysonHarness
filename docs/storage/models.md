@@ -104,8 +104,8 @@ Settings → Models can **Import** ChatGPT Codex or Grok Build via a pinned loca
 | `DisplayAlias` | UI label (e.g. “GPT-4o Fast”) |
 | `IsDefault` | Global default selection for new sessions (one default across all providers) |
 | `IsEnabled` | When false, omitted from new selection catalogs (picker, Composer `/model`, system-prompt catalog, `FindSlugByNameAsync`); Settings → Models still lists it. Managed providers only expose Enable/Disable; manual/custom slugs stay always selectable (API rejects toggle). Default `true` (migration + new inserts). |
-| `DefaultReasoningEffort` | Optional freeform default for top-level API `reasoning_effort` (e.g. `high` / `low`); null/empty = omit |
-| `ReasoningModes` | Freeform `List<string>` of `reasoning_effort` values for the Composer dropdown; stored as JSON TEXT via `StringListJsonValueConverter` (normalize on write; empty list on bad JSON read); default `[]` |
+| `DefaultReasoningEffort` | Optional freeform default effort (e.g. `high` / `low`); null/empty = omit. Wire shape depends on API mode: Completions → top-level `reasoning_effort`; Responses → nested `reasoning.effort` |
+| `ReasoningModes` | Freeform `List<string>` of effort values for the Composer dropdown; stored as JSON TEXT via `StringListJsonValueConverter` (normalize on write; empty list on bad JSON read); default `[]` |
 | `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
 
 Unique index on `(ProviderId, Slug)`.
@@ -138,7 +138,7 @@ Per-slug **default** (`DefaultReasoningEffort`) plus a **session override** (`se
 3. Slug **`ReasoningModes`** registers freeform values for the Composer Effort dropdown (not a hard-coded enum; no requirement that slug default ∈ modes).
 4. Composer can override for the current session only (does not rewrite the slug default).
 5. Live `OpenAiCompatibleAgentProvider.ReasoningEffort` is built as session value when set (including empty = omit); if session value is null (legacy rows), fall back to slug default.
-6. When non-empty, Completions and Responses request bodies include top-level `"reasoning_effort": "<value>"`; blank/null omits the field.
+6. When non-empty, Completions request bodies include top-level `"reasoning_effort": "<value>"` and Responses include nested `"reasoning": { "effort": "<value>" }`; blank/null omits the field.
 7. `StartSubagent.reasoningEffort` (optional) sets the child’s effort; omit/null uses the chosen slug’s default (or keeps the parent’s current effort when inheriting the parent model).
 
 ## System-prompt catalog

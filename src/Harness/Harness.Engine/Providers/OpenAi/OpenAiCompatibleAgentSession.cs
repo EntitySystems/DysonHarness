@@ -549,9 +549,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 Result<OpenAiModelReply, string> replyResult;
                 if (useResponses)
                 {
-                    // Local-first: rebuild full input from compacted history + in-flight rounds
-                    // (store: false). Use previous_response_id only for same-PromptAsync deltas
-                    // when we already have a response id from this loop.
+                    // store: true on every Responses call so previous_response_id chaining works.
+                    // Prefer delta (outputs-only + id) within the tool loop; full rebuild still
+                    // passes previousResponseId when known (harnessFollowUp / compaction fallback).
                     OpenAiCacheFriendlyTranscriptBuilder.BuiltResponsesRequest built;
                     if (previousResponseId is not null && inFlight.Count > 0 && harnessFollowUp is null)
                     {
@@ -566,7 +566,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                             this,
                             currentUserPrompt: harnessFollowUp,
                             currentFilePaths: null,
-                            inFlightRounds: inFlight);
+                            inFlightRounds: inFlight,
+                            previousResponseId: previousResponseId);
                         if (round == 0 && filePaths.Count > 0)
                             AppendPathsToLastUser(built.Input, filePaths);
                     }
@@ -707,6 +708,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     turn,
                     inFlight,
                     useResponses,
+                    previousResponseId,
                     incompleteToolReason,
                     cancellationToken).ConfigureAwait(false);
 
@@ -730,6 +732,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         DysonAgentTurn turn,
         List<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound> inFlight,
         bool useResponses,
+        string? previousResponseId,
         string incompleteToolReason,
         CancellationToken cancellationToken)
     {
@@ -744,7 +747,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 this,
                 currentUserPrompt: DysonRethinkToolUsageFlow.ExploreBudgetRecapInstruction,
                 currentFilePaths: null,
-                inFlightRounds: inFlight);
+                inFlightRounds: inFlight,
+                previousResponseId: previousResponseId);
             built.Tools.Clear();
             replyResult = await ConsumeStreamAsync(
                 _responses.StreamCreateAsync(OpenAiProvider, built, cancellationToken),

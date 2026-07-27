@@ -2,7 +2,7 @@
 
 Anomaly (opencode) hosted model gateways: **Zen** (pay-as-you-go curated catalog) and **Go** (fixed-price subscription, open-weight models). Shared account and API key; different base URLs and model sets. Dialects are upstream-native, not a single OpenAI-compatible surface.
 
-Research date: **2026-07-25**.
+Research date: **2026-07-27**.
 
 ## Product
 
@@ -94,10 +94,11 @@ OpenAI-dialect Zen/Go Completions or Responses map as `ProviderKind=OpenAICompat
 | Dyson field | Zen / Go mapping |
 | ----------- | ---------------- |
 | `Slug` | Gateway model id (no `opencode/` prefix on the wire) |
-| `DefaultReasoningEffort` / `ReasoningModes` | Per-slug from models.dev / live behavior; Dyson sends top-level `reasoning_effort` today |
+| `DefaultReasoningEffort` / `ReasoningModes` | Per-slug from models.dev / live behavior; Completions → top-level `reasoning_effort`; Responses → nested `reasoning.effort` |
 | Anthropic `/messages` + `x-api-key` | **not wired yet** as OpenAICompatible (needs Anthropic dialect / header) |
 | Google `x-goog-api-key` / `thinkingConfig` | **not wired yet** |
-| Nested Responses `reasoning.effort` / Anthropic `thinking` | Upstream contracts; **not wired yet** beyond top-level `reasoning_effort` |
+| Nested Responses `reasoning.effort` | Wired when `OpenAiApiMode=Responses` |
+| Anthropic `thinking` | Upstream contract; **not wired yet** |
 | `reasoning_content` parse / echo | **not wired yet** for models that interleave it |
 | Free `public` key filter | **not wired yet** as a special-case catalog mode |
 
