@@ -902,7 +902,8 @@ public sealed class DysonMcpPipeline
         yield return new DysonMcpTool
         {
             Name = "BrowserTakeScreenshot",
-            Description = "Capture a PNG screenshot of the tab (base64 in the tool result).",
+            Description =
+                "Capture a screenshot of the tab (JPEG multimodal attachment + short JSON ack; no base64 in Content).",
             InputSchemaJson = """
                 {
                   "type": "object",

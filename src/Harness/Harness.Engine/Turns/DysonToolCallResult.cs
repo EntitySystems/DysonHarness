@@ -30,10 +30,26 @@ public sealed class DysonToolCallResult
     public string Content { get; init; } = "";
 
     /// <summary>
-    /// When set (LoadBinary), transcript builders emit a follow-up multimodal user/input part
-    /// with filename+extension metadata; not inlined into <see cref="Content"/>.
+    /// When set (LoadBinary / BrowserTakeScreenshot), transcript builders emit a follow-up
+    /// multimodal user/input part with filename+extension metadata; not inlined into
+    /// <see cref="Content"/>. Cleared after the turn finalizes (one-shot vision).
     /// </summary>
     public DysonBinaryAttachment? BinaryAttachment { get; init; }
+
+    /// <summary>Copy without <see cref="BinaryAttachment"/> (ack <see cref="Content"/> kept).</summary>
+    public DysonToolCallResult WithoutBinaryAttachment() =>
+        BinaryAttachment is null
+            ? this
+            : new DysonToolCallResult
+            {
+                CallId = CallId,
+                ToolName = ToolName,
+                Stage = Stage,
+                IsError = IsError,
+                Content = Content,
+                EndsCurrentTurn = EndsCurrentTurn,
+                CompletedAt = CompletedAt,
+            };
 
     /// <summary>
     /// When true (and not <see cref="IsError"/>), the tool loop soft-closes the calling turn

@@ -430,8 +430,27 @@ public sealed partial class DysonWorkspaceToolExecutor
         var result = await tab.Value.TakeScreenshotAsync(cancellationToken).ConfigureAwait(false);
         if (result.IsError)
             return Error(call, result.Error);
-        var b64 = Convert.ToBase64String(result.Value);
-        return Ok(call, JsonSerializer.Serialize(new { mimeType = "image/png", base64 = b64 }));
+
+        var compressed = DysonImageCompress.ToJpegMaxEdge(result.Value);
+        var windowId = GetOptionalString(root, "windowId");
+        var tabId = GetOptionalString(root, "tabId");
+        var attachment = new DysonBinaryAttachment
+        {
+            FileName = "screenshot.jpg",
+            Extension = ".jpg",
+            MimeType = compressed.MimeType,
+            Base64Data = Convert.ToBase64String(compressed.Bytes),
+        };
+        var ack = JsonSerializer.Serialize(new
+        {
+            mimeType = compressed.MimeType,
+            byteLength = compressed.Bytes.Length,
+            width = compressed.Width,
+            height = compressed.Height,
+            windowId,
+            tabId,
+        });
+        return Ok(call, ack, attachment);
     }
 
     private static async Task<DysonToolCallResult> BrowserReadConsoleLogAsync(

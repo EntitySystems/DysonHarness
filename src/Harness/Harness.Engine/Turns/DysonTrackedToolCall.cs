@@ -20,6 +20,15 @@ public sealed class DysonTrackedToolCall
         Result = result;
     }
 
+    /// <summary>Replaces a completed/failed result (e.g. strip BinaryAttachment after turn finalize).</summary>
+    internal void ReplaceResult(DysonToolCallResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (!IsTerminal(Status))
+            return;
+        Result = result;
+    }
+
     internal void SetWorking()
     {
         var previous = Status;

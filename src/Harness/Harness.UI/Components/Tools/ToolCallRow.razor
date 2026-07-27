@@ -38,6 +38,7 @@
                                   Stage="@Tracked.Call.Stage"
                                   ArgumentsJson="@Tracked.Call.ArgumentsJson"
                                   ResultContent="@(Tracked.Result?.Content)"
+                                  BinaryAttachment="@(Tracked.Result?.BinaryAttachment)"
                                   IsError="@(Tracked.Result?.IsError == true || Tracked.Status == DysonToolCallStatus.Failed)"
                                   ArgsOnly="false" />
         </div>

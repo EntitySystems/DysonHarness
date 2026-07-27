@@ -106,8 +106,79 @@ public static class DysonToolCallUi
             "FreeExtract" => TextSummary(Truncate(UrlHost(GetString(argumentsJson, "url")), SummaryMaxLength)),
             "WebFetch" => SummarizeWebFetch(argumentsJson),
             "FetchGithubReadme" => TextSummary(Truncate(GithubOwnerRepo(GetString(argumentsJson, "url")), SummaryMaxLength)),
+            "BrowserTakeScreenshot" => SummarizeScreenshot(resultContent, hasResult),
             _ => TextSummary(Truncate(CompactJson(argumentsJson), SummaryMaxLength)),
         };
+    }
+
+    public sealed class ScreenshotAckParsed
+    {
+        public string? MimeType { get; init; }
+        public int? ByteLength { get; init; }
+        public int? Width { get; init; }
+        public int? Height { get; init; }
+    }
+
+    public static ScreenshotAckParsed? TryParseScreenshotAck(string? resultContent)
+    {
+        if (!TryParseObject(resultContent, out var root))
+            return null;
+
+        int? byteLength = null;
+        if (root.TryGetProperty("byteLength", out var bl) && bl.ValueKind == JsonValueKind.Number
+            && bl.TryGetInt32(out var n))
+        {
+            byteLength = n;
+        }
+
+        int? width = null;
+        if (root.TryGetProperty("width", out var w) && w.ValueKind == JsonValueKind.Number
+            && w.TryGetInt32(out var wi))
+        {
+            width = wi;
+        }
+
+        int? height = null;
+        if (root.TryGetProperty("height", out var h) && h.ValueKind == JsonValueKind.Number
+            && h.TryGetInt32(out var hi))
+        {
+            height = hi;
+        }
+
+        return new ScreenshotAckParsed
+        {
+            MimeType = GetPropString(root, "mimeType"),
+            ByteLength = byteLength,
+            Width = width,
+            Height = height,
+        };
+    }
+
+    public static string FormatByteSize(int bytes)
+    {
+        if (bytes < 1024)
+            return $"{bytes} B";
+        var kb = bytes / 1024.0;
+        if (kb < 1024)
+            return $"{kb:0.#} KB";
+        return $"{kb / 1024.0:0.#} MB";
+    }
+
+    private static CollapsedSummary SummarizeScreenshot(string? resultContent, bool hasResult)
+    {
+        if (!hasResult)
+            return TextSummary("screenshot");
+
+        var parsed = TryParseScreenshotAck(resultContent);
+        if (parsed is null)
+            return TextSummary("screenshot");
+
+        var parts = new List<string> { "screenshot" };
+        if (parsed.Width is int w && parsed.Height is int h)
+            parts.Add($"{w}x{h}");
+        if (parsed.ByteLength is int bytes)
+            parts.Add(FormatByteSize(bytes));
+        return TextSummary(Truncate(string.Join(" · ", parts), SummaryMaxLength));
     }
 
     public static WriteFileParsed? TryParseWriteFile(string? argumentsJson)

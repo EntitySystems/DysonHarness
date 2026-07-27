@@ -246,6 +246,52 @@ public sealed class DysonAgentTurn
     }
 
     /// <summary>
+    /// Drops multimodal payloads after the model has seen them (ack <see cref="DysonToolCallResult.Content"/> kept).
+    /// </summary>
+    public void ClearBinaryAttachments()
+    {
+        var stripped = false;
+        var results = ResponseLog.ToArray();
+        foreach (var result in results)
+        {
+            if (result.BinaryAttachment is not null)
+            {
+                stripped = true;
+                break;
+            }
+        }
+
+        if (!stripped)
+        {
+            foreach (var tracked in _tracked)
+            {
+                if (tracked.Result?.BinaryAttachment is not null)
+                {
+                    stripped = true;
+                    break;
+                }
+            }
+        }
+
+        if (!stripped)
+            return;
+
+        while (ResponseLog.TryDequeue(out _))
+        {
+        }
+
+        foreach (var result in results)
+            ResponseLog.Enqueue(result.WithoutBinaryAttachment());
+
+        foreach (var tracked in _tracked)
+        {
+            if (tracked.Result?.BinaryAttachment is null)
+                continue;
+            tracked.ReplaceResult(tracked.Result.WithoutBinaryAttachment());
+        }
+    }
+
+    /// <summary>
     /// Marks Queued/Working tools (and any <see cref="ToolCalls"/> without a ResponseLog row)
     /// as Failed with <paramref name="reason"/>, enqueueing synthetic results so transcripts stay paired.
     /// </summary>
@@ -363,9 +409,13 @@ public sealed class DysonAgentTurn
     /// <summary>
     /// End streaming after <see cref="AssistantText"/> has been set.
     /// Clears preview and raises one change so UI can hand off to Markdig.
+    /// Also drops one-shot multimodal attachments once the turn has assistant output.
     /// </summary>
     public void FinishStreaming()
     {
+        if (!string.IsNullOrEmpty(AssistantText))
+            ClearBinaryAttachments();
+
         if (_streamingPreview.Length == 0 && !IsStreaming)
             return;
 

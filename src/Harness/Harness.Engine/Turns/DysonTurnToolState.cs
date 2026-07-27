@@ -42,6 +42,11 @@ public static class DysonTurnToolStateSerializer
     {
         ArgumentNullException.ThrowIfNull(turn);
 
+        // Completed turns: drop BinaryAttachment so SQLite stays small (ack JSON remains).
+        var stripAttachments = !string.IsNullOrEmpty(turn.AssistantText);
+        if (stripAttachments)
+            turn.ClearBinaryAttachments();
+
         var state = new DysonTurnToolState
         {
             ToolCalls = [.. turn.ToolCalls],
@@ -51,10 +56,18 @@ public static class DysonTurnToolStateSerializer
                 {
                     CallId = t.Call.CallId,
                     Status = t.Status,
-                    Result = t.Result,
+                    Result = t.Result is null
+                        ? null
+                        : stripAttachments
+                            ? t.Result.WithoutBinaryAttachment()
+                            : t.Result,
                 }),
             ],
-            ResponseLog = [.. turn.ResponseLog],
+            ResponseLog =
+            [
+                .. turn.ResponseLog.Select(r =>
+                    stripAttachments ? r.WithoutBinaryAttachment() : r),
+            ],
         };
 
         return Serialize(state);

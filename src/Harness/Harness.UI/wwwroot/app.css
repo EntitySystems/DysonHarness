@@ -2999,6 +2999,19 @@ code, .mono {
   max-height: 16rem;
 }
 
+.tool-screenshot-thumb {
+  display: block;
+  max-width: min(100%, 320px);
+  max-height: 180px;
+  width: auto;
+  height: auto;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  object-fit: contain;
+  background: var(--bg-2);
+}
+
 .tool-scroll--danger,
 .tool-result--danger {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));

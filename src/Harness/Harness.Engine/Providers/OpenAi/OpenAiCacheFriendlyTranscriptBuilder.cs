@@ -76,8 +76,14 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
         if (inFlightRounds is not null)
         {
-            foreach (var round in inFlightRounds)
-                AppendToolRoundCompletions(messages, round);
+            for (var i = 0; i < inFlightRounds.Count; i++)
+            {
+                // One-shot vision: only the unanswered (last) round keeps BinaryAttachment parts.
+                AppendToolRoundCompletions(
+                    messages,
+                    inFlightRounds[i],
+                    includeBinaryAttachments: i == inFlightRounds.Count - 1);
+            }
         }
 
         // After in-flight rounds so harness follow-ups (e.g. SubmitSubagentReport nudge) land last.
@@ -118,8 +124,13 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
         if (inFlightRounds is not null)
         {
-            foreach (var round in inFlightRounds)
-                AppendToolRoundResponses(input, round);
+            for (var i = 0; i < inFlightRounds.Count; i++)
+            {
+                AppendToolRoundResponses(
+                    input,
+                    inFlightRounds[i],
+                    includeBinaryAttachments: i == inFlightRounds.Count - 1);
+            }
         }
 
         // After in-flight rounds so harness follow-ups (e.g. SubmitSubagentReport nudge) land last.
@@ -279,7 +290,12 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                     ["tool_calls"] = toolCalls,
                 });
 
-                AppendPairedToolResultsCompletions(messages, turn.ToolCalls, turn.ResponseLog);
+                // History turns already have assistant output — ack only, no multimodal re-emit.
+                AppendPairedToolResultsCompletions(
+                    messages,
+                    turn.ToolCalls,
+                    turn.ResponseLog,
+                    includeBinaryAttachments: false);
             }
 
             if (!string.IsNullOrEmpty(turn.AssistantText))
@@ -341,7 +357,11 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                     });
                 }
 
-                AppendPairedToolResultsResponses(input, turn.ToolCalls, turn.ResponseLog);
+                AppendPairedToolResultsResponses(
+                    input,
+                    turn.ToolCalls,
+                    turn.ResponseLog,
+                    includeBinaryAttachments: false);
             }
 
             if (!string.IsNullOrEmpty(turn.AssistantText))
@@ -355,7 +375,10 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         }
     }
 
-    private static void AppendToolRoundCompletions(JsonArray messages, InFlightToolRound round)
+    private static void AppendToolRoundCompletions(
+        JsonArray messages,
+        InFlightToolRound round,
+        bool includeBinaryAttachments)
     {
         var toolCalls = new JsonArray();
         foreach (var call in round.Calls)
@@ -379,10 +402,17 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             ["tool_calls"] = toolCalls,
         });
 
-        AppendPairedToolResultsCompletions(messages, round.Calls, round.Results);
+        AppendPairedToolResultsCompletions(
+            messages,
+            round.Calls,
+            round.Results,
+            includeBinaryAttachments);
     }
 
-    private static void AppendToolRoundResponses(JsonArray input, InFlightToolRound round)
+    private static void AppendToolRoundResponses(
+        JsonArray input,
+        InFlightToolRound round,
+        bool includeBinaryAttachments)
     {
         foreach (var call in round.Calls)
         {
@@ -395,13 +425,18 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             });
         }
 
-        AppendPairedToolResultsResponses(input, round.Calls, round.Results);
+        AppendPairedToolResultsResponses(
+            input,
+            round.Calls,
+            round.Results,
+            includeBinaryAttachments);
     }
 
     private static void AppendPairedToolResultsCompletions(
         JsonArray messages,
         IReadOnlyList<DysonToolCall> calls,
-        IEnumerable<DysonToolCallResult> results)
+        IEnumerable<DysonToolCallResult> results,
+        bool includeBinaryAttachments)
     {
         var byCallId = IndexResultsByCallId(results);
         foreach (var call in calls)
@@ -414,15 +449,19 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 ["content"] = FormatToolResultContent(result),
             });
 
-            if (result is { IsError: false, BinaryAttachment: { } attachment })
+            if (includeBinaryAttachments
+                && result is { IsError: false, BinaryAttachment: { } attachment })
+            {
                 AppendCompletionsBinaryAttachment(messages, attachment);
+            }
         }
     }
 
     private static void AppendPairedToolResultsResponses(
         JsonArray input,
         IReadOnlyList<DysonToolCall> calls,
-        IEnumerable<DysonToolCallResult> results)
+        IEnumerable<DysonToolCallResult> results,
+        bool includeBinaryAttachments)
     {
         var byCallId = IndexResultsByCallId(results);
         foreach (var call in calls)
@@ -435,8 +474,11 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 ["output"] = FormatToolResultContent(result),
             });
 
-            if (result is { IsError: false, BinaryAttachment: { } attachment })
+            if (includeBinaryAttachments
+                && result is { IsError: false, BinaryAttachment: { } attachment })
+            {
                 AppendResponsesBinaryAttachment(input, attachment);
+            }
         }
     }
 
