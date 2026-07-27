@@ -125,7 +125,7 @@
                 {
                     _activeWorkDirectoryId = id;
                     await WorkDirs.TouchOpenedAsync(id);
-                    RefreshGitBranch(get.Value.AbsolutePath);
+                    await RefreshGitBranchAsync(get.Value.AbsolutePath);
                     await RefreshSessionsAsync();
                     StateHasChanged();
                     return;
@@ -147,7 +147,7 @@
         }
         else
         {
-            RefreshGitBranch(null);
+            await RefreshGitBranchAsync(null);
             await RefreshSessionsAsync();
         }
 
@@ -229,7 +229,7 @@
         else
         {
             _activeWorkDirectoryId = null;
-            RefreshGitBranch(null);
+            await RefreshGitBranchAsync(null);
             await PersistWorkDirectoryAsync(null);
             await RefreshSessionsAsync();
         }
@@ -245,12 +245,12 @@
     private async Task SetActiveWorkDirectoryAsync(Guid id, string absolutePath)
     {
         _activeWorkDirectoryId = id;
-        RefreshGitBranch(absolutePath);
+        await RefreshGitBranchAsync(absolutePath);
         await PersistWorkDirectoryAsync(id);
         await RefreshSessionsAsync();
     }
 
-    private void RefreshGitBranch(string? absolutePath)
+    private async Task RefreshGitBranchAsync(string? absolutePath)
     {
         if (string.IsNullOrWhiteSpace(absolutePath))
         {
@@ -258,7 +258,9 @@
             return;
         }
 
-        var fs = DysonWorkspaceFileSystems.CreateLocalAsync(absolutePath).GetAwaiter().GetResult();
+        var fs = await DysonWorkspaceFileSystems
+            .CreateLocalAsync(absolutePath)
+            .ConfigureAwait(false);
         var branch = fs.IsError
             ? DysonGitInfo.TryGetBranch(absolutePath)
             : DysonGitInfo.TryGetBranch(fs.Value);
