@@ -1760,8 +1760,15 @@ code, .mono {
   min-width: 0;
 }
 
-.turn-block__reasoning {
+.turn-block__thinking-history {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   margin: 6px 10px 0;
+}
+
+.turn-block__reasoning {
+  margin: 0;
   padding: 0 0 0 10px;
   border-left: 2px solid var(--border);
   color: var(--text-muted);
@@ -1792,6 +1799,15 @@ code, .mono {
   padding: 4px 0 8px;
   font-size: 13px;
   color: var(--text-muted);
+}
+
+.turn-block__interim {
+  margin: 0;
+  padding: 4px 0 8px 10px;
+  border-left: 2px solid transparent;
+  font-size: 13px;
+  color: var(--text-muted);
+  opacity: 0.75;
 }
 
 .turn-block__tools {

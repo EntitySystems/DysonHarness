@@ -34,6 +34,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(turn);
 
+        // Soft-pause has no new model reply — don't invent segments; clear any leftover preview.
         turn.ClearStreamingPreview();
         turn.ClearReasoningPreview();
         turn.FinalizeIncompleteTools(OpenAiCacheFriendlyTranscriptBuilder.IncompleteToolResultContent);
@@ -83,6 +84,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     {
         ArgumentNullException.ThrowIfNull(turn);
 
+        // Tool-loop caller commits Thought for this round before SoftClose; leftover preview only.
+        CommitReasoningRound(turn, reply: null, roundIndex: 0, isFinalAssistant: true);
         turn.ClearStreamingPreview();
         turn.ClearReasoningPreview();
 
@@ -601,6 +604,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
                 if (replyResult.IsError)
                 {
+                    CommitReasoningRound(turn, reply: null, round, isFinalAssistant: true);
                     turn.ClearStreamingPreview();
                     turn.ClearReasoningPreview();
                     turn.FinalizeIncompleteTools(incompleteToolReason);
@@ -616,6 +620,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
                 if (reply.ToolCalls.Count > 0)
                 {
+                    // Thought now; InterimText only if this round continues (not EndsCurrentTurn).
+                    CommitReasoningRound(turn, reply, round, isFinalAssistant: true);
                     turn.ClearStreamingPreview();
                     turn.ClearReasoningPreview();
 
@@ -670,6 +676,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                         return SoftCloseAfterEndsCurrentTurn(turn, ending.ToolName, reply.Content);
                     }
 
+                    // Continuing tool loop — interim assistant words (not final reply).
+                    CommitInterimText(turn, reply.Content, round);
                     continue;
                 }
 
@@ -682,6 +690,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     if (!childReportNudged)
                     {
                         // Keep AssistantText unset so history stays incomplete and tools remain inFlight-only.
+                        CommitReasoningRound(turn, reply, round, isFinalAssistant: true);
                         turn.ClearStreamingPreview();
                         turn.ClearReasoningPreview();
                         previousResponseId = null;
@@ -692,6 +701,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                         continue;
                     }
 
+                    CommitReasoningRound(turn, reply, round, isFinalAssistant: true);
                     turn.ClearStreamingPreview();
                     turn.ClearReasoningPreview();
                     turn.FinalizeIncompleteTools(incompleteToolReason);
@@ -700,8 +710,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 }
 
                 // Title parse only at finalize — preview stays raw (incl. mid-stream H1) until then.
+                CommitReasoningRound(turn, reply, round, isFinalAssistant: true);
                 ApplyAssistantText(turn, text);
-                ApplyReasoningText(turn, reply);
                 turn.FinishStreaming();
                 turn.FinishReasoningStreaming();
                 AppendLog($"turn complete: {turn.AgentTitle ?? turn.Id.ToString("N")[..8]}");
@@ -722,6 +732,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            CommitReasoningRound(turn, reply: null, roundIndex: inFlight.Count, isFinalAssistant: true);
             turn.ClearStreamingPreview();
             turn.ClearReasoningPreview();
             turn.FinalizeIncompleteTools(incompleteToolReason);
@@ -777,6 +788,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         if (replyResult.IsError)
         {
+            CommitReasoningRound(turn, reply: null, roundIndex: 0, isFinalAssistant: true);
             turn.ClearStreamingPreview();
             turn.ClearReasoningPreview();
             ApplyAssistantText(turn, DysonRethinkToolUsageFlow.ExploreBudgetExhaustedFallback);
@@ -795,8 +807,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             ? DysonRethinkToolUsageFlow.ExploreBudgetExhaustedFallback
             : reply.Content;
 
+        CommitReasoningRound(turn, reply, roundIndex: 0, isFinalAssistant: true);
         ApplyAssistantText(turn, text);
-        ApplyReasoningText(turn, reply);
         turn.FinishStreaming();
         turn.FinishReasoningStreaming();
         AppendLog($"explore budget recap complete: {turn.AgentTitle ?? turn.Id.ToString("N")[..8]}");
@@ -898,14 +910,39 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         }
     }
 
-    private static void ApplyReasoningText(DysonAgentTurn turn, OpenAiModelReply reply)
+    /// <summary>
+    /// Commits Thought (and optional InterimText) for a tool-loop round from reply / streaming preview.
+    /// When <paramref name="isFinalAssistant"/> is true, skips InterimText (final body is AssistantText).
+    /// </summary>
+    internal static void CommitReasoningRound(
+        DysonAgentTurn turn,
+        OpenAiModelReply? reply,
+        int roundIndex,
+        bool isFinalAssistant)
     {
-        var reasoning = reply.ReasoningContent;
-        if (string.IsNullOrWhiteSpace(reasoning))
-            reasoning = turn.ReasoningStreamingPreview;
+        ArgumentNullException.ThrowIfNull(turn);
 
-        if (!string.IsNullOrWhiteSpace(reasoning))
-            turn.ReasoningText = reasoning;
+        var thought = reply?.ReasoningContent;
+        if (string.IsNullOrWhiteSpace(thought))
+            thought = turn.ReasoningStreamingPreview;
+
+        var interim = isFinalAssistant ? null : reply?.Content;
+        turn.AppendReasoningRound(
+            roundIndex,
+            thoughtText: thought,
+            interimText: interim,
+            includeInterimText: !isFinalAssistant);
+    }
+
+    /// <summary>Appends InterimText only (after tools when the round continues).</summary>
+    internal static void CommitInterimText(DysonAgentTurn turn, string? content, int roundIndex)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+        turn.AppendReasoningRound(
+            roundIndex,
+            thoughtText: null,
+            interimText: content,
+            includeInterimText: true);
     }
 
     private static string Truncate(string value, int max)

@@ -1391,13 +1391,14 @@ public abstract class DysonAgentSession
                 AgentTitle = row.AgentTitle,
                 PlanRelativePath = row.PlanRelativePath,
                 AssistantText = row.AssistantText,
-                ReasoningText = row.ReasoningText,
                 ToolHistoryOptimized = row.ToolHistoryOptimized,
                 CompactToolHistory = row.CompactToolHistory,
                 IsExcludedFromContext = row.IsExcludedFromContext,
                 StartedUtc = row.CreatedUtc,
                 CompletedUtc = row.CompletedUtc,
             };
+            turn.RestoreReasoningLog(
+                DysonReasoningLogSerializer.DeserializeOrSynthesize(row.ReasoningLogJson, row.ReasoningText));
             DysonTurnToolStateSerializer.ApplyToTurn(turn, row.ToolStateJson);
             turn.FinalizeIncompleteTools(
                 "Tool call did not complete (cancelled or interrupted).");

@@ -75,7 +75,9 @@ Conceptual overview: [README.md](README.md).
 
 | Type | Notes |
 | ---- | ----- |
-| `DysonAgentTurn` | Turn kind, instruction, agent title, optional `PlanRelativePath` (PlanResult / BeginBuildPlan), `AssistantText`, `ReasoningText` (optional model thinking; UI + persist only, not in model transcript), `StartedUtc` / `CompletedUtc` (UI chrome + persistence; not in model transcript), `IsExcludedFromContext` (omit from provider transcripts; UI Dropped + Restore), live `StreamingPreview`/`IsStreaming` + `ReasoningStreamingPreview`/`IsReasoningStreaming`/`AssistantTextChanged`, tool calls, tracked status, response log, compact history |
+| `DysonAgentTurn` | Turn kind, instruction, agent title, optional `PlanRelativePath` (PlanResult / BeginBuildPlan), `AssistantText`, `ReasoningLog` / `ReasoningText` (ordered Thought+InterimText log + denormalized Thought join; UI + persist only, not in model transcript), `StartedUtc` / `CompletedUtc` (UI chrome + persistence; not in model transcript), `IsExcludedFromContext` (omit from provider transcripts; UI Dropped + Restore), live `StreamingPreview`/`IsStreaming` + `ReasoningStreamingPreview`/`IsReasoningStreaming`/`AssistantTextChanged`, tool calls, tracked status, response log, compact history |
+| `DysonReasoningSegment` / `DysonReasoningSegmentKind` | Ordered log entry (`Thought` / `InterimText`) with `RoundIndex`; serialized as turn `ReasoningLogJson` |
+| `DysonReasoningHistoryUi` | `ShouldExpandThought` — latest Thought open until `AssistantText` (or while reasoning streams); priors collapsed |
 | `DysonAgentTurnKind` | `Normal`, `ExpandThoughtProcess`, `TaskCompletionConfirm`, `Continuation`, `ReportSummary`, `InitializeSession`, `PlanResult`, `BeginBuildPlan`, `SubagentReportProcessing`, `ShellExited`, `RethinkToolUsage` (=10) |
 | `DysonAgentTurnKindDisplay` | `GetDisplayName` → UI labels (e.g. TaskCompletionConfirm → "Completion confirmed", RethinkToolUsage → "Rethink tool usage") |
 | `DysonPlanResultFlow` | Factory + Instruction continuity mandate after `SubmitPlan`; legacy `BuildPlanMarker` / `BuildPlanUserPrompt` for sticky dismissal of old sessions; `AppendPlanResultTurn` on session |

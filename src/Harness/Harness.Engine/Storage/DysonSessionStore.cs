@@ -320,6 +320,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 existing.Instruction = turn.Instruction;
                 existing.AssistantText = turn.AssistantText;
                 existing.ReasoningText = turn.ReasoningText;
+                existing.ReasoningLogJson = turn.ReasoningLogJson;
                 existing.ToolStateJson = turn.ToolStateJson;
                 existing.ToolHistoryOptimized = turn.ToolHistoryOptimized;
                 existing.CompactToolHistory = turn.CompactToolHistory;

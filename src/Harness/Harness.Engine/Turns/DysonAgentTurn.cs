@@ -52,9 +52,17 @@ public sealed class DysonAgentTurn
     public string? AssistantText { get; set; }
 
     /// <summary>
-    /// Model reasoning / thinking text for this turn (UI + persistence only; not sent back in transcripts).
+    /// Denormalized join of Thought segments only (UI + persistence / search; not sent back in transcripts).
+    /// Prefer <see cref="ReasoningLog"/> for ordered history including InterimText.
     /// </summary>
     public string? ReasoningText { get; set; }
+
+    private readonly List<DysonReasoningSegment> _reasoningLog = [];
+
+    /// <summary>
+    /// Ordered thought + interim-text segments for this turn (UI + DB only; omitted from transcripts).
+    /// </summary>
+    public IReadOnlyList<DysonReasoningSegment> ReasoningLog => _reasoningLog;
 
     /// <summary>UTC when this turn began (live create or restored from persistence).</summary>
     public DateTime StartedUtc { get; set; }
@@ -257,6 +265,54 @@ public sealed class DysonAgentTurn
 
         foreach (var result in results)
             ResponseLog.Enqueue(result);
+    }
+
+    /// <summary>Replaces <see cref="ReasoningLog"/> from a persisted / synthesized snapshot.</summary>
+    public void RestoreReasoningLog(IEnumerable<DysonReasoningSegment> segments)
+    {
+        ArgumentNullException.ThrowIfNull(segments);
+
+        _reasoningLog.Clear();
+        _reasoningLog.AddRange(segments);
+        ReasoningText = DysonReasoningLogSerializer.JoinThoughtTexts(_reasoningLog);
+    }
+
+    /// <summary>
+    /// Appends Thought (and optional InterimText) for a tool-loop round, refreshes denormalized
+    /// <see cref="ReasoningText"/>, and raises <see cref="AssistantTextChanged"/>.
+    /// Does not invent empty segments.
+    /// </summary>
+    public void AppendReasoningRound(
+        int roundIndex,
+        string? thoughtText,
+        string? interimText,
+        bool includeInterimText)
+    {
+        var added = false;
+
+        if (!string.IsNullOrWhiteSpace(thoughtText))
+        {
+            _reasoningLog.Add(new DysonReasoningSegment(
+                DysonReasoningSegmentKind.Thought,
+                thoughtText.Trim(),
+                roundIndex));
+            added = true;
+        }
+
+        if (includeInterimText && !string.IsNullOrWhiteSpace(interimText))
+        {
+            _reasoningLog.Add(new DysonReasoningSegment(
+                DysonReasoningSegmentKind.InterimText,
+                interimText.Trim(),
+                roundIndex));
+            added = true;
+        }
+
+        if (!added)
+            return;
+
+        ReasoningText = DysonReasoningLogSerializer.JoinThoughtTexts(_reasoningLog);
+        NotifyAssistantTextChanged();
     }
 
     /// <summary>

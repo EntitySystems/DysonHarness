@@ -35,7 +35,8 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `PlanRelativePath` | Workspace-relative plan path for `PlanResult` / `BeginBuildPlan` (e.g. `.dyson/plans/…`); null otherwise |
 | `Instruction` | Harness-injected instruction |
 | `AssistantText` | Agent body after title |
-| `ReasoningText` | Optional model reasoning / thinking (UI + reload; not replayed into transcripts) |
+| `ReasoningText` | Denormalized join of Thought segments only (UI / reload / search; not replayed into transcripts) |
+| `ReasoningLogJson` | Ordered Thought + InterimText JSON for thinking history (UI + DB only; omitted from transcripts). Empty/null with legacy `ReasoningText` → restore synthesizes one Thought |
 | `ToolStateJson` | Full snapshot of tool calls + results (restore fidelity) |
 | `ToolHistoryOptimized` | bool |
 | `CompactToolHistory` | string? |

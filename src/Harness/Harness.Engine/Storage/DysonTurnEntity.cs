@@ -11,8 +11,14 @@ public sealed class DysonTurnEntity
     public string? PlanRelativePath { get; set; }
     public string? Instruction { get; set; }
     public string? AssistantText { get; set; }
-    /// <summary>Model reasoning / thinking text (UI only; not replayed into transcripts).</summary>
+    /// <summary>
+    /// Denormalized join of Thought segments only (UI / reload / search; not replayed into transcripts).
+    /// </summary>
     public string? ReasoningText { get; set; }
+    /// <summary>
+    /// Ordered Thought + InterimText JSON for thinking history (UI + DB only; omitted from transcripts).
+    /// </summary>
+    public string? ReasoningLogJson { get; set; }
     public string ToolStateJson { get; set; } = "{}";
     public bool ToolHistoryOptimized { get; set; }
     public string? CompactToolHistory { get; set; }
