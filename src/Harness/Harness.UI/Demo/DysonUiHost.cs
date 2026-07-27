@@ -294,6 +294,18 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         var path = relativePath.Trim().Replace('\\', '/');
+        string? absolutePath = null;
+        try
+        {
+            absolutePath = Path.GetFullPath(Path.Combine(
+                resolvedRoot,
+                path.Replace('/', Path.DirectorySeparatorChar)));
+        }
+        catch
+        {
+            absolutePath = null;
+        }
+
         var fm = new DysonFileManager(resolvedRoot);
         var read = fm.ReadText(path);
         var title = Path.GetFileName(path) ?? path;
@@ -307,6 +319,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 Title = title,
                 Content = "",
                 IsMarkdown = isMd,
+                AbsolutePath = absolutePath,
                 Error = read.Error,
             }
             : new DysonFileViewerState
@@ -315,8 +328,65 @@ public sealed class DysonUiHost : IAsyncDisposable
                 Title = title,
                 Content = read.Value,
                 IsMarkdown = isMd,
+                AbsolutePath = absolutePath,
             };
         Notify();
+    }
+
+    /// <summary>Opens an absolute file path with the OS default application.</summary>
+    public VoidResult<string> OpenFileInDefaultEditor(string absolutePath)
+    {
+        if (string.IsNullOrWhiteSpace(absolutePath))
+            return VoidResult<string>.AsError("Path is empty.");
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(absolutePath.Trim());
+        }
+        catch (Exception ex)
+        {
+            return VoidResult<string>.AsError($"Invalid path: {ex.Message}");
+        }
+
+        if (!File.Exists(fullPath))
+            return VoidResult<string>.AsError("File does not exist.");
+
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = fullPath,
+                    UseShellExecute = true,
+                });
+            }
+            else if (OperatingSystem.IsMacOS())
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "open",
+                    ArgumentList = { fullPath },
+                    UseShellExecute = false,
+                });
+            }
+            else
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "xdg-open",
+                    ArgumentList = { fullPath },
+                    UseShellExecute = false,
+                });
+            }
+
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex)
+        {
+            return VoidResult<string>.AsError($"Failed to open file: {ex.Message}");
+        }
     }
 
     public void CloseFileViewer()

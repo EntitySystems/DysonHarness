@@ -1,5 +1,8 @@
 @namespace Harness.UI.Components.Shell
 @using Harness.UI.Components.Files
+@using Harness.UI.Files
+@inject DysonFileTreeService FileTree
+@inject DysonGitChangesService GitChanges
 
 <div class="tool-panel rail-tabs">
     <div class="rail-tabs__tabs" role="tablist" aria-label="Rail panels">
@@ -25,10 +28,14 @@
             Usage
         </button>
     </div>
-    <div class="rail-tabs__body@(_activeTab == RailTab.Files ? " rail-tabs__body--files" : null)" role="tabpanel">
+    <div class="rail-tabs__body@BodyModifierClass" role="tabpanel">
         @if (_activeTab == RailTab.Files)
         {
             <FileTreePanel ActiveWorkDirectoryId="ActiveWorkDirectoryId" />
+        }
+        else if (_activeTab == RailTab.Git)
+        {
+            <GitChangesPanel ActiveWorkDirectoryId="ActiveWorkDirectoryId" />
         }
         else
         {
@@ -46,8 +53,27 @@
     }
 
     private RailTab _activeTab = RailTab.Files;
+    private Guid? _boundWorkDirectoryId;
 
     [Parameter] public Guid? ActiveWorkDirectoryId { get; set; }
+
+    private string? BodyModifierClass => _activeTab switch
+    {
+        RailTab.Files => " rail-tabs__body--files",
+        RailTab.Git => " rail-tabs__body--git",
+        _ => null,
+    };
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_boundWorkDirectoryId == ActiveWorkDirectoryId)
+            return;
+
+        _boundWorkDirectoryId = ActiveWorkDirectoryId;
+        // Always keep the workdir watcher + git status alive regardless of active tab.
+        await FileTree.SetActiveAsync(ActiveWorkDirectoryId);
+        await GitChanges.SetActiveAsync(ActiveWorkDirectoryId);
+    }
 
     private void Select(RailTab tab) => _activeTab = tab;
 }

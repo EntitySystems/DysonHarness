@@ -7,5 +7,6 @@ public sealed class DysonFileViewerState
     public required string Title { get; init; }
     public required string Content { get; init; }
     public required bool IsMarkdown { get; init; }
+    public string? AbsolutePath { get; init; }
     public string? Error { get; init; }
 }

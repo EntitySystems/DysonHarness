@@ -37,6 +37,7 @@ builder.Services.AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>();
 builder.Services.AddScoped<DysonUiHost>();
 builder.Services.AddScoped<ThemeService>();
 builder.Services.AddSingleton<DysonFileTreeService>();
+builder.Services.AddSingleton<DysonGitChangesService>();
 
 var app = builder.Build();
 

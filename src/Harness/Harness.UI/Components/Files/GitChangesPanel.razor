@@ -1,0 +1,108 @@
+@namespace Harness.UI.Components.Files
+@using DysonHarness
+@using Harness.UI.Demo
+@using Harness.UI.Files
+@implements IDisposable
+@inject DysonGitChangesService GitChanges
+@inject DysonUiHost Host
+
+<div class="git-changes">
+    @if (ActiveWorkDirectoryId is null)
+    {
+        <div class="git-changes__empty">Select a work directory</div>
+    }
+    else if (GitChanges.Active is null || (GitChanges.Active.IsLoading && GitChanges.Active.Entries.Count == 0 && !GitChanges.Active.NoRepo && GitChanges.Active.Error is null))
+    {
+        <div class="git-changes__empty">Loading…</div>
+    }
+    else if (GitChanges.Active.Error is { } error)
+    {
+        <div class="git-changes__error">@error</div>
+    }
+    else if (GitChanges.Active.NoRepo || GitChanges.Active.RepoRoot is null)
+    {
+        <div class="git-changes__empty">No git repository</div>
+    }
+    else
+    {
+        var state = GitChanges.Active;
+        var added = state.OfKind(DysonGitChangeKind.Added).ToList();
+        var modified = state.OfKind(DysonGitChangeKind.Modified).ToList();
+        var deleted = state.OfKind(DysonGitChangeKind.Deleted).ToList();
+        var untracked = state.OfKind(DysonGitChangeKind.Untracked).ToList();
+
+        @if (added.Count == 0 && modified.Count == 0 && deleted.Count == 0 && untracked.Count == 0)
+        {
+            <div class="git-changes__empty">No changes</div>
+        }
+        else
+        {
+            @RenderSection("Added", added, "git-changes__row--added", clickable: true)
+            @RenderSection("Modified", modified, "git-changes__row--modified", clickable: true)
+            @RenderSection("Deleted", deleted, "git-changes__row--deleted", clickable: false)
+            @RenderSection("Uncommitted", untracked, "git-changes__row--untracked", clickable: true)
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public Guid? ActiveWorkDirectoryId { get; set; }
+
+    protected override void OnInitialized() => GitChanges.Changed += OnChanged;
+
+    public void Dispose() => GitChanges.Changed -= OnChanged;
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private RenderFragment RenderSection(
+        string title,
+        List<DysonGitStatusEntry> entries,
+        string rowClass,
+        bool clickable) => __builder =>
+    {
+        if (entries.Count == 0)
+            return;
+
+        <div class="git-changes__section">
+            <div class="git-changes__section-title">@title (@entries.Count)</div>
+            <ul class="git-changes__list" role="list">
+                @foreach (var entry in entries)
+                {
+                    if (clickable)
+                    {
+                        <li class="git-changes__row @rowClass"
+                            role="button"
+                            tabindex="0"
+                            title="@entry.Path"
+                            @onclick="@(() => OpenAsync(entry))"
+                            @onkeydown="@(e => OnRowKeyDown(e, entry))">
+                            <span class="git-changes__path mono">@entry.Path</span>
+                        </li>
+                    }
+                    else
+                    {
+                        <li class="git-changes__row git-changes__row--disabled @rowClass"
+                            title="@entry.Path">
+                            <span class="git-changes__path mono">@entry.Path</span>
+                        </li>
+                    }
+                }
+            </ul>
+        </div>
+    };
+
+    private async Task OnRowKeyDown(KeyboardEventArgs e, DysonGitStatusEntry entry)
+    {
+        if (e.Key is "Enter" or " ")
+            await OpenAsync(entry);
+    }
+
+    private async Task OpenAsync(DysonGitStatusEntry entry)
+    {
+        var repoRoot = GitChanges.Active?.RepoRoot;
+        if (string.IsNullOrWhiteSpace(repoRoot) || string.IsNullOrWhiteSpace(entry.Path))
+            return;
+
+        await Host.OpenFileViewerAsync(entry.Path, workRoot: repoRoot);
+    }
+}

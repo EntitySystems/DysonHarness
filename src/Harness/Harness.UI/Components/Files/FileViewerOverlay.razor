@@ -21,10 +21,21 @@
                     <h3 id="file-viewer-modal-title">@viewer.Title</h3>
                     <div class="file-viewer-modal__path mono">@viewer.RelativePath</div>
                 </div>
-                <button type="button"
-                        class="btn btn-ghost file-viewer-modal__close"
-                        @onclick="Close"
-                        aria-label="Close">×</button>
+                <div class="file-viewer-modal__actions">
+                    @if (CanOpenInDefaultEditor(viewer))
+                    {
+                        <button type="button"
+                                class="btn btn-ghost file-viewer-modal__open-editor"
+                                title="Open in default editor"
+                                @onclick="OpenInDefaultEditor">
+                            Open in default editor
+                        </button>
+                    }
+                    <button type="button"
+                            class="btn btn-ghost file-viewer-modal__close"
+                            @onclick="Close"
+                            aria-label="Close">×</button>
+                </div>
             </div>
 
             <div class="file-viewer-modal__body">
@@ -206,6 +217,18 @@
     {
         ClearViewerState();
         Host.CloseFileViewer();
+    }
+
+    private static bool CanOpenInDefaultEditor(DysonFileViewerState viewer) =>
+        !string.IsNullOrWhiteSpace(viewer.AbsolutePath)
+        && File.Exists(viewer.AbsolutePath);
+
+    private void OpenInDefaultEditor()
+    {
+        if (Host.FileViewer is not { AbsolutePath: { } path } || !File.Exists(path))
+            return;
+
+        Host.OpenFileInDefaultEditor(path);
     }
 
     private void SelectBlock(int index)

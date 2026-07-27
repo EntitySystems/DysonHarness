@@ -15,6 +15,7 @@
   --danger: #e85d5d;
   --success: #4caf7a;
   --warning: #d4a24c;
+  --git-modified: #4c8bf5;
   --shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
   color-scheme: dark;
 }
@@ -33,6 +34,7 @@
   --danger: #c43c3c;
   --success: #2f8f5b;
   --warning: #b07d20;
+  --git-modified: #4c8bf5;
   --shadow: 0 1px 0 rgba(0, 0, 0, 0.06);
   color-scheme: light;
 }
@@ -144,7 +146,13 @@ code, .mono {
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  overflow: auto;
+  /* Clip to rail; children (rail-tabs body, session log) own their scroll. */
+  overflow: hidden;
+}
+
+/* Session log (and any non-tab rail panels) keep intrinsic height. */
+.app-shell__rail > .tool-panel:not(.rail-tabs) {
+  flex: 0 0 auto;
 }
 
 .sidebar__brand {
@@ -2596,11 +2604,14 @@ code, .mono {
 
 /* Rail Files / Git / Usage tabs */
 .rail-tabs {
-  flex: 1 1 auto;
-  min-height: 120px;
+  /* Basis 0 + min-height 0 so tall file/git lists shrink and scroll inside. */
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .rail-tabs__tabs {
+  flex: 0 0 auto;
   display: flex;
   gap: 2px;
   border-bottom: 1px solid var(--border);
@@ -2635,20 +2646,22 @@ code, .mono {
 }
 
 .rail-tabs__body {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 80px;
+  min-height: 0;
   padding: 16px 8px;
   min-width: 0;
   overflow: hidden;
 }
 
-.rail-tabs__body--files {
+.rail-tabs__body--files,
+.rail-tabs__body--git {
   align-items: stretch;
   justify-content: flex-start;
   padding: 4px 0 8px;
+  min-height: 0;
   overflow: auto;
 }
 
@@ -2656,6 +2669,104 @@ code, .mono {
   color: var(--text-dim);
   font-size: 12px;
   text-align: center;
+}
+
+/* Git change list */
+.git-changes {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  gap: 8px;
+}
+
+.git-changes__section {
+  min-width: 0;
+}
+
+.git-changes__section-title {
+  padding: 4px 10px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.git-changes__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.git-changes__row {
+  display: flex;
+  align-items: center;
+  padding: 3px 10px;
+  min-height: 22px;
+  cursor: pointer;
+  border-radius: 2px;
+  font-size: 12px;
+  line-height: 1.3;
+  user-select: none;
+}
+
+.git-changes__row:hover {
+  background: var(--bg-hover);
+}
+
+.git-changes__row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.git-changes__row--disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.git-changes__row--disabled:hover {
+  background: transparent;
+}
+
+.git-changes__path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.git-changes__row--added .git-changes__path {
+  color: var(--success);
+}
+
+.git-changes__row--modified .git-changes__path {
+  color: var(--git-modified);
+}
+
+.git-changes__row--deleted .git-changes__path {
+  color: var(--danger);
+}
+
+.git-changes__row--untracked .git-changes__path {
+  color: var(--warning);
+}
+
+.git-changes__empty,
+.git-changes__error {
+  padding: 12px 10px;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: center;
+}
+
+.git-changes__error {
+  color: var(--danger, #c44);
+  text-align: left;
 }
 
 /* Lazy FILES tree */
@@ -3298,6 +3409,19 @@ code, .mono {
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-viewer-modal__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.file-viewer-modal__open-editor {
+  font-size: 11px;
+  padding: 4px 8px;
   white-space: nowrap;
 }
 
