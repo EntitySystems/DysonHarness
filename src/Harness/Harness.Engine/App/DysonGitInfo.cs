@@ -24,6 +24,15 @@ public static class DysonGitInfo
     /// <summary>
     /// Runs <c>git -C path rev-parse --abbrev-ref HEAD</c>. Failure means no usable git repo.
     /// </summary>
+    public static Result<string, string> TryGetBranch(IDysonWorkspaceFileSystem workspaceFileSystem)
+    {
+        ArgumentNullException.ThrowIfNull(workspaceFileSystem);
+        return TryGetBranch(workspaceFileSystem.NativeRootPath);
+    }
+
+    /// <summary>
+    /// Runs <c>git -C path rev-parse --abbrev-ref HEAD</c>. Failure means no usable git repo.
+    /// </summary>
     public static Result<string, string> TryGetBranch(string absolutePath)
     {
         if (string.IsNullOrWhiteSpace(absolutePath))
@@ -55,6 +64,16 @@ public static class DysonGitInfo
         }
 
         return Result<string, string>.AsValue(branch);
+    }
+
+    /// <summary>
+    /// Walks parents from the workspace native root and returns the outermost directory
+    /// that contains a <c>.git</c> file or directory.
+    /// </summary>
+    public static Result<string, string> TryFindRootMostRepo(IDysonWorkspaceFileSystem workspaceFileSystem)
+    {
+        ArgumentNullException.ThrowIfNull(workspaceFileSystem);
+        return TryFindRootMostRepo(workspaceFileSystem.NativeRootPath);
     }
 
     /// <summary>
@@ -114,6 +133,17 @@ public static class DysonGitInfo
         return found is null
             ? Result<string, string>.AsError("No git repository.")
             : Result<string, string>.AsValue(found);
+    }
+
+    /// <summary>
+    /// Runs <c>git -C</c> against the workspace native root with <c>status --porcelain=v1 -uall</c>.
+    /// Prefer resolving the repo root via <see cref="TryFindRootMostRepo(IDysonWorkspaceFileSystem)"/> first.
+    /// </summary>
+    public static Result<IReadOnlyList<DysonGitStatusEntry>, string> TryGetStatusPorcelain(
+        IDysonWorkspaceFileSystem workspaceFileSystem)
+    {
+        ArgumentNullException.ThrowIfNull(workspaceFileSystem);
+        return TryGetStatusPorcelain(workspaceFileSystem.NativeRootPath);
     }
 
     /// <summary>

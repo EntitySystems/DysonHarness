@@ -58,7 +58,7 @@ public class DysonTaskCompletionTests
         var session = new StubSession();
         session.ConfigureRootForTest();
         using var http = new HttpClient();
-        var executor = new DysonWorkspaceToolExecutor(session, Path.GetTempPath(), http);
+        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
 
         var result = executor.ExecuteAsync(new DysonToolCall
         {
@@ -89,7 +89,7 @@ public class DysonTaskCompletionTests
         var session = new StubSession();
         session.ConfigureRootForTest();
         using var http = new HttpClient();
-        var executor = new DysonWorkspaceToolExecutor(session, Path.GetTempPath(), http);
+        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
 
         var confirm = executor.ExecuteAsync(new DysonToolCall
         {
@@ -126,7 +126,7 @@ public class DysonTaskCompletionTests
         session.ConfigureRootForTest();
         session.AddTurnForTest(DysonTaskCompletionFlow.CreateCompletionConfirmTurn("prior"));
         using var http = new HttpClient();
-        var executor = new DysonWorkspaceToolExecutor(session, Path.GetTempPath(), http);
+        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
 
         if (!session.IsInTaskCompletionConfirmPhase)
             throw new InvalidOperationException("Expected IsInTaskCompletionConfirmPhase after confirm turn.");
@@ -158,7 +158,7 @@ public class DysonTaskCompletionTests
         session.ConfigureRootForTest();
         session.AddTurnForTest(DysonTaskCompletionFlow.CreateCompletionConfirmTurn("prior"));
         using var http = new HttpClient();
-        var executor = new DysonWorkspaceToolExecutor(session, Path.GetTempPath(), http);
+        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
 
         var result = executor.ExecuteAsync(new DysonToolCall
         {

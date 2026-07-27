@@ -181,8 +181,21 @@ public sealed class DysonGitChangesService : IDisposable
                 state.WorkAbsolutePath = get.Value.AbsolutePath;
             }
 
+            // Prefer the active file-tree FS native root when it matches this workdir.
+            var nativeRoot = state.WorkAbsolutePath;
+            var tree = _fileTree.Active;
+            if (tree is not null
+                && tree.WorkDirectoryId == state.WorkDirectoryId
+                && !string.IsNullOrWhiteSpace(tree.FileSystem.NativeRootPath))
+            {
+                nativeRoot = tree.FileSystem.NativeRootPath;
+                state.WorkAbsolutePath = nativeRoot;
+            }
+
             var root = await Task.Run(
-                    () => DysonGitInfo.TryFindRootMostRepo(state.WorkAbsolutePath),
+                    () => tree is not null && tree.WorkDirectoryId == state.WorkDirectoryId
+                        ? DysonGitInfo.TryFindRootMostRepo(tree.FileSystem)
+                        : DysonGitInfo.TryFindRootMostRepo(nativeRoot),
                     ct)
                 .ConfigureAwait(false);
 

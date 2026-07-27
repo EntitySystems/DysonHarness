@@ -16,25 +16,28 @@ namespace DysonHarness;
 public sealed partial class DysonWorkspaceToolExecutor
 {
     private readonly DysonAgentSession _session;
-    private readonly string _workRoot;
+    private readonly IDysonWorkspaceFileSystem _fs;
     private readonly Guid _workDirectoryId;
     private readonly HttpClient _http;
     private readonly DysonSessionStore? _store;
 
     public DysonWorkspaceToolExecutor(
         DysonAgentSession session,
-        string workDirectoryAbsolutePath,
+        IDysonWorkspaceFileSystem workspaceFileSystem,
         HttpClient http,
         DysonSessionStore? store = null,
         Guid workDirectoryId = default)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
-        ArgumentException.ThrowIfNullOrWhiteSpace(workDirectoryAbsolutePath);
-        _workRoot = Path.GetFullPath(workDirectoryAbsolutePath);
+        _fs = workspaceFileSystem ?? throw new ArgumentNullException(nameof(workspaceFileSystem));
+        if (!_fs.IsInitialized)
+            throw new ArgumentException("Workspace filesystem must be initialized.", nameof(workspaceFileSystem));
         _workDirectoryId = workDirectoryId;
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _store = store;
     }
+
+    private string WorkRoot => _fs.NativeRootPath;
 
     public async Task<DysonToolCallResult> ExecuteAsync(
         DysonToolCall call,
@@ -275,7 +278,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (string.IsNullOrWhiteSpace(markdown))
             return Task.FromResult(Error(call, "SubmitPlan: markdown must be non-empty."));
 
-        var fm = new DysonFileManager(_workRoot);
+        var fm = new DysonFileManager(_fs);
         var written = fm.WriteNewPlan(title, markdown);
         if (written.IsError)
             return Task.FromResult(Error(call, written.Error));
@@ -283,7 +286,8 @@ public sealed partial class DysonWorkspaceToolExecutor
         var planPath = written.Value;
         _session.AppendPlanResultTurn(planPath, title);
 
-        var abs = Path.GetFullPath(Path.Combine(_workRoot, planPath.Replace('/', Path.DirectorySeparatorChar)));
+        var absResolved = _fs.ResolvePath(planPath);
+        var abs = absResolved.IsError ? planPath : absResolved.Value;
         var payload = $$"""
             {
               "planPath": {{JsonSerializer.Serialize(planPath)}},
@@ -1326,23 +1330,35 @@ public sealed partial class DysonWorkspaceToolExecutor
         await _store.AppendLogAsync(statusLog, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<DysonToolCallResult> ReadFileAsync(
+    private Task<DysonToolCallResult> ReadFileAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
         var path = RequireString(doc.RootElement, "path");
         if (path.IsError)
-            return Error(call, path.Error);
+            return Task.FromResult(Error(call, path.Error));
 
-        var resolved = ResolveUnderWorkRoot(path.Value);
-        if (resolved.IsError)
-            return Error(call, resolved.Error);
+        var exists = _fs.FileExists(path.Value);
+        if (exists.IsError)
+            return Task.FromResult(Error(call, exists.Error));
+        if (!exists.Value)
+            return Task.FromResult(Error(call, $"File not found: {path.Value}"));
 
-        if (!File.Exists(resolved.Value))
-            return Error(call, $"File not found: {path.Value}");
+        var text = _fs.ReadAllText(path.Value);
+        if (text.IsError)
+            return Task.FromResult(Error(call, text.Error));
 
-        var lines = await File.ReadAllLinesAsync(resolved.Value, cancellationToken).ConfigureAwait(false);
+        var lines = text.Value.Replace("\r\n", "\n").Split('\n');
+        // Preserve trailing empty line semantics of ReadAllLines for a final newline.
+        if (text.Value.Length > 0
+            && (text.Value.EndsWith('\n') || text.Value.EndsWith('\r')))
+        {
+            if (lines.Length > 0 && lines[^1].Length == 0)
+                lines = lines[..^1];
+        }
+
         var offset = GetInt(doc.RootElement, "offset") ?? 1;
         var limit = GetInt(doc.RootElement, "limit");
         if (offset < 1)
@@ -1362,55 +1378,55 @@ public sealed partial class DysonWorkspaceToolExecutor
             lineNo++;
         }
 
-        return Ok(call, sb.Length == 0 ? "(empty)" : sb.ToString().TrimEnd());
+        return Task.FromResult(Ok(call, sb.Length == 0 ? "(empty)" : sb.ToString().TrimEnd()));
     }
 
-    private async Task<DysonToolCallResult> CreateFileAsync(
+    private Task<DysonToolCallResult> CreateFileAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
         var path = RequireString(doc.RootElement, "path");
         if (path.IsError)
-            return Error(call, path.Error);
+            return Task.FromResult(Error(call, path.Error));
 
         var content = doc.RootElement.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "";
         var overwrite = doc.RootElement.TryGetProperty("overwrite", out var o)
             && o.ValueKind == JsonValueKind.True;
 
-        var resolved = ResolveUnderWorkRoot(path.Value);
-        if (resolved.IsError)
-            return Error(call, resolved.Error);
+        var exists = _fs.FileExists(path.Value);
+        if (exists.IsError)
+            return Task.FromResult(Error(call, exists.Error));
+        if (exists.Value && !overwrite)
+            return Task.FromResult(Error(call, $"File already exists: {path.Value}"));
 
-        if (File.Exists(resolved.Value) && !overwrite)
-            return Error(call, $"File already exists: {path.Value}");
+        var written = _fs.WriteAllText(path.Value, content);
+        if (written.IsError)
+            return Task.FromResult(Error(call, written.Error));
 
-        var dir = Path.GetDirectoryName(resolved.Value);
-        if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
-
-        await File.WriteAllTextAsync(resolved.Value, content, cancellationToken).ConfigureAwait(false);
-        return Ok(call, $"Created {path.Value} ({content.Length} chars).");
+        return Task.FromResult(Ok(call, $"Created {path.Value} ({content.Length} chars)."));
     }
 
-    private async Task<DysonToolCallResult> WriteFileAsync(
+    private Task<DysonToolCallResult> WriteFileAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
         var path = RequireString(doc.RootElement, "path");
         if (path.IsError)
-            return Error(call, path.Error);
+            return Task.FromResult(Error(call, path.Error));
 
-        var resolved = ResolveUnderWorkRoot(path.Value);
-        if (resolved.IsError)
-            return Error(call, resolved.Error);
+        var exists = _fs.FileExists(path.Value);
+        if (exists.IsError)
+            return Task.FromResult(Error(call, exists.Error));
 
-        if (!File.Exists(resolved.Value)
+        if (!exists.Value
             && !(doc.RootElement.TryGetProperty("content", out var fullContentProp)
                  && fullContentProp.ValueKind == JsonValueKind.String))
         {
-            return Error(call, $"File not found: {path.Value}");
+            return Task.FromResult(Error(call, $"File not found: {path.Value}"));
         }
 
         if (doc.RootElement.TryGetProperty("content", out var contentProp)
@@ -1418,16 +1434,19 @@ public sealed partial class DysonWorkspaceToolExecutor
             && !doc.RootElement.TryGetProperty("old_text", out _)
             && !doc.RootElement.TryGetProperty("edits", out _))
         {
-            var dir = Path.GetDirectoryName(resolved.Value);
-            if (!string.IsNullOrEmpty(dir))
-                Directory.CreateDirectory(dir);
-
             var full = contentProp.GetString() ?? "";
-            await File.WriteAllTextAsync(resolved.Value, full, cancellationToken).ConfigureAwait(false);
-            return Ok(call, $"Wrote full content to {path.Value} ({full.Length} chars).");
+            var written = _fs.WriteAllText(path.Value, full);
+            if (written.IsError)
+                return Task.FromResult(Error(call, written.Error));
+
+            return Task.FromResult(Ok(call, $"Wrote full content to {path.Value} ({full.Length} chars)."));
         }
 
-        var text = await File.ReadAllTextAsync(resolved.Value, cancellationToken).ConfigureAwait(false);
+        var read = _fs.ReadAllText(path.Value);
+        if (read.IsError)
+            return Task.FromResult(Error(call, read.Error));
+
+        var text = read.Value;
         var edits = new List<(string Old, string New, bool ReplaceAll)>();
         var defaultReplaceAll = GetBool(doc.RootElement, "replace_all");
 
@@ -1452,20 +1471,20 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
 
         if (edits.Count == 0)
-            return Error(call, "WriteFile: provide content, or old_text/new_text, or edits[].");
+            return Task.FromResult(Error(call, "WriteFile: provide content, or old_text/new_text, or edits[]."));
 
         var appliedEdits = 0;
         var replacementCount = 0;
         foreach (var (oldText, newText, replaceAll) in edits)
         {
             if (string.IsNullOrEmpty(oldText))
-                return Error(call, "WriteFile: old_text must be non-empty.");
+                return Task.FromResult(Error(call, "WriteFile: old_text must be non-empty."));
 
             var result = DysonTextEditApplier.TryReplace(text, oldText, newText, replaceAll);
             if (result.IsError)
             {
                 var failure = result.Error;
-                return Error(call, $"WriteFile: {failure.Message} ({path.Value})");
+                return Task.FromResult(Error(call, $"WriteFile: {failure.Message} ({path.Value})"));
             }
 
             text = result.Value.Content;
@@ -1473,10 +1492,13 @@ public sealed partial class DysonWorkspaceToolExecutor
             replacementCount += result.Value.ReplacementCount;
         }
 
-        await File.WriteAllTextAsync(resolved.Value, text, cancellationToken).ConfigureAwait(false);
-        return Ok(
+        var saved = _fs.WriteAllText(path.Value, text);
+        if (saved.IsError)
+            return Task.FromResult(Error(call, saved.Error));
+
+        return Task.FromResult(Ok(
             call,
-            $"Applied {appliedEdits} edit(s) ({replacementCount} replacement(s)) to {path.Value}.");
+            $"Applied {appliedEdits} edit(s) ({replacementCount} replacement(s)) to {path.Value}."));
     }
 
     private const int GrepMaxLineChars = 400;
@@ -1505,14 +1527,14 @@ public sealed partial class DysonWorkspaceToolExecutor
         ".sqlite", ".db", ".dat", ".cache", ".ilk", ".exp", ".suo", ".user", ".vsidx",
     };
 
-    private async Task<DysonToolCallResult> GrepAsync(
+    private Task<DysonToolCallResult> GrepAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
         using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
         var pattern = RequireString(doc.RootElement, "pattern");
         if (pattern.IsError)
-            return Error(call, pattern.Error);
+            return Task.FromResult(Error(call, pattern.Error));
 
         var searchPath = doc.RootElement.TryGetProperty("path", out var pathProp)
             ? pathProp.GetString() ?? "."
@@ -1524,9 +1546,9 @@ public sealed partial class DysonWorkspaceToolExecutor
             && ci.ValueKind == JsonValueKind.True;
         var maxMatches = GetInt(doc.RootElement, "maxMatches") ?? 100;
 
-        var resolved = ResolveUnderWorkRoot(searchPath);
+        var resolved = _fs.ResolvePath(searchPath);
         if (resolved.IsError)
-            return Error(call, resolved.Error);
+            return Task.FromResult(Error(call, resolved.Error));
 
         Regex regex;
         try
@@ -1539,21 +1561,26 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
         catch (ArgumentException ex)
         {
-            return Error(call, $"Invalid regex: {ex.Message}");
+            return Task.FromResult(Error(call, $"Invalid regex: {ex.Message}"));
         }
 
         IEnumerable<string> files;
-        if (File.Exists(resolved.Value))
+        var fileExists = _fs.FileExists(searchPath);
+        var dirExists = _fs.DirectoryExists(searchPath);
+        if (fileExists.IsSuccess && fileExists.Value)
         {
             files = [resolved.Value];
         }
-        else if (Directory.Exists(resolved.Value))
+        else if (dirExists.IsSuccess && dirExists.Value)
         {
-            files = EnumerateFilesSkippingExcluded(resolved.Value, glob);
+            var enumerated = EnumerateFilesSkippingExcluded(searchPath, glob);
+            if (enumerated.IsError)
+                return Task.FromResult(Error(call, enumerated.Error));
+            files = enumerated.Value;
         }
         else
         {
-            return Error(call, $"Path not found: {searchPath}");
+            return Task.FromResult(Error(call, $"Path not found: {searchPath}"));
         }
 
         var sb = new StringBuilder();
@@ -1564,11 +1591,15 @@ public sealed partial class DysonWorkspaceToolExecutor
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!IsUnderWorkRoot(file))
+            var under = _fs.ResolvePath(file);
+            if (under.IsError)
                 continue;
 
-            var rel = Path.GetRelativePath(_workRoot, file).Replace('\\', '/');
-            var kind = ClassifyGrepFile(file);
+            var relResult = _fs.GetRelativePath(under.Value);
+            if (relResult.IsError)
+                continue;
+            var rel = relResult.Value;
+            var kind = ClassifyGrepFile(rel);
             if (kind is GrepFileKind.Binary or GrepFileKind.Image)
             {
                 // Path-only: never inline binary/image bytes. Emit when the relative path matches.
@@ -1591,14 +1622,17 @@ public sealed partial class DysonWorkspaceToolExecutor
                 continue;
             }
 
-            string[] lines;
-            try
-            {
-                lines = await File.ReadAllLinesAsync(file, cancellationToken).ConfigureAwait(false);
-            }
-            catch
-            {
+            var read = _fs.ReadAllText(rel);
+            if (read.IsError)
                 continue;
+
+            var lines = read.Value.Replace("\r\n", "\n").Split('\n');
+            if (read.Value.Length > 0
+                && (read.Value.EndsWith('\n') || read.Value.EndsWith('\r'))
+                && lines.Length > 0
+                && lines[^1].Length == 0)
+            {
+                lines = lines[..^1];
             }
 
             for (var i = 0; i < lines.Length; i++)
@@ -1625,7 +1659,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
 
         if (matches == 0)
-            return Ok(call, "No matches.");
+            return Task.FromResult(Ok(call, "No matches."));
 
         if (binaryHits > 0)
             sb.AppendLine("Use LoadBinary to inspect binary/image files.");
@@ -1636,42 +1670,47 @@ public sealed partial class DysonWorkspaceToolExecutor
         else if (cappedByChars)
             text += $"\n… capped at {GrepMaxResultChars} chars";
 
-        return Ok(call, text);
+        return Task.FromResult(Ok(call, text));
     }
 
-    private async Task<DysonToolCallResult> LoadBinaryAsync(
+    private Task<DysonToolCallResult> LoadBinaryAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
         var path = RequireString(doc.RootElement, "path");
         if (path.IsError)
-            return Error(call, path.Error);
+            return Task.FromResult(Error(call, path.Error));
 
-        var resolved = ResolveUnderWorkRoot(path.Value);
-        if (resolved.IsError)
-            return Error(call, resolved.Error);
+        var exists = _fs.FileExists(path.Value);
+        if (exists.IsError)
+            return Task.FromResult(Error(call, exists.Error));
+        if (!exists.Value)
+            return Task.FromResult(Error(call, $"File not found: {path.Value}"));
 
-        if (!File.Exists(resolved.Value))
-            return Error(call, $"File not found: {path.Value}");
-
-        var info = new FileInfo(resolved.Value);
-        if (info.Length > LoadBinaryMaxBytes)
+        var length = _fs.GetFileLength(path.Value);
+        if (length.IsError)
+            return Task.FromResult(Error(call, length.Error));
+        if (length.Value > LoadBinaryMaxBytes)
         {
-            return Error(call,
-                $"LoadBinary: file is {info.Length} bytes; max is {LoadBinaryMaxBytes} bytes.");
+            return Task.FromResult(Error(call,
+                $"LoadBinary: file is {length.Value} bytes; max is {LoadBinaryMaxBytes} bytes."));
         }
 
-        var bytes = await File.ReadAllBytesAsync(resolved.Value, cancellationToken).ConfigureAwait(false);
-        var fileName = Path.GetFileName(resolved.Value);
-        var extension = Path.GetExtension(resolved.Value);
+        var bytes = _fs.ReadAllBytes(path.Value);
+        if (bytes.IsError)
+            return Task.FromResult(Error(call, bytes.Error));
+
+        var fileName = Path.GetFileName(path.Value.Replace('/', Path.DirectorySeparatorChar));
+        var extension = Path.GetExtension(fileName);
         var mimeType = MimeTypeFromExtension(extension);
         var attachment = new DysonBinaryAttachment
         {
             FileName = fileName,
             Extension = extension,
             MimeType = mimeType,
-            Base64Data = Convert.ToBase64String(bytes),
+            Base64Data = Convert.ToBase64String(bytes.Value),
         };
 
         var ack = JsonSerializer.Serialize(new
@@ -1680,10 +1719,10 @@ public sealed partial class DysonWorkspaceToolExecutor
             fileName,
             extension,
             mimeType,
-            byteLength = bytes.Length,
+            byteLength = bytes.Value.Length,
         });
 
-        return Ok(call, ack, attachment);
+        return Task.FromResult(Ok(call, ack, attachment));
     }
 
     private enum GrepFileKind
@@ -1721,80 +1760,96 @@ public sealed partial class DysonWorkspaceToolExecutor
         };
     }
 
-    private static GrepFileKind ClassifyGrepFile(string absolutePath)
+    private GrepFileKind ClassifyGrepFile(string workspaceRelativePath)
     {
-        var ext = Path.GetExtension(absolutePath);
+        var ext = Path.GetExtension(workspaceRelativePath);
         if (GrepImageExtensions.Contains(ext))
             return GrepFileKind.Image;
         if (GrepBinaryExtensions.Contains(ext))
             return GrepFileKind.Binary;
 
-        if (FileLooksBinaryByNulSniff(absolutePath))
+        if (FileLooksBinaryByNulSniff(workspaceRelativePath))
             return GrepFileKind.Binary;
 
         return GrepFileKind.Text;
     }
 
-    private static bool FileLooksBinaryByNulSniff(string absolutePath)
+    private bool FileLooksBinaryByNulSniff(string workspaceRelativePath)
     {
-        try
-        {
-            using var stream = File.OpenRead(absolutePath);
-            var buf = new byte[GrepBinarySniffBytes];
-            var read = stream.Read(buf, 0, buf.Length);
-            for (var i = 0; i < read; i++)
-            {
-                if (buf[i] == 0)
-                    return true;
-            }
-        }
-        catch
-        {
+        var head = _fs.ReadFileHead(workspaceRelativePath, GrepBinarySniffBytes);
+        if (head.IsError)
             return true;
+
+        foreach (var b in head.Value)
+        {
+            if (b == 0)
+                return true;
         }
 
         return false;
     }
 
-    private static IEnumerable<string> EnumerateFilesSkippingExcluded(string rootDir, string? glob)
+    private Result<IReadOnlyList<string>, string> EnumerateFilesSkippingExcluded(
+        string rootDirRelative,
+        string? glob)
     {
         var pattern = string.IsNullOrWhiteSpace(glob) ? "*" : glob;
         var stack = new Stack<string>();
-        stack.Push(rootDir);
+        stack.Push(rootDirRelative);
+        var files = new List<string>();
 
         while (stack.Count > 0)
         {
             var dir = stack.Pop();
-            IEnumerable<string> subdirs;
-            try
-            {
-                subdirs = Directory.EnumerateDirectories(dir);
-            }
-            catch
-            {
+            var entries = _fs.EnumerateEntries(dir);
+            if (entries.IsError)
                 continue;
-            }
 
-            foreach (var sub in subdirs)
+            foreach (var entry in entries.Value)
             {
-                var name = Path.GetFileName(sub);
-                if (GrepExcludedDirNames.Contains(name))
+                var childRel = string.IsNullOrEmpty(dir) || dir is "." or "./"
+                    ? entry.Name
+                    : $"{dir.TrimEnd('/').Replace('\\', '/')}/{entry.Name}";
+
+                if (entry.IsDirectory)
+                {
+                    if (GrepExcludedDirNames.Contains(entry.Name))
+                        continue;
+                    stack.Push(childRel);
                     continue;
-                stack.Push(sub);
-            }
+                }
 
-            IEnumerable<string> files;
-            try
-            {
-                files = Directory.EnumerateFiles(dir, pattern);
-            }
-            catch
-            {
-                continue;
-            }
+                if (!MatchesSimpleGlob(entry.Name, pattern))
+                    continue;
 
-            foreach (var file in files)
-                yield return file;
+                var resolved = _fs.ResolvePath(childRel);
+                if (resolved.IsSuccess)
+                    files.Add(resolved.Value);
+            }
+        }
+
+        return Result<IReadOnlyList<string>, string>.AsValue(files);
+    }
+
+    /// <summary>Minimal <c>*</c> / <c>?</c> matcher for file names (same role as Directory.EnumerateFiles pattern).</summary>
+    private static bool MatchesSimpleGlob(string fileName, string pattern)
+    {
+        if (pattern is "*" or "*.*")
+            return true;
+
+        try
+        {
+            return Path.GetFileName(fileName).Equals(
+                       Path.GetFileName(pattern),
+                       StringComparison.OrdinalIgnoreCase)
+                   || System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(
+                       pattern,
+                       fileName,
+                       ignoreCase: OperatingSystem.IsWindows());
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -1818,25 +1873,60 @@ public sealed partial class DysonWorkspaceToolExecutor
         var recursive = doc.RootElement.TryGetProperty("recursive", out var r)
             && r.ValueKind == JsonValueKind.True;
 
-        var resolved = ResolveUnderWorkRoot(path.Value);
-        if (resolved.IsError)
-            return Task.FromResult(Error(call, resolved.Error));
-
-        if (!Directory.Exists(resolved.Value))
+        var dirExists = _fs.DirectoryExists(path.Value);
+        if (dirExists.IsError)
+            return Task.FromResult(Error(call, dirExists.Error));
+        if (!dirExists.Value)
             return Task.FromResult(Error(call, $"Directory not found: {path.Value}"));
 
-        var option = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-        var entries = Directory.EnumerateFileSystemEntries(resolved.Value, "*", option)
-            .Take(500)
-            .Select(e =>
-            {
-                var rel = Path.GetRelativePath(_workRoot, e);
-                var kind = Directory.Exists(e) ? "dir" : "file";
-                return $"{kind}\t{rel}";
-            });
+        var lines = new List<string>();
+        if (!recursive)
+        {
+            var entries = _fs.EnumerateEntries(path.Value);
+            if (entries.IsError)
+                return Task.FromResult(Error(call, entries.Error));
 
-        var text = string.Join('\n', entries);
+            foreach (var entry in entries.Value.Take(500))
+            {
+                var childRel = CombineWorkspaceRelative(path.Value, entry.Name);
+                var kind = entry.IsDirectory ? "dir" : "file";
+                lines.Add($"{kind}\t{childRel.Replace('\\', '/')}");
+            }
+        }
+        else
+        {
+            var stack = new Stack<string>();
+            stack.Push(path.Value);
+            while (stack.Count > 0 && lines.Count < 500)
+            {
+                var current = stack.Pop();
+                var entries = _fs.EnumerateEntries(current);
+                if (entries.IsError)
+                    continue;
+
+                foreach (var entry in entries.Value)
+                {
+                    if (lines.Count >= 500)
+                        break;
+
+                    var childRel = CombineWorkspaceRelative(current, entry.Name);
+                    var kind = entry.IsDirectory ? "dir" : "file";
+                    lines.Add($"{kind}\t{childRel.Replace('\\', '/')}");
+                    if (entry.IsDirectory)
+                        stack.Push(childRel);
+                }
+            }
+        }
+
+        var text = string.Join('\n', lines);
         return Task.FromResult(Ok(call, string.IsNullOrEmpty(text) ? "(empty)" : text));
+    }
+
+    private static string CombineWorkspaceRelative(string parent, string name)
+    {
+        if (string.IsNullOrEmpty(parent) || parent is "." or "./")
+            return name.Replace('\\', '/');
+        return $"{parent.TrimEnd('/').Replace('\\', '/')}/{name.Replace('\\', '/')}";
     }
 
     private Task<DysonToolCallResult> CreateDirectoryAsync(
@@ -1849,17 +1939,13 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (path.IsError)
             return Task.FromResult(Error(call, path.Error));
 
-        var createParents = !doc.RootElement.TryGetProperty("createParents", out var cp)
+        // createParents is accepted for schema compatibility; CreateDirectory always creates parents.
+        _ = !doc.RootElement.TryGetProperty("createParents", out var cp)
             || cp.ValueKind != JsonValueKind.False;
 
-        var resolved = ResolveUnderWorkRoot(path.Value);
-        if (resolved.IsError)
-            return Task.FromResult(Error(call, resolved.Error));
-
-        if (createParents)
-            Directory.CreateDirectory(resolved.Value);
-        else
-            Directory.CreateDirectory(resolved.Value); // CreateDirectory always creates parents on .NET
+        var created = _fs.CreateDirectory(path.Value);
+        if (created.IsError)
+            return Task.FromResult(Error(call, created.Error));
 
         return Task.FromResult(Ok(call, $"Created directory {path.Value}."));
     }
@@ -1885,12 +1971,15 @@ public sealed partial class DysonWorkspaceToolExecutor
             ? wdProp.GetString()
             : null;
         var workDir = string.IsNullOrWhiteSpace(workDirRel)
-            ? Result<string, string>.AsValue(_workRoot)
-            : ResolveUnderWorkRoot(workDirRel);
+            ? Result<string, string>.AsValue(WorkRoot)
+            : _fs.ResolvePath(workDirRel);
         if (workDir.IsError)
             return Error(call, workDir.Error);
 
-        if (!Directory.Exists(workDir.Value))
+        var dirExists = _fs.DirectoryExists(string.IsNullOrWhiteSpace(workDirRel) ? "." : workDirRel!);
+        if (dirExists.IsError)
+            return Error(call, dirExists.Error);
+        if (!dirExists.Value)
             return Error(call, $"Working directory not found: {workDirRel ?? "."}");
 
         var timeoutMs = GetInt(doc.RootElement, "timeoutMs");
@@ -1962,12 +2051,15 @@ public sealed partial class DysonWorkspaceToolExecutor
             ? wdProp.GetString()
             : null;
         var workDir = string.IsNullOrWhiteSpace(workDirRel)
-            ? Result<string, string>.AsValue(_workRoot)
-            : ResolveUnderWorkRoot(workDirRel);
+            ? Result<string, string>.AsValue(WorkRoot)
+            : _fs.ResolvePath(workDirRel);
         if (workDir.IsError)
             return Error(call, workDir.Error);
 
-        if (!Directory.Exists(workDir.Value))
+        var dirExists = _fs.DirectoryExists(string.IsNullOrWhiteSpace(workDirRel) ? "." : workDirRel!);
+        if (dirExists.IsError)
+            return Error(call, dirExists.Error);
+        if (!dirExists.Value)
             return Error(call, $"Working directory not found: {workDirRel ?? "."}");
 
         var started = await DysonLongRunningShellRegistry
@@ -2470,40 +2562,13 @@ public sealed partial class DysonWorkspaceToolExecutor
         return list.Count > 0 ? list : null;
     }
 
-    private Result<string, string> ResolveUnderWorkRoot(string path)
-    {
-        try
-        {
-            var combined = Path.IsPathRooted(path)
-                ? Path.GetFullPath(path)
-                : Path.GetFullPath(Path.Combine(_workRoot, path));
-
-            if (!IsUnderWorkRoot(combined))
-                return Result<string, string>.AsError($"Path escapes work directory: {path}");
-
-            return Result<string, string>.AsValue(combined);
-        }
-        catch (Exception ex)
-        {
-            return Result<string, string>.AsError($"Invalid path: {ex.Message}");
-        }
-    }
+    private Result<string, string> ResolveUnderWorkRoot(string path) =>
+        _fs.ResolvePath(path);
 
     private bool IsUnderWorkRoot(string fullPath)
     {
-        var root = _workRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                   + Path.DirectorySeparatorChar;
-        var full = Path.GetFullPath(fullPath);
-        if (string.Equals(full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                _workRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        return full.StartsWith(
-            root,
-            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        var resolved = _fs.ResolvePath(fullPath);
+        return resolved.IsSuccess;
     }
 
     private static string ArgsOrEmpty(DysonToolCall call) =>

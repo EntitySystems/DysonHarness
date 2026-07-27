@@ -258,7 +258,10 @@
             return;
         }
 
-        var branch = DysonGitInfo.TryGetBranch(absolutePath);
+        var fs = DysonWorkspaceFileSystems.CreateLocalAsync(absolutePath).GetAwaiter().GetResult();
+        var branch = fs.IsError
+            ? DysonGitInfo.TryGetBranch(absolutePath)
+            : DysonGitInfo.TryGetBranch(fs.Value);
         _gitBranch = branch.IsSuccess ? branch.Value : null;
     }
 

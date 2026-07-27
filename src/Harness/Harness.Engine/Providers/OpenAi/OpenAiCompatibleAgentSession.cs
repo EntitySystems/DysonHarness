@@ -523,7 +523,13 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         AppendLog($"prompt: {Truncate(turn.Instruction ?? turn.Kind.ToString(), 120)}");
         AddTurn(turn);
 
-        var executor = new DysonWorkspaceToolExecutor(this, _workDirectoryPath, _http, _store, _workDirectoryId);
+        var fsResult = await DysonWorkspaceFileSystems
+            .CreateLocalAsync(_workDirectoryPath, cancellationToken)
+            .ConfigureAwait(false);
+        if (fsResult.IsError)
+            return new VoidResult<string>($"Workspace filesystem: {fsResult.Error}");
+
+        var executor = new DysonWorkspaceToolExecutor(this, fsResult.Value, _http, _store, _workDirectoryId);
         var inFlight = new List<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound>();
         var useResponses = string.Equals(
             OpenAiProvider.OpenAiApiMode,

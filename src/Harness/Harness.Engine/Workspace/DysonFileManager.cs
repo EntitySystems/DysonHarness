@@ -11,29 +11,23 @@ public sealed class DysonFileManager
 {
     public const string PlansRelativeDir = ".dyson/plans";
 
-    private readonly string _workRoot;
+    private readonly IDysonWorkspaceFileSystem _fs;
 
-    public DysonFileManager(string workDirectoryAbsolutePath)
+    public DysonFileManager(IDysonWorkspaceFileSystem workspaceFileSystem)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(workDirectoryAbsolutePath);
-        _workRoot = Path.GetFullPath(workDirectoryAbsolutePath);
+        _fs = workspaceFileSystem ?? throw new ArgumentNullException(nameof(workspaceFileSystem));
     }
 
-    public string WorkRoot => _workRoot;
+    public string WorkRoot => _fs.NativeRootPath;
 
     /// <summary>Ensures <c>{workRoot}/.dyson/plans/</c> exists.</summary>
     public VoidResult<string> EnsurePlansDirectory()
     {
-        var plansAbs = Path.Combine(_workRoot, ".dyson", "plans");
-        try
-        {
-            Directory.CreateDirectory(plansAbs);
-            return VoidResult<string>.Success;
-        }
-        catch (Exception ex)
-        {
-            return new VoidResult<string>($"Failed to create plans directory: {ex.Message}");
-        }
+        var created = _fs.CreateDirectory(PlansRelativeDir);
+        if (created.IsError)
+            return VoidResult<string>.AsError($"Failed to create plans directory: {created.Error}");
+
+        return VoidResult<string>.Success;
     }
 
     /// <summary>
@@ -53,22 +47,18 @@ public sealed class DysonFileManager
         var fileName = $"{slug}-{hash}.md";
         var relative = $"{PlansRelativeDir}/{fileName}";
 
-        var resolved = ResolveUnderWorkRoot(relative);
+        var resolved = _fs.ResolvePath(relative);
         if (resolved.IsError)
             return resolved;
 
         if (!IsUnderPlansDir(resolved.Value))
             return Result<string, string>.AsError($"Plan path escapes {PlansRelativeDir}: {relative}");
 
-        try
-        {
-            File.WriteAllText(resolved.Value, markdown, Encoding.UTF8);
-            return Result<string, string>.AsValue(relative);
-        }
-        catch (Exception ex)
-        {
-            return Result<string, string>.AsError($"Failed to write plan: {ex.Message}");
-        }
+        var written = _fs.WriteAllText(relative, markdown);
+        if (written.IsError)
+            return Result<string, string>.AsError($"Failed to write plan: {written.Error}");
+
+        return Result<string, string>.AsValue(relative);
     }
 
     /// <summary>Reads UTF-8 text at a workspace-relative (or absolute-under-root) path.</summary>
@@ -76,21 +66,11 @@ public sealed class DysonFileManager
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
 
-        var resolved = ResolveUnderWorkRoot(relativePath);
-        if (resolved.IsError)
-            return resolved;
+        var read = _fs.ReadAllText(relativePath);
+        if (read.IsError)
+            return Result<string, string>.AsError(read.Error);
 
-        if (!File.Exists(resolved.Value))
-            return Result<string, string>.AsError($"File not found: {relativePath}");
-
-        try
-        {
-            return Result<string, string>.AsValue(File.ReadAllText(resolved.Value, Encoding.UTF8));
-        }
-        catch (Exception ex)
-        {
-            return Result<string, string>.AsError($"Failed to read file: {ex.Message}");
-        }
+        return read;
     }
 
     public static string SanitizeSlug(string? title)
@@ -132,46 +112,13 @@ public sealed class DysonFileManager
         return Convert.ToHexString(hash).ToLowerInvariant()[..10];
     }
 
-    private Result<string, string> ResolveUnderWorkRoot(string path)
-    {
-        try
-        {
-            var combined = Path.IsPathRooted(path)
-                ? Path.GetFullPath(path)
-                : Path.GetFullPath(Path.Combine(_workRoot, path.Replace('/', Path.DirectorySeparatorChar)));
-
-            if (!IsUnderWorkRoot(combined))
-                return Result<string, string>.AsError($"Path escapes work directory: {path}");
-
-            return Result<string, string>.AsValue(combined);
-        }
-        catch (Exception ex)
-        {
-            return Result<string, string>.AsError($"Invalid path: {ex.Message}");
-        }
-    }
-
-    private bool IsUnderWorkRoot(string fullPath)
-    {
-        var root = _workRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                   + Path.DirectorySeparatorChar;
-        var full = Path.GetFullPath(fullPath);
-        if (string.Equals(
-                full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                _workRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        return full.StartsWith(
-            root,
-            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
-    }
-
     private bool IsUnderPlansDir(string fullPath)
     {
-        var plansRoot = Path.GetFullPath(Path.Combine(_workRoot, ".dyson", "plans"));
+        var plansResolved = _fs.ResolvePath(PlansRelativeDir);
+        if (plansResolved.IsError)
+            return false;
+
+        var plansRoot = plansResolved.Value;
         var root = plansRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
                    + Path.DirectorySeparatorChar;
         var full = Path.GetFullPath(fullPath);

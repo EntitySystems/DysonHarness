@@ -30,7 +30,7 @@ public class DysonFileManagerTests
         Directory.CreateDirectory(root);
         try
         {
-            var fm = new DysonFileManager(root);
+            var fm = new DysonFileManager(DysonWorkspaceTestFs.CreateLocal(root));
             var markdown = "# Test plan\n\nDo the thing.\n";
             var written = fm.WriteNewPlan("My Cool Plan", markdown);
             if (written.IsError)

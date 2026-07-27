@@ -312,11 +312,37 @@ public sealed class DysonUiHost : IAsyncDisposable
             absolutePath = null;
         }
 
-        var fm = new DysonFileManager(resolvedRoot);
+        var fsResult = await DysonWorkspaceFileSystems
+            .CreateLocalAsync(resolvedRoot, cancellationToken)
+            .ConfigureAwait(true);
+        if (fsResult.IsError)
+        {
+            _fileViewer = new DysonFileViewerState
+            {
+                RelativePath = path,
+                Title = Path.GetFileName(path) ?? path,
+                Content = "",
+                IsMarkdown = path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+                             || path.EndsWith(".markdown", StringComparison.OrdinalIgnoreCase),
+                AbsolutePath = absolutePath,
+                Error = fsResult.Error,
+            };
+            Notify();
+            return;
+        }
+
+        var fm = new DysonFileManager(fsResult.Value);
         var read = fm.ReadText(path);
         var title = Path.GetFileName(path) ?? path;
         var isMd = path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
                    || path.EndsWith(".markdown", StringComparison.OrdinalIgnoreCase);
+
+        if (read.IsSuccess)
+        {
+            var resolved = fsResult.Value.ResolvePath(path);
+            if (resolved.IsSuccess)
+                absolutePath = resolved.Value;
+        }
 
         _fileViewer = read.IsError
             ? new DysonFileViewerState

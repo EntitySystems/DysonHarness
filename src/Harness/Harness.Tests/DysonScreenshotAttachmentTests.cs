@@ -96,7 +96,7 @@ public class DysonScreenshotAttachmentTests
         Directory.CreateDirectory(root);
         try
         {
-            var executor = new DysonWorkspaceToolExecutor(session, root, new HttpClient());
+            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
             var call = new DysonToolCall
             {
                 CallId = "shot1",

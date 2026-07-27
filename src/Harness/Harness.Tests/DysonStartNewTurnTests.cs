@@ -20,7 +20,7 @@ public class DysonStartNewTurnTests
         var session = new StubSession(DysonAgentModes.Work);
         session.ConfigureRootForTest();
         using var http = new HttpClient();
-        var executor = new DysonWorkspaceToolExecutor(session, Path.GetTempPath(), http);
+        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
 
         session.AddTurnForTest(new DysonAgentTurn
         {
@@ -65,7 +65,7 @@ public class DysonStartNewTurnTests
         var session = new StubSession(DysonAgentModes.Work);
         session.ConfigureRootForTest();
         using var http = new HttpClient();
-        var executor = new DysonWorkspaceToolExecutor(session, Path.GetTempPath(), http);
+        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
 
         var missing = executor.ExecuteAsync(new DysonToolCall
         {

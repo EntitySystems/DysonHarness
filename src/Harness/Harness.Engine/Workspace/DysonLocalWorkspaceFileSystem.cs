@@ -1,0 +1,423 @@
+namespace DysonHarness;
+
+/// <summary>
+/// Path-based workspace FS over a local directory, mapped drive, or UNC/SMB mount
+/// (including Azure Files mounts). Call <see cref="InitializeAsync"/> with
+/// <see cref="DysonWorkspaceSubjects.LocalFs"/> before IO.
+/// </summary>
+public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
+{
+    private static readonly StringComparison PathComparison =
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private readonly string _root;
+    private string? _subjectId;
+    private bool _initialized;
+
+    public DysonLocalWorkspaceFileSystem(string absoluteRootPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(absoluteRootPath);
+        _root = Path.GetFullPath(absoluteRootPath.Trim());
+    }
+
+    public string NativeRootPath => _root;
+
+    public string? SubjectId => _subjectId;
+
+    public bool IsInitialized => _initialized;
+
+    public Task<VoidResult<string>> InitializeAsync(
+        string subjectId,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentException.ThrowIfNullOrWhiteSpace(subjectId);
+
+        if (!string.Equals(subjectId, DysonWorkspaceSubjects.LocalFs, StringComparison.Ordinal))
+        {
+            return Task.FromResult(VoidResult<string>.AsError(
+                $"Local workspace FS only accepts subject '{DysonWorkspaceSubjects.LocalFs}' (got '{subjectId}')."));
+        }
+
+        if (_initialized)
+        {
+            if (string.Equals(_subjectId, subjectId, StringComparison.Ordinal))
+                return Task.FromResult(VoidResult<string>.Success);
+
+            return Task.FromResult(VoidResult<string>.AsError(
+                $"Workspace FS already initialized with subject '{_subjectId}'."));
+        }
+
+        _subjectId = subjectId;
+        _initialized = true;
+        return Task.FromResult(VoidResult<string>.Success);
+    }
+
+    public Result<string, string> ResolvePath(string path)
+    {
+        var ready = EnsureInitialized();
+        if (ready.IsError)
+            return Result<string, string>.AsError(ready.Error);
+
+        return ResolveUnderWorkRoot(path);
+    }
+
+    public Result<string, string> GetRelativePath(string path)
+    {
+        var resolved = ResolvePath(path);
+        if (resolved.IsError)
+            return resolved;
+
+        try
+        {
+            var rootTrimmed = _root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var fullTrimmed = resolved.Value.TrimEnd(
+                Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (string.Equals(fullTrimmed, rootTrimmed, PathComparison))
+                return Result<string, string>.AsValue("");
+
+            var rel = Path.GetRelativePath(_root, resolved.Value);
+            return Result<string, string>.AsValue(rel.Replace('\\', '/'));
+        }
+        catch (Exception ex)
+        {
+            return Result<string, string>.AsError($"Invalid path: {ex.Message}");
+        }
+    }
+
+    public Result<bool, string> FileExists(string path)
+    {
+        var resolved = ResolvePath(path);
+        if (resolved.IsError)
+            return Result<bool, string>.AsError(resolved.Error);
+
+        try
+        {
+            return Result<bool, string>.AsValue(File.Exists(resolved.Value));
+        }
+        catch (Exception ex)
+        {
+            return Result<bool, string>.AsError($"Failed to check file: {ex.Message}");
+        }
+    }
+
+    public Result<bool, string> DirectoryExists(string path)
+    {
+        var resolved = ResolvePath(path);
+        if (resolved.IsError)
+            return Result<bool, string>.AsError(resolved.Error);
+
+        try
+        {
+            return Result<bool, string>.AsValue(Directory.Exists(resolved.Value));
+        }
+        catch (Exception ex)
+        {
+            return Result<bool, string>.AsError($"Failed to check directory: {ex.Message}");
+        }
+    }
+
+    public Result<long, string> GetFileLength(string path)
+    {
+        var resolved = ResolvePath(path);
+        if (resolved.IsError)
+            return Result<long, string>.AsError(resolved.Error);
+
+        try
+        {
+            if (!File.Exists(resolved.Value))
+                return Result<long, string>.AsError($"File not found: {path}");
+
+            return Result<long, string>.AsValue(new FileInfo(resolved.Value).Length);
+        }
+        catch (Exception ex)
+        {
+            return Result<long, string>.AsError($"Failed to get file length: {ex.Message}");
+        }
+    }
+
+    public Result<string, string> ReadAllText(string path)
+    {
+        var resolved = ResolvePath(path);
+        if (resolved.IsError)
+            return resolved;
+
+        try
+        {
+            if (!File.Exists(resolved.Value))
+                return Result<string, string>.AsError($"File not found: {path}");
+
+            return Result<string, string>.AsValue(File.ReadAllText(resolved.Value));
+        }
+        catch (Exception ex)
+        {
+            return Result<string, string>.AsError($"Failed to read file: {ex.Message}");
+        }
+    }
+
+    public Result<byte[], string> ReadAllBytes(string path)
+    {
+        var resolved = ResolvePath(path);
+        if (resolved.IsError)
+            return Result<byte[], string>.AsError(resolved.Error);
+
+        try
+        {
+            if (!File.Exists(resolved.Value))
+                return Result<byte[], string>.AsError($"File not found: {path}");
+
+            return Result<byte[], string>.AsValue(File.ReadAllBytes(resolved.Value));
+        }
+        catch (Exception ex)
+        {
+            return Result<byte[], string>.AsError($"Failed to read file: {ex.Message}");
+        }
+    }
+
+    public Result<byte[], string> ReadFileHead(string path, int maxBytes)
+    {
+        if (maxBytes < 0)
+            return Result<byte[], string>.AsError("maxBytes must be non-negative.");
+
+        var resolved = ResolvePath(path);
+        if (resolved.IsError)
+            return Result<byte[], string>.AsError(resolved.Error);
+
+        try
+        {
+            if (!File.Exists(resolved.Value))
+                return Result<byte[], string>.AsError($"File not found: {path}");
+
+            using var stream = File.OpenRead(resolved.Value);
+            var buf = new byte[maxBytes];
+            var read = stream.Read(buf, 0, buf.Length);
+            if (read == buf.Length)
+                return Result<byte[], string>.AsValue(buf);
+
+            var sliced = new byte[read];
+            Buffer.BlockCopy(buf, 0, sliced, 0, read);
+            return Result<byte[], string>.AsValue(sliced);
+        }
+        catch (Exception ex)
+        {
+            return Result<byte[], string>.AsError($"Failed to read file: {ex.Message}");
+        }
+    }
+
+    public VoidResult<string> WriteAllText(string path, string contents)
+    {
+        ArgumentNullException.ThrowIfNull(contents);
+
+        var resolved = ResolvePath(path);
+        if (resolved.IsError)
+            return VoidResult<string>.AsError(resolved.Error);
+
+        try
+        {
+            var dir = Path.GetDirectoryName(resolved.Value);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
+
+            File.WriteAllText(resolved.Value, contents);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex)
+        {
+            return VoidResult<string>.AsError($"Failed to write file: {ex.Message}", ex);
+        }
+    }
+
+    public VoidResult<string> WriteAllBytes(string path, byte[] contents)
+    {
+        ArgumentNullException.ThrowIfNull(contents);
+
+        var resolved = ResolvePath(path);
+        if (resolved.IsError)
+            return VoidResult<string>.AsError(resolved.Error);
+
+        try
+        {
+            var dir = Path.GetDirectoryName(resolved.Value);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
+
+            File.WriteAllBytes(resolved.Value, contents);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex)
+        {
+            return VoidResult<string>.AsError($"Failed to write file: {ex.Message}", ex);
+        }
+    }
+
+    public VoidResult<string> CreateDirectory(string path)
+    {
+        var resolved = ResolvePath(path);
+        if (resolved.IsError)
+            return VoidResult<string>.AsError(resolved.Error);
+
+        try
+        {
+            Directory.CreateDirectory(resolved.Value);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex)
+        {
+            return VoidResult<string>.AsError($"Failed to create directory: {ex.Message}", ex);
+        }
+    }
+
+    public Result<IReadOnlyList<DysonWorkspaceEntry>, string> EnumerateEntries(string path)
+    {
+        var resolved = ResolvePath(path);
+        if (resolved.IsError)
+            return Result<IReadOnlyList<DysonWorkspaceEntry>, string>.AsError(resolved.Error);
+
+        try
+        {
+            if (!Directory.Exists(resolved.Value))
+                return Result<IReadOnlyList<DysonWorkspaceEntry>, string>.AsError(
+                    $"Directory not found: {path}");
+
+            var list = new List<DysonWorkspaceEntry>();
+            foreach (var entry in Directory.EnumerateFileSystemEntries(resolved.Value))
+            {
+                var name = Path.GetFileName(entry);
+                if (string.IsNullOrEmpty(name))
+                    continue;
+
+                list.Add(new DysonWorkspaceEntry(name, Directory.Exists(entry)));
+            }
+
+            return Result<IReadOnlyList<DysonWorkspaceEntry>, string>.AsValue(list);
+        }
+        catch (Exception ex)
+        {
+            return Result<IReadOnlyList<DysonWorkspaceEntry>, string>.AsError(
+                $"Failed to list directory: {ex.Message}");
+        }
+    }
+
+    public Result<IReadOnlyList<string>, string> EnumerateFiles(
+        string directoryPath,
+        string searchPattern = "*",
+        bool recursive = false)
+    {
+        var resolved = ResolvePath(directoryPath);
+        if (resolved.IsError)
+            return Result<IReadOnlyList<string>, string>.AsError(resolved.Error);
+
+        var pattern = string.IsNullOrWhiteSpace(searchPattern) ? "*" : searchPattern;
+        try
+        {
+            if (!Directory.Exists(resolved.Value))
+                return Result<IReadOnlyList<string>, string>.AsError(
+                    $"Directory not found: {directoryPath}");
+
+            var option = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+            var files = Directory.EnumerateFiles(resolved.Value, pattern, option).ToList();
+            return Result<IReadOnlyList<string>, string>.AsValue(files);
+        }
+        catch (Exception ex)
+        {
+            return Result<IReadOnlyList<string>, string>.AsError(
+                $"Failed to enumerate files: {ex.Message}");
+        }
+    }
+
+    public VoidResult<string> DeleteFile(string path)
+    {
+        var resolved = ResolvePath(path);
+        if (resolved.IsError)
+            return VoidResult<string>.AsError(resolved.Error);
+
+        try
+        {
+            if (!File.Exists(resolved.Value))
+                return VoidResult<string>.AsError($"File not found: {path}");
+
+            File.Delete(resolved.Value);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex)
+        {
+            return VoidResult<string>.AsError($"Failed to delete file: {ex.Message}", ex);
+        }
+    }
+
+    public VoidResult<string> DeleteDirectory(string path, bool recursive = false)
+    {
+        var resolved = ResolvePath(path);
+        if (resolved.IsError)
+            return VoidResult<string>.AsError(resolved.Error);
+
+        try
+        {
+            if (!Directory.Exists(resolved.Value))
+                return VoidResult<string>.AsError($"Directory not found: {path}");
+
+            Directory.Delete(resolved.Value, recursive);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex)
+        {
+            return VoidResult<string>.AsError($"Failed to delete directory: {ex.Message}", ex);
+        }
+    }
+
+    public Result<IDysonWorkspaceChangeWatcher, string> CreateWatcher()
+    {
+        var ready = EnsureInitialized();
+        if (ready.IsError)
+            return Result<IDysonWorkspaceChangeWatcher, string>.AsError(ready.Error);
+
+        return Result<IDysonWorkspaceChangeWatcher, string>.AsValue(
+            new DysonLocalWorkspaceChangeWatcher(_root));
+    }
+
+    private VoidResult<string> EnsureInitialized()
+    {
+        if (_initialized)
+            return VoidResult<string>.Success;
+
+        return VoidResult<string>.AsError(
+            "Workspace filesystem is not initialized. Call InitializeAsync first.");
+    }
+
+    private Result<string, string> ResolveUnderWorkRoot(string path)
+    {
+        try
+        {
+            var combined = string.IsNullOrWhiteSpace(path) || path is "." or "./"
+                ? _root
+                : Path.IsPathRooted(path)
+                    ? Path.GetFullPath(path)
+                    : Path.GetFullPath(Path.Combine(
+                        _root,
+                        path.Replace('/', Path.DirectorySeparatorChar)));
+
+            if (!IsUnderWorkRoot(combined))
+                return Result<string, string>.AsError($"Path escapes work directory: {path}");
+
+            return Result<string, string>.AsValue(combined);
+        }
+        catch (Exception ex)
+        {
+            return Result<string, string>.AsError($"Invalid path: {ex.Message}");
+        }
+    }
+
+    private bool IsUnderWorkRoot(string fullPath)
+    {
+        var root = _root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                   + Path.DirectorySeparatorChar;
+        var full = Path.GetFullPath(fullPath);
+        var rootTrimmed = _root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var fullTrimmed = full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        if (string.Equals(fullTrimmed, rootTrimmed, PathComparison))
+            return true;
+
+        return full.StartsWith(root, PathComparison);
+    }
+}

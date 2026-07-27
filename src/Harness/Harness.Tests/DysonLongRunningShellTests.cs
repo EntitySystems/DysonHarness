@@ -207,7 +207,7 @@ public class DysonLongRunningShellTests
         {
             var session = new StubSession();
             using var http = new HttpClient();
-            var executor = new DysonWorkspaceToolExecutor(session, cwd, http, store: null, workDirId);
+            var executor = DysonWorkspaceTestFs.CreateExecutor(session, cwd, http, store: null, workDirId);
             var call = new DysonToolCall
             {
                 CallId = "lrs-start-tail",

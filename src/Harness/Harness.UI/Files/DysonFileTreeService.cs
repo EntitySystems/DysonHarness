@@ -5,7 +5,7 @@ namespace Harness.UI.Files;
 
 /// <summary>
 /// Process-lifetime in-memory file tree: per-workdir cache, async directory skeleton,
-/// lazy file load on expand, and <see cref="FileSystemWatcher"/> live updates.
+/// lazy file load on expand, and workspace-FS watcher live updates.
 /// </summary>
 public sealed class DysonFileTreeService : IDisposable
 {
@@ -63,7 +63,7 @@ public sealed class DysonFileTreeService : IDisposable
             absolutePath = get.Value.AbsolutePath;
         }
 
-        return ActivateNew(id, absolutePath);
+        return await ActivateNewAsync(id, absolutePath, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Activate by known absolute path (skips store lookup). Used by tests.</summary>
@@ -82,7 +82,9 @@ public sealed class DysonFileTreeService : IDisposable
             }
         }
 
-        return ActivateNew(workDirectoryId, absolutePath);
+        return ActivateNewAsync(workDirectoryId, absolutePath, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
     }
 
     public async Task<VoidResult<string>> ExpandAsync(
@@ -164,22 +166,18 @@ public sealed class DysonFileTreeService : IDisposable
         }
     }
 
-    private VoidResult<string> ActivateNew(Guid id, string absolutePath)
+    private async Task<VoidResult<string>> ActivateNewAsync(
+        Guid id,
+        string absolutePath,
+        CancellationToken cancellationToken)
     {
-        string fullPath;
-        try
-        {
-            fullPath = Path.GetFullPath(absolutePath.Trim());
-        }
-        catch (Exception ex)
-        {
-            return VoidResult<string>.AsError($"Invalid path: {ex.Message}");
-        }
+        var fsResult = await DysonWorkspaceFileSystems
+            .CreateLocalAsync(absolutePath, cancellationToken)
+            .ConfigureAwait(false);
+        if (fsResult.IsError)
+            return VoidResult<string>.AsError(fsResult.Error);
 
-        if (!Directory.Exists(fullPath))
-            return VoidResult<string>.AsError("Directory does not exist.");
-
-        var state = new DysonFileTreeState(id, fullPath, Notify);
+        var state = new DysonFileTreeState(id, fsResult.Value, Notify);
         lock (_gate)
         {
             if (_cache.TryGetValue(id, out var raced))
@@ -217,22 +215,27 @@ public sealed class DysonFileTreeNode
 public sealed class DysonFileTreeState : IDisposable
 {
     private const int DebounceMs = 120;
-    private static readonly StringComparison PathComparison =
-        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
+    private readonly IDysonWorkspaceFileSystem _fs;
     private readonly Action _notify;
     private readonly object _treeGate = new();
     private readonly object _pendingGate = new();
     private readonly List<PendingFsOp> _pending = [];
-    private FileSystemWatcher? _watcher;
+    private IDysonWorkspaceChangeWatcher? _watcher;
     private Timer? _debounceTimer;
     private bool _disposed;
     private bool _resyncScheduled;
 
-    public DysonFileTreeState(Guid workDirectoryId, string absolutePath, Action notify)
+    public DysonFileTreeState(Guid workDirectoryId, IDysonWorkspaceFileSystem workspaceFileSystem, Action notify)
     {
+        ArgumentNullException.ThrowIfNull(workspaceFileSystem);
+        if (!workspaceFileSystem.IsInitialized)
+            throw new ArgumentException("Workspace filesystem must be initialized.", nameof(workspaceFileSystem));
+
         WorkDirectoryId = workDirectoryId;
-        AbsolutePath = Path.GetFullPath(absolutePath);
+        _fs = workspaceFileSystem;
+        AbsolutePath = _fs.NativeRootPath;
+        FileSystem = _fs;
         _notify = notify ?? throw new ArgumentNullException(nameof(notify));
 
         var name = new DirectoryInfo(AbsolutePath).Name;
@@ -251,6 +254,7 @@ public sealed class DysonFileTreeState : IDisposable
 
     public Guid WorkDirectoryId { get; }
     public string AbsolutePath { get; }
+    public IDysonWorkspaceFileSystem FileSystem { get; }
     public DysonFileTreeNode Root { get; }
     public bool SkeletonComplete { get; private set; }
     public bool SkeletonRunning { get; private set; }
@@ -278,51 +282,28 @@ public sealed class DysonFileTreeState : IDisposable
         if (!node.IsDirectory)
             return VoidResult<string>.AsError("Not a directory.");
 
-        var resolved = ResolveUnderWorkRoot(node.RelativePath);
-        if (resolved.IsError)
-            return VoidResult<string>.AsError(resolved.Error);
-
-        IEnumerable<string> entries;
-        try
-        {
-            entries = Directory.EnumerateFileSystemEntries(resolved.Value);
-        }
-        catch (Exception ex)
-        {
-            return VoidResult<string>.AsError($"Failed to list directory: {ex.Message}");
-        }
+        var path = node.RelativePath.Length == 0 ? "." : node.RelativePath;
+        var entries = _fs.EnumerateEntries(path);
+        if (entries.IsError)
+            return VoidResult<string>.AsError(entries.Error);
 
         lock (_treeGate)
         {
             var known = node.Children.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
-            foreach (var entry in entries)
+            foreach (var entry in entries.Value)
             {
-                string name;
-                bool isDir;
-                try
-                {
-                    name = Path.GetFileName(entry);
-                    if (string.IsNullOrEmpty(name))
-                        continue;
-                    isDir = Directory.Exists(entry);
-                }
-                catch
-                {
-                    continue;
-                }
-
-                if (known.ContainsKey(name))
+                if (string.IsNullOrEmpty(entry.Name) || known.ContainsKey(entry.Name))
                     continue;
 
-                var childRel = CombineRelative(node.RelativePath, name);
+                var childRel = CombineRelative(node.RelativePath, entry.Name);
                 var child = new DysonFileTreeNode
                 {
-                    Name = name,
+                    Name = entry.Name,
                     RelativePath = childRel,
-                    IsDirectory = isDir,
+                    IsDirectory = entry.IsDirectory,
                 };
                 InsertSorted(node.Children, child);
-                known[name] = child;
+                known[entry.Name] = child;
             }
 
             node.ChildrenLoaded = true;
@@ -383,42 +364,20 @@ public sealed class DysonFileTreeState : IDisposable
 
     private void WalkDirectories(DysonFileTreeNode parent)
     {
-        var resolved = ResolveUnderWorkRoot(parent.RelativePath);
-        if (resolved.IsError)
+        var path = parent.RelativePath.Length == 0 ? "." : parent.RelativePath;
+        var entries = _fs.EnumerateEntries(path);
+        if (entries.IsError)
             return;
 
-        IEnumerable<string> dirs;
-        try
-        {
-            dirs = Directory.EnumerateDirectories(resolved.Value);
-        }
-        catch
-        {
-            return;
-        }
+        var dirs = entries.Value
+            .Where(e => e.IsDirectory && !string.IsNullOrEmpty(e.Name))
+            .OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        var names = new List<(string Name, string FullPath)>();
-        foreach (var dir in dirs)
-        {
-            try
-            {
-                var name = Path.GetFileName(dir);
-                if (string.IsNullOrEmpty(name))
-                    continue;
-                names.Add((name, dir));
-            }
-            catch
-            {
-                // skip unreadable entries
-            }
-        }
-
-        names.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
-
-        foreach (var (name, _) in names)
+        foreach (var entry in dirs)
         {
             var existing = parent.Children.Find(c =>
-                c.IsDirectory && c.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                c.IsDirectory && c.Name.Equals(entry.Name, StringComparison.OrdinalIgnoreCase));
             DysonFileTreeNode child;
             if (existing is not null)
             {
@@ -428,14 +387,14 @@ public sealed class DysonFileTreeState : IDisposable
             {
                 child = new DysonFileTreeNode
                 {
-                    Name = name,
-                    RelativePath = CombineRelative(parent.RelativePath, name),
+                    Name = entry.Name,
+                    RelativePath = CombineRelative(parent.RelativePath, entry.Name),
                     IsDirectory = true,
                 };
                 InsertSorted(parent.Children, child);
             }
 
-            if (!IsNodeModulesName(name))
+            if (!IsNodeModulesName(entry.Name))
                 WalkDirectories(child);
         }
     }
@@ -444,17 +403,26 @@ public sealed class DysonFileTreeState : IDisposable
     {
         try
         {
-            var watcher = new FileSystemWatcher(AbsolutePath)
+            var created = _fs.CreateWatcher();
+            if (created.IsError)
             {
-                IncludeSubdirectories = true,
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName,
-                InternalBufferSize = 64 * 1024,
-            };
-            watcher.Created += OnFsCreated;
-            watcher.Deleted += OnFsDeleted;
-            watcher.Renamed += OnFsRenamed;
-            watcher.Error += OnFsError;
-            watcher.EnableRaisingEvents = true;
+                Error = created.Error;
+                _notify();
+                return;
+            }
+
+            var watcher = created.Value;
+            watcher.Changed += OnFsChanged;
+            watcher.Failed += OnFsFailed;
+            var started = watcher.Start();
+            if (started.IsError)
+            {
+                watcher.Dispose();
+                Error = started.Error;
+                _notify();
+                return;
+            }
+
             _watcher = watcher;
         }
         catch (Exception ex)
@@ -471,24 +439,30 @@ public sealed class DysonFileTreeState : IDisposable
         if (watcher is null)
             return;
 
-        watcher.EnableRaisingEvents = false;
-        watcher.Created -= OnFsCreated;
-        watcher.Deleted -= OnFsDeleted;
-        watcher.Renamed -= OnFsRenamed;
-        watcher.Error -= OnFsError;
+        watcher.Stop();
+        watcher.Changed -= OnFsChanged;
+        watcher.Failed -= OnFsFailed;
         watcher.Dispose();
     }
 
-    private void OnFsCreated(object sender, FileSystemEventArgs e) =>
-        Enqueue(new PendingFsOp(FsOpKind.Created, e.FullPath, OldFullPath: null));
+    private void OnFsChanged(object? sender, DysonWorkspaceChangeEventArgs e)
+    {
+        switch (e.Kind)
+        {
+            case DysonWorkspaceChangeKind.Created:
+            case DysonWorkspaceChangeKind.Changed:
+                Enqueue(new PendingFsOp(FsOpKind.Created, e.FullPath, OldFullPath: null));
+                break;
+            case DysonWorkspaceChangeKind.Deleted:
+                Enqueue(new PendingFsOp(FsOpKind.Deleted, e.FullPath, OldFullPath: null));
+                break;
+            case DysonWorkspaceChangeKind.Renamed:
+                Enqueue(new PendingFsOp(FsOpKind.Renamed, e.FullPath, e.OldFullPath));
+                break;
+        }
+    }
 
-    private void OnFsDeleted(object sender, FileSystemEventArgs e) =>
-        Enqueue(new PendingFsOp(FsOpKind.Deleted, e.FullPath, OldFullPath: null));
-
-    private void OnFsRenamed(object sender, RenamedEventArgs e) =>
-        Enqueue(new PendingFsOp(FsOpKind.Renamed, e.FullPath, e.OldFullPath));
-
-    private void OnFsError(object sender, ErrorEventArgs e)
+    private void OnFsFailed(object? sender, Exception ex)
     {
         Dirty = true;
         // ponytail: global dirty + shallow resync of loaded dirs; upgrade = per-node dirty map
@@ -564,17 +538,14 @@ public sealed class DysonFileTreeState : IDisposable
         if (parent is null || !parent.IsDirectory)
             return false;
 
-        bool isDir;
-        try
-        {
-            isDir = Directory.Exists(fullPath);
-            if (!isDir && !File.Exists(fullPath))
-                return false;
-        }
-        catch
-        {
+        var isDirResult = _fs.DirectoryExists(rel);
+        var isFileResult = _fs.FileExists(rel);
+        if (isDirResult.IsError || isFileResult.IsError)
             return false;
-        }
+
+        var isDir = isDirResult.Value;
+        if (!isDir && !isFileResult.Value)
+            return false;
 
         var inLazyZone = IsUnderNodeModulesSegment(rel);
         // Dirs outside an unexpanded node_modules interior join the skeleton even if files aren't loaded yet.
@@ -684,23 +655,15 @@ public sealed class DysonFileTreeState : IDisposable
                     if (_disposed)
                         return;
 
-                    var resolved = ResolveUnderWorkRoot(node.RelativePath);
-                    if (resolved.IsError)
+                    var path = node.RelativePath.Length == 0 ? "." : node.RelativePath;
+                    var entries = _fs.EnumerateEntries(path);
+                    if (entries.IsError)
                         continue;
 
-                    HashSet<string> onDisk;
-                    try
-                    {
-                        onDisk = Directory.EnumerateFileSystemEntries(resolved.Value)
-                            .Select(Path.GetFileName)
-                            .Where(n => !string.IsNullOrEmpty(n))
-                            .Select(n => n!)
-                            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                    }
-                    catch
-                    {
-                        continue;
-                    }
+                    var onDisk = entries.Value
+                        .Select(e => e.Name)
+                        .Where(n => !string.IsNullOrEmpty(n))
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
                     lock (_treeGate)
                     {
@@ -714,27 +677,16 @@ public sealed class DysonFileTreeState : IDisposable
                         // Add new (shallow)
                         var known = node.Children.Select(c => c.Name)
                             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                        foreach (var name in onDisk)
+                        foreach (var entry in entries.Value)
                         {
-                            if (known.Contains(name))
+                            if (string.IsNullOrEmpty(entry.Name) || known.Contains(entry.Name))
                                 continue;
-
-                            var childAbs = Path.Combine(resolved.Value, name);
-                            bool isDir;
-                            try
-                            {
-                                isDir = Directory.Exists(childAbs);
-                            }
-                            catch
-                            {
-                                continue;
-                            }
 
                             InsertSorted(node.Children, new DysonFileTreeNode
                             {
-                                Name = name,
-                                RelativePath = CombineRelative(node.RelativePath, name),
-                                IsDirectory = isDir,
+                                Name = entry.Name,
+                                RelativePath = CombineRelative(node.RelativePath, entry.Name),
+                                IsDirectory = entry.IsDirectory,
                             });
                         }
                     }
@@ -783,63 +735,10 @@ public sealed class DysonFileTreeState : IDisposable
         return current;
     }
 
-    private Result<string, string> ResolveUnderWorkRoot(string relativePath)
-    {
-        try
-        {
-            var combined = relativePath.Length == 0
-                ? AbsolutePath
-                : Path.GetFullPath(Path.Combine(
-                    AbsolutePath,
-                    relativePath.Replace('/', Path.DirectorySeparatorChar)));
-
-            if (!IsUnderWorkRoot(combined))
-                return Result<string, string>.AsError($"Path escapes work directory: {relativePath}");
-
-            return Result<string, string>.AsValue(combined);
-        }
-        catch (Exception ex)
-        {
-            return Result<string, string>.AsError($"Invalid path: {ex.Message}");
-        }
-    }
-
-    private bool IsUnderWorkRoot(string fullPath)
-    {
-        var root = AbsolutePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                   + Path.DirectorySeparatorChar;
-        var full = Path.GetFullPath(fullPath);
-        var rootTrimmed = AbsolutePath.TrimEnd(
-            Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var fullTrimmed = full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-        if (string.Equals(fullTrimmed, rootTrimmed, PathComparison))
-            return true;
-
-        return full.StartsWith(root, PathComparison);
-    }
-
     private string? TryGetRelative(string fullPath)
     {
-        try
-        {
-            var full = Path.GetFullPath(fullPath);
-            if (!IsUnderWorkRoot(full))
-                return null;
-
-            var rootTrimmed = AbsolutePath.TrimEnd(
-                Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var fullTrimmed = full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            if (string.Equals(fullTrimmed, rootTrimmed, PathComparison))
-                return "";
-
-            var rel = Path.GetRelativePath(AbsolutePath, full);
-            return rel.Replace('\\', '/');
-        }
-        catch
-        {
-            return null;
-        }
+        var rel = _fs.GetRelativePath(fullPath);
+        return rel.IsError ? null : rel.Value;
     }
 
     internal static bool IsNodeModulesName(string name) =>

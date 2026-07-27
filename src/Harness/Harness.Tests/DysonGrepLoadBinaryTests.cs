@@ -62,7 +62,7 @@ public class DysonGrepLoadBinaryTests
             File.WriteAllText(Path.Combine(root, "bin", "secret.txt"), "alpha must not appear from bin");
 
             var session = new StubSession();
-            var executor = new DysonWorkspaceToolExecutor(session, root, new HttpClient());
+            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
             var call = new DysonToolCall
             {
                 CallId = "grep1",
@@ -121,7 +121,7 @@ public class DysonGrepLoadBinaryTests
             File.WriteAllBytes(Path.Combine(root, fileName), bytes);
 
             var session = new StubSession();
-            var executor = new DysonWorkspaceToolExecutor(session, root, new HttpClient());
+            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
             var call = new DysonToolCall
             {
                 CallId = "lb1",

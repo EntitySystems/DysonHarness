@@ -15,8 +15,11 @@ Conceptual overview: [README.md](README.md).
 | `OpenAiCompatibleAgentSession` | Completions/Responses tool-loop session; `MaxToolRounds` 35 / Explore 120 (`ResolveMaxToolRounds`); soft-pause → `RethinkToolUsage` via `SoftPauseAfterToolLoopExhaustion` (non-Explore); Explore budget hit → no-tools recap |
 | `OpenAiCompletionsClient` / `OpenAiResponsesClient` | Streaming SSE adapters (`StreamCreateAsync` → `OpenAiStreamChunk`); Responses body uses nested `reasoning.effort` + always `store: true` |
 | `OpenAiCacheFriendlyTranscriptBuilder` | Stable-prefix transcript + `prompt_cache_key`; each history turn’s user content is prefixed with `[turnId={guid}]`; skips `IsExcludedFromContext` turns. Responses: always `store: true`; `previous_response_id` omitted on first full rebuild, required on delta hops, passed on mid-loop full rebuilds when known. Explicit breakpoints via `SupportsExplicitPromptCache` (GPT-5.6+ and not managed) |
-| `DysonWorkspaceToolExecutor` | Workdir-scoped file tools + `RenameSession` + `GetDateTime` + `WaitForSeconds` (1–300) + `SubmitPlan` (Plan mode only → `.dyson/plans/` + PlanResult turn) + `ShellExecute` + **long-running shell tools** (`StartLongRunningShell` / `ListLongRunningShells` / `ReadLongRunningShellTail` / `AbortLongRunningShell` / `RequestLongRunningShellCancellation` / `LongRunningShellInteract` / `SubscribeToLongRunningShellCompletion`) + web search/fetch tools (tool-owned summarize) + **subagent tools** (`StartSubagent` / `ListSubagents` / `WaitForSubagent` / `InspectSubagentLog` / `StopSubagent` / `SubmitSubagentReport`) + **inter-agent / Ask** (`TriggerParentEvent` / `RespondToSubagentEvent` / `TriggerSubagentEvent` / `AskQuestion` / `AskQuestionFromParent`) + **task completion** (`CompleteTask` / `ConfirmTaskComplete` / `ContinueWork`) + **`ResumeCurrentTask`** (rethink phase) + **session todo tools** (`ListTodos` / `CreateTodo` / `UpdateTodo` / `DeleteTodo`) + **browser tools** (when `BrowserControl` set: `OpenBrowser`, `ListBrowserWindows`, `CloseBrowser`, `ResizeBrowser`, tab/nav/click/type/JS/screenshot/log helpers); stubs for the rest |
-| `DysonFileManager` | Work-root sandbox helper: `WriteNewPlan` / `ReadText` / `EnsurePlansDirectory` under `.dyson/plans/` |
+| `DysonWorkspaceToolExecutor` | Workdir-scoped file tools (via `IDysonWorkspaceFileSystem`) + `RenameSession` + `GetDateTime` + `WaitForSeconds` (1–300) + `SubmitPlan` (Plan mode only → `.dyson/plans/` + PlanResult turn) + `ShellExecute` + **long-running shell tools** (`StartLongRunningShell` / `ListLongRunningShells` / `ReadLongRunningShellTail` / `AbortLongRunningShell` / `RequestLongRunningShellCancellation` / `LongRunningShellInteract` / `SubscribeToLongRunningShellCompletion`) + web search/fetch tools (tool-owned summarize) + **subagent tools** (`StartSubagent` / `ListSubagents` / `WaitForSubagent` / `InspectSubagentLog` / `StopSubagent` / `SubmitSubagentReport`) + **inter-agent / Ask** (`TriggerParentEvent` / `RespondToSubagentEvent` / `TriggerSubagentEvent` / `AskQuestion` / `AskQuestionFromParent`) + **task completion** (`CompleteTask` / `ConfirmTaskComplete` / `ContinueWork`) + **`ResumeCurrentTask`** (rethink phase) + **session todo tools** (`ListTodos` / `CreateTodo` / `UpdateTodo` / `DeleteTodo`) + **browser tools** (when `BrowserControl` set: `OpenBrowser`, `ListBrowserWindows`, `CloseBrowser`, `ResizeBrowser`, tab/nav/click/type/JS/screenshot/log helpers); stubs for the rest |
+| `DysonFileManager` | Work-root sandbox helper over `IDysonWorkspaceFileSystem`: `WriteNewPlan` / `ReadText` / `EnsurePlansDirectory` under `.dyson/plans/` |
+| `IDysonWorkspaceFileSystem` / `DysonWorkspaceSubjects` / `DysonWorkspaceEntry` | Sandboxed workspace IO; `InitializeAsync(subjectId)` (local: `"local_fs"`); `NativeRootPath` for shells/git |
+| `IDysonWorkspaceChangeWatcher` / `DysonWorkspaceChangeKind` / `DysonWorkspaceChangeEventArgs` | Live FS change notifications from an initialized workspace FS |
+| `DysonLocalWorkspaceFileSystem` / `DysonWorkspaceFileSystems` | Local/SMB/UNC path-backed FS + `CreateLocalAsync` factory |
 | `DysonShell` / `DysonWindowsShell` | Shell runners; path-based execute + basename fixed-arg heuristics; legacy `DysonShellType` map kept for tests |
 | `DysonConfiguredShellSpec` / `DysonShellType` / `DysonShellRunResult` | Session shell name+path+optional FixedArgs; legacy enum; process result |
 | `DysonConfiguredShellEntity` / `DysonConfiguredShellStore` | Persisted shells (`configured_shells`, optional `FixedArgsJson`); seed defaults; list enabled specs |
@@ -167,6 +170,20 @@ Keep `TError` / user-facing messages clean — do not stringify exceptions into 
 | `DysonBrowserConsoleEntry` / `DysonBrowserNetworkEntry` | Log DTOs |
 | `DysonNullBrowserControl` | All methods → `"browser control unavailable"` |
 | `DysonCefBrowserControl` | Windows CefSharp impl in `Harness.WindowsBrowser` (not referenced by Engine) |
+
+## Workspace filesystem
+
+| Type | Notes |
+| ---- | ----- |
+| `IDysonWorkspaceFileSystem` | `InitializeAsync(subjectId)` then sandboxed resolve/exists/read/write/enumerate/delete; `NativeRootPath` + `SubjectId` |
+| `DysonWorkspaceSubjects` | `LocalFs = "local_fs"` |
+| `DysonWorkspaceEntry` | `Name` + `IsDirectory` |
+| `IDysonWorkspaceChangeWatcher` | `Changed` / `Failed` + start/stop/`IDisposable` |
+| `DysonWorkspaceChangeKind` / `DysonWorkspaceChangeEventArgs` | Created / Changed / Deleted / Renamed (+ native `FullPath`) |
+| `DysonLocalWorkspaceFileSystem` | Path-based local/SMB/UNC (incl. Azure Files mounts); accepts only `"local_fs"` |
+| `DysonWorkspaceFileSystems.CreateLocalAsync` | Validate dir → construct → init with `"local_fs"` |
+
+Cloud hosts implement `IDysonWorkspaceFileSystem` themselves — see [Cloud hosting / custom implementations](../storage/work-directories.md#cloud-hosting--custom-implementations).
 
 ## Persistence-facing types
 
