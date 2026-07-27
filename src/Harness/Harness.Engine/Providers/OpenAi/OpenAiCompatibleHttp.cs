@@ -88,6 +88,43 @@ public static class OpenAiCompatibleHttp
     }
 
     /// <summary>
+    /// True when Responses <c>store</c> + <c>previous_response_id</c> tool-loop chaining is reliable.
+    /// Managed/CLIProxy returns response ids without retaining function_call items — use local replay.
+    /// </summary>
+    public static bool SupportsResponsesServerChaining(OpenAiCompatibleAgentProvider provider)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        return string.IsNullOrWhiteSpace(provider.ManagedSource);
+    }
+
+    /// <summary>
+    /// Exact Responses 400 when <c>function_call_output</c> has no matching stored <c>function_call</c>.
+    /// </summary>
+    public static bool IsMissingToolCallForOutputError(string? error)
+    {
+        if (string.IsNullOrEmpty(error))
+            return false;
+
+        return error.Contains("No tool call found for function call output", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Usable Responses <c>call_id</c> for <c>function_call_output</c>: must be <c>call_…</c>-style,
+    /// never item <c>id</c> (<c>fc_…</c>) or a Guid fallback.
+    /// </summary>
+    public static bool IsUsableResponsesCallId(string? callId)
+    {
+        if (string.IsNullOrWhiteSpace(callId))
+            return false;
+
+        var id = callId.Trim();
+        if (id.StartsWith("fc_", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return !Guid.TryParse(id, out _);
+    }
+
+    /// <summary>
     /// Builds OpenAI <c>tools[]</c> from the MCP catalog with required harness <c>stage</c> on every schema.
     /// Stable sort by tool name.
     /// </summary>

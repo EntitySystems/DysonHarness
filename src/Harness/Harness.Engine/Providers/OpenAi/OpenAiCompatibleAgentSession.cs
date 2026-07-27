@@ -538,6 +538,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             OpenAiProvider.OpenAiApiMode,
             DysonOpenAiApiModes.Responses,
             StringComparison.Ordinal);
+        var supportsResponsesChaining = useResponses
+            && OpenAiCompatibleHttp.SupportsResponsesServerChaining(OpenAiProvider);
         string? previousResponseId = null;
         var childReportNudged = false;
         string? harnessFollowUp = null;
@@ -558,12 +560,18 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 Result<OpenAiModelReply, string> replyResult;
                 if (useResponses)
                 {
-                    // store: true on every Responses call so previous_response_id chaining works.
-                    // Prefer delta (outputs-only + id) within the tool loop; full rebuild still
-                    // passes previousResponseId when known (harnessFollowUp / compaction fallback).
+                    // Direct OpenAI: store+delta via previous_response_id when known.
+                    // Managed/CLIProxy: never chain — full local reasoning→call→output replay.
                     OpenAiCacheFriendlyTranscriptBuilder.BuiltResponsesRequest built;
-                    if (previousResponseId is not null && inFlight.Count > 0 && harnessFollowUp is null)
+                    if (supportsResponsesChaining
+                        && previousResponseId is not null
+                        && inFlight.Count > 0
+                        && harnessFollowUp is null)
                     {
+                        await EnsureResponsesBinaryFileIdsAsync(
+                                inFlight[^1].Results,
+                                cancellationToken)
+                            .ConfigureAwait(false);
                         built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesDelta(
                             this,
                             previousResponseId,
@@ -571,12 +579,14 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     }
                     else
                     {
+                        await EnsureLastInFlightBinaryFileIdsAsync(inFlight, cancellationToken)
+                            .ConfigureAwait(false);
                         built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
                             this,
                             currentUserPrompt: harnessFollowUp,
                             currentFilePaths: null,
                             inFlightRounds: inFlight,
-                            previousResponseId: previousResponseId);
+                            previousResponseId: supportsResponsesChaining ? previousResponseId : null);
                         if (round == 0 && filePaths.Count > 0)
                             AppendPathsToLastUser(built.Input, filePaths);
                     }
@@ -585,6 +595,30 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                         _responses.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
                         turn,
                         cancellationToken).ConfigureAwait(false);
+
+                    // Direct only: one full-replay retry when store chaining lost the function_call.
+                    if (replyResult.IsError
+                        && supportsResponsesChaining
+                        && OpenAiCompatibleHttp.IsMissingToolCallForOutputError(replyResult.Error))
+                    {
+                        AppendLog("Responses: missing tool call for output — retrying with full item replay");
+                        previousResponseId = null;
+                        await EnsureLastInFlightBinaryFileIdsAsync(inFlight, cancellationToken)
+                            .ConfigureAwait(false);
+                        var retryBuilt = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+                            this,
+                            currentUserPrompt: harnessFollowUp,
+                            currentFilePaths: null,
+                            inFlightRounds: inFlight,
+                            previousResponseId: null);
+                        if (round == 0 && filePaths.Count > 0)
+                            AppendPathsToLastUser(retryBuilt.Input, filePaths);
+
+                        replyResult = await ConsumeStreamAsync(
+                            _responses.StreamCreateAsync(OpenAiProvider, retryBuilt, cancellationToken),
+                            turn,
+                            cancellationToken).ConfigureAwait(false);
+                    }
                 }
                 else
                 {
@@ -615,7 +649,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 if (!string.IsNullOrEmpty(reply.UsageCacheHint))
                     AppendLog(reply.UsageCacheHint);
 
-                if (!string.IsNullOrEmpty(reply.ResponseId))
+                if (supportsResponsesChaining && !string.IsNullOrEmpty(reply.ResponseId))
                     previousResponseId = reply.ResponseId;
 
                 if (reply.ToolCalls.Count > 0)
@@ -665,7 +699,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
                     inFlight.Add(new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound(
                         reply.ToolCalls.ToList(),
-                        roundResults));
+                        roundResults,
+                        reply.ReasoningOutputItems.Count > 0 ? reply.ReasoningOutputItems : null));
 
                     AppendLog($"tool round {round + 1}: {reply.ToolCalls.Count} call(s)");
 
@@ -724,7 +759,6 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     turn,
                     inFlight,
                     useResponses,
-                    previousResponseId,
                     incompleteToolReason,
                     cancellationToken).ConfigureAwait(false);
 
@@ -744,12 +778,12 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     /// Explore-only post-budget path: one Completions/Responses call with tools cleared so the
     /// model cannot burn more rounds; applies recap text or a harness incomplete-findings fallback.
     /// Does not enqueue <see cref="DysonAgentTurnKind.RethinkToolUsage"/>.
+    /// Omits <c>previous_response_id</c> (fresh full rebuild after budget exhaustion).
     /// </summary>
     private async Task<VoidResult<string>> ExploreBudgetRecapAsync(
         DysonAgentTurn turn,
         List<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound> inFlight,
         bool useResponses,
-        string? previousResponseId,
         string incompleteToolReason,
         CancellationToken cancellationToken)
     {
@@ -760,12 +794,14 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         Result<OpenAiModelReply, string> replyResult;
         if (useResponses)
         {
+            await EnsureLastInFlightBinaryFileIdsAsync(inFlight, cancellationToken)
+                .ConfigureAwait(false);
             var built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
                 this,
                 currentUserPrompt: DysonRethinkToolUsageFlow.ExploreBudgetRecapInstruction,
                 currentFilePaths: null,
                 inFlightRounds: inFlight,
-                previousResponseId: previousResponseId);
+                previousResponseId: null);
             built.Tools.Clear();
             replyResult = await ConsumeStreamAsync(
                 _responses.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
@@ -832,6 +868,29 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 Interrupt = interrupt.Value,
             });
     }
+
+    /// <summary>
+    /// One-shot vision: only the last in-flight round is emitted with BinaryAttachment parts.
+    /// </summary>
+    private Task EnsureLastInFlightBinaryFileIdsAsync(
+        IReadOnlyList<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound> inFlight,
+        CancellationToken cancellationToken)
+    {
+        if (inFlight.Count == 0)
+            return Task.CompletedTask;
+
+        return EnsureResponsesBinaryFileIdsAsync(inFlight[^1].Results, cancellationToken);
+    }
+
+    private Task EnsureResponsesBinaryFileIdsAsync(
+        IReadOnlyList<DysonToolCallResult> results,
+        CancellationToken cancellationToken) =>
+        OpenAiFilesClient.EnsureBinaryFileIdsAsync(
+            _http,
+            OpenAiProvider,
+            results,
+            note => AppendLog(note),
+            cancellationToken);
 
     private static void AppendPathsToLastUser(
         System.Text.Json.Nodes.JsonArray messagesOrInput,

@@ -34,7 +34,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
     public sealed record InFlightToolRound(
         IReadOnlyList<DysonToolCall> Calls,
-        IReadOnlyList<DysonToolCallResult> Results);
+        IReadOnlyList<DysonToolCallResult> Results,
+        IReadOnlyList<JsonObject>? ReasoningItems = null);
 
     /// <summary>System text: mode prompt + MCP catalog (stable prefix for Completions).</summary>
     public static string BuildSystemText(DysonAgentSession session)
@@ -104,9 +105,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     }
 
     /// <summary>
-    /// Full Responses rebuild (after compaction, new user turn, or mid-loop fallback).
-    /// Always <c>store: true</c> so a later tool-loop hop can chain via <c>previous_response_id</c>.
-    /// Pass <paramref name="previousResponseId"/> when known so mid-loop full rebuilds keep chaining.
+    /// Full Responses rebuild (after compaction, new user turn, mid-loop fallback, or managed replay).
+    /// Direct OpenAI: <c>store: true</c> and optional <paramref name="previousResponseId"/> for chaining.
+    /// Managed/CLIProxy: <c>store: false</c>, never chains; replays reasoning → function_call → outputs.
     /// </summary>
     public static BuiltResponsesRequest BuildResponsesFull(
         DysonAgentSession session,
@@ -117,9 +118,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     {
         ArgumentNullException.ThrowIfNull(session);
 
-        var includeBreakpoints = session.Provider is OpenAiCompatibleAgentProvider oai
-            && OpenAiCompatibleHttp.SupportsExplicitPromptCache(oai);
-
+        var (includeBreakpoints, store, chainPreviousId) = ResolveResponsesRequestFlags(session);
         var instructions = BuildSystemText(session);
         var input = new JsonArray();
 
@@ -152,12 +151,14 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             OpenAiCompatibleHttp.BuildResponsesToolsArray(session.McpPipeline),
             OpenAiCompatibleHttp.PromptCacheKey(session.PersistenceId, session.SystemPromptGeneration),
             includeBreakpoints,
-            PreviousResponseId: previousResponseId,
-            Store: true);
+            PreviousResponseId: chainPreviousId ? previousResponseId : null,
+            Store: store);
     }
 
     /// <summary>
-    /// Responses delta within a tool loop: <c>previous_response_id</c> + only new function_call_output items.
+    /// Responses delta within a tool loop (direct OpenAI only): <c>previous_response_id</c> + new
+    /// function_call_output items. Always resends instructions/tools (spec: previous_response_id
+    /// does not carry top-level instructions).
     /// </summary>
     public static BuiltResponsesRequest BuildResponsesDelta(
         DysonAgentSession session,
@@ -168,8 +169,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         ArgumentException.ThrowIfNullOrWhiteSpace(previousResponseId);
         ArgumentNullException.ThrowIfNull(newResults);
 
-        var includeBreakpoints = session.Provider is OpenAiCompatibleAgentProvider oai
-            && OpenAiCompatibleHttp.SupportsExplicitPromptCache(oai);
+        var (includeBreakpoints, _, _) = ResolveResponsesRequestFlags(session);
 
         // ponytail: two-pass so BinaryAttachment never splits consecutive function_call_output.
         var input = new JsonArray();
@@ -199,6 +199,25 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             includeBreakpoints,
             PreviousResponseId: previousResponseId,
             Store: true);
+    }
+
+    /// <summary>
+    /// Direct OpenAI: store+chain. Managed: store false, no previous_response_id.
+    /// Non-OpenAI stubs (tests): keep store+chain so existing fixtures stay valid.
+    /// </summary>
+    private static (bool IncludeBreakpoints, bool Store, bool ChainPreviousId) ResolveResponsesRequestFlags(
+        DysonAgentSession session)
+    {
+        if (session.Provider is OpenAiCompatibleAgentProvider oai)
+        {
+            var chain = OpenAiCompatibleHttp.SupportsResponsesServerChaining(oai);
+            return (
+                OpenAiCompatibleHttp.SupportsExplicitPromptCache(oai),
+                Store: chain,
+                ChainPreviousId: chain);
+        }
+
+        return (IncludeBreakpoints: false, Store: true, ChainPreviousId: true);
     }
 
     private static JsonNode BuildTextContentParts(string text, bool includeBreakpoint)
@@ -421,6 +440,13 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         InFlightToolRound round,
         bool includeBinaryAttachments)
     {
+        // Stateless / full-replay order: reasoning → function_call → function_call_output.
+        if (round.ReasoningItems is { Count: > 0 })
+        {
+            foreach (var item in round.ReasoningItems)
+                input.Add(item.DeepClone());
+        }
+
         foreach (var call in round.Calls)
         {
             input.Add(new JsonObject
@@ -504,8 +530,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     }
 
     /// <summary>
-    /// Completions: short tool ack already emitted; follow with a user multimodal message
-    /// carrying filename+extension on the file/image part.
+    /// Completions: short tool ack already emitted; follow with a user multimodal message.
+    /// Images: nested <c>image_url: { url, detail }</c> data URL (no <c>filename</c>, no <c>file_id</c>).
+    /// Non-images: <c>file.filename</c> + <c>file_data</c>.
     /// </summary>
     private static void AppendCompletionsBinaryAttachment(
         JsonArray messages,
@@ -529,9 +556,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 ["image_url"] = new JsonObject
                 {
                     ["url"] = dataUrl,
+                    ["detail"] = "auto",
                 },
-                // Some OpenAI-compatible hosts accept filename alongside image_url.
-                ["filename"] = attachment.FileName,
             });
         }
         else
@@ -555,13 +581,13 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     }
 
     /// <summary>
-    /// Responses: follow function_call_output with input_image / input_file (filename = name+ext).
+    /// Responses: follow function_call_output with input_image / input_file.
+    /// Prefer <c>file_id</c> when present; else data URL / file_data. Never <c>filename</c> on images.
     /// </summary>
     private static void AppendResponsesBinaryAttachment(
         JsonArray input,
         DysonBinaryAttachment attachment)
     {
-        var dataUrl = BuildDataUrl(attachment);
         var parts = new JsonArray
         {
             new JsonObject
@@ -573,11 +599,31 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
         if (attachment.IsImage)
         {
+            if (!string.IsNullOrEmpty(attachment.FileId))
+            {
+                parts.Add(new JsonObject
+                {
+                    ["type"] = "input_image",
+                    ["file_id"] = attachment.FileId,
+                    ["detail"] = "auto",
+                });
+            }
+            else
+            {
+                parts.Add(new JsonObject
+                {
+                    ["type"] = "input_image",
+                    ["image_url"] = BuildDataUrl(attachment),
+                    ["detail"] = "auto",
+                });
+            }
+        }
+        else if (!string.IsNullOrEmpty(attachment.FileId))
+        {
             parts.Add(new JsonObject
             {
-                ["type"] = "input_image",
-                ["image_url"] = dataUrl,
-                ["filename"] = attachment.FileName,
+                ["type"] = "input_file",
+                ["file_id"] = attachment.FileId,
             });
         }
         else
@@ -586,7 +632,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             {
                 ["type"] = "input_file",
                 ["filename"] = attachment.FileName,
-                ["file_data"] = dataUrl,
+                ["file_data"] = BuildDataUrl(attachment),
             });
         }
 

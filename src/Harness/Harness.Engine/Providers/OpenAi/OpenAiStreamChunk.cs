@@ -1,3 +1,5 @@
+using System.Text.Json.Nodes;
+
 namespace DysonHarness;
 
 /// <summary>Parsed Completions or Responses model reply (streaming final or non-streaming parse).</summary>
@@ -9,6 +11,12 @@ public sealed class OpenAiModelReply
     public IReadOnlyList<DysonToolCall> ToolCalls { get; init; } = [];
     public string? ResponseId { get; init; }
     public string? UsageCacheHint { get; init; }
+
+    /// <summary>
+    /// Raw Responses <c>type:reasoning</c> output items (incl. <c>encrypted_content</c>) for
+    /// stateless tool-loop replay. Separate from UI <see cref="ReasoningContent"/>.
+    /// </summary>
+    public IReadOnlyList<JsonObject> ReasoningOutputItems { get; init; } = [];
 }
 
 /// <summary>Incremental delta from a streaming Completions or Responses round.</summary>

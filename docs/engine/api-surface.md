@@ -13,8 +13,9 @@ Conceptual overview: [README.md](README.md).
 | `DysonAgentProvider` | Abstract ephemeral model provider (no durable state) |
 | `OpenAiCompatibleAgentProvider` | OpenAI-compatible ephemeral provider (`BaseUrl`, `ApiKey`, `Slug`, `OpenAiApiMode`, optional `ManagedSource`, optional `ReasoningEffort`, …). Completions send top-level `reasoning_effort`; Responses send nested `reasoning.effort` |
 | `OpenAiCompatibleAgentSession` | Completions/Responses tool-loop session; `MaxToolRounds` 35 / Explore 120 (`ResolveMaxToolRounds`); soft-pause → `RethinkToolUsage` via `SoftPauseAfterToolLoopExhaustion` (non-Explore); Explore budget hit → no-tools recap |
-| `OpenAiCompletionsClient` / `OpenAiResponsesClient` | Streaming SSE adapters (`StreamCreateAsync` → `OpenAiStreamChunk`); Responses body uses nested `reasoning.effort` + always `store: true` |
-| `OpenAiCacheFriendlyTranscriptBuilder` | Stable-prefix transcript + `prompt_cache_key`; each history turn’s user content is prefixed with `[turnId={guid}]`; skips `IsExcludedFromContext` turns. Responses: always `store: true`; `previous_response_id` omitted on first full rebuild, required on delta hops, passed on mid-loop full rebuilds when known. Explicit breakpoints via `SupportsExplicitPromptCache` (GPT-5.6+ and not managed) |
+| `OpenAiCompletionsClient` / `OpenAiResponsesClient` | Streaming SSE adapters (`StreamCreateAsync` → `OpenAiStreamChunk`); Responses body uses nested `reasoning.effort`; `store`/`include`/`previous_response_id` follow chaining gate; `call_id` from model only (never `fc_*`/Guid); merges tools from `response.completed.output` |
+| `OpenAiFilesClient` | Multipart `POST …/files`; images `purpose=vision`, non-images `purpose=user_data`; `EnsureBinaryFileIdsAsync` sets `DysonBinaryAttachment.FileId` before Responses transcript build (data-URL fallback on failure) |
+| `OpenAiCacheFriendlyTranscriptBuilder` | Stable-prefix transcript + `prompt_cache_key`; each history turn’s user content is prefixed with `[turnId={guid}]`; skips `IsExcludedFromContext` turns. Responses: direct = `store: true` + delta/`previous_response_id`; managed = `store: false` + reasoning→call→output replay. Explicit breakpoints via `SupportsExplicitPromptCache` (GPT-5.6+ and not managed). Binary attachments: Completions nested `image_url` data URL; Responses `file_id` preferred (see README vision matrix) |
 | `DysonWorkspaceToolExecutor` | Workdir-scoped file tools (via `IDysonWorkspaceFileSystem`) + `RenameSession` + `GetDateTime` + `WaitForSeconds` (1–300) + `SubmitPlan` (Plan mode only → `.dyson/plans/` + PlanResult turn) + `ShellExecute` + **long-running shell tools** (`StartLongRunningShell` / `ListLongRunningShells` / `ReadLongRunningShellTail` / `AbortLongRunningShell` / `RequestLongRunningShellCancellation` / `LongRunningShellInteract` / `SubscribeToLongRunningShellCompletion`) + web search/fetch tools (tool-owned summarize) + **subagent tools** (`StartSubagent` / `ListSubagents` / `WaitForSubagent` / `InspectSubagentLog` / `StopSubagent` / `SubmitSubagentReport`) + **inter-agent / Ask** (`TriggerParentEvent` / `RespondToSubagentEvent` / `TriggerSubagentEvent` / `AskQuestion` / `AskQuestionFromParent`) + **task completion** (`CompleteTask` / `ConfirmTaskComplete` / `ContinueWork`) + **`ResumeCurrentTask`** (rethink phase) + **session todo tools** (`ListTodos` / `CreateTodo` / `UpdateTodo` / `DeleteTodo`) + **browser tools** (when `BrowserControl` set: `OpenBrowser`, `ListBrowserWindows`, `CloseBrowser`, `ResizeBrowser`, tab/nav/click/type/JS/screenshot/log helpers); stubs for the rest |
 | `DysonFileManager` | Work-root sandbox helper over `IDysonWorkspaceFileSystem`: `WriteNewPlan` / `ReadText` / `EnsurePlansDirectory` under `.dyson/plans/` |
 | `IDysonWorkspaceFileSystem` / `DysonWorkspaceSubjects` / `DysonWorkspaceEntry` | Sandboxed workspace IO; `InitializeAsync(subjectId)` (local: `"local_fs"`); `NativeRootPath` for shells/git |
@@ -44,6 +45,8 @@ Conceptual overview: [README.md](README.md).
 | `DysonCliProxyDownloader` / `DysonCliProxyPaths` / `DysonCliProxyAssetResolver` | Download, unpack paths, asset URL resolution |
 | `DysonThirdPartyResources` | Pinned third-party release URLs (`CliProxyApi.ReleaseTagUrl` / `Version`) |
 | `OpenAiCompatibleHttp.SupportsExplicitPromptCache` | True for direct GPT-5.6+ slugs when `ManagedSource` is unset |
+| `OpenAiCompatibleHttp.SupportsResponsesServerChaining` | True when `ManagedSource` is unset (direct OpenAI store+`previous_response_id`); false for CLIProxy managed → local item replay |
+| `OpenAiCompatibleHttp.IsUsableResponsesCallId` / `IsMissingToolCallForOutputError` | `call_id` must be usable (not `fc_*`/Guid); detector for the known store-chain 400 |
 
 ### Session members (high level)
 
@@ -77,7 +80,7 @@ Conceptual overview: [README.md](README.md).
 | ---- | ----- |
 | `DysonAgentTurn` | Turn kind, instruction, agent title, optional `PlanRelativePath` (PlanResult / BeginBuildPlan), `AssistantText`, `ReasoningLog` / `ReasoningText` (ordered Thought+InterimText log + denormalized Thought join; UI + persist only, not in model transcript), `StartedUtc` / `CompletedUtc` (UI chrome + persistence; not in model transcript), `IsExcludedFromContext` (omit from provider transcripts; UI Dropped + Restore), live `StreamingPreview`/`IsStreaming` + `ReasoningStreamingPreview`/`IsReasoningStreaming`/`AssistantTextChanged`, tool calls, tracked status, response log, compact history |
 | `DysonReasoningSegment` / `DysonReasoningSegmentKind` | Ordered log entry (`Thought` / `InterimText`) with `RoundIndex`; serialized as turn `ReasoningLogJson` |
-| `DysonReasoningHistoryUi` | `ShouldExpandThought` — latest Thought open until `AssistantText` (or while reasoning streams); priors collapsed |
+| `DysonReasoningHistoryUi` | `ShouldExpandSegment` — latest Thought/InterimText slot open until assistant body (`AssistantText` or streaming preview) unless reasoning still streams; priors collapsed |
 | `DysonAgentTurnKind` | `Normal`, `ExpandThoughtProcess`, `TaskCompletionConfirm`, `Continuation`, `ReportSummary`, `InitializeSession`, `PlanResult`, `BeginBuildPlan`, `SubagentReportProcessing`, `ShellExited`, `RethinkToolUsage` (=10) |
 | `DysonAgentTurnKindDisplay` | `GetDisplayName` → UI labels (e.g. TaskCompletionConfirm → "Completion confirmed", RethinkToolUsage → "Rethink tool usage") |
 | `DysonPlanResultFlow` | Factory + Instruction continuity mandate after `SubmitPlan`; legacy `BuildPlanMarker` / `BuildPlanUserPrompt` for sticky dismissal of old sessions; `AppendPlanResultTurn` on session |
@@ -91,7 +94,7 @@ Conceptual overview: [README.md](README.md).
 | `DysonToolCallStatus` | `Queued`, `Working`, `Completed`, `Failed` |
 | `DysonTrackedToolCall` | Live status + result for UI rows |
 | `DysonToolCallResult` | Completed/failed payload (`IsError`, `Content`, optional `BinaryAttachment`, `EndsCurrentTurn` soft-closes the calling turn after the staged round; keeps same-round model content when present, else tool-specific harness note) |
-| `DysonBinaryAttachment` | LoadBinary media (`FileName` with ext, `Extension`, `MimeType`, `Base64Data`); transcript builder emits Completions/Responses multimodal parts |
+| `DysonBinaryAttachment` | LoadBinary / screenshot media (`FileName` with ext, `Extension`, `MimeType`, `Base64Data`, optional mutable `FileId` after Responses Files upload); Completions emits nested `image_url` data URL; Responses prefers `input_image`/`input_file` `file_id` |
 | `DysonToolCallStatusChangedEventArgs` | Previous/new status + tracked row |
 | `DysonToolCallScheduler` | `RunStagedAsync` — concurrent same-stage, barrier across stages; multi-round Queued-only runs |
 
@@ -195,7 +198,7 @@ Documented under [docs/storage](../storage/models.md), [sessions.md](../storage/
 - `DysonDbContext`, `DysonModelStore`, `DysonSessionStore`, `DysonWorkDirectoryStore`, `DysonAppSettingsStore`
 - `DysonModelProviderEntity` (providers own `ApiKey` / `BaseUrl` / `ProviderKind` / optional `ManagedSource` / `OpenAiApiMode`)
 - `DysonModelSlugEntity` (slugs own `Slug` + `DisplayAlias` + `IsEnabled` + optional `DefaultReasoningEffort` + `ReasoningModes`)
-- `DysonModelStore.UpsertManagedProviderAsync` / `SetSlugEnabledAsync` — managed import + per-slug enable (see [storage/models.md](../storage/models.md)#managed-providers-cliproxy)
+- `DysonModelStore.UpsertManagedProviderAsync` / `SetSlugEnabledAsync` / `SetSlugDefaultReasoningEffortAsync` — managed import + per-slug enable + default effort (see [storage/models.md](../storage/models.md)#managed-providers-cliproxy)
 - `DysonAppSettingEntity` / `DysonAppSettingKeys` (key/value prefs, e.g. web search summarizer slug; `cliproxy_*` mirrors)
 - `DysonWorkDirectoryEntity`, `DysonNativeFolderPicker`, `DysonGitInfo`
 - Session/turn/log entities and `DysonPersistedSession` (sessions reference `ModelSlugId`, optional `ReasoningEffort`, + optional `WorkDirectoryId`; aggregate includes todos)

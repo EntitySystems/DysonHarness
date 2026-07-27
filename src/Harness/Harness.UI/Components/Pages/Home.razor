@@ -49,7 +49,7 @@
                    OnCancelPrompt="CancelPrompt"
                    SelectedSlugId="_selectedSlugId"
                    SelectedSlugIdChanged="OnSelectedSlugIdChangedAsync"
-                   ReasoningEffort="_reasoningEffort"
+                   ReasoningEffort="@_reasoningEffort"
                    ReasoningEffortChanged="OnReasoningEffortChangedAsync"
                    SelectedAgentMode="@_selectedAgentMode"
                    SelectedAgentModeChanged="OnAgentModeChanged"
@@ -175,8 +175,17 @@
 
     private async Task OnSelectedSlugIdChangedAsync(Guid? id)
     {
-        _selectedSlugId = id;
-        await Host.SetSessionModelSlugAsync(id);
+        var result = await Host.SetSessionModelSlugAsync(id);
+        if (result.IsError)
+        {
+            SyncSelectedSlugFromSession();
+            SyncReasoningEffortFromHost();
+            return;
+        }
+
+        SyncSelectedSlugFromSession();
+        if (Host.Session is null)
+            _selectedSlugId = id;
         SyncReasoningEffortFromHost();
     }
 

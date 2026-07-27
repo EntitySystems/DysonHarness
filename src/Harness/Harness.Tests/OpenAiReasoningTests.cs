@@ -18,6 +18,50 @@ public class OpenAiReasoningTests
         AssertResponsesCreateBodyNestedReasoningEffort();
         AssertPromptCacheOptionsGate();
         AssertTurnReasoningPreviewHandoff();
+        AssertNullEffortFallsBackToSlugDefault();
+        AssertExplicitNoneKeepsLiteralNone();
+    }
+
+    private static void AssertNullEffortFallsBackToSlugDefault()
+    {
+        var slug = new DysonModelSlugEntity
+        {
+            Id = Guid.NewGuid(),
+            ProviderId = Guid.NewGuid(),
+            Slug = "gpt-test",
+            DisplayAlias = "gpt-test",
+            DefaultReasoningEffort = "medium",
+        };
+        var provider = new OpenAiCompatibleAgentProvider(
+            provider: null,
+            slug: slug,
+            reasoningEffort: null);
+        if (!string.Equals(provider.ReasoningEffort, "medium", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"null reasoningEffort must use slug DefaultReasoningEffort 'medium', got '{provider.ReasoningEffort ?? "null"}'.");
+        }
+    }
+
+    private static void AssertExplicitNoneKeepsLiteralNone()
+    {
+        var slug = new DysonModelSlugEntity
+        {
+            Id = Guid.NewGuid(),
+            ProviderId = Guid.NewGuid(),
+            Slug = "gpt-test",
+            DisplayAlias = "gpt-test",
+            DefaultReasoningEffort = "medium",
+        };
+        var provider = new OpenAiCompatibleAgentProvider(
+            provider: null,
+            slug: slug,
+            reasoningEffort: "none");
+        if (!string.Equals(provider.ReasoningEffort, "none", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"explicit reasoningEffort 'none' must not fall back to slug default, got '{provider.ReasoningEffort ?? "null"}'.");
+        }
     }
 
     private static void AssertNormalizeBaseUrl()

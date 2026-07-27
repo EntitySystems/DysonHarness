@@ -106,33 +106,36 @@ public sealed class OpenAiResponsesClient(HttpClient http)
                 if (obj["item"] is JsonObject item
                     && string.Equals(item["type"]?.GetValue<string>(), "function_call", StringComparison.Ordinal))
                 {
-                    var itemId = TryGetString(item["id"])
-                        ?? TryGetString(item["call_id"])
-                        ?? Guid.NewGuid().ToString("N");
-                    var slot = GetOrCreateFunctionSlot(functionCalls, itemId);
-                    slot.CallId = TryGetString(item["call_id"]) ?? itemId;
-                    slot.ToolName = TryGetString(item["name"]);
-                    slot.Arguments.Clear();
-                    if (TryGetString(item["arguments"]) is { Length: > 0 } initialArgs)
-                        slot.Arguments.Append(initialArgs);
+                    var itemId = ResolveFunctionItemKey(item);
+                    if (itemId is not null)
+                    {
+                        var slot = GetOrCreateFunctionSlot(functionCalls, itemId);
+                        ApplyFunctionCallFields(slot, item, obj["output_index"]?.GetValue<int>());
 
-                    toolDeltas =
-                    [
-                        new OpenAiStreamToolCallDelta
+                        if (OpenAiCompatibleHttp.IsUsableResponsesCallId(slot.CallId))
                         {
-                            Index = obj["output_index"]?.GetValue<int>() ?? 0,
-                            CallId = slot.CallId,
-                            ToolName = slot.ToolName,
-                        },
-                    ];
+                            toolDeltas =
+                            [
+                                new OpenAiStreamToolCallDelta
+                                {
+                                    Index = slot.OutputIndex,
+                                    CallId = slot.CallId,
+                                    ToolName = slot.ToolName,
+                                },
+                            ];
+                        }
+                    }
                 }
             }
             else if (string.Equals(eventType, "response.function_call_arguments.delta", StringComparison.Ordinal))
             {
-                var itemId = TryGetString(obj["item_id"]) ?? "";
+                var itemId = TryGetString(obj["item_id"]);
                 if (!string.IsNullOrEmpty(itemId))
                 {
                     var slot = GetOrCreateFunctionSlot(functionCalls, itemId);
+                    if (obj["output_index"]?.GetValue<int>() is int idx)
+                        slot.OutputIndex = Math.Min(slot.OutputIndex, idx);
+
                     var delta = TryGetString(obj["delta"]);
                     if (!string.IsNullOrEmpty(delta))
                         slot.Arguments.Append(delta);
@@ -141,8 +144,10 @@ public sealed class OpenAiResponsesClient(HttpClient http)
                     [
                         new OpenAiStreamToolCallDelta
                         {
-                            Index = obj["output_index"]?.GetValue<int>() ?? 0,
-                            CallId = slot.CallId ?? itemId,
+                            Index = slot.OutputIndex == int.MaxValue ? 0 : slot.OutputIndex,
+                            CallId = OpenAiCompatibleHttp.IsUsableResponsesCallId(slot.CallId)
+                                ? slot.CallId
+                                : null,
                             ToolName = slot.ToolName,
                             ArgumentsDelta = delta,
                         },
@@ -152,7 +157,7 @@ public sealed class OpenAiResponsesClient(HttpClient http)
             else if (string.Equals(eventType, "response.function_call_arguments.done", StringComparison.Ordinal))
             {
                 // Authoritative full arguments; name is often omitted by the live API — keep from added.
-                var itemId = TryGetString(obj["item_id"]) ?? "";
+                var itemId = TryGetString(obj["item_id"]);
                 if (!string.IsNullOrEmpty(itemId))
                 {
                     var slot = GetOrCreateFunctionSlot(functionCalls, itemId);
@@ -173,19 +178,11 @@ public sealed class OpenAiResponsesClient(HttpClient http)
                 if (obj["item"] is JsonObject item
                     && string.Equals(item["type"]?.GetValue<string>(), "function_call", StringComparison.Ordinal))
                 {
-                    var itemId = TryGetString(item["id"])
-                        ?? TryGetString(item["call_id"])
-                        ?? "";
-                    if (!string.IsNullOrEmpty(itemId))
+                    var itemId = ResolveFunctionItemKey(item);
+                    if (itemId is not null)
                     {
                         var slot = GetOrCreateFunctionSlot(functionCalls, itemId);
-                        slot.CallId = TryGetString(item["call_id"]) ?? itemId;
-                        slot.ToolName = TryGetString(item["name"]) ?? slot.ToolName;
-                        if (TryGetString(item["arguments"]) is { } args)
-                        {
-                            slot.Arguments.Clear();
-                            slot.Arguments.Append(args);
-                        }
+                        ApplyFunctionCallFields(slot, item, obj["output_index"]?.GetValue<int>());
                     }
                 }
             }
@@ -212,7 +209,8 @@ public sealed class OpenAiResponsesClient(HttpClient http)
             yield break;
         }
 
-        var toolCalls = BuildToolCalls(functionCalls);
+        var toolCalls = MergeToolCalls(functionCalls, completedResponse);
+        var reasoningItems = ExtractRawReasoningItems(completedResponse);
         var usageHint = completedResponse is not null
             ? OpenAiCompatibleHttp.FormatUsageCacheHint(completedResponse)
             : null;
@@ -232,11 +230,15 @@ public sealed class OpenAiResponsesClient(HttpClient http)
                 ToolCalls = toolCalls,
                 ResponseId = responseId,
                 UsageCacheHint = usageHint,
+                ReasoningOutputItems = reasoningItems,
             },
         });
     }
 
-    /// <summary>Builds the POST /responses JSON body (nested <c>reasoning.effort</c>, not top-level <c>reasoning_effort</c>).</summary>
+    /// <summary>
+    /// Builds the POST /responses JSON body (nested <c>reasoning.effort</c>, not top-level <c>reasoning_effort</c>).
+    /// When <c>store: false</c>, requests <c>reasoning.encrypted_content</c> for stateless replay.
+    /// </summary>
     public static JsonObject BuildCreateBody(
         OpenAiCompatibleAgentProvider provider,
         OpenAiCacheFriendlyTranscriptBuilder.BuiltResponsesRequest built)
@@ -257,6 +259,14 @@ public sealed class OpenAiResponsesClient(HttpClient http)
 
         if (!string.IsNullOrWhiteSpace(built.PreviousResponseId))
             body["previous_response_id"] = built.PreviousResponseId;
+
+        if (!built.Store)
+        {
+            body["include"] = new JsonArray
+            {
+                "reasoning.encrypted_content",
+            };
+        }
 
         if (built.IncludeExplicitBreakpoints)
         {
@@ -283,6 +293,7 @@ public sealed class OpenAiResponsesClient(HttpClient http)
         var contentParts = new List<string>();
         var reasoningParts = new List<string>();
         var toolCalls = new List<DysonToolCall>();
+        var reasoningItems = new List<JsonObject>();
 
         foreach (var item in output)
         {
@@ -312,21 +323,20 @@ public sealed class OpenAiResponsesClient(HttpClient http)
             else if (string.Equals(type, "reasoning", StringComparison.Ordinal))
             {
                 AppendReasoningParts(obj, reasoningParts);
+                reasoningItems.Add((JsonObject)obj.DeepClone());
             }
             else if (string.Equals(type, "function_call", StringComparison.Ordinal))
             {
-                var id = obj["call_id"]?.GetValue<string>()
-                    ?? obj["id"]?.GetValue<string>()
-                    ?? Guid.NewGuid().ToString("N");
+                var callId = TryGetUsableCallId(obj);
                 var name = obj["name"]?.GetValue<string>() ?? "";
                 var args = obj["arguments"]?.GetValue<string>() ?? "{}";
-                if (string.IsNullOrWhiteSpace(name))
+                if (string.IsNullOrWhiteSpace(name) || callId is null)
                     continue;
 
                 var (stage, argsClean) = OpenAiCompatibleHttp.SplitStageFromArguments(args);
                 toolCalls.Add(new DysonToolCall
                 {
-                    CallId = id,
+                    CallId = callId,
                     ToolName = name,
                     Stage = stage,
                     ArgumentsJson = argsClean,
@@ -343,6 +353,7 @@ public sealed class OpenAiResponsesClient(HttpClient http)
             ToolCalls = toolCalls,
             ResponseId = response["id"]?.GetValue<string>(),
             UsageCacheHint = OpenAiCompatibleHttp.FormatUsageCacheHint(response),
+            ReasoningOutputItems = reasoningItems,
         });
     }
 
@@ -365,6 +376,24 @@ public sealed class OpenAiResponsesClient(HttpClient http)
         }
 
         return parts.Count == 0 ? null : string.Join("\n", parts);
+    }
+
+    private static IReadOnlyList<JsonObject> ExtractRawReasoningItems(JsonObject? response)
+    {
+        if (response?["output"] is not JsonArray output)
+            return [];
+
+        var items = new List<JsonObject>();
+        foreach (var item in output)
+        {
+            if (item is JsonObject obj
+                && string.Equals(obj["type"]?.GetValue<string>(), "reasoning", StringComparison.Ordinal))
+            {
+                items.Add((JsonObject)obj.DeepClone());
+            }
+        }
+
+        return items;
     }
 
     private static void AppendReasoningParts(JsonObject reasoningItem, List<string> parts)
@@ -409,19 +438,108 @@ public sealed class OpenAiResponsesClient(HttpClient http)
         return slot;
     }
 
-    private static List<DysonToolCall> BuildToolCalls(Dictionary<string, ResponsesFunctionSlot> slots)
+    /// <summary>
+    /// Slot key for SSE assembly: prefer item <c>id</c> (<c>fc_…</c>); never invent a Guid.
+    /// </summary>
+    private static string? ResolveFunctionItemKey(JsonObject item)
     {
+        var id = TryGetString(item["id"]);
+        if (!string.IsNullOrEmpty(id))
+            return id;
+
+        var callId = TryGetString(item["call_id"]);
+        return string.IsNullOrEmpty(callId) ? null : callId;
+    }
+
+    private static void ApplyFunctionCallFields(
+        ResponsesFunctionSlot slot,
+        JsonObject item,
+        int? outputIndex)
+    {
+        var callId = TryGetUsableCallId(item);
+        if (callId is not null)
+            slot.CallId = callId;
+
+        var name = TryGetString(item["name"]);
+        if (!string.IsNullOrEmpty(name))
+            slot.ToolName = name;
+
+        if (TryGetString(item["arguments"]) is { Length: > 0 } args)
+        {
+            slot.Arguments.Clear();
+            slot.Arguments.Append(args);
+        }
+
+        if (outputIndex is int idx)
+            slot.OutputIndex = Math.Min(slot.OutputIndex, idx);
+    }
+
+    private static string? TryGetUsableCallId(JsonObject item)
+    {
+        var callId = TryGetString(item["call_id"]);
+        return OpenAiCompatibleHttp.IsUsableResponsesCallId(callId) ? callId : null;
+    }
+
+    /// <summary>
+    /// Prefer <c>response.completed.output</c> (ordered) when present; else stream slots by output_index.
+    /// Never emits <c>fc_*</c> / Guid as <c>call_id</c>.
+    /// </summary>
+    private static List<DysonToolCall> MergeToolCalls(
+        Dictionary<string, ResponsesFunctionSlot> slots,
+        JsonObject? completedResponse)
+    {
+        if (completedResponse?["output"] is JsonArray output)
+        {
+            var fromCompleted = new List<DysonToolCall>();
+            foreach (var item in output)
+            {
+                if (item is not JsonObject obj)
+                    continue;
+                if (!string.Equals(obj["type"]?.GetValue<string>(), "function_call", StringComparison.Ordinal))
+                    continue;
+
+                var callId = TryGetUsableCallId(obj);
+                var name = TryGetString(obj["name"]);
+                if (callId is null || string.IsNullOrWhiteSpace(name))
+                    continue;
+
+                var args = TryGetString(obj["arguments"]) ?? "{}";
+                var (stage, argsClean) = OpenAiCompatibleHttp.SplitStageFromArguments(args);
+                fromCompleted.Add(new DysonToolCall
+                {
+                    CallId = callId,
+                    ToolName = name,
+                    Stage = stage,
+                    ArgumentsJson = argsClean,
+                });
+            }
+
+            if (fromCompleted.Count > 0)
+                return fromCompleted;
+        }
+
+        return BuildToolCallsFromSlots(slots);
+    }
+
+    private static List<DysonToolCall> BuildToolCallsFromSlots(Dictionary<string, ResponsesFunctionSlot> slots)
+    {
+        var ordered = slots.Values
+            .OrderBy(s => s.OutputIndex)
+            .ThenBy(s => s.CallId, StringComparer.Ordinal);
+
         var toolCalls = new List<DysonToolCall>();
-        foreach (var slot in slots.Values)
+        foreach (var slot in ordered)
         {
             if (string.IsNullOrWhiteSpace(slot.ToolName))
+                continue;
+            if (!OpenAiCompatibleHttp.IsUsableResponsesCallId(slot.CallId))
                 continue;
 
             var args = slot.Arguments.Length == 0 ? "{}" : slot.Arguments.ToString();
             var (stage, argsClean) = OpenAiCompatibleHttp.SplitStageFromArguments(args);
             toolCalls.Add(new DysonToolCall
             {
-                CallId = string.IsNullOrEmpty(slot.CallId) ? Guid.NewGuid().ToString("N") : slot.CallId,
+                CallId = slot.CallId!,
                 ToolName = slot.ToolName,
                 Stage = stage,
                 ArgumentsJson = argsClean,
@@ -463,5 +581,6 @@ public sealed class OpenAiResponsesClient(HttpClient http)
         public string? CallId { get; set; }
         public string? ToolName { get; set; }
         public StringBuilder Arguments { get; } = new();
+        public int OutputIndex { get; set; } = int.MaxValue;
     }
 }

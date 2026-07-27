@@ -87,60 +87,106 @@
                         <div class="turn-block__thinking-history">
                             @{
                                 var thoughtOrdinal = 0;
+                                var interimOrdinal = 0;
                                 var thoughtCount = Turn.ReasoningLog.Count(s =>
                                     s.Kind == DysonReasoningSegmentKind.Thought);
-                                var hasAssistant = !string.IsNullOrWhiteSpace(Turn.AssistantText);
+                                var interimCount = Turn.ReasoningLog.Count(s =>
+                                    s.Kind == DysonReasoningSegmentKind.InterimText
+                                    && !string.IsNullOrWhiteSpace(s.Text));
                                 var liveStreaming = Turn.IsReasoningStreaming
                                     && !string.IsNullOrEmpty(Turn.ReasoningStreamingPreview);
-                                // While a trailing live Thought streams, treat it as the latest slot
-                                // so prior committed Thoughts stay collapsed.
-                                var expandSlotCount = liveStreaming ? thoughtCount + 1 : thoughtCount;
                             }
                             @foreach (var segment in Turn.ReasoningLog)
                             {
                                 if (segment.Kind == DysonReasoningSegmentKind.Thought)
                                 {
-                                    var expand = DysonReasoningHistoryUi.ShouldExpandThought(
-                                        thoughtOrdinal,
-                                        expandSlotCount,
-                                        hasAssistant,
-                                        Turn.IsReasoningStreaming);
-                                    var attrs = expand
-                                        ? new Dictionary<string, object> { ["open"] = true }
-                                        : null;
-                                    <details class="turn-block__reasoning" @attributes="attrs">
-                                        <summary class="turn-block__reasoning-summary">
-                                            @(thoughtCount > 1 || liveStreaming ? $"Thinking {thoughtOrdinal + 1}" : "Thinking")
-                                        </summary>
-                                        <div class="turn-block__body">@MarkdownRenderer.ToHtml(segment.Text)</div>
-                                    </details>
+                                    var key = $"t:{thoughtOrdinal}";
+                                    var fallback = thoughtCount > 1 || liveStreaming
+                                        ? $"Thinking {thoughtOrdinal + 1}"
+                                        : "Thinking";
+                                    var (title, body) = SplitSegmentTitle(segment.Text, fallback);
+                                    <div class="turn-block__reasoning" @key="@($"{Turn.Id}:{key}")">
+                                        <button type="button"
+                                                class="turn-block__reasoning-summary"
+                                                aria-expanded="@IsSegmentExpanded(key)"
+                                                @onclick="() => ToggleSegment(key)"
+                                                @onclick:stopPropagation="true">
+                                            <span class="turn-block__reasoning-chevron" aria-hidden="true">@(IsSegmentExpanded(key) ? "▾" : "▸")</span>
+                                            <span>@title</span>
+                                        </button>
+                                        @if (IsSegmentExpanded(key))
+                                        {
+                                            <div class="turn-block__body">@MarkdownRenderer.ToHtml(body)</div>
+                                        }
+                                    </div>
                                     thoughtOrdinal++;
                                 }
                                 else if (segment.Kind == DysonReasoningSegmentKind.InterimText
                                          && !string.IsNullOrWhiteSpace(segment.Text))
                                 {
-                                    <div class="turn-block__interim">@MarkdownRenderer.ToHtml(segment.Text)</div>
+                                    var key = $"i:{interimOrdinal}";
+                                    var fallback = interimCount > 1
+                                        ? $"Note {interimOrdinal + 1}"
+                                        : "Note";
+                                    var (title, body) = SplitSegmentTitle(segment.Text, fallback);
+                                    <div class="turn-block__reasoning turn-block__reasoning--interim" @key="@($"{Turn.Id}:{key}")">
+                                        <button type="button"
+                                                class="turn-block__reasoning-summary"
+                                                aria-expanded="@IsSegmentExpanded(key)"
+                                                @onclick="() => ToggleSegment(key)"
+                                                @onclick:stopPropagation="true">
+                                            <span class="turn-block__reasoning-chevron" aria-hidden="true">@(IsSegmentExpanded(key) ? "▾" : "▸")</span>
+                                            <span>@title</span>
+                                        </button>
+                                        @if (IsSegmentExpanded(key))
+                                        {
+                                            <div class="turn-block__body">@MarkdownRenderer.ToHtml(body)</div>
+                                        }
+                                    </div>
+                                    interimOrdinal++;
                                 }
                             }
 
                             @if (liveStreaming)
                             {
-                                <details class="turn-block__reasoning turn-block__reasoning--live" open="true">
-                                    <summary class="turn-block__reasoning-summary">
-                                        @(thoughtCount > 0 ? $"Thinking {thoughtCount + 1}" : "Thinking")
-                                    </summary>
-                                    <div class="turn-block__body turn-block__body--streaming">
-                                        @Turn.ReasoningStreamingPreview<span class="turn-block__caret" aria-hidden="true"></span>
-                                    </div>
-                                </details>
+                                const string liveKey = "live";
+                                var liveTitle = thoughtCount > 0 ? $"Thinking {thoughtCount + 1}" : "Thinking";
+                                <div class="turn-block__reasoning turn-block__reasoning--live" @key="@($"{Turn.Id}:{liveKey}")">
+                                    <button type="button"
+                                            class="turn-block__reasoning-summary"
+                                            aria-expanded="@IsSegmentExpanded(liveKey)"
+                                            @onclick="() => ToggleSegment(liveKey)"
+                                            @onclick:stopPropagation="true">
+                                        <span class="turn-block__reasoning-chevron" aria-hidden="true">@(IsSegmentExpanded(liveKey) ? "▾" : "▸")</span>
+                                        <span>@liveTitle</span>
+                                    </button>
+                                    @if (IsSegmentExpanded(liveKey))
+                                    {
+                                        <div class="turn-block__body turn-block__body--streaming">
+                                            @Turn.ReasoningStreamingPreview<span class="turn-block__caret" aria-hidden="true"></span>
+                                        </div>
+                                    }
+                                </div>
                             }
                             else if (Turn.ReasoningLog.Count == 0 && !string.IsNullOrWhiteSpace(Turn.ReasoningText))
                             {
                                 @* Legacy blob without ReasoningLog (should be rare after restore synthesis). *@
-                                <details class="turn-block__reasoning">
-                                    <summary class="turn-block__reasoning-summary">Thinking</summary>
-                                    <div class="turn-block__body">@MarkdownRenderer.ToHtml(Turn.ReasoningText)</div>
-                                </details>
+                                const string legacyKey = "legacy";
+                                var (legacyTitle, legacyBody) = SplitSegmentTitle(Turn.ReasoningText, "Thinking");
+                                <div class="turn-block__reasoning" @key="@($"{Turn.Id}:{legacyKey}")">
+                                    <button type="button"
+                                            class="turn-block__reasoning-summary"
+                                            aria-expanded="@IsSegmentExpanded(legacyKey)"
+                                            @onclick="() => ToggleSegment(legacyKey)"
+                                            @onclick:stopPropagation="true">
+                                        <span class="turn-block__reasoning-chevron" aria-hidden="true">@(IsSegmentExpanded(legacyKey) ? "▾" : "▸")</span>
+                                        <span>@legacyTitle</span>
+                                    </button>
+                                    @if (IsSegmentExpanded(legacyKey))
+                                    {
+                                        <div class="turn-block__body">@MarkdownRenderer.ToHtml(legacyBody)</div>
+                                    }
+                                </div>
                             }
                         </div>
                     }
@@ -189,6 +235,8 @@
     private ElementReference _resizerEl;
     private DotNetObjectReference<TurnBlock>? _dotNetRef;
     private bool _resizerAttached;
+    private readonly HashSet<string> _expandedKeys = new(StringComparer.Ordinal);
+    private string? _expandPolicyFingerprint;
 
     [Parameter, EditorRequired] public DysonAgentTurn Turn { get; set; } = default!;
 
@@ -266,6 +314,107 @@
         Turn.TrackedToolCalls.Any(t =>
             t.Status is DysonToolCallStatus.Queued or DysonToolCallStatus.Working)
         || (Turn.ToolCalls.Count > 0 && Turn.TrackedToolCalls.Count == 0);
+
+    protected override void OnParametersSet()
+    {
+        var fingerprint = BuildExpandPolicyFingerprint();
+        if (fingerprint == _expandPolicyFingerprint)
+            return;
+
+        _expandPolicyFingerprint = fingerprint;
+        ApplyExpandPolicy();
+    }
+
+    private string BuildExpandPolicyFingerprint()
+    {
+        var liveStreaming = Turn.IsReasoningStreaming
+            && !string.IsNullOrEmpty(Turn.ReasoningStreamingPreview);
+        // Lengths only — preview growth must not clear user toggles every token.
+        var parts = new List<string>(Turn.ReasoningLog.Count + 3)
+        {
+            HasAssistantBody ? "1" : "0",
+            Turn.IsReasoningStreaming ? "1" : "0",
+            liveStreaming ? "1" : "0",
+        };
+        foreach (var segment in Turn.ReasoningLog)
+            parts.Add($"{(int)segment.Kind}:{segment.Text.Length}");
+
+        if (Turn.ReasoningLog.Count == 0 && !string.IsNullOrWhiteSpace(Turn.ReasoningText))
+            parts.Add($"legacy:{Turn.ReasoningText.Length}");
+
+        return string.Join('|', parts);
+    }
+
+    private void ApplyExpandPolicy()
+    {
+        _expandedKeys.Clear();
+
+        var keys = new List<string>();
+        var thoughtOrdinal = 0;
+        var interimOrdinal = 0;
+        foreach (var segment in Turn.ReasoningLog)
+        {
+            if (segment.Kind == DysonReasoningSegmentKind.Thought)
+            {
+                keys.Add($"t:{thoughtOrdinal}");
+                thoughtOrdinal++;
+            }
+            else if (segment.Kind == DysonReasoningSegmentKind.InterimText
+                     && !string.IsNullOrWhiteSpace(segment.Text))
+            {
+                keys.Add($"i:{interimOrdinal}");
+                interimOrdinal++;
+            }
+        }
+
+        var liveStreaming = Turn.IsReasoningStreaming
+            && !string.IsNullOrEmpty(Turn.ReasoningStreamingPreview);
+        var expandSlotCount = liveStreaming ? keys.Count + 1 : keys.Count;
+        var hasAssistantBody = HasAssistantBody;
+
+        for (var i = 0; i < keys.Count; i++)
+        {
+            if (DysonReasoningHistoryUi.ShouldExpandSegment(
+                    i, expandSlotCount, hasAssistantBody, Turn.IsReasoningStreaming))
+            {
+                _expandedKeys.Add(keys[i]);
+            }
+        }
+
+        if (liveStreaming)
+        {
+            if (DysonReasoningHistoryUi.ShouldExpandSegment(
+                    keys.Count, expandSlotCount, hasAssistantBody, Turn.IsReasoningStreaming))
+            {
+                _expandedKeys.Add("live");
+            }
+        }
+        else if (keys.Count == 0 && !string.IsNullOrWhiteSpace(Turn.ReasoningText))
+        {
+            if (DysonReasoningHistoryUi.ShouldExpandSegment(
+                    0, 1, hasAssistantBody, Turn.IsReasoningStreaming))
+            {
+                _expandedKeys.Add("legacy");
+            }
+        }
+    }
+
+    private bool IsSegmentExpanded(string key) => _expandedKeys.Contains(key);
+
+    private void ToggleSegment(string key)
+    {
+        if (!_expandedKeys.Remove(key))
+            _expandedKeys.Add(key);
+    }
+
+    private static (string Title, string Body) SplitSegmentTitle(string text, string fallback)
+    {
+        var parsed = DysonAgentTurn.TryParseAgentTitle(text);
+        if (parsed.IsSuccess && !string.IsNullOrWhiteSpace(parsed.Value.Title))
+            return (parsed.Value.Title!, parsed.Value.Body);
+
+        return (fallback, text);
+    }
 
     private Task HandleCancelAsync() => CanCancel ? OnCancel.InvokeAsync() : Task.CompletedTask;
 

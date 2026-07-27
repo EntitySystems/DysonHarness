@@ -92,7 +92,7 @@ Cascade-delete: removing a provider deletes its slugs.
 
 Settings → Models can **Import** ChatGPT Codex or Grok Build via a pinned local [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) binary under `{AppContext.BaseDirectory}/external/cliproxy/{version}/` (lazy download; not LocalAppData). Managed rows stay `ProviderKind=OpenAICompatible`, `OpenAiApiMode=Responses`, `BaseUrl=http://127.0.0.1:{port}/v1`, with `ApiKey` = the local proxy Bearer key. OAuth goes through CLIProxy Management API (`codex-auth-url` / `xai-auth-url` + `get-auth-status`); **Verify** syncs `/v1/models` into the slug set.
 
-`DysonModelStore.UpsertManagedProviderAsync` keeps an id-stable row per `ManagedSource` and **merges** slugs by name: existing rows keep `Id` and `IsEnabled` while catalog fields refresh; new API models insert enabled; missing API models are removed. `UpdateProviderAsync` / slug add-update-remove reject when `ManagedSource` is set. `SetSlugEnabledAsync` toggles enablement for managed slugs only.
+`DysonModelStore.UpsertManagedProviderAsync` keeps an id-stable row per `ManagedSource` and **merges** slugs by name: existing rows keep `Id`, `IsEnabled`, and `DefaultReasoningEffort` while catalog fields (`DisplayAlias`, `ReasoningModes`, …) refresh; new API models insert enabled with catalog default effort; missing API models are removed. `UpdateProviderAsync` / slug add-update-remove reject when `ManagedSource` is set. `SetSlugEnabledAsync` toggles enablement for managed slugs only. `SetSlugDefaultReasoningEffortAsync` sets per-slug default effort for managed slugs only (blank → null/omit).
 
 ## Model slugs (`model_slugs`)
 
@@ -124,8 +124,8 @@ User-starred slugs for the Composer model picker (persisted per app-data DB).
 
 Thin CRUD over `DysonDbContext` using the Result pattern (`Result` / `VoidResult`):
 
-- **Providers:** list (include slugs), get, create, update (incl. `ApiKey` / `BaseUrl` / `OpenAiApiMode`; rejected when `ManagedSource` set), `UpsertManagedProviderAsync` (id-stable by source + merge slugs by name, preserving `Id`/`IsEnabled`), delete
-- **Slugs:** add under a provider (optional `defaultReasoningEffort` + `reasoningModes`; rejected when provider is managed), update (alias / slug / default effort / modes / is-default; rejected when managed), remove (rejected when managed), `SetSlugEnabledAsync` (managed only)
+- **Providers:** list (include slugs), get, create, update (incl. `ApiKey` / `BaseUrl` / `OpenAiApiMode`; rejected when `ManagedSource` set), `UpsertManagedProviderAsync` (id-stable by source + merge slugs by name, preserving `Id`/`IsEnabled`/`DefaultReasoningEffort`), delete
+- **Slugs:** add under a provider (optional `defaultReasoningEffort` + `reasoningModes`; rejected when provider is managed), update (alias / slug / default effort / modes / is-default; rejected when managed), remove (rejected when managed), `SetSlugEnabledAsync` (managed only), `SetSlugDefaultReasoningEffortAsync` (managed only; blank → omit)
 - **Selection:** get/set default slug (get prefers enabled `IsDefault`, else first enabled; set rejects disabled), get slug by id (with provider loaded; works for disabled — resume), `FindSlugByNameAsync` (enabled only; case-insensitive exact match on `Slug` then `DisplayAlias`)
 - **Favorites:** `ListFavoriteSlugIdsAsync`, `AddFavoriteAsync`, `RemoveFavoriteAsync`, `IsFavoriteAsync`
 

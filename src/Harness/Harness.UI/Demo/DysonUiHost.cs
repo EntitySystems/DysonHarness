@@ -635,6 +635,11 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         LastError = null;
 
+        // Keep New Session effort aligned with the composer when a session is focused
+        // (pending is otherwise only set pre-session / on model switch).
+        if (_session is not null)
+            _pendingReasoningEffort = SessionReasoningEffort ?? "";
+
         if (workDirectoryId is null || workDirectoryId == Guid.Empty)
         {
             LastError = "Select a work directory before creating a session.";
@@ -1010,6 +1015,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             }
         }
 
+        _pendingReasoningEffort = effort;
         Notify();
         return VoidResult<string>.Success;
     }

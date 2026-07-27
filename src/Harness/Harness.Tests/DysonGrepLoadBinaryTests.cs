@@ -182,10 +182,10 @@ public class DysonGrepLoadBinaryTests
                 || !completionsJson.Contains("data:image/png;base64,", StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
-                    "Completions transcript must include image part with filename + data URL.");
+                    "Completions transcript must include image part label + nested data URL.");
             }
 
-            AssertFilenameOnCompletionsMediaPart(completions.Messages, fileName);
+            AssertCompletionsImageShape(completions.Messages, fileName, "data:image/png;base64,");
 
             var responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
                 session,
@@ -202,12 +202,15 @@ public class DysonGrepLoadBinaryTests
                 || !responsesJson.Contains("data:image/png;base64,", StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
-                    "Responses transcript must include input_image with filename + data URL.");
+                    "Responses transcript must include input_image label + data URL fallback.");
             }
 
-            AssertFilenameOnResponsesMediaPart(responses.Input, fileName);
+            AssertResponsesImageDataUrlFallback(responses.Input, fileName, "data:image/png;base64,");
 
-            // Non-image: filename on input_file / file.file_data
+            // Mocked upload → Responses file_id preferred.
+            AssertResponsesImageFileIdViaUpload(session, toolCall, result, fileName);
+
+            // Non-image: filename on Completions file object; Responses file_id or filename+file_data
             const string dllName = "dxcompiler.dll";
             File.WriteAllBytes(Path.Combine(root, dllName), [0x4D, 0x5A, 0x00, 0x90]);
             var dllCall = new DysonToolCall
@@ -240,6 +243,20 @@ public class DysonGrepLoadBinaryTests
                 throw new InvalidOperationException(
                     "Completions must emit file part with filename+ext for non-image binaries.");
             }
+
+            AssertFilenameOnCompletionsFilePart(dllCompletions.Messages, dllName);
+
+            var dllResponsesFallback = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+                session,
+                currentUserPrompt: null,
+                currentFilePaths: null,
+                inFlightRounds:
+                [
+                    new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([dllCall], [dllResult]),
+                ]);
+            AssertResponsesInputFileFallback(dllResponsesFallback.Input, dllName);
+
+            AssertResponsesInputFileViaUpload(session, dllCall, dllResult, dllName);
         }
         finally
         {
@@ -254,8 +271,13 @@ public class DysonGrepLoadBinaryTests
         }
     }
 
-    private static void AssertFilenameOnCompletionsMediaPart(JsonArray messages, string fileName)
+    private static void AssertCompletionsImageShape(
+        JsonArray messages,
+        string fileName,
+        string expectDataUrlPrefix)
     {
+        JsonObject? imagePart = null;
+        var labelOk = false;
         foreach (var node in messages)
         {
             if (node is not JsonObject msg
@@ -269,9 +291,113 @@ public class DysonGrepLoadBinaryTests
             {
                 if (part is not JsonObject p)
                     continue;
-                if (p["filename"]?.GetValue<string>() == fileName)
-                    return;
-                if (p["file"] is JsonObject file
+                if (p["type"]?.GetValue<string>() == "text"
+                    && (p["text"]?.GetValue<string>()?.Contains(fileName, StringComparison.Ordinal) ?? false))
+                {
+                    labelOk = true;
+                }
+
+                if (string.Equals(p["type"]?.GetValue<string>(), "image_url", StringComparison.Ordinal))
+                    imagePart = p;
+            }
+        }
+
+        if (!labelOk)
+            throw new InvalidOperationException("Completions must label the image with filename in text.");
+        if (imagePart is null)
+            throw new InvalidOperationException("Completions must include an image_url part.");
+        if (imagePart["filename"] is not null)
+            throw new InvalidOperationException("Completions image_url must not carry top-level filename.");
+        if (imagePart["image_url"] is not JsonObject nested
+            || nested["url"]?.GetValue<string>() is not { } url
+            || !url.StartsWith(expectDataUrlPrefix, StringComparison.Ordinal)
+            || nested["detail"]?.GetValue<string>() != "auto")
+        {
+            throw new InvalidOperationException(
+                "Completions image_url must be nested { url: data URL, detail: auto }.");
+        }
+    }
+
+    private static void AssertResponsesImageDataUrlFallback(
+        JsonArray input,
+        string fileName,
+        string expectDataUrlPrefix)
+    {
+        var imagePart = FindResponsesPart(input, "input_image")
+            ?? throw new InvalidOperationException("Responses must include an input_image part.");
+        if (!HasInputTextLabel(input, fileName))
+            throw new InvalidOperationException("Responses must label the image with filename in input_text.");
+        if (imagePart["filename"] is not null)
+            throw new InvalidOperationException("Responses input_image must not carry filename.");
+        if (imagePart["file_id"] is not null)
+            throw new InvalidOperationException("Fallback Responses input_image must not set file_id.");
+        if (imagePart["image_url"]?.GetValue<string>() is not { } url
+            || !url.StartsWith(expectDataUrlPrefix, StringComparison.Ordinal)
+            || imagePart["detail"]?.GetValue<string>() != "auto")
+        {
+            throw new InvalidOperationException(
+                "Responses fallback input_image must use top-level image_url string + detail auto.");
+        }
+    }
+
+    private static void AssertResponsesImageFileIdViaUpload(
+        StubSession session,
+        DysonToolCall call,
+        DysonToolCallResult result,
+        string fileName)
+    {
+        var attachment = result.BinaryAttachment
+            ?? throw new InvalidOperationException("Expected BinaryAttachment for upload test.");
+        attachment.FileId = null;
+
+        var handler = new StubFilesUploadHandler("file-vision-png-1", expectedPurpose: "vision");
+        using var http = new HttpClient(handler);
+        var provider = MakeFilesTestProvider();
+        OpenAiFilesClient.EnsureBinaryFileIdsAsync(http, provider, [result]).GetAwaiter().GetResult();
+
+        if (attachment.FileId != "file-vision-png-1" || handler.LastPurpose != "vision")
+            throw new InvalidOperationException("Image upload must set FileId with purpose=vision.");
+
+        var responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null,
+            inFlightRounds:
+            [
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
+            ]);
+
+        var imagePart = FindResponsesPart(responses.Input, "input_image")
+            ?? throw new InvalidOperationException("Responses must include input_image after upload.");
+        if (imagePart["file_id"]?.GetValue<string>() != "file-vision-png-1"
+            || imagePart["detail"]?.GetValue<string>() != "auto"
+            || imagePart["image_url"] is not null
+            || imagePart["filename"] is not null
+            || !HasInputTextLabel(responses.Input, fileName)
+            || responses.Input.ToJsonString().Contains("data:image/", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Responses with FileId must emit input_image.file_id + detail and no data URL/filename.");
+        }
+
+        attachment.FileId = null;
+    }
+
+    private static void AssertFilenameOnCompletionsFilePart(JsonArray messages, string fileName)
+    {
+        foreach (var node in messages)
+        {
+            if (node is not JsonObject msg
+                || msg["role"]?.GetValue<string>() != "user"
+                || msg["content"] is not JsonArray parts)
+            {
+                continue;
+            }
+
+            foreach (var part in parts)
+            {
+                if (part is JsonObject p
+                    && p["file"] is JsonObject file
                     && file["filename"]?.GetValue<string>() == fileName)
                 {
                     return;
@@ -280,10 +406,84 @@ public class DysonGrepLoadBinaryTests
         }
 
         throw new InvalidOperationException(
-            "Completions multimodal part must carry filename including extension.");
+            "Completions non-image file part must carry filename including extension.");
     }
 
-    private static void AssertFilenameOnResponsesMediaPart(JsonArray input, string fileName)
+    private static void AssertResponsesInputFileFallback(JsonArray input, string fileName)
+    {
+        var filePart = FindResponsesPart(input, "input_file")
+            ?? throw new InvalidOperationException("Responses must include input_file for non-image.");
+        if (filePart["filename"]?.GetValue<string>() != fileName
+            || filePart["file_data"] is null
+            || filePart["file_id"] is not null)
+        {
+            throw new InvalidOperationException(
+                "Responses fallback input_file must use filename + file_data (no file_id).");
+        }
+    }
+
+    private static void AssertResponsesInputFileViaUpload(
+        StubSession session,
+        DysonToolCall call,
+        DysonToolCallResult result,
+        string fileName)
+    {
+        var attachment = result.BinaryAttachment
+            ?? throw new InvalidOperationException("Expected BinaryAttachment for dll upload test.");
+        attachment.FileId = null;
+
+        var handler = new StubFilesUploadHandler("file-userdata-dll-1", expectedPurpose: "user_data");
+        using var http = new HttpClient(handler);
+        var provider = MakeFilesTestProvider();
+        OpenAiFilesClient.EnsureBinaryFileIdsAsync(http, provider, [result]).GetAwaiter().GetResult();
+
+        if (attachment.FileId != "file-userdata-dll-1" || handler.LastPurpose != "user_data")
+            throw new InvalidOperationException("Non-image upload must set FileId with purpose=user_data.");
+
+        var responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null,
+            inFlightRounds:
+            [
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
+            ]);
+
+        var filePart = FindResponsesPart(responses.Input, "input_file")
+            ?? throw new InvalidOperationException("Responses must include input_file after upload.");
+        if (filePart["file_id"]?.GetValue<string>() != "file-userdata-dll-1"
+            || filePart["filename"] is not null
+            || filePart["file_data"] is not null
+            || !HasInputTextLabel(responses.Input, fileName))
+        {
+            throw new InvalidOperationException(
+                "Responses with FileId must emit input_file.file_id only (label carries filename).");
+        }
+
+        attachment.FileId = null;
+    }
+
+    private static bool HasInputTextLabel(JsonArray input, string fileName)
+    {
+        foreach (var node in input)
+        {
+            if (node is not JsonObject msg || msg["content"] is not JsonArray parts)
+                continue;
+            foreach (var part in parts)
+            {
+                if (part is JsonObject p
+                    && p["type"]?.GetValue<string>() == "input_text"
+                    && (p["text"]?.GetValue<string>()?.Contains(fileName, StringComparison.Ordinal) ?? false))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static JsonObject? FindResponsesPart(JsonArray input, string type)
     {
         foreach (var node in input)
         {
@@ -292,13 +492,76 @@ public class DysonGrepLoadBinaryTests
 
             foreach (var part in parts)
             {
-                if (part is JsonObject p && p["filename"]?.GetValue<string>() == fileName)
-                    return;
+                if (part is JsonObject p
+                    && string.Equals(p["type"]?.GetValue<string>(), type, StringComparison.Ordinal))
+                {
+                    return p;
+                }
             }
         }
 
-        throw new InvalidOperationException(
-            "Responses multimodal part must carry filename including extension.");
+        return null;
+    }
+
+    private static OpenAiCompatibleAgentProvider MakeFilesTestProvider()
+    {
+        var entity = new DysonModelProviderEntity
+        {
+            Id = Guid.NewGuid(),
+            DisplayName = "test",
+            ProviderKind = DysonProviderKinds.OpenAICompatible,
+            BaseUrl = "https://api.openai.com/v1",
+            ApiKey = "sk-test",
+            OpenAiApiMode = DysonOpenAiApiModes.Responses,
+        };
+        return new OpenAiCompatibleAgentProvider(
+            entity,
+            new DysonModelSlugEntity
+            {
+                Id = Guid.NewGuid(),
+                ProviderId = entity.Id,
+                Slug = "gpt-4o",
+                DisplayAlias = "gpt-4o",
+                Provider = entity,
+            });
+    }
+
+    private sealed class StubFilesUploadHandler(string fileId, string expectedPurpose) : HttpMessageHandler
+    {
+        public string? LastPurpose { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (request.Method != HttpMethod.Post
+                || request.RequestUri is null
+                || !request.RequestUri.AbsolutePath.EndsWith("/files", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+                {
+                    Content = new StringContent("unexpected request"),
+                };
+            }
+
+            if (request.Content is MultipartFormDataContent multipart)
+            {
+                foreach (var part in multipart)
+                {
+                    if (part.Headers.ContentDisposition?.Name?.Trim('"') == "purpose")
+                        LastPurpose = await part.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            _ = expectedPurpose;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    $$"""{"id":"{{fileId}}","object":"file","purpose":"{{LastPurpose ?? expectedPurpose}}"}""",
+                    System.Text.Encoding.UTF8,
+                    "application/json"),
+            };
+        }
     }
 
     private sealed class StubProvider : DysonAgentProvider;

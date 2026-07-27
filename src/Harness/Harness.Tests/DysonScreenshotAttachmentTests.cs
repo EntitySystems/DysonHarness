@@ -143,13 +143,7 @@ public class DysonScreenshotAttachmentTests
                 [
                     new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
                 ]);
-            var completionsJson = completions.Messages.ToJsonString();
-            if (!completionsJson.Contains("image_url", StringComparison.Ordinal)
-                || !completionsJson.Contains("data:image/jpeg;base64,", StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    "In-flight Completions must include JPEG image_url on first emission.");
-            }
+            AssertCompletionsImageShape(completions.Messages, expectDataUrlPrefix: "data:image/jpeg;base64,");
 
             var responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
                 session,
@@ -159,13 +153,10 @@ public class DysonScreenshotAttachmentTests
                 [
                     new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
                 ]);
-            var responsesJson = responses.Input.ToJsonString();
-            if (!responsesJson.Contains("input_image", StringComparison.Ordinal)
-                || !responsesJson.Contains("data:image/jpeg;base64,", StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    "In-flight Responses must include input_image on first emission.");
-            }
+            AssertResponsesImageDataUrlFallback(responses.Input, expectDataUrlPrefix: "data:image/jpeg;base64,");
+
+            // Mocked Files upload → Responses prefer file_id (no data URL).
+            AssertResponsesImageFileIdViaUpload(session, call, result);
 
             // Later in-flight round: prior screenshot round must not re-emit the image.
             var laterCall = new DysonToolCall
@@ -371,10 +362,200 @@ public class DysonScreenshotAttachmentTests
 
         var afterJson = afterTools.ToJsonString();
         if (!afterJson.Contains("image_url", StringComparison.Ordinal)
-            || !afterJson.Contains("data:image/jpeg;base64,", StringComparison.Ordinal))
+            || !afterJson.Contains("data:image/jpeg;base64,", StringComparison.Ordinal)
+            || afterJson.Contains("\"filename\"", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "Post-tool user message must carry JPEG image_url.");
+                "Post-tool user message must carry nested JPEG image_url without filename.");
+        }
+
+        AssertCompletionsImageShape(
+            built.Messages,
+            expectDataUrlPrefix: "data:image/jpeg;base64,");
+    }
+
+    private static void AssertCompletionsImageShape(JsonArray messages, string expectDataUrlPrefix)
+    {
+        JsonObject? imagePart = null;
+        foreach (var node in messages)
+        {
+            if (node is not JsonObject msg
+                || msg["role"]?.GetValue<string>() != "user"
+                || msg["content"] is not JsonArray parts)
+            {
+                continue;
+            }
+
+            foreach (var part in parts)
+            {
+                if (part is JsonObject p
+                    && string.Equals(p["type"]?.GetValue<string>(), "image_url", StringComparison.Ordinal))
+                {
+                    imagePart = p;
+                    break;
+                }
+            }
+
+            if (imagePart is not null)
+                break;
+        }
+
+        if (imagePart is null)
+            throw new InvalidOperationException("Completions must include an image_url part.");
+
+        if (imagePart["filename"] is not null)
+            throw new InvalidOperationException("Completions image_url must not carry top-level filename.");
+
+        if (imagePart["image_url"] is not JsonObject nested
+            || nested["url"]?.GetValue<string>() is not { } url
+            || !url.StartsWith(expectDataUrlPrefix, StringComparison.Ordinal)
+            || nested["detail"]?.GetValue<string>() != "auto")
+        {
+            throw new InvalidOperationException(
+                "Completions image_url must be nested { url: data URL, detail: auto }.");
+        }
+    }
+
+    private static void AssertResponsesImageDataUrlFallback(JsonArray input, string expectDataUrlPrefix)
+    {
+        var imagePart = FindResponsesInputImage(input)
+            ?? throw new InvalidOperationException("Responses must include an input_image part.");
+
+        if (imagePart["filename"] is not null)
+            throw new InvalidOperationException("Responses input_image must not carry filename.");
+        if (imagePart["file_id"] is not null)
+            throw new InvalidOperationException("Fallback Responses input_image must not set file_id.");
+
+        if (imagePart["image_url"]?.GetValue<string>() is not { } url
+            || !url.StartsWith(expectDataUrlPrefix, StringComparison.Ordinal)
+            || imagePart["detail"]?.GetValue<string>() != "auto")
+        {
+            throw new InvalidOperationException(
+                "Responses fallback input_image must use top-level image_url string + detail auto.");
+        }
+    }
+
+    private static void AssertResponsesImageFileIdViaUpload(
+        StubSession session,
+        DysonToolCall call,
+        DysonToolCallResult result)
+    {
+        var attachment = result.BinaryAttachment
+            ?? throw new InvalidOperationException("Expected BinaryAttachment for upload test.");
+        attachment.FileId = null;
+
+        var handler = new StubFilesUploadHandler("file-vision-shot-1");
+        using var http = new HttpClient(handler);
+        var entity = new DysonModelProviderEntity
+        {
+            Id = Guid.NewGuid(),
+            DisplayName = "test",
+            ProviderKind = DysonProviderKinds.OpenAICompatible,
+            BaseUrl = "https://api.openai.com/v1",
+            ApiKey = "sk-test",
+            OpenAiApiMode = DysonOpenAiApiModes.Responses,
+        };
+        var provider = new OpenAiCompatibleAgentProvider(
+            entity,
+            new DysonModelSlugEntity
+            {
+                Id = Guid.NewGuid(),
+                ProviderId = entity.Id,
+                Slug = "gpt-4o",
+                DisplayAlias = "gpt-4o",
+                Provider = entity,
+            });
+
+        OpenAiFilesClient.EnsureBinaryFileIdsAsync(
+            http,
+            provider,
+            [result],
+            onNote: null).GetAwaiter().GetResult();
+
+        if (attachment.FileId != "file-vision-shot-1")
+            throw new InvalidOperationException($"Expected FileId after upload; got {attachment.FileId}.");
+        if (handler.LastPurpose != "vision")
+            throw new InvalidOperationException($"Expected purpose=vision; got {handler.LastPurpose}.");
+
+        var responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null,
+            inFlightRounds:
+            [
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
+            ]);
+
+        var imagePart = FindResponsesInputImage(responses.Input)
+            ?? throw new InvalidOperationException("Responses must include input_image after upload.");
+        if (imagePart["file_id"]?.GetValue<string>() != "file-vision-shot-1"
+            || imagePart["detail"]?.GetValue<string>() != "auto"
+            || imagePart["image_url"] is not null
+            || imagePart["filename"] is not null
+            || responses.Input.ToJsonString().Contains("data:image/", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Responses with FileId must emit input_image.file_id + detail and no data URL/filename.");
+        }
+
+        // Leave attachment without FileId so later history assertions stay on the data-URL path.
+        attachment.FileId = null;
+    }
+
+    private static JsonObject? FindResponsesInputImage(JsonArray input)
+    {
+        foreach (var node in input)
+        {
+            if (node is not JsonObject msg || msg["content"] is not JsonArray parts)
+                continue;
+
+            foreach (var part in parts)
+            {
+                if (part is JsonObject p
+                    && string.Equals(p["type"]?.GetValue<string>(), "input_image", StringComparison.Ordinal))
+                {
+                    return p;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private sealed class StubFilesUploadHandler(string fileId) : HttpMessageHandler
+    {
+        public string? LastPurpose { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (request.Method != HttpMethod.Post
+                || request.RequestUri is null
+                || !request.RequestUri.AbsolutePath.EndsWith("/files", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+                {
+                    Content = new StringContent("unexpected request"),
+                };
+            }
+
+            if (request.Content is MultipartFormDataContent multipart)
+            {
+                foreach (var part in multipart)
+                {
+                    if (part.Headers.ContentDisposition?.Name?.Trim('"') == "purpose")
+                        LastPurpose = await part.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    $$"""{"id":"{{fileId}}","object":"file","purpose":"vision"}""",
+                    System.Text.Encoding.UTF8,
+                    "application/json"),
+            };
         }
     }
 

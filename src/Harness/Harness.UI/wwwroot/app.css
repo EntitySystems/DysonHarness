@@ -1776,23 +1776,33 @@ code, .mono {
 }
 
 .turn-block__reasoning-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: 0;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
   cursor: pointer;
   user-select: none;
-  list-style: none;
+  font: inherit;
   font-size: 12px;
   font-weight: 500;
   letter-spacing: 0.02em;
   text-transform: uppercase;
+  text-align: left;
   color: var(--text-muted);
-  padding: 4px 0;
 }
 
-.turn-block__reasoning-summary::-webkit-details-marker {
-  display: none;
+.turn-block__reasoning-summary:hover {
+  color: var(--text);
 }
 
-.turn-block__reasoning[open] > .turn-block__reasoning-summary {
-  margin-bottom: 2px;
+.turn-block__reasoning-chevron {
+  width: 1em;
+  flex: 0 0 auto;
+  color: var(--text-dim);
 }
 
 .turn-block__reasoning .turn-block__body {
@@ -1801,12 +1811,7 @@ code, .mono {
   color: var(--text-muted);
 }
 
-.turn-block__interim {
-  margin: 0;
-  padding: 4px 0 8px 10px;
-  border-left: 2px solid transparent;
-  font-size: 13px;
-  color: var(--text-muted);
+.turn-block__reasoning--interim {
   opacity: 0.75;
 }
 
@@ -3303,6 +3308,54 @@ code, .mono {
 
 .models-panel__slug.is-active {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.models-panel__slug-actions {
+  margin-top: 2px;
+  align-items: center;
+}
+
+.models-panel__effort {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.models-panel__effort-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  user-select: none;
+}
+
+.models-panel__effort-select {
+  max-width: 7.5rem;
+  min-height: 22px;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.2;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg-3);
+  color: var(--text);
+  cursor: pointer;
+  outline: none;
+}
+
+.models-panel__effort-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.models-panel__effort-select:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+.models-panel__effort-select option {
+  background: var(--bg-2);
+  color: var(--text);
 }
 
 .models-panel__modes {

@@ -214,10 +214,9 @@ public sealed class DysonModelStore(DysonDbContext db)
                 {
                     row.DisplayAlias = spec.DisplayAlias.Trim();
                     row.IsDefault = isDefault;
-                    row.DefaultReasoningEffort = NormalizeReasoningEffort(spec.DefaultReasoningEffort);
                     row.ReasoningModes = StringListJsonValueConverter.Normalize(spec.ReasoningModes);
                     row.UpdatedUtc = now;
-                    // Keep Id + IsEnabled across Verify sync.
+                    // Keep Id + IsEnabled + DefaultReasoningEffort across Verify sync.
                 }
                 else
                 {
@@ -493,6 +492,43 @@ public sealed class DysonModelStore(DysonDbContext db)
         catch (Exception ex)
         {
             return new VoidResult<string>($"Failed to set model slug enabled: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Set default reasoning effort for a managed provider slug. Manual providers are rejected.
+    /// Blank/whitespace <paramref name="effort"/> clears to null (omit).
+    /// </summary>
+    public async Task<VoidResult<string>> SetSlugDefaultReasoningEffortAsync(
+        Guid id,
+        string? effort,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var existing = await _db.ModelSlugs
+                .Include(s => s.Provider)
+                .FirstOrDefaultAsync(s => s.Id == id, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (existing is null)
+                return new VoidResult<string>($"Model slug '{id}' not found.");
+
+            if (string.IsNullOrWhiteSpace(existing.Provider?.ManagedSource))
+            {
+                return new VoidResult<string>(
+                    "Default reasoning effort can only be set for managed provider slugs.");
+            }
+
+            existing.DefaultReasoningEffort = NormalizeReasoningEffort(effort);
+            existing.UpdatedUtc = DateTime.UtcNow;
+
+            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex)
+        {
+            return new VoidResult<string>($"Failed to set model slug default reasoning effort: {ex.Message}");
         }
     }
 

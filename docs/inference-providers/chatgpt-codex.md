@@ -101,8 +101,9 @@ Documented HTTP paths:
 | ChatGPT OAuth + `ChatGPT-Account-ID` (direct) | Prefer CLIProxy managed provider; direct harness OAuth **not wired** |
 | Base `https://chatgpt.com/backend-api/codex` | **not wired** as a first-party Dyson endpoint (CLIProxy mediates) |
 | Codex SDK / `codex exec` host | **not wired yet** |
-| `store: true` | Dyson always sends `store: true` on Responses so tool-loop `previous_response_id` chaining works |
-| `include: ["reasoning.encrypted_content"]` / `store: false` | Codex-CLI-style multi-turn defaults; **not wired** as Codex-specific request shaping (Dyson keeps `store: true`) |
+| Responses tool-loop (direct API key) | `store: true` + `previous_response_id` delta hops (`function_call_output` only); always resends `instructions` + `tools`. On exact 400 “No tool call found for function call output…”, one full-replay retry |
+| Responses tool-loop (CLIProxy managed) | Stateless: `store: false`, never `previous_response_id`; full local replay `reasoning` (with `encrypted_content`) → `function_call` → `function_call_output`; `include: ["reasoning.encrypted_content"]` |
+| `call_id` | Always model `call_…` (never item `fc_…` / Guid) for `function_call_output` |
 
 ## Gotchas
 

@@ -63,7 +63,8 @@
                          SelectedSlugIdChanged="SelectedSlugIdChanged" />
         <label class="composer-effort" title="Session reasoning_effort (None = omit)">
             <span class="composer-effort__label">Effort</span>
-            <select class="composer-effort__input composer-effort__select"
+            <select @key="SelectedSlugId"
+                    class="composer-effort__input composer-effort__select"
                     value="@(_effortDraft)"
                     disabled="@Disabled"
                     @onchange="OnEffortSelectedAsync">

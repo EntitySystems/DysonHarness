@@ -4,6 +4,8 @@ namespace DysonHarness;
 /// Optional binary/image payload for provider multimodal parts (e.g. LoadBinary).
 /// <see cref="FileName"/> is the original name including extension (e.g. <c>shot.png</c>).
 /// Keep <see cref="DysonToolCallResult.Content"/> as a short ack — do not stuff base64 there.
+/// Human-readable name goes in a text / input_text label — never on Completions image_url
+/// or Responses input_image wire parts.
 /// </summary>
 public sealed class DysonBinaryAttachment
 {
@@ -16,6 +18,12 @@ public sealed class DysonBinaryAttachment
     public required string MimeType { get; init; }
 
     public required string Base64Data { get; init; }
+
+    /// <summary>
+    /// OpenAI Files API id after upload (Responses only). Set by
+    /// <c>OpenAiFilesClient.EnsureBinaryFileIdsAsync</c>; cleared with the one-shot attachment.
+    /// </summary>
+    public string? FileId { get; set; }
 
     public bool IsImage =>
         MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
@@ -31,8 +39,8 @@ public sealed class DysonToolCallResult
 
     /// <summary>
     /// When set (LoadBinary / BrowserTakeScreenshot), transcript builders emit a follow-up
-    /// multimodal user/input part with filename+extension metadata; not inlined into
-    /// <see cref="Content"/>. Cleared after the turn finalizes (one-shot vision).
+    /// multimodal user/input part; filename stays in a text label (and on non-image file parts).
+    /// Not inlined into <see cref="Content"/>. Cleared after the turn finalizes (one-shot vision).
     /// </summary>
     public DysonBinaryAttachment? BinaryAttachment { get; init; }
 

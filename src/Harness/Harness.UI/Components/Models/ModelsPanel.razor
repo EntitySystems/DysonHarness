@@ -259,7 +259,7 @@
                                                 {
                                                     <text> · @(slug.IsEnabled ? "enabled" : "disabled")</text>
                                                 }
-                                                @if (!string.IsNullOrWhiteSpace(slug.DefaultReasoningEffort))
+                                                else if (!string.IsNullOrWhiteSpace(slug.DefaultReasoningEffort))
                                                 {
                                                     <text> · effort @slug.DefaultReasoningEffort</text>
                                                 }
@@ -277,7 +277,19 @@
                                             }
                                             else
                                             {
-                                                <div class="btn-row" style="margin-top:2px;">
+                                                <div class="btn-row models-panel__slug-actions">
+                                                    <label class="models-panel__effort">
+                                                        <span class="models-panel__effort-label">effort</span>
+                                                        <select class="models-panel__effort-select"
+                                                                value="@(slug.DefaultReasoningEffort ?? "")"
+                                                                @onchange="e => SetManagedSlugEffortAsync(slug, e.Value?.ToString())">
+                                                            <option value="">omit</option>
+                                                            @foreach (var mode in ManagedEffortModes(slug))
+                                                            {
+                                                                <option value="@mode">@mode</option>
+                                                            }
+                                                        </select>
+                                                    </label>
                                                     @if (!slug.IsDefault && slug.IsEnabled)
                                                     {
                                                         <button type="button" class="btn" style="padding:2px 6px;font-size:10px;" @onclick="() => SetDefaultAsync(slug.Id)">Default</button>
@@ -1015,6 +1027,27 @@
         }
 
         _status = slug.IsEnabled ? "Disabled." : "Enabled.";
+        await RefreshAsync();
+        await OnChanged.InvokeAsync();
+    }
+
+    private static IReadOnlyList<string> ManagedEffortModes(DysonModelSlugEntity slug) =>
+        slug.ReasoningModes is { Count: > 0 } modes
+            ? modes
+            : ManagedInferenceProviderBase.DefaultReasoningModes;
+
+    private async Task SetManagedSlugEffortAsync(DysonModelSlugEntity slug, string? effort)
+    {
+        _error = null;
+        _status = null;
+        var set = await ModelStore.SetSlugDefaultReasoningEffortAsync(slug.Id, effort);
+        if (set.IsError)
+        {
+            _error = set.Error;
+            return;
+        }
+
+        _status = "Default effort updated.";
         await RefreshAsync();
         await OnChanged.InvokeAsync();
     }

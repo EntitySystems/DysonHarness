@@ -48,8 +48,8 @@ Wire (Responses API): nested `reasoning.effort` — same Dyson Responses client 
 | `DefaultReasoningEffort` / `ReasoningModes` | Freeform; Responses sends nested `reasoning.effort` |
 | Nested `reasoning.effort` | Wired on Responses |
 | `prompt_cache_key` | Always sent (session-scoped) |
+| Responses tool-loop (CLIProxy managed) | Stateless: `store: false`, no `previous_response_id`; full local `reasoning` → `function_call` → `function_call_output` replay (same as Codex managed) |
 | `prompt_cache_options` / explicit breakpoints | **Omitted** for CLIProxy managed (`ManagedSource=cliproxy-grok`) |
-| `store: true` | Dyson always sends `store: true` on Responses for tool-loop chaining |
 | Direct xAI OAuth / non-proxy base | **not wired** — prefer CLIProxy managed path |
 
 ## Gotchas

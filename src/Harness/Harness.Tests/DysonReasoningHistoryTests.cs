@@ -177,19 +177,35 @@ public class DysonReasoningHistoryTests
 
     private static void AssertExpandCollapseHelper()
     {
-        // Latest open while no assistant text.
-        if (!DysonReasoningHistoryUi.ShouldExpandThought(1, 2, hasFinalAssistantText: false, isReasoningStreaming: false))
-            throw new InvalidOperationException("Latest Thought should expand before AssistantText.");
-        if (DysonReasoningHistoryUi.ShouldExpandThought(0, 2, hasFinalAssistantText: false, isReasoningStreaming: false))
+        // Latest Thought open while no assistant body.
+        if (!DysonReasoningHistoryUi.ShouldExpandSegment(1, 2, hasAssistantBody: false, isReasoningStreaming: false))
+            throw new InvalidOperationException("Latest Thought should expand before assistant body.");
+        if (DysonReasoningHistoryUi.ShouldExpandSegment(0, 2, hasAssistantBody: false, isReasoningStreaming: false))
             throw new InvalidOperationException("Prior Thought should stay collapsed.");
 
-        // All collapsed once assistant text exists (and not streaming).
-        if (DysonReasoningHistoryUi.ShouldExpandThought(1, 2, hasFinalAssistantText: true, isReasoningStreaming: false))
-            throw new InvalidOperationException("Thoughts should collapse after AssistantText.");
+        // All collapsed once assistant body exists (final text) and not streaming reasoning.
+        if (DysonReasoningHistoryUi.ShouldExpandSegment(1, 2, hasAssistantBody: true, isReasoningStreaming: false))
+            throw new InvalidOperationException("Segments should collapse after AssistantText.");
 
-        // Streaming keeps latest open even if assistant text already set (handoff edge).
-        if (!DysonReasoningHistoryUi.ShouldExpandThought(0, 1, hasFinalAssistantText: true, isReasoningStreaming: true))
-            throw new InvalidOperationException("Streaming should keep latest Thought open.");
+        // Assistant streaming preview also collapses the log (same gate as final text).
+        if (DysonReasoningHistoryUi.ShouldExpandSegment(0, 1, hasAssistantBody: true, isReasoningStreaming: false))
+            throw new InvalidOperationException("Segments should collapse while assistant StreamingPreview is shown.");
+
+        // Reasoning streaming keeps latest open even if assistant body already set (handoff edge).
+        if (!DysonReasoningHistoryUi.ShouldExpandSegment(0, 1, hasAssistantBody: true, isReasoningStreaming: true))
+            throw new InvalidOperationException("Reasoning streaming should keep latest segment open.");
+
+        // InterimText counts as a collapsible slot (Thought + Interim → Interim is latest).
+        if (DysonReasoningHistoryUi.ShouldExpandSegment(0, 2, hasAssistantBody: false, isReasoningStreaming: false))
+            throw new InvalidOperationException("Prior Thought should collapse when InterimText is the latest slot.");
+        if (!DysonReasoningHistoryUi.ShouldExpandSegment(1, 2, hasAssistantBody: false, isReasoningStreaming: false))
+            throw new InvalidOperationException("Latest InterimText slot should expand before assistant body.");
+
+        // Live trailing reasoning slot: committed Thought collapses while live is latest.
+        if (DysonReasoningHistoryUi.ShouldExpandSegment(0, 2, hasAssistantBody: false, isReasoningStreaming: true))
+            throw new InvalidOperationException("Committed Thought should collapse while live reasoning is the latest slot.");
+        if (!DysonReasoningHistoryUi.ShouldExpandSegment(1, 2, hasAssistantBody: false, isReasoningStreaming: true))
+            throw new InvalidOperationException("Live reasoning slot should expand while streaming.");
     }
 
     private sealed class StubProvider : DysonAgentProvider;

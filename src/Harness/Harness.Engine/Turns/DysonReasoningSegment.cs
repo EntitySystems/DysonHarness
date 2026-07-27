@@ -85,26 +85,29 @@ public static class DysonReasoningLogSerializer
     }
 }
 
-/// <summary>UI expand/collapse rules for ordered Thought segments in the thinking history.</summary>
+/// <summary>
+/// UI expand/collapse rules for ordered Thought + InterimText slots in the thinking history.
+/// </summary>
 public static class DysonReasoningHistoryUi
 {
     /// <summary>
-    /// Latest Thought stays open while the turn has no finalized assistant text (and/or while
-    /// reasoning is still streaming). Prior Thoughts stay collapsed. Once assistant text exists
-    /// and streaming has ended, all Thoughts default collapsed.
+    /// Latest Thought/InterimText slot stays open while the turn has no assistant body yet
+    /// (final <c>AssistantText</c> or streaming preview) and/or while reasoning is still
+    /// streaming. Prior slots stay collapsed. Once an assistant body exists and reasoning is
+    /// not streaming, all slots default collapsed.
     /// </summary>
-    public static bool ShouldExpandThought(
-        int thoughtOrdinal,
-        int thoughtCount,
-        bool hasFinalAssistantText,
+    public static bool ShouldExpandSegment(
+        int segmentOrdinal,
+        int segmentCount,
+        bool hasAssistantBody,
         bool isReasoningStreaming)
     {
-        if (thoughtCount <= 0 || thoughtOrdinal < 0 || thoughtOrdinal >= thoughtCount)
+        if (segmentCount <= 0 || segmentOrdinal < 0 || segmentOrdinal >= segmentCount)
             return false;
 
-        if (hasFinalAssistantText && !isReasoningStreaming)
+        if (hasAssistantBody && !isReasoningStreaming)
             return false;
 
-        return thoughtOrdinal == thoughtCount - 1;
+        return segmentOrdinal == segmentCount - 1;
     }
 }
