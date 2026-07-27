@@ -26,11 +26,19 @@ builder.Services.AddScoped<DysonSessionStore>();
 builder.Services.AddScoped<DysonWorkDirectoryStore>();
 builder.Services.AddScoped<DysonAppSettingsStore>();
 builder.Services.AddScoped<DysonToolPolicyStore>();
+builder.Services.AddScoped<DysonConfiguredShellStore>();
+builder.Services.AddSingleton(sp =>
+{
+    var factory = sp.GetRequiredService<IHttpClientFactory>();
+    return new DysonCliProxyHost(factory.CreateClient("cliproxy"));
+});
+builder.Services.AddHttpClient("cliproxy");
 builder.Services.AddScoped(sp =>
 {
     var factory = sp.GetRequiredService<IHttpClientFactory>();
     return factory.CreateClient();
 });
+builder.Services.AddScoped<ManagedInferenceProviderCatalog>();
 #if WINDOWS
 builder.Services.AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>();
 #endif
@@ -40,6 +48,19 @@ builder.Services.AddSingleton<DysonFileTreeService>();
 builder.Services.AddSingleton<DysonGitChangesService>();
 
 var app = builder.Build();
+
+app.Lifetime.ApplicationStopping.Register(() =>
+{
+    try
+    {
+        var host = app.Services.GetService<DysonCliProxyHost>();
+        host?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+    catch
+    {
+        // ignore shutdown races
+    }
+});
 
 if (!app.Environment.IsDevelopment())
 {

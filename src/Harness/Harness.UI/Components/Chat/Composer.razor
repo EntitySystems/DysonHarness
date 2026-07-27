@@ -186,6 +186,9 @@
             foreach (var slug in provider.Slugs)
             {
                 _slugReasoningModes[slug.Id] = slug.ReasoningModes;
+                if (!slug.IsEnabled)
+                    continue;
+
                 _models.Add(new ComposerSlashCommands.ModelOption(
                     slug.Id,
                     slug.DisplayAlias,

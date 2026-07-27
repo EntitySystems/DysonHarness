@@ -20,4 +20,18 @@ public static class DysonAppSettingKeys
     /// Empty / missing ⇒ all tools enabled.
     /// </summary>
     public const string AgentModeToolPolicy = "agent_mode_tool_policy";
+
+    /// <summary>
+    /// Local CLIProxyAPI Bearer key for <c>/v1/*</c> (mirrored from
+    /// <c>external/cliproxy/keys.json</c> when a managed provider connects).
+    /// </summary>
+    public const string CliProxyApiKey = "cliproxy_api_key";
+
+    /// <summary>
+    /// Local CLIProxyAPI management Bearer key for <c>/v0/management/*</c>.
+    /// </summary>
+    public const string CliProxyManagementKey = "cliproxy_management_key";
+
+    /// <summary>Local CLIProxyAPI listen port (default 8317).</summary>
+    public const string CliProxyPort = "cliproxy_port";
 }

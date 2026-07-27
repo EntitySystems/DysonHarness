@@ -20,7 +20,7 @@ public static class DysonSessionToolsetBuilder
 
         var pipeline = DysonMcpPipeline.CreateDefault(
             config.McpAccessMode,
-            config.AvailableShellTypes,
+            config.AvailableShells.Select(s => s.Name).ToArray(),
             browserControlAvailable: config.BrowserControl is not null);
 
         pipeline.ConfigureShellExecuteForMode(
@@ -50,7 +50,7 @@ public static class DysonSessionToolsetBuilder
 
         var pipeline = DysonMcpPipeline.CreateDefault(
             config.McpAccessMode,
-            config.AvailableShellTypes,
+            config.AvailableShells.Select(s => s.Name).ToArray(),
             browserControlAvailable: config.BrowserControl is not null);
 
         pipeline.ConfigureShellExecuteForMode(
@@ -95,7 +95,7 @@ public static class DysonSessionToolsetBuilder
     {
         var pipeline = DysonMcpPipeline.CreateDefault(
             DysonMcpAccessMode.FullAccess,
-            DysonShell.AvailableForCurrentPlatform(),
+            DysonShell.DefaultShellNamesForCurrentPlatform(),
             browserControlAvailable: true);
         return pipeline.Tools.Values
             .OrderBy(t => t.Name, StringComparer.Ordinal)

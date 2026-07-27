@@ -31,7 +31,8 @@ public sealed class DysonLongRunningShell : IDisposable
 
     public required int Id { get; init; }
     public required Guid WorkDirectoryId { get; init; }
-    public required DysonShellType ShellType { get; init; }
+    /// <summary>Configured shell name from session catalog (MCP enum value).</summary>
+    public required string ShellName { get; init; }
     public required string Command { get; init; }
     public required string WorkingDirectory { get; init; }
     public required DateTime StartedUtc { get; init; }
@@ -48,7 +49,7 @@ public sealed class DysonLongRunningShell : IDisposable
             {
                 Id = Id,
                 WorkDirectoryId = WorkDirectoryId,
-                ShellType = ShellType,
+                ShellName = ShellName,
                 Command = Command,
                 WorkingDirectory = WorkingDirectory,
                 StartedUtc = StartedUtc,
@@ -458,7 +459,8 @@ public sealed class DysonLongRunningShellInfo
 {
     public required int Id { get; init; }
     public required Guid WorkDirectoryId { get; init; }
-    public required DysonShellType ShellType { get; init; }
+    /// <summary>Configured shell name from session catalog (MCP enum value).</summary>
+    public required string ShellName { get; init; }
     public required string Command { get; init; }
     public required string WorkingDirectory { get; init; }
     public required DateTime StartedUtc { get; init; }

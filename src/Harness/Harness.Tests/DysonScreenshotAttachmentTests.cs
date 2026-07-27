@@ -18,6 +18,7 @@ public class DysonScreenshotAttachmentTests
         AssertCatalog();
         AssertImageCompress();
         AssertScreenshotExecutorAndOneShotTranscript();
+        AssertParallelToolRoundKeepsToolMessagesConsecutive();
         AssertScreenshotUiSummary();
     }
 
@@ -254,8 +255,132 @@ public class DysonScreenshotAttachmentTests
         }
     }
 
+    /// <summary>
+    /// Completions must keep role:tool consecutive after parallel tool_calls even when
+    /// BrowserTakeScreenshot (BinaryAttachment) is not last in the round.
+    /// </summary>
+    private static void AssertParallelToolRoundKeepsToolMessagesConsecutive()
+    {
+        var session = new StubSession();
+        var shellCall = new DysonToolCall
+        {
+            CallId = "shell1",
+            ToolName = "ShellExecute",
+            Stage = 0,
+            ArgumentsJson = """{"command":"echo hi"}""",
+        };
+        var shotCall = new DysonToolCall
+        {
+            CallId = "shot1",
+            ToolName = "BrowserTakeScreenshot",
+            Stage = 0,
+            ArgumentsJson = """{"windowId":"win1","tabId":"tab1"}""",
+        };
+        var reloadCall = new DysonToolCall
+        {
+            CallId = "reload1",
+            ToolName = "BrowserReload",
+            Stage = 0,
+            ArgumentsJson = """{"windowId":"win1","tabId":"tab1"}""",
+        };
+
+        var shellResult = new DysonToolCallResult
+        {
+            CallId = "shell1",
+            ToolName = "ShellExecute",
+            Stage = 0,
+            Content = """{"exitCode":0,"stdout":"hi"}""",
+        };
+        var shotResult = new DysonToolCallResult
+        {
+            CallId = "shot1",
+            ToolName = "BrowserTakeScreenshot",
+            Stage = 0,
+            Content = """{"mimeType":"image/jpeg","byteLength":12,"width":8,"height":6,"windowId":"win1","tabId":"tab1"}""",
+            BinaryAttachment = new DysonBinaryAttachment
+            {
+                FileName = "screenshot.jpg",
+                Extension = ".jpg",
+                MimeType = "image/jpeg",
+                Base64Data = Convert.ToBase64String([0xFF, 0xD8, 0xFF, 0xD9]),
+            },
+        };
+        var reloadResult = new DysonToolCallResult
+        {
+            CallId = "reload1",
+            ToolName = "BrowserReload",
+            Stage = 0,
+            Content = """{"ok":true}""",
+        };
+
+        var built = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null,
+            inFlightRounds:
+            [
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound(
+                    [shellCall, shotCall, reloadCall],
+                    [shellResult, shotResult, reloadResult]),
+            ]);
+
+        var expectedIds = new[] { "shell1", "shot1", "reload1" };
+        var toolBlockStart = -1;
+        for (var i = 0; i < built.Messages.Count; i++)
+        {
+            var msg = built.Messages[i] as JsonObject
+                ?? throw new InvalidOperationException("Expected message object.");
+            if (msg["role"]?.GetValue<string>() != "assistant"
+                || msg["tool_calls"] is not JsonArray toolCalls
+                || toolCalls.Count != expectedIds.Length)
+            {
+                continue;
+            }
+
+            toolBlockStart = i + 1;
+            break;
+        }
+
+        if (toolBlockStart < 0)
+            throw new InvalidOperationException("Expected assistant tool_calls for the parallel round.");
+
+        for (var i = 0; i < expectedIds.Length; i++)
+        {
+            var msg = built.Messages[toolBlockStart + i] as JsonObject
+                ?? throw new InvalidOperationException("Expected tool message object.");
+            if (msg["role"]?.GetValue<string>() != "tool")
+            {
+                throw new InvalidOperationException(
+                    $"Expected consecutive role:tool at index {toolBlockStart + i}; got {msg["role"]}.");
+            }
+
+            if (msg["tool_call_id"]?.GetValue<string>() != expectedIds[i])
+            {
+                throw new InvalidOperationException(
+                    $"tool_call_id mismatch at {i}: expected {expectedIds[i]}, got {msg["tool_call_id"]}.");
+            }
+        }
+
+        var afterTools = built.Messages[toolBlockStart + expectedIds.Length] as JsonObject
+            ?? throw new InvalidOperationException("Expected multimodal user message after tool block.");
+        if (afterTools["role"]?.GetValue<string>() != "user")
+        {
+            throw new InvalidOperationException(
+                "JPEG image_url user message must follow the full consecutive tool block.");
+        }
+
+        var afterJson = afterTools.ToJsonString();
+        if (!afterJson.Contains("image_url", StringComparison.Ordinal)
+            || !afterJson.Contains("data:image/jpeg;base64,", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Post-tool user message must carry JPEG image_url.");
+        }
+    }
+
     private static void AssertScreenshotUiSummary()
     {
+
         var ack = """{"mimeType":"image/jpeg","byteLength":20480,"width":1280,"height":720,"windowId":"w","tabId":"t"}""";
         var summary = DysonToolCallUi.GetCollapsedSummary(
             "BrowserTakeScreenshot",

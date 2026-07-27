@@ -31,6 +31,46 @@ namespace Harness.Engine.Migrations
                     b.ToTable("app_settings", (string)null);
                 });
 
+            modelBuilder.Entity("DysonHarness.DysonConfiguredShellEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ExecutablePath")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FixedArgsJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .UseCollation("NOCASE");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.HasIndex("SortOrder");
+
+                    b.ToTable("configured_shells", (string)null);
+                });
+
             modelBuilder.Entity("DysonHarness.DysonModelFavoriteEntity", b =>
                 {
                     b.Property<Guid>("Id")
@@ -70,6 +110,9 @@ namespace Harness.Engine.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ManagedSource")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("OpenAiApiMode")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -82,6 +125,9 @@ namespace Harness.Engine.Migrations
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ManagedSource")
+                        .IsUnique();
 
                     b.ToTable("model_providers", (string)null);
                 });
@@ -103,6 +149,9 @@ namespace Harness.Engine.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<bool>("IsDefault")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsEnabled")
                         .HasColumnType("INTEGER");
 
                     b.Property<Guid>("ProviderId")

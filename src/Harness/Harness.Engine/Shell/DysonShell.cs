@@ -1,7 +1,7 @@
 namespace DysonHarness;
 
 /// <summary>
-/// Thin shell runner. Public <see cref="ShellType"/> identifies the concrete runner.
+/// Thin shell runner. Public <see cref="ShellType"/> identifies the concrete runner when created by type.
 /// </summary>
 public abstract class DysonShell
 {
@@ -22,15 +22,38 @@ public abstract class DysonShell
     };
 
     /// <summary>
-    /// Shells offered to the model for the current OS.
+    /// Default shell display names for the current OS (Settings catalog / CreateDefault fallback).
     /// Windows: Pwsh, PowerShell, Cmd. Other platforms: none yet.
     /// </summary>
+    public static IReadOnlyList<string> DefaultShellNamesForCurrentPlatform()
+    {
+        if (OperatingSystem.IsWindows())
+            return ["Pwsh", "PowerShell", "Cmd"];
+
+        // ponytail: return Bash/Zsh for macOS/Linux later
+        return [];
+    }
+
+    /// <summary>Default type list for legacy callers / tests that still use <see cref="DysonShellType"/>.</summary>
     public static IReadOnlyList<DysonShellType> AvailableForCurrentPlatform()
     {
         if (OperatingSystem.IsWindows())
             return [DysonShellType.Pwsh, DysonShellType.PowerShell, DysonShellType.Cmd];
 
-        // ponytail: return Bash/Zsh (and runners) for macOS/Linux later
         return [];
+    }
+
+    /// <summary>Default session specs matching Windows seed paths (tests / catalog fallback).</summary>
+    public static IReadOnlyList<DysonConfiguredShellSpec> DefaultConfiguredShellsForCurrentPlatform()
+    {
+        if (!OperatingSystem.IsWindows())
+            return [];
+
+        return
+        [
+            new DysonConfiguredShellSpec("Pwsh", "pwsh"),
+            new DysonConfiguredShellSpec("PowerShell", "powershell.exe"),
+            new DysonConfiguredShellSpec("Cmd", "cmd.exe"),
+        ];
     }
 }

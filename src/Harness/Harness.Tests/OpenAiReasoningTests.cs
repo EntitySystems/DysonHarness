@@ -15,6 +15,8 @@ public class OpenAiReasoningTests
         AssertNormalizeBaseUrl();
         AssertCompletionsParseReasoning();
         AssertResponsesParseReasoning();
+        AssertResponsesCreateBodyNestedReasoningEffort();
+        AssertPromptCacheOptionsGate();
         AssertTurnReasoningPreviewHandoff();
     }
 
@@ -103,6 +105,94 @@ public class OpenAiReasoningTests
         {
             throw new InvalidOperationException(
                 $"Expected ReasoningContent '{expected}', got '{parsed.Value.ReasoningContent}'.");
+        }
+    }
+
+    private static void AssertResponsesCreateBodyNestedReasoningEffort()
+    {
+        var provider = new OpenAiCompatibleAgentProvider(
+            provider: null,
+            slug: null,
+            reasoningEffort: "high");
+        var built = new OpenAiCacheFriendlyTranscriptBuilder.BuiltResponsesRequest(
+            Instructions: "sys",
+            Input: [],
+            Tools: [],
+            PromptCacheKey: "cache-key",
+            IncludeExplicitBreakpoints: false,
+            PreviousResponseId: null,
+            Store: false);
+
+        var body = OpenAiResponsesClient.BuildCreateBody(provider, built);
+
+        if (body.ContainsKey("reasoning_effort"))
+            throw new InvalidOperationException("Responses body must not include top-level reasoning_effort.");
+
+        var effort = body["reasoning"]?["effort"]?.GetValue<string>();
+        if (!string.Equals(effort, "high", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Expected reasoning.effort 'high', got '{effort ?? "null"}'.");
+        }
+    }
+
+    private static void AssertPromptCacheOptionsGate()
+    {
+        static OpenAiCompatibleAgentProvider MakeProvider(string slug, string? managedSource)
+        {
+            var entity = new DysonModelProviderEntity
+            {
+                Id = Guid.NewGuid(),
+                DisplayName = managedSource is null ? "Direct OpenAI" : "Managed Codex",
+                ProviderKind = DysonProviderKinds.OpenAICompatible,
+                BaseUrl = managedSource is null ? "https://api.openai.com/v1" : "http://127.0.0.1:8317/v1",
+                OpenAiApiMode = DysonOpenAiApiModes.Responses,
+                ManagedSource = managedSource,
+            };
+            var slugEntity = new DysonModelSlugEntity
+            {
+                Id = Guid.NewGuid(),
+                ProviderId = entity.Id,
+                Slug = slug,
+                DisplayAlias = slug,
+                Provider = entity,
+            };
+            return new OpenAiCompatibleAgentProvider(entity, slugEntity);
+        }
+
+        static JsonObject BodyFor(OpenAiCompatibleAgentProvider provider)
+        {
+            var built = new OpenAiCacheFriendlyTranscriptBuilder.BuiltResponsesRequest(
+                Instructions: "sys",
+                Input: [],
+                Tools: [],
+                PromptCacheKey: "dyson:test",
+                IncludeExplicitBreakpoints: OpenAiCompatibleHttp.SupportsExplicitPromptCache(provider),
+                PreviousResponseId: null,
+                Store: false);
+            return OpenAiResponsesClient.BuildCreateBody(provider, built);
+        }
+
+        var managed = MakeProvider("gpt-5.6-sol", DysonManagedSources.CliProxyCodex);
+        if (OpenAiCompatibleHttp.SupportsExplicitPromptCache(managed))
+            throw new InvalidOperationException("Managed GPT-5.6 must not support explicit prompt cache.");
+
+        var managedBody = BodyFor(managed);
+        if (managedBody.ContainsKey("prompt_cache_options"))
+            throw new InvalidOperationException("Managed Responses body must omit prompt_cache_options.");
+        if (managedBody["prompt_cache_key"]?.GetValue<string>() is not { Length: > 0 })
+            throw new InvalidOperationException("Managed Responses body must still include prompt_cache_key.");
+
+        var direct = MakeProvider("gpt-5.6-sol", managedSource: null);
+        if (!OpenAiCompatibleHttp.SupportsExplicitPromptCache(direct))
+            throw new InvalidOperationException("Direct GPT-5.6 must support explicit prompt cache.");
+
+        var directBody = BodyFor(direct);
+        var mode = directBody["prompt_cache_options"]?["mode"]?.GetValue<string>();
+        if (!string.Equals(mode, "explicit", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Direct GPT-5.6 Responses body expected prompt_cache_options.mode=explicit, got '{mode ?? "null"}'.");
         }
     }
 

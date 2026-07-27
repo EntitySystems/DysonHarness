@@ -78,6 +78,16 @@ public static class OpenAiCompatibleHttp
     }
 
     /// <summary>
+    /// Direct OpenAI GPT-5.6+ only. Managed/CLIProxy rejects <c>prompt_cache_options</c>.
+    /// </summary>
+    public static bool SupportsExplicitPromptCache(OpenAiCompatibleAgentProvider provider)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        return LooksLikeGpt56OrNewer(provider.Slug)
+            && string.IsNullOrWhiteSpace(provider.ManagedSource);
+    }
+
+    /// <summary>
     /// Builds OpenAI <c>tools[]</c> from the MCP catalog with required harness <c>stage</c> on every schema.
     /// Stable sort by tool name.
     /// </summary>

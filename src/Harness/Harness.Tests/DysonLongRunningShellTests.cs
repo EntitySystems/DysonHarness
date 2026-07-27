@@ -23,7 +23,7 @@ public class DysonLongRunningShellTests
         if (none.Length != 0)
             throw new InvalidOperationException("Long-running shell tools must be omitted when no shells available.");
 
-        var tools = DysonMcpPipeline.CreateLongRunningShellTools([DysonShellType.Pwsh], planMode: false).ToArray();
+        var tools = DysonMcpPipeline.CreateLongRunningShellTools(["Pwsh"], planMode: false).ToArray();
         if (tools.Length != 7)
             throw new InvalidOperationException($"Expected 7 long-running shell tools, got {tools.Length}.");
 
@@ -136,14 +136,14 @@ public class DysonLongRunningShellTests
         {
             // Short sleep so Abort has a live process.
             var a = DysonLongRunningShellRegistry
-                .StartAsync(workDirId, DysonShellType.Cmd, "ping -n 30 127.0.0.1 >nul", cwd)
+                .StartAsync(workDirId, "Cmd", "cmd.exe", "ping -n 30 127.0.0.1 >nul", cwd)
                 .GetAwaiter()
                 .GetResult();
             if (a.IsError)
                 throw new InvalidOperationException($"Start #1 failed: {a.Error}");
 
             var b = DysonLongRunningShellRegistry
-                .StartAsync(workDirId, DysonShellType.Cmd, "ping -n 30 127.0.0.1 >nul", cwd)
+                .StartAsync(workDirId, "Cmd", "cmd.exe", "ping -n 30 127.0.0.1 >nul", cwd)
                 .GetAwaiter()
                 .GetResult();
             if (b.IsError)
@@ -250,7 +250,7 @@ public class DysonLongRunningShellTests
 
     private sealed class StubSession() : DysonAgentSession(
         DysonAgentModes.Work,
-        new DysonAgentSessionConfig { AvailableShellTypes = [DysonShellType.Cmd] },
+        new DysonAgentSessionConfig { AvailableShells = [new DysonConfiguredShellSpec("Cmd", "cmd.exe")] },
         new StubProvider())
     {
         public override Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(

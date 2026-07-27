@@ -19,16 +19,22 @@ public class DysonToolPolicyTests
 
     private static void AssertEmptyPolicyKeepsTools()
     {
-        var config = new DysonAgentSessionConfig();
+        var config = new DysonAgentSessionConfig
+        {
+            AvailableShells = DysonShell.DefaultConfiguredShellsForCurrentPlatform(),
+        };
         var pipeline = DysonSessionToolsetBuilder.Build(config, DysonAgentModes.Work);
-        if (!pipeline.Tools.ContainsKey("WriteFile") || !pipeline.Tools.ContainsKey("ShellExecute"))
+        if (!pipeline.Tools.ContainsKey("WriteFile"))
             throw new InvalidOperationException("Empty policy should keep default catalog tools.");
+        if (config.AvailableShells.Count > 0 && !pipeline.Tools.ContainsKey("ShellExecute"))
+            throw new InvalidOperationException("Empty policy should keep ShellExecute when shells are configured.");
     }
 
     private static void AssertDisabledToolsOmitted()
     {
         var config = new DysonAgentSessionConfig
         {
+            AvailableShells = DysonShell.DefaultConfiguredShellsForCurrentPlatform(),
             DisabledTools = new HashSet<string>(StringComparer.Ordinal) { "WriteFile", "ShellExecute" },
         };
         var pipeline = DysonSessionToolsetBuilder.Build(config, DysonAgentModes.Ask);
@@ -110,7 +116,7 @@ public class DysonToolPolicyTests
     {
         var config = new DysonAgentSessionConfig
         {
-            AvailableShellTypes = [],
+            AvailableShells = [],
             DisabledTools = new HashSet<string>(StringComparer.Ordinal),
         };
         var pipeline = DysonSessionToolsetBuilder.Build(config, DysonAgentModes.Work);

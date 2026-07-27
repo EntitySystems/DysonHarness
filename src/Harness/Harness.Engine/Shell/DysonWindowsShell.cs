@@ -3,12 +3,13 @@ using System.Text;
 
 namespace DysonHarness;
 
-/// <summary>Windows process runner for <see cref="DysonShellType.Pwsh"/>, PowerShell, and Cmd.</summary>
+/// <summary>Windows process runner for pwsh / powershell / cmd (path- or type-based).</summary>
 public sealed class DysonWindowsShell : DysonShell
 {
     private const int DefaultTimeoutMs = 120_000;
 
-    private readonly DysonShellType _type;
+    private readonly DysonShellType? _type;
+    private readonly string _executablePath;
 
     public DysonWindowsShell(DysonShellType type)
     {
@@ -16,15 +17,39 @@ public sealed class DysonWindowsShell : DysonShell
             throw new ArgumentOutOfRangeException(nameof(type), type, "Not a Windows shell type.");
 
         _type = type;
+        _executablePath = MapArgs(type).FileName;
     }
 
-    public override DysonShellType ShellType => _type;
+    public DysonWindowsShell(string executablePath)
+    {
+        if (string.IsNullOrWhiteSpace(executablePath))
+            throw new ArgumentException("Executable path is required.", nameof(executablePath));
 
-    public override async Task<Result<DysonShellRunResult, string>> ExecuteAsync(
+        _executablePath = executablePath.Trim();
+        _type = null;
+    }
+
+    public override DysonShellType ShellType =>
+        _type ?? throw new InvalidOperationException("Path-based shell has no DysonShellType.");
+
+    public override Task<Result<DysonShellRunResult, string>> ExecuteAsync(
         string command,
         string workingDirectory,
         int? timeoutMs = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        ExecuteWithPathAsync(_executablePath, command, workingDirectory, timeoutMs, cancellationToken);
+
+    /// <summary>
+    /// One-shot run using an executable path.
+    /// Fixed args: <paramref name="fixedArgsOverride"/> when non-empty, else basename heuristics.
+    /// </summary>
+    public static async Task<Result<DysonShellRunResult, string>> ExecuteWithPathAsync(
+        string executablePath,
+        string command,
+        string workingDirectory,
+        int? timeoutMs = null,
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<string>? fixedArgsOverride = null)
     {
         if (string.IsNullOrWhiteSpace(command))
             return Result<DysonShellRunResult, string>.AsError("Command is empty.");
@@ -32,7 +57,11 @@ public sealed class DysonWindowsShell : DysonShell
         if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
             return Result<DysonShellRunResult, string>.AsError("Working directory does not exist.");
 
-        var (fileName, fixedArgs) = MapArgs(_type);
+        var mapped = ResolveFixedArgs(executablePath, fixedArgsOverride);
+        if (mapped.IsError)
+            return Result<DysonShellRunResult, string>.AsError(mapped.Error);
+
+        var (fileName, fixedArgs) = mapped.Value;
         var limitMs = timeoutMs is > 0 ? timeoutMs.Value : DefaultTimeoutMs;
 
         try
@@ -115,6 +144,62 @@ public sealed class DysonWindowsShell : DysonShell
         DysonShellType.Cmd => ("cmd.exe", ["/d", "/c"]),
         _ => throw new ArgumentOutOfRangeException(nameof(type), type, "Not a Windows shell type."),
     };
+
+    /// <summary>
+    /// Prefers <paramref name="fixedArgsOverride"/> when non-empty; otherwise basename heuristics.
+    /// </summary>
+    public static Result<(string FileName, string[] FixedArgs), string> ResolveFixedArgs(
+        string executablePath,
+        IReadOnlyList<string>? fixedArgsOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(executablePath))
+            return Result<(string, string[]), string>.AsError("Executable path is empty.");
+
+        var fileName = executablePath.Trim();
+        if (fixedArgsOverride is { Count: > 0 })
+            return Result<(string, string[]), string>.AsValue((fileName, fixedArgsOverride.ToArray()));
+
+        return MapFixedArgsFromExecutablePath(fileName);
+    }
+
+    /// <summary>
+    /// Resolves fixed args from the executable basename (so <c>C:\…\pwsh.exe</c> still gets Pwsh flags).
+    /// <paramref name="executablePath"/> is used as <c>FileName</c> unchanged.
+    /// </summary>
+    public static Result<(string FileName, string[] FixedArgs), string> MapFixedArgsFromExecutablePath(
+        string executablePath)
+    {
+        if (string.IsNullOrWhiteSpace(executablePath))
+            return Result<(string, string[]), string>.AsError("Executable path is empty.");
+
+        var fileName = executablePath.Trim();
+        var baseName = Path.GetFileNameWithoutExtension(fileName);
+        if (string.IsNullOrWhiteSpace(baseName))
+            return Result<(string, string[]), string>.AsError("Executable path has no file name.");
+
+        if (baseName.Equals("pwsh", StringComparison.OrdinalIgnoreCase)
+            || baseName.Equals("powershell", StringComparison.OrdinalIgnoreCase))
+        {
+            return Result<(string, string[]), string>.AsValue(
+                (fileName, ["-NoProfile", "-NonInteractive", "-Command"]));
+        }
+
+        if (baseName.Equals("cmd", StringComparison.OrdinalIgnoreCase))
+            return Result<(string, string[]), string>.AsValue((fileName, ["/d", "/c"]));
+
+        if (baseName.Equals("bash", StringComparison.OrdinalIgnoreCase)
+            || baseName.Equals("sh", StringComparison.OrdinalIgnoreCase)
+            || baseName.Equals("zsh", StringComparison.OrdinalIgnoreCase)
+            || baseName.Equals("git-bash", StringComparison.OrdinalIgnoreCase))
+        {
+            return Result<(string, string[]), string>.AsValue((fileName, ["-c"]));
+        }
+
+        return Result<(string, string[]), string>.AsError(
+            $"Unsupported shell executable basename '{baseName}'. " +
+            "Expected pwsh, powershell, cmd, bash, sh, zsh, or git-bash — " +
+            "or set Fixed args in Settings → Shells.");
+    }
 
     private static void TryKill(Process process)
     {

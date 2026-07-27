@@ -22,16 +22,16 @@ public sealed class DysonMcpPipeline
     public Dictionary<string, DysonMcpTool> Tools { get; } = new(StringComparer.Ordinal);
     public DysonMcpAutoReviewProxy? AutoReviewProxy { get; }
 
-    private readonly IReadOnlyList<DysonShellType> _availableShellTypes;
+    private readonly IReadOnlyList<string> _availableShellNames;
     private readonly bool _browserControlAvailable;
 
     private DysonMcpPipeline(
         DysonMcpAccessMode accessMode,
-        IReadOnlyList<DysonShellType> availableShellTypes,
+        IReadOnlyList<string> availableShellNames,
         bool browserControlAvailable)
     {
         AccessMode = accessMode;
-        _availableShellTypes = availableShellTypes;
+        _availableShellNames = availableShellNames;
         _browserControlAvailable = browserControlAvailable;
         AutoReviewProxy = accessMode == DysonMcpAccessMode.AutoReview
             ? new DysonMcpAutoReviewProxy(this)
@@ -40,12 +40,12 @@ public sealed class DysonMcpPipeline
 
     public static DysonMcpPipeline CreateDefault(
         DysonMcpAccessMode accessMode,
-        IReadOnlyList<DysonShellType>? availableShellTypes = null,
+        IReadOnlyList<string>? availableShellNames = null,
         bool browserControlAvailable = false)
     {
-        availableShellTypes ??= DysonShell.AvailableForCurrentPlatform();
-        var pipeline = new DysonMcpPipeline(accessMode, availableShellTypes, browserControlAvailable);
-        foreach (var tool in DefaultTools(availableShellTypes, browserControlAvailable))
+        availableShellNames ??= DysonShell.DefaultShellNamesForCurrentPlatform();
+        var pipeline = new DysonMcpPipeline(accessMode, availableShellNames, browserControlAvailable);
+        foreach (var tool in DefaultTools(availableShellNames, browserControlAvailable))
             pipeline.Tools[tool.Name] = tool;
         return pipeline;
     }
@@ -56,7 +56,7 @@ public sealed class DysonMcpPipeline
     /// </summary>
     public void ConfigureShellExecuteForMode(bool planMode)
     {
-        var tool = CreateShellExecuteTool(_availableShellTypes, planMode);
+        var tool = CreateShellExecuteTool(_availableShellNames, planMode);
         if (tool is null)
             Tools.Remove("ShellExecute");
         else
@@ -71,7 +71,7 @@ public sealed class DysonMcpPipeline
     /// </summary>
     public void ConfigureLongRunningShellTools(bool planMode)
     {
-        if (_availableShellTypes.Count == 0)
+        if (_availableShellNames.Count == 0)
         {
             Tools.Remove("StartLongRunningShell");
             Tools.Remove("ListLongRunningShells");
@@ -83,7 +83,7 @@ public sealed class DysonMcpPipeline
             return;
         }
 
-        foreach (var t in CreateLongRunningShellTools(_availableShellTypes, planMode))
+        foreach (var t in CreateLongRunningShellTools(_availableShellNames, planMode))
             Tools[t.Name] = t;
     }
 
@@ -97,14 +97,17 @@ public sealed class DysonMcpPipeline
     /// When <paramref name="planMode"/>, appends <see cref="PlanShellExecuteWarning"/> to Description.
     /// </summary>
     public static DysonMcpTool? CreateShellExecuteTool(
-        IReadOnlyList<DysonShellType> available,
+        IReadOnlyList<string> available,
         bool planMode = false)
     {
         ArgumentNullException.ThrowIfNull(available);
         if (available.Count == 0)
             return null;
 
-        var names = available.Select(t => t.ToString()).ToArray();
+        var names = available.Where(n => !string.IsNullOrWhiteSpace(n)).ToArray();
+        if (names.Length == 0)
+            return null;
+
         var listed = string.Join(", ", names);
         var enumJson = string.Join(", ", names.Select(n => $"\"{n}\""));
 
@@ -152,14 +155,17 @@ public sealed class DysonMcpPipeline
     /// When <paramref name="planMode"/>, <c>StartLongRunningShell</c> description includes the Plan soft warning.
     /// </summary>
     public static IEnumerable<DysonMcpTool> CreateLongRunningShellTools(
-        IReadOnlyList<DysonShellType> available,
+        IReadOnlyList<string> available,
         bool planMode = false)
     {
         ArgumentNullException.ThrowIfNull(available);
         if (available.Count == 0)
             yield break;
 
-        var names = available.Select(t => t.ToString()).ToArray();
+        var names = available.Where(n => !string.IsNullOrWhiteSpace(n)).ToArray();
+        if (names.Length == 0)
+            yield break;
+
         var listed = string.Join(", ", names);
         var enumJson = string.Join(", ", names.Select(n => $"\"{n}\""));
 
@@ -951,7 +957,7 @@ public sealed class DysonMcpPipeline
     }
 
     private static IEnumerable<DysonMcpTool> DefaultTools(
-        IReadOnlyList<DysonShellType> availableShellTypes,
+        IReadOnlyList<string> availableShellNames,
         bool browserControlAvailable)
     {
         foreach (var tool in InterAgentTools())
@@ -1665,11 +1671,11 @@ public sealed class DysonMcpPipeline
                 """,
         };
 
-        var shellExecute = CreateShellExecuteTool(availableShellTypes);
+        var shellExecute = CreateShellExecuteTool(availableShellNames);
         if (shellExecute is not null)
             yield return shellExecute;
 
-        foreach (var longRunning in CreateLongRunningShellTools(availableShellTypes, planMode: false))
+        foreach (var longRunning in CreateLongRunningShellTools(availableShellNames, planMode: false))
             yield return longRunning;
 
         yield return new DysonMcpTool

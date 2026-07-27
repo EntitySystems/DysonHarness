@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 namespace DysonHarness;
 
 /// <summary>
-/// Opens a native OS folder picker on the host process (Interactive Server / future WebView2 host).
+/// Opens a native OS folder/file picker on the host process (Interactive Server / future WebView2 host).
 /// Requires an interactive desktop session on the machine running the harness.
 /// </summary>
 public static class DysonNativeFolderPicker
@@ -13,6 +13,11 @@ public static class DysonNativeFolderPicker
     public static Task<Result<string, string>> PickFolderAsync(
         CancellationToken cancellationToken = default) =>
         Task.Run(() => PickFolder(cancellationToken), cancellationToken);
+
+    /// <summary>Shows a file dialog and returns the selected absolute path.</summary>
+    public static Task<Result<string, string>> PickFileAsync(
+        CancellationToken cancellationToken = default) =>
+        Task.Run(() => PickFile(cancellationToken), cancellationToken);
 
     private static Result<string, string> PickFolder(CancellationToken cancellationToken)
     {
@@ -30,28 +35,50 @@ public static class DysonNativeFolderPicker
         return Result<string, string>.AsError("Folder picker is not supported on this OS.");
     }
 
-    private static Result<string, string> PickFolderWindows()
+    private static Result<string, string> PickFile(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (OperatingSystem.IsWindows())
+            return PickFileWindows();
+
+        if (OperatingSystem.IsMacOS())
+            return PickFileMacOs();
+
+        if (OperatingSystem.IsLinux())
+            return PickFileLinux();
+
+        return Result<string, string>.AsError("File picker is not supported on this OS.");
+    }
+
+    private static Result<string, string> PickFolderWindows() =>
+        PickPathWindows(Fos.PickFolders | Fos.ForceFileSystem | Fos.PathMustExist, "folder");
+
+    private static Result<string, string> PickFileWindows() =>
+        PickPathWindows(Fos.ForceFileSystem | Fos.FileMustExist | Fos.PathMustExist, "file");
+
+    private static Result<string, string> PickPathWindows(Fos options, string kind)
     {
         var dialog = (IFileOpenDialog)new FileOpenDialogRCW();
         try
         {
-            dialog.SetOptions(Fos.PickFolders | Fos.ForceFileSystem | Fos.PathMustExist);
+            dialog.SetOptions(options);
             var hr = dialog.Show(IntPtr.Zero);
             if (hr == HresultCancelled)
-                return Result<string, string>.AsError("Folder selection cancelled.");
+                return Result<string, string>.AsError($"{char.ToUpperInvariant(kind[0])}{kind[1..]} selection cancelled.");
 
             if (hr != 0)
-                return Result<string, string>.AsError($"Folder dialog failed (HRESULT 0x{hr:X8}).");
+                return Result<string, string>.AsError($"{char.ToUpperInvariant(kind[0])}{kind[1..]} dialog failed (HRESULT 0x{hr:X8}).");
 
             dialog.GetResult(out var item);
             if (item is null)
-                return Result<string, string>.AsError("No folder was selected.");
+                return Result<string, string>.AsError($"No {kind} was selected.");
 
             try
             {
                 item.GetDisplayName(Sigdn.FileSysPath, out var path);
                 if (string.IsNullOrWhiteSpace(path))
-                    return Result<string, string>.AsError("Selected folder path was empty.");
+                    return Result<string, string>.AsError($"Selected {kind} path was empty.");
 
                 return Result<string, string>.AsValue(Path.GetFullPath(path));
             }
@@ -84,6 +111,20 @@ public static class DysonNativeFolderPicker
             "Folder selection cancelled or osascript failed.");
     }
 
+    private static Result<string, string> PickFileMacOs()
+    {
+        const string script =
+            """
+            set chosenFile to choose file with prompt "Select executable"
+            return POSIX path of chosenFile
+            """;
+
+        return RunAndCapture(
+            "osascript",
+            ["-e", script],
+            "File selection cancelled or osascript failed.");
+    }
+
     private static Result<string, string> PickFolderLinux()
     {
         var zenity = RunAndCapture(
@@ -98,6 +139,22 @@ public static class DysonNativeFolderPicker
             "kdialog",
             ["--getexistingdirectory", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)],
             "No folder picker available (tried zenity and kdialog).");
+    }
+
+    private static Result<string, string> PickFileLinux()
+    {
+        var zenity = RunAndCapture(
+            "zenity",
+            ["--file-selection", "--title=Select executable"],
+            "zenity failed.");
+
+        if (zenity.IsSuccess)
+            return zenity;
+
+        return RunAndCapture(
+            "kdialog",
+            ["--getopenfilename", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)],
+            "No file picker available (tried zenity and kdialog).");
     }
 
     private static Result<string, string> RunAndCapture(
@@ -204,6 +261,7 @@ public static class DysonNativeFolderPicker
     {
         ForceFileSystem = 0x40,
         PathMustExist = 0x800,
+        FileMustExist = 0x1000,
         PickFolders = 0x20,
     }
 

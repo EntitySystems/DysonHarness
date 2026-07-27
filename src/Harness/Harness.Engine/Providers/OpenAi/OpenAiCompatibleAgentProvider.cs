@@ -22,6 +22,7 @@ public sealed class OpenAiCompatibleAgentProvider : DysonAgentProvider
             ?? "OpenAI Compatible";
         OpenAiApiMode = DysonOpenAiApiModes.Normalize(
             provider?.OpenAiApiMode ?? slug?.Provider?.OpenAiApiMode);
+        ManagedSource = provider?.ManagedSource ?? slug?.Provider?.ManagedSource;
         ReasoningEffort = NormalizeReasoningEffort(
             reasoningEffort ?? slug?.DefaultReasoningEffort);
     }
@@ -50,6 +51,7 @@ public sealed class OpenAiCompatibleAgentProvider : DysonAgentProvider
         BaseUrl = source.BaseUrl;
         ProviderDisplayName = source.ProviderDisplayName;
         OpenAiApiMode = source.OpenAiApiMode;
+        ManagedSource = source.ManagedSource;
         ReasoningEffort = NormalizeReasoningEffort(reasoningEffort);
     }
 
@@ -62,6 +64,8 @@ public sealed class OpenAiCompatibleAgentProvider : DysonAgentProvider
     public string? BaseUrl { get; }
     public string ProviderDisplayName { get; }
     public string OpenAiApiMode { get; }
+    /// <summary>When set (e.g. cliproxy-codex), provider is managed; null = direct/user-owned.</summary>
+    public string? ManagedSource { get; }
     /// <summary>Top-level request reasoning_effort; null/empty = omit.</summary>
     public string? ReasoningEffort { get; set; }
 

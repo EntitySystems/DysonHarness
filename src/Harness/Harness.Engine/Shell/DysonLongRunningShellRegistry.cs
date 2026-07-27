@@ -26,27 +26,34 @@ public static class DysonLongRunningShellRegistry
 
     public static async Task<Result<DysonLongRunningShellInfo, string>> StartAsync(
         Guid workDirectoryId,
-        DysonShellType shellType,
+        string shellName,
+        string executablePath,
         string command,
         string workingDirectory,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<string>? fixedArgsOverride = null)
     {
         if (workDirectoryId == Guid.Empty)
             return Result<DysonLongRunningShellInfo, string>.AsError("Work directory id is required.");
+        if (string.IsNullOrWhiteSpace(shellName))
+            return Result<DysonLongRunningShellInfo, string>.AsError("Shell name is required.");
+        if (string.IsNullOrWhiteSpace(executablePath))
+            return Result<DysonLongRunningShellInfo, string>.AsError("Executable path is required.");
         if (string.IsNullOrWhiteSpace(command))
             return Result<DysonLongRunningShellInfo, string>.AsError("Command is empty.");
         if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
             return Result<DysonLongRunningShellInfo, string>.AsError("Working directory does not exist.");
 
-        if (shellType is not (DysonShellType.Pwsh or DysonShellType.PowerShell or DysonShellType.Cmd))
-            return Result<DysonLongRunningShellInfo, string>.AsError($"Shell '{shellType}' is not supported for long-running shells yet.");
+        var mapped = DysonWindowsShell.ResolveFixedArgs(executablePath, fixedArgsOverride);
+        if (mapped.IsError)
+            return Result<DysonLongRunningShellInfo, string>.AsError(mapped.Error);
 
         cancellationToken.ThrowIfCancellationRequested();
 
         var bucket = Buckets.GetOrAdd(workDirectoryId, static id => new WorkdirBucket(id));
         var id = bucket.NextId();
 
-        var (fileName, fixedArgs) = DysonWindowsShell.MapArgs(shellType);
+        var (fileName, fixedArgs) = mapped.Value;
         Process? process = null;
         try
         {
@@ -84,7 +91,7 @@ public static class DysonLongRunningShellRegistry
             {
                 Id = id,
                 WorkDirectoryId = workDirectoryId,
-                ShellType = shellType,
+                ShellName = shellName.Trim(),
                 Command = command,
                 WorkingDirectory = workingDirectory,
                 StartedUtc = DateTime.UtcNow,

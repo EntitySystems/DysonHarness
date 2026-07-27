@@ -298,6 +298,9 @@ public static class DysonAgentSystemPrompts
 
             foreach (var slug in provider.Slugs)
             {
+                if (!slug.IsEnabled)
+                    continue;
+
                 var alias = string.IsNullOrWhiteSpace(slug.DisplayAlias) ? slug.Slug : slug.DisplayAlias.Trim();
                 var apiSlug = slug.Slug?.Trim() ?? "";
                 var defaultEffort = string.IsNullOrWhiteSpace(slug.DefaultReasoningEffort)

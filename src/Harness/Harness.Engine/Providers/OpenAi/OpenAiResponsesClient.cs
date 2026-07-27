@@ -20,31 +20,7 @@ public sealed class OpenAiResponsesClient(HttpClient http)
 
         var baseUrl = OpenAiCompatibleHttp.NormalizeBaseUrl(provider.BaseUrl);
         var url = $"{baseUrl}/responses";
-
-        var body = new JsonObject
-        {
-            ["model"] = provider.Slug,
-            ["instructions"] = built.Instructions,
-            ["input"] = built.Input.DeepClone(),
-            ["tools"] = built.Tools.DeepClone(),
-            ["prompt_cache_key"] = built.PromptCacheKey,
-            ["store"] = built.Store,
-            ["stream"] = true,
-        };
-
-        if (!string.IsNullOrWhiteSpace(built.PreviousResponseId))
-            body["previous_response_id"] = built.PreviousResponseId;
-
-        if (built.IncludeExplicitBreakpoints)
-        {
-            body["prompt_cache_options"] = new JsonObject
-            {
-                ["mode"] = "explicit",
-            };
-        }
-
-        if (!string.IsNullOrWhiteSpace(provider.ReasoningEffort))
-            body["reasoning_effort"] = provider.ReasoningEffort.Trim();
+        var body = BuildCreateBody(provider, built);
 
         var content = new StringBuilder();
         var reasoning = new StringBuilder();
@@ -258,6 +234,42 @@ public sealed class OpenAiResponsesClient(HttpClient http)
                 UsageCacheHint = usageHint,
             },
         });
+    }
+
+    /// <summary>Builds the POST /responses JSON body (nested <c>reasoning.effort</c>, not top-level <c>reasoning_effort</c>).</summary>
+    public static JsonObject BuildCreateBody(
+        OpenAiCompatibleAgentProvider provider,
+        OpenAiCacheFriendlyTranscriptBuilder.BuiltResponsesRequest built)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(built);
+
+        var body = new JsonObject
+        {
+            ["model"] = provider.Slug,
+            ["instructions"] = built.Instructions,
+            ["input"] = built.Input.DeepClone(),
+            ["tools"] = built.Tools.DeepClone(),
+            ["prompt_cache_key"] = built.PromptCacheKey,
+            ["store"] = built.Store,
+            ["stream"] = true,
+        };
+
+        if (!string.IsNullOrWhiteSpace(built.PreviousResponseId))
+            body["previous_response_id"] = built.PreviousResponseId;
+
+        if (built.IncludeExplicitBreakpoints)
+        {
+            body["prompt_cache_options"] = new JsonObject
+            {
+                ["mode"] = "explicit",
+            };
+        }
+
+        if (!string.IsNullOrWhiteSpace(provider.ReasoningEffort))
+            body["reasoning"] = new JsonObject { ["effort"] = provider.ReasoningEffort.Trim() };
+
+        return body;
     }
 
     public static Result<OpenAiModelReply, string> Parse(JsonObject response)

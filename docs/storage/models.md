@@ -52,6 +52,23 @@ Known keys (`DysonAppSettingKeys`):
 - `web_search_summarizer_model_slug_id` — Guid string of the model slug for web-search/fetch summarization; empty / missing ⇒ session model.
 - `tool_panel_width_percent` — chat tools column width as a percent of the turn content row (clamped 12–50, default 30); empty / missing ⇒ 30.
 - `agent_mode_tool_policy` — JSON `DysonToolPolicyDocument`: `modes.{Mode}.disabledTools` string arrays (denylist); optional `models.{slugGuid}.modes.{Mode}.disabledTools` plumbing for future per-model overlays (resolver ignores `models` in v1). Missing document / mode ⇒ all tools enabled. Edited via Settings → Agent modes (`DysonToolPolicyStore`).
+- `cliproxy_api_key` / `cliproxy_management_key` / `cliproxy_port` — mirrored from `external/cliproxy/keys.json` when a managed provider connects (canonical secret store is the sidecar next to `config.yaml`).
+
+## Configured shells (`configured_shells`)
+
+User-managed shell catalog for MCP `ShellExecute` / long-running shell tools (`DysonConfiguredShellEntity` / `DysonConfiguredShellStore`). Not stored in `app_settings`.
+
+| Property | Notes |
+| -------- | ----- |
+| `Id` | Guid PK |
+| `Name` | Unique case-insensitive (SQLite `NOCASE`); MCP `shell` enum value |
+| `ExecutablePath` | Absolute path or PATH-resolvable file name |
+| `FixedArgsJson` | Optional JSON string array of argv prefix before the command (e.g. `["-c"]`); null/empty ⇒ basename heuristics |
+| `IsEnabled` | When false, omitted from session `AvailableShells` / MCP catalog |
+| `SortOrder` | Stable UI / enum order (ascending) |
+| `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
+
+`EnsureDefaultsAsync` seeds Windows rows when the table is empty: `Pwsh`→`pwsh`, `PowerShell`→`powershell.exe`, `Cmd`→`cmd.exe` (all enabled). Other platforms seed nothing until Bash/Zsh runners exist. Settings → Shells edits the table (optional Fixed args as space-separated tokens → `FixedArgsJson`); new/resume sessions load enabled specs into `DysonAgentSessionConfig.AvailableShells` (`Name`, `ExecutablePath`, optional `FixedArgs`).
 
 ## Model providers (`model_providers`)
 
@@ -65,10 +82,17 @@ Credentials and endpoint live on the provider only. Slugs are children; add/remo
 | `BaseUrl` | Optional API root (OpenAI-compatible default `https://api.openai.com/v1`; keep `/vN` if already present, else `/v1` is appended) |
 | `ApiKey` | Optional; **plaintext-local** (no OS keychain yet) |
 | `OpenAiApiMode` | OpenAICompatible only: `Completions` (default) or `Responses` — see `DysonOpenAiApiModes` |
+| `ManagedSource` | Optional; when set (e.g. `cliproxy-codex`, `cliproxy-grok`) the row is a managed third-party provider — view-only in UI; unique when non-null. Null = user-owned manual provider |
 | `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
 | `Slugs` | Navigation to child `model_slugs` |
 
 Cascade-delete: removing a provider deletes its slugs.
+
+### Managed providers (CLIProxy)
+
+Settings → Models can **Import** ChatGPT Codex or Grok Build via a pinned local [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) binary under `{AppContext.BaseDirectory}/external/cliproxy/{version}/` (lazy download; not LocalAppData). Managed rows stay `ProviderKind=OpenAICompatible`, `OpenAiApiMode=Responses`, `BaseUrl=http://127.0.0.1:{port}/v1`, with `ApiKey` = the local proxy Bearer key. OAuth goes through CLIProxy Management API (`codex-auth-url` / `xai-auth-url` + `get-auth-status`); **Verify** syncs `/v1/models` into the slug set.
+
+`DysonModelStore.UpsertManagedProviderAsync` keeps an id-stable row per `ManagedSource` and **merges** slugs by name: existing rows keep `Id` and `IsEnabled` while catalog fields refresh; new API models insert enabled; missing API models are removed. `UpdateProviderAsync` / slug add-update-remove reject when `ManagedSource` is set. `SetSlugEnabledAsync` toggles enablement for managed slugs only.
 
 ## Model slugs (`model_slugs`)
 
@@ -79,6 +103,7 @@ Cascade-delete: removing a provider deletes its slugs.
 | `Slug` | API model id (e.g. `gpt-4o`) |
 | `DisplayAlias` | UI label (e.g. “GPT-4o Fast”) |
 | `IsDefault` | Global default selection for new sessions (one default across all providers) |
+| `IsEnabled` | When false, omitted from new selection catalogs (picker, Composer `/model`, system-prompt catalog, `FindSlugByNameAsync`); Settings → Models still lists it. Managed providers only expose Enable/Disable; manual/custom slugs stay always selectable (API rejects toggle). Default `true` (migration + new inserts). |
 | `DefaultReasoningEffort` | Optional freeform default for top-level API `reasoning_effort` (e.g. `high` / `low`); null/empty = omit |
 | `ReasoningModes` | Freeform `List<string>` of `reasoning_effort` values for the Composer dropdown; stored as JSON TEXT via `StringListJsonValueConverter` (normalize on write; empty list on bad JSON read); default `[]` |
 | `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
@@ -99,9 +124,9 @@ User-starred slugs for the Composer model picker (persisted per app-data DB).
 
 Thin CRUD over `DysonDbContext` using the Result pattern (`Result` / `VoidResult`):
 
-- **Providers:** list (include slugs), get, create, update (incl. `ApiKey` / `BaseUrl` / `OpenAiApiMode`), delete
-- **Slugs:** add under a provider (optional `defaultReasoningEffort` + `reasoningModes`), update (alias / slug / default effort / modes / is-default), remove
-- **Selection:** get/set default slug, get slug by id (with provider loaded), `FindSlugByNameAsync` (case-insensitive exact match on `Slug` then `DisplayAlias`)
+- **Providers:** list (include slugs), get, create, update (incl. `ApiKey` / `BaseUrl` / `OpenAiApiMode`; rejected when `ManagedSource` set), `UpsertManagedProviderAsync` (id-stable by source + merge slugs by name, preserving `Id`/`IsEnabled`), delete
+- **Slugs:** add under a provider (optional `defaultReasoningEffort` + `reasoningModes`; rejected when provider is managed), update (alias / slug / default effort / modes / is-default; rejected when managed), remove (rejected when managed), `SetSlugEnabledAsync` (managed only)
+- **Selection:** get/set default slug (get prefers enabled `IsDefault`, else first enabled; set rejects disabled), get slug by id (with provider loaded; works for disabled — resume), `FindSlugByNameAsync` (enabled only; case-insensitive exact match on `Slug` then `DisplayAlias`)
 - **Favorites:** `ListFavoriteSlugIdsAsync`, `AddFavoriteAsync`, `RemoveFavoriteAsync`, `IsFavoriteAsync`
 
 ## Reasoning effort
@@ -118,7 +143,7 @@ Per-slug **default** (`DefaultReasoningEffort`) plus a **session override** (`se
 
 ## System-prompt catalog
 
-At session create / load / child spawn (when a `DysonModelStore` is available), `DysonAgentSystemPrompts.FormatAvailableModelsBlock` appends a same-kind slug list to the system prompt: display alias, API slug, `defaultEffort`, and registered `modes`. That snapshot is persisted as `SystemPromptSnapshot`. Tests/stubs without a model store skip the block.
+At session create / load / child spawn (when a `DysonModelStore` is available), `DysonAgentSystemPrompts.FormatAvailableModelsBlock` appends a same-kind **enabled** slug list to the system prompt: display alias, API slug, `defaultEffort`, and registered `modes`. That snapshot is persisted as `SystemPromptSnapshot`. Tests/stubs without a model store skip the block.
 
 ## OpenAI-compatible API mode
 

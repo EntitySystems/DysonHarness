@@ -36,6 +36,9 @@ Desktop.ini
 *.pfx
 *.key
 
+## Lazy-downloaded third-party binaries (CLIProxyAPI, …)
+**/external/
+
 ## Local verify / publish outputs
 artifacts/
 

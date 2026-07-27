@@ -22,6 +22,7 @@ public sealed class DysonDbContext : DbContext
     public DbSet<DysonSessionLogEntry> SessionLogs => Set<DysonSessionLogEntry>();
     public DbSet<DysonSessionTodoEntity> SessionTodos => Set<DysonSessionTodoEntity>();
     public DbSet<DysonAppSettingEntity> AppSettings => Set<DysonAppSettingEntity>();
+    public DbSet<DysonConfiguredShellEntity> ConfiguredShells => Set<DysonConfiguredShellEntity>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -41,6 +42,7 @@ public sealed class DysonDbContext : DbContext
             e.HasKey(x => x.Id);
             e.Property(x => x.DisplayName).IsRequired();
             e.Property(x => x.ProviderKind).IsRequired();
+            e.HasIndex(x => x.ManagedSource).IsUnique();
             e.HasMany(x => x.Slugs)
                 .WithOne(s => s.Provider)
                 .HasForeignKey(s => s.ProviderId)
@@ -156,6 +158,16 @@ public sealed class DysonDbContext : DbContext
             e.HasKey(x => x.Key);
             e.Property(x => x.Key).IsRequired();
             e.Property(x => x.Value).IsRequired();
+        });
+
+        modelBuilder.Entity<DysonConfiguredShellEntity>(e =>
+        {
+            e.ToTable("configured_shells");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Name).IsRequired().UseCollation("NOCASE");
+            e.Property(x => x.ExecutablePath).IsRequired();
+            e.HasIndex(x => x.Name).IsUnique();
+            e.HasIndex(x => x.SortOrder);
         });
     }
 

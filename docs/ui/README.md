@@ -12,7 +12,7 @@ dotnet run --project src/Harness/Harness.UI --urls http://localhost:5180
 
 Or open the solution and set **Harness.UI** as the startup project. The app uses Interactive Server rendering globally.
 
-DI (scoped): `ThemeService`, `DysonDbContext`, `DysonModelStore`, `DysonSessionStore`, `DysonWorkDirectoryStore`, `DysonAppSettingsStore`, `HttpClient` (via `IHttpClientFactory`), `DysonUiHost`.
+DI (scoped): `ThemeService`, `DysonDbContext`, `DysonModelStore`, `DysonSessionStore`, `DysonWorkDirectoryStore`, `DysonAppSettingsStore`, `DysonToolPolicyStore`, `DysonConfiguredShellStore`, `HttpClient` (via `IHttpClientFactory`), `ManagedInferenceProviderCatalog`, `DysonUiHost`. Singleton: `DysonCliProxyHost` (disposed on app shutdown).
 
 **Windows only:** `Program.cs` also registers `AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>()`. `DysonUiHost` injects that singleton into every `DysonAgentSessionConfig.BrowserControl` (new + resume). When set, the engine MCP catalog includes browser tools (`OpenBrowser`, …) that open in-process CefSharp WPF windows. See [packaging/webview](../packaging/webview.md).
 
@@ -32,17 +32,18 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `/settings` | `SettingsLayout` | Redirects to `/settings/general` |
 | `/settings/general` | `SettingsLayout` | Theme / accent (`ThemeSwitcher`) + web search summarizer model (`ModelSlugPicker`, optional) |
 | `/settings/models` | `SettingsLayout` | Provider/slug CRUD (`ModelsPanel`) |
+| `/settings/shells` | `SettingsLayout` | Configured shells CRUD (name, path, enable/disable; native file Browse) |
 | `/settings/agent-modes` | `SettingsLayout` | List of `DysonAgentModes.BuiltIns`; link to per-mode tool toggles |
 | `/settings/agent-modes/{Mode}` | `SettingsLayout` | Enable/disable MCP tools for one mode (`Uri.EscapeDataString` for spaces); persists denylist |
 
-`SettingsLayout` nests under `MainLayout` (side nav: General, Models, Agent modes, Back to agent).
+`SettingsLayout` nests under `MainLayout` (side nav: General, Models, Shells, Agent modes, Back to agent).
 
 ## Layout
 
 | Path | Role |
 | ---- | ---- |
 | `Components/Pages/Home.razor` | Agent IDE shell |
-| `Components/Pages/Settings/` | Settings pages (`Index`, `General`, `Models`, `AgentModes`, `AgentModeDetail`) |
+| `Components/Pages/Settings/` | Settings pages (`Index`, `General`, `Models`, `Shells`, `AgentModes`, `AgentModeDetail`) |
 | `Components/Layout/SettingsLayout.razor` | Settings side-nav shell |
 | `Components/Shell/` | `AppShell`, `Sidebar`, `SessionHeader`, `RailSidePanel` |
 | `Components/Sessions/` | `WorkDirectorySwitcher`, `SessionList` |
@@ -65,8 +66,9 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `RailSidePanel` | Right-rail Files / Git / Usage tabs (placeholders for now); Session log stays as a sibling panel on `Home` |
 | `Sidebar` | Work directory switcher, sessions, Settings link, app-mode badge |
 | `WorkDirectorySwitcher` | Register/switch/remove workdirs; native folder pick via `DysonNativeFolderPicker` |
+| Settings → Shells | Enable/disable/edit/remove configured shells; optional Fixed args (space-separated → JSON); Browse via `DysonNativeFolderPicker.PickFileAsync`; seeds Windows defaults when empty |
 | `SessionList` | Sessions for active workdir; click a row to resume/load it; hover (or focus) shows a trash icon that confirms then deletes via `DysonUiHost.DeleteSessionAsync`; **New** disabled until a workdir is selected |
-| `ModelSlugPicker` | Compact chip + search modal; switches the **active** session model (and persists `ModelSlugId` + resets effort to slug default) when a session is focused; otherwise sets the slug / pending effort for the next New session; also General summarizer (`AllowEmpty` → use session model) |
+| `ModelSlugPicker` | Compact chip + search modal; switches the **active** session model (and persists `ModelSlugId` + resets effort to slug default) when a session is focused; otherwise sets the slug / pending effort for the next New session; also General summarizer (`AllowEmpty` → use session model); lists enabled slugs only (keeps a currently selected disabled slug visible so resume is not force-switched) |
 | `AgentModePicker` | Compact chip + search modal of `DysonAgentModes.BuiltIns`; picker may change freely; **submit** commits via `Host.PromptAsync(prompt, agentMode)` → `ApplyAgentMode` when it differs from `session.Mode` (rebuilds system prompt + persists); resume / host `Changed` syncs picker from `session.Mode` |
 | `ChatPanel` | Transcript (`.chat-panel__turns` flex-scrolls inside the main column; stick-to-bottom via `dysonChat` in `theme.js` while near bottom / on new turns); forwards model / effort / mode / git branch / `OnNewSession` to Composer |
 | `TurnBlock` | Single turn (title left; muted mono local `dd/MM/yyyy HH:mm` on header right from `StartedUtc`/`CompletedUtc` — start only while in progress, `{start} – {end}` when complete; not in model transcript; older turns collapse when a new turn starts — header click toggles expand/collapse; user prompt with right-side spinner while reply in flight; hover → danger cancel SVG click cancels; when idle, muted Retry (`icons/retry.svg`) resubmits the prompt; optional expandable **Thinking** section above the reply when the model emits reasoning (`ReasoningText` / live preview — auto-open while streaming, collapsed when finished); streaming plain-text preview while `IsStreaming`, Markdig assistant body when complete, tools; **`PlanResultBlock`** for `PlanResult` turns (Open plan → file viewer; Build plan → `BuildPendingPlanAsync`); **`SubagentCard`** under each completed/working `StartSubagent` tool call) |
@@ -76,13 +78,13 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `SubagentCard` | Compact parent-turn card: child title + muted model label (`Alias · Provider / slug`, child provider with parent fallback) + latest child turn title + spinner while running; click → `NavigateToSessionAsync` |
 | `SubagentEventBlock` | Expandable “Subagent event” transcript block (kind, subagent, eventId, payload); spinner while unaddressed |
 | `AskQuestionPopover` | Composer overlay for root `AskQuestion` / L1 `askQuestion` parent events; per-question Skip; Submit when all resolved; disables Send while open |
-| `Composer` | Prompt + left-aligned toolbar (model chip, **Effort** `<select>` of the selected slug’s `ReasoningModes` plus **None** (null → omit; legacy current value kept as an extra option if not in the list), mode, git branch chip); **PlanReadyPopover** above the textarea when `Host.PendingPlanReady` is set; typing `/` as the whole prompt token opens a dense slash-command overlay above the textarea (`/ask` `/plan` `/work` modes, `/new` → `OnNewSession` / `StartNewAsync`, `/[model]` fuzzy match on slug/alias like the model picker — applies to the live session via `SetSessionModelSlugAsync` when focused; max 5; ↑↓ Enter Esc; send strips+applies a leading command). Logic in `ComposerSlashCommands` (Facts in `Harness.Tests`) |
+| `Composer` | Prompt + left-aligned toolbar (model chip, **Effort** `<select>` of the selected slug’s `ReasoningModes` plus **None** (null → omit; legacy current value kept as an extra option if not in the list), mode, git branch chip); **PlanReadyPopover** above the textarea when `Host.PendingPlanReady` is set; typing `/` as the whole prompt token opens a dense slash-command overlay above the textarea (`/ask` `/plan` `/work` modes, `/new` → `OnNewSession` / `StartNewAsync`, `/[model]` fuzzy match on **enabled** slug/alias like the model picker — applies to the live session via `SetSessionModelSlugAsync` when focused; max 5; ↑↓ Enter Esc; send strips+applies a leading command). Logic in `ComposerSlashCommands` (Facts in `Harness.Tests`) |
 | `ToolCallPanel` / `ToolCallRow` / `QueuedToolCallRow` | Live tool status; shared expand chrome with tool-specific collapsed summaries and expanded bodies (`Components/Tools/Variants/`), generic args/result fallback for unknown tools |
 | `ThemeSwitcher` | Light/Dark + Blue/Green/Red/Purple (settings → General) |
 | `SessionHeader` | Title (`DisplayTitle`), mode, ids, MCP, git branch, **Shells N** count pill (running long-running shells for the workdir; opens list/log modal with Force stop → Abort), **Tools** menu → Open Browser when `IDysonBrowserControl` is registered (Windows), app mode; when viewing a child (`ParentSessionId` set), **← Parent** → `NavigateToParentAsync` |
 | `SessionTodoOverview` | Between `SessionHeader` and `ChatPanel`; hidden when the session todo list is empty; collapsed (default) shows `{complete}/{total} tasks done`; expanded lists DisplayName, TaskCode, status badge, comments; refreshes on `TodosChanged` via host `Notify` |
 | `SessionSubagentOverview` | Below todos; session-level roster of direct children (not only spawn-turn cards); collapsed shows `{n} subagents ({active} active)`; expanded reuses `SubagentCard`; refreshes on host `Notify` after hydrate / spawn |
-| `ModelsPanel` | Provider/slug CRUD — settings → Models; OpenAICompatible shows Completions/Responses API mode toggle; slug create/edit **Reasoning modes** chip/list editor + default reasoning effort (new forms prefill `high`; blank = omit); **Repair mis-tagged providers** fixes demo rows that have credentials |
+| `ModelsPanel` | Provider/slug CRUD — settings → Models; OpenAICompatible shows Completions/Responses API mode toggle; slug create/edit **Reasoning modes** chip/list editor + default reasoning effort (new forms prefill `high`; blank = omit); **Repair mis-tagged providers** fixes demo rows that have credentials; **Third-party managed providers** section imports Codex/Grok via CLIProxy (download progress, Connect / Complete / Verify; managed rows are view-only except Enable/Disable per slug + Default) |
 | `SettingsLayout` | Settings side nav + content |
 
 General also hosts **Web search summarizer**: optional slug stored in `app_settings` (`web_search_summarizer_model_slug_id`); cleared = use session model.
@@ -115,12 +117,12 @@ General also hosts **Web search summarizer**: optional slug stored in `app_setti
 - **AskQuestion (root):** pending questions bind to composer popover; answers complete via `RespondToAskQuestion`.
 - **New session:** `StartNewSessionAsync(agentMode, modelSlugId, workDirectoryId)` — workdir required → resolves provider kind → `OpenAiCompatibleAgentSession` or `DemoDysonAgentSession`
 - **Switch agent mode (submit):** `PromptAsync(prompt, agentMode)` applies mode when the picker differs from `session.Mode` (via `SetSessionAgentModeAsync` / `ApplyAgentModeCoreAsync`) before the turn — rebuilds system prompt + available-models suffix, bumps `SystemPromptGeneration` (OpenAI `prompt_cache_key`), persists `AgentMode` + `SystemPromptSnapshot`; busy-gated; resume / focus syncs the composer picker from `session.Mode`; leaving Plan drains any buffered completion auto-turns
-- **Switch model:** `SetSessionModelSlugAsync(modelSlugId)` — same provider kind only; swaps live `session.Provider`, resets effort to the slug’s `DefaultReasoningEffort`, and persists `ModelSlugId` + `ReasoningEffort`; cross-kind (demo ↔ OpenAI) rejected (`LastError`: start a new session); blocked while busy; with no session, updates pending effort for the next New session
+- **Switch model:** `SetSessionModelSlugAsync(modelSlugId)` — same provider kind only; rejects switching **to** a disabled slug; swaps live `session.Provider`, resets effort to the slug’s `DefaultReasoningEffort`, and persists `ModelSlugId` + `ReasoningEffort`; cross-kind (demo ↔ OpenAI) rejected (`LastError`: start a new session); blocked while busy; with no session, updates pending effort for the next New session
 - **Session effort:** `SetSessionReasoningEffortAsync(effort)` — overrides session `ReasoningEffort` / live provider only (not the slug default); empty omits the request field; persists when a session is focused; blocked while busy
 - **Plan-ready sticky:** `PendingPlanReady` / `BuildPendingPlanAsync` — after latest `PlanResult` with a path, composer shows View / Build until a later `BeginBuildPlan` turn (layout-only: Recap + Agent actions, no tools; buffered Explore reports fold into that Instruction); legacy `[BuildPlan]` user turns still dismiss sticky. After a successful BeginBuildPlan, `PromptOnSessionAsync` enqueues `DysonBeginBuildPlanFlow.ContinuationPrompt` as a Normal turn that implements from the Agent actions set
 - **File viewer:** `OpenFileViewerAsync` stays on the Blazor sync context (no `ConfigureAwait(false)` on this path) so `Notify` paints `FileViewerOverlay`; overlay also listens to `Host.Changed`
 - **Delete session:** `DeleteSessionAsync(sessionId)` — confirms in UI, then store delete (subtree + cascaded turns/logs); detaches if it was the active session
-- **Resume:** `GetFullSessionAsync` → re-resolves provider from `ModelSlugId` + session `ReasoningEffort` (null → slug default) → same branch as new session; restores todos into the live session; hydrates direct DB children into `SubSessions` / `SubagentsById` (quiet child loads skip `SessionResumed` logs) so Wait/Inspect/Stop and `SessionSubagentOverview` work after cold resume
+- **Resume:** `GetFullSessionAsync` → re-resolves provider from `ModelSlugId` + session `ReasoningEffort` (null → slug default) → same branch as new session; resume by id still works when the slug is disabled; restores todos into the live session; hydrates direct DB children into `SubSessions` / `SubagentsById` (quiet child loads skip `SessionResumed` logs) so Wait/Inspect/Stop and `SessionSubagentOverview` work after cold resume
 - **Todos:** host subscribes `TodosChanged` → `Notify()` so `SessionTodoOverview` refreshes without a full reload; MCP todo tools mutate the focused session’s own list
 - **Subagents overview:** `SessionSubagentOverview` binds to `Session.SubSessions` (session-owned roster); spawn-turn `SubagentCard`s remain under `TurnBlock`
 - **Rename:** demo tool executor handles `RenameSession` → `RenameAsync` + persist `Title` + `SessionRenamed` log; host `SessionRenamed` notifies UI to refresh list/header

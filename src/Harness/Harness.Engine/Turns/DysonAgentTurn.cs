@@ -64,17 +64,31 @@ public sealed class DysonAgentTurn
 
     private readonly StringBuilder _streamingPreview = new();
     private readonly StringBuilder _reasoningPreview = new();
+    // ponytail: StringBuilder is not thread-safe; Blazor renders while the stream thread Appends.
+    private readonly object _previewGate = new();
 
     /// <summary>Live streaming preview (transient; not persisted).</summary>
-    public string? StreamingPreview =>
-        _streamingPreview.Length == 0 ? null : _streamingPreview.ToString();
+    public string? StreamingPreview
+    {
+        get
+        {
+            lock (_previewGate)
+                return _streamingPreview.Length == 0 ? null : _streamingPreview.ToString();
+        }
+    }
 
     /// <summary>True while assistant text is streaming into <see cref="StreamingPreview"/>.</summary>
     public bool IsStreaming { get; private set; }
 
     /// <summary>Live reasoning preview (transient; not persisted).</summary>
-    public string? ReasoningStreamingPreview =>
-        _reasoningPreview.Length == 0 ? null : _reasoningPreview.ToString();
+    public string? ReasoningStreamingPreview
+    {
+        get
+        {
+            lock (_previewGate)
+                return _reasoningPreview.Length == 0 ? null : _reasoningPreview.ToString();
+        }
+    }
 
     /// <summary>True while reasoning text is streaming into <see cref="ReasoningStreamingPreview"/>.</summary>
     public bool IsReasoningStreaming { get; private set; }
@@ -390,19 +404,27 @@ public sealed class DysonAgentTurn
         if (delta.Length == 0)
             return;
 
-        _streamingPreview.Append(delta);
-        IsStreaming = true;
+        lock (_previewGate)
+        {
+            _streamingPreview.Append(delta);
+            IsStreaming = true;
+        }
+
         NotifyAssistantTextChanged();
     }
 
     /// <summary>Clear transient streaming preview (e.g. before tool execution or on error).</summary>
     public void ClearStreamingPreview()
     {
-        if (_streamingPreview.Length == 0 && !IsStreaming)
-            return;
+        lock (_previewGate)
+        {
+            if (_streamingPreview.Length == 0 && !IsStreaming)
+                return;
 
-        _streamingPreview.Clear();
-        IsStreaming = false;
+            _streamingPreview.Clear();
+            IsStreaming = false;
+        }
+
         NotifyAssistantTextChanged();
     }
 
@@ -416,11 +438,15 @@ public sealed class DysonAgentTurn
         if (!string.IsNullOrEmpty(AssistantText))
             ClearBinaryAttachments();
 
-        if (_streamingPreview.Length == 0 && !IsStreaming)
-            return;
+        lock (_previewGate)
+        {
+            if (_streamingPreview.Length == 0 && !IsStreaming)
+                return;
 
-        _streamingPreview.Clear();
-        IsStreaming = false;
+            _streamingPreview.Clear();
+            IsStreaming = false;
+        }
+
         NotifyAssistantTextChanged();
     }
 
@@ -431,19 +457,27 @@ public sealed class DysonAgentTurn
         if (delta.Length == 0)
             return;
 
-        _reasoningPreview.Append(delta);
-        IsReasoningStreaming = true;
+        lock (_previewGate)
+        {
+            _reasoningPreview.Append(delta);
+            IsReasoningStreaming = true;
+        }
+
         NotifyAssistantTextChanged();
     }
 
     /// <summary>Clear transient reasoning preview (same paths as <see cref="ClearStreamingPreview"/>).</summary>
     public void ClearReasoningPreview()
     {
-        if (_reasoningPreview.Length == 0 && !IsReasoningStreaming)
-            return;
+        lock (_previewGate)
+        {
+            if (_reasoningPreview.Length == 0 && !IsReasoningStreaming)
+                return;
 
-        _reasoningPreview.Clear();
-        IsReasoningStreaming = false;
+            _reasoningPreview.Clear();
+            IsReasoningStreaming = false;
+        }
+
         NotifyAssistantTextChanged();
     }
 
@@ -453,11 +487,15 @@ public sealed class DysonAgentTurn
     /// </summary>
     public void FinishReasoningStreaming()
     {
-        if (_reasoningPreview.Length == 0 && !IsReasoningStreaming)
-            return;
+        lock (_previewGate)
+        {
+            if (_reasoningPreview.Length == 0 && !IsReasoningStreaming)
+                return;
 
-        _reasoningPreview.Clear();
-        IsReasoningStreaming = false;
+            _reasoningPreview.Clear();
+            IsReasoningStreaming = false;
+        }
+
         NotifyAssistantTextChanged();
     }
 

@@ -1877,15 +1877,9 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (command.IsError)
             return Error(call, command.Error);
 
-        if (!Enum.TryParse<DysonShellType>(shellName.Value, ignoreCase: true, out var shellType))
-            return Error(call, $"Unknown shell '{shellName.Value}'.");
-
-        var available = _session.Config.AvailableShellTypes;
-        if (!available.Contains(shellType))
-        {
-            var listed = string.Join(", ", available);
-            return Error(call, $"Shell '{shellType}' is not available for this session. Available: {listed}.");
-        }
+        var resolve = ResolveConfiguredShell(shellName.Value);
+        if (resolve.IsError)
+            return Error(call, resolve.Error);
 
         var workDirRel = doc.RootElement.TryGetProperty("workingDirectory", out var wdProp)
             ? wdProp.GetString()
@@ -1900,17 +1894,14 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Error(call, $"Working directory not found: {workDirRel ?? "."}");
 
         var timeoutMs = GetInt(doc.RootElement, "timeoutMs");
-        DysonShell shell;
-        try
-        {
-            shell = DysonShell.Create(shellType);
-        }
-        catch (Exception ex)
-        {
-            return Error(call, ex.Message);
-        }
-
-        var run = await shell.ExecuteAsync(command.Value, workDir.Value, timeoutMs, cancellationToken)
+        var run = await DysonWindowsShell
+            .ExecuteWithPathAsync(
+                resolve.Value.ExecutablePath,
+                command.Value,
+                workDir.Value,
+                timeoutMs,
+                cancellationToken,
+                resolve.Value.FixedArgs)
             .ConfigureAwait(false);
         if (run.IsError)
             return Error(call, run.Error);
@@ -1963,15 +1954,9 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (command.IsError)
             return Error(call, command.Error);
 
-        if (!Enum.TryParse<DysonShellType>(shellName.Value, ignoreCase: true, out var shellType))
-            return Error(call, $"Unknown shell '{shellName.Value}'.");
-
-        var available = _session.Config.AvailableShellTypes;
-        if (!available.Contains(shellType))
-        {
-            var listed = string.Join(", ", available);
-            return Error(call, $"Shell '{shellType}' is not available for this session. Available: {listed}.");
-        }
+        var resolve = ResolveConfiguredShell(shellName.Value);
+        if (resolve.IsError)
+            return Error(call, resolve.Error);
 
         var workDirRel = doc.RootElement.TryGetProperty("workingDirectory", out var wdProp)
             ? wdProp.GetString()
@@ -1986,7 +1971,14 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Error(call, $"Working directory not found: {workDirRel ?? "."}");
 
         var started = await DysonLongRunningShellRegistry
-            .StartAsync(_workDirectoryId, shellType, command.Value, workDir.Value, cancellationToken)
+            .StartAsync(
+                _workDirectoryId,
+                resolve.Value.Name,
+                resolve.Value.ExecutablePath,
+                command.Value,
+                workDir.Value,
+                cancellationToken,
+                resolve.Value.FixedArgs)
             .ConfigureAwait(false);
         if (started.IsError)
             return Error(call, started.Error);
@@ -2010,7 +2002,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             tailText = tail.Value.Text.TrimEnd();
 
         var content =
-            $"longRunningShellId={info.Id}\nstatus={info.Status}\nshell={info.ShellType}\ncommand={info.Command}" +
+            $"longRunningShellId={info.Id}\nstatus={info.Status}\nshell={info.ShellName}\ncommand={info.Command}" +
             "\n---\n" +
             tailText;
 
@@ -2039,7 +2031,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             sb.Append('{');
             sb.Append("\"id\":").Append(s.Id);
             sb.Append(",\"status\":\"").Append(s.Status).Append('"');
-            sb.Append(",\"shell\":\"").Append(s.ShellType).Append('"');
+            sb.Append(",\"shell\":").Append(JsonSerializer.Serialize(s.ShellName));
             sb.Append(",\"command\":").Append(JsonSerializer.Serialize(cmd));
             if (s.ExitCode is int code)
                 sb.Append(",\"exitCode\":").Append(code);
@@ -2049,6 +2041,23 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         sb.Append(']');
         return Ok(call, sb.ToString());
+    }
+
+    private Result<DysonConfiguredShellSpec, string> ResolveConfiguredShell(string shellName)
+    {
+        var available = _session.Config.AvailableShells;
+        var match = available.FirstOrDefault(
+            s => string.Equals(s.Name, shellName, StringComparison.OrdinalIgnoreCase));
+        if (match is null)
+        {
+            var listed = string.Join(", ", available.Select(s => s.Name));
+            return Result<DysonConfiguredShellSpec, string>.AsError(
+                string.IsNullOrEmpty(listed)
+                    ? $"Shell '{shellName}' is not available for this session."
+                    : $"Shell '{shellName}' is not available for this session. Available: {listed}.");
+        }
+
+        return Result<DysonConfiguredShellSpec, string>.AsValue(match);
     }
 
     private async Task<DysonToolCallResult> ReadLongRunningShellTailAsync(

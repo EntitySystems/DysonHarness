@@ -1,0 +1,274 @@
+@page "/settings/shells"
+@layout SettingsLayout
+@using DysonHarness
+@inject DysonConfiguredShellStore ShellStore
+
+<PageTitle>Shells — Settings</PageTitle>
+
+<div class="settings-page">
+    <h1 class="settings-page__title">Shells</h1>
+    <p class="settings-page__copy">
+        Register shells available to agents via ShellExecute and long-running shell tools.
+        Only enabled shells appear in the MCP enum. New and resumed sessions pick up changes.
+        Leave Fixed args blank to use basename heuristics (pwsh/powershell/cmd/bash/sh/zsh/git-bash).
+    </p>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="error-banner">@_error</div>
+    }
+
+    @if (!string.IsNullOrEmpty(_status))
+    {
+        <p class="settings-page__copy" style="margin:0 0 8px;">@_status</p>
+    }
+
+    <div class="settings-page__panel panel">
+        @if (_shells.Count == 0)
+        {
+            <div class="empty-state" style="padding:8px 0;">No shells configured.</div>
+        }
+        else
+        {
+            <div class="list">
+                @foreach (var shell in _shells)
+                {
+                    <div class="list-item" style="cursor:default;">
+                        @if (_editingId == shell.Id)
+                        {
+                            <div class="field">
+                                <label>Name</label>
+                                <input @bind="_editName" />
+                            </div>
+                            <div class="field">
+                                <label>Executable path</label>
+                                <div class="btn-row" style="align-items:center;">
+                                    <input @bind="_editPath" style="flex:1;min-width:0;" />
+                                    <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="BrowseEditPathAsync">Browse</button>
+                                </div>
+                            </div>
+                            <div class="field">
+                                <label>Fixed args (optional)</label>
+                                <input @bind="_editFixedArgs" placeholder="e.g. -c or -NoProfile -NonInteractive -Command" />
+                            </div>
+                            <label class="checkbox-row">
+                                <input type="checkbox" @bind="_editEnabled" />
+                                Enabled
+                            </label>
+                            <div class="btn-row" style="margin-top:4px;">
+                                <button type="button" class="btn btn-primary" style="padding:3px 7px;font-size:11px;" @onclick="() => SaveEditAsync(shell.Id)">Save</button>
+                                <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="CancelEdit">Cancel</button>
+                            </div>
+                        }
+                        else
+                        {
+                            <span class="list-item__title">@shell.Name</span>
+                            <span class="list-item__meta mono">
+                                @(shell.IsEnabled ? "enabled" : "disabled") · @shell.ExecutablePath
+                                @if (!string.IsNullOrWhiteSpace(shell.FixedArgsJson))
+                                {
+                                    <text> · fixed @DysonConfiguredShellStore.FixedArgsToText(shell.FixedArgsJson)</text>
+                                }
+                            </span>
+                            <div class="btn-row" style="margin-top:4px;">
+                                <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="() => BeginEdit(shell)">Edit</button>
+                                <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="() => ToggleEnabledAsync(shell)">
+                                    @(shell.IsEnabled ? "Disable" : "Enable")
+                                </button>
+                                <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="() => DeleteAsync(shell.Id)">Remove</button>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        <div style="margin-top:1rem;border-top:1px solid var(--border, #333);padding-top:0.75rem;">
+            <div class="tool-panel__title" style="margin-bottom:8px;">Add shell</div>
+            <div class="field">
+                <label>Name</label>
+                <input @bind="_addName" placeholder="e.g. MyPwsh" />
+            </div>
+            <div class="field">
+                <label>Executable path</label>
+                <div class="btn-row" style="align-items:center;">
+                    <input @bind="_addPath" placeholder="pwsh or C:\…\pwsh.exe" style="flex:1;min-width:0;" />
+                    <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="BrowseAddPathAsync">Browse</button>
+                </div>
+            </div>
+            <div class="field">
+                <label>Fixed args (optional)</label>
+                <input @bind="_addFixedArgs" placeholder="blank = basename heuristics" />
+            </div>
+            <div class="btn-row" style="margin-top:4px;">
+                <button type="button" class="btn btn-primary" style="padding:3px 7px;font-size:11px;" @onclick="AddAsync">Add</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<DysonConfiguredShellEntity> _shells = [];
+    private string? _error;
+    private string? _status;
+
+    private Guid? _editingId;
+    private string _editName = "";
+    private string _editPath = "";
+    private string _editFixedArgs = "";
+    private bool _editEnabled = true;
+
+    private string _addName = "";
+    private string _addPath = "";
+    private string _addFixedArgs = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var ensure = await ShellStore.EnsureDefaultsAsync();
+        if (ensure.IsError)
+        {
+            _error = ensure.Error;
+            return;
+        }
+
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        var list = await ShellStore.ListAsync();
+        if (list.IsError)
+        {
+            _error = list.Error;
+            return;
+        }
+
+        _shells = list.Value.ToList();
+    }
+
+    private void BeginEdit(DysonConfiguredShellEntity shell)
+    {
+        _error = null;
+        _status = null;
+        _editingId = shell.Id;
+        _editName = shell.Name;
+        _editPath = shell.ExecutablePath;
+        _editFixedArgs = DysonConfiguredShellStore.FixedArgsToText(shell.FixedArgsJson);
+        _editEnabled = shell.IsEnabled;
+    }
+
+    private void CancelEdit()
+    {
+        _editingId = null;
+    }
+
+    private async Task SaveEditAsync(Guid id)
+    {
+        _error = null;
+        _status = null;
+        var update = await ShellStore.UpdateAsync(
+            id,
+            _editName,
+            _editPath,
+            _editEnabled,
+            DysonConfiguredShellStore.ParseFixedArgsText(_editFixedArgs));
+        if (update.IsError)
+        {
+            _error = update.Error;
+            return;
+        }
+
+        _editingId = null;
+        _status = "Saved.";
+        await ReloadAsync();
+    }
+
+    private async Task ToggleEnabledAsync(DysonConfiguredShellEntity shell)
+    {
+        _error = null;
+        _status = null;
+        var update = await ShellStore.UpdateAsync(
+            shell.Id,
+            shell.Name,
+            shell.ExecutablePath,
+            !shell.IsEnabled,
+            DysonConfiguredShellStore.ParseFixedArgs(shell.FixedArgsJson));
+        if (update.IsError)
+        {
+            _error = update.Error;
+            return;
+        }
+
+        _status = shell.IsEnabled ? "Disabled." : "Enabled.";
+        await ReloadAsync();
+    }
+
+    private async Task DeleteAsync(Guid id)
+    {
+        _error = null;
+        _status = null;
+        var del = await ShellStore.DeleteAsync(id);
+        if (del.IsError)
+        {
+            _error = del.Error;
+            return;
+        }
+
+        if (_editingId == id)
+            _editingId = null;
+        _status = "Removed.";
+        await ReloadAsync();
+    }
+
+    private async Task AddAsync()
+    {
+        _error = null;
+        _status = null;
+        var create = await ShellStore.CreateAsync(
+            _addName,
+            _addPath,
+            isEnabled: true,
+            DysonConfiguredShellStore.ParseFixedArgsText(_addFixedArgs));
+        if (create.IsError)
+        {
+            _error = create.Error;
+            return;
+        }
+
+        _addName = "";
+        _addPath = "";
+        _addFixedArgs = "";
+        _status = "Added.";
+        await ReloadAsync();
+    }
+
+    private async Task BrowseAddPathAsync()
+    {
+        _error = null;
+        var pick = await DysonNativeFolderPicker.PickFileAsync();
+        if (pick.IsError)
+        {
+            if (!pick.Error.Contains("cancelled", StringComparison.OrdinalIgnoreCase))
+                _error = pick.Error;
+            return;
+        }
+
+        _addPath = pick.Value;
+        if (string.IsNullOrWhiteSpace(_addName))
+            _addName = Path.GetFileNameWithoutExtension(pick.Value);
+    }
+
+    private async Task BrowseEditPathAsync()
+    {
+        _error = null;
+        var pick = await DysonNativeFolderPicker.PickFileAsync();
+        if (pick.IsError)
+        {
+            if (!pick.Error.Contains("cancelled", StringComparison.OrdinalIgnoreCase))
+                _error = pick.Error;
+            return;
+        }
+
+        _editPath = pick.Value;
+    }
+}

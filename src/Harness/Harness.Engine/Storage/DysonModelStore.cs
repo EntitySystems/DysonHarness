@@ -106,6 +106,12 @@ public sealed class DysonModelStore(DysonDbContext db)
             if (existing is null)
                 return new VoidResult<string>($"Model provider '{provider.Id}' not found.");
 
+            if (!string.IsNullOrWhiteSpace(existing.ManagedSource))
+            {
+                return new VoidResult<string>(
+                    $"Provider '{existing.DisplayName}' is managed ({existing.ManagedSource}) and cannot be edited.");
+            }
+
             existing.DisplayName = provider.DisplayName;
             existing.ProviderKind = provider.ProviderKind;
             existing.BaseUrl = provider.BaseUrl;
@@ -119,6 +125,127 @@ public sealed class DysonModelStore(DysonDbContext db)
         catch (Exception ex)
         {
             return new VoidResult<string>($"Failed to update model provider: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Insert-or-update a managed provider by <paramref name="managedSource"/> (id-stable),
+    /// merging slugs by name (preserves <see cref="DysonModelSlugEntity.Id"/> and
+    /// <see cref="DysonModelSlugEntity.IsEnabled"/>). Empty <paramref name="slugs"/> clears the catalog.
+    /// </summary>
+    public async Task<Result<Guid, string>> UpsertManagedProviderAsync(
+        string managedSource,
+        string displayName,
+        string baseUrl,
+        string apiKey,
+        string openAiApiMode,
+        IReadOnlyList<ManagedSlugSpec> slugs,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(managedSource);
+        ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseUrl);
+        ArgumentNullException.ThrowIfNull(slugs);
+
+        try
+        {
+            var source = managedSource.Trim();
+            var now = DateTime.UtcNow;
+            var existing = await _db.ModelProviders
+                .Include(p => p.Slugs)
+                .FirstOrDefaultAsync(p => p.ManagedSource == source, cancellationToken)
+                .ConfigureAwait(false);
+
+            string? priorDefaultSlug = null;
+            if (existing is not null)
+                priorDefaultSlug = existing.Slugs.FirstOrDefault(s => s.IsDefault)?.Slug;
+
+            if (existing is null)
+            {
+                existing = new DysonModelProviderEntity
+                {
+                    Id = Guid.NewGuid(),
+                    DisplayName = displayName.Trim(),
+                    ProviderKind = DysonProviderKinds.OpenAICompatible,
+                    BaseUrl = baseUrl.Trim(),
+                    ApiKey = apiKey,
+                    OpenAiApiMode = DysonOpenAiApiModes.Normalize(openAiApiMode),
+                    ManagedSource = source,
+                    CreatedUtc = now,
+                    UpdatedUtc = now,
+                    Slugs = [],
+                };
+                _db.ModelProviders.Add(existing);
+                await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                existing.DisplayName = displayName.Trim();
+                existing.ProviderKind = DysonProviderKinds.OpenAICompatible;
+                existing.BaseUrl = baseUrl.Trim();
+                existing.ApiKey = apiKey;
+                existing.OpenAiApiMode = DysonOpenAiApiModes.Normalize(openAiApiMode);
+                existing.UpdatedUtc = now;
+            }
+
+            var providerId = existing.Id;
+            var bySlug = existing.Slugs.ToDictionary(s => s.Slug, StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var defaultAssigned = false;
+
+            foreach (var spec in slugs)
+            {
+                if (string.IsNullOrWhiteSpace(spec.Slug) || string.IsNullOrWhiteSpace(spec.DisplayAlias))
+                    continue;
+
+                var slugKey = spec.Slug.Trim();
+                seen.Add(slugKey);
+
+                var isDefault = !defaultAssigned
+                    && priorDefaultSlug is not null
+                    && string.Equals(priorDefaultSlug, slugKey, StringComparison.OrdinalIgnoreCase);
+                if (isDefault)
+                {
+                    await ClearDefaultsAsync(cancellationToken).ConfigureAwait(false);
+                    defaultAssigned = true;
+                }
+
+                if (bySlug.TryGetValue(slugKey, out var row))
+                {
+                    row.DisplayAlias = spec.DisplayAlias.Trim();
+                    row.IsDefault = isDefault;
+                    row.DefaultReasoningEffort = NormalizeReasoningEffort(spec.DefaultReasoningEffort);
+                    row.ReasoningModes = StringListJsonValueConverter.Normalize(spec.ReasoningModes);
+                    row.UpdatedUtc = now;
+                    // Keep Id + IsEnabled across Verify sync.
+                }
+                else
+                {
+                    _db.ModelSlugs.Add(new DysonModelSlugEntity
+                    {
+                        Id = Guid.NewGuid(),
+                        ProviderId = providerId,
+                        Slug = slugKey,
+                        DisplayAlias = spec.DisplayAlias.Trim(),
+                        IsDefault = isDefault,
+                        IsEnabled = true,
+                        DefaultReasoningEffort = NormalizeReasoningEffort(spec.DefaultReasoningEffort),
+                        ReasoningModes = StringListJsonValueConverter.Normalize(spec.ReasoningModes),
+                        CreatedUtc = now,
+                        UpdatedUtc = now,
+                    });
+                }
+            }
+
+            foreach (var obsolete in existing.Slugs.Where(s => !seen.Contains(s.Slug)).ToList())
+                _db.ModelSlugs.Remove(obsolete);
+
+            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            return Result<Guid, string>.AsValue(providerId);
+        }
+        catch (Exception ex)
+        {
+            return Result<Guid, string>.AsError($"Failed to upsert managed provider: {ex.Message}", ex);
         }
     }
 
@@ -159,12 +286,19 @@ public sealed class DysonModelStore(DysonDbContext db)
 
         try
         {
-            var providerExists = await _db.ModelProviders
-                .AnyAsync(p => p.Id == providerId, cancellationToken)
+            var provider = await _db.ModelProviders
+                .AsNoTracking()
+                .FirstOrDefaultAsync(p => p.Id == providerId, cancellationToken)
                 .ConfigureAwait(false);
 
-            if (!providerExists)
+            if (provider is null)
                 return Result<Guid, string>.AsError($"Model provider '{providerId}' not found.");
+
+            if (!string.IsNullOrWhiteSpace(provider.ManagedSource))
+            {
+                return Result<Guid, string>.AsError(
+                    $"Provider '{provider.DisplayName}' is managed ({provider.ManagedSource}); slugs are synced via Verify.");
+            }
 
             if (isDefault)
                 await ClearDefaultsAsync(cancellationToken).ConfigureAwait(false);
@@ -202,11 +336,18 @@ public sealed class DysonModelStore(DysonDbContext db)
         try
         {
             var existing = await _db.ModelSlugs
+                .Include(s => s.Provider)
                 .FirstOrDefaultAsync(s => s.Id == slug.Id, cancellationToken)
                 .ConfigureAwait(false);
 
             if (existing is null)
                 return new VoidResult<string>($"Model slug '{slug.Id}' not found.");
+
+            if (!string.IsNullOrWhiteSpace(existing.Provider?.ManagedSource))
+            {
+                return new VoidResult<string>(
+                    $"Slug belongs to managed provider ({existing.Provider.ManagedSource}) and cannot be edited.");
+            }
 
             if (slug.IsDefault && !existing.IsDefault)
                 await ClearDefaultsAsync(cancellationToken).ConfigureAwait(false);
@@ -234,11 +375,18 @@ public sealed class DysonModelStore(DysonDbContext db)
         try
         {
             var existing = await _db.ModelSlugs
+                .Include(s => s.Provider)
                 .FirstOrDefaultAsync(s => s.Id == id, cancellationToken)
                 .ConfigureAwait(false);
 
             if (existing is null)
                 return new VoidResult<string>($"Model slug '{id}' not found.");
+
+            if (!string.IsNullOrWhiteSpace(existing.Provider?.ManagedSource))
+            {
+                return new VoidResult<string>(
+                    $"Slug belongs to managed provider ({existing.Provider.ManagedSource}) and cannot be removed.");
+            }
 
             _db.ModelSlugs.Remove(existing);
             await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -258,8 +406,18 @@ public sealed class DysonModelStore(DysonDbContext db)
             var entity = await _db.ModelSlugs
                 .AsNoTracking()
                 .Include(s => s.Provider)
-                .FirstOrDefaultAsync(s => s.IsDefault, cancellationToken)
+                .FirstOrDefaultAsync(s => s.IsDefault && s.IsEnabled, cancellationToken)
                 .ConfigureAwait(false);
+
+            if (entity is null)
+            {
+                entity = await _db.ModelSlugs
+                    .AsNoTracking()
+                    .Include(s => s.Provider)
+                    .OrderBy(s => s.DisplayAlias)
+                    .FirstOrDefaultAsync(s => s.IsEnabled, cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             return Result<DysonModelSlugEntity?, string>.AsValue(entity);
         }
@@ -283,6 +441,12 @@ public sealed class DysonModelStore(DysonDbContext db)
             if (existing is null)
                 return new VoidResult<string>($"Model slug '{id}' not found.");
 
+            if (!existing.IsEnabled)
+            {
+                return new VoidResult<string>(
+                    "Enable the model slug before setting it as default.");
+            }
+
             await ClearDefaultsAsync(cancellationToken).ConfigureAwait(false);
             existing.IsDefault = true;
             existing.UpdatedUtc = DateTime.UtcNow;
@@ -293,6 +457,42 @@ public sealed class DysonModelStore(DysonDbContext db)
         catch (Exception ex)
         {
             return new VoidResult<string>($"Failed to set default model slug: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Enable/disable a managed provider slug. Manual providers are rejected.
+    /// </summary>
+    public async Task<VoidResult<string>> SetSlugEnabledAsync(
+        Guid id,
+        bool enabled,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var existing = await _db.ModelSlugs
+                .Include(s => s.Provider)
+                .FirstOrDefaultAsync(s => s.Id == id, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (existing is null)
+                return new VoidResult<string>($"Model slug '{id}' not found.");
+
+            if (string.IsNullOrWhiteSpace(existing.Provider?.ManagedSource))
+            {
+                return new VoidResult<string>(
+                    "Enable/disable is only available for managed provider slugs.");
+            }
+
+            existing.IsEnabled = enabled;
+            existing.UpdatedUtc = DateTime.UtcNow;
+
+            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex)
+        {
+            return new VoidResult<string>($"Failed to set model slug enabled: {ex.Message}");
         }
     }
 
@@ -336,6 +536,7 @@ public sealed class DysonModelStore(DysonDbContext db)
             var slugs = await _db.ModelSlugs
                 .AsNoTracking()
                 .Include(s => s.Provider)
+                .Where(s => s.IsEnabled)
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
 

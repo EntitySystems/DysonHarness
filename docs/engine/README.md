@@ -35,7 +35,7 @@ When `ProviderKind == OpenAICompatible`, the host builds `OpenAiCompatibleAgentP
   1. Stable prefix first: system/instructions (mode prompt + MCP catalog) → `tools[]` (stable sort) → prior transcript → new user/tool deltas last.
   2. Never mutate an already-sent/optimized prefix (`OptimizeContextIfNeeded` before building).
   3. `prompt_cache_key` = `dyson:{PersistenceId}:sp{SystemPromptGeneration}` on every call (send-first; generation bumps on mid-session `ApplyAgentMode`).
-  4. GPT-5.6+ only: optional `prompt_cache_options.mode=explicit` + breakpoint on the system prefix when the slug looks like `gpt-5.6+`.
+  4. GPT-5.6+ **direct** OpenAI only: optional `prompt_cache_options.mode=explicit` + breakpoint on the system prefix when the slug looks like `gpt-5.6+`. Managed/CLIProxy (`ManagedSource` set) omits `prompt_cache_options` (unsupported) but still sends `prompt_cache_key` + stable prefix ordering.
   5. Completions always sends full local `messages[]`. Responses rebuilds full `input` after compaction / new user turns (`store: false`); within a tool loop may chain `previous_response_id` + `function_call_output` (`store: true` for that hop).
   6. User content for history turns is always `Instruction` only; rename-review mandate is appended only for the in-flight review turn.
 
@@ -124,10 +124,10 @@ Default tools include subagent control (`StartSubagent`, `ListSubagents`, `WaitF
 
 ### ShellExecute
 
-- Session config `AvailableShellTypes` defaults from `DysonShell.AvailableForCurrentPlatform()` (Windows: `Pwsh`, `PowerShell`, `Cmd`; other platforms: none yet).
-- MCP schema `shell` enum + description list those types; the model must pass `shell` plus `command` (optional `timeoutMs`, `workingDirectory` under the work root).
-- Executor rejects shells outside the session list, then `DysonShell.Create` → `DysonWindowsShell` (Windows arg map: `pwsh`/`powershell.exe` `-NoProfile -NonInteractive -Command`, `cmd.exe` `/d /c`).
-- Abstraction: `DysonShellType`, abstract `DysonShell` (`ShellType` get + `ExecuteAsync`), `DysonShellRunResult`, `DysonShell.Create` / `AvailableForCurrentPlatform`.
+- Session config `AvailableShells` is an `IReadOnlyList<DysonConfiguredShellSpec>` (`Name` + `ExecutablePath` + optional `FixedArgs`). Empty ⇒ `ShellExecute` and all long-running shell tools are omitted. The UI host loads **enabled** rows from `configured_shells` (`DysonConfiguredShellStore.EnsureDefaultsAsync` + `ListEnabledSpecsAsync`) on new/resume.
+- MCP schema `shell` enum + description list those **names**; the model must pass `shell` plus `command` (optional `timeoutMs`, `workingDirectory` under the work root).
+- Executor resolves name → path/`FixedArgs` against `AvailableShells`, then `DysonWindowsShell.ExecuteWithPathAsync` via `ResolveFixedArgs`: non-empty spec `FixedArgs` win; else basename heuristics (`pwsh`/`powershell` → `-NoProfile -NonInteractive -Command`, `cmd` → `/d /c`, `bash`/`sh`/`zsh`/`git-bash` → `-c`). Unknown basename without Fixed args errors and points to Settings → Shells.
+- Related: `DysonConfiguredShellSpec`, `DysonShellType` (legacy/heuristics), abstract `DysonShell`, `DysonShellRunResult`, `ResolveFixedArgs` / `MapFixedArgsFromExecutablePath`.
 - **Plan soft warning:** in Plan mode, `ConfigureShellExecuteForMode(true)` appends a read-only-inspection warning to the tool description (prefer `dir` / `git status` / small reads; never run builds/installs/servers; prefer `ReadFile` / `Grep` / `ListDirectory`). The executor still runs the command but prepends the same WARNING to Ok/Error content. Non-Plan modes use the plain description. Covered by `DysonShellExecutePlanWarningTests` in `Harness.Tests`.
 
 ### Long-running shells
@@ -137,10 +137,10 @@ Workdir-scoped background processes for E2E runs, large builds, and keeping deve
 | Type / tool | Role |
 | ----------- | ---- |
 | `DysonLongRunningShellRegistry` | Static workdir buckets; incremental `longRunningShellId` ints per workdir; shared by parent/child sessions; completion subscribers |
-| `DysonLongRunningShell` | Process + stdin + stdout/stderr/combined rings (~256KB each) |
-| `DysonLongRunningShellExitedFlow` | `ShellExited` turn Instruction (auto-read tail) + trim after completion |
-| `StartLongRunningShell` | `shell` + `command` (+ optional `workingDirectory`) → `longRunningShellId` |
-| `ListLongRunningShells` | Compact roster for the workdir (`id`, `status`, `shell`, short `command`, `exitCode`, `startedUtc`) |
+| `DysonLongRunningShell` | Process + stdin + stdout/stderr/combined rings (~256KB each); stores configured `ShellName` |
+| `DysonLongRunningShellExitedFlow` | `ShellExited` turn Instruction (auto-read tail) + trim after completion; Instruction uses configured shell name |
+| `StartLongRunningShell` | `shell` (enabled name) + `command` (+ optional `workingDirectory`) → `longRunningShellId` |
+| `ListLongRunningShells` | Compact roster for the workdir (`id`, `status`, `shell` = configured name, short `command`, `exitCode`, `startedUtc`) |
 | `ReadLongRunningShellTail` | Tail combined output; optional `timeoutMs` wait for new bytes |
 | `AbortLongRunningShell` | Kill process tree (same as UI Force stop) |
 | `RequestLongRunningShellCancellation` | Soft cancel (`\x03` stdin, else `CloseMainWindow`) |

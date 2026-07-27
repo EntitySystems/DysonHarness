@@ -1,6 +1,8 @@
 @namespace Harness.UI.Components.Models
 @using DysonHarness
 @inject DysonModelStore ModelStore
+@inject DysonCliProxyHost CliProxy
+@inject ManagedInferenceProviderCatalog ManagedCatalog
 
 <div class="models-panel panel">
     <div class="tool-panel__title">Providers &amp; slugs</div>
@@ -14,6 +16,61 @@
     {
         <div class="list-item__meta" style="margin:4px 0 0;">@_status</div>
     }
+
+    <div class="models-panel__managed" style="margin:10px 0 12px;padding:8px 0;border-bottom:1px solid var(--border, #333);">
+        <div class="tool-panel__title" style="font-size:12px;">Third-party managed providers</div>
+        <div class="list-item__meta" style="margin:4px 0 8px;">
+            ChatGPT Codex and Grok Build via local CLIProxyAPI (OAuth). Rows are view-only; use Connect / Verify to sync models.
+        </div>
+
+        @if (!_cliProxyInstalled)
+        {
+            <div class="error-banner" style="margin:0 0 8px;">
+                CLIProxyAPI is not installed locally (expected under <span class="mono">external/cliproxy/@DysonThirdPartyResources.CliProxyApi.Version</span>).
+                Import downloads it automatically before creating a managed provider.
+            </div>
+        }
+
+        @if (_downloadProgress is { } prog)
+        {
+            <div style="margin:6px 0 10px;">
+                <div class="list-item__meta mono" style="margin-bottom:4px;">
+                    Downloading CLIProxyAPI…
+                    @if (prog.TotalBytes is long total && total > 0)
+                    {
+                        <text>@FormatBytes(prog.BytesReceived) / @FormatBytes(total)</text>
+                    }
+                    else
+                    {
+                        <text>@FormatBytes(prog.BytesReceived)</text>
+                    }
+                </div>
+                @if (prog.Fraction is double frac)
+                {
+                    <progress value="@frac" max="1" style="width:100%;height:8px;"></progress>
+                }
+                else
+                {
+                    <progress style="width:100%;height:8px;"></progress>
+                }
+            </div>
+        }
+
+        <div class="btn-row" style="margin:0 0 8px;flex-wrap:wrap;gap:6px;">
+            @foreach (var managed in ManagedCatalog.All)
+            {
+                var source = managed.ManagedSource;
+                var already = _providers.Any(p => string.Equals(p.ManagedSource, source, StringComparison.Ordinal));
+                <button type="button"
+                        class="btn"
+                        style="padding:3px 7px;font-size:11px;"
+                        disabled="@(already || _busy)"
+                        @onclick="() => ImportManagedAsync(managed)">
+                    @(already ? $"Imported: {managed.DisplayName}" : $"Import {managed.DisplayName}")
+                </button>
+            }
+        </div>
+    </div>
 
     <div class="btn-row" style="margin:8px 0;">
         <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="RepairMisTaggedProvidersAsync">
@@ -31,8 +88,9 @@
             {
                 @foreach (var provider in _providers)
                 {
+                    var isManaged = !string.IsNullOrWhiteSpace(provider.ManagedSource);
                     <div class="list-item" style="cursor:default;">
-                        @if (_editingProviderId == provider.Id)
+                        @if (!isManaged && _editingProviderId == provider.Id)
                         {
                             <div class="field">
                                 <label>Display name</label>
@@ -77,6 +135,10 @@
                             <span class="list-item__title">@provider.DisplayName</span>
                             <span class="list-item__meta mono">
                                 @provider.ProviderKind
+                                @if (isManaged)
+                                {
+                                    <text> · managed @provider.ManagedSource</text>
+                                }
                                 @if (string.Equals(provider.ProviderKind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
                                 {
                                     <text> · @DysonOpenAiApiModes.Normalize(provider.OpenAiApiMode)</text>
@@ -87,22 +149,63 @@
                                 }
                                 @(string.IsNullOrEmpty(provider.ApiKey) ? "" : " · key set")
                             </span>
-                            <div class="btn-row" style="margin-top:4px;">
-                                <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="() => BeginEditProvider(provider)">Edit</button>
-                                <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="() => DeleteProviderAsync(provider.Id)">Delete</button>
+                            @if (isManaged && !_cliProxyInstalled)
+                            {
+                                <div class="error-banner" style="margin:6px 0;">
+                                    CLIProxyAPI binary missing — Connect blocked until reinstall (use Import above).
+                                </div>
+                            }
+                            @if (isManaged
+                                && _pendingAuth.TryGetValue(provider.ManagedSource!, out var pending)
+                                && !string.IsNullOrWhiteSpace(pending.UserCode))
+                            {
+                                <div class="list-item__meta" style="margin:4px 0;">
+                                    Device code: <span class="mono">@pending.UserCode</span>
+                                    @if (!string.IsNullOrWhiteSpace(pending.AuthUrl))
+                                    {
+                                        <text> · <a href="@pending.AuthUrl" target="_blank" rel="noopener">open auth URL</a></text>
+                                    }
+                                </div>
+                            }
+                            <div class="btn-row" style="margin-top:4px;flex-wrap:wrap;gap:4px;">
+                                @if (isManaged)
+                                {
+                                    <button type="button" class="btn btn-primary" style="padding:3px 7px;font-size:11px;"
+                                            disabled="@(_busy || !_cliProxyInstalled)"
+                                            @onclick="() => ConnectManagedAsync(provider)">Connect</button>
+                                    <button type="button" class="btn" style="padding:3px 7px;font-size:11px;"
+                                            disabled="@(_busy || !_pendingAuth.ContainsKey(provider.ManagedSource!))"
+                                            @onclick="() => CompleteManagedAsync(provider)">Complete</button>
+                                    <button type="button" class="btn" style="padding:3px 7px;font-size:11px;"
+                                            disabled="@(_busy || !_cliProxyInstalled)"
+                                            @onclick="() => VerifyManagedAsync(provider)">Verify / Refresh models</button>
+                                    <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;"
+                                            disabled="@_busy"
+                                            @onclick="() => DisconnectManagedAsync(provider)">Disconnect</button>
+                                    <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;"
+                                            disabled="@_busy"
+                                            @onclick="() => DeleteProviderAsync(provider.Id)">Delete</button>
+                                }
+                                else
+                                {
+                                    <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="() => BeginEditProvider(provider)">Edit</button>
+                                    <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="() => DeleteProviderAsync(provider.Id)">Delete</button>
+                                }
                             </div>
                         }
 
                         <div class="models-panel__slugs">
                             @if (provider.Slugs.Count == 0)
                             {
-                                <div class="list-item__meta" style="padding:4px 0;">No slugs</div>
+                                <div class="list-item__meta" style="padding:4px 0;">
+                                    @(isManaged ? "No slugs yet — Connect then Verify / Refresh models." : "No slugs")
+                                </div>
                             }
                             else
                             {
                                 @foreach (var slug in provider.Slugs)
                                 {
-                                    @if (_editingSlugId == slug.Id)
+                                    @if (!isManaged && _editingSlugId == slug.Id)
                                     {
                                         <div class="models-panel__slug" style="margin-top:4px;">
                                             <div class="field">
@@ -152,70 +255,92 @@
                                             <span class="list-item__meta mono">
                                                 @slug.Slug
                                                 @(slug.IsDefault ? " · default" : "")
+                                                @if (isManaged)
+                                                {
+                                                    <text> · @(slug.IsEnabled ? "enabled" : "disabled")</text>
+                                                }
                                                 @if (!string.IsNullOrWhiteSpace(slug.DefaultReasoningEffort))
                                                 {
                                                     <text> · effort @slug.DefaultReasoningEffort</text>
                                                 }
                                             </span>
-                                            <div class="btn-row" style="margin-top:2px;">
-                                                <button type="button" class="btn" style="padding:2px 6px;font-size:10px;" @onclick="() => BeginEditSlug(slug)">Edit</button>
-                                                @if (!slug.IsDefault)
-                                                {
-                                                    <button type="button" class="btn" style="padding:2px 6px;font-size:10px;" @onclick="() => SetDefaultAsync(slug.Id)">Default</button>
-                                                }
-                                                <button type="button" class="btn btn-ghost" style="padding:2px 6px;font-size:10px;" @onclick="() => RemoveSlugAsync(slug.Id)">Remove</button>
-                                            </div>
+                                            @if (!isManaged)
+                                            {
+                                                <div class="btn-row" style="margin-top:2px;">
+                                                    <button type="button" class="btn" style="padding:2px 6px;font-size:10px;" @onclick="() => BeginEditSlug(slug)">Edit</button>
+                                                    @if (!slug.IsDefault)
+                                                    {
+                                                        <button type="button" class="btn" style="padding:2px 6px;font-size:10px;" @onclick="() => SetDefaultAsync(slug.Id)">Default</button>
+                                                    }
+                                                    <button type="button" class="btn btn-ghost" style="padding:2px 6px;font-size:10px;" @onclick="() => RemoveSlugAsync(slug.Id)">Remove</button>
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <div class="btn-row" style="margin-top:2px;">
+                                                    @if (!slug.IsDefault && slug.IsEnabled)
+                                                    {
+                                                        <button type="button" class="btn" style="padding:2px 6px;font-size:10px;" @onclick="() => SetDefaultAsync(slug.Id)">Default</button>
+                                                    }
+                                                    <button type="button" class="btn btn-ghost" style="padding:2px 6px;font-size:10px;" @onclick="() => ToggleSlugEnabledAsync(slug)">
+                                                        @(slug.IsEnabled ? "Disable" : "Enable")
+                                                    </button>
+                                                </div>
+                                            }
                                         </div>
                                     }
                                 }
                             }
 
-                            @if (_addSlugProviderId == provider.Id)
+                            @if (!isManaged)
                             {
-                                <div style="margin-top:6px;">
-                                    <div class="field">
-                                        <label>Display alias</label>
-                                        <input @bind="_slugAlias" />
-                                    </div>
-                                    <div class="field">
-                                        <label>Slug</label>
-                                        <input @bind="_slugValue" placeholder="gpt-4o" />
-                                    </div>
-                                    <div class="field">
-                                        <label>Default reasoning effort</label>
-                                        <input @bind="_slugEffort" placeholder="blank = omit" />
-                                    </div>
-                                    <div class="field">
-                                        <label>Reasoning modes</label>
-                                        <div class="models-panel__modes">
-                                            @foreach (var mode in _addSlugReasoningModes)
-                                            {
-                                                var m = mode;
-                                                <span class="models-panel__mode-chip">
-                                                    <span class="mono">@m</span>
-                                                    <button type="button" class="btn btn-ghost" style="padding:0 4px;font-size:10px;" @onclick="() => RemoveAddSlugMode(m)" title="Remove">×</button>
-                                                </span>
-                                            }
+                                @if (_addSlugProviderId == provider.Id)
+                                {
+                                    <div style="margin-top:6px;">
+                                        <div class="field">
+                                            <label>Display alias</label>
+                                            <input @bind="_slugAlias" />
                                         </div>
-                                        <div class="btn-row" style="margin-top:4px;align-items:center;">
-                                            <input @bind="_addSlugModeDraft" @bind:event="oninput" placeholder="e.g. high" style="flex:1;min-width:0;"
-                                                   @onkeydown="OnAddSlugModeKeyDown" />
-                                            <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="AddAddSlugMode">Add</button>
+                                        <div class="field">
+                                            <label>Slug</label>
+                                            <input @bind="_slugValue" placeholder="gpt-4o" />
+                                        </div>
+                                        <div class="field">
+                                            <label>Default reasoning effort</label>
+                                            <input @bind="_slugEffort" placeholder="blank = omit" />
+                                        </div>
+                                        <div class="field">
+                                            <label>Reasoning modes</label>
+                                            <div class="models-panel__modes">
+                                                @foreach (var mode in _addSlugReasoningModes)
+                                                {
+                                                    var m = mode;
+                                                    <span class="models-panel__mode-chip">
+                                                        <span class="mono">@m</span>
+                                                        <button type="button" class="btn btn-ghost" style="padding:0 4px;font-size:10px;" @onclick="() => RemoveAddSlugMode(m)" title="Remove">×</button>
+                                                    </span>
+                                                }
+                                            </div>
+                                            <div class="btn-row" style="margin-top:4px;align-items:center;">
+                                                <input @bind="_addSlugModeDraft" @bind:event="oninput" placeholder="e.g. high" style="flex:1;min-width:0;"
+                                                       @onkeydown="OnAddSlugModeKeyDown" />
+                                                <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="AddAddSlugMode">Add</button>
+                                            </div>
+                                        </div>
+                                        <label class="checkbox-row">
+                                            <input type="checkbox" @bind="_slugIsDefault" />
+                                            Set as default
+                                        </label>
+                                        <div class="btn-row">
+                                            <button type="button" class="btn btn-primary" style="padding:3px 7px;font-size:11px;" @onclick="() => AddSlugAsync(provider.Id)">Add</button>
+                                            <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="CancelAddSlug">Cancel</button>
                                         </div>
                                     </div>
-                                    <label class="checkbox-row">
-                                        <input type="checkbox" @bind="_slugIsDefault" />
-                                        Set as default
-                                    </label>
-                                    <div class="btn-row">
-                                        <button type="button" class="btn btn-primary" style="padding:3px 7px;font-size:11px;" @onclick="() => AddSlugAsync(provider.Id)">Add</button>
-                                        <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="CancelAddSlug">Cancel</button>
-                                    </div>
-                                </div>
-                            }
-                            else
-                            {
-                                <button type="button" class="btn" style="margin-top:6px;padding:3px 7px;font-size:11px;" @onclick="() => BeginAddSlug(provider.Id)">Add slug</button>
+                                }
+                                else
+                                {
+                                    <button type="button" class="btn" style="margin-top:6px;padding:3px 7px;font-size:11px;" @onclick="() => BeginAddSlug(provider.Id)">Add slug</button>
+                                }
                             }
                         </div>
                     </div>
@@ -304,6 +429,10 @@
     private string? _error;
     private string? _status;
     private bool _providerFormOpen = true;
+    private bool _cliProxyInstalled;
+    private bool _busy;
+    private CliProxyDownloadProgress? _downloadProgress;
+    private readonly Dictionary<string, ManagedConnectionBegin> _pendingAuth = new(StringComparer.Ordinal);
 
     private string _displayName = "";
     private string _providerKind = DysonProviderKinds.OpenAICompatible;
@@ -347,6 +476,7 @@
     public async Task RefreshAsync()
     {
         _error = null;
+        _cliProxyInstalled = CliProxy.IsInstalled;
         var result = await ModelStore.ListProvidersAsync();
         if (result.IsError)
         {
@@ -355,6 +485,205 @@
         }
 
         _providers = result.Value.ToList();
+    }
+
+    private Progress<CliProxyDownloadProgress> CreateDownloadProgress() =>
+        new(p =>
+        {
+            _downloadProgress = p;
+            _ = InvokeAsync(StateHasChanged);
+        });
+
+    private async Task ImportManagedAsync(ManagedInferenceProviderBase managed)
+    {
+        _error = null;
+        _status = null;
+        _busy = true;
+        _downloadProgress = null;
+        try
+        {
+            var progress = CreateDownloadProgress();
+            var import = await managed.ImportAsync(progress);
+            if (import.IsError)
+            {
+                _error = import.Error;
+                _cliProxyInstalled = CliProxy.IsInstalled;
+                return;
+            }
+
+            _status = $"Imported {managed.DisplayName}. Use Connect to sign in, then Verify / Refresh models.";
+            _cliProxyInstalled = CliProxy.IsInstalled;
+            await RefreshAsync();
+            await OnChanged.InvokeAsync();
+        }
+        finally
+        {
+            _busy = false;
+            _downloadProgress = null;
+        }
+    }
+
+    private async Task ConnectManagedAsync(DysonModelProviderEntity provider)
+    {
+        var managed = ManagedCatalog.FindBySource(provider.ManagedSource);
+        if (managed is null)
+        {
+            _error = $"Unknown managed source '{provider.ManagedSource}'.";
+            return;
+        }
+
+        _error = null;
+        _status = null;
+        _busy = true;
+        _downloadProgress = null;
+        try
+        {
+            var begin = await managed.BeginConnectionAsync(openBrowser: true, CreateDownloadProgress());
+            if (begin.IsError)
+            {
+                _error = begin.Error;
+                _cliProxyInstalled = CliProxy.IsInstalled;
+                return;
+            }
+
+            _pendingAuth[managed.ManagedSource] = begin.Value;
+            _status = string.IsNullOrWhiteSpace(begin.Value.UserCode)
+                ? $"Browser opened for {managed.DisplayName}. Click Complete when finished signing in."
+                : $"Enter device code {begin.Value.UserCode} in the browser, then Complete.";
+            _cliProxyInstalled = CliProxy.IsInstalled;
+
+            // Auto-poll a few times so Grok/Codex complete without an extra click when possible.
+            for (var i = 0; i < 8; i++)
+            {
+                await Task.Delay(1500);
+                var complete = await managed.CompleteConnectionAsync(begin.Value.State);
+                if (complete.IsError)
+                    break;
+                if (!complete.Value.IsComplete)
+                    continue;
+
+                _pendingAuth.Remove(managed.ManagedSource);
+                _status = $"{managed.DisplayName} connected. Refreshing models…";
+                var verify = await managed.VerifyConnectionAsync();
+                if (verify.IsError)
+                {
+                    _error = verify.Error;
+                    break;
+                }
+
+                _status = $"{managed.DisplayName}: synced {verify.Value.SlugCount} model slug(s).";
+                await RefreshAsync();
+                await OnChanged.InvokeAsync();
+                return;
+            }
+        }
+        finally
+        {
+            _busy = false;
+            _downloadProgress = null;
+        }
+    }
+
+    private async Task CompleteManagedAsync(DysonModelProviderEntity provider)
+    {
+        var managed = ManagedCatalog.FindBySource(provider.ManagedSource);
+        if (managed is null)
+        {
+            _error = $"Unknown managed source '{provider.ManagedSource}'.";
+            return;
+        }
+
+        if (!_pendingAuth.TryGetValue(managed.ManagedSource, out var pending))
+        {
+            _error = "No pending Connect session — click Connect first.";
+            return;
+        }
+
+        _error = null;
+        _busy = true;
+        try
+        {
+            var complete = await managed.CompleteConnectionAsync(pending.State);
+            if (complete.IsError)
+            {
+                _error = complete.Error;
+                return;
+            }
+
+            if (!complete.Value.IsComplete)
+            {
+                _status = $"Auth status: {complete.Value.Status}"
+                    + (string.IsNullOrWhiteSpace(complete.Value.Message) ? "" : $" — {complete.Value.Message}");
+                return;
+            }
+
+            _pendingAuth.Remove(managed.ManagedSource);
+            _status = $"{managed.DisplayName} connected. Refreshing models…";
+            var verify = await managed.VerifyConnectionAsync();
+            if (verify.IsError)
+            {
+                _error = verify.Error;
+                return;
+            }
+
+            _status = $"{managed.DisplayName}: synced {verify.Value.SlugCount} model slug(s).";
+            await RefreshAsync();
+            await OnChanged.InvokeAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task VerifyManagedAsync(DysonModelProviderEntity provider)
+    {
+        var managed = ManagedCatalog.FindBySource(provider.ManagedSource);
+        if (managed is null)
+        {
+            _error = $"Unknown managed source '{provider.ManagedSource}'.";
+            return;
+        }
+
+        _error = null;
+        _busy = true;
+        _downloadProgress = null;
+        try
+        {
+            var verify = await managed.VerifyConnectionAsync(CreateDownloadProgress());
+            if (verify.IsError)
+            {
+                _error = verify.Error;
+                _cliProxyInstalled = CliProxy.IsInstalled;
+                return;
+            }
+
+            _status = $"{managed.DisplayName}: synced {verify.Value.SlugCount} model slug(s).";
+            _cliProxyInstalled = CliProxy.IsInstalled;
+            await RefreshAsync();
+            await OnChanged.InvokeAsync();
+        }
+        finally
+        {
+            _busy = false;
+            _downloadProgress = null;
+        }
+    }
+
+    private Task DisconnectManagedAsync(DysonModelProviderEntity provider)
+    {
+        if (!string.IsNullOrWhiteSpace(provider.ManagedSource))
+            _pendingAuth.Remove(provider.ManagedSource);
+
+        _status = $"{provider.DisplayName}: disconnected local auth session tracking. Proxy credentials are kept — use Connect to sign in again.";
+        return Task.CompletedTask;
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:0.#} KB";
+        return $"{bytes / (1024.0 * 1024.0):0.##} MB";
     }
 
     private async Task CreateProviderAsync()
@@ -670,6 +999,22 @@
             return;
         }
 
+        await RefreshAsync();
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task ToggleSlugEnabledAsync(DysonModelSlugEntity slug)
+    {
+        _error = null;
+        _status = null;
+        var set = await ModelStore.SetSlugEnabledAsync(slug.Id, !slug.IsEnabled);
+        if (set.IsError)
+        {
+            _error = set.Error;
+            return;
+        }
+
+        _status = slug.IsEnabled ? "Disabled." : "Enabled.";
         await RefreshAsync();
         await OnChanged.InvokeAsync();
     }

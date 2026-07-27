@@ -419,7 +419,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             {
                 Id = shellId,
                 WorkDirectoryId = workDir,
-                ShellType = DysonShellType.Cmd,
+                ShellName = "Cmd",
                 Command = "(unknown)",
                 WorkingDirectory = "(unknown)",
                 StartedUtc = DateTime.UtcNow,

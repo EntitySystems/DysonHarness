@@ -189,6 +189,10 @@
         {
             foreach (var slug in provider.Slugs)
             {
+                // Keep current selection visible even if disabled (resume / in-flight session).
+                if (!slug.IsEnabled && SelectedSlugId != slug.Id)
+                    continue;
+
                 _options.Add(new SlugOption(
                     slug.Id,
                     slug.DisplayAlias,

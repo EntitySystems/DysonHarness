@@ -117,7 +117,7 @@ public static class DysonLongRunningShellExitedFlow
             info.Id,
             outcome,
             interrupt.ExitCode ?? info.ExitCode,
-            info.ShellType.ToString(),
+            info.ShellName,
             info.Command,
             info.WorkingDirectory,
             tail);

@@ -60,7 +60,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         ArgumentNullException.ThrowIfNull(session);
 
         var includeBreakpoints = session.Provider is OpenAiCompatibleAgentProvider oai
-            && OpenAiCompatibleHttp.LooksLikeGpt56OrNewer(oai.Slug);
+            && OpenAiCompatibleHttp.SupportsExplicitPromptCache(oai);
 
         var systemText = BuildSystemText(session);
         var messages = new JsonArray();
@@ -115,7 +115,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         ArgumentNullException.ThrowIfNull(session);
 
         var includeBreakpoints = session.Provider is OpenAiCompatibleAgentProvider oai
-            && OpenAiCompatibleHttp.LooksLikeGpt56OrNewer(oai.Slug);
+            && OpenAiCompatibleHttp.SupportsExplicitPromptCache(oai);
 
         var instructions = BuildSystemText(session);
         var input = new JsonArray();
@@ -166,8 +166,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         ArgumentNullException.ThrowIfNull(newResults);
 
         var includeBreakpoints = session.Provider is OpenAiCompatibleAgentProvider oai
-            && OpenAiCompatibleHttp.LooksLikeGpt56OrNewer(oai.Slug);
+            && OpenAiCompatibleHttp.SupportsExplicitPromptCache(oai);
 
+        // ponytail: two-pass so BinaryAttachment never splits consecutive function_call_output.
         var input = new JsonArray();
         foreach (var result in newResults)
         {
@@ -179,7 +180,10 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                     ? $"[error] {result.Content}"
                     : result.Content,
             });
+        }
 
+        foreach (var result in newResults)
+        {
             if (!result.IsError && result.BinaryAttachment is { } attachment)
                 AppendResponsesBinaryAttachment(input, attachment);
         }
@@ -438,6 +442,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         IEnumerable<DysonToolCallResult> results,
         bool includeBinaryAttachments)
     {
+        // ponytail: OpenAI requires consecutive role:tool after tool_calls; defer BinaryAttachment.
         var byCallId = IndexResultsByCallId(results);
         foreach (var call in calls)
         {
@@ -448,8 +453,14 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 ["tool_call_id"] = call.CallId,
                 ["content"] = FormatToolResultContent(result),
             });
+        }
 
-            if (includeBinaryAttachments
+        if (!includeBinaryAttachments)
+            return;
+
+        foreach (var call in calls)
+        {
+            if (byCallId.TryGetValue(call.CallId, out var result)
                 && result is { IsError: false, BinaryAttachment: { } attachment })
             {
                 AppendCompletionsBinaryAttachment(messages, attachment);
@@ -463,6 +474,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         IEnumerable<DysonToolCallResult> results,
         bool includeBinaryAttachments)
     {
+        // ponytail: keep function_call_output consecutive; BinaryAttachment after the round.
         var byCallId = IndexResultsByCallId(results);
         foreach (var call in calls)
         {
@@ -473,8 +485,14 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 ["call_id"] = call.CallId,
                 ["output"] = FormatToolResultContent(result),
             });
+        }
 
-            if (includeBinaryAttachments
+        if (!includeBinaryAttachments)
+            return;
+
+        foreach (var call in calls)
+        {
+            if (byCallId.TryGetValue(call.CallId, out var result)
                 && result is { IsError: false, BinaryAttachment: { } attachment })
             {
                 AppendResponsesBinaryAttachment(input, attachment);

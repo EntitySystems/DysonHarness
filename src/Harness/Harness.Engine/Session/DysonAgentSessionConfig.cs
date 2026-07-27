@@ -15,11 +15,11 @@ public class DysonAgentSessionConfig
     public DysonMcpAccessMode McpAccessMode { get; set; } = DysonMcpAccessMode.FullAccess;
 
     /// <summary>
-    /// Shells listed on the ShellExecute MCP enum for this session.
-    /// Defaults from <see cref="DysonShell.AvailableForCurrentPlatform"/>.
+    /// Enabled shells for ShellExecute / StartLongRunningShell (MCP enum = <see cref="DysonConfiguredShellSpec.Name"/>).
+    /// Empty ⇒ those tools (and all long-running shell tools) are omitted. Hosts load from
+    /// <see cref="DysonConfiguredShellStore"/>; tests set explicitly.
     /// </summary>
-    public IReadOnlyList<DysonShellType> AvailableShellTypes { get; set; } =
-        DysonShell.AvailableForCurrentPlatform();
+    public IReadOnlyList<DysonConfiguredShellSpec> AvailableShells { get; set; } = [];
 
     /// <summary>
     /// Optional Brave Search API key for FreeSearch / FreeSearchAdvanced.

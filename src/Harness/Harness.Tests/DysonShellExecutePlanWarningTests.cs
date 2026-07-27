@@ -18,7 +18,7 @@ public class DysonShellExecutePlanWarningTests
 
     private static void AssertDescriptions()
     {
-        var shells = new[] { DysonShellType.Pwsh };
+        var shells = new[] { "Pwsh" };
         var nonPlan = DysonMcpPipeline.CreateShellExecuteTool(shells, planMode: false);
         var plan = DysonMcpPipeline.CreateShellExecuteTool(shells, planMode: true);
 
@@ -36,7 +36,7 @@ public class DysonShellExecutePlanWarningTests
     {
         var pipeline = DysonMcpPipeline.CreateDefault(
             DysonMcpAccessMode.FullAccess,
-            [DysonShellType.Pwsh]);
+            ["Pwsh"]);
 
         pipeline.ConfigureShellExecuteForMode(planMode: true);
         if (!pipeline.Tools.TryGetValue("ShellExecute", out var planTool)

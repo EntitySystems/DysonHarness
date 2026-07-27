@@ -20,6 +20,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly DysonModelStore _models;
     private readonly DysonWorkDirectoryStore _workDirectories;
     private readonly DysonAppSettingsStore _appSettings;
+    private readonly DysonConfiguredShellStore _configuredShells;
+    private readonly DysonCliProxyHost _cliProxy;
     private readonly HttpClient _http;
     private readonly IDysonBrowserControl? _browserControl;
     private readonly SemaphoreSlim _persistGate = new(1, 1);
@@ -62,14 +64,18 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonModelStore models,
         DysonWorkDirectoryStore workDirectories,
         DysonAppSettingsStore appSettings,
+        DysonConfiguredShellStore configuredShells,
         HttpClient http,
+        DysonCliProxyHost cliProxy,
         IDysonBrowserControl? browserControl = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
         _workDirectories = workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
+        _configuredShells = configuredShells ?? throw new ArgumentNullException(nameof(configuredShells));
         _http = http ?? throw new ArgumentNullException(nameof(http));
+        _cliProxy = cliProxy ?? throw new ArgumentNullException(nameof(cliProxy));
         _browserControl = browserControl;
         DysonLongRunningShellRegistry.Changed += OnLongRunningShellRegistryChanged;
     }
@@ -875,6 +881,24 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         LastError = null;
 
+        if (modelSlugId is Guid switchId)
+        {
+            var switchSlug = await _models.GetSlugAsync(switchId, cancellationToken).ConfigureAwait(false);
+            if (switchSlug.IsError)
+            {
+                LastError = switchSlug.Error;
+                Notify();
+                return new VoidResult<string>(switchSlug.Error);
+            }
+
+            if (!switchSlug.Value.IsEnabled)
+            {
+                LastError = "That model slug is disabled. Enable it in Settings → Models first.";
+                Notify();
+                return new VoidResult<string>(LastError);
+            }
+        }
+
         if (_session is null)
         {
             var pending = await ResolveProviderAsync(modelSlugId, reasoningEffort: null, cancellationToken)
@@ -1555,6 +1579,14 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (mcpAccessMode is { } mode)
             config.McpAccessMode = mode;
 
+        var ensureShells = await _configuredShells.EnsureDefaultsAsync(cancellationToken).ConfigureAwait(false);
+        if (!ensureShells.IsError)
+        {
+            var shells = await _configuredShells.ListEnabledSpecsAsync(cancellationToken).ConfigureAwait(false);
+            if (!shells.IsError)
+                config.AvailableShells = shells.Value;
+        }
+
         var policyStore = new DysonToolPolicyStore(_appSettings);
         var policy = await policyStore.GetDocumentAsync(cancellationToken).ConfigureAwait(false);
         if (!policy.IsError)
@@ -1620,6 +1652,14 @@ public sealed class DysonUiHost : IAsyncDisposable
             provider?.ProviderKind ?? DysonProviderKinds.Demo,
             provider?.BaseUrl,
             provider?.ApiKey);
+
+        if (!string.IsNullOrWhiteSpace(provider?.ManagedSource))
+        {
+            var ensure = await _cliProxy.EnsureRunningAsync(progress: null, cancellationToken)
+                .ConfigureAwait(false);
+            if (ensure.IsError)
+                return Result<ResolvedProvider, string>.AsError(ensure.Error);
+        }
 
         if (string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
         {

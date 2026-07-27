@@ -83,15 +83,23 @@ Codex client enum also has `Ultra` (rewritten to `max` on the wire; fans work to
 
 ## Harness notes
 
-Documented HTTP path today: `ProviderKind=OpenAICompatible`, `BaseUrl=https://api.openai.com/v1`, API key, `OpenAiApiMode=Responses`.
+Documented HTTP paths:
+
+1. **Platform API key:** `ProviderKind=OpenAICompatible`, `BaseUrl=https://api.openai.com/v1`, API key, `OpenAiApiMode=Responses`.
+2. **ChatGPT subscription (managed):** Settings → Models → Import **ChatGPT Codex (CLIProxy)** (`ManagedSource=cliproxy-codex`). Local CLIProxyAPI handles OAuth; Dyson sessions still use OpenAI-compatible Responses against `http://127.0.0.1:8317/v1`. See [inference-providers README](README.md)#managed-cliproxy-providers.
+   - Connect calls management `codex-auth-url?is_webui=true` so CLIProxy starts a temporary OAuth forwarder on `http://localhost:1455` (Codex’s hardcoded redirect).
+   - Before that GET, Dyson bind-checks `127.0.0.1:1455`. If the port is occupied, Connect fails with a Models error banner (no silent browser `ERR_CONNECTION_REFUSED`).
 
 | Dyson field | Codex mapping |
 | ----------- | ------------- |
 | `Slug` | Bare model id (`gpt-5.6-sol`, …) |
-| `DefaultReasoningEffort` / `ReasoningModes` | Prefer `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` — Dyson sends top-level `reasoning_effort` today |
-| Nested `reasoning.effort` / `reasoning.mode` | Upstream contract; **not wired yet** (Dyson only sends top-level `reasoning_effort`) |
-| ChatGPT OAuth + `ChatGPT-Account-ID` | **not wired yet** |
-| Base `https://chatgpt.com/backend-api/codex` | **not wired yet** (and not a supported third-party integration) |
+| `DefaultReasoningEffort` / `ReasoningModes` | Prefer `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` — Responses sends nested `reasoning.effort`; Completions still send top-level `reasoning_effort` |
+| Nested `reasoning.effort` | Wired on Responses (`OpenAiResponsesClient` → `reasoning: { effort }`) |
+| Nested `reasoning.mode` | Upstream contract; **not wired yet** |
+| `prompt_cache_key` | Always sent (session-scoped) |
+| `prompt_cache_options` / explicit breakpoints | Direct `api.openai.com` GPT-5.6+ only — **omitted** for CLIProxy managed (`ManagedSource=cliproxy-codex`) |
+| ChatGPT OAuth + `ChatGPT-Account-ID` (direct) | Prefer CLIProxy managed provider; direct harness OAuth **not wired** |
+| Base `https://chatgpt.com/backend-api/codex` | **not wired** as a first-party Dyson endpoint (CLIProxy mediates) |
 | Codex SDK / `codex exec` host | **not wired yet** |
 | `include: ["reasoning.encrypted_content"]` / `store: false` | Codex client defaults for multi-turn; **not wired yet** as Codex-specific request shaping |
 
@@ -103,6 +111,8 @@ Documented HTTP path today: `ProviderKind=OpenAICompatible`, `BaseUrl=https://ap
 - Slug lists rot fast; poll `/models` (presets include `default_reasoning_effort`, `supported_reasoning_efforts`).
 - `xhigh` / `max` / `reasoning.mode=pro` are model- and generation-dependent.
 - Subscription vs API key differ in billing, retention, and feature reach (cloud).
+- Managed Connect needs localhost **1455** free for the CLIProxy web-UI OAuth forwarder; another process (or a stuck prior login) blocks the callback until freed.
+- Omit `is_webui=true` and CLIProxy never opens 1455 — the browser then gets `ERR_CONNECTION_REFUSED` on the redirect.
 
 ## Sources
 
