@@ -34,11 +34,14 @@ Conceptual overview: [README.md](README.md).
 
 | Type | Notes |
 | ---- | ----- |
-| `DysonManagedSources` | Managed-source constants (`cliproxy-codex`, `cliproxy-grok`) |
-| `ManagedEndpointKind` | `OpenAiCompatible` / `AnthropicCompatible` (Anthropic reserved, not shipped) |
+| `DysonManagedSources` | Managed-source constants (`cliproxy-codex`, `cliproxy-grok`, `cliproxy-antigravity`, `cliproxy-kimi`, `cliproxy-claude`) |
+| `ManagedEndpointKind` | `OpenAiCompatible` / `AnthropicCompatible` (Anthropic Messages session path reserved, not shipped) |
 | `ManagedInferenceProviderBase` | Shared Import / BeginConnection / CompleteConnection / VerifyConnection for CLIProxy-backed providers |
 | `ManagedCodexInferenceProvider` | ChatGPT Codex managed path (`ManagedSource=cliproxy-codex`, `codex-auth-url?is_webui=true`, OAuth port 1455 preflight) |
 | `ManagedGrokInferenceProvider` | Grok Build managed path (`ManagedSource=cliproxy-grok`, `xai-auth-url`) |
+| `ManagedAntigravityInferenceProvider` | Antigravity managed path (`ManagedSource=cliproxy-antigravity`, `antigravity-auth-url?is_webui=true`, OAuth port 51121 preflight) |
+| `ManagedKimiInferenceProvider` | Kimi managed path (`ManagedSource=cliproxy-kimi`, `kimi-auth-url`) |
+| `ManagedClaudeInferenceProvider` | Claude Code managed path (`ManagedSource=cliproxy-claude`, `anthropic-auth-url?is_webui=true`, OAuth port 54545 preflight; OpenAI/Responses via proxy) |
 | `ManagedInferenceProviderCatalog` | DI catalog of managed providers; `FindBySource` |
 | `ManagedConnectionBegin` / `Complete` / `Verify` | Connection-flow DTOs |
 | `DysonCliProxyHost` | Local CLIProxy process host (`IsInstalled`, `EnsureInstalledAsync`, `EnsureRunningAsync`, `LocalBaseUrl`) |

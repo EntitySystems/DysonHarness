@@ -80,6 +80,10 @@ public class ManagedSlugSyncTests
             new ManagedModelInfo("gpt-5.4", "openai", null, null),
             new ManagedModelInfo("claude-sonnet", "anthropic", "claude", null),
             new ManagedModelInfo("grok-4", "xai", "xai", "Grok 4"),
+            new ManagedModelInfo("gemini-2.5-pro", "google", "gemini", null),
+            new ManagedModelInfo("antigravity-flash", "antigravity", null, null),
+            new ManagedModelInfo("kimi-k2.5", "moonshot", "kimi", "Kimi K2.5"),
+            new ManagedModelInfo("kimi-k2.5", "kimi", null, null),
         };
 
         var codex = ManagedInferenceProviderBase.MapModelsToSlugs(models, ["codex", "openai"]);
@@ -90,6 +94,16 @@ public class ManagedSlugSyncTests
         var grok = ManagedInferenceProviderBase.MapModelsToSlugs(models, ["xai", "grok"]);
         Assert.Single(grok);
         Assert.Equal("grok-4", grok[0].Slug);
+
+        var antigravity = ManagedInferenceProviderBase.MapModelsToSlugs(
+            models, ["antigravity", "google", "gemini"]);
+        Assert.Equal(["gemini-2.5-pro", "antigravity-flash"], antigravity.Select(s => s.Slug).ToArray());
+
+        var kimi = ManagedInferenceProviderBase.MapModelsToSlugs(models, ["kimi", "moonshot"]);
+        Assert.Equal(["kimi-k2.5"], kimi.Select(s => s.Slug).ToArray());
+
+        var claude = ManagedInferenceProviderBase.MapModelsToSlugs(models, ["claude", "anthropic"]);
+        Assert.Equal(["claude-sonnet"], claude.Select(s => s.Slug).ToArray());
     }
 
     [Fact]
@@ -159,6 +173,128 @@ public class ManagedCodexOAuthPreflightTests
         }
 
         var result = ManagedCodexInferenceProvider.TryEnsureOAuthCallbackPortFree();
+        Assert.False(result.IsError);
+    }
+}
+
+public class ManagedAntigravityOAuthPreflightTests
+{
+    [Fact]
+    public void AuthUrlPath_requests_webui_oauth_forwarder()
+    {
+        Assert.Equal(
+            "antigravity-auth-url?is_webui=true",
+            ManagedAntigravityInferenceProvider.AntigravityAuthUrlPath);
+        Assert.Contains(
+            "is_webui=true",
+            ManagedAntigravityInferenceProvider.AntigravityAuthUrlPath,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryEnsureOAuthCallbackPortFree_errors_when_51121_occupied()
+    {
+        var holder = new TcpListener(
+            IPAddress.Loopback,
+            ManagedAntigravityInferenceProvider.AntigravityOAuthCallbackPort);
+        holder.Start();
+        try
+        {
+            var result = ManagedAntigravityInferenceProvider.TryEnsureOAuthCallbackPortFree();
+            Assert.True(result.IsError);
+            Assert.Contains("51121", result.Error, StringComparison.Ordinal);
+            Assert.Contains("free", result.Error, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            holder.Stop();
+        }
+    }
+
+    [Fact]
+    public void TryEnsureOAuthCallbackPortFree_succeeds_when_51121_available()
+    {
+        TcpListener? probe = null;
+        try
+        {
+            probe = new TcpListener(
+                IPAddress.Loopback,
+                ManagedAntigravityInferenceProvider.AntigravityOAuthCallbackPort);
+            probe.Start();
+            probe.Stop();
+            probe = null;
+        }
+        catch (SocketException)
+        {
+            return;
+        }
+        finally
+        {
+            probe?.Stop();
+        }
+
+        var result = ManagedAntigravityInferenceProvider.TryEnsureOAuthCallbackPortFree();
+        Assert.False(result.IsError);
+    }
+}
+
+public class ManagedClaudeOAuthPreflightTests
+{
+    [Fact]
+    public void AuthUrlPath_requests_webui_oauth_forwarder()
+    {
+        Assert.Equal(
+            "anthropic-auth-url?is_webui=true",
+            ManagedClaudeInferenceProvider.ClaudeAuthUrlPath);
+        Assert.Contains(
+            "is_webui=true",
+            ManagedClaudeInferenceProvider.ClaudeAuthUrlPath,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryEnsureOAuthCallbackPortFree_errors_when_54545_occupied()
+    {
+        var holder = new TcpListener(
+            IPAddress.Loopback,
+            ManagedClaudeInferenceProvider.ClaudeOAuthCallbackPort);
+        holder.Start();
+        try
+        {
+            var result = ManagedClaudeInferenceProvider.TryEnsureOAuthCallbackPortFree();
+            Assert.True(result.IsError);
+            Assert.Contains("54545", result.Error, StringComparison.Ordinal);
+            Assert.Contains("free", result.Error, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            holder.Stop();
+        }
+    }
+
+    [Fact]
+    public void TryEnsureOAuthCallbackPortFree_succeeds_when_54545_available()
+    {
+        TcpListener? probe = null;
+        try
+        {
+            probe = new TcpListener(
+                IPAddress.Loopback,
+                ManagedClaudeInferenceProvider.ClaudeOAuthCallbackPort);
+            probe.Start();
+            probe.Stop();
+            probe = null;
+        }
+        catch (SocketException)
+        {
+            return;
+        }
+        finally
+        {
+            probe?.Stop();
+        }
+
+        var result = ManagedClaudeInferenceProvider.TryEnsureOAuthCallbackPortFree();
         Assert.False(result.IsError);
     }
 }

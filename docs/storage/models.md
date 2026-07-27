@@ -82,7 +82,7 @@ Credentials and endpoint live on the provider only. Slugs are children; add/remo
 | `BaseUrl` | Optional API root (OpenAI-compatible default `https://api.openai.com/v1`; keep `/vN` if already present, else `/v1` is appended) |
 | `ApiKey` | Optional; **plaintext-local** (no OS keychain yet) |
 | `OpenAiApiMode` | OpenAICompatible only: `Completions` (default) or `Responses` — see `DysonOpenAiApiModes` |
-| `ManagedSource` | Optional; when set (e.g. `cliproxy-codex`, `cliproxy-grok`) the row is a managed third-party provider — view-only in UI; unique when non-null. Null = user-owned manual provider |
+| `ManagedSource` | Optional; when set (e.g. `cliproxy-codex`, `cliproxy-grok`, `cliproxy-antigravity`, `cliproxy-kimi`, `cliproxy-claude`) the row is a managed third-party provider — view-only in UI; unique when non-null. Null = user-owned manual provider |
 | `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
 | `Slugs` | Navigation to child `model_slugs` |
 
@@ -90,7 +90,7 @@ Cascade-delete: removing a provider deletes its slugs.
 
 ### Managed providers (CLIProxy)
 
-Settings → Models can **Import** ChatGPT Codex or Grok Build via a pinned local [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) binary under `{AppContext.BaseDirectory}/external/cliproxy/{version}/` (lazy download; not LocalAppData). Managed rows stay `ProviderKind=OpenAICompatible`, `OpenAiApiMode=Responses`, `BaseUrl=http://127.0.0.1:{port}/v1`, with `ApiKey` = the local proxy Bearer key. OAuth goes through CLIProxy Management API (`codex-auth-url` / `xai-auth-url` + `get-auth-status`); **Verify** syncs `/v1/models` into the slug set.
+Settings → Models can **Import** ChatGPT Codex, Grok Build, Antigravity, Kimi, or Claude Code via a pinned local [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) binary under `{AppContext.BaseDirectory}/external/cliproxy/{version}/` (lazy download; not LocalAppData). Managed rows stay `ProviderKind=OpenAICompatible`, `OpenAiApiMode=Responses`, `BaseUrl=http://127.0.0.1:{port}/v1`, with `ApiKey` = the local proxy Bearer key. OAuth goes through CLIProxy Management API (`codex-auth-url` / `xai-auth-url` / `antigravity-auth-url` / `kimi-auth-url` / `anthropic-auth-url` + `get-auth-status`); **Verify** syncs `/v1/models` into the slug set. Claude uses the proxy’s OpenAI/Responses surface (not Anthropic Messages).
 
 `DysonModelStore.UpsertManagedProviderAsync` keeps an id-stable row per `ManagedSource` and **merges** slugs by name: existing rows keep `Id`, `IsEnabled`, and `DefaultReasoningEffort` while catalog fields (`DisplayAlias`, `ReasoningModes`, …) refresh; new API models insert enabled with catalog default effort; missing API models are removed. `UpdateProviderAsync` / slug add-update-remove reject when `ManagedSource` is set. `SetSlugEnabledAsync` toggles enablement for managed slugs only. `SetSlugDefaultReasoningEffortAsync` sets per-slug default effort for managed slugs only (blank → null/omit).
 

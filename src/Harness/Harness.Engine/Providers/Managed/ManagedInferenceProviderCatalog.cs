@@ -13,6 +13,9 @@ public sealed class ManagedInferenceProviderCatalog
         [
             new ManagedCodexInferenceProvider(host, http, models, appSettings),
             new ManagedGrokInferenceProvider(host, http, models, appSettings),
+            new ManagedAntigravityInferenceProvider(host, http, models, appSettings),
+            new ManagedKimiInferenceProvider(host, http, models, appSettings),
+            new ManagedClaudeInferenceProvider(host, http, models, appSettings),
         ];
     }
 
