@@ -45,6 +45,7 @@ Desktop.ini
 artifacts/
 
 ## Harness runtime logs
+*.log
 .ui-*.err.log
 .ui-*.out.log
 
