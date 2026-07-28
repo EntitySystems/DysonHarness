@@ -66,10 +66,14 @@ public class DysonPlanResultTests
             || !turn.Instruction.Contains("**`## Recap`**", StringComparison.Ordinal)
             || !turn.Instruction.Contains("**`## Agent actions`**", StringComparison.Ordinal)
             || !turn.Instruction.Contains("layout-only", StringComparison.OrdinalIgnoreCase)
-            || !turn.Instruction.Contains("Do not call tools this turn", StringComparison.Ordinal)
+            || !turn.Instruction.Contains("CreateTodo", StringComparison.Ordinal)
+            || !turn.Instruction.Contains(
+                "More todos may be added later during implementation",
+                StringComparison.Ordinal)
             || !turn.Instruction.Contains(
                 "next harness turn will automatically continue and run the implementation",
                 StringComparison.OrdinalIgnoreCase)
+            || turn.Instruction.Contains("Do not call tools this turn", StringComparison.Ordinal)
             || turn.Instruction.Contains("same turn after the sections is OK", StringComparison.Ordinal)
             || turn.Instruction.Contains("\n## Recap\n", StringComparison.Ordinal)
             || turn.Instruction.Contains("\n## Agent actions\n", StringComparison.Ordinal))
@@ -81,7 +85,8 @@ public class DysonPlanResultTests
     private static void AssertBeginBuildPlanContinuation()
     {
         if (DysonBeginBuildPlanFlow.ContinuationPrompt
-            != "Continue the plan implementation as per previous instructions")
+            != "Continue the plan implementation as per previous instructions. "
+                + "Session todos already exist for the Agent actions checklist; add or update todos as work unfolds.")
         {
             throw new InvalidOperationException("BeginBuildPlan ContinuationPrompt text mismatch.");
         }

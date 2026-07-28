@@ -1304,12 +1304,22 @@ code, .mono {
 }
 
 .subagent-card__title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   font-size: 13px;
   font-weight: 600;
   line-height: 1.35;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.subagent-card__id {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
 }
 
 .subagent-card__model {
@@ -1479,6 +1489,61 @@ code, .mono {
   border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
   background: color-mix(in srgb, var(--danger) 12%, var(--bg-1));
   color: var(--danger);
+}
+
+/* Home LastError toast: flex + dismiss; border thickness depletes over 20s */
+.error-banner--toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  /* faint base edge so the box doesn't jump when animated border hits 0 */
+  outline: 1px solid color-mix(in srgb, var(--danger) 25%, var(--border));
+  outline-offset: -1px;
+  border-width: 3px;
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--danger) 70%, var(--border));
+  animation: error-banner-expire 20s linear forwards;
+}
+
+.error-banner__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.error-banner__dismiss {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 4px;
+  color: var(--danger);
+}
+
+.error-banner__dismiss:hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.error-banner__dismiss-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  /* stroke SVG is black; tint to danger */
+  filter: brightness(0) saturate(100%) invert(42%) sepia(62%) saturate(1800%) hue-rotate(330deg) brightness(1.05);
+}
+
+@keyframes error-banner-expire {
+  from {
+    border-width: 3px;
+  }
+  to {
+    border-width: 0;
+  }
 }
 
 /* Chat */

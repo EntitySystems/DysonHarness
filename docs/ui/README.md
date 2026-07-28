@@ -31,21 +31,22 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `/` | `MainLayout` → `AppShell` | Agent shell: workdirs + sessions + chat |
 | `/settings` | `SettingsLayout` | Redirects to `/settings/general` |
 | `/settings/general` | `SettingsLayout` | Theme / accent (`ThemeSwitcher`) + web search summarizer model (`ModelSlugPicker`, optional) |
+| `/settings/agent-behavior` | `SettingsLayout` | End of task auto review toggle (`end_of_task_auto_review` in `app_settings`; persist only — no reviewer spawn yet) |
 | `/settings/models` | `SettingsLayout` | Provider/slug CRUD (`ModelsPanel`) |
 | `/settings/shells` | `SettingsLayout` | Configured shells CRUD (name, path, enable/disable; native file Browse) |
 | `/settings/agent-modes` | `SettingsLayout` | List of `DysonAgentModes.BuiltIns`; link to per-mode tool toggles |
 | `/settings/agent-modes/{Mode}` | `SettingsLayout` | Enable/disable MCP tools for one mode (`Uri.EscapeDataString` for spaces); persists denylist |
 
-`SettingsLayout` nests under `MainLayout` (side nav: General, Models, Shells, Agent modes, Back to agent).
+`SettingsLayout` nests under `MainLayout` (side nav: General, Agent behavior, Models, Shells, Agent modes, Back to agent).
 
 ## Layout
 
 | Path | Role |
 | ---- | ---- |
-| `Components/Pages/Home.razor` | Agent IDE shell |
-| `Components/Pages/Settings/` | Settings pages (`Index`, `General`, `Models`, `Shells`, `AgentModes`, `AgentModeDetail`) |
+| `Components/Pages/Home.razor` | Agent IDE shell; `Host.LastError` shows as a 20s auto-expiring toast (border countdown + dismiss X) via `ErrorToast` |
+| `Components/Pages/Settings/` | Settings pages (`Index`, `General`, `AgentBehavior`, `Models`, `Shells`, `AgentModes`, `AgentModeDetail`) |
 | `Components/Layout/SettingsLayout.razor` | Settings side-nav shell |
-| `Components/Shell/` | `AppShell`, `Sidebar`, `SessionHeader`, `RailSidePanel` |
+| `Components/Shell/` | `AppShell`, `Sidebar`, `SessionHeader`, `RailSidePanel`, `ErrorToast` |
 | `Components/Sessions/` | `WorkDirectorySwitcher`, `SessionList` |
 | `Components/Chat/` | `ChatPanel`, `SessionTodoOverview`, `SessionSubagentOverview`, `TurnBlock`, `PlanResultBlock`, `PlanReadyPopover`, `SubagentCard`, `SubagentEventBlock`, `AskQuestionPopover`, `Composer`, `AgentModePicker` |
 | `Components/Files/` | `FileViewerOverlay` (chat-preserving plan/file viewer) |
@@ -63,6 +64,7 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | Component | Role |
 | --------- | ---- |
 | `AppShell` | Sidebar \| main \| right rail |
+| `ErrorToast` | Home-only `Host.LastError` banner: 20s auto-clear (`ClearLastError`), CSS border-thickness countdown, dismiss X (`icons/cancel.svg`); Settings form `error-banner`s stay until the next action |
 | `RailSidePanel` | Right-rail Files / Git / Usage tabs (placeholders for now); Session log stays as a sibling panel on `Home` |
 | `Sidebar` | Work directory switcher, sessions, Settings link, app-mode badge |
 | `WorkDirectorySwitcher` | Register/switch/remove workdirs; native folder pick via `DysonNativeFolderPicker` |
@@ -75,7 +77,7 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `PlanResultBlock` | Plan title + relative path + **Open plan** / **Build plan** (`stopPropagation`) → `Host.OpenFileViewerAsync` / `Host.BuildPendingPlanAsync` |
 | `PlanReadyPopover` | Composer sticky after latest `PlanResult` until a `BeginBuildPlan` turn (or legacy `[BuildPlan]` user prompt); **View plan file** / **Build plan** (`Host.BuildPendingPlanAsync` → consume buffered Explore reports into BeginBuildPlan Instruction, Work mode + `PromptBeginBuildPlanAsync`) |
 | `FileViewerOverlay` | Fixed backdrop overlay on `Home`; subscribes to `Host.Changed` so open paints without a parent re-render; Escape / ×; markdown via `MarkdownRenderer` or monospace code; Comment popup accumulates drafts in-viewer (edit only); comments panel pinned above scrollable file content when drafts exist; **Submit comments** posts one Normal turn via `Host.PromptAsync` then closes (discard on close without submit) |
-| `SubagentCard` | Compact parent-turn card: child title + muted model label (`Alias · Provider / slug`, child provider with parent fallback) + latest child turn title + spinner while running; click → `NavigateToSessionAsync` |
+| `SubagentCard` | Compact parent-turn card: child title + muted mono `#RuntimeId` + muted model label (`Alias · Provider / slug`, child provider with parent fallback) + latest child turn title + spinner while running; click → `NavigateToSessionAsync` |
 | `SubagentEventBlock` | Expandable “Subagent event” transcript block (kind, subagent, eventId, payload); spinner while unaddressed |
 | `AskQuestionPopover` | Composer overlay for root `AskQuestion` / L1 `askQuestion` parent events; per-question Skip; Submit when all resolved; disables Send while open |
 | `Composer` | Prompt + left-aligned toolbar (model chip, **Effort** `<select>` of the selected slug’s `ReasoningModes` plus **None** (null → omit; legacy current value kept as an extra option if not in the list), mode, git branch chip); **PlanReadyPopover** above the textarea when `Host.PendingPlanReady` is set; typing `/` as the whole prompt token opens a dense slash-command overlay above the textarea (`/ask` `/plan` `/work` modes, `/new` → `OnNewSession` / `StartNewAsync`, `/[model]` fuzzy match on **enabled** slug/alias like the model picker — applies to the live session via `SetSessionModelSlugAsync` when focused; max 5; ↑↓ Enter Esc; send strips+applies a leading command). Logic in `ComposerSlashCommands` (Facts in `Harness.Tests`) |
@@ -88,6 +90,8 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `SettingsLayout` | Settings side nav + content |
 
 General also hosts **Web search summarizer**: optional slug stored in `app_settings` (`web_search_summarizer_model_slug_id`); cleared = use session model.
+
+**Agent behavior** settings: **End of task auto review** toggle stored in `app_settings` (`end_of_task_auto_review` = `"true"` / `"false"`; missing ⇒ off). Persist only for now — does not spawn a reviewer yet.
 
 **Agent modes** settings: list built-ins; detail page toggles catalog tool names via `DysonToolPolicyStore` (`agent_mode_tool_policy` JSON). Disabled tools are omitted from new sessions and on mid-session `ApplyAgentMode` rebuild — running sessions are not live-refreshed without a mode switch.
 
@@ -110,7 +114,7 @@ General also hosts **Web search summarizer**: optional slug stored in `app_setti
 
 - **Live session registry:** `_sessionsById` keeps parent + children running while the UI focuses one session (`ActiveSessionId` / `Session`). Switching focus does not dispose other registry entries.
 - **Navigate:** `NavigateToSessionAsync(Guid)` / `NavigateToParentAsync()` — focus live registry entry or load from DB; sidebar stays **roots only** (children via cards / back, not listed).
-- **Subagent cards:** `GetSubagentCardState(persistenceId)` → title, `ModelLabel` (child `Provider`, else parent), latest turn `AgentTitle`, `IsRunning` / status for `SubagentCard`.
+- **Subagent cards:** `GetSubagentCardState(persistenceId)` → title, `RuntimeId` (child session id for muted `#id` on the card), `ModelLabel` (child `Provider`, else parent), latest turn `AgentTitle`, `IsRunning` / status for `SubagentCard`.
 - **Auto-turn on report:** on parent `SubagentCompleted` / `SubagentFailed` / `SubagentStopped` interrupt, enqueue a harness `SubagentReportProcessing` turn for that parent; when parent `!IsBusy` and **not** in Plan mode, FIFO `PromptSubagentReportProcessingAsync` (`# Subagent report` mandate + bold **Report** block; analyze then continue in one turn — does not cancel in-flight parent work). Kickoff failures also surface a concrete reason here. In **Plan** mode, completions are buffered (UI still updates); **Build plan** folds them into the BeginBuildPlan Instruction (one `#` title + bold labels; reply still mandates `` ## Recap `` / `` ## Agent actions ``), or leaving Plan without Build drains them as `SubagentReportProcessing` auto-turns. `SubagentEvent` / Ask UI are not deferred.
 - **Auto-turn on shell exit:** on `LongRunningShellExited` (from `SubscribeToLongRunningShellCompletion`), always FIFO-drain a `ShellExited` harness turn via `PromptShellExitedAsync` (auto-read tail in Instruction; trimmed after the turn completes — including while Plan). Does not cancel in-flight parent work.
 - **Subagent events:** on `SubagentEvent`, show `SubagentEventBlock`; general kinds FIFO-auto-prompt `RespondToSubagentEvent`; `askQuestion` opens `AskQuestionPopover` (no parent LLM auto-Respond).
@@ -119,13 +123,14 @@ General also hosts **Web search summarizer**: optional slug stored in `app_setti
 - **Switch agent mode (submit):** `PromptAsync(prompt, agentMode)` applies mode when the picker differs from `session.Mode` (via `SetSessionAgentModeAsync` / `ApplyAgentModeCoreAsync`) before the turn — rebuilds system prompt + available-models suffix, bumps `SystemPromptGeneration` (OpenAI `prompt_cache_key`), persists `AgentMode` + `SystemPromptSnapshot`; busy-gated; resume / focus syncs the composer picker from `session.Mode`; leaving Plan drains any buffered completion auto-turns
 - **Switch model:** `SetSessionModelSlugAsync(modelSlugId)` — same provider kind only; rejects switching **to** a disabled slug; swaps live `session.Provider`, resets composer effort to the slug’s `DefaultReasoningEffort` (pending kept in sync for New Session), and persists `ModelSlugId` + `ReasoningEffort`; cross-kind (demo ↔ OpenAI) rejected (`LastError`: start a new session); blocked while busy; with no session, updates pending effort for the next New session
 - **Session effort:** `SetSessionReasoningEffortAsync(effort)` — overrides session `ReasoningEffort` / live provider only (not the slug default); empty omits the request field; persists when a session is focused; blocked while busy; New Session seeds from the current composer effort (live session when focused, else pending)
-- **Plan-ready sticky:** `PendingPlanReady` / `BuildPendingPlanAsync` — after latest `PlanResult` with a path, composer shows View / Build until a later `BeginBuildPlan` turn (layout-only: Recap + Agent actions, no tools; buffered Explore reports fold into that Instruction); legacy `[BuildPlan]` user turns still dismiss sticky. After a successful BeginBuildPlan, `PromptOnSessionAsync` enqueues `DysonBeginBuildPlanFlow.ContinuationPrompt` as a Normal turn that implements from the Agent actions set
+- **Plan-ready sticky:** `PendingPlanReady` / `BuildPendingPlanAsync` — after latest `PlanResult` with a path, composer shows View / Build until a later `BeginBuildPlan` turn (layout-only: Recap + Agent actions + mandatory `CreateTodo` per action after `ReadFile`; no StartSubagent / WriteFile / shell / product work; buffered Explore reports fold into that Instruction); legacy `[BuildPlan]` user turns still dismiss sticky. After a successful BeginBuildPlan, `PromptOnSessionAsync` enqueues `DysonBeginBuildPlanFlow.ContinuationPrompt` as a Normal turn that implements from the Agent actions set
 - **File viewer:** `OpenFileViewerAsync` stays on the Blazor sync context (no `ConfigureAwait(false)` on this path) so `Notify` paints `FileViewerOverlay`; overlay also listens to `Host.Changed`
 - **Delete session:** `DeleteSessionAsync(sessionId)` — confirms in UI, then store delete (subtree + cascaded turns/logs); detaches if it was the active session
 - **Resume:** `GetFullSessionAsync` → re-resolves provider from `ModelSlugId` + session `ReasoningEffort` (null → slug default) → same branch as new session; resume by id still works when the slug is disabled; restores todos into the live session; hydrates direct DB children into `SubSessions` / `SubagentsById` (quiet child loads skip `SessionResumed` logs) so Wait/Inspect/Stop and `SessionSubagentOverview` work after cold resume
 - **Todos:** host subscribes `TodosChanged` → `Notify()` so `SessionTodoOverview` refreshes without a full reload; MCP todo tools mutate the focused session’s own list
 - **Subagents overview:** `SessionSubagentOverview` binds to `Session.SubSessions` (session-owned roster); spawn-turn `SubagentCard`s remain under `TurnBlock`
 - **Rename:** demo tool executor handles `RenameSession` → `RenameAsync` + persist `Title` + `SessionRenamed` log; host `SessionRenamed` notifies UI to refresh list/header
+- **LastError toast (Home):** session errors on `Host.LastError` (e.g. busy model switch) render as a 20s auto-expiring toast with a depleting border and dismiss X (`icons/cancel.svg` → `ClearLastError`); Settings/Models form banners are unchanged
 - **Cancel prompt:** `CancelPrompt()` cancels the linked CTS used by the in-flight `PromptAsync`; latest busy turn spinner hover shows a danger cancel cross (`icons/cancel.svg`) and click invokes it
 - **Resubmit prompt:** idle user turns show a muted Retry control on `.turn-block__user` (`icons/retry.svg`); click re-sends that turn’s `Instruction` through `OnSubmit` / `PromptAsync` as a new turn (disabled while `SessionBusy`)
 - **Provider:** resolved from selected/default slug; credentialed `demo` rows are treated as `OpenAICompatible`; picker chip syncs from focused `Session.Provider` on host change / resume / new session

@@ -1,0 +1,51 @@
+@namespace Harness.UI.Components.Shell
+@implements IDisposable
+@inject DysonUiHost Host
+
+<div class="error-banner error-banner--toast" role="alert">
+    <span class="error-banner__text">@Message</span>
+    <button type="button"
+            class="error-banner__dismiss"
+            title="Dismiss"
+            aria-label="Dismiss error"
+            @onclick="Dismiss">
+        <img class="error-banner__dismiss-icon" src="icons/cancel.svg" alt="" />
+    </button>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Message { get; set; } = "";
+
+    private CancellationTokenSource? _cts;
+
+    protected override void OnInitialized()
+    {
+        _cts = new CancellationTokenSource();
+        _ = ExpireAsync(_cts.Token);
+    }
+
+    private async Task ExpireAsync(CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(20), ct);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        if (string.Equals(Host.LastError, Message, StringComparison.Ordinal))
+            Host.ClearLastError();
+    }
+
+    private void Dismiss() => Host.ClearLastError();
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = null;
+    }
+}

@@ -41,7 +41,7 @@
         <SessionSubagentOverview Session="Host.Session" />
         @if (!string.IsNullOrEmpty(Host.LastError))
         {
-            <div class="error-banner">@Host.LastError</div>
+            <ErrorToast @key="Host.LastError" Message="@Host.LastError" />
         }
         <ChatPanel Turns="@(Host.Session?.Turns ?? Array.Empty<DysonAgentTurn>())"
                    Disabled="@(Host.Session is null)"

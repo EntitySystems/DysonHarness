@@ -2,6 +2,8 @@ namespace DysonHarness;
 
 /// <summary>
 /// Factories and instruction text for BeginBuildPlan harness turns (composer Build plan).
+/// Layout-only reply (Recap + Agent actions) plus required ReadFile / CreateTodo tools;
+/// no implementation or StartSubagent this turn.
 /// </summary>
 public static class DysonBeginBuildPlanFlow
 {
@@ -10,7 +12,8 @@ public static class DysonBeginBuildPlanFlow
     /// continues without a manual user message.
     /// </summary>
     public const string ContinuationPrompt =
-        "Continue the plan implementation as per previous instructions";
+        "Continue the plan implementation as per previous instructions. "
+        + "Session todos already exist for the Agent actions checklist; add or update todos as work unfolds.";
 
     /// <summary>
     /// Whether the host should enqueue <see cref="ContinuationPrompt"/> after this turn
@@ -20,8 +23,9 @@ public static class DysonBeginBuildPlanFlow
         kind == DysonAgentTurnKind.BeginBuildPlan;
 
     /// <summary>
-    /// Harness mandate: layout-only turn — read the plan, emit Recap + Agent actions.
-    /// No tools / implementation this turn; the host enqueues a Normal continuation next.
+    /// Harness mandate: layout-only turn — read the plan, emit Recap + Agent actions,
+    /// and create session todos for each Agent actions item. No implementation /
+    /// StartSubagent this turn; the host enqueues a Normal continuation next.
     /// Optional Explore report blocks are folded into the layout when Plan-mode buffered them.
     /// </summary>
     public static string BuildInstruction(
@@ -44,7 +48,9 @@ public static class DysonBeginBuildPlanFlow
             - **`## Recap`** — Brief restatement of the plan goal and constraints (enough for later turns without re-reading the whole file).
             - **`## Agent actions`** — An ordered, concrete checklist of who/what comes next (e.g. Drone briefs, solution setup, verify steps).
 
-            Do not call tools this turn: no `StartSubagent` / Drones, no `WriteFile`, no shell, no product work.
+            Required tools this turn: `ReadFile` on the plan path, then `CreateTodo` for each Agent actions item (`displayName` + unique `taskCode`).
+            More todos may be added later during implementation (`CreateTodo` / `UpdateTodo` on later turns).
+            Do not call other tools this turn: no `StartSubagent` / Drones, no `WriteFile`, no shell, no product work.
             Layout the functional instructions only; do not invent a new plan file.
             The next harness turn will automatically continue and run the implementation from that Agent actions set.
             """;

@@ -92,6 +92,8 @@ public static class DysonSubagentHostLogic
 public sealed class DysonSubagentCardState
 {
     public required Guid PersistenceId { get; init; }
+    /// <summary>Child session runtime id (<see cref="DysonAgentSession.Id"/>).</summary>
+    public int RuntimeId { get; init; }
     public string? Title { get; init; }
     public string? LatestTurnAgentTitle { get; init; }
     public string? ModelLabel { get; init; }

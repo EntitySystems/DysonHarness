@@ -108,6 +108,13 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     public string? LastError { get; private set; }
 
+    /// <summary>Clears <see cref="LastError"/> and notifies listeners (Home toast dismiss / expiry).</summary>
+    public void ClearLastError()
+    {
+        LastError = null;
+        Notify();
+    }
+
     /// <summary>
     /// Effective session reasoning_effort for the composer (live provider, else pending).
     /// Null/empty = omit from requests.
@@ -1225,6 +1232,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         return new DysonSubagentCardState
         {
             PersistenceId = persistenceId,
+            RuntimeId = session.Id,
             Title = session.DisplayTitle,
             LatestTurnAgentTitle = latest?.AgentTitle,
             ModelLabel = modelLabel,

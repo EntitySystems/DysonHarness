@@ -1,0 +1,72 @@
+@page "/settings/agent-behavior"
+@layout SettingsLayout
+@using DysonHarness
+@inject DysonAppSettingsStore AppSettings
+
+<PageTitle>Agent behavior — Settings</PageTitle>
+
+<div class="settings-page">
+    <h1 class="settings-page__title">Agent behavior</h1>
+    <p class="settings-page__copy">
+        Preferences that change how agents finish work. Stored in the local app database.
+    </p>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="error-banner">@_error</div>
+    }
+
+    <div class="settings-page__panel panel">
+        <label class="checkbox-row">
+            <input type="checkbox"
+                   checked="@_endOfTaskAutoReview"
+                   @onchange="OnEndOfTaskAutoReviewChangedAsync" />
+            <span>End of task auto review</span>
+        </label>
+        <p class="settings-page__copy" style="margin:0;">
+            After an agent marks a task as completed, a new reviewer agent will automatically run to check the code (uses more tokens).
+        </p>
+        @if (_saved)
+        {
+            <p class="settings-page__copy" style="margin:8px 0 0;">Saved.</p>
+        }
+    </div>
+</div>
+
+@code {
+    private bool _endOfTaskAutoReview;
+    private string? _error;
+    private bool _saved;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var get = await AppSettings.GetAsync(DysonAppSettingKeys.EndOfTaskAutoReview);
+        if (get.IsError)
+        {
+            _error = get.Error;
+            return;
+        }
+
+        _endOfTaskAutoReview = string.Equals(get.Value, "true", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task OnEndOfTaskAutoReviewChangedAsync(ChangeEventArgs e)
+    {
+        _error = null;
+        _saved = false;
+        _endOfTaskAutoReview = e.Value is bool b
+            ? b
+            : bool.TryParse(e.Value?.ToString(), out var parsed) && parsed;
+
+        var set = await AppSettings.SetAsync(
+            DysonAppSettingKeys.EndOfTaskAutoReview,
+            _endOfTaskAutoReview ? "true" : "false");
+        if (set.IsError)
+        {
+            _error = set.Error;
+            return;
+        }
+
+        _saved = true;
+    }
+}

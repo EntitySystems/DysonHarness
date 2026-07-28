@@ -15,7 +15,13 @@
               style="--subagent-mode-icon: url('@icon.Url')"
               aria-hidden="true"></span>
         <div class="subagent-card__text">
-            <div class="subagent-card__title">@(_state?.Title ?? "Subagent")</div>
+            <div class="subagent-card__title">
+                <span>@(_state?.Title ?? "Subagent")</span>
+                @if (_state is { RuntimeId: > 0 })
+                {
+                    <span class="subagent-card__id mono">#@_state.RuntimeId</span>
+                }
+            </div>
             @if (!string.IsNullOrWhiteSpace(_state?.ModelLabel))
             {
                 <div class="subagent-card__model">@_state.ModelLabel</div>

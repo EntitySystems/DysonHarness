@@ -34,4 +34,10 @@ public static class DysonAppSettingKeys
 
     /// <summary>Local CLIProxyAPI listen port (default 8317).</summary>
     public const string CliProxyPort = "cliproxy_port";
+
+    /// <summary>
+    /// When <c>"true"</c>, after an agent marks a task completed a reviewer agent should
+    /// auto-run (persist only for now — no reviewer spawn yet). Missing / other ⇒ off.
+    /// </summary>
+    public const string EndOfTaskAutoReview = "end_of_task_auto_review";
 }
