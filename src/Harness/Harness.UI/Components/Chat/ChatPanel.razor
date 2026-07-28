@@ -14,7 +14,28 @@
         }
         @if (timeline.Count == 0)
         {
-            <div class="empty-state">Start a session and send a prompt. Demo tools run staged mocks.</div>
+            @if (Host.Session is null)
+            {
+                var canCreate = CanCreateSession && !SessionBusy;
+                <div class="chat-panel__empty">
+                    <p class="chat-panel__empty-message">No session selected. Start one to begin chatting.</p>
+                    <button type="button"
+                            class="btn btn-primary"
+                            disabled="@(!canCreate)"
+                            title="@(CanCreateSession ? "Start new session" : "New disabled until a workdir is selected")"
+                            @onclick="OnNewSessionAsync">
+                        Start new session
+                    </button>
+                    @if (!CanCreateSession)
+                    {
+                        <p class="chat-panel__empty-hint">New disabled until a workdir is selected</p>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="empty-state">Send a prompt to begin.</div>
+            }
         }
         else
         {
@@ -74,6 +95,8 @@
     [Parameter] public string? GitBranch { get; set; }
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
     [Parameter] public EventCallback OnNewSession { get; set; }
+    /// <summary>Same gate as SessionList New — workdir must be selected.</summary>
+    [Parameter] public bool CanCreateSession { get; set; }
 
     private IEnumerable<DysonSubagentEventUiItem> FocusedSubagentEvents
     {
@@ -176,6 +199,8 @@
         _forceStick = true;
         await OnSubmit.InvokeAsync(prompt);
     }
+
+    private Task OnNewSessionAsync() => OnNewSession.InvokeAsync();
 
     private Task HandleAskSubmitAsync(IReadOnlyList<DysonAskQuestionAnswer> answers)
     {

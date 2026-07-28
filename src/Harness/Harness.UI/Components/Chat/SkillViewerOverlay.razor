@@ -1,0 +1,60 @@
+@namespace Harness.UI.Components.Chat
+@using Harness.UI.Demo
+@using Harness.UI.Markdown
+@using Microsoft.AspNetCore.Components.Web
+@implements IDisposable
+@inject DysonUiHost Host
+
+@if (Host.SkillViewer is { } viewer)
+{
+    <div class="file-viewer-modal-backdrop"
+         @onclick="Close"
+         @onkeydown="OnKeyDown">
+        <div class="file-viewer-modal skill-viewer-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="skill-viewer-modal-title"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnKeyDown">
+            <div class="file-viewer-modal__header">
+                <div class="file-viewer-modal__titles">
+                    <h3 id="skill-viewer-modal-title">@viewer.DisplayName</h3>
+                    @if (!string.IsNullOrWhiteSpace(viewer.ResolvedPath))
+                    {
+                        <div class="file-viewer-modal__path mono">@viewer.ResolvedPath</div>
+                    }
+                </div>
+                <div class="file-viewer-modal__actions">
+                    <button type="button"
+                            class="btn btn-ghost file-viewer-modal__close"
+                            @onclick="Close"
+                            aria-label="Close">×</button>
+                </div>
+            </div>
+
+            <div class="file-viewer-modal__body">
+                <div class="file-viewer-modal__content">
+                    <div class="file-viewer-modal__markdown turn-block__body">
+                        @MarkdownRenderer.ToHtml(viewer.Markdown)
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    protected override void OnInitialized() => Host.Changed += OnHostChanged;
+
+    private void OnHostChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void Close() => Host.CloseSkillViewer();
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            Close();
+    }
+
+    public void Dispose() => Host.Changed -= OnHostChanged;
+}

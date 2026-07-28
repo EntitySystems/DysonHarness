@@ -18,7 +18,7 @@ public static class DysonRethinkToolUsageFlow
     public const string RethinkInstruction = """
         Rethink tool usage: the prior turn hit the tool-round budget without a final reply.
         Analyze recent tool calls for recursive / non-progressing patterns versus justified progress.
-        This turn: use readonly tools only when a peek is needed (e.g. ReadFile, Grep, ListDirectory, LoadBinary, list/inspect helpers, readonly web/browser reads). Do not call writes, shells, or other mutating/work tools (aside from the Explore exception below).
+        This turn: use readonly tools only when a peek is needed (e.g. ReadFile, Grep, ListDirectory, LoadBinary, LoadSkill, list/inspect helpers, readonly web/browser reads). Do not call writes, shells, or other mutating/work tools (aside from the Explore exception below).
         Explore exception: if the problem is complex and direct searching would consume a lot of context, you may StartSubagent an Explore this turn. If you spawn Explore, you must WaitForSubagent until completion this turn (no fire-and-forget; incorporate the report before resume vs stop). Do not spawn Drones/other modes on rethink; do not use Explore instead of ResumeCurrentTask when work should simply continue.
         - If continuing is justified, call ResumeCurrentTask with a brief rationale and/or continuationInstructions.
         - If stuck (doom loop, no useful next step), explain briefly in your reply and do not call ResumeCurrentTask.

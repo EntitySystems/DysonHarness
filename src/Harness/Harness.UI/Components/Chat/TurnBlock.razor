@@ -40,10 +40,31 @@
     </header>
     @if (IsExpanded)
     {
-        @if (IsUserTurn && !string.IsNullOrWhiteSpace(Turn.Instruction))
+        @if (IsUserTurn && (!string.IsNullOrWhiteSpace(Turn.Instruction) || Turn.SkillsUsed.Count > 0))
         {
             <div class="turn-block__user">
-                <div class="turn-block__user-prompt">@MarkdownRenderer.ToHtml(Turn.Instruction)</div>
+                <div class="turn-block__user-main">
+                    @if (Turn.SkillsUsed.Count > 0)
+                    {
+                        <div class="turn-block__skills">
+                            @foreach (var skill in Turn.SkillsUsed)
+                            {
+                                var entry = skill;
+                                <button type="button"
+                                        class="turn-block__skill-chip"
+                                        title="@(entry.ResolvedPath ?? entry.DisplayName)"
+                                        @onclick:stopPropagation="true"
+                                        @onclick="() => Host.OpenSkillViewer(entry)">
+                                    Used skill @entry.DisplayName
+                                </button>
+                            }
+                        </div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(Turn.Instruction))
+                    {
+                        <div class="turn-block__user-prompt">@MarkdownRenderer.ToHtml(Turn.Instruction)</div>
+                    }
+                </div>
                 @if (ShowPromptSpinner)
                 {
                     <button type="button"

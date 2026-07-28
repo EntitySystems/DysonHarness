@@ -11,7 +11,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="Resources\Skills\JDSL.md" />
+    <EmbeddedResource Include="Resources\Skills\**\*.md" />
   </ItemGroup>
 
   <ItemGroup>

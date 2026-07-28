@@ -64,6 +64,13 @@ public sealed class DysonAgentTurn
     /// </summary>
     public IReadOnlyList<DysonReasoningSegment> ReasoningLog => _reasoningLog;
 
+    private readonly List<DysonSkillUsedEntry> _skillsUsed = [];
+
+    /// <summary>
+    /// Skills attached this turn (slash / <c>LoadSkill</c>). Injected into provider transcripts + UI chip/modal.
+    /// </summary>
+    public IReadOnlyList<DysonSkillUsedEntry> SkillsUsed => _skillsUsed;
+
     /// <summary>UTC when this turn began (live create or restored from persistence).</summary>
     public DateTime StartedUtc { get; set; }
 
@@ -275,6 +282,40 @@ public sealed class DysonAgentTurn
         _reasoningLog.Clear();
         _reasoningLog.AddRange(segments);
         ReasoningText = DysonReasoningLogSerializer.JoinThoughtTexts(_reasoningLog);
+    }
+
+    /// <summary>Appends a skill used on this turn (slash attach or <c>LoadSkill</c>).</summary>
+    public void AddSkillUsed(DysonSkillUsedEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        _skillsUsed.Add(entry);
+    }
+
+    /// <summary>Replaces <see cref="SkillsUsed"/> from a persisted snapshot.</summary>
+    public void RestoreSkillsUsed(IEnumerable<DysonSkillUsedEntry> skills)
+    {
+        ArgumentNullException.ThrowIfNull(skills);
+
+        _skillsUsed.Clear();
+        _skillsUsed.AddRange(skills);
+    }
+
+    /// <summary>Maps a loaded skill onto a <see cref="DysonSkillUsedEntry"/> and appends it.</summary>
+    public DysonSkillUsedEntry AttachLoadedSkill(DysonLoadedSkill loaded)
+    {
+        ArgumentNullException.ThrowIfNull(loaded);
+
+        var entry = new DysonSkillUsedEntry
+        {
+            SkillId = loaded.Id,
+            DisplayName = loaded.DisplayName,
+            MarkdownContent = loaded.Markdown,
+            ResolvedPath = loaded.ResolvedPath,
+            LoadIndexOnly = loaded.LoadIndexOnly,
+            UsedUtc = DateTime.UtcNow,
+        };
+        AddSkillUsed(entry);
+        return entry;
     }
 
     /// <summary>

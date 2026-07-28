@@ -3,7 +3,7 @@ using DysonHarness;
 namespace Harness.UI.Components.Chat;
 
 /// <summary>
-/// Leading <c>/</c> command parsing for the composer overlay (modes, new session, model switch).
+/// Leading <c>/</c> command parsing for the composer overlay (modes, new session, model switch, skills).
 /// </summary>
 public static class ComposerSlashCommands
 {
@@ -14,6 +14,7 @@ public static class ComposerSlashCommands
         Mode,
         NewSession,
         Model,
+        Skill,
     }
 
     public sealed record ModelOption(
@@ -23,12 +24,19 @@ public static class ComposerSlashCommands
         string Slug,
         string Label);
 
+    public sealed record SkillOption(
+        string Name,
+        string DisplayName,
+        string Token,
+        string Label);
+
     public sealed record Suggestion(
         string Token,
         string Label,
         Kind Kind,
         string? Mode = null,
-        Guid? ModelSlugId = null);
+        Guid? ModelSlugId = null,
+        string? SkillName = null);
 
     public sealed record ParseResult(
         Suggestion Suggestion,
@@ -80,10 +88,16 @@ public static class ComposerSlashCommands
         return true;
     }
 
-    public static IReadOnlyList<Suggestion> Filter(string typedToken, IReadOnlyList<ModelOption> models)
+    public static IReadOnlyList<Suggestion> Filter(
+        string typedToken,
+        IReadOnlyList<ModelOption> models,
+        IReadOnlyList<SkillOption>? skills = null)
     {
         var filter = typedToken.StartsWith('/') ? typedToken[1..] : typedToken;
         filter = filter.Trim();
+
+        if (IsSkillFilter(filter))
+            return FilterSkills(filter, skills ?? []);
 
         var results = new List<Suggestion>(MaxSuggestions);
 
@@ -114,15 +128,30 @@ public static class ComposerSlashCommands
     }
 
     /// <summary>
-    /// Resolve a leading command for send: exact built-in/display-alias, else first filtered suggestion.
+    /// Resolve a leading command for send: exact built-in/display-alias/skill, else first filtered suggestion.
     /// </summary>
-    public static bool TryResolve(string? text, IReadOnlyList<ModelOption> models, out ParseResult? result)
+    public static bool TryResolve(
+        string? text,
+        IReadOnlyList<ModelOption> models,
+        out ParseResult? result,
+        IReadOnlyList<SkillOption>? skills = null)
     {
         result = null;
         if (!TryGetLeadingToken(text, out var token, out var remainder))
             return false;
 
         var name = token.StartsWith('/') ? token[1..] : token;
+        skills ??= [];
+
+        if (IsSkillFilter(name))
+        {
+            var skillSuggestions = FilterSkills(name, skills);
+            if (skillSuggestions.Count == 0)
+                return false;
+
+            result = new ParseResult(skillSuggestions[0], remainder);
+            return true;
+        }
 
         var builtIn = BuiltIns.FirstOrDefault(b =>
             string.Equals(b.Token, token, StringComparison.OrdinalIgnoreCase));
@@ -146,13 +175,114 @@ public static class ComposerSlashCommands
             return true;
         }
 
+        // Exact skill token /skill-{name} even when filter prefix is not "skill"
+        var skillExact = skills.FirstOrDefault(s =>
+            string.Equals(s.Token, token, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (skillExact is not null)
+        {
+            result = new ParseResult(
+                new Suggestion(
+                    skillExact.Token,
+                    skillExact.Label,
+                    Kind.Skill,
+                    SkillName: skillExact.Name),
+                remainder);
+            return true;
+        }
+
         // ponytail: ceiling = first filtered hit; upgrade if send should require an exact token.
-        var suggestions = Filter(token, models);
+        var suggestions = Filter(token, models, skills);
         if (suggestions.Count == 0)
             return false;
 
         result = new ParseResult(suggestions[0], remainder);
         return true;
+    }
+
+    public static SkillOption ToSkillOption(DysonSkillCatalogEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        var token = "/skill-" + SanitizeSkillToken(entry.Name);
+        return new SkillOption(
+            entry.Name,
+            entry.DisplayName,
+            token,
+            $"{entry.DisplayName} · skill");
+    }
+
+    private static bool IsSkillFilter(string filter) =>
+        filter.StartsWith("skill", StringComparison.OrdinalIgnoreCase);
+
+    private static IReadOnlyList<Suggestion> FilterSkills(
+        string filter,
+        IReadOnlyList<SkillOption> skills)
+    {
+        if (skills.Count == 0)
+            return [];
+
+        // Strip "skill" / "skill-" prefix for ranking the skill id/display.
+        var needle = filter;
+        if (needle.StartsWith("skill-", StringComparison.OrdinalIgnoreCase))
+            needle = needle["skill-".Length..];
+        else if (needle.StartsWith("skill", StringComparison.OrdinalIgnoreCase))
+            needle = needle["skill".Length..].TrimStart('-');
+
+        var ranked = skills
+            .Select(s => (Skill: s, Score: ScoreSkill(s, needle)))
+            .Where(x => needle.Length == 0 || x.Score > 0)
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Skill.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .Take(MaxSuggestions)
+            .Select(x => new Suggestion(
+                x.Skill.Token,
+                x.Skill.Label,
+                Kind.Skill,
+                SkillName: x.Skill.Name))
+            .ToArray();
+
+        return ranked;
+    }
+
+    private static int ScoreSkill(SkillOption skill, string needle)
+    {
+        if (needle.Length == 0)
+            return 1;
+        if (string.Equals(skill.Name, needle, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(skill.DisplayName, needle, StringComparison.OrdinalIgnoreCase))
+        {
+            return 300;
+        }
+
+        if (skill.Name.StartsWith(needle, StringComparison.OrdinalIgnoreCase)
+            || skill.DisplayName.StartsWith(needle, StringComparison.OrdinalIgnoreCase))
+        {
+            return 200;
+        }
+
+        if (needle.Length >= 2
+            && (skill.Name.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                || skill.DisplayName.Contains(needle, StringComparison.OrdinalIgnoreCase)))
+        {
+            return 100;
+        }
+
+        return 0;
+    }
+
+    private static string SanitizeSkillToken(string name)
+    {
+        var sb = new System.Text.StringBuilder(name.Length);
+        foreach (var ch in name.Trim())
+        {
+            if (char.IsLetterOrDigit(ch) || ch is '-' or '_')
+                sb.Append(char.ToLowerInvariant(ch));
+            else if (ch is ' ' or '/' or '\\' or '.')
+                sb.Append('-');
+        }
+
+        var token = sb.ToString().Trim('-');
+        return string.IsNullOrEmpty(token) ? "skill" : token;
     }
 
     private static bool MatchesBuiltIn(string commandToken, string filter)

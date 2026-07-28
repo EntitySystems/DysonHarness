@@ -1,5 +1,6 @@
 ﻿@page "/"
 @using DysonHarness
+@using Harness.UI.Components.Chat
 @using Harness.UI.Components.Files
 @using Harness.UI.Demo
 @implements IDisposable
@@ -46,6 +47,7 @@
         <ChatPanel Turns="@(Host.Session?.Turns ?? Array.Empty<DysonAgentTurn>())"
                    Disabled="@(Host.Session is null)"
                    SessionBusy="Host.IsBusy"
+                   CanCreateSession="_activeWorkDirectoryId is not null"
                    OnCancelPrompt="CancelPrompt"
                    SelectedSlugId="_selectedSlugId"
                    SelectedSlugIdChanged="OnSelectedSlugIdChangedAsync"
@@ -79,6 +81,7 @@
 </AppShell>
 
 <FileViewerOverlay />
+<SkillViewerOverlay />
 
 @code {
     private IReadOnlyList<DysonSessionSummary> _sessions = [];
@@ -124,6 +127,7 @@
                 if (get.IsSuccess)
                 {
                     _activeWorkDirectoryId = id;
+                    Host.SetComposerWorkDirectoryId(id);
                     await WorkDirs.TouchOpenedAsync(id);
                     await RefreshGitBranchAsync(get.Value.AbsolutePath);
                     await RefreshSessionsAsync();
@@ -238,6 +242,7 @@
         else
         {
             _activeWorkDirectoryId = null;
+            Host.SetComposerWorkDirectoryId(null);
             await RefreshGitBranchAsync(null);
             await PersistWorkDirectoryAsync(null);
             await RefreshSessionsAsync();
@@ -254,6 +259,7 @@
     private async Task SetActiveWorkDirectoryAsync(Guid id, string absolutePath)
     {
         _activeWorkDirectoryId = id;
+        Host.SetComposerWorkDirectoryId(id);
         await RefreshGitBranchAsync(absolutePath);
         await PersistWorkDirectoryAsync(id);
         await RefreshSessionsAsync();

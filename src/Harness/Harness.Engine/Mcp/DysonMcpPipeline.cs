@@ -1359,7 +1359,7 @@ public sealed class DysonMcpPipeline
                 "Branches on nested tool IsError via OnSuccess/OnFailure; optional ContinueWith and Loop. " +
                 "Argument refs: fromArg:name, fromResult:$0, fromResult:json.path. " +
                 "Caps: nesting depth 8, 50 nested invocations, MaxIterations 1–20 (default 5). " +
-                "Cannot call itself. See Resources/Skills/JDSL.md.",
+                "Cannot call itself. Prefer LoadSkill(name: \"JDSL\", loadIndexOnly: true) for the agent guide; see Resources/Skills/JDSL.md.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1528,6 +1528,35 @@ public sealed class DysonMcpPipeline
                       "description": "Clock zone: utc (default) or local (host machine)."
                     }
                   }
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "LoadSkill",
+            Description =
+                "Load an agent skill into the current turn (and return its markdown). " +
+                "Resolve order: (1) included Resources/Skills by file name or stem (e.g. JDSL / JDSL.md), " +
+                "(2) work-root .dyson/skills/{name}/ (or .dyson/skills/{name}), " +
+                "(3) literal work-relative path (file or directory). " +
+                "loadIndexOnly is required: true = entry skill file only (SKILL.md if present, else first *.md; " +
+                "single files are that file); false = concatenate all *.md under the directory (entry first). " +
+                "Readonly — prefer this over ReadFile for known skills.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "Skill id/stem (e.g. JDSL), .dyson/skills name, or work-relative path."
+                    },
+                    "loadIndexOnly": {
+                      "type": "boolean",
+                      "description": "true = entry skill file only; false = full directory markdown concat."
+                    }
+                  },
+                  "required": ["name", "loadIndexOnly"]
                 }
                 """,
         };

@@ -87,6 +87,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "UpdateTodo" => await UpdateTodoAsync(call, cancellationToken).ConfigureAwait(false),
                 "DeleteTodo" => await DeleteTodoAsync(call, cancellationToken).ConfigureAwait(false),
                 "ReadFile" => await ReadFileAsync(call, cancellationToken).ConfigureAwait(false),
+                "LoadSkill" => await LoadSkillAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateFile" => await CreateFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "WriteFile" => await WriteFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "Grep" => await GrepAsync(call, cancellationToken).ConfigureAwait(false),
@@ -1429,6 +1430,35 @@ public sealed partial class DysonWorkspaceToolExecutor
         return Task.FromResult(Ok(call, sb.Length == 0 ? "(empty)" : sb.ToString().TrimEnd()));
     }
 
+    private Task<DysonToolCallResult> LoadSkillAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+        var name = RequireString(doc.RootElement, "name");
+        if (name.IsError)
+            return Task.FromResult(Error(call, name.Error));
+
+        var loadIndexOnly = RequireBool(doc.RootElement, "loadIndexOnly");
+        if (loadIndexOnly.IsError)
+            return Task.FromResult(Error(call, loadIndexOnly.Error));
+
+        var loaded = DysonSkillLoader.ResolveAndLoad(name.Value, loadIndexOnly.Value, _fs);
+        if (loaded.IsError)
+            return Task.FromResult(Error(call, loaded.Error));
+
+        var turn = _session.Turns.Count > 0 ? _session.Turns[^1] : null;
+        if (turn is not null && turn.CompletedUtc is null)
+            turn.AttachLoadedSkill(loaded.Value);
+
+        var header =
+            $"Loaded skill '{loaded.Value.DisplayName}' " +
+            $"(source={loaded.Value.Source}, path={loaded.Value.ResolvedPath}, " +
+            $"loadIndexOnly={loaded.Value.LoadIndexOnly})";
+        return Task.FromResult(Ok(call, header + "\n\n" + loaded.Value.Markdown));
+    }
+
     private Task<DysonToolCallResult> CreateFileAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)
@@ -2632,6 +2662,17 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Result<string, string>.AsError($"Field '{name}' must be non-empty.");
 
         return Result<string, string>.AsValue(value);
+    }
+
+    private static Result<bool, string> RequireBool(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var prop)
+            || prop.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            return Result<bool, string>.AsError($"Missing required boolean field '{name}'.");
+        }
+
+        return Result<bool, string>.AsValue(prop.GetBoolean());
     }
 
     private static int? GetInt(JsonElement root, string name)

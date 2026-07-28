@@ -2,6 +2,7 @@
 @using DysonHarness
 @using Harness.UI.Components.Models
 @using Harness.UI.Demo
+@implements IDisposable
 @inject DysonModelStore ModelStore
 @inject DysonUiHost Host
 @inject IJSRuntime Js
@@ -9,84 +10,112 @@
 <div class="composer">
     <AskQuestionPopover Ask="Ask" OnSubmit="OnAskSubmit" />
     <PlanReadyPopover Pending="Host.PendingPlanReady" />
-    <div class="composer__prompt">
-        @if (_slashOpen && _suggestions.Count > 0)
-        {
-            <div class="composer-slash" role="listbox" aria-label="Slash commands">
-                @for (var i = 0; i < _suggestions.Count; i++)
-                {
-                    var suggestion = _suggestions[i];
-                    var index = i;
-                    <button type="button"
-                            class="composer-slash__item @(index == _highlight ? "is-active" : null)"
-                            role="option"
-                            aria-selected="@(index == _highlight)"
-                            @onmousedown:preventDefault="true"
-                            @onclick="() => ApplySuggestionAsync(suggestion)">
-                        <span class="composer-slash__token">@suggestion.Token</span>
-                        <span class="composer-slash__desc">@suggestion.Label</span>
-                    </button>
-                }
-            </div>
-        }
-        else if (Host.QueuedPrompts.Count > 0)
-        {
-            <div class="composer-queue" role="list" aria-label="Queued prompts">
-                @foreach (var item in Host.QueuedPrompts)
-                {
-                    var queued = item;
-                    <div class="composer-queue__item" role="listitem">
-                        <span class="composer-queue__text" title="@queued.FirstLine">@queued.FirstLine</span>
+    <div class="composer-shell">
+        <div class="composer__prompt">
+            @if (_slashOpen && _suggestions.Count > 0)
+            {
+                <div class="composer-slash" role="listbox" aria-label="Slash commands">
+                    @for (var i = 0; i < _suggestions.Count; i++)
+                    {
+                        var suggestion = _suggestions[i];
+                        var index = i;
                         <button type="button"
-                                class="composer-queue__remove"
-                                title="Remove from queue"
-                                aria-label="Remove queued prompt"
+                                class="composer-slash__item @(index == _highlight ? "is-active" : null)"
+                                role="option"
+                                aria-selected="@(index == _highlight)"
                                 @onmousedown:preventDefault="true"
-                                @onclick="() => Host.RemoveQueuedPrompt(queued.Id)">
-                            ×
+                                @onclick="() => ApplySuggestionAsync(suggestion)">
+                            <span class="composer-slash__token">@suggestion.Token</span>
+                            <span class="composer-slash__desc">@suggestion.Label</span>
                         </button>
-                    </div>
-                }
+                    }
+                </div>
+            }
+            else if (Host.QueuedPrompts.Count > 0)
+            {
+                <div class="composer-queue" role="list" aria-label="Queued prompts">
+                    @foreach (var item in Host.QueuedPrompts)
+                    {
+                        var queued = item;
+                        <div class="composer-queue__item" role="listitem">
+                            <span class="composer-queue__text" title="@queued.FirstLine">@queued.FirstLine</span>
+                            <button type="button"
+                                    class="composer-queue__remove"
+                                    title="Remove from queue"
+                                    aria-label="Remove queued prompt"
+                                    @onmousedown:preventDefault="true"
+                                    @onclick="() => Host.RemoveQueuedPrompt(queued.Id)">
+                                ×
+                            </button>
+                        </div>
+                    }
+                </div>
+            }
+            @if (Host.PendingSkillNames.Count > 0)
+            {
+                <div class="composer-context" aria-label="Pending skills">
+                    @foreach (var skillName in Host.PendingSkillNames)
+                    {
+                        var name = skillName;
+                        var display = ResolveSkillDisplay(name);
+                        <span class="composer-context__chip" title="@name">
+                            <span class="composer-context__label">Skill · @display</span>
+                            <button type="button"
+                                    class="composer-context__remove"
+                                    title="Remove pending skill"
+                                    aria-label="@($"Remove pending skill {display}")"
+                                    @onmousedown:preventDefault="true"
+                                    @onclick="() => Host.RemovePendingSkill(name)">
+                                ×
+                            </button>
+                        </span>
+                    }
+                </div>
+            }
+            <textarea @ref="_textarea"
+                      @bind="_text"
+                      @bind:event="oninput"
+                      @bind:after="OnTextChanged"
+                      @onkeydown="OnKeyDown"
+                      placeholder="Prompt the agent…"
+                      disabled="@Disabled"
+                      data-slash-open="@(_slashOpen ? "1" : null)"></textarea>
+        </div>
+        <div class="composer__footer">
+            <div class="composer__toolbar">
+                <ModelSlugPicker SelectedSlugId="SelectedSlugId"
+                                 SelectedSlugIdChanged="SelectedSlugIdChanged" />
+                <label class="composer-effort" title="Session reasoning_effort (None = omit)">
+                    <span class="composer-effort__label">Effort</span>
+                    <select @key="SelectedSlugId"
+                            class="composer-effort__input composer-effort__select"
+                            value="@(_effortDraft)"
+                            disabled="@Disabled"
+                            @onchange="OnEffortSelectedAsync">
+                        <option value="">None</option>
+                        @foreach (var mode in EffortOptions)
+                        {
+                            <option value="@mode">@mode</option>
+                        }
+                    </select>
+                </label>
+                <AgentModePicker SelectedMode="@SelectedAgentMode"
+                                 SelectedModeChanged="SelectedAgentModeChanged" />
+                <span class="composer-chip composer-chip--branch @(string.IsNullOrEmpty(GitBranch) ? "is-muted" : null)"
+                      title="@(GitBranch ?? "No git repo")">
+                    @(string.IsNullOrEmpty(GitBranch) ? "No git repo" : GitBranch)
+                </span>
             </div>
-        }
-        <textarea @ref="_textarea"
-                  @bind="_text"
-                  @bind:event="oninput"
-                  @bind:after="OnTextChanged"
-                  @onkeydown="OnKeyDown"
-                  placeholder="Prompt the agent…"
-                  disabled="@Disabled"
-                  data-slash-open="@(_slashOpen ? "1" : null)"></textarea>
+            <button type="button"
+                    class="btn btn-primary composer__send"
+                    disabled="@(Disabled || string.IsNullOrWhiteSpace(_text))"
+                    @onclick="SubmitAsync">
+                Send
+            </button>
+        </div>
     </div>
-    <div class="composer__toolbar">
-        <ModelSlugPicker SelectedSlugId="SelectedSlugId"
-                         SelectedSlugIdChanged="SelectedSlugIdChanged" />
-        <label class="composer-effort" title="Session reasoning_effort (None = omit)">
-            <span class="composer-effort__label">Effort</span>
-            <select @key="SelectedSlugId"
-                    class="composer-effort__input composer-effort__select"
-                    value="@(_effortDraft)"
-                    disabled="@Disabled"
-                    @onchange="OnEffortSelectedAsync">
-                <option value="">None</option>
-                @foreach (var mode in EffortOptions)
-                {
-                    <option value="@mode">@mode</option>
-                }
-            </select>
-        </label>
-        <AgentModePicker SelectedMode="@SelectedAgentMode"
-                         SelectedModeChanged="SelectedAgentModeChanged" />
-        <span class="composer-chip composer-chip--branch @(string.IsNullOrEmpty(GitBranch) ? "is-muted" : null)"
-              title="@(GitBranch ?? "No git repo")">
-            @(string.IsNullOrEmpty(GitBranch) ? "No git repo" : GitBranch)
-        </span>
-    </div>
-    <div class="composer__actions">
+    <div class="composer__hint">
         <span class="list-item__meta">Ctrl+Enter to send · / for commands</span>
-        <button type="button" class="btn btn-primary" disabled="@(Disabled || string.IsNullOrWhiteSpace(_text))" @onclick="SubmitAsync">
-            Send
-        </button>
     </div>
 </div>
 
@@ -95,6 +124,7 @@
     private ElementReference _textarea;
     private bool _textareaBound;
     private readonly List<ComposerSlashCommands.ModelOption> _models = [];
+    private readonly List<ComposerSlashCommands.SkillOption> _skills = [];
     private IReadOnlyList<ComposerSlashCommands.Suggestion> _suggestions = [];
     private bool _slashOpen;
     private int _highlight;
@@ -138,6 +168,8 @@
         }
     }
 
+    protected override void OnInitialized() => Host.Changed += OnHostChanged;
+
     protected override void OnParametersSet()
     {
         _effortDraft = ReasoningEffort ?? "";
@@ -154,7 +186,11 @@
         await ReasoningEffortChanged.InvokeAsync(next);
     }
 
-    protected override async Task OnInitializedAsync() => await RefreshModelsAsync();
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshModelsAsync();
+        await RefreshSkillsAsync();
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -173,6 +209,12 @@
         {
         }
     }
+
+    private void OnHostChanged() => _ = InvokeAsync(async () =>
+    {
+        await RefreshSkillsAsync();
+        StateHasChanged();
+    });
 
     private async Task RefreshModelsAsync()
     {
@@ -200,6 +242,31 @@
         }
     }
 
+    private async Task RefreshSkillsAsync()
+    {
+        _skills.Clear();
+        var catalog = await Host.ListSkillCatalogAsync();
+        foreach (var entry in catalog)
+            _skills.Add(ComposerSlashCommands.ToSkillOption(entry));
+    }
+
+    private string ResolveSkillDisplay(string skillName)
+    {
+        foreach (var skill in _skills)
+        {
+            if (string.Equals(skill.Name, skillName, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.IsNullOrWhiteSpace(skill.DisplayName))
+                    return skill.DisplayName;
+                if (!string.IsNullOrWhiteSpace(skill.Label))
+                    return skill.Label;
+                break;
+            }
+        }
+
+        return skillName;
+    }
+
     private void OnTextChanged()
     {
         RefreshSlashState();
@@ -215,7 +282,7 @@
             return;
         }
 
-        _suggestions = ComposerSlashCommands.Filter(token, _models);
+        _suggestions = ComposerSlashCommands.Filter(token, _models, _skills);
         _slashOpen = _suggestions.Count > 0;
         _highlight = 0;
     }
@@ -282,6 +349,9 @@
             case ComposerSlashCommands.Kind.Model when suggestion.ModelSlugId is Guid id:
                 await SelectedSlugIdChanged.InvokeAsync(id);
                 break;
+            case ComposerSlashCommands.Kind.Skill when suggestion.SkillName is not null:
+                Host.QueuePendingSkill(suggestion.SkillName);
+                break;
         }
     }
 
@@ -292,7 +362,7 @@
 
         var raw = _text;
 
-        if (ComposerSlashCommands.TryResolve(raw, _models, out var parsed) && parsed is not null)
+        if (ComposerSlashCommands.TryResolve(raw, _models, out var parsed, _skills) && parsed is not null)
         {
             await ApplyKindAsync(parsed.Suggestion);
             raw = parsed.Remainder;
@@ -303,10 +373,12 @@
         _suggestions = [];
         _highlight = 0;
 
-        // Empty after strip: apply-only (mode/model/new); composer never sends blank prompts.
+        // Empty after strip: apply-only (mode/model/new/skill); composer never sends blank prompts.
         if (string.IsNullOrWhiteSpace(raw))
             return;
 
         await OnSubmit.InvokeAsync(raw.Trim());
     }
+
+    public void Dispose() => Host.Changed -= OnHostChanged;
 }

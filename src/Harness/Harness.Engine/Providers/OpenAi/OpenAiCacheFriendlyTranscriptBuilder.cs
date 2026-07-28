@@ -279,6 +279,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 });
             }
 
+            AppendSkillUserMessages(messages, turn);
+
             if (incompleteCurrent)
                 continue;
 
@@ -356,6 +358,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                     ["content"] = FormatTurnUserContent(session, turn, i, incompleteCurrent),
                 });
             }
+
+            AppendSkillUserMessages(input, turn);
 
             if (incompleteCurrent)
                 continue;
@@ -737,6 +741,22 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Emits one user message per skill after the turn instruction so the model sees full markdown
+    /// without dumping it into the visible prompt UI.
+    /// </summary>
+    private static void AppendSkillUserMessages(JsonArray messages, DysonAgentTurn turn)
+    {
+        foreach (var skill in turn.SkillsUsed)
+        {
+            messages.Add(new JsonObject
+            {
+                ["role"] = "user",
+                ["content"] = $"[Skill: {skill.DisplayName}]\n\n{skill.MarkdownContent}",
+            });
+        }
     }
 
     private static string FormatAssistantReply(DysonAgentTurn turn)

@@ -19,6 +19,10 @@ public sealed class DysonTurnEntity
     /// Ordered Thought + InterimText JSON for thinking history (UI + DB only; omitted from transcripts).
     /// </summary>
     public string? ReasoningLogJson { get; set; }
+    /// <summary>
+    /// Skills attached this turn (JSON). Injected into provider transcripts on restore.
+    /// </summary>
+    public string? SkillsUsedJson { get; set; }
     public string ToolStateJson { get; set; } = "{}";
     public bool ToolHistoryOptimized { get; set; }
     public string? CompactToolHistory { get; set; }

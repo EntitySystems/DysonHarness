@@ -2,7 +2,7 @@
 
 Session MCP tool that interprets a strict nested JSON program (`Entry` / `FunctionCall` / `Loop`) and dispatches nested calls only to **existing catalog tools**. Branching uses nested `DysonToolCallResult.IsError` only.
 
-**Source of truth:** C# schema types in [`DysonJsonDynamicToolchainSchema.cs`](../../src/Harness/Harness.Engine/Mcp/DysonJsonDynamicToolchainSchema.cs). Agent-facing guide: [`Resources/Skills/JDSL.md`](../../src/Harness/Harness.Engine/Resources/Skills/JDSL.md) (markdown file only — no skill loader yet).
+**Source of truth:** C# schema types in [`DysonJsonDynamicToolchainSchema.cs`](../../src/Harness/Harness.Engine/Mcp/DysonJsonDynamicToolchainSchema.cs). Agent-facing guide: [`Resources/Skills/JDSL.md`](../../src/Harness/Harness.Engine/Resources/Skills/JDSL.md) — load with `LoadSkill(name: "JDSL", loadIndexOnly: true)` or composer `/skill-jdsl`.
 
 ## Catalog
 

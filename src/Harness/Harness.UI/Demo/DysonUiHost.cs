@@ -42,6 +42,10 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly object _subagentEventUiGate = new();
     private DysonAskUiState? _pendingAskUi;
     private DysonFileViewerState? _fileViewer;
+    private DysonSkillViewerState? _skillViewer;
+    private readonly List<string> _pendingSkillNames = [];
+    private readonly object _pendingSkillsGate = new();
+    private Guid? _composerWorkDirectoryId;
 
     private DemoDysonEngine? _engine;
     private DysonAgentSession? _session;
@@ -158,6 +162,88 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     /// <summary>Open file viewer overlay (null when closed).</summary>
     public DysonFileViewerState? FileViewer => _fileViewer;
+
+    /// <summary>Open skill markdown viewer overlay (null when closed).</summary>
+    public DysonSkillViewerState? SkillViewer => _skillViewer;
+
+    /// <summary>Work directory preferred for skill catalog when no session is focused.</summary>
+    public void SetComposerWorkDirectoryId(Guid? workDirectoryId)
+    {
+        if (_composerWorkDirectoryId == workDirectoryId)
+            return;
+        _composerWorkDirectoryId = workDirectoryId;
+        Notify();
+    }
+
+    /// <summary>Skill names queued to attach on the next non-empty <see cref="PromptAsync"/>.</summary>
+    public IReadOnlyList<string> PendingSkillNames
+    {
+        get
+        {
+            lock (_pendingSkillsGate)
+                return [.. _pendingSkillNames];
+        }
+    }
+
+    /// <summary>Queue a skill name to attach on the next non-empty <see cref="PromptAsync"/>.</summary>
+    public void QueuePendingSkill(string skillName)
+    {
+        if (string.IsNullOrWhiteSpace(skillName))
+            return;
+
+        lock (_pendingSkillsGate)
+            _pendingSkillNames.Add(skillName.Trim());
+        Notify();
+    }
+
+    /// <summary>Remove the first queued pending skill matching <paramref name="name"/>.</summary>
+    public void RemovePendingSkill(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return;
+
+        var trimmed = name.Trim();
+        lock (_pendingSkillsGate)
+        {
+            var index = _pendingSkillNames.FindIndex(n =>
+                string.Equals(n, trimmed, StringComparison.OrdinalIgnoreCase));
+            if (index < 0)
+                return;
+            _pendingSkillNames.RemoveAt(index);
+        }
+
+        Notify();
+    }
+
+    /// <summary>Clear all skills queued for the next prompt.</summary>
+    public void ClearPendingSkills()
+    {
+        lock (_pendingSkillsGate)
+        {
+            if (_pendingSkillNames.Count == 0)
+                return;
+            _pendingSkillNames.Clear();
+        }
+
+        Notify();
+    }
+
+    /// <summary>Catalog for <c>/skill-</c> searcher (included + <c>.dyson/skills</c> when a workdir is available).</summary>
+    public async Task<IReadOnlyList<DysonSkillCatalogEntry>> ListSkillCatalogAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var root = await TryResolveCatalogWorkRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root is null)
+            return DysonSkillLoader.ListCatalog(fs: null);
+
+        var fsResult = await DysonWorkspaceFileSystems
+            .CreateLocalAsync(root, cancellationToken)
+            .ConfigureAwait(false);
+        if (fsResult.IsError)
+            return DysonSkillLoader.ListCatalog(fs: null);
+
+        return DysonSkillLoader.ListCatalog(fsResult.Value);
+    }
 
     /// <summary>Work directory of the focused session, if any.</summary>
     public Guid? ActiveWorkDirectoryId => _session switch
@@ -436,6 +522,26 @@ public sealed class DysonUiHost : IAsyncDisposable
         Notify();
     }
 
+    public void OpenSkillViewer(DysonSkillUsedEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        _skillViewer = new DysonSkillViewerState
+        {
+            DisplayName = entry.DisplayName,
+            ResolvedPath = entry.ResolvedPath,
+            Markdown = entry.MarkdownContent,
+        };
+        Notify();
+    }
+
+    public void CloseSkillViewer()
+    {
+        if (_skillViewer is null)
+            return;
+        _skillViewer = null;
+        Notify();
+    }
+
     private async Task<string?> TryResolveActiveWorkRootAsync(CancellationToken cancellationToken)
     {
         var workDirectoryId = ActiveWorkDirectoryId;
@@ -443,6 +549,19 @@ public sealed class DysonUiHost : IAsyncDisposable
             return null;
 
         var wd = await _workDirectories.GetAsync(workDirectoryId.Value, cancellationToken);
+        return wd.IsError ? null : wd.Value.AbsolutePath;
+    }
+
+    private async Task<string?> TryResolveCatalogWorkRootAsync(CancellationToken cancellationToken)
+    {
+        var root = await TryResolveActiveWorkRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root is not null)
+            return root;
+
+        if (_composerWorkDirectoryId is not Guid id)
+            return null;
+
+        var wd = await _workDirectories.GetAsync(id, cancellationToken).ConfigureAwait(false);
         return wd.IsError ? null : wd.Value.AbsolutePath;
     }
 
@@ -1318,22 +1437,71 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return modeResult;
         }
 
+        var turnBuild = await BuildUserTurnWithPendingSkillsAsync(prompt.Trim(), cancellationToken)
+            .ConfigureAwait(false);
+        if (turnBuild.IsError)
+        {
+            LastError = turnBuild.Error;
+            Notify();
+            return new VoidResult<string>(turnBuild.Error);
+        }
+
+        var turn = turnBuild.Value;
         var sessionId = session.PersistenceId;
         if (_busySessions.ContainsKey(sessionId))
         {
-            EnqueuePrompt(sessionId, DysonAgentSession.CreateNormalTurn(prompt));
+            EnqueuePrompt(sessionId, turn);
             LastError = null;
             Notify();
             return VoidResult<string>.Success;
         }
 
-        var result = await PromptOnSessionAsync(session, prompt, cancellationToken)
+        var result = await PromptHarnessTurnOnSessionAsync(session, turn, cancellationToken)
             .ConfigureAwait(false);
         if (result.IsError)
             LastError = result.Error;
 
         Notify();
         return result;
+    }
+
+    private async Task<Result<DysonAgentTurn, string>> BuildUserTurnWithPendingSkillsAsync(
+        string prompt,
+        CancellationToken cancellationToken)
+    {
+        List<string> pending;
+        lock (_pendingSkillsGate)
+        {
+            pending = [.. _pendingSkillNames];
+            _pendingSkillNames.Clear();
+        }
+
+        var turn = DysonAgentSession.CreateNormalTurn(prompt);
+        if (pending.Count == 0)
+            return Result<DysonAgentTurn, string>.AsValue(turn);
+
+        IDysonWorkspaceFileSystem? fs = null;
+        var root = await TryResolveActiveWorkRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root is not null)
+        {
+            var fsResult = await DysonWorkspaceFileSystems
+                .CreateLocalAsync(root, cancellationToken)
+                .ConfigureAwait(false);
+            if (fsResult.IsError)
+                return Result<DysonAgentTurn, string>.AsError(fsResult.Error);
+            fs = fsResult.Value;
+        }
+
+        foreach (var name in pending)
+        {
+            // Slash picks always load index-only; agent can LoadSkill(false) for full dir later.
+            var loaded = DysonSkillLoader.ResolveAndLoad(name, loadIndexOnly: true, fs);
+            if (loaded.IsError)
+                return Result<DysonAgentTurn, string>.AsError(loaded.Error);
+            turn.AttachLoadedSkill(loaded.Value);
+        }
+
+        return Result<DysonAgentTurn, string>.AsValue(turn);
     }
 
     private async Task<VoidResult<string>> LoadAndFocusSessionAsync(
@@ -1730,6 +1898,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _session = null;
         _engine = null;
         CloseFileViewer();
+        CloseSkillViewer();
     }
 
     private Guid? ResolveStoredParentId(DysonAgentSession session)
@@ -1872,6 +2041,9 @@ public sealed class DysonUiHost : IAsyncDisposable
             _subagentEventUi.Clear();
         _pendingAskUi = null;
         _fileViewer = null;
+        _skillViewer = null;
+        lock (_pendingSkillsGate)
+            _pendingSkillNames.Clear();
 
         foreach (var cts in _promptCtsBySession.Values)
         {

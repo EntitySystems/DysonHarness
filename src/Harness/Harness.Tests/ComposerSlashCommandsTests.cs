@@ -63,5 +63,45 @@ public class ComposerSlashCommandsTests
             throw new InvalidOperationException("Filter(/gpt-4o) should return both duplicate-alias models.");
         if (duplicateResults[0].Label != "GPT-4o · Alpha Provider")
             throw new InvalidOperationException("Filter should order duplicate aliases by provider name.");
+
+        var skills = new List<ComposerSlashCommands.SkillOption>
+        {
+            ComposerSlashCommands.ToSkillOption(
+                new DysonSkillCatalogEntry("JDSL", "JDSL", DysonSkillSource.Included)),
+            ComposerSlashCommands.ToSkillOption(
+                new DysonSkillCatalogEntry("angular-skill", "angular-skill", DysonSkillSource.DysonSkills)),
+        };
+
+        var skillRoot = ComposerSlashCommands.Filter("/skill", models, skills);
+        if (skillRoot.Count == 0
+            || skillRoot.Any(s => s.Kind != ComposerSlashCommands.Kind.Skill)
+            || skillRoot.Any(s => s.Kind == ComposerSlashCommands.Kind.Model))
+        {
+            throw new InvalidOperationException("Filter(/skill) must return skills only, not models.");
+        }
+
+        var jdsl = ComposerSlashCommands.Filter("/skill-jdsl", models, skills);
+        if (jdsl.Count != 1
+            || jdsl[0].Kind != ComposerSlashCommands.Kind.Skill
+            || jdsl[0].SkillName != "JDSL"
+            || jdsl[0].Token != "/skill-jdsl")
+        {
+            throw new InvalidOperationException("Filter(/skill-jdsl) should resolve JDSL skill.");
+        }
+
+        if (!ComposerSlashCommands.TryResolve("/skill-jdsl do X", models, out var skillParsed, skills)
+            || skillParsed!.Suggestion.Kind != ComposerSlashCommands.Kind.Skill
+            || skillParsed.Suggestion.SkillName != "JDSL"
+            || skillParsed.Remainder != "do X")
+        {
+            throw new InvalidOperationException("TryResolve(/skill-jdsl do X) failed.");
+        }
+
+        if (!ComposerSlashCommands.TryResolve("/skill-jdsl", models, out var skillOnly, skills)
+            || skillOnly!.Suggestion.Kind != ComposerSlashCommands.Kind.Skill
+            || skillOnly.Remainder != "")
+        {
+            throw new InvalidOperationException("TryResolve(/skill-jdsl) apply-only remainder failed.");
+        }
     }
 }

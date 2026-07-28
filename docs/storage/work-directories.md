@@ -59,6 +59,8 @@ Cloud or multi-tenant hosts **must implement** their own `IDysonWorkspaceFileSys
 
 Plan mode publishes markdown under `{workRoot}/.dyson/plans/{slug}-{hash}.md` via `DysonFileManager` (constructed from an initialized workspace FS) / `SubmitPlan`. Paths stay sandboxed under the work root. See [engine README](../engine/README.md) (Plan artifacts).
 
+Agent skills may live under `{workRoot}/.dyson/skills/{name}/` (entry `SKILL.md` or first `*.md`). `LoadSkill` / composer `/skill-` resolve **included** embedded `Resources/Skills` first, then `.dyson/skills`, then a literal work-relative path. Repo-root Cursor `skills/` packaging is separate and not auto-cataloged unless also present under those resolve roots.
+
 ## UI
 
 Sidebar `WorkDirectorySwitcher` lists registered dirs, persists active id in `localStorage` (`dyson-workdir`), filters `SessionList` by that id. See [docs/ui/README.md](../ui/README.md).

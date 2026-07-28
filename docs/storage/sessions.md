@@ -37,6 +37,7 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `AssistantText` | Agent body after title |
 | `ReasoningText` | Denormalized join of Thought segments only (UI / reload / search; not replayed into transcripts) |
 | `ReasoningLogJson` | Ordered Thought + InterimText JSON for thinking history (UI + DB only; omitted from transcripts). Empty/null with legacy `ReasoningText` → restore synthesizes one Thought |
+| `SkillsUsedJson` | Skills attached this turn (slash `/skill-` or `LoadSkill`); JSON array of `DysonSkillUsedEntry`. Injected into provider transcripts as separate `[Skill: …]` user messages |
 | `ToolStateJson` | Full snapshot of tool calls + results (restore fidelity) |
 | `ToolHistoryOptimized` | bool |
 | `CompactToolHistory` | string? |
