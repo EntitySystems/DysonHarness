@@ -8,6 +8,66 @@ Full engine spec: [`docs/engine/json-dynamic-toolchain.md`](../../../../../docs/
 
 Call `JsonDynamicStructuredLanguageToolchain` with a JSON **program** that chains existing session catalog tools (`WebFetch`, `CompleteTask`, `WaitForSeconds`, file tools, …). Success/failure branching uses each nested result’s **`IsError`** only (`OnSuccess` / `OnFailure`), plus optional `ContinueWith` and `Loop`.
 
+## Use cases
+
+Prefer JDSL when several catalog calls should run in **one** turn with branching or bounded polling. Prefer ordinary sequential tool calls when you need model judgment between steps.
+
+**Loop note:** a loop exits when `Condition` returns `IsError` (normal exit, not program failure). For “wait until ready,” use a condition tool that **fails while not ready** (e.g. `BrowserWaitForSelector`, `Grep` with no match if that yields error, `ReadFile` of a sentinel), often paired with `WaitForSeconds` in `Action` — not an infinite `WaitForSeconds`-only condition.
+
+- **Try until one succeeds** — nested `ShellExecute` (or similar) with `OnFailure` → next attempt; optional final `OnFailure` → `CompleteTask` / report.
+
+```json
+{
+  "FunctionCall": {
+    "Function": "MCP:ShellExecute",
+    "Arguments": { "command": "cmd-a" },
+    "OnFailure": {
+      "FunctionCall": {
+        "Function": "MCP:ShellExecute",
+        "Arguments": { "command": "cmd-b" },
+        "OnFailure": {
+          "FunctionCall": {
+            "Function": "MCP:CompleteTask",
+            "Arguments": { "summary": "fromResult:$0" }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+- **Poll until ready** — `Loop` whose `Condition` fails until ready; `Action` does `WaitForSeconds` (and/or a light probe); `MaxIterations` as the timeout budget.
+
+```json
+{
+  "Loop": {
+    "Condition": {
+      "FunctionCall": {
+        "Function": "MCP:BrowserWaitForSelector",
+        "Arguments": { "selector": "#ready", "timeoutMs": 500 }
+      }
+    },
+    "Action": {
+      "FunctionCall": {
+        "Function": "MCP:WaitForSeconds",
+        "Arguments": { "seconds": 1 }
+      }
+    },
+    "MaxIterations": 10
+  }
+}
+```
+
+- **Local then online** — `Grep` / `ReadFile` / `ListDirectory` → `OnFailure` → `FreeSearch` / `WebFetch` / `SearchWithSynthesis`.
+- **Fallback file paths** — try `ReadFile` on primary path → `OnFailure` alternate path(s) (config, README, lockfile variants).
+- **Create-if-missing then write** — `ReadFile` / `ListDirectory` fails → `CreateDirectory` / `CreateFile` → `ContinueWith` `WriteFile`.
+- **Navigate, wait, extract (browser)** — `BrowserNavigate` → `OnSuccess` `BrowserWaitForSelector` → `ContinueWith` `BrowserGetHtml` / `BrowserTakeScreenshot`.
+- **Long-running shell: start then poll** — `StartLongRunningShell` → `Loop` with `ReadLongRunningShellTail` / readiness probe as condition, backoff via `WaitForSeconds` in `Action`; exit into `AbortLongRunningShell` or a success path.
+- **Research with source fallback** — `FreeSearch` → `OnFailure` `FreeSearchAdvanced` → `OnFailure` `WebFetch` a known docs URL; forward `fromResult:$0` into `CompleteTask`.
+- **Build / test then branch** — `ShellExecute` build or test → `OnSuccess` mark todo / `CompleteTask`; `OnFailure` `Grep` logs or `ContinueWork`-style follow-up (catalog tools only).
+- **Subagent fire-and-collect** — `StartSubagent` → `ContinueWith` `WaitForSubagent` → `OnSuccess` `InspectSubagentLog` / `SubmitSubagentReport` handling via refs where useful.
+
 ## Strict shape (nested only)
 
 PascalCase wire. Flat `"FunctionCall": "MCP:…"` strings are **rejected**.
