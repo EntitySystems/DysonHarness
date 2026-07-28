@@ -16,10 +16,6 @@
 - Drop noisy turns from model context when conversations get heavy
 - Sessions persist and resume; works with OpenAI-compatible providers
 
-## Notable mentions
-
-- **JDSL** (`JsonDynamicStructuredLanguageToolchain`) — one MCP tool that runs nested JSON programs (`Entry` / `FunctionCall` / `OnSuccess` / `OnFailure` / `ContinueWith` / `Loop`) against existing session catalog tools, with `IsError` branching, `fromArg`/`fromResult` refs, and safety caps (nesting depth, max nested invocations, loop `MaxIterations`). The UI flow modal shows executed (green) vs ignored (grey) paths. Spec: [json-dynamic-toolchain](docs/engine/json-dynamic-toolchain.md) · Agent guide: [JDSL.md](src/Harness/Harness.Engine/Resources/Skills/JDSL.md)
-
 ## Tested models
 
 - GLM 5.2
