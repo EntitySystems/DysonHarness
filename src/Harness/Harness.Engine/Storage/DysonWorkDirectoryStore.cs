@@ -2,17 +2,17 @@ using Microsoft.EntityFrameworkCore;
 
 namespace DysonHarness;
 
-public sealed class DysonWorkDirectoryStore(DysonDbContext db)
+public sealed class DysonWorkDirectoryStore(DysonDbAccessor accessor)
 {
-    private readonly DysonDbContext _db = db ?? throw new ArgumentNullException(nameof(db));
+    private readonly DysonDbAccessor _accessor = accessor ?? throw new ArgumentNullException(nameof(accessor));
 
-    public async Task<Result<Guid, string>> CreateAsync(
+    public Task<Result<Guid, string>> CreateAsync(
         string absolutePath,
         string? name = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(absolutePath))
-            return Result<Guid, string>.AsError("Path is required.");
+            return Task.FromResult(Result<Guid, string>.AsError("Path is required."));
 
         string fullPath;
         try
@@ -21,11 +21,11 @@ public sealed class DysonWorkDirectoryStore(DysonDbContext db)
         }
         catch (Exception ex)
         {
-            return Result<Guid, string>.AsError($"Invalid path: {ex.Message}");
+            return Task.FromResult(Result<Guid, string>.AsError($"Invalid path: {ex.Message}"));
         }
 
         if (!Directory.Exists(fullPath))
-            return Result<Guid, string>.AsError("Directory does not exist.");
+            return Task.FromResult(Result<Guid, string>.AsError("Directory does not exist."));
 
         var displayName = string.IsNullOrWhiteSpace(name)
             ? new DirectoryInfo(fullPath).Name
@@ -34,9 +34,43 @@ public sealed class DysonWorkDirectoryStore(DysonDbContext db)
         if (string.IsNullOrWhiteSpace(displayName))
             displayName = fullPath;
 
+        return _accessor.RunAsync(
+            (db, ct) => CreateCoreAsync(db, fullPath, displayName, ct),
+            cancellationToken);
+    }
+
+    public Task<Result<DysonWorkDirectoryEntity, string>> GetAsync(
+        Guid id,
+        CancellationToken cancellationToken = default)
+        => _accessor.RunAsync((db, ct) => GetCoreAsync(db, id, ct), cancellationToken);
+
+    public Task<Result<IReadOnlyList<DysonWorkDirectoryEntity>, string>> ListAsync(
+        CancellationToken cancellationToken = default)
+        => _accessor.RunAsync(ListCoreAsync, cancellationToken);
+
+    public Task<VoidResult<string>> TouchOpenedAsync(
+        Guid id,
+        CancellationToken cancellationToken = default)
+        => _accessor.RunAsync((db, ct) => TouchOpenedCoreAsync(db, id, ct), cancellationToken);
+
+    /// <summary>
+    /// Removes the work directory registration. Blocked when any sessions still reference it.
+    /// Does not delete the folder on disk.
+    /// </summary>
+    public Task<VoidResult<string>> DeleteAsync(
+        Guid id,
+        CancellationToken cancellationToken = default)
+        => _accessor.RunAsync((db, ct) => DeleteCoreAsync(db, id, ct), cancellationToken);
+
+    private static async Task<Result<Guid, string>> CreateCoreAsync(
+        DysonDbContext db,
+        string fullPath,
+        string displayName,
+        CancellationToken cancellationToken)
+    {
         try
         {
-            var existing = await _db.WorkDirectories
+            var existing = await db.WorkDirectories
                 .AsNoTracking()
                 .FirstOrDefaultAsync(w => w.AbsolutePath == fullPath, cancellationToken)
                 .ConfigureAwait(false);
@@ -54,23 +88,24 @@ public sealed class DysonWorkDirectoryStore(DysonDbContext db)
                 LastOpenedUtc = now,
             };
 
-            _db.WorkDirectories.Add(entity);
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            db.WorkDirectories.Add(entity);
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return Result<Guid, string>.AsValue(entity.Id);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return Result<Guid, string>.AsError($"Failed to create work directory: {ex.Message}");
         }
     }
 
-    public async Task<Result<DysonWorkDirectoryEntity, string>> GetAsync(
+    private static async Task<Result<DysonWorkDirectoryEntity, string>> GetCoreAsync(
+        DysonDbContext db,
         Guid id,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
         try
         {
-            var entity = await _db.WorkDirectories
+            var entity = await db.WorkDirectories
                 .AsNoTracking()
                 .FirstOrDefaultAsync(w => w.Id == id, cancellationToken)
                 .ConfigureAwait(false);
@@ -79,19 +114,20 @@ public sealed class DysonWorkDirectoryStore(DysonDbContext db)
                 ? Result<DysonWorkDirectoryEntity, string>.AsError($"Work directory '{id}' not found.")
                 : Result<DysonWorkDirectoryEntity, string>.AsValue(entity);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return Result<DysonWorkDirectoryEntity, string>.AsError(
                 $"Failed to load work directory: {ex.Message}");
         }
     }
 
-    public async Task<Result<IReadOnlyList<DysonWorkDirectoryEntity>, string>> ListAsync(
-        CancellationToken cancellationToken = default)
+    private static async Task<Result<IReadOnlyList<DysonWorkDirectoryEntity>, string>> ListCoreAsync(
+        DysonDbContext db,
+        CancellationToken cancellationToken)
     {
         try
         {
-            var list = await _db.WorkDirectories
+            var list = await db.WorkDirectories
                 .AsNoTracking()
                 .OrderByDescending(w => w.LastOpenedUtc)
                 .ToListAsync(cancellationToken)
@@ -99,20 +135,21 @@ public sealed class DysonWorkDirectoryStore(DysonDbContext db)
 
             return Result<IReadOnlyList<DysonWorkDirectoryEntity>, string>.AsValue(list);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return Result<IReadOnlyList<DysonWorkDirectoryEntity>, string>.AsError(
                 $"Failed to list work directories: {ex.Message}");
         }
     }
 
-    public async Task<VoidResult<string>> TouchOpenedAsync(
+    private static async Task<VoidResult<string>> TouchOpenedCoreAsync(
+        DysonDbContext db,
         Guid id,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
         try
         {
-            var entity = await _db.WorkDirectories
+            var entity = await db.WorkDirectories
                 .FirstOrDefaultAsync(w => w.Id == id, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -120,33 +157,30 @@ public sealed class DysonWorkDirectoryStore(DysonDbContext db)
                 return new VoidResult<string>($"Work directory '{id}' not found.");
 
             entity.LastOpenedUtc = DateTime.UtcNow;
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return new VoidResult<string>($"Failed to update work directory: {ex.Message}");
         }
     }
 
-    /// <summary>
-    /// Removes the work directory registration. Blocked when any sessions still reference it.
-    /// Does not delete the folder on disk.
-    /// </summary>
-    public async Task<VoidResult<string>> DeleteAsync(
+    private static async Task<VoidResult<string>> DeleteCoreAsync(
+        DysonDbContext db,
         Guid id,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
         try
         {
-            var entity = await _db.WorkDirectories
+            var entity = await db.WorkDirectories
                 .FirstOrDefaultAsync(w => w.Id == id, cancellationToken)
                 .ConfigureAwait(false);
 
             if (entity is null)
                 return new VoidResult<string>($"Work directory '{id}' not found.");
 
-            var sessionCount = await _db.Sessions
+            var sessionCount = await db.Sessions
                 .CountAsync(s => s.WorkDirectoryId == id, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -156,11 +190,11 @@ public sealed class DysonWorkDirectoryStore(DysonDbContext db)
                     $"Cannot remove work directory while {sessionCount} session(s) still reference it.");
             }
 
-            _db.WorkDirectories.Remove(entity);
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            db.WorkDirectories.Remove(entity);
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return new VoidResult<string>($"Failed to delete work directory: {ex.Message}");
         }

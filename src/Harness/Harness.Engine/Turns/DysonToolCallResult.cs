@@ -25,6 +25,13 @@ public sealed class DysonBinaryAttachment
     /// </summary>
     public string? FileId { get; set; }
 
+    /// <summary>
+    /// Optional HTML/DOM reference for browser snips.
+    /// TODO: future snip will resolve elements intersecting the selection; empty today.
+    /// Not sent on provider wire image parts.
+    /// </summary>
+    public string? HtmlRef { get; init; }
+
     public bool IsImage =>
         MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
 }

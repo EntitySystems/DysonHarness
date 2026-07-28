@@ -35,9 +35,13 @@ Single SQLite file holds providers, slugs, sessions, and app settings for that m
 ## Database
 
 - Packages: `Microsoft.EntityFrameworkCore.Sqlite`, `Microsoft.EntityFrameworkCore.Design` (private)
-- `DysonDbContext` → `UseSqlite` at `DysonAppPaths.GetDatabasePath(DysonBuildInfo.Current)`
-- `Database.Migrate()` on open; migrations under `Harness.Engine/Migrations/`
+- Connection: `DysonSqliteConfigurator` → `Data Source={path};Default Timeout=30`, plus `PRAGMA journal_mode=WAL` and `PRAGMA synchronous=NORMAL` on open
+- `DysonDbContext` via `IDbContextFactory` at `DysonAppPaths.GetDatabasePath(DysonBuildInfo.Current)`
+- Thread-safe entrypoint: singleton `DysonDbAccessor` (process-wide gate per DB path, fresh context per `RunAsync`)
+- Stores depend on the accessor (or a pass-down context with single-thread ownership) — never a shared scoped long-lived `DbContext`
+- `Database.Migrate()` **once** at startup; migrations under `Harness.Engine/Migrations/`
 - Entity timestamps are `DateTime` (UTC). Do not use `DateTimeOffset` on EF entities or in EF `OrderBy` queries (SQLite limitation).
+- `UpsertTurnAsync` retries EF concurrent-context / SQLITE_BUSY (5) / locked (6) before failing; other store ops rely on the accessor gate + busy `SaveChanges` retry
 
 ## App settings (`app_settings`)
 
@@ -123,7 +127,7 @@ User-starred slugs for the Composer model picker (persisted per app-data DB).
 
 ## `DysonModelStore`
 
-Thin CRUD over `DysonDbContext` using the Result pattern (`Result` / `VoidResult`):
+Thin CRUD over `DysonDbAccessor` / factory contexts using the Result pattern (`Result` / `VoidResult`):
 
 - **Providers:** list (include slugs), get, create, update (incl. `ApiKey` / `BaseUrl` / `OpenAiApiMode`; rejected when `ManagedSource` set), `UpsertManagedProviderAsync` (id-stable by source + merge slugs by name, preserving `Id`/`IsEnabled`/`DefaultReasoningEffort`), delete
 - **Slugs:** add under a provider (optional `defaultReasoningEffort` + `reasoningModes`; rejected when provider is managed), update (alias / slug / default effort / modes / is-default; rejected when managed), remove (rejected when managed), `SetSlugEnabledAsync` (managed only), `SetSlugDefaultReasoningEffortAsync` (managed only; blank → omit)

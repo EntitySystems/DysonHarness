@@ -40,7 +40,7 @@
     </header>
     @if (IsExpanded)
     {
-        @if (IsUserTurn && (!string.IsNullOrWhiteSpace(Turn.Instruction) || Turn.SkillsUsed.Count > 0))
+        @if (IsUserTurn && (!string.IsNullOrWhiteSpace(Turn.Instruction) || Turn.SkillsUsed.Count > 0 || Turn.UserImages.Count > 0))
         {
             <div class="turn-block__user">
                 <div class="turn-block__user-main">
@@ -57,6 +57,20 @@
                                         @onclick="() => Host.OpenSkillViewer(entry)">
                                     Used skill @entry.DisplayName
                                 </button>
+                            }
+                        </div>
+                    }
+                    @if (Turn.UserImages.Count > 0)
+                    {
+                        <div class="turn-block__images" aria-label="Attached images">
+                            @foreach (var image in Turn.UserImages)
+                            {
+                                var img = image;
+                                <figure class="turn-block__image" title="@img.FileName">
+                                    <img src="@($"data:{img.MimeType};base64,{img.Base64Data}")"
+                                         alt="@img.FileName" />
+                                    <figcaption class="turn-block__image-caption mono">@img.FileName</figcaption>
+                                </figure>
                             }
                         </div>
                     }

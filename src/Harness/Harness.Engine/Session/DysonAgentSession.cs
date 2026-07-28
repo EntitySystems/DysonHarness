@@ -1400,6 +1400,7 @@ public abstract class DysonAgentSession
             turn.RestoreReasoningLog(
                 DysonReasoningLogSerializer.DeserializeOrSynthesize(row.ReasoningLogJson, row.ReasoningText));
             turn.RestoreSkillsUsed(DysonSkillsUsedSerializer.Deserialize(row.SkillsUsedJson));
+            turn.RestoreUserImages(DysonUserImagesSerializer.Deserialize(row.UserImagesJson));
             DysonTurnToolStateSerializer.ApplyToTurn(turn, row.ToolStateJson);
             turn.FinalizeIncompleteTools(
                 "Tool call did not complete (cancelled or interrupted).");

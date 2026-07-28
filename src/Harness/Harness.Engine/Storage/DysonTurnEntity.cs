@@ -23,6 +23,11 @@ public sealed class DysonTurnEntity
     /// Skills attached this turn (JSON). Injected into provider transcripts on restore.
     /// </summary>
     public string? SkillsUsedJson { get; set; }
+    /// <summary>
+    /// User-attached images this turn (JSON of <see cref="DysonBinaryAttachment"/> fields).
+    /// Re-emitted in provider multimodal transcripts on restore.
+    /// </summary>
+    public string? UserImagesJson { get; set; }
     public string ToolStateJson { get; set; } = "{}";
     public bool ToolHistoryOptimized { get; set; }
     public string? CompactToolHistory { get; set; }

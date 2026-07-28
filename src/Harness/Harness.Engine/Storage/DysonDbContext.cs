@@ -31,7 +31,7 @@ public sealed class DysonDbContext : DbContext
 
         DysonAppPaths.EnsureRoot(DysonBuildInfo.Current);
         var path = DysonAppPaths.GetDatabasePath(DysonBuildInfo.Current);
-        optionsBuilder.UseSqlite($"Data Source={path}");
+        DysonSqliteConfigurator.Configure(optionsBuilder, path);
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

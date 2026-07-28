@@ -45,6 +45,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     private DysonSkillViewerState? _skillViewer;
     private readonly List<string> _pendingSkillNames = [];
     private readonly object _pendingSkillsGate = new();
+    private readonly List<PendingComposerImage> _pendingImages = [];
+    private readonly object _pendingImagesGate = new();
     private Guid? _composerWorkDirectoryId;
 
     private DemoDysonEngine? _engine;
@@ -81,10 +83,33 @@ public sealed class DysonUiHost : IAsyncDisposable
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _cliProxy = cliProxy ?? throw new ArgumentNullException(nameof(cliProxy));
         _browserControl = browserControl;
+        if (_browserControl is not null)
+            _browserControl.SnipCaptured += OnBrowserSnipCaptured;
         DysonLongRunningShellRegistry.Changed += OnLongRunningShellRegistryChanged;
     }
 
     private void OnLongRunningShellRegistryChanged() => Notify();
+
+    private void OnBrowserSnipCaptured(DysonBrowserSnipPayload payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        var created = DysonUserImageFactory.CreateFromBytes(payload.FileName, payload.ImageBytes);
+        if (created.IsError)
+        {
+            ReportError(created.Error);
+            return;
+        }
+
+        var compressed = created.Value;
+        QueuePendingImage(new DysonBinaryAttachment
+        {
+            FileName = compressed.FileName,
+            Extension = compressed.Extension,
+            MimeType = compressed.MimeType,
+            Base64Data = compressed.Base64Data,
+            HtmlRef = string.IsNullOrWhiteSpace(payload.HtmlRef) ? null : payload.HtmlRef.Trim(),
+        });
+    }
 
     public DemoDysonEngine? Engine => _engine;
     public DysonAgentSession? Session => _session;
@@ -116,6 +141,13 @@ public sealed class DysonUiHost : IAsyncDisposable
     public void ClearLastError()
     {
         LastError = null;
+        Notify();
+    }
+
+    /// <summary>Sets <see cref="LastError"/> for composer / host UI toasts.</summary>
+    public void ReportError(string message)
+    {
+        LastError = string.IsNullOrWhiteSpace(message) ? "Unexpected error." : message.Trim();
         Notify();
     }
 
@@ -223,6 +255,105 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (_pendingSkillNames.Count == 0)
                 return;
             _pendingSkillNames.Clear();
+        }
+
+        Notify();
+    }
+
+    /// <summary>Compressed images queued to attach on the next <see cref="PromptAsync"/>.</summary>
+    public IReadOnlyList<PendingComposerImage> PendingImages
+    {
+        get
+        {
+            lock (_pendingImagesGate)
+                return [.. _pendingImages];
+        }
+    }
+
+    /// <summary>Queue a composer image (already compressed) for the next prompt.</summary>
+    public VoidResult<string> QueuePendingImage(DysonBinaryAttachment attachment)
+    {
+        ArgumentNullException.ThrowIfNull(attachment);
+        if (!attachment.IsImage)
+        {
+            LastError = "Only image attachments are supported.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        lock (_pendingImagesGate)
+        {
+            if (_pendingImages.Count >= DysonUserImageFactory.MaxPendingImages)
+            {
+                LastError = $"At most {DysonUserImageFactory.MaxPendingImages} images can be attached.";
+                Notify();
+                return new VoidResult<string>(LastError);
+            }
+
+            _pendingImages.Add(new PendingComposerImage(
+                Guid.NewGuid(),
+                attachment.FileName,
+                attachment.MimeType,
+                attachment.Base64Data,
+                attachment.Extension,
+                attachment.HtmlRef));
+        }
+
+        LastError = null;
+        Notify();
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>Decode bytes / data URL, compress, and queue for the next prompt.</summary>
+    public VoidResult<string> QueuePendingImageFromBytes(string? fileName, byte[] imageBytes)
+    {
+        var created = DysonUserImageFactory.CreateFromBytes(fileName, imageBytes);
+        if (created.IsError)
+        {
+            LastError = created.Error;
+            Notify();
+            return new VoidResult<string>(created.Error);
+        }
+
+        return QueuePendingImage(created.Value);
+    }
+
+    /// <summary>Decode a data URL, compress, and queue for the next prompt.</summary>
+    public VoidResult<string> QueuePendingImageFromDataUrl(string? fileName, string dataUrl)
+    {
+        var created = DysonUserImageFactory.CreateFromDataUrl(fileName, dataUrl);
+        if (created.IsError)
+        {
+            LastError = created.Error;
+            Notify();
+            return new VoidResult<string>(created.Error);
+        }
+
+        return QueuePendingImage(created.Value);
+    }
+
+    /// <summary>Remove a pending composer image by id.</summary>
+    public void RemovePendingImage(Guid id)
+    {
+        lock (_pendingImagesGate)
+        {
+            var index = _pendingImages.FindIndex(i => i.Id == id);
+            if (index < 0)
+                return;
+            _pendingImages.RemoveAt(index);
+        }
+
+        Notify();
+    }
+
+    /// <summary>Clear all images queued for the next prompt.</summary>
+    public void ClearPendingImages()
+    {
+        lock (_pendingImagesGate)
+        {
+            if (_pendingImages.Count == 0)
+                return;
+            _pendingImages.Clear();
         }
 
         Notify();
@@ -1406,7 +1537,11 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(LastError);
         }
 
-        if (string.IsNullOrWhiteSpace(prompt))
+        var hasPendingImages = false;
+        lock (_pendingImagesGate)
+            hasPendingImages = _pendingImages.Count > 0;
+
+        if (string.IsNullOrWhiteSpace(prompt) && !hasPendingImages)
         {
             LastError = "Prompt is empty.";
             Notify();
@@ -1437,7 +1572,9 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return modeResult;
         }
 
-        var turnBuild = await BuildUserTurnWithPendingSkillsAsync(prompt.Trim(), cancellationToken)
+        var turnBuild = await BuildUserTurnWithPendingContextAsync(
+                prompt?.Trim() ?? "",
+                cancellationToken)
             .ConfigureAwait(false);
         if (turnBuild.IsError)
         {
@@ -1465,19 +1602,45 @@ public sealed class DysonUiHost : IAsyncDisposable
         return result;
     }
 
-    private async Task<Result<DysonAgentTurn, string>> BuildUserTurnWithPendingSkillsAsync(
+    private async Task<Result<DysonAgentTurn, string>> BuildUserTurnWithPendingContextAsync(
         string prompt,
         CancellationToken cancellationToken)
     {
-        List<string> pending;
+        List<string> pendingSkills;
         lock (_pendingSkillsGate)
         {
-            pending = [.. _pendingSkillNames];
+            pendingSkills = [.. _pendingSkillNames];
             _pendingSkillNames.Clear();
         }
 
-        var turn = DysonAgentSession.CreateNormalTurn(prompt);
-        if (pending.Count == 0)
+        List<PendingComposerImage> pendingImages;
+        lock (_pendingImagesGate)
+        {
+            pendingImages = [.. _pendingImages];
+            _pendingImages.Clear();
+        }
+
+        var turn = string.IsNullOrWhiteSpace(prompt)
+            ? new DysonAgentTurn
+            {
+                Kind = DysonAgentTurnKind.Normal,
+                Instruction = "",
+                StartedUtc = DateTime.UtcNow,
+            }
+            : DysonAgentSession.CreateNormalTurn(prompt);
+        foreach (var pending in pendingImages)
+        {
+            turn.AddUserImage(new DysonBinaryAttachment
+            {
+                FileName = pending.FileName,
+                Extension = pending.Extension,
+                MimeType = pending.MimeType,
+                Base64Data = pending.Base64Data,
+                HtmlRef = pending.HtmlRef,
+            });
+        }
+
+        if (pendingSkills.Count == 0)
             return Result<DysonAgentTurn, string>.AsValue(turn);
 
         IDysonWorkspaceFileSystem? fs = null;
@@ -1492,7 +1655,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             fs = fsResult.Value;
         }
 
-        foreach (var name in pending)
+        foreach (var name in pendingSkills)
         {
             // Slash picks always load index-only; agent can LoadSkill(false) for full dir later.
             var loaded = DysonSkillLoader.ResolveAndLoad(name, loadIndexOnly: true, fs);
@@ -3130,6 +3293,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         _disposed = true;
         CancelToolPanelWidthSaveTimer();
         ClearFocus();
+        if (_browserControl is not null)
+            _browserControl.SnipCaptured -= OnBrowserSnipCaptured;
         DysonLongRunningShellRegistry.Changed -= OnLongRunningShellRegistryChanged;
         UnhookAllSessions();
         lock (_promptQueueGate)
@@ -3141,3 +3306,16 @@ public sealed class DysonUiHost : IAsyncDisposable
 
 /// <summary>Queued composer prompt preview for the active session.</summary>
 public readonly record struct QueuedPrompt(Guid Id, string FirstLine);
+
+/// <summary>Pending composer image (JPEG after compress) shown as a dismissible thumbnail.</summary>
+public sealed record PendingComposerImage(
+    Guid Id,
+    string FileName,
+    string MimeType,
+    string Base64Data,
+    string Extension,
+    /// <summary>Optional browser snip DOM ref (empty today; future HTML element hit-test).</summary>
+    string? HtmlRef = null)
+{
+    public string DataUrl => $"data:{MimeType};base64,{Base64Data}";
+}

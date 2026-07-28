@@ -1751,6 +1751,37 @@ code, .mono {
   color: var(--text);
 }
 
+.turn-block__images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.turn-block__image {
+  margin: 0;
+  width: 120px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.turn-block__image img {
+  display: block;
+  width: 100%;
+  height: 80px;
+  object-fit: cover;
+}
+
+.turn-block__image-caption {
+  padding: 4px 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .turn-block__user-prompt {
   flex: 1;
   min-width: 0;
@@ -2186,6 +2217,12 @@ code, .mono {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
+.composer-shell.is-drop-target {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-2));
+}
+
 .composer__prompt {
   position: relative;
   display: flex;
@@ -2240,6 +2277,80 @@ code, .mono {
 .composer-context__remove:hover {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
   opacity: 1;
+}
+
+.composer-context__thumb {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border-strong));
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-1);
+}
+
+.composer-context__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.composer-context__thumb .composer-context__remove {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 18px;
+  height: 18px;
+  font-size: 13px;
+  background: color-mix(in srgb, var(--bg-1) 75%, transparent);
+  color: var(--text);
+}
+
+.composer-attach {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-1);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.composer-attach:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.composer-attach:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.composer-attach__icon {
+  width: 14px;
+  height: 14px;
+  opacity: 0.85;
+}
+
+.composer-attach__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .composer textarea {

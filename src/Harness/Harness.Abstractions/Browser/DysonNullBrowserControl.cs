@@ -10,6 +10,10 @@ public sealed class DysonNullBrowserControl : IDysonBrowserControl
 
     private const string Unavailable = "browser control unavailable";
 
+#pragma warning disable CS0067 // Raised only by Windows Cef chrome; null control never fires.
+    public event Action<DysonBrowserSnipPayload>? SnipCaptured;
+#pragma warning restore CS0067
+
     public Task<Result<IDysonBrowserWindow, string>> OpenBrowserAsync(
         string? url = null,
         int? width = null,

@@ -2,44 +2,61 @@ using Microsoft.EntityFrameworkCore;
 
 namespace DysonHarness;
 
-public sealed class DysonAppSettingsStore(DysonDbContext db)
+public sealed class DysonAppSettingsStore(DysonDbAccessor accessor)
 {
-    private readonly DysonDbContext _db = db ?? throw new ArgumentNullException(nameof(db));
+    private readonly DysonDbAccessor _accessor = accessor ?? throw new ArgumentNullException(nameof(accessor));
 
-    public async Task<Result<string?, string>> GetAsync(
+    public Task<Result<string?, string>> GetAsync(
         string key,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(key))
-            return Result<string?, string>.AsError("Setting key is required.");
+            return Task.FromResult(Result<string?, string>.AsError("Setting key is required."));
 
+        return _accessor.RunAsync((db, ct) => GetCoreAsync(db, key, ct), cancellationToken);
+    }
+
+    /// <summary>Sets a value; null or whitespace deletes the row.</summary>
+    public Task<VoidResult<string>> SetAsync(
+        string key,
+        string? value,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return Task.FromResult(new VoidResult<string>("Setting key is required."));
+
+        return _accessor.RunAsync((db, ct) => SetCoreAsync(db, key, value, ct), cancellationToken);
+    }
+
+    private static async Task<Result<string?, string>> GetCoreAsync(
+        DysonDbContext db,
+        string key,
+        CancellationToken cancellationToken)
+    {
         try
         {
-            var entity = await _db.AppSettings
+            var entity = await db.AppSettings
                 .AsNoTracking()
                 .FirstOrDefaultAsync(s => s.Key == key, cancellationToken)
                 .ConfigureAwait(false);
 
             return Result<string?, string>.AsValue(entity?.Value);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return Result<string?, string>.AsError($"Failed to read setting '{key}': {ex.Message}");
         }
     }
 
-    /// <summary>Sets a value; null or whitespace deletes the row.</summary>
-    public async Task<VoidResult<string>> SetAsync(
+    private static async Task<VoidResult<string>> SetCoreAsync(
+        DysonDbContext db,
         string key,
         string? value,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(key))
-            return new VoidResult<string>("Setting key is required.");
-
         try
         {
-            var entity = await _db.AppSettings
+            var entity = await db.AppSettings
                 .FirstOrDefaultAsync(s => s.Key == key, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -47,8 +64,8 @@ public sealed class DysonAppSettingsStore(DysonDbContext db)
             {
                 if (entity is not null)
                 {
-                    _db.AppSettings.Remove(entity);
-                    await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    db.AppSettings.Remove(entity);
+                    await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
                 }
 
                 return VoidResult<string>.Success;
@@ -56,7 +73,7 @@ public sealed class DysonAppSettingsStore(DysonDbContext db)
 
             if (entity is null)
             {
-                _db.AppSettings.Add(new DysonAppSettingEntity
+                db.AppSettings.Add(new DysonAppSettingEntity
                 {
                     Key = key.Trim(),
                     Value = value.Trim(),
@@ -67,10 +84,10 @@ public sealed class DysonAppSettingsStore(DysonDbContext db)
                 entity.Value = value.Trim();
             }
 
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return new VoidResult<string>($"Failed to write setting '{key}': {ex.Message}");
         }

@@ -58,18 +58,35 @@ public sealed class DysonAgentTurn
     public string? ReasoningText { get; set; }
 
     private readonly List<DysonReasoningSegment> _reasoningLog = [];
+    // ponytail: List is not thread-safe; Blazor enumerates while the stream thread Appends/Restores.
+    private readonly object _reasoningLogGate = new();
 
     /// <summary>
     /// Ordered thought + interim-text segments for this turn (UI + DB only; omitted from transcripts).
+    /// Returns a snapshot so UI enumeration cannot race Append/Restore mutations.
     /// </summary>
-    public IReadOnlyList<DysonReasoningSegment> ReasoningLog => _reasoningLog;
+    public IReadOnlyList<DysonReasoningSegment> ReasoningLog
+    {
+        get
+        {
+            lock (_reasoningLogGate)
+                return _reasoningLog.ToArray();
+        }
+    }
 
     private readonly List<DysonSkillUsedEntry> _skillsUsed = [];
+    private readonly List<DysonBinaryAttachment> _userImages = [];
 
     /// <summary>
     /// Skills attached this turn (slash / <c>LoadSkill</c>). Injected into provider transcripts + UI chip/modal.
     /// </summary>
     public IReadOnlyList<DysonSkillUsedEntry> SkillsUsed => _skillsUsed;
+
+    /// <summary>
+    /// User-attached images for this turn (composer). Persist across history and re-emit in
+    /// provider multimodal transcripts (unlike one-shot tool <see cref="DysonToolCallResult.BinaryAttachment"/>).
+    /// </summary>
+    public IReadOnlyList<DysonBinaryAttachment> UserImages => _userImages;
 
     /// <summary>UTC when this turn began (live create or restored from persistence).</summary>
     public DateTime StartedUtc { get; set; }
@@ -279,9 +296,12 @@ public sealed class DysonAgentTurn
     {
         ArgumentNullException.ThrowIfNull(segments);
 
-        _reasoningLog.Clear();
-        _reasoningLog.AddRange(segments);
-        ReasoningText = DysonReasoningLogSerializer.JoinThoughtTexts(_reasoningLog);
+        lock (_reasoningLogGate)
+        {
+            _reasoningLog.Clear();
+            _reasoningLog.AddRange(segments);
+            ReasoningText = DysonReasoningLogSerializer.JoinThoughtTexts(_reasoningLog);
+        }
     }
 
     /// <summary>Appends a skill used on this turn (slash attach or <c>LoadSkill</c>).</summary>
@@ -298,6 +318,29 @@ public sealed class DysonAgentTurn
 
         _skillsUsed.Clear();
         _skillsUsed.AddRange(skills);
+    }
+
+    /// <summary>Appends a user-attached image for this turn (composer).</summary>
+    public void AddUserImage(DysonBinaryAttachment image)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        if (!image.IsImage)
+            throw new ArgumentException("User image attachment must have an image/* MimeType.", nameof(image));
+
+        _userImages.Add(image);
+    }
+
+    /// <summary>Replaces <see cref="UserImages"/> from a persisted snapshot.</summary>
+    public void RestoreUserImages(IEnumerable<DysonBinaryAttachment> images)
+    {
+        ArgumentNullException.ThrowIfNull(images);
+
+        _userImages.Clear();
+        foreach (var image in images)
+        {
+            if (image.IsImage)
+                _userImages.Add(image);
+        }
     }
 
     /// <summary>Maps a loaded skill onto a <see cref="DysonSkillUsedEntry"/> and appends it.</summary>
@@ -331,29 +374,32 @@ public sealed class DysonAgentTurn
     {
         var added = false;
 
-        if (!string.IsNullOrWhiteSpace(thoughtText))
+        lock (_reasoningLogGate)
         {
-            _reasoningLog.Add(new DysonReasoningSegment(
-                DysonReasoningSegmentKind.Thought,
-                thoughtText.Trim(),
-                roundIndex));
-            added = true;
+            if (!string.IsNullOrWhiteSpace(thoughtText))
+            {
+                _reasoningLog.Add(new DysonReasoningSegment(
+                    DysonReasoningSegmentKind.Thought,
+                    thoughtText.Trim(),
+                    roundIndex));
+                added = true;
+            }
+
+            if (includeInterimText && !string.IsNullOrWhiteSpace(interimText))
+            {
+                _reasoningLog.Add(new DysonReasoningSegment(
+                    DysonReasoningSegmentKind.InterimText,
+                    interimText.Trim(),
+                    roundIndex));
+                added = true;
+            }
+
+            if (added)
+                ReasoningText = DysonReasoningLogSerializer.JoinThoughtTexts(_reasoningLog);
         }
 
-        if (includeInterimText && !string.IsNullOrWhiteSpace(interimText))
-        {
-            _reasoningLog.Add(new DysonReasoningSegment(
-                DysonReasoningSegmentKind.InterimText,
-                interimText.Trim(),
-                roundIndex));
-            added = true;
-        }
-
-        if (!added)
-            return;
-
-        ReasoningText = DysonReasoningLogSerializer.JoinThoughtTexts(_reasoningLog);
-        NotifyAssistantTextChanged();
+        if (added)
+            NotifyAssistantTextChanged();
     }
 
     /// <summary>

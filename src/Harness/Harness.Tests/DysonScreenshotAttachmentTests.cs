@@ -586,6 +586,10 @@ public class DysonScreenshotAttachmentTests
     {
         private readonly StubWindow _window = new(windowId, tabId, png);
 
+#pragma warning disable CS0067
+        public event Action<DysonBrowserSnipPayload>? SnipCaptured;
+#pragma warning restore CS0067
+
         public Task<Result<IDysonBrowserWindow, string>> OpenBrowserAsync(
             string? url = null,
             int? width = null,

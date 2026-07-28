@@ -85,25 +85,43 @@ public sealed class OpenAiFilesClient(HttpClient http)
     }
 
     /// <summary>
-    /// Uploads missing <see cref="DysonBinaryAttachment.FileId"/> values for Responses.
-    /// Failures leave <see cref="DysonBinaryAttachment.FileId"/> unset (data-URL fallback).
+    /// Uploads missing <see cref="DysonBinaryAttachment.FileId"/> values for Responses
+    /// (tool results). Failures leave <see cref="DysonBinaryAttachment.FileId"/> unset
+    /// (data-URL fallback).
     /// </summary>
-    public static async Task EnsureBinaryFileIdsAsync(
+    public static Task EnsureBinaryFileIdsAsync(
         HttpClient http,
         OpenAiCompatibleAgentProvider provider,
         IEnumerable<DysonToolCallResult> results,
         Action<string>? onNote = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(http);
-        ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(results);
 
+        var attachments = results
+            .Where(static r => !r.IsError && r.BinaryAttachment is not null)
+            .Select(static r => r.BinaryAttachment!);
+        return EnsureBinaryFileIdsAsync(http, provider, attachments, onNote, cancellationToken);
+    }
+
+    /// <summary>
+    /// Uploads missing <see cref="DysonBinaryAttachment.FileId"/> values for Responses.
+    /// Failures leave <see cref="DysonBinaryAttachment.FileId"/> unset (data-URL fallback).
+    /// </summary>
+    public static async Task EnsureBinaryFileIdsAsync(
+        HttpClient http,
+        OpenAiCompatibleAgentProvider provider,
+        IEnumerable<DysonBinaryAttachment> attachments,
+        Action<string>? onNote = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(http);
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(attachments);
+
         OpenAiFilesClient? client = null;
-        foreach (var result in results)
+        foreach (var attachment in attachments)
         {
-            if (result.IsError || result.BinaryAttachment is not { } attachment)
-                continue;
             if (!string.IsNullOrEmpty(attachment.FileId))
                 continue;
 

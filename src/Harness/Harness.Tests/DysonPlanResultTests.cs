@@ -65,6 +65,8 @@ public class DysonPlanResultTests
             || !turn.Instruction.Contains(".dyson/plans/build-abcdef0123.md", StringComparison.Ordinal)
             || !turn.Instruction.Contains("**`## Recap`**", StringComparison.Ordinal)
             || !turn.Instruction.Contains("**`## Agent actions`**", StringComparison.Ordinal)
+            || !turn.Instruction.Contains("multiple Drones", StringComparison.Ordinal)
+            || !turn.Instruction.Contains("Multitasking is superior", StringComparison.Ordinal)
             || !turn.Instruction.Contains("layout-only", StringComparison.OrdinalIgnoreCase)
             || !turn.Instruction.Contains("CreateTodo", StringComparison.Ordinal)
             || !turn.Instruction.Contains(
@@ -86,6 +88,8 @@ public class DysonPlanResultTests
     {
         if (DysonBeginBuildPlanFlow.ContinuationPrompt
             != "Continue the plan implementation as per previous instructions. "
+                + "Prefer parallel Drone multitasking (`StartSubagent`) for independent Agent actions workstreams; "
+                + "Wait only for hard prerequisites. "
                 + "Session todos already exist for the Agent actions checklist; add or update todos as work unfolds.")
         {
             throw new InvalidOperationException("BeginBuildPlan ContinuationPrompt text mismatch.");

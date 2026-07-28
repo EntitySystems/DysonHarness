@@ -4,115 +4,27 @@ using Microsoft.EntityFrameworkCore;
 namespace DysonHarness;
 
 /// <summary>CRUD + seed for <see cref="DysonConfiguredShellEntity"/>.</summary>
-public sealed class DysonConfiguredShellStore(DysonDbContext db)
+public sealed class DysonConfiguredShellStore(DysonDbAccessor accessor)
 {
-    private readonly DysonDbContext _db = db ?? throw new ArgumentNullException(nameof(db));
+    private readonly DysonDbAccessor _accessor = accessor ?? throw new ArgumentNullException(nameof(accessor));
 
     /// <summary>
     /// When the table is empty, seeds platform defaults (Windows: Pwsh / PowerShell / Cmd).
     /// Other platforms seed nothing until Bash/Zsh runners exist.
     /// </summary>
-    public async Task<VoidResult<string>> EnsureDefaultsAsync(CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            if (await _db.ConfiguredShells.AnyAsync(cancellationToken).ConfigureAwait(false))
-                return VoidResult<string>.Success;
+    public Task<VoidResult<string>> EnsureDefaultsAsync(CancellationToken cancellationToken = default)
+        => _accessor.RunAsync(EnsureDefaultsCoreAsync, cancellationToken);
 
-            if (!OperatingSystem.IsWindows())
-                return VoidResult<string>.Success;
-
-            var now = DateTime.UtcNow;
-            _db.ConfiguredShells.AddRange(
-                new DysonConfiguredShellEntity
-                {
-                    Id = Guid.NewGuid(),
-                    Name = "Pwsh",
-                    ExecutablePath = "pwsh",
-                    IsEnabled = true,
-                    SortOrder = 0,
-                    CreatedUtc = now,
-                    UpdatedUtc = now,
-                },
-                new DysonConfiguredShellEntity
-                {
-                    Id = Guid.NewGuid(),
-                    Name = "PowerShell",
-                    ExecutablePath = "powershell.exe",
-                    IsEnabled = true,
-                    SortOrder = 1,
-                    CreatedUtc = now,
-                    UpdatedUtc = now,
-                },
-                new DysonConfiguredShellEntity
-                {
-                    Id = Guid.NewGuid(),
-                    Name = "Cmd",
-                    ExecutablePath = "cmd.exe",
-                    IsEnabled = true,
-                    SortOrder = 2,
-                    CreatedUtc = now,
-                    UpdatedUtc = now,
-                });
-
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            return VoidResult<string>.Success;
-        }
-        catch (Exception ex)
-        {
-            return new VoidResult<string>($"Failed to seed configured shells: {ex.Message}");
-        }
-    }
-
-    public async Task<Result<IReadOnlyList<DysonConfiguredShellEntity>, string>> ListAsync(
+    public Task<Result<IReadOnlyList<DysonConfiguredShellEntity>, string>> ListAsync(
         CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            var list = await _db.ConfiguredShells
-                .AsNoTracking()
-                .OrderBy(s => s.SortOrder)
-                .ThenBy(s => s.Name)
-                .ToListAsync(cancellationToken)
-                .ConfigureAwait(false);
-
-            return Result<IReadOnlyList<DysonConfiguredShellEntity>, string>.AsValue(list);
-        }
-        catch (Exception ex)
-        {
-            return Result<IReadOnlyList<DysonConfiguredShellEntity>, string>.AsError(
-                $"Failed to list configured shells: {ex.Message}");
-        }
-    }
+        => _accessor.RunAsync(ListCoreAsync, cancellationToken);
 
     /// <summary>Enabled shells as session specs, ordered by <see cref="DysonConfiguredShellEntity.SortOrder"/>.</summary>
-    public async Task<Result<IReadOnlyList<DysonConfiguredShellSpec>, string>> ListEnabledSpecsAsync(
+    public Task<Result<IReadOnlyList<DysonConfiguredShellSpec>, string>> ListEnabledSpecsAsync(
         CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            var rows = await _db.ConfiguredShells
-                .AsNoTracking()
-                .Where(s => s.IsEnabled)
-                .OrderBy(s => s.SortOrder)
-                .ThenBy(s => s.Name)
-                .ToListAsync(cancellationToken)
-                .ConfigureAwait(false);
+        => _accessor.RunAsync(ListEnabledSpecsCoreAsync, cancellationToken);
 
-            IReadOnlyList<DysonConfiguredShellSpec> list = rows
-                .Select(s => new DysonConfiguredShellSpec(s.Name, s.ExecutablePath, ParseFixedArgs(s.FixedArgsJson)))
-                .ToList();
-
-            return Result<IReadOnlyList<DysonConfiguredShellSpec>, string>.AsValue(list);
-        }
-        catch (Exception ex)
-        {
-            return Result<IReadOnlyList<DysonConfiguredShellSpec>, string>.AsError(
-                $"Failed to list enabled shells: {ex.Message}");
-        }
-    }
-
-    public async Task<Result<Guid, string>> CreateAsync(
+    public Task<Result<Guid, string>> CreateAsync(
         string name,
         string executablePath,
         bool isEnabled = true,
@@ -122,47 +34,16 @@ public sealed class DysonConfiguredShellStore(DysonDbContext db)
         var trimmedName = (name ?? "").Trim();
         var trimmedPath = (executablePath ?? "").Trim();
         if (string.IsNullOrWhiteSpace(trimmedName))
-            return Result<Guid, string>.AsError("Shell name is required.");
+            return Task.FromResult(Result<Guid, string>.AsError("Shell name is required."));
         if (string.IsNullOrWhiteSpace(trimmedPath))
-            return Result<Guid, string>.AsError("Executable path is required.");
+            return Task.FromResult(Result<Guid, string>.AsError("Executable path is required."));
 
-        try
-        {
-            var duplicate = await _db.ConfiguredShells
-                .AnyAsync(s => s.Name.ToLower() == trimmedName.ToLower(), cancellationToken)
-                .ConfigureAwait(false);
-            if (duplicate)
-                return Result<Guid, string>.AsError($"A shell named '{trimmedName}' already exists.");
-
-            var maxOrder = await _db.ConfiguredShells
-                .Select(s => (int?)s.SortOrder)
-                .MaxAsync(cancellationToken)
-                .ConfigureAwait(false);
-
-            var now = DateTime.UtcNow;
-            var entity = new DysonConfiguredShellEntity
-            {
-                Id = Guid.NewGuid(),
-                Name = trimmedName,
-                ExecutablePath = trimmedPath,
-                FixedArgsJson = ToFixedArgsJson(fixedArgs),
-                IsEnabled = isEnabled,
-                SortOrder = (maxOrder ?? -1) + 1,
-                CreatedUtc = now,
-                UpdatedUtc = now,
-            };
-
-            _db.ConfiguredShells.Add(entity);
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            return Result<Guid, string>.AsValue(entity.Id);
-        }
-        catch (Exception ex)
-        {
-            return Result<Guid, string>.AsError($"Failed to create configured shell: {ex.Message}");
-        }
+        return _accessor.RunAsync(
+            (db, ct) => CreateCoreAsync(db, trimmedName, trimmedPath, isEnabled, fixedArgs, ct),
+            cancellationToken);
     }
 
-    public async Task<VoidResult<string>> UpdateAsync(
+    public Task<VoidResult<string>> UpdateAsync(
         Guid id,
         string name,
         string executablePath,
@@ -173,62 +54,19 @@ public sealed class DysonConfiguredShellStore(DysonDbContext db)
         var trimmedName = (name ?? "").Trim();
         var trimmedPath = (executablePath ?? "").Trim();
         if (string.IsNullOrWhiteSpace(trimmedName))
-            return new VoidResult<string>("Shell name is required.");
+            return Task.FromResult(new VoidResult<string>("Shell name is required."));
         if (string.IsNullOrWhiteSpace(trimmedPath))
-            return new VoidResult<string>("Executable path is required.");
+            return Task.FromResult(new VoidResult<string>("Executable path is required."));
 
-        try
-        {
-            var existing = await _db.ConfiguredShells
-                .FirstOrDefaultAsync(s => s.Id == id, cancellationToken)
-                .ConfigureAwait(false);
-            if (existing is null)
-                return new VoidResult<string>($"Configured shell '{id}' not found.");
-
-            var duplicate = await _db.ConfiguredShells
-                .AnyAsync(
-                    s => s.Id != id && s.Name.ToLower() == trimmedName.ToLower(),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (duplicate)
-                return new VoidResult<string>($"A shell named '{trimmedName}' already exists.");
-
-            existing.Name = trimmedName;
-            existing.ExecutablePath = trimmedPath;
-            existing.FixedArgsJson = ToFixedArgsJson(fixedArgs);
-            existing.IsEnabled = isEnabled;
-            existing.UpdatedUtc = DateTime.UtcNow;
-
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            return VoidResult<string>.Success;
-        }
-        catch (Exception ex)
-        {
-            return new VoidResult<string>($"Failed to update configured shell: {ex.Message}");
-        }
+        return _accessor.RunAsync(
+            (db, ct) => UpdateCoreAsync(db, id, trimmedName, trimmedPath, isEnabled, fixedArgs, ct),
+            cancellationToken);
     }
 
-    public async Task<VoidResult<string>> DeleteAsync(
+    public Task<VoidResult<string>> DeleteAsync(
         Guid id,
         CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            var existing = await _db.ConfiguredShells
-                .FirstOrDefaultAsync(s => s.Id == id, cancellationToken)
-                .ConfigureAwait(false);
-            if (existing is null)
-                return new VoidResult<string>($"Configured shell '{id}' not found.");
-
-            _db.ConfiguredShells.Remove(existing);
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            return VoidResult<string>.Success;
-        }
-        catch (Exception ex)
-        {
-            return new VoidResult<string>($"Failed to delete configured shell: {ex.Message}");
-        }
-    }
+        => _accessor.RunAsync((db, ct) => DeleteCoreAsync(db, id, ct), cancellationToken);
 
     /// <summary>Space-separated UI tokens → argv list (empty ⇒ null / heuristics).</summary>
     public static IReadOnlyList<string>? ParseFixedArgsText(string? text)
@@ -275,5 +113,215 @@ public sealed class DysonConfiguredShellStore(DysonDbContext db)
     {
         var args = ParseFixedArgs(fixedArgsJson);
         return args is null ? "" : string.Join(' ', args);
+    }
+
+    private static async Task<VoidResult<string>> EnsureDefaultsCoreAsync(
+        DysonDbContext db,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (await db.ConfiguredShells.AnyAsync(cancellationToken).ConfigureAwait(false))
+                return VoidResult<string>.Success;
+
+            if (!OperatingSystem.IsWindows())
+                return VoidResult<string>.Success;
+
+            var now = DateTime.UtcNow;
+            db.ConfiguredShells.AddRange(
+                new DysonConfiguredShellEntity
+                {
+                    Id = Guid.NewGuid(),
+                    Name = "Pwsh",
+                    ExecutablePath = "pwsh",
+                    IsEnabled = true,
+                    SortOrder = 0,
+                    CreatedUtc = now,
+                    UpdatedUtc = now,
+                },
+                new DysonConfiguredShellEntity
+                {
+                    Id = Guid.NewGuid(),
+                    Name = "PowerShell",
+                    ExecutablePath = "powershell.exe",
+                    IsEnabled = true,
+                    SortOrder = 1,
+                    CreatedUtc = now,
+                    UpdatedUtc = now,
+                },
+                new DysonConfiguredShellEntity
+                {
+                    Id = Guid.NewGuid(),
+                    Name = "Cmd",
+                    ExecutablePath = "cmd.exe",
+                    IsEnabled = true,
+                    SortOrder = 2,
+                    CreatedUtc = now,
+                    UpdatedUtc = now,
+                });
+
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return new VoidResult<string>($"Failed to seed configured shells: {ex.Message}");
+        }
+    }
+
+    private static async Task<Result<IReadOnlyList<DysonConfiguredShellEntity>, string>> ListCoreAsync(
+        DysonDbContext db,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var list = await db.ConfiguredShells
+                .AsNoTracking()
+                .OrderBy(s => s.SortOrder)
+                .ThenBy(s => s.Name)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            return Result<IReadOnlyList<DysonConfiguredShellEntity>, string>.AsValue(list);
+        }
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return Result<IReadOnlyList<DysonConfiguredShellEntity>, string>.AsError(
+                $"Failed to list configured shells: {ex.Message}");
+        }
+    }
+
+    private static async Task<Result<IReadOnlyList<DysonConfiguredShellSpec>, string>> ListEnabledSpecsCoreAsync(
+        DysonDbContext db,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var rows = await db.ConfiguredShells
+                .AsNoTracking()
+                .Where(s => s.IsEnabled)
+                .OrderBy(s => s.SortOrder)
+                .ThenBy(s => s.Name)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            IReadOnlyList<DysonConfiguredShellSpec> list = rows
+                .Select(s => new DysonConfiguredShellSpec(s.Name, s.ExecutablePath, ParseFixedArgs(s.FixedArgsJson)))
+                .ToList();
+
+            return Result<IReadOnlyList<DysonConfiguredShellSpec>, string>.AsValue(list);
+        }
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return Result<IReadOnlyList<DysonConfiguredShellSpec>, string>.AsError(
+                $"Failed to list enabled shells: {ex.Message}");
+        }
+    }
+
+    private static async Task<Result<Guid, string>> CreateCoreAsync(
+        DysonDbContext db,
+        string trimmedName,
+        string trimmedPath,
+        bool isEnabled,
+        IReadOnlyList<string>? fixedArgs,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var duplicate = await db.ConfiguredShells
+                .AnyAsync(s => s.Name.ToLower() == trimmedName.ToLower(), cancellationToken)
+                .ConfigureAwait(false);
+            if (duplicate)
+                return Result<Guid, string>.AsError($"A shell named '{trimmedName}' already exists.");
+
+            var maxOrder = await db.ConfiguredShells
+                .Select(s => (int?)s.SortOrder)
+                .MaxAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            var now = DateTime.UtcNow;
+            var entity = new DysonConfiguredShellEntity
+            {
+                Id = Guid.NewGuid(),
+                Name = trimmedName,
+                ExecutablePath = trimmedPath,
+                FixedArgsJson = ToFixedArgsJson(fixedArgs),
+                IsEnabled = isEnabled,
+                SortOrder = (maxOrder ?? -1) + 1,
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            };
+
+            db.ConfiguredShells.Add(entity);
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
+            return Result<Guid, string>.AsValue(entity.Id);
+        }
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return Result<Guid, string>.AsError($"Failed to create configured shell: {ex.Message}");
+        }
+    }
+
+    private static async Task<VoidResult<string>> UpdateCoreAsync(
+        DysonDbContext db,
+        Guid id,
+        string trimmedName,
+        string trimmedPath,
+        bool isEnabled,
+        IReadOnlyList<string>? fixedArgs,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var existing = await db.ConfiguredShells
+                .FirstOrDefaultAsync(s => s.Id == id, cancellationToken)
+                .ConfigureAwait(false);
+            if (existing is null)
+                return new VoidResult<string>($"Configured shell '{id}' not found.");
+
+            var duplicate = await db.ConfiguredShells
+                .AnyAsync(
+                    s => s.Id != id && s.Name.ToLower() == trimmedName.ToLower(),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (duplicate)
+                return new VoidResult<string>($"A shell named '{trimmedName}' already exists.");
+
+            existing.Name = trimmedName;
+            existing.ExecutablePath = trimmedPath;
+            existing.FixedArgsJson = ToFixedArgsJson(fixedArgs);
+            existing.IsEnabled = isEnabled;
+            existing.UpdatedUtc = DateTime.UtcNow;
+
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return new VoidResult<string>($"Failed to update configured shell: {ex.Message}");
+        }
+    }
+
+    private static async Task<VoidResult<string>> DeleteCoreAsync(
+        DysonDbContext db,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var existing = await db.ConfiguredShells
+                .FirstOrDefaultAsync(s => s.Id == id, cancellationToken)
+                .ConfigureAwait(false);
+            if (existing is null)
+                return new VoidResult<string>($"Configured shell '{id}' not found.");
+
+            db.ConfiguredShells.Remove(existing);
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return new VoidResult<string>($"Failed to delete configured shell: {ex.Message}");
+        }
     }
 }

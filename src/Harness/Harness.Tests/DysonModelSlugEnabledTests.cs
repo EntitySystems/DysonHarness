@@ -24,8 +24,9 @@ public class DysonModelSlugEnabledTests
 
     private static void AssertUpsertMergePreservesIdAndIsEnabled()
     {
-        using var db = OpenTempDb();
-        var store = new DysonModelStore(db);
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var store = new DysonModelStore(accessor);
 
         var first = store.UpsertManagedProviderAsync(
             "cliproxy-test",
@@ -88,8 +89,9 @@ public class DysonModelSlugEnabledTests
 
     private static void AssertUpsertMergePreservesDefaultReasoningEffort()
     {
-        using var db = OpenTempDb();
-        var store = new DysonModelStore(db);
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var store = new DysonModelStore(accessor);
 
         var first = store.UpsertManagedProviderAsync(
             "cliproxy-effort-merge",
@@ -143,8 +145,9 @@ public class DysonModelSlugEnabledTests
 
     private static void AssertSetSlugEnabledRejectsManual()
     {
-        using var db = OpenTempDb();
-        var store = new DysonModelStore(db);
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var store = new DysonModelStore(accessor);
 
         var create = store.CreateProviderAsync(new DysonModelProviderEntity
         {
@@ -167,8 +170,9 @@ public class DysonModelSlugEnabledTests
 
     private static void AssertSetSlugDefaultReasoningEffortManagedAndRejectsManual()
     {
-        using var db = OpenTempDb();
-        var store = new DysonModelStore(db);
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var store = new DysonModelStore(accessor);
 
         var upsert = store.UpsertManagedProviderAsync(
             "cliproxy-effort-set",
@@ -231,8 +235,9 @@ public class DysonModelSlugEnabledTests
 
     private static void AssertDisabledDefaultFallsBack()
     {
-        using var db = OpenTempDb();
-        var store = new DysonModelStore(db);
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var store = new DysonModelStore(accessor);
 
         var upsert = store.UpsertManagedProviderAsync(
             "cliproxy-fallback",
@@ -271,8 +276,9 @@ public class DysonModelSlugEnabledTests
 
     private static void AssertFindSlugSkipsDisabled()
     {
-        using var db = OpenTempDb();
-        var store = new DysonModelStore(db);
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var store = new DysonModelStore(accessor);
 
         var upsert = store.UpsertManagedProviderAsync(
             "cliproxy-find",
@@ -304,8 +310,9 @@ public class DysonModelSlugEnabledTests
 
     private static void AssertSetDefaultRejectsDisabled()
     {
-        using var db = OpenTempDb();
-        var store = new DysonModelStore(db);
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var store = new DysonModelStore(accessor);
 
         var upsert = store.UpsertManagedProviderAsync(
             "cliproxy-default",
@@ -372,15 +379,4 @@ public class DysonModelSlugEnabledTests
         }
     }
 
-    private static DysonDbContext OpenTempDb()
-    {
-        var conn = new SqliteConnection("Data Source=:memory:");
-        conn.Open();
-        var options = new DbContextOptionsBuilder<DysonDbContext>()
-            .UseSqlite(conn)
-            .Options;
-        var db = new DysonDbContext(options);
-        db.Database.EnsureCreated();
-        return db;
-    }
 }

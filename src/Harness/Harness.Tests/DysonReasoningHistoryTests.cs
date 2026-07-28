@@ -4,7 +4,7 @@ namespace Harness.Tests;
 
 /// <summary>
 /// ponytail: multi-round reasoning log commit, legacy ReasoningText synthesize, transcript omission,
-/// thinking expand/collapse helper (Xunit Fact).
+/// thinking expand/collapse helper, reasoning-log contention smoke (Xunit Fact).
 /// </summary>
 public class DysonReasoningHistoryTests
 {
@@ -15,6 +15,7 @@ public class DysonReasoningHistoryTests
         AssertPersistRestoreAndLegacySynthesize();
         AssertTranscriptOmitsReasoning();
         AssertExpandCollapseHelper();
+        AssertReasoningLogContentionSmoke();
     }
 
     private static void AssertMultiRoundCommitAndReasoningTextJoin()
@@ -173,6 +174,44 @@ public class DysonReasoningHistoryTests
                     $"Responses transcript must omit reasoning; found '{secret}'.");
             }
         }
+    }
+
+    private static void AssertReasoningLogContentionSmoke()
+    {
+        var turn = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        var token = cts.Token;
+
+        var writer = Task.Run(() =>
+        {
+            var i = 0;
+            while (!token.IsCancellationRequested)
+            {
+                turn.AppendReasoningRound(i, $"t{i}", $"m{i}", includeInterimText: true);
+                i++;
+            }
+        }, token);
+
+        var reader = Task.Run(() =>
+        {
+            while (!token.IsCancellationRequested)
+            {
+                foreach (var _ in turn.ReasoningLog)
+                {
+                }
+            }
+        }, token);
+
+        try
+        {
+            Task.WaitAll(writer, reader);
+        }
+        catch (AggregateException ex) when (ex.InnerExceptions.All(e => e is OperationCanceledException or TaskCanceledException))
+        {
+        }
+
+        // Snapshot getter + gate: enumeration must not throw Collection was modified.
+        _ = turn.ReasoningLog.Count;
     }
 
     private static void AssertExpandCollapseHelper()

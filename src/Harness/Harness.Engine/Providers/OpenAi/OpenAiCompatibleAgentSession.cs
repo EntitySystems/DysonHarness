@@ -579,7 +579,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     }
                     else
                     {
-                        await EnsureLastInFlightBinaryFileIdsAsync(inFlight, cancellationToken)
+                        await EnsureResponsesVisionFileIdsAsync(inFlight, cancellationToken)
                             .ConfigureAwait(false);
                         built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
                             this,
@@ -603,7 +603,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     {
                         AppendLog("Responses: missing tool call for output — retrying with full item replay");
                         previousResponseId = null;
-                        await EnsureLastInFlightBinaryFileIdsAsync(inFlight, cancellationToken)
+                        await EnsureResponsesVisionFileIdsAsync(inFlight, cancellationToken)
                             .ConfigureAwait(false);
                         var retryBuilt = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
                             this,
@@ -794,7 +794,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         Result<OpenAiModelReply, string> replyResult;
         if (useResponses)
         {
-            await EnsureLastInFlightBinaryFileIdsAsync(inFlight, cancellationToken)
+            await EnsureResponsesVisionFileIdsAsync(inFlight, cancellationToken)
                 .ConfigureAwait(false);
             var built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
                 this,
@@ -870,16 +870,38 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     }
 
     /// <summary>
-    /// One-shot vision: only the last in-flight round is emitted with BinaryAttachment parts.
+    /// Responses vision: upload turn <see cref="DysonAgentTurn.UserImages"/> plus one-shot
+    /// tool BinaryAttachment on the last in-flight round (data-URL fallback on failure).
     /// </summary>
-    private Task EnsureLastInFlightBinaryFileIdsAsync(
+    private async Task EnsureResponsesVisionFileIdsAsync(
         IReadOnlyList<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound> inFlight,
         CancellationToken cancellationToken)
     {
-        if (inFlight.Count == 0)
-            return Task.CompletedTask;
+        var images = new List<DysonBinaryAttachment>();
+        foreach (var turn in Turns)
+        {
+            if (turn.IsExcludedFromContext)
+                continue;
+            foreach (var image in turn.UserImages)
+                images.Add(image);
+        }
 
-        return EnsureResponsesBinaryFileIdsAsync(inFlight[^1].Results, cancellationToken);
+        if (images.Count > 0)
+        {
+            await OpenAiFilesClient.EnsureBinaryFileIdsAsync(
+                    _http,
+                    OpenAiProvider,
+                    images,
+                    note => AppendLog(note),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if (inFlight.Count == 0)
+            return;
+
+        await EnsureResponsesBinaryFileIdsAsync(inFlight[^1].Results, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private Task EnsureResponsesBinaryFileIdsAsync(

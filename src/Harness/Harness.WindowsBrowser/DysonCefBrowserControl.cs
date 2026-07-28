@@ -10,6 +10,14 @@ public sealed class DysonCefBrowserControl : IDysonBrowserControl
 {
     private readonly ConcurrentDictionary<string, DysonCefBrowserWindow> _windows = new(StringComparer.Ordinal);
 
+    public event Action<DysonBrowserSnipPayload>? SnipCaptured;
+
+    internal void RaiseSnipCaptured(DysonBrowserSnipPayload payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        SnipCaptured?.Invoke(payload);
+    }
+
     public async Task<Result<IDysonBrowserWindow, string>> OpenBrowserAsync(
         string? url = null,
         int? width = null,

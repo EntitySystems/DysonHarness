@@ -6,6 +6,12 @@ namespace DysonHarness;
 /// </summary>
 public interface IDysonBrowserControl
 {
+    /// <summary>
+    /// Raised when the user completes a Snip in a browser window (cropped JPEG/PNG bytes).
+    /// UI host subscribes; WindowsBrowser must not call the host directly.
+    /// </summary>
+    event Action<DysonBrowserSnipPayload>? SnipCaptured;
+
     Task<Result<IDysonBrowserWindow, string>> OpenBrowserAsync(
         string? url = null,
         int? width = null,

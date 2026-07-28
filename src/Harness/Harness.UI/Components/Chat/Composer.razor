@@ -2,7 +2,8 @@
 @using DysonHarness
 @using Harness.UI.Components.Models
 @using Harness.UI.Demo
-@implements IDisposable
+@using Microsoft.AspNetCore.Components.Forms
+@implements IAsyncDisposable
 @inject DysonModelStore ModelStore
 @inject DysonUiHost Host
 @inject IJSRuntime Js
@@ -10,7 +11,8 @@
 <div class="composer">
     <AskQuestionPopover Ask="Ask" OnSubmit="OnAskSubmit" />
     <PlanReadyPopover Pending="Host.PendingPlanReady" />
-    <div class="composer-shell">
+    <div @ref="_shell"
+         class="composer-shell @(_dragOver ? "is-drop-target" : null)">
         <div class="composer__prompt">
             @if (_slashOpen && _suggestions.Count > 0)
             {
@@ -51,9 +53,9 @@
                     }
                 </div>
             }
-            @if (Host.PendingSkillNames.Count > 0)
+            @if (Host.PendingSkillNames.Count > 0 || Host.PendingImages.Count > 0)
             {
-                <div class="composer-context" aria-label="Pending skills">
+                <div class="composer-context" aria-label="Pending attachments">
                     @foreach (var skillName in Host.PendingSkillNames)
                     {
                         var name = skillName;
@@ -66,6 +68,21 @@
                                     aria-label="@($"Remove pending skill {display}")"
                                     @onmousedown:preventDefault="true"
                                     @onclick="() => Host.RemovePendingSkill(name)">
+                                ×
+                            </button>
+                        </span>
+                    }
+                    @foreach (var image in Host.PendingImages)
+                    {
+                        var pending = image;
+                        <span class="composer-context__thumb" title="@pending.FileName">
+                            <img src="@pending.DataUrl" alt="@pending.FileName" />
+                            <button type="button"
+                                    class="composer-context__remove"
+                                    title="Remove image"
+                                    aria-label="@($"Remove image {pending.FileName}")"
+                                    @onmousedown:preventDefault="true"
+                                    @onclick="() => Host.RemovePendingImage(pending.Id)">
                                 ×
                             </button>
                         </span>
@@ -83,6 +100,20 @@
         </div>
         <div class="composer__footer">
             <div class="composer__toolbar">
+                <InputFile @key="_fileInputKey"
+                           OnChange="OnFilesSelectedAsync"
+                           accept="image/*"
+                           multiple
+                           class="composer-attach__input"
+                           disabled="@Disabled" />
+                <button type="button"
+                        class="composer-attach"
+                        title="Attach images"
+                        aria-label="Attach images"
+                        disabled="@Disabled"
+                        @onclick="OpenFilePickerAsync">
+                    <img class="composer-attach__icon" src="icons/plus.svg" alt="" />
+                </button>
                 <ModelSlugPicker SelectedSlugId="SelectedSlugId"
                                  SelectedSlugIdChanged="SelectedSlugIdChanged" />
                 <label class="composer-effort" title="Session reasoning_effort (None = omit)">
@@ -108,21 +139,26 @@
             </div>
             <button type="button"
                     class="btn btn-primary composer__send"
-                    disabled="@(Disabled || string.IsNullOrWhiteSpace(_text))"
+                    disabled="@(Disabled || !CanSubmit)"
                     @onclick="SubmitAsync">
                 Send
             </button>
         </div>
     </div>
     <div class="composer__hint">
-        <span class="list-item__meta">Ctrl+Enter to send · / for commands</span>
+        <span class="list-item__meta">Ctrl+Enter to send · paste/drop images · / for commands</span>
     </div>
 </div>
 
 @code {
     private string _text = "";
     private ElementReference _textarea;
+    private ElementReference _shell;
     private bool _textareaBound;
+    private bool _imageCaptureBound;
+    private bool _dragOver;
+    private DotNetObjectReference<Composer>? _dotNetRef;
+    private int _fileInputKey;
     private readonly List<ComposerSlashCommands.ModelOption> _models = [];
     private readonly List<ComposerSlashCommands.SkillOption> _skills = [];
     private IReadOnlyList<ComposerSlashCommands.Suggestion> _suggestions = [];
@@ -144,6 +180,9 @@
 
     private string _effortDraft = "";
     private readonly Dictionary<Guid, IReadOnlyList<string>> _slugReasoningModes = new();
+
+    private bool CanSubmit =>
+        !string.IsNullOrWhiteSpace(_text) || Host.PendingImages.Count > 0;
 
     private IEnumerable<string> EffortOptions
     {
@@ -194,19 +233,35 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (_textareaBound)
-            return;
+        if (!_textareaBound)
+        {
+            try
+            {
+                await Js.InvokeVoidAsync("dysonComposer.attachSlashGuard", _textarea);
+                _textareaBound = true;
+            }
+            catch (JSException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
 
-        try
+        if (!_imageCaptureBound)
         {
-            await Js.InvokeVoidAsync("dysonComposer.attachSlashGuard", _textarea);
-            _textareaBound = true;
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
+            try
+            {
+                _dotNetRef ??= DotNetObjectReference.Create(this);
+                await Js.InvokeVoidAsync("dysonComposer.attachImageCapture", _shell, _dotNetRef);
+                _imageCaptureBound = true;
+            }
+            catch (JSException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
         }
     }
 
@@ -355,9 +410,69 @@
         }
     }
 
+    private async Task OpenFilePickerAsync()
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("dysonComposer.openFileInput", _shell);
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private async Task OnFilesSelectedAsync(InputFileChangeEventArgs e)
+    {
+        if (Disabled)
+            return;
+
+        foreach (var file in e.GetMultipleFiles(DysonUserImageFactory.MaxPendingImages))
+        {
+            if (!file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            try
+            {
+                await using var stream = file.OpenReadStream(DysonUserImageFactory.MaxRawBytes);
+                using var ms = new MemoryStream();
+                await stream.CopyToAsync(ms);
+                Host.QueuePendingImageFromBytes(file.Name, ms.ToArray());
+            }
+            catch (Exception ex)
+            {
+                Host.ReportError($"Could not read image: {ex.Message}");
+            }
+        }
+
+        _fileInputKey++;
+    }
+
+    [JSInvokable]
+    public Task OnImageDataUrlFromJs(string fileName, string dataUrl)
+    {
+        if (Disabled)
+            return Task.CompletedTask;
+
+        var queued = Host.QueuePendingImageFromDataUrl(fileName, dataUrl);
+        _ = queued;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public Task SetDragOver(bool value)
+    {
+        if (_dragOver == value)
+            return Task.CompletedTask;
+        _dragOver = value;
+        return InvokeAsync(StateHasChanged);
+    }
+
     private async Task SubmitAsync()
     {
-        if (Disabled || string.IsNullOrWhiteSpace(_text))
+        if (Disabled || !CanSubmit)
             return;
 
         var raw = _text;
@@ -373,12 +488,34 @@
         _suggestions = [];
         _highlight = 0;
 
-        // Empty after strip: apply-only (mode/model/new/skill); composer never sends blank prompts.
-        if (string.IsNullOrWhiteSpace(raw))
+        // Empty after strip: apply-only (mode/model/new/skill) unless images are pending.
+        if (string.IsNullOrWhiteSpace(raw) && Host.PendingImages.Count == 0)
             return;
 
-        await OnSubmit.InvokeAsync(raw.Trim());
+        await OnSubmit.InvokeAsync(raw?.Trim() ?? "");
     }
 
-    public void Dispose() => Host.Changed -= OnHostChanged;
+    public async ValueTask DisposeAsync()
+    {
+        Host.Changed -= OnHostChanged;
+        if (_imageCaptureBound)
+        {
+            try
+            {
+                await Js.InvokeVoidAsync("dysonComposer.detachImageCapture", _shell);
+            }
+            catch (JSException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+
+        _dotNetRef?.Dispose();
+        _dotNetRef = null;
+    }
 }

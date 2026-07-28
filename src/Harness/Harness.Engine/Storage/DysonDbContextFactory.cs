@@ -8,10 +8,8 @@ public sealed class DysonDbContextFactory : IDesignTimeDbContextFactory<DysonDbC
 {
     public DysonDbContext CreateDbContext(string[] args)
     {
-        var options = new DbContextOptionsBuilder<DysonDbContext>()
-            .UseSqlite("Data Source=dyson-design.db")
-            .Options;
-
-        return new DysonDbContext(options);
+        var optionsBuilder = new DbContextOptionsBuilder<DysonDbContext>();
+        DysonSqliteConfigurator.Configure(optionsBuilder, "dyson-design.db");
+        return new DysonDbContext(optionsBuilder.Options);
     }
 }

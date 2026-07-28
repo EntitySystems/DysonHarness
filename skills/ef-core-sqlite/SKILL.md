@@ -1,10 +1,11 @@
 ---
 name: ef-core-sqlite
 description: >-
-  EF Core + SQLite practices for DysonHarness (DysonDbContext, migrations,
-  value converters, EnsureMigrated). Use when changing entities, DbContext
-  configuration, SQLite schema, migrations, value converters, indexes, cascade
-  deletes, or concurrency around a shared DbContext in this repository.
+  EF Core + SQLite practices for DysonHarness (DysonDbContext, DysonDbAccessor,
+  IDbContextFactory, migrations, value converters, WAL/timeout). Use when
+  changing entities, DbContext configuration, store concurrency, SQLite schema,
+  migrations, value converters, indexes, cascade deletes, or any service that
+  touches dyson.db in this repository.
 ---
 
 # EF Core + SQLite (DysonHarness)
@@ -16,10 +17,13 @@ Apply when working on persistence in `Harness.Engine` (`DysonDbContext`, stores,
 | Piece | Location |
 | ----- | -------- |
 | DbContext | `src/Harness/Harness.Engine/Storage/DysonDbContext.cs` |
+| Connection + WAL/timeout | `DysonSqliteConfigurator` |
+| Thread-safe EF entrypoint | `DysonDbAccessor` (singleton) |
 | Design-time factory | `src/Harness/Harness.Engine/Storage/DysonDbContextFactory.cs` |
+| Runtime factory registration | `Program.cs` → `AddDbContextFactory<DysonDbContext>` |
 | Migrations | `src/Harness/Harness.Engine/Migrations/` |
 | Value converter example | `src/Harness/Harness.Engine/Storage/StringListJsonValueConverter.cs` |
-| Apply on startup | `EnsureMigrated()` / `DysonDbContext.Open()` → `Database.Migrate()` |
+| Apply on startup | **once** via factory `EnsureMigrated()` in `Program.cs` |
 | Schema docs | `docs/storage/models.md`, `docs/storage/sessions.md` |
 
 DB file: `DysonAppPaths.GetDatabasePath(DysonBuildInfo.Current)` → `{app-data}/dyson.db`. Timestamps: `DateTime` UTC only — never `DateTimeOffset` on entities or EF `OrderBy` (SQLite limitation; see csharp skill / rules).
@@ -36,27 +40,67 @@ DB file: `DysonAppPaths.GetDatabasePath(DysonBuildInfo.Current)` → `{app-data}
 - Some schema ops need table rebuilds; EF may rebuild or throw `NotSupportedException` — review generated migrations for SQLite.
 - Idempotent migration scripts are limited; prefer `Database.Migrate()` / `dotnet ef database update`.
 
-## DbContext & connection strings
+## Connection (timeout + WAL)
 
-- Runtime: `OnConfiguring` calls `UseSqlite($"Data Source={path}")` when options are not already configured.
-- Design-time: `DysonDbContextFactory` uses a throwaway `Data Source=dyson-design.db` for `dotnet ef` only — do not point tools at real user DBs casually.
-- Prefer configuring via `DbContextOptions` when constructing from DI; keep path resolution in one place (`DysonAppPaths`).
+Always configure through `DysonSqliteConfigurator` (not bare `Data Source=`):
+
+- Connection string: `Data Source={path};Default Timeout=30` (busy timeout seconds)
+- On open: `PRAGMA journal_mode=WAL;` + `PRAGMA synchronous=NORMAL;`
+- Used by DI factory registration, `OnConfiguring`, design-time factory, and tests that open file-backed DBs
 
 ```csharp
-// Prefer migrations path used by the app:
-db.EnsureMigrated();           // Database.Migrate()
-// or
-var db = DysonDbContext.Open(); // new context + Migrate()
+DysonSqliteConfigurator.Configure(options, databasePath);
 ```
+
+## Mandatory service rule (concurrency)
+
+**Any DB access in a service must use either:**
+
+1. A **new** `DysonDbContext` from `IDbContextFactory` / `DysonDbAccessor.RunAsync` for that operation (preferred default), **or**
+2. A `DysonDbContext` **passed down** from the caller that already owns it — **one logical owner / one thread of execution at a time** on that instance.
+
+Hard bans:
+
+- Never inject a long-lived shared scoped `DysonDbContext` into multithreaded services for ad-hoc use.
+- Never share one context across parallel tools / `Task.WhenAll` / `Task.Run` / multiple stores.
+- Never stash a context on a singleton beyond the owning `RunAsync` lifetime.
+
+### Accessor pattern
+
+```csharp
+// Public store API
+public Task<Result<Guid, string>> CreateAsync(...) =>
+    _accessor.RunAsync((db, ct) => CreateCoreAsync(db, ..., ct), cancellationToken);
+
+// Pass-down helper (same unit of work; no parallel ops on db)
+private static async Task TouchAsync(DysonDbContext db, Guid id, CancellationToken ct) { ... }
+```
+
+Semantics of `RunAsync`: acquire process-wide gate (keyed by DB path) → `CreateDbContext` → run work → dispose → release gate. `DysonDbAccessor.SaveChangesAsync` retries SQLITE_BUSY (5) / SQLITE_LOCKED (6).
+
+### SQLite one-writer
+
+SQLite allows one writer at a time. The process-wide gate serializes writers in-process; `Default Timeout=30` waits on external lock holders. **Error 5** = database busy (another connection holds a write lock). Prefer short transactions; do not hold a context across UI awaits outside `RunAsync`.
+
+### UpsertTurn contention retry
+
+`DysonSessionStore.UpsertTurnAsync` alone retries (~5 attempts, short backoff, fresh `RunAsync` each time) on:
+
+- EF `InvalidOperationException` (“second operation … on this context”)
+- `SqliteException` busy (5) / locked (6)
+
+Other errors return `Failed to upsert turn: …` immediately.
 
 ## EnsureCreated vs migrations
 
 | API | Use |
 | --- | --- |
 | `Database.Migrate()` / `EnsureMigrated()` | **This repo’s default** — creates DB if missing and applies pending migrations |
-| `EnsureCreated()` | Prototypes / throwaway tests only |
+| `EnsureCreated()` | Prototypes / throwaway in-memory tests only |
 
-**Do not mix** `EnsureCreated` with migrations. `EnsureCreated` skips the migrations history table; a DB created that way cannot be updated with migrations cleanly. If switching from `EnsureCreated` to migrations, drop and recreate (or otherwise rebuild) the DB.
+**Migrate once** at app startup (`Program.cs` factory context). Do not call `EnsureMigrated` on every scope.
+
+**Do not mix** `EnsureCreated` with migrations on the same durable DB file.
 
 ## Migrations workflow
 
@@ -106,19 +150,15 @@ Configure in `OnModelCreating` (match existing style):
 
 Pick delete behavior deliberately; SQLite will enforce FKs when enabled.
 
-## Concurrency & threading
-
-- A `DbContext` instance is **not thread-safe**. Do not run concurrent operations on one context.
-- If one context is shared across UI/async work, **serialize** access (lock / queue / single-threaded ownership). Prefer short-lived contexts or clear ownership in stores.
-- SQLite allows one writer at a time; keep transactions short.
-- Do not call `SaveChanges` from multiple threads on the same instance; avoid overlapping queries + writes on that instance.
-
 ## Pitfalls checklist
 
 - [ ] Schema change → migration + snapshot + docs; never rely on `EnsureCreated` in app code
-- [ ] No parallel use of the same `DysonDbContext`
+- [ ] Service DB access → factory/accessor **or** pass-down context with single-thread ownership
+- [ ] No shared scoped `DysonDbContext` across parallel tools / stores
 - [ ] No `DateTimeOffset` on EF entities / ordered queries
 - [ ] Collection JSON properties use converter + comparer (or immutable replace of the list)
+- [ ] Connection uses `DysonSqliteConfigurator` (timeout + WAL), not bare `Data Source=`
+- [ ] Migrate **once** at startup — not per DI scope
 - [ ] Secrets: API keys live in DB for the app’s use — do not log them, do not commit `dyson.db` / `.env` credentials
 - [ ] Design-time DB (`dyson-design.db`) is not user data; don’t treat it as source of truth
 - [ ] Abandoned migration lock (EF9+ `__EFMigrationsLock`): if migrate hangs after a kill, clear that table (see [reference.md](reference.md))

@@ -22,6 +22,18 @@ Ship a **Windows desktop shell** that hosts Dyson UI inside **CefSharp WPF** (no
 - MCP browser tools appear only when that property is non-null
 - Non-Windows: no project reference to `Harness.WindowsBrowser`; browser tools omitted
 
+## Snip → agent composer
+
+Agent browser chrome has a **Snip** button to the right of the address bar. Clicking it enters rubber-band mode over the page content (Esc cancels). On a valid drag:
+
+1. The active tab takes a full-viewport DevTools screenshot (`TakeScreenshotAsync`)
+2. The selection (DIP) is mapped to pixel bounds and cropped to JPEG in WPF
+3. `IDysonBrowserControl.SnipCaptured` raises `DysonBrowserSnipPayload` (`ImageBytes`, empty `HtmlRef`, `FileName` = `browser-snip.jpg`)
+4. `DysonUiHost` compresses via `DysonUserImageFactory` and `QueuePendingImage` — the thumbnail appears in the composer; the user still types/sends (no auto-send)
+
+**`HtmlRef` TODO:** `DysonBinaryAttachment.HtmlRef` / payload `HtmlRef` are reserved for a future feature that will resolve HTML elements intersecting the snip rectangle. Today they are always empty/null and are not sent on provider wire image parts.
+
+Boundary: `Harness.WindowsBrowser` only references Abstractions; it never calls `DysonUiHost` directly.
 ## Constraints
 
 - Reuse app mode + platform paths from [docs/storage/models.md](../storage/models.md) — one `dyson.db` per mode folder

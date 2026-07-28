@@ -3,6 +3,7 @@ using Harness.UI.Components;
 using Harness.UI.Demo;
 using Harness.UI.Files;
 using Harness.UI.Theme;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -15,12 +16,16 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
 builder.Services.AddHttpClient();
-builder.Services.AddScoped(_ =>
-{
-    var db = new DysonDbContext();
-    db.EnsureMigrated();
-    return db;
-});
+
+DysonAppPaths.EnsureRoot(DysonBuildInfo.Current);
+var databasePath = DysonAppPaths.GetDatabasePath(DysonBuildInfo.Current);
+builder.Services.AddDbContextFactory<DysonDbContext>(options =>
+    DysonSqliteConfigurator.Configure(options, databasePath));
+builder.Services.AddSingleton(sp =>
+    new DysonDbAccessor(
+        sp.GetRequiredService<IDbContextFactory<DysonDbContext>>(),
+        databasePath));
+
 builder.Services.AddScoped<DysonModelStore>();
 builder.Services.AddScoped<DysonSessionStore>();
 builder.Services.AddScoped<DysonWorkDirectoryStore>();
@@ -48,6 +53,14 @@ builder.Services.AddSingleton<DysonFileTreeService>();
 builder.Services.AddSingleton<DysonGitChangesService>();
 
 var app = builder.Build();
+
+{
+    await using var db = await app.Services
+        .GetRequiredService<IDbContextFactory<DysonDbContext>>()
+        .CreateDbContextAsync()
+        .ConfigureAwait(false);
+    db.EnsureMigrated();
+}
 
 app.Lifetime.ApplicationStopping.Register(() =>
 {

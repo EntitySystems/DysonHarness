@@ -88,20 +88,18 @@ public sealed class DysonSessionTodoReplaceItem
     public IReadOnlyList<string>? Comments { get; init; }
 }
 
-public sealed class DysonSessionStore(DysonDbContext db)
+public sealed class DysonSessionStore(DysonDbAccessor accessor)
 {
     private static readonly JsonSerializerOptions TodoJsonOptions = new();
 
-    private readonly DysonDbContext _db = db ?? throw new ArgumentNullException(nameof(db));
-    // ponytail: global lock serializes all session DbContext ops on the shared scoped context; upgrade path = IDbContextFactory per operation
-    private readonly SemaphoreSlim _dbGate = new(1, 1);
+    private readonly DysonDbAccessor _accessor = accessor ?? throw new ArgumentNullException(nameof(accessor));
 
     public Task<Result<Guid, string>> CreateSessionAsync(
         DysonSessionCreateRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return RunSerializedAsync(ct => CreateSessionCoreAsync(request, ct), cancellationToken);
+        return _accessor.RunAsync((db, ct) => CreateSessionCoreAsync(db, request, ct), cancellationToken);
     }
 
     public Task<VoidResult<string>> UpdateSessionMetaAsync(
@@ -109,15 +107,34 @@ public sealed class DysonSessionStore(DysonDbContext db)
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(update);
-        return RunSerializedAsync(ct => UpdateSessionMetaCoreAsync(update, ct), cancellationToken);
+        return _accessor.RunAsync((db, ct) => UpdateSessionMetaCoreAsync(db, update, ct), cancellationToken);
     }
 
-    public Task<VoidResult<string>> UpsertTurnAsync(
+    public async Task<VoidResult<string>> UpsertTurnAsync(
         DysonTurnEntity turn,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(turn);
-        return RunSerializedAsync(ct => UpsertTurnCoreAsync(turn, ct), cancellationToken);
+        const int maxAttempts = 5;
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return await _accessor.RunAsync(
+                        (db, ct) => UpsertTurnCoreAsync(db, turn, ct),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (attempt < maxAttempts - 1 && DysonDbAccessor.IsContention(ex))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(20 * (attempt + 1)), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                return new VoidResult<string>($"Failed to upsert turn: {ex.Message}");
+            }
+        }
     }
 
     public Task<VoidResult<string>> AppendLogAsync(
@@ -125,14 +142,14 @@ public sealed class DysonSessionStore(DysonDbContext db)
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        return RunSerializedAsync(ct => AppendLogCoreAsync(entry, ct), cancellationToken);
+        return _accessor.RunAsync((db, ct) => AppendLogCoreAsync(db, entry, ct), cancellationToken);
     }
 
     public Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListSessionsAsync(
         Guid? workDirectoryId = null,
         bool rootsOnly = true,
         CancellationToken cancellationToken = default)
-        => RunSerializedAsync(ct => ListSessionsCoreAsync(workDirectoryId, rootsOnly, ct), cancellationToken);
+        => _accessor.RunAsync((db, ct) => ListSessionsCoreAsync(db, workDirectoryId, rootsOnly, ct), cancellationToken);
 
     /// <summary>
     /// Direct child sessions for <paramref name="parentSessionId"/>, ordered by <see cref="DysonSessionSummary.RuntimeId"/>.
@@ -140,12 +157,12 @@ public sealed class DysonSessionStore(DysonDbContext db)
     public Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListChildSessionsAsync(
         Guid parentSessionId,
         CancellationToken cancellationToken = default)
-        => RunSerializedAsync(ct => ListChildSessionsCoreAsync(parentSessionId, ct), cancellationToken);
+        => _accessor.RunAsync((db, ct) => ListChildSessionsCoreAsync(db, parentSessionId, ct), cancellationToken);
 
     public Task<Result<DysonPersistedSession, string>> GetFullSessionAsync(
         Guid sessionId,
         CancellationToken cancellationToken = default)
-        => RunSerializedAsync(ct => GetFullSessionCoreAsync(sessionId, ct), cancellationToken);
+        => _accessor.RunAsync((db, ct) => GetFullSessionCoreAsync(db, sessionId, ct), cancellationToken);
 
     /// <summary>
     /// Deletes a session and its descendant subagent sessions. Turns, logs, and todos cascade.
@@ -153,19 +170,19 @@ public sealed class DysonSessionStore(DysonDbContext db)
     public Task<VoidResult<string>> DeleteSessionAsync(
         Guid sessionId,
         CancellationToken cancellationToken = default)
-        => RunSerializedAsync(ct => DeleteSessionCoreAsync(sessionId, ct), cancellationToken);
+        => _accessor.RunAsync((db, ct) => DeleteSessionCoreAsync(db, sessionId, ct), cancellationToken);
 
     public Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ListTodosAsync(
         Guid sessionId,
         CancellationToken cancellationToken = default)
-        => RunSerializedAsync(ct => ListTodosCoreAsync(sessionId, ct), cancellationToken);
+        => _accessor.RunAsync((db, ct) => ListTodosCoreAsync(db, sessionId, ct), cancellationToken);
 
     public Task<Result<DysonSessionTodo, string>> CreateTodoAsync(
         DysonSessionTodoCreateRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return RunSerializedAsync(ct => CreateTodoCoreAsync(request, ct), cancellationToken);
+        return _accessor.RunAsync((db, ct) => CreateTodoCoreAsync(db, request, ct), cancellationToken);
     }
 
     public Task<Result<DysonSessionTodo, string>> UpdateTodoAsync(
@@ -173,14 +190,14 @@ public sealed class DysonSessionStore(DysonDbContext db)
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return RunSerializedAsync(ct => UpdateTodoCoreAsync(request, ct), cancellationToken);
+        return _accessor.RunAsync((db, ct) => UpdateTodoCoreAsync(db, request, ct), cancellationToken);
     }
 
     public Task<VoidResult<string>> DeleteTodoAsync(
         Guid sessionId,
         string taskCode,
         CancellationToken cancellationToken = default)
-        => RunSerializedAsync(ct => DeleteTodoCoreAsync(sessionId, taskCode, ct), cancellationToken);
+        => _accessor.RunAsync((db, ct) => DeleteTodoCoreAsync(db, sessionId, taskCode, ct), cancellationToken);
 
     /// <summary>
     /// Replaces the session's todo list (delete all, then insert <paramref name="items"/> in order).
@@ -191,25 +208,11 @@ public sealed class DysonSessionStore(DysonDbContext db)
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(items);
-        return RunSerializedAsync(ct => ReplaceTodosCoreAsync(sessionId, items, ct), cancellationToken);
-    }
-
-    private async Task<T> RunSerializedAsync<T>(
-        Func<CancellationToken, Task<T>> action,
-        CancellationToken cancellationToken)
-    {
-        await _dbGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            return await action(cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            _dbGate.Release();
-        }
+        return _accessor.RunAsync((db, ct) => ReplaceTodosCoreAsync(db, sessionId, items, ct), cancellationToken);
     }
 
     private async Task<Result<Guid, string>> CreateSessionCoreAsync(
+        DysonDbContext db,
         DysonSessionCreateRequest request,
         CancellationToken cancellationToken)
     {
@@ -234,23 +237,24 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 LastActivityUtc = now,
             };
 
-            _db.Sessions.Add(entity);
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            db.Sessions.Add(entity);
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return Result<Guid, string>.AsValue(entity.Id);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return Result<Guid, string>.AsError($"Failed to create session: {ex.Message}");
         }
     }
 
     private async Task<VoidResult<string>> UpdateSessionMetaCoreAsync(
+        DysonDbContext db,
         DysonSessionMetaUpdate update,
         CancellationToken cancellationToken)
     {
         try
         {
-            var entity = await _db.Sessions
+            var entity = await db.Sessions
                 .FirstOrDefaultAsync(s => s.Id == update.SessionId, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -281,16 +285,17 @@ public sealed class DysonSessionStore(DysonDbContext db)
             entity.UpdatedUtc = now;
             entity.LastActivityUtc = now;
 
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return new VoidResult<string>($"Failed to update session meta: {ex.Message}");
         }
     }
 
     private async Task<VoidResult<string>> UpsertTurnCoreAsync(
+        DysonDbContext db,
         DysonTurnEntity turn,
         CancellationToken cancellationToken)
     {
@@ -299,7 +304,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
             if (turn.Id == Guid.Empty)
                 turn.Id = Guid.NewGuid();
 
-            var existing = await _db.Turns
+            var existing = await db.Turns
                 .FirstOrDefaultAsync(t => t.Id == turn.Id, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -308,7 +313,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 if (turn.CreatedUtc == default)
                     turn.CreatedUtc = DateTime.UtcNow;
 
-                _db.Turns.Add(turn);
+                db.Turns.Add(turn);
             }
             else
             {
@@ -322,6 +327,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 existing.ReasoningText = turn.ReasoningText;
                 existing.ReasoningLogJson = turn.ReasoningLogJson;
                 existing.SkillsUsedJson = turn.SkillsUsedJson;
+                existing.UserImagesJson = turn.UserImagesJson;
                 existing.ToolStateJson = turn.ToolStateJson;
                 existing.ToolHistoryOptimized = turn.ToolHistoryOptimized;
                 existing.CompactToolHistory = turn.CompactToolHistory;
@@ -329,7 +335,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 existing.CompletedUtc = turn.CompletedUtc;
             }
 
-            var session = await _db.Sessions
+            var session = await db.Sessions
                 .FirstOrDefaultAsync(s => s.Id == turn.SessionId, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -340,16 +346,17 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 session.LastActivityUtc = now;
             }
 
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsContention(ex))
         {
             return new VoidResult<string>($"Failed to upsert turn: {ex.Message}");
         }
     }
 
     private async Task<VoidResult<string>> AppendLogCoreAsync(
+        DysonDbContext db,
         DysonSessionLogEntry entry,
         CancellationToken cancellationToken)
     {
@@ -362,12 +369,12 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 entry.TimestampUtc = DateTime.UtcNow;
 
             if (entry.Sequence <= 0)
-                entry.Sequence = await NextLogSequenceAsync(entry.SessionId, cancellationToken)
+                entry.Sequence = await NextLogSequenceAsync(db, entry.SessionId, cancellationToken)
                     .ConfigureAwait(false);
 
-            _db.SessionLogs.Add(entry);
+            db.SessionLogs.Add(entry);
 
-            var session = await _db.Sessions
+            var session = await db.Sessions
                 .FirstOrDefaultAsync(s => s.Id == entry.SessionId, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -378,23 +385,24 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 session.LastActivityUtc = now;
             }
 
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return new VoidResult<string>($"Failed to append session log: {ex.Message}");
         }
     }
 
     private async Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListSessionsCoreAsync(
+        DysonDbContext db,
         Guid? workDirectoryId,
         bool rootsOnly,
         CancellationToken cancellationToken)
     {
         try
         {
-            var query = _db.Sessions.AsNoTracking().AsQueryable();
+            var query = db.Sessions.AsNoTracking().AsQueryable();
             if (rootsOnly)
                 query = query.Where(s => s.ParentSessionId == null);
 
@@ -421,7 +429,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
 
             return Result<IReadOnlyList<DysonSessionSummary>, string>.AsValue(list);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return Result<IReadOnlyList<DysonSessionSummary>, string>.AsError(
                 $"Failed to list sessions: {ex.Message}");
@@ -429,12 +437,13 @@ public sealed class DysonSessionStore(DysonDbContext db)
     }
 
     private async Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListChildSessionsCoreAsync(
+        DysonDbContext db,
         Guid parentSessionId,
         CancellationToken cancellationToken)
     {
         try
         {
-            var list = await _db.Sessions
+            var list = await db.Sessions
                 .AsNoTracking()
                 .Where(s => s.ParentSessionId == parentSessionId)
                 .OrderBy(s => s.RuntimeId)
@@ -456,7 +465,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
 
             return Result<IReadOnlyList<DysonSessionSummary>, string>.AsValue(list);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return Result<IReadOnlyList<DysonSessionSummary>, string>.AsError(
                 $"Failed to list child sessions: {ex.Message}");
@@ -464,12 +473,13 @@ public sealed class DysonSessionStore(DysonDbContext db)
     }
 
     private async Task<Result<DysonPersistedSession, string>> GetFullSessionCoreAsync(
+        DysonDbContext db,
         Guid sessionId,
         CancellationToken cancellationToken)
     {
         try
         {
-            var session = await _db.Sessions
+            var session = await db.Sessions
                 .AsNoTracking()
                 .FirstOrDefaultAsync(s => s.Id == sessionId, cancellationToken)
                 .ConfigureAwait(false);
@@ -477,21 +487,21 @@ public sealed class DysonSessionStore(DysonDbContext db)
             if (session is null)
                 return Result<DysonPersistedSession, string>.AsError($"Session '{sessionId}' not found.");
 
-            var turns = await _db.Turns
+            var turns = await db.Turns
                 .AsNoTracking()
                 .Where(t => t.SessionId == sessionId)
                 .OrderBy(t => t.Sequence)
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            var logs = await _db.SessionLogs
+            var logs = await db.SessionLogs
                 .AsNoTracking()
                 .Where(l => l.SessionId == sessionId)
                 .OrderBy(l => l.Sequence)
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            var todoRows = await _db.SessionTodos
+            var todoRows = await db.SessionTodos
                 .AsNoTracking()
                 .Where(t => t.SessionId == sessionId)
                 .OrderBy(t => t.Sequence)
@@ -506,7 +516,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 Todos = todoRows.Select(ToRuntimeTodo).ToList(),
             });
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return Result<DysonPersistedSession, string>.AsError(
                 $"Failed to load full session: {ex.Message}");
@@ -514,12 +524,13 @@ public sealed class DysonSessionStore(DysonDbContext db)
     }
 
     private async Task<VoidResult<string>> DeleteSessionCoreAsync(
+        DysonDbContext db,
         Guid sessionId,
         CancellationToken cancellationToken)
     {
         try
         {
-            var root = await _db.Sessions
+            var root = await db.Sessions
                 .FirstOrDefaultAsync(s => s.Id == sessionId, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -534,7 +545,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
             {
                 var id = pending.Dequeue();
                 ordered.Add(id);
-                var childIds = await _db.Sessions
+                var childIds = await db.Sessions
                     .Where(s => s.ParentSessionId == id)
                     .Select(s => s.Id)
                     .ToListAsync(cancellationToken)
@@ -547,29 +558,30 @@ public sealed class DysonSessionStore(DysonDbContext db)
             {
                 var entity = i == 0
                     ? root
-                    : await _db.Sessions
+                    : await db.Sessions
                         .FirstOrDefaultAsync(s => s.Id == ordered[i], cancellationToken)
                         .ConfigureAwait(false);
                 if (entity is not null)
-                    _db.Sessions.Remove(entity);
+                    db.Sessions.Remove(entity);
             }
 
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return new VoidResult<string>($"Failed to delete session: {ex.Message}");
         }
     }
 
     private async Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ListTodosCoreAsync(
+        DysonDbContext db,
         Guid sessionId,
         CancellationToken cancellationToken)
     {
         try
         {
-            var exists = await _db.Sessions
+            var exists = await db.Sessions
                 .AsNoTracking()
                 .AnyAsync(s => s.Id == sessionId, cancellationToken)
                 .ConfigureAwait(false);
@@ -578,7 +590,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 return Result<IReadOnlyList<DysonSessionTodo>, string>.AsError(
                     $"Session '{sessionId}' not found.");
 
-            var rows = await _db.SessionTodos
+            var rows = await db.SessionTodos
                 .AsNoTracking()
                 .Where(t => t.SessionId == sessionId)
                 .OrderBy(t => t.Sequence)
@@ -588,7 +600,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
             return Result<IReadOnlyList<DysonSessionTodo>, string>.AsValue(
                 rows.Select(ToRuntimeTodo).ToList());
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return Result<IReadOnlyList<DysonSessionTodo>, string>.AsError(
                 $"Failed to list todos: {ex.Message}");
@@ -596,6 +608,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
     }
 
     private async Task<Result<DysonSessionTodo, string>> CreateTodoCoreAsync(
+        DysonDbContext db,
         DysonSessionTodoCreateRequest request,
         CancellationToken cancellationToken)
     {
@@ -611,14 +624,14 @@ public sealed class DysonSessionStore(DysonDbContext db)
             if (!Enum.IsDefined(request.Status))
                 return Result<DysonSessionTodo, string>.AsError($"Invalid status '{request.Status}'.");
 
-            var sessionExists = await _db.Sessions
+            var sessionExists = await db.Sessions
                 .AnyAsync(s => s.Id == request.SessionId, cancellationToken)
                 .ConfigureAwait(false);
 
             if (!sessionExists)
                 return Result<DysonSessionTodo, string>.AsError($"Session '{request.SessionId}' not found.");
 
-            var duplicate = await _db.SessionTodos
+            var duplicate = await db.SessionTodos
                 .AnyAsync(
                     t => t.SessionId == request.SessionId && t.TaskCode == taskCode,
                     cancellationToken)
@@ -631,7 +644,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
             }
 
             var now = DateTime.UtcNow;
-            var sequence = await NextTodoSequenceAsync(request.SessionId, cancellationToken)
+            var sequence = await NextTodoSequenceAsync(db, request.SessionId, cancellationToken)
                 .ConfigureAwait(false);
 
             var entity = new DysonSessionTodoEntity
@@ -647,24 +660,25 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 UpdatedUtc = now,
             };
 
-            _db.SessionTodos.Add(entity);
-            await TouchSessionActivityAsync(request.SessionId, now, cancellationToken)
+            db.SessionTodos.Add(entity);
+            await TouchSessionActivityAsync(db, request.SessionId, now, cancellationToken)
                 .ConfigureAwait(false);
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return Result<DysonSessionTodo, string>.AsValue(ToRuntimeTodo(entity));
         }
-        catch (DbUpdateException ex)
+        catch (DbUpdateException ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return Result<DysonSessionTodo, string>.AsError(
                 $"Failed to create todo (duplicate TaskCode?): {ex.Message}");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return Result<DysonSessionTodo, string>.AsError($"Failed to create todo: {ex.Message}");
         }
     }
 
     private async Task<Result<DysonSessionTodo, string>> UpdateTodoCoreAsync(
+        DysonDbContext db,
         DysonSessionTodoUpdateRequest request,
         CancellationToken cancellationToken)
     {
@@ -677,7 +691,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
             if (request.Status is { } status && !Enum.IsDefined(status))
                 return Result<DysonSessionTodo, string>.AsError($"Invalid status '{status}'.");
 
-            var entity = await _db.SessionTodos
+            var entity = await db.SessionTodos
                 .FirstOrDefaultAsync(
                     t => t.SessionId == request.SessionId && t.TaskCode == taskCode,
                     cancellationToken)
@@ -712,18 +726,19 @@ public sealed class DysonSessionStore(DysonDbContext db)
 
             var now = DateTime.UtcNow;
             entity.UpdatedUtc = now;
-            await TouchSessionActivityAsync(request.SessionId, now, cancellationToken)
+            await TouchSessionActivityAsync(db, request.SessionId, now, cancellationToken)
                 .ConfigureAwait(false);
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return Result<DysonSessionTodo, string>.AsValue(ToRuntimeTodo(entity));
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return Result<DysonSessionTodo, string>.AsError($"Failed to update todo: {ex.Message}");
         }
     }
 
     private async Task<VoidResult<string>> DeleteTodoCoreAsync(
+        DysonDbContext db,
         Guid sessionId,
         string taskCode,
         CancellationToken cancellationToken)
@@ -734,7 +749,7 @@ public sealed class DysonSessionStore(DysonDbContext db)
             if (normalized is null)
                 return new VoidResult<string>("TaskCode is required.");
 
-            var entity = await _db.SessionTodos
+            var entity = await db.SessionTodos
                 .FirstOrDefaultAsync(
                     t => t.SessionId == sessionId && t.TaskCode == normalized,
                     cancellationToken)
@@ -743,26 +758,27 @@ public sealed class DysonSessionStore(DysonDbContext db)
             if (entity is null)
                 return new VoidResult<string>($"Todo '{normalized}' not found on session '{sessionId}'.");
 
-            _db.SessionTodos.Remove(entity);
-            await TouchSessionActivityAsync(sessionId, DateTime.UtcNow, cancellationToken)
+            db.SessionTodos.Remove(entity);
+            await TouchSessionActivityAsync(db, sessionId, DateTime.UtcNow, cancellationToken)
                 .ConfigureAwait(false);
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return new VoidResult<string>($"Failed to delete todo: {ex.Message}");
         }
     }
 
     private async Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ReplaceTodosCoreAsync(
+        DysonDbContext db,
         Guid sessionId,
         IReadOnlyList<DysonSessionTodoReplaceItem> items,
         CancellationToken cancellationToken)
     {
         try
         {
-            var sessionExists = await _db.Sessions
+            var sessionExists = await db.Sessions
                 .AnyAsync(s => s.Id == sessionId, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -802,13 +818,13 @@ public sealed class DysonSessionStore(DysonDbContext db)
                 }
             }
 
-            var existing = await _db.SessionTodos
+            var existing = await db.SessionTodos
                 .Where(t => t.SessionId == sessionId)
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
 
             if (existing.Count > 0)
-                _db.SessionTodos.RemoveRange(existing);
+                db.SessionTodos.RemoveRange(existing);
 
             var now = DateTime.UtcNow;
             var created = new List<DysonSessionTodoEntity>(items.Count);
@@ -828,28 +844,29 @@ public sealed class DysonSessionStore(DysonDbContext db)
                     UpdatedUtc = now,
                 };
                 created.Add(entity);
-                _db.SessionTodos.Add(entity);
+                db.SessionTodos.Add(entity);
             }
 
-            await TouchSessionActivityAsync(sessionId, now, cancellationToken).ConfigureAwait(false);
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await TouchSessionActivityAsync(db, sessionId, now, cancellationToken).ConfigureAwait(false);
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return Result<IReadOnlyList<DysonSessionTodo>, string>.AsValue(
                 created.Select(ToRuntimeTodo).ToList());
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return Result<IReadOnlyList<DysonSessionTodo>, string>.AsError(
                 $"Failed to replace todos: {ex.Message}");
         }
     }
 
-    /// <summary>Caller must already hold <see cref="_dbGate"/>.</summary>
+    /// <summary>Caller owns <paramref name="db"/> for this call (no parallel use).</summary>
     private async Task TouchSessionActivityAsync(
+        DysonDbContext db,
         Guid sessionId,
         DateTime utcNow,
         CancellationToken cancellationToken)
     {
-        var session = await _db.Sessions
+        var session = await db.Sessions
             .FirstOrDefaultAsync(s => s.Id == sessionId, cancellationToken)
             .ConfigureAwait(false);
 
@@ -860,16 +877,17 @@ public sealed class DysonSessionStore(DysonDbContext db)
         session.LastActivityUtc = utcNow;
     }
 
-    /// <summary>Caller must already hold <see cref="_dbGate"/>.</summary>
-    private async Task<int> NextTodoSequenceAsync(Guid sessionId, CancellationToken cancellationToken)
+    /// <summary>Caller owns <paramref name="db"/> for this call (no parallel use).</summary>
+    private async Task<int> NextTodoSequenceAsync(DysonDbContext db,
+        Guid sessionId, CancellationToken cancellationToken)
     {
-        var dbMax = await _db.SessionTodos
+        var dbMax = await db.SessionTodos
             .Where(t => t.SessionId == sessionId)
             .Select(t => (int?)t.Sequence)
             .MaxAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        var localMax = _db.SessionTodos.Local
+        var localMax = db.SessionTodos.Local
             .Where(t => t.SessionId == sessionId)
             .Select(t => (int?)t.Sequence)
             .DefaultIfEmpty()
@@ -878,16 +896,17 @@ public sealed class DysonSessionStore(DysonDbContext db)
         return Math.Max(dbMax ?? 0, localMax ?? 0) + 1;
     }
 
-    /// <summary>Caller must already hold <see cref="_dbGate"/>.</summary>
-    private async Task<long> NextLogSequenceAsync(Guid sessionId, CancellationToken cancellationToken)
+    /// <summary>Caller owns <paramref name="db"/> for this call (no parallel use).</summary>
+    private async Task<long> NextLogSequenceAsync(DysonDbContext db,
+        Guid sessionId, CancellationToken cancellationToken)
     {
-        var dbMax = await _db.SessionLogs
+        var dbMax = await db.SessionLogs
             .Where(l => l.SessionId == sessionId)
             .Select(l => (long?)l.Sequence)
             .MaxAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        var localMax = _db.SessionLogs.Local
+        var localMax = db.SessionLogs.Local
             .Where(l => l.SessionId == sessionId)
             .Select(l => (long?)l.Sequence)
             .DefaultIfEmpty()

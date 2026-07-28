@@ -21,8 +21,9 @@ public class DysonConfiguredShellStoreTests
         if (!OperatingSystem.IsWindows())
             return;
 
-        using var db = OpenTempDb();
-        var store = new DysonConfiguredShellStore(db);
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var store = new DysonConfiguredShellStore(accessor);
 
         var ensure = store.EnsureDefaultsAsync().GetAwaiter().GetResult();
         if (ensure.IsError)
@@ -59,8 +60,9 @@ public class DysonConfiguredShellStoreTests
 
     private static void AssertUniqueNameCaseInsensitive()
     {
-        using var db = OpenTempDb();
-        var store = new DysonConfiguredShellStore(db);
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var store = new DysonConfiguredShellStore(accessor);
 
         var a = store.CreateAsync("MyShell", "cmd.exe").GetAwaiter().GetResult();
         if (a.IsError)
@@ -73,8 +75,9 @@ public class DysonConfiguredShellStoreTests
 
     private static void AssertFixedArgsRoundTrip()
     {
-        using var db = OpenTempDb();
-        var store = new DysonConfiguredShellStore(db);
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var store = new DysonConfiguredShellStore(accessor);
 
         var created = store.CreateAsync("GitBash", @"C:\Git\bin\bash.exe", fixedArgs: ["-c"])
             .GetAwaiter().GetResult();
@@ -146,15 +149,4 @@ public class DysonConfiguredShellStoreTests
         }
     }
 
-    private static DysonDbContext OpenTempDb()
-    {
-        var conn = new SqliteConnection("Data Source=:memory:");
-        conn.Open();
-        var options = new DbContextOptionsBuilder<DysonDbContext>()
-            .UseSqlite(conn)
-            .Options;
-        var db = new DysonDbContext(options);
-        db.Database.EnsureCreated();
-        return db;
-    }
 }

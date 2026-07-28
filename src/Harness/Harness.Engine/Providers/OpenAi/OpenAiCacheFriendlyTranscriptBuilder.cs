@@ -270,12 +270,12 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             // In-progress current turn: user content may get ephemeral rename / Plan mandates;
             // tool rounds come from inFlightRounds. PlanResult may append after the live turn.
             var incompleteCurrent = i == incompleteIndex;
-            if (!string.IsNullOrEmpty(turn.Instruction))
+            if (!string.IsNullOrEmpty(turn.Instruction) || turn.UserImages.Count > 0)
             {
                 messages.Add(new JsonObject
                 {
                     ["role"] = "user",
-                    ["content"] = FormatTurnUserContent(session, turn, i, incompleteCurrent),
+                    ["content"] = BuildCompletionsTurnUserContent(session, turn, i, incompleteCurrent),
                 });
             }
 
@@ -350,12 +350,12 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 continue;
 
             var incompleteCurrent = i == incompleteIndex;
-            if (!string.IsNullOrEmpty(turn.Instruction))
+            if (!string.IsNullOrEmpty(turn.Instruction) || turn.UserImages.Count > 0)
             {
                 input.Add(new JsonObject
                 {
                     ["role"] = "user",
-                    ["content"] = FormatTurnUserContent(session, turn, i, incompleteCurrent),
+                    ["content"] = BuildResponsesTurnUserContent(session, turn, i, incompleteCurrent),
                 });
             }
 
@@ -726,10 +726,21 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         sb.Append("[turnId=");
         sb.Append(turn.Id.ToString("D"));
         sb.AppendLine("]");
-        sb.Append(turn.Instruction!);
+        if (!string.IsNullOrEmpty(turn.Instruction))
+            sb.Append(turn.Instruction);
+
+        if (turn.UserImages.Count > 0)
+        {
+            if (sb.Length > 0 && sb[^1] != '\n')
+                sb.AppendLine();
+            sb.AppendLine();
+            sb.AppendLine("Attached images:");
+            foreach (var image in turn.UserImages)
+                sb.AppendLine($"- {image.FileName}");
+        }
 
         if (!incompleteCurrent)
-            return sb.ToString();
+            return sb.ToString().TrimEnd();
 
         if (zeroBasedIndex == 0
             && string.Equals(session.Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase))
@@ -747,7 +758,94 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             sb.Append(DysonSessionInitialization.RenameSessionReviewMandate.Trim());
         }
 
-        return sb.ToString();
+        return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// Completions user content: plain string when no images; multimodal parts when
+    /// <see cref="DysonAgentTurn.UserImages"/> is non-empty.
+    /// </summary>
+    private static JsonNode BuildCompletionsTurnUserContent(
+        DysonAgentSession session,
+        DysonAgentTurn turn,
+        int zeroBasedIndex,
+        bool incompleteCurrent)
+    {
+        var text = FormatTurnUserContent(session, turn, zeroBasedIndex, incompleteCurrent);
+        if (turn.UserImages.Count == 0)
+            return text;
+
+        var parts = new JsonArray
+        {
+            new JsonObject
+            {
+                ["type"] = "text",
+                ["text"] = text,
+            },
+        };
+
+        foreach (var image in turn.UserImages)
+        {
+            parts.Add(new JsonObject
+            {
+                ["type"] = "image_url",
+                ["image_url"] = new JsonObject
+                {
+                    ["url"] = BuildDataUrl(image),
+                    ["detail"] = "auto",
+                },
+            });
+        }
+
+        return parts;
+    }
+
+    /// <summary>
+    /// Responses user content: plain string when no images; <c>input_text</c> + <c>input_image</c>
+    /// parts when <see cref="DysonAgentTurn.UserImages"/> is non-empty.
+    /// </summary>
+    private static JsonNode BuildResponsesTurnUserContent(
+        DysonAgentSession session,
+        DysonAgentTurn turn,
+        int zeroBasedIndex,
+        bool incompleteCurrent)
+    {
+        var text = FormatTurnUserContent(session, turn, zeroBasedIndex, incompleteCurrent);
+        if (turn.UserImages.Count == 0)
+            return text;
+
+        var parts = new JsonArray
+        {
+            new JsonObject
+            {
+                ["type"] = "input_text",
+                ["text"] = text,
+            },
+        };
+
+        foreach (var image in turn.UserImages)
+        {
+            if (!string.IsNullOrEmpty(image.FileId))
+            {
+                parts.Add(new JsonObject
+                {
+                    ["type"] = "input_image",
+                    ["file_id"] = image.FileId,
+                    ["detail"] = "auto",
+                });
+            }
+            else
+            {
+                parts.Add(new JsonObject
+                {
+                    ["type"] = "input_image",
+                    ["image_url"] = BuildDataUrl(image),
+                    ["detail"] = "auto",
+                });
+            }
+        }
+
+        return parts;
     }
 
     /// <summary>

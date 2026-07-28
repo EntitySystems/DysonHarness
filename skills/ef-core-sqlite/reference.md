@@ -38,11 +38,15 @@ Then retry `Migrate()` / `dotnet ef database update`.
 
 | Context | Connection |
 | ------- | ---------- |
-| App runtime | `Data Source={DysonAppPaths.GetDatabasePath(...)}` |
-| Design-time factory | `Data Source=dyson-design.db` |
-| Explicit CLI update | `dotnet ef database update --connection "Data Source=..."` |
+| App runtime | `DysonSqliteConfigurator` → `Data Source={path};Default Timeout=30` + WAL / `synchronous=NORMAL` |
+| Design-time factory | same configurator on `dyson-design.db` |
+| Explicit CLI update | `dotnet ef database update --connection "Data Source=...;Default Timeout=30"` |
 
-Prefer app `EnsureMigrated()` for normal runs so Dev/Test/Prod paths stay consistent with `DysonBuildInfo.Current`.
+Prefer a single startup `EnsureMigrated()` via `IDbContextFactory` so Dev/Test/Prod paths stay consistent with `DysonBuildInfo.Current`.
+
+## Concurrency (accessor)
+
+Stores use `DysonDbAccessor` (process-wide gate + fresh context per `RunAsync`). Nested helpers take `DysonDbContext` as a parameter (pass-down), never a second ambient scoped context. See [SKILL.md](SKILL.md) mandatory service rule.
 
 ## Value converter tips
 

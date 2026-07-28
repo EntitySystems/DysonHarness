@@ -52,6 +52,96 @@ window.dysonComposer = {
       if (e.key === "Enter" && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey)
         e.preventDefault();
     });
+  },
+
+  openFileInput: function (shell) {
+    if (!shell) return;
+    var input = shell.querySelector(".composer-attach__input");
+    if (input) input.click();
+  },
+
+  attachImageCapture: function (el, dotNetRef) {
+    if (!el || el._dysonImageCapture || !dotNetRef) return;
+    el._dysonImageCapture = true;
+    el._dysonImageDotNet = dotNetRef;
+
+    function hasImageFile(dt) {
+      if (!dt || !dt.types) return false;
+      for (var i = 0; i < dt.types.length; i++) {
+        if (dt.types[i] === "Files") return true;
+      }
+      return false;
+    }
+
+    function readAndSend(file) {
+      if (!file || !(file.type || "").startsWith("image/")) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        var dataUrl = reader.result;
+        if (typeof dataUrl !== "string") return;
+        el._dysonImageDotNet.invokeMethodAsync(
+          "OnImageDataUrlFromJs",
+          file.name || "clipboard.png",
+          dataUrl
+        );
+      };
+      reader.readAsDataURL(file);
+    }
+
+    el._dysonPaste = function (e) {
+      var items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      var found = false;
+      for (var i = 0; i < items.length; i++) {
+        if ((items[i].type || "").indexOf("image/") === 0) {
+          found = true;
+          var file = items[i].getAsFile();
+          if (file) readAndSend(file);
+        }
+      }
+      if (found) e.preventDefault();
+    };
+
+    el._dysonDragOver = function (e) {
+      if (!hasImageFile(e.dataTransfer)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+      el._dysonImageDotNet.invokeMethodAsync("SetDragOver", true);
+    };
+
+    el._dysonDragLeave = function (e) {
+      if (e.relatedTarget && el.contains(e.relatedTarget)) return;
+      el._dysonImageDotNet.invokeMethodAsync("SetDragOver", false);
+    };
+
+    el._dysonDrop = function (e) {
+      el._dysonImageDotNet.invokeMethodAsync("SetDragOver", false);
+      var files = e.dataTransfer && e.dataTransfer.files;
+      if (!files || !files.length) return;
+      var anyImage = false;
+      for (var i = 0; i < files.length; i++) {
+        if ((files[i].type || "").indexOf("image/") === 0) {
+          anyImage = true;
+          readAndSend(files[i]);
+        }
+      }
+      if (anyImage) e.preventDefault();
+    };
+
+    el.addEventListener("paste", el._dysonPaste);
+    el.addEventListener("dragover", el._dysonDragOver);
+    el.addEventListener("dragleave", el._dysonDragLeave);
+    el.addEventListener("drop", el._dysonDrop);
+  },
+
+  detachImageCapture: function (el) {
+    if (!el || !el._dysonImageCapture) return;
+    el.removeEventListener("paste", el._dysonPaste);
+    el.removeEventListener("dragover", el._dysonDragOver);
+    el.removeEventListener("dragleave", el._dysonDragLeave);
+    el.removeEventListener("drop", el._dysonDrop);
+    el._dysonImageCapture = false;
+    el._dysonImageDotNet = null;
   }
 };
 
