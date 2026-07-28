@@ -1352,6 +1352,30 @@ public sealed class DysonMcpPipeline
 
         yield return new DysonMcpTool
         {
+            Name = "JsonDynamicStructuredLanguageToolchain",
+            Description =
+                "Interpret a nested JSON dynamic structured-language program that chains existing session MCP tools. " +
+                "Strict nested FunctionCall/Loop only (no flat FunctionCall strings). " +
+                "Branches on nested tool IsError via OnSuccess/OnFailure; optional ContinueWith and Loop. " +
+                "Argument refs: fromArg:name, fromResult:$0, fromResult:json.path. " +
+                "Caps: nesting depth 8, 50 nested invocations, MaxIterations 1–20 (default 5). " +
+                "Cannot call itself. See Resources/Skills/JDSL.md.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "program": {
+                      "description": "Toolchain program (object) or JSON string of the program.",
+                      "oneOf": [{ "type": "object" }, { "type": "string" }]
+                    }
+                  },
+                  "required": ["program"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
             Name = "ExpandThoughtProcess",
             Description =
                 "Queue an ExpandThoughtProcess reformulation turn, hard-end the current turn, then auto-continue with a Normal turn. " +

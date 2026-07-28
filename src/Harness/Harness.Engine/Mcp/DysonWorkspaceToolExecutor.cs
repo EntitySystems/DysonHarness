@@ -9,8 +9,9 @@ namespace DysonHarness;
 /// Executes workspace-scoped MCP tools against a work directory root, plus RenameSession,
 /// GetDateTime, WaitForSeconds, ShellExecute, long-running shell tools, subagent spawn/list/report tools,
 /// inter-agent events / AskQuestion, session todo CRUD, task completion tools, ResumeCurrentTask,
-/// ExpandThoughtProcess / StartNewTurn / DropTurnContext / RestoreTurnContext, in-process web search/fetch tools, and browser
-/// control tools (when <see cref="DysonAgentSessionConfig.BrowserControl"/> is set).
+/// ExpandThoughtProcess / StartNewTurn / DropTurnContext / RestoreTurnContext, in-process web search/fetch tools,
+/// <c>JsonDynamicStructuredLanguageToolchain</c>, and browser control tools
+/// (when <see cref="DysonAgentSessionConfig.BrowserControl"/> is set).
 /// Other catalog tools return a not-implemented stub result.
 /// </summary>
 public sealed partial class DysonWorkspaceToolExecutor
@@ -80,6 +81,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "DropTurnContext" => await DropTurnContextAsync(call, cancellationToken).ConfigureAwait(false),
                 "RestoreTurnContext" => await RestoreTurnContextAsync(call, cancellationToken).ConfigureAwait(false),
                 "WaitForSeconds" => await WaitForSecondsAsync(call, cancellationToken).ConfigureAwait(false),
+                "JsonDynamicStructuredLanguageToolchain" => await JsonDynamicStructuredLanguageToolchainAsync(call, cancellationToken).ConfigureAwait(false),
                 "ListTodos" => await ListTodosAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateTodo" => await CreateTodoAsync(call, cancellationToken).ConfigureAwait(false),
                 "UpdateTodo" => await UpdateTodoAsync(call, cancellationToken).ConfigureAwait(false),
@@ -1284,6 +1286,52 @@ public sealed partial class DysonWorkspaceToolExecutor
             status = "ok",
             waitedSeconds = seconds,
         }));
+    }
+
+    private async Task<DysonToolCallResult> JsonDynamicStructuredLanguageToolchainAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        JsonElement programEl;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            if (!doc.RootElement.TryGetProperty("program", out programEl))
+                return Error(call, "JsonDynamicStructuredLanguageToolchain: program is required.");
+            programEl = programEl.Clone();
+        }
+        catch (JsonException)
+        {
+            return Error(call, "JsonDynamicStructuredLanguageToolchain: invalid JSON arguments.");
+        }
+
+        var parsed = DysonJsonDynamicToolchainSchema.ParseProgram(programEl);
+        if (parsed.IsError)
+            return Error(call, parsed.Error);
+
+        var outcome = await DysonJsonDynamicToolchainInterpreter.RunAsync(
+                parsed.Value,
+                call,
+                _session.McpPipeline.Tools,
+                ExecuteAsync,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        var content = DysonJsonDynamicToolchainSchema.SerializeResult(outcome.Result);
+        if (outcome.IsError)
+        {
+            return new DysonToolCallResult
+            {
+                CallId = call.CallId,
+                ToolName = call.ToolName,
+                Stage = call.Stage,
+                IsError = true,
+                Content = content,
+                EndsCurrentTurn = outcome.EndsCurrentTurn,
+            };
+        }
+
+        return Ok(call, content, endsCurrentTurn: outcome.EndsCurrentTurn);
     }
 
     private static Result<string, string> ExtractQuestionsJson(DysonToolCall call)

@@ -1,0 +1,191 @@
+@namespace Harness.UI.Components.Tools.Variants
+@using System.Text.Json
+@using DysonHarness
+@using Harness.UI.Demo
+
+<div class="tool-section">
+    <div class="tool-section__label">Toolchain</div>
+    <div class="toolchain-flow-summary">
+        <span class="mono">@(SummaryText)</span>
+        @if (Flow is not null)
+        {
+            <button type="button" class="btn btn-ghost toolchain-flow-summary__open" @onclick="OpenModal">
+                View flow
+            </button>
+        }
+    </div>
+    @if (!string.IsNullOrEmpty(ErrorText))
+    {
+        <pre class="tool-scroll mono tool-error">@ErrorText</pre>
+    }
+</div>
+
+@if (_modalOpen && Flow is not null)
+{
+    <div class="toolchain-flow-modal-backdrop"
+         tabindex="-1"
+         @onclick="CloseModal"
+         @onkeydown="OnBackdropKeyDown">
+        <div class="toolchain-flow-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="toolchain-flow-title"
+             @onclick:stopPropagation="true">
+            <div class="toolchain-flow-modal__header">
+                <h3 id="toolchain-flow-title">Toolchain flow</h3>
+                <button type="button" class="toolchain-flow-modal__close" @onclick="CloseModal" aria-label="Close">×</button>
+            </div>
+            <div class="toolchain-flow-modal__body">
+                @RenderFlowNode(Flow)
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public string? ArgumentsJson { get; set; }
+    [Parameter] public string? ResultContent { get; set; }
+    [Parameter] public bool IsError { get; set; }
+    [Parameter] public bool ArgsOnly { get; set; }
+
+    private bool _modalOpen;
+    private DysonJsonDynamicToolchainFlowNode? Flow { get; set; }
+    private string SummaryText { get; set; } = "toolchain";
+    private string? ErrorText { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        Flow = null;
+        ErrorText = null;
+        SummaryText = "toolchain";
+
+        if (ArgsOnly || string.IsNullOrWhiteSpace(ResultContent))
+        {
+            SummaryText = "program queued";
+            return;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(ResultContent);
+            var root = doc.RootElement;
+            var status = root.TryGetProperty("status", out var st) ? st.GetString() : null;
+            var steps = root.TryGetProperty("steps", out var stepsEl) && stepsEl.ValueKind == JsonValueKind.Array
+                ? stepsEl.GetArrayLength()
+                : 0;
+            SummaryText = string.Equals(status, "error", StringComparison.Ordinal)
+                ? $"error · {steps} steps"
+                : $"ok · {steps} steps";
+
+            if (root.TryGetProperty("error", out var err) && err.ValueKind == JsonValueKind.String)
+                ErrorText = err.GetString();
+
+            if (root.TryGetProperty("flow", out var flowEl))
+            {
+                Flow = JsonSerializer.Deserialize<DysonJsonDynamicToolchainFlowNode>(
+                    flowEl.GetRawText(),
+                    DysonJsonDynamicToolchainSchema.ResultJsonOptions);
+            }
+        }
+        catch (JsonException)
+        {
+            SummaryText = "invalid result JSON";
+        }
+    }
+
+    private void OpenModal() => _modalOpen = true;
+
+    private void CloseModal() => _modalOpen = false;
+
+    private void OnBackdropKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            CloseModal();
+    }
+
+    private RenderFragment RenderFlowNode(DysonJsonDynamicToolchainFlowNode node) => builder =>
+    {
+        var takenClass = node.Executed ? "toolchain-flow-node--taken" : "toolchain-flow-node--ignored";
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", $"toolchain-flow-node {takenClass}");
+
+        builder.OpenElement(2, "div");
+        builder.AddAttribute(3, "class", "toolchain-flow-node__head");
+
+        builder.OpenElement(4, "span");
+        builder.AddAttribute(5, "class", "toolchain-flow-node__kind mono");
+        var label = node.Kind == "FunctionCall" && !string.IsNullOrEmpty(node.Function)
+            ? $"FunctionCall · {node.Function}"
+            : node.Kind;
+        builder.AddContent(6, label);
+        builder.CloseElement();
+
+        if (node.Executed)
+        {
+            builder.OpenElement(7, "span");
+            builder.AddAttribute(8, "class", "toolchain-flow-node__badge");
+            builder.AddContent(9, "taken");
+            builder.CloseElement();
+        }
+        else
+        {
+            builder.OpenElement(10, "span");
+            builder.AddAttribute(11, "class", "toolchain-flow-node__badge toolchain-flow-node__badge--ignored");
+            builder.AddContent(12, "ignored");
+            builder.CloseElement();
+        }
+
+        if (node.IsError == true)
+        {
+            builder.OpenElement(13, "span");
+            builder.AddAttribute(14, "class", "toolchain-flow-node__badge toolchain-flow-node__badge--error");
+            builder.AddContent(15, "IsError");
+            builder.CloseElement();
+        }
+
+        if (!string.IsNullOrEmpty(node.BranchTaken))
+        {
+            builder.OpenElement(16, "span");
+            builder.AddAttribute(17, "class", "toolchain-flow-node__meta mono");
+            builder.AddContent(18, $"→ {node.BranchTaken}");
+            builder.CloseElement();
+        }
+
+        if (node.Iterations is int iters)
+        {
+            builder.OpenElement(19, "span");
+            builder.AddAttribute(20, "class", "toolchain-flow-node__meta mono");
+            builder.AddContent(21, $"iterations={iters}");
+            builder.CloseElement();
+        }
+
+        builder.CloseElement(); // head
+
+        builder.OpenElement(22, "div");
+        builder.AddAttribute(23, "class", "toolchain-flow-node__children");
+
+        var seq = 24;
+        void Child(string title, DysonJsonDynamicToolchainFlowNode? child)
+        {
+            if (child is null)
+                return;
+            builder.OpenElement(seq++, "div");
+            builder.AddAttribute(seq++, "class", "toolchain-flow-node__child");
+            builder.OpenElement(seq++, "div");
+            builder.AddAttribute(seq++, "class", "toolchain-flow-node__child-label");
+            builder.AddContent(seq++, title);
+            builder.CloseElement();
+            builder.AddContent(seq++, RenderFlowNode(child));
+            builder.CloseElement();
+        }
+
+        Child("OnSuccess", node.OnSuccess);
+        Child("OnFailure", node.OnFailure);
+        Child("ContinueWith", node.ContinueWith);
+        Child("Condition", node.Condition);
+        Child("Action", node.Action);
+
+        builder.CloseElement(); // children
+        builder.CloseElement(); // node
+    };
+}

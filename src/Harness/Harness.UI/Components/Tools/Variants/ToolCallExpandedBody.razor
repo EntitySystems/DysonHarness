@@ -59,6 +59,9 @@
     case "RestoreTurnContext":
         <LifecycleToolCallBody ToolName="@ToolName" ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
         break;
+    case "JsonDynamicStructuredLanguageToolchain":
+        <JsonDynamicToolchainToolCallBody ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
+        break;
     case "FreeSearch":
     case "FreeSearchAdvanced":
     case "SearchWithSynthesis":

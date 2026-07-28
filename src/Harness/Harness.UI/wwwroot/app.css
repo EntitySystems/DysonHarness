@@ -3814,3 +3814,138 @@ code, .mono {
   margin-top: 2px;
 }
 
+/* JsonDynamicStructuredLanguageToolchain flow modal */
+.toolchain-flow-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.toolchain-flow-summary__open {
+  font-size: 12px;
+}
+
+.toolchain-flow-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.toolchain-flow-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 100%);
+  max-height: min(80vh, 640px);
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.toolchain-flow-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.toolchain-flow-modal__header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.toolchain-flow-modal__close {
+  min-width: 28px;
+  padding: 2px 8px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.toolchain-flow-modal__body {
+  overflow: auto;
+  padding: 14px;
+}
+
+.toolchain-flow-node {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  background: var(--bg-2);
+}
+
+.toolchain-flow-node--taken {
+  border-color: color-mix(in srgb, var(--success) 55%, var(--border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--success) 25%, transparent);
+}
+
+.toolchain-flow-node--ignored {
+  border-color: var(--border);
+  opacity: 0.72;
+}
+
+.toolchain-flow-node__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.toolchain-flow-node__kind {
+  font-size: 12px;
+}
+
+.toolchain-flow-node__badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid color-mix(in srgb, var(--success) 40%, var(--border));
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 14%, var(--bg-2));
+}
+
+.toolchain-flow-node__badge--ignored {
+  border-color: var(--border);
+  color: var(--text-muted);
+  background: transparent;
+}
+
+.toolchain-flow-node__badge--error {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, var(--bg-2));
+}
+
+.toolchain-flow-node__meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.toolchain-flow-node__children {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding-left: 10px;
+  border-left: 1px dashed var(--border);
+}
+
+.toolchain-flow-node__child-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+

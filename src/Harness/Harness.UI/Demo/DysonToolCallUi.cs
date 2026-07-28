@@ -93,6 +93,7 @@ public static class DysonToolCallUi
                 ?? "resume",
                 SummaryMaxLength)),
             "WaitForSeconds" => TextSummary(SummarizeWaitForSeconds(argumentsJson)),
+            "JsonDynamicStructuredLanguageToolchain" => SummarizeJsonDynamicToolchain(resultContent, hasResult),
             "ExpandThoughtProcess" => TextSummary(Truncate(
                 GetString(argumentsJson, "focus") ?? "reformulate",
                 SummaryMaxLength)),
@@ -864,6 +865,28 @@ public static class DysonToolCallUi
     {
         var seconds = GetInt(argumentsJson, "seconds");
         return seconds is null ? "Wait" : $"Wait {seconds}s";
+    }
+
+    private static CollapsedSummary SummarizeJsonDynamicToolchain(string? resultContent, bool hasResult)
+    {
+        if (!hasResult || string.IsNullOrWhiteSpace(resultContent))
+            return TextSummary("toolchain");
+
+        try
+        {
+            using var doc = JsonDocument.Parse(resultContent);
+            var root = doc.RootElement;
+            var status = root.TryGetProperty("status", out var st) ? st.GetString() : null;
+            var steps = root.TryGetProperty("steps", out var stepsEl) && stepsEl.ValueKind == JsonValueKind.Array
+                ? stepsEl.GetArrayLength()
+                : 0;
+            var prefix = string.Equals(status, "error", StringComparison.Ordinal) ? "toolchain error" : "toolchain";
+            return TextSummary(Truncate($"{prefix}: {steps} steps", SummaryMaxLength));
+        }
+        catch (JsonException)
+        {
+            return TextSummary("toolchain");
+        }
     }
 
     private static string SummarizeDropTurnContext(string? argumentsJson)
