@@ -22,6 +22,7 @@
 - GLM 4.7
 - Kimi K2.7 Code
 - Kimi K3
+- GPT 5.6 Luna/Terra
 
 ## Usage guidance
 
