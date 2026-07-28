@@ -24,6 +24,7 @@ public sealed class DysonJsonDynamicToolchainInterpreter
     private int _nextNestedId;
     private string? _lastContent;
     private bool _endsCurrentTurn;
+    private bool _returnedOutput;
     private string? _fatalError;
 
     private DysonJsonDynamicToolchainInterpreter(
@@ -68,6 +69,7 @@ public sealed class DysonJsonDynamicToolchainInterpreter
             Flow = eval.Flow,
             Steps = interp._steps,
             FinalContent = interp._lastContent,
+            Returned = interp._returnedOutput,
             Error = isProgramError
                 ? (interp._fatalError ?? interp._lastContent ?? "Toolchain failed.")
                 : null,
@@ -86,7 +88,7 @@ public sealed class DysonJsonDynamicToolchainInterpreter
         int depth,
         CancellationToken cancellationToken)
     {
-        if (_fatalError is not null)
+        if (_fatalError is not null || _returnedOutput)
             return EvalOutcome.Skipped(BuildSkippedFlow(node));
 
         if (depth > MaxActionDepth)
@@ -110,6 +112,15 @@ public sealed class DysonJsonDynamicToolchainInterpreter
         int depth,
         CancellationToken cancellationToken)
     {
+        // JDSL-only intrinsic — match exact token before catalog / MCP: normalize.
+        if (string.Equals(
+                call.Function.Trim(),
+                DysonJsonDynamicToolchainSchema.ReturnOutputFunction,
+                StringComparison.Ordinal))
+        {
+            return await EvalReturnOutputAsync(call, depth, cancellationToken).ConfigureAwait(false);
+        }
+
         var toolName = DysonJsonDynamicToolchainSchema.NormalizeFunctionName(call.Function);
         if (string.IsNullOrWhiteSpace(toolName))
         {
@@ -210,6 +221,80 @@ public sealed class DysonJsonDynamicToolchainInterpreter
             .ConfigureAwait(false);
     }
 
+    private async Task<EvalOutcome> EvalReturnOutputAsync(
+        DysonJsonDynamicToolchainFunctionCall call,
+        int depth,
+        CancellationToken cancellationToken)
+    {
+        const string toolName = DysonJsonDynamicToolchainSchema.ReturnOutputFunction;
+
+        if (call.Arguments is null || !call.Arguments.TryGetValue("output", out var outputEl))
+        {
+            const string failContent = "JDSL:ReturnOutput requires Arguments.output.";
+            _lastContent = failContent;
+            _steps.Add(new DysonJsonDynamicToolchainStep
+            {
+                Tool = toolName,
+                IsError = true,
+                ContentPreview = Preview(failContent),
+            });
+
+            return await AfterFunctionAsync(
+                    call,
+                    toolName,
+                    isError: true,
+                    endsCurrentTurn: false,
+                    depth,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var resolved = ResolveValue(outputEl);
+        if (resolved.IsError)
+        {
+            _lastContent = resolved.Error;
+            _steps.Add(new DysonJsonDynamicToolchainStep
+            {
+                Tool = toolName,
+                IsError = true,
+                ContentPreview = Preview(resolved.Error),
+            });
+
+            return await AfterFunctionAsync(
+                    call,
+                    toolName,
+                    isError: true,
+                    endsCurrentTurn: false,
+                    depth,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var outputText = JsonElementToReturnText(resolved.Value);
+        _lastContent = outputText;
+        _returnedOutput = true;
+        _steps.Add(new DysonJsonDynamicToolchainStep
+        {
+            Tool = toolName,
+            IsError = false,
+            ContentPreview = Preview(outputText),
+        });
+
+        // Success stops the program: children are skipped (no AfterFunctionAsync branching).
+        var flow = new DysonJsonDynamicToolchainFlowNode
+        {
+            Kind = "FunctionCall",
+            Executed = true,
+            Function = toolName,
+            IsError = false,
+            OnSuccess = call.OnSuccess is null ? null : BuildSkippedFlow(call.OnSuccess),
+            OnFailure = call.OnFailure is null ? null : BuildSkippedFlow(call.OnFailure),
+            ContinueWith = call.ContinueWith is null ? null : BuildSkippedFlow(call.ContinueWith),
+        };
+
+        return new EvalOutcome(flow, LeafIsError: false, Handled: true, Fatal: false);
+    }
+
     private async Task<EvalOutcome> AfterFunctionAsync(
         DysonJsonDynamicToolchainFunctionCall call,
         string toolName,
@@ -259,7 +344,10 @@ public sealed class DysonJsonDynamicToolchainInterpreter
             }
         }
 
-        if (!endsCurrentTurn && call.ContinueWith is not null && _fatalError is null)
+        if (!endsCurrentTurn
+            && !_returnedOutput
+            && call.ContinueWith is not null
+            && _fatalError is null)
         {
             var contEval = await EvalActionAsync(call.ContinueWith, depth + 1, cancellationToken)
                 .ConfigureAwait(false);
@@ -310,7 +398,7 @@ public sealed class DysonJsonDynamicToolchainInterpreter
 
         for (var i = 0; i < maxIter; i++)
         {
-            if (_fatalError is not null)
+            if (_fatalError is not null || _returnedOutput)
                 break;
 
             var condEval = await EvalActionAsync(loop.Condition, depth + 1, cancellationToken)
@@ -332,7 +420,8 @@ public sealed class DysonJsonDynamicToolchainInterpreter
             }
 
             // Condition IsError exits loop normally (not a program failure).
-            if (condEval.LeafIsError)
+            // ReturnOutput in Condition also stops the loop (program already returned).
+            if (condEval.LeafIsError || _returnedOutput)
             {
                 lastActionFlow ??= BuildSkippedFlow(loop.Action);
                 break;
@@ -357,7 +446,7 @@ public sealed class DysonJsonDynamicToolchainInterpreter
                     leafIsError: true);
             }
 
-            if (_endsCurrentTurn)
+            if (_endsCurrentTurn || _returnedOutput)
                 break;
         }
 
@@ -503,6 +592,11 @@ public sealed class DysonJsonDynamicToolchainInterpreter
             ContinueWith = call.ContinueWith is null ? null : BuildSkippedFlow(call.ContinueWith),
         };
     }
+
+    private static string JsonElementToReturnText(JsonElement value) =>
+        value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? ""
+            : value.GetRawText();
 
     private static string? Preview(string? content)
     {

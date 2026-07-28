@@ -664,6 +664,13 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         if (result is null)
             return IncompleteToolResultContent;
 
+        var returned = DysonJsonDynamicToolchainSchema.TryFormatReturnedToolResultForModel(
+            result.ToolName,
+            result.Content,
+            result.IsError);
+        if (returned is not null)
+            return returned;
+
         return result.IsError
             ? $"[error] {result.Content}"
             : result.Content;

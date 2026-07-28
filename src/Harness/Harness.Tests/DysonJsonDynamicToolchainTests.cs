@@ -23,6 +23,11 @@ public class DysonJsonDynamicToolchainTests
         AssertUnknownToolFatal();
         AssertNestingDepthCap();
         AssertCatalogRegistration();
+        AssertReturnOutputSuccessStopsAndSkipsContinueWith();
+        AssertReturnOutputRejectsNonJdslNames();
+        AssertReturnOutputMissingOutputIsError();
+        AssertReturnOutputDoesNotCountAsNestedMcp();
+        AssertReturnOutputTranscriptSlim();
     }
 
     private static void AssertRejectFlatFunctionCall()
@@ -400,6 +405,253 @@ public class DysonJsonDynamicToolchainTests
         session.ConfigureRootForTest();
         if (!session.McpPipeline.Tools.ContainsKey(DysonJsonDynamicToolchainSchema.ToolName))
             throw new InvalidOperationException("Toolchain must be in default catalog.");
+    }
+
+    private static void AssertReturnOutputSuccessStopsAndSkipsContinueWith()
+    {
+        var result = RunToolchain("""
+            {
+              "program": {
+                "Entry": {
+                  "Actions": {
+                    "FunctionCall": {
+                      "Function": "JDSL:ReturnOutput",
+                      "Arguments": { "output": "hello-return" },
+                      "OnSuccess": {
+                        "FunctionCall": {
+                          "Function": "MCP:GetDateTime",
+                          "Arguments": { "timezone": "utc" }
+                        }
+                      },
+                      "ContinueWith": {
+                        "FunctionCall": {
+                          "Function": "MCP:GetDateTime",
+                          "Arguments": { "timezone": "utc" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """);
+
+        if (result.IsError)
+            throw new InvalidOperationException("ReturnOutput should succeed: " + result.Content);
+
+        using var doc = JsonDocument.Parse(result.Content);
+        var root = doc.RootElement;
+        if (root.GetProperty("status").GetString() != "ok"
+            || root.GetProperty("returned").GetBoolean() != true
+            || root.GetProperty("finalContent").GetString() != "hello-return")
+        {
+            throw new InvalidOperationException("ReturnOutput envelope fields mismatch: " + result.Content);
+        }
+
+        var flow = root.GetProperty("flow");
+        if (flow.GetProperty("executed").GetBoolean() != true
+            || flow.GetProperty("function").GetString() != DysonJsonDynamicToolchainSchema.ReturnOutputFunction
+            || flow.GetProperty("onSuccess").GetProperty("executed").GetBoolean() != false
+            || flow.GetProperty("continueWith").GetProperty("executed").GetBoolean() != false)
+        {
+            throw new InvalidOperationException("ReturnOutput must skip OnSuccess/ContinueWith: " + result.Content);
+        }
+
+        if (root.GetProperty("steps").GetArrayLength() != 1)
+            throw new InvalidOperationException("ReturnOutput alone should log one step.");
+    }
+
+    private static void AssertReturnOutputRejectsNonJdslNames()
+    {
+        foreach (var name in new[] { "MCP:ReturnOutput", "ReturnOutput" })
+        {
+            var result = RunToolchain($$"""
+                {
+                  "program": {
+                    "Entry": {
+                      "Actions": {
+                        "FunctionCall": {
+                          "Function": "{{name}}",
+                          "Arguments": { "output": "x" }
+                        }
+                      }
+                    }
+                  }
+                }
+                """);
+
+            if (!result.IsError)
+                throw new InvalidOperationException(name + " must fail as unknown tool.");
+
+            using var doc = JsonDocument.Parse(result.Content);
+            var err = doc.RootElement.TryGetProperty("error", out var e) ? e.GetString() : null;
+            if (err is null || !err.Contains("not in the session catalog", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(name + " should be catalog-miss: " + result.Content);
+
+            if (doc.RootElement.TryGetProperty("returned", out var returned) && returned.GetBoolean())
+                throw new InvalidOperationException(name + " must not set returned.");
+        }
+    }
+
+    private static void AssertReturnOutputMissingOutputIsError()
+    {
+        var result = RunToolchain("""
+            {
+              "program": {
+                "Entry": {
+                  "Actions": {
+                    "FunctionCall": {
+                      "Function": "JDSL:ReturnOutput",
+                      "Arguments": { }
+                    }
+                  }
+                }
+              }
+            }
+            """);
+
+        if (!result.IsError)
+            throw new InvalidOperationException("Missing output must fail the program.");
+
+        using var doc = JsonDocument.Parse(result.Content);
+        if (doc.RootElement.GetProperty("status").GetString() != "error")
+            throw new InvalidOperationException("Missing output status should be error.");
+
+        if (doc.RootElement.TryGetProperty("returned", out var returned) && returned.GetBoolean())
+            throw new InvalidOperationException("Failed ReturnOutput must not set returned.");
+
+        var steps = doc.RootElement.GetProperty("steps");
+        if (steps.GetArrayLength() != 1
+            || steps[0].GetProperty("tool").GetString() != DysonJsonDynamicToolchainSchema.ReturnOutputFunction
+            || steps[0].GetProperty("isError").GetBoolean() != true)
+        {
+            throw new InvalidOperationException("Missing output should log an error step.");
+        }
+    }
+
+    private static void AssertReturnOutputDoesNotCountAsNestedMcp()
+    {
+        var nestedCalls = 0;
+        var session = new StubSession();
+        session.ConfigureRootForTest();
+        var parent = new DysonToolCall
+        {
+            CallId = "jdsl-return-cap",
+            ToolName = DysonJsonDynamicToolchainSchema.ToolName,
+            Stage = 0,
+            ArgumentsJson = "{}",
+        };
+
+        var parsed = DysonJsonDynamicToolchainSchema.ParseProgram("""
+            {
+              "Entry": {
+                "Actions": {
+                  "FunctionCall": {
+                    "Function": "JDSL:ReturnOutput",
+                    "Arguments": { "output": 42 }
+                  }
+                }
+              }
+            }
+            """);
+        if (parsed.IsError)
+            throw new InvalidOperationException("Parse failed: " + parsed.Error);
+
+        var outcome = DysonJsonDynamicToolchainInterpreter.RunAsync(
+                parsed.Value,
+                parent,
+                session.McpPipeline.Tools,
+                (_, _) =>
+                {
+                    nestedCalls++;
+                    return Task.FromResult(new DysonToolCallResult
+                    {
+                        CallId = "n",
+                        ToolName = "x",
+                        Stage = 0,
+                        Content = "should-not-run",
+                    });
+                })
+            .GetAwaiter()
+            .GetResult();
+
+        if (nestedCalls != 0)
+            throw new InvalidOperationException("ReturnOutput must not dispatch nested MCP.");
+
+        if (outcome.IsError
+            || !outcome.Result.Returned
+            || outcome.Result.FinalContent != "42"
+            || outcome.Result.Status != "ok")
+        {
+            throw new InvalidOperationException(
+                "ReturnOutput numeric output / flags mismatch: "
+                + DysonJsonDynamicToolchainSchema.SerializeResult(outcome.Result));
+        }
+    }
+
+    private static void AssertReturnOutputTranscriptSlim()
+    {
+        var result = RunToolchain("""
+            {
+              "program": {
+                "Entry": {
+                  "Actions": {
+                    "FunctionCall": {
+                      "Function": "JDSL:ReturnOutput",
+                      "Arguments": { "output": "slim-me" }
+                    }
+                  }
+                }
+              }
+            }
+            """);
+
+        if (result.IsError)
+            throw new InvalidOperationException("ReturnOutput for transcript slim should succeed.");
+
+        // Persist/UI Content stays the full envelope.
+        using (var doc = JsonDocument.Parse(result.Content))
+        {
+            if (doc.RootElement.GetProperty("returned").GetBoolean() != true
+                || doc.RootElement.GetProperty("finalContent").GetString() != "slim-me"
+                || !doc.RootElement.TryGetProperty("flow", out _))
+            {
+                throw new InvalidOperationException("Envelope must remain full for UI: " + result.Content);
+            }
+        }
+
+        var modelFacing = DysonJsonDynamicToolchainSchema.TryFormatReturnedToolResultForModel(
+            result.ToolName,
+            result.Content,
+            result.IsError);
+        if (modelFacing != "slim-me")
+            throw new InvalidOperationException("Transcript slim should equal finalContent, got: " + modelFacing);
+
+        // Non-returned JDSL envelopes must not slim.
+        var ordinary = RunToolchain("""
+            {
+              "program": {
+                "Entry": {
+                  "Actions": {
+                    "FunctionCall": {
+                      "Function": "MCP:GetDateTime",
+                      "Arguments": { "timezone": "utc" }
+                    }
+                  }
+                }
+              }
+            }
+            """);
+        if (ordinary.IsError)
+            throw new InvalidOperationException("Ordinary GetDateTime should succeed.");
+
+        if (DysonJsonDynamicToolchainSchema.TryFormatReturnedToolResultForModel(
+                ordinary.ToolName,
+                ordinary.Content,
+                ordinary.IsError) is not null)
+        {
+            throw new InvalidOperationException("Non-returned JDSL Content must not slim.");
+        }
     }
 
     private static DysonToolCallResult RunToolchain(string argumentsJson)

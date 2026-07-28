@@ -6,7 +6,7 @@ Full engine spec: [`docs/engine/json-dynamic-toolchain.md`](../../../../../docs/
 
 ## What it is for
 
-Call `JsonDynamicStructuredLanguageToolchain` with a JSON **program** that chains existing session catalog tools (`WebFetch`, `CompleteTask`, `WaitForSeconds`, file tools, …). Success/failure branching uses each nested result’s **`IsError`** only (`OnSuccess` / `OnFailure`), plus optional `ContinueWith` and `Loop`.
+Call `JsonDynamicStructuredLanguageToolchain` with a JSON **program** that chains existing session catalog tools (`WebFetch`, `CompleteTask`, `WaitForSeconds`, file tools, …). Success/failure branching uses each nested result’s **`IsError`** only (`OnSuccess` / `OnFailure`), plus optional `ContinueWith` and `Loop`. Use the JDSL-only intrinsic `JDSL:ReturnOutput` when the caller model should receive a specific value as the tool result.
 
 ## Use cases
 
@@ -65,6 +65,23 @@ Prefer JDSL when several catalog calls should run in **one** turn with branching
 - **Navigate, wait, extract (browser)** — `BrowserNavigate` → `OnSuccess` `BrowserWaitForSelector` → `ContinueWith` `BrowserGetHtml` / `BrowserTakeScreenshot`.
 - **Long-running shell: start then poll** — `StartLongRunningShell` → `Loop` with `ReadLongRunningShellTail` / readiness probe as condition, backoff via `WaitForSeconds` in `Action`; exit into `AbortLongRunningShell` or a success path.
 - **Research with source fallback** — `FreeSearch` → `OnFailure` `FreeSearchAdvanced` → `OnFailure` `WebFetch` a known docs URL; forward `fromResult:$0` into `CompleteTask`.
+- **Return a value to the caller** — fetch / compute, then `JDSL:ReturnOutput` with `output` (literal or `fromResult:$0`). Stops the program; UI keeps the full flow envelope; the model transcript sees only that output.
+
+```json
+{
+  "FunctionCall": {
+    "Function": "WebFetch",
+    "Arguments": { "url": "https://example.com", "summarize": true },
+    "OnSuccess": {
+      "FunctionCall": {
+        "Function": "JDSL:ReturnOutput",
+        "Arguments": { "output": "fromResult:$0" }
+      }
+    }
+  }
+}
+```
+
 - **Build / test then branch** — `ShellExecute` build or test → `OnSuccess` mark todo / `CompleteTask`; `OnFailure` `Grep` logs or `ContinueWork`-style follow-up (catalog tools only).
 - **Subagent fire-and-collect** — `StartSubagent` → `ContinueWith` `WaitForSubagent` → `OnSuccess` `InspectSubagentLog` / `SubmitSubagentReport` handling via refs where useful.
 
@@ -114,7 +131,7 @@ MCP input:
 
 | Kind | Required | Notes |
 |------|----------|--------|
-| `FunctionCall` | nested **object** with `Function` | Optional `Arguments` (object), `OnSuccess`, `OnFailure`, `ContinueWith` |
+| `FunctionCall` | nested **object** with `Function` | Optional `Arguments` (object), `OnSuccess`, `OnFailure`, `ContinueWith`. `Function` may be catalog `MCP:ToolName` / `ToolName`, or intrinsic `JDSL:ReturnOutput` |
 | `Loop` | nested **object** with `Condition` + `Action` | Optional `MaxIterations` (default 5, clamp 1–20). Typo `MaxInterations` rejected |
 
 Exactly one of `FunctionCall` or `Loop` per action node. No sibling keys at the action level.
@@ -131,18 +148,26 @@ Named MCP parameters only (no positional arrays).
 
 Unresolved refs make that FunctionCall fail (`IsError`); the program fails only if unhandled / caps / parse.
 
+### `JDSL:ReturnOutput`
+
+JDSL-only (not in the MCP catalog). `Function` must be exactly `JDSL:ReturnOutput` — `MCP:ReturnOutput` and bare `ReturnOutput` fail as unknown tools.
+
+- Required `Arguments.output` (literal or ref). Non-string values are serialized to text.
+- Success: sets program `finalContent` + `returned: true`, skips that node’s children, and stops the program (no further ancestor `ContinueWith` / loop iterations). Does not count toward the nested MCP invocation cap.
+- Persist/UI `Content` stays the full envelope; the caller-model transcript receives only `finalContent`.
+
 ## Branching and Loop
 
-- After a FunctionCall: `IsError` ? `OnFailure` : `OnSuccess`, then `ContinueWith` (unless a nested result set `EndsCurrentTurn`).
+- After a FunctionCall: `IsError` ? `OnFailure` : `OnSuccess`, then `ContinueWith` (unless a nested result set `EndsCurrentTurn`, or `JDSL:ReturnOutput` already returned).
 - Outer toolchain `IsError` only for parse/cap/unknown-tool/self-call, or a leaf error with no `OnFailure` that handled it.
 - **Loop:** while `Condition` is `!IsError` and under `MaxIterations`, run `Action`. Condition `IsError` exits the loop normally (not a program failure).
 
 ## Caps and catalog rules
 
 - Max action nesting depth **8**
-- Max nested tool invocations **50**
+- Max nested tool invocations **50** (`JDSL:ReturnOutput` does not increment)
 - `MaxIterations` **1–20** (missing ⇒ **5**)
-- Catalog-only: `MCP:ToolName` or `ToolName` must exist in the session catalog
+- Catalog-only for MCP tools: `MCP:ToolName` or `ToolName` must exist in the session catalog; plus intrinsic `JDSL:ReturnOutput`
 - **No self-call** of `JsonDynamicStructuredLanguageToolchain`
 - Nested `stage` inherits the outer call; synthetic call ids `{parent}/n{i}`
 

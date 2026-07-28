@@ -11,6 +11,9 @@ public static class DysonJsonDynamicToolchainSchema
 {
     public const string ToolName = "JsonDynamicStructuredLanguageToolchain";
 
+    /// <summary>JDSL-only intrinsic; not an MCP catalog tool. Exact Function token.</summary>
+    public const string ReturnOutputFunction = "JDSL:ReturnOutput";
+
     public static readonly JsonSerializerOptions ProgramJsonOptions = CreateProgramOptions();
     public static readonly JsonSerializerOptions ResultJsonOptions = CreateResultOptions();
 
@@ -108,6 +111,47 @@ public static class DysonJsonDynamicToolchainSchema
 
     public static string SerializeResult(DysonJsonDynamicToolchainResult result) =>
         JsonSerializer.Serialize(result, ResultJsonOptions);
+
+    /// <summary>
+    /// When a JDSL tool result envelope has <c>returned: true</c>, returns the model-facing
+    /// payload (<c>finalContent</c>, or <c>[error] …</c> on error). Otherwise null.
+    /// </summary>
+    public static string? TryFormatReturnedToolResultForModel(
+        string? toolName,
+        string? content,
+        bool isError)
+    {
+        if (!string.Equals(toolName, ToolName, StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(content))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(content);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("returned", out var returned)
+                || returned.ValueKind != JsonValueKind.True)
+            {
+                return null;
+            }
+
+            string? finalContent = null;
+            if (root.TryGetProperty("finalContent", out var fc)
+                && fc.ValueKind is JsonValueKind.String or JsonValueKind.Null)
+            {
+                finalContent = fc.ValueKind == JsonValueKind.String ? fc.GetString() : null;
+            }
+
+            finalContent ??= "";
+            return isError ? $"[error] {finalContent}" : finalContent;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 }
 
 /// <summary>MCP input envelope: <c>program</c> object or JSON string.</summary>
@@ -194,6 +238,12 @@ public sealed class DysonJsonDynamicToolchainResult
 
     [JsonPropertyName("finalContent")]
     public string? FinalContent { get; init; }
+
+    /// <summary>
+    /// True when <c>JDSL:ReturnOutput</c> succeeded; model transcript may slim to <see cref="FinalContent"/>.
+    /// </summary>
+    [JsonPropertyName("returned")]
+    public bool Returned { get; init; }
 
     [JsonPropertyName("error")]
     public string? Error { get; init; }

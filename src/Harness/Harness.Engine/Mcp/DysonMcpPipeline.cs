@@ -1357,6 +1357,8 @@ public sealed class DysonMcpPipeline
                 "Interpret a nested JSON dynamic structured-language program that chains existing session MCP tools. " +
                 "Strict nested FunctionCall/Loop only (no flat FunctionCall strings). " +
                 "Branches on nested tool IsError via OnSuccess/OnFailure; optional ContinueWith and Loop. " +
+                "JDSL-only intrinsic JDSL:ReturnOutput (required Arguments.output) stops the program and surfaces " +
+                "that value as the model-facing tool result (full flow envelope still persisted for UI). " +
                 "Argument refs: fromArg:name, fromResult:$0, fromResult:json.path. " +
                 "Caps: nesting depth 8, 50 nested invocations, MaxIterations 1–20 (default 5). " +
                 "Cannot call itself. Prefer LoadSkill(name: \"JDSL\", loadIndexOnly: true) for the agent guide; see Resources/Skills/JDSL.md.",
