@@ -459,6 +459,9 @@
         catch (InvalidOperationException)
         {
         }
+        catch (JSDisconnectedException)
+        {
+        }
 
         _chatLinksRef?.Dispose();
         _chatLinksRef = null;
