@@ -427,7 +427,9 @@ public sealed partial class DysonWorkspaceToolExecutor
         var tab = await ResolveTabAsync(call, control, root, cancellationToken).ConfigureAwait(false);
         if (tab.IsError)
             return Error(call, tab.Error);
-        var result = await tab.Value.TakeScreenshotAsync(cancellationToken).ConfigureAwait(false);
+        var result = await tab.Value
+            .TakeScreenshotAsync(GetInt(root, "timeoutMs"), cancellationToken)
+            .ConfigureAwait(false);
         if (result.IsError)
             return Error(call, result.Error);
 

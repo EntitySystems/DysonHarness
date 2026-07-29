@@ -16,7 +16,7 @@ public static class DysonAgentSystemPrompts
         - Prefer MCP tools over shell whenever an appropriate MCP tool exists (e.g. ReadFile, WriteFile, Grep, LoadBinary, LoadSkill, ListDirectory, CreateDirectory, CreateFile). Use shell only when no suitable MCP tool covers the need.
         - For public web facts, prefer MCP search tools (FreeSearch, FreeSearchAdvanced, SearchWithSynthesis, FreeExtract, WebFetch, FetchGithubReadme) over inventing URLs or scraping via shell. Still prefer file MCP tools over search when the answer is in the workspace.
         - When writing or reviewing C# in this repository, follow Result-pattern rules: public APIs return Result / VoidResult / ValueResult for expected failures; do not use exceptions for ordinary control flow.
-        - Prefer LoadSkill for included Resources/Skills and work-root .dyson/skills (loadIndexOnly true for the entry file, false for the full skill directory). Skills may also be a work-relative literal path. Repo Cursor agent skills under /skills and rules under /rules and AGENTS.md—respect them.
+        - Work-root openrules.json (or implicit AGENTS.md) injects Root + AutoInclude rules/skills into this system prompt once per session create/load/mode change (provider-filtered; Dyson id is dyson). Call GetOpenRulesConfig for a no-body summary of all rows. Call InitializeOpenRules to create a default openrules.json when missing. Prefer LoadSkill for AgentOptional openrules entries (including http(s) Paths), included Resources/Skills, and work-root .dyson/skills (loadIndexOnly true for the entry file, false for the full skill directory). Skills may also be a work-relative literal path or composer /skill-.
         - Never claim work is done that you did not actually perform.
         - Prefer evidence (files, commands, build/test output) over assumptions.
 
@@ -273,6 +273,38 @@ public static class DysonAgentSystemPrompts
             return null;
 
         return FormatAvailableModelsBlock(listed.Value, providerKind);
+    }
+
+    /// <summary>
+    /// Joins non-empty system-prompt suffix parts with blank lines (models block + openrules block).
+    /// </summary>
+    public static string? JoinSystemPromptSuffix(params string?[] parts)
+    {
+        if (parts is null || parts.Length == 0)
+            return null;
+
+        var nonEmpty = parts
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p!.Trim())
+            .ToArray();
+        return nonEmpty.Length == 0 ? null : string.Join("\n\n", nonEmpty);
+    }
+
+    /// <summary>
+    /// Builds session system-prompt suffix: available-models catalog + openrules AutoInclude block.
+    /// </summary>
+    public static async Task<string?> BuildSessionSystemPromptSuffixAsync(
+        DysonModelStore? models,
+        string providerKind,
+        string? workDirectoryAbsolutePath,
+        CancellationToken cancellationToken = default)
+    {
+        var modelsBlock = await BuildAvailableModelsBlockAsync(models, providerKind, cancellationToken)
+            .ConfigureAwait(false);
+        var openRulesBlock = await DysonOpenRules
+            .BuildSystemPromptBlockAsync(workDirectoryAbsolutePath, cancellationToken)
+            .ConfigureAwait(false);
+        return JoinSystemPromptSuffix(modelsBlock, openRulesBlock);
     }
 
     /// <summary>

@@ -7,6 +7,7 @@ When code changes, **update the matching docs in the same change** (or immediate
 | Area | Path | Update when you change… |
 | ---- | ---- | ------------------------ |
 | Engine | [`docs/engine/`](../docs/engine/) | Session loop, modes, MCP, staging, interrupts, completion, optimizer, Result usage, public bindable types → `README.md` / `api-surface.md` |
+| OpenRules | [`docs/openrules/`](../docs/openrules/) | `openrules.json` schema, Root/AutoInclude system prompt, AgentOptional catalog → `README.md` |
 | Storage | [`docs/storage/`](../docs/storage/) | App mode, paths, SQLite, model profiles → `models.md`; sessions, turns, log kinds, `GetFullSession` / resume → `sessions.md` |
 | Inference providers | [`docs/inference-providers/`](../docs/inference-providers/) | Provider slug catalogs, auth/base URLs, thinking/effort params → `README.md` + per-provider pages |
 | UI | [`docs/ui/`](../docs/ui/) | Blazor project layout, components, theme, how to run → `README.md` |

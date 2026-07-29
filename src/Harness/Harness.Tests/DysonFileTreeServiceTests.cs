@@ -56,6 +56,48 @@ public class DysonFileTreeServiceTests
         }
     }
 
+    [Fact]
+    public async Task Watcher_updates_tree_after_directory_rename()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dyson-ft-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "old-name"));
+        await File.WriteAllTextAsync(Path.Combine(root, "old-name", "a.txt"), "x");
+
+        using var service = new DysonFileTreeService(new NoOpScopeFactory());
+        var activate = service.SetActive(Guid.NewGuid(), root);
+        Assert.True(activate.IsSuccess, activate.IsError ? activate.Error : null);
+
+        var state = await WaitForAsync(
+            () => service.Active is { SkeletonComplete: true } ? service.Active : null,
+            TimeSpan.FromSeconds(5));
+        Assert.NotNull(state);
+        Assert.Contains(state.Root.Children, c => c.IsDirectory && c.Name == "old-name");
+
+        var moved = state.FileSystem.Move("old-name", "new-name");
+        Assert.True(moved.IsSuccess, moved.IsError ? moved.Error : null);
+
+        await WaitForAsync(
+            () =>
+            {
+                var active = service.Active;
+                if (active is null)
+                    return null;
+                var hasNew = active.Root.Children.Any(c => c.IsDirectory && c.Name == "new-name");
+                var hasOld = active.Root.Children.Any(c => c.IsDirectory && c.Name == "old-name");
+                return hasNew && !hasOld ? active : null;
+            },
+            TimeSpan.FromSeconds(5));
+
+        try
+        {
+            Directory.Delete(root, recursive: true);
+        }
+        catch
+        {
+            // ignore cleanup races with watcher
+        }
+    }
+
     private static async Task<T> WaitForAsync<T>(Func<T?> probe, TimeSpan timeout)
         where T : class
     {

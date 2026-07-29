@@ -373,20 +373,45 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
     public Task<Result<string, string>> GetHtmlAsync(CancellationToken cancellationToken = default) =>
         ExecuteJavaScriptAsync("document.documentElement.outerHTML", cancellationToken);
 
-    public async Task<Result<byte[], string>> TakeScreenshotAsync(CancellationToken cancellationToken = default)
+    public async Task<Result<byte[], string>> TakeScreenshotAsync(
+        int? timeoutMs = null,
+        CancellationToken cancellationToken = default)
     {
+        var timeout = timeoutMs is > 0 ? timeoutMs.Value : 30_000;
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        linked.CancelAfter(timeout);
+        linked.Token.ThrowIfCancellationRequested();
+
         try
         {
-            var bytes = await DysonCefStaHost.InvokeAsync(async () =>
+            // Race CDP against linked CT — do not plumb CT into STA host (this change).
+            var cdpTask = DysonCefStaHost.InvokeAsync(async () =>
             {
                 using var client = BrowserControl.GetDevToolsClient();
                 var shot = await client.Page.CaptureScreenshotAsync().ConfigureAwait(true);
                 return shot.Data;
-            }).ConfigureAwait(false);
+            });
+            var delayTask = Task.Delay(Timeout.Infinite, linked.Token);
+            var winner = await Task.WhenAny(cdpTask, delayTask).ConfigureAwait(false);
+            if (winner != cdpTask)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    cancellationToken.ThrowIfCancellationRequested();
+                return Result<byte[], string>.AsError($"Screenshot timed out after {timeout}ms.");
+            }
 
+            var bytes = await cdpTask.ConfigureAwait(false);
             if (bytes is null || bytes.Length == 0)
                 return Result<byte[], string>.AsError("Screenshot capture returned empty.");
             return Result<byte[], string>.AsValue(bytes);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            return Result<byte[], string>.AsError($"Screenshot timed out after {timeout}ms.");
         }
         catch (Exception ex)
         {

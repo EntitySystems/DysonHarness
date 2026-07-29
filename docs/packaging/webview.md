@@ -26,7 +26,7 @@ Ship a **Windows desktop shell** that hosts Dyson UI inside **CefSharp WPF** (no
 
 Agent browser chrome has a **Snip** button to the right of the address bar. Clicking it enters rubber-band mode over the page content (Esc cancels). On a valid drag:
 
-1. The active tab takes a full-viewport DevTools screenshot (`TakeScreenshotAsync`)
+1. The active tab takes a full-viewport DevTools screenshot (`TakeScreenshotAsync`; optional `timeoutMs`, default **30s**, linked to the prompt cancellation token so cancel/timeout cannot hang forever)
 2. The selection (DIP) is mapped to pixel bounds and cropped to JPEG in WPF
 3. `IDysonBrowserControl.SnipCaptured` raises `DysonBrowserSnipPayload` (`ImageBytes`, empty `HtmlRef`, `FileName` = `browser-snip.jpg`)
 4. `DysonUiHost` compresses via `DysonUserImageFactory` and `QueuePendingImage` — the thumbnail appears in the composer; the user still types/sends (no auto-send)

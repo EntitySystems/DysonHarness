@@ -7,7 +7,7 @@ namespace DysonHarness;
 
 /// <summary>
 /// Executes workspace-scoped MCP tools against a work directory root, plus RenameSession,
-/// GetDateTime, WaitForSeconds, ShellExecute, long-running shell tools, subagent spawn/list/report tools,
+/// GetDateTime, GetOpenRulesConfig, InitializeOpenRules, WaitForSeconds, ShellExecute, long-running shell tools, subagent spawn/list/report tools,
 /// inter-agent events / AskQuestion, session todo CRUD, task completion tools, ResumeCurrentTask,
 /// ExpandThoughtProcess / StartNewTurn / DropTurnContext / RestoreTurnContext, in-process web search/fetch tools,
 /// <c>JsonDynamicStructuredLanguageToolchain</c>, and browser control tools
@@ -60,6 +60,8 @@ public sealed partial class DysonWorkspaceToolExecutor
             {
                 "RenameSession" => await RenameSessionAsync(call, cancellationToken).ConfigureAwait(false),
                 "GetDateTime" => await GetDateTimeAsync(call, cancellationToken).ConfigureAwait(false),
+                "GetOpenRulesConfig" => await GetOpenRulesConfigAsync(call, cancellationToken).ConfigureAwait(false),
+                "InitializeOpenRules" => await InitializeOpenRulesAsync(call, cancellationToken).ConfigureAwait(false),
                 "SubmitPlan" => await SubmitPlanAsync(call, cancellationToken).ConfigureAwait(false),
                 "StartSubagent" => await StartSubagentAsync(call, cancellationToken).ConfigureAwait(false),
                 "ListSubagents" => await ListSubagentsAsync(call, cancellationToken).ConfigureAwait(false),
@@ -243,6 +245,29 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         var content = $"timezone: {timezone}\ndatetime: {iso}\ndisplay: {display}";
         return Task.FromResult(Ok(call, content));
+    }
+
+    private Task<DysonToolCallResult> GetOpenRulesConfigAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(Ok(call, DysonOpenRules.FormatConfigSummaryJson(_fs)));
+    }
+
+    private Task<DysonToolCallResult> InitializeOpenRulesAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var result = DysonOpenRules.InitializeOrRead(_fs);
+        if (result.IsError)
+            return Task.FromResult(Error(call, result.Error));
+
+        var (json, created) = result.Value;
+        // Embed file JSON as an object (not a string) for easier agent consumption.
+        var payload = "{\"created\":" + (created ? "true" : "false") + ",\"openrules\":" + json + "}";
+        return Task.FromResult(Ok(call, payload));
     }
 
     private Task<DysonToolCallResult> SubmitPlanAsync(
@@ -1430,7 +1455,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         return Task.FromResult(Ok(call, sb.Length == 0 ? "(empty)" : sb.ToString().TrimEnd()));
     }
 
-    private Task<DysonToolCallResult> LoadSkillAsync(
+    private async Task<DysonToolCallResult> LoadSkillAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
@@ -1438,15 +1463,17 @@ public sealed partial class DysonWorkspaceToolExecutor
         using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
         var name = RequireString(doc.RootElement, "name");
         if (name.IsError)
-            return Task.FromResult(Error(call, name.Error));
+            return Error(call, name.Error);
 
         var loadIndexOnly = RequireBool(doc.RootElement, "loadIndexOnly");
         if (loadIndexOnly.IsError)
-            return Task.FromResult(Error(call, loadIndexOnly.Error));
+            return Error(call, loadIndexOnly.Error);
 
-        var loaded = DysonSkillLoader.ResolveAndLoad(name.Value, loadIndexOnly.Value, _fs);
+        var loaded = await DysonSkillLoader
+            .ResolveAndLoadAsync(name.Value, loadIndexOnly.Value, _fs, cancellationToken)
+            .ConfigureAwait(false);
         if (loaded.IsError)
-            return Task.FromResult(Error(call, loaded.Error));
+            return Error(call, loaded.Error);
 
         var turn = _session.Turns.Count > 0 ? _session.Turns[^1] : null;
         if (turn is not null && turn.CompletedUtc is null)
@@ -1456,7 +1483,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             $"Loaded skill '{loaded.Value.DisplayName}' " +
             $"(source={loaded.Value.Source}, path={loaded.Value.ResolvedPath}, " +
             $"loadIndexOnly={loaded.Value.LoadIndexOnly})";
-        return Task.FromResult(Ok(call, header + "\n\n" + loaded.Value.Markdown));
+        return Ok(call, header + "\n\n" + loaded.Value.Markdown);
     }
 
     private Task<DysonToolCallResult> CreateFileAsync(

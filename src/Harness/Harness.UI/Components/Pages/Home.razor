@@ -3,7 +3,7 @@
 @using Harness.UI.Components.Chat
 @using Harness.UI.Components.Files
 @using Harness.UI.Demo
-@implements IDisposable
+@implements IAsyncDisposable
 @inject DysonUiHost Host
 @inject DysonWorkDirectoryStore WorkDirs
 @inject ThemeService Theme
@@ -94,6 +94,7 @@
     private string? _gitBranch;
     private bool _workdirHydrated;
     private WorkDirectorySwitcher? _workdirSwitcher;
+    private DotNetObjectReference<DysonUiHost>? _chatLinksRef;
 
     protected override async Task OnInitializedAsync()
     {
@@ -107,12 +108,30 @@
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
+        {
             await Theme.InitializeAsync();
+            await InstallChatExternalLinksAsync();
+        }
 
         if (!_workdirHydrated)
         {
             _workdirHydrated = true;
             await HydrateWorkDirectoryAsync();
+        }
+    }
+
+    private async Task InstallChatExternalLinksAsync()
+    {
+        _chatLinksRef ??= DotNetObjectReference.Create(Host);
+        try
+        {
+            await Js.InvokeVoidAsync("dysonChatLinks.install", _chatLinksRef);
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
         }
     }
 
@@ -426,9 +445,22 @@
 
     private void CancelPrompt() => Host.CancelPrompt();
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         Host.Changed -= OnHostChanged;
         Theme.Changed -= OnThemeChanged;
+        try
+        {
+            await Js.InvokeVoidAsync("dysonChatLinks.uninstall");
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        _chatLinksRef?.Dispose();
+        _chatLinksRef = null;
     }
 }

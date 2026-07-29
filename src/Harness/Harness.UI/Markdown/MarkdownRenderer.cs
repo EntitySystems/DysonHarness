@@ -1,4 +1,7 @@
 using Markdig;
+using Markdig.Renderers.Html;
+using Markdig.Syntax;
+using Markdig.Syntax.Inlines;
 using Microsoft.AspNetCore.Components;
 
 namespace Harness.UI.Markdown;
@@ -18,8 +21,29 @@ public static class MarkdownRenderer
         .DisableHtml()
         .Build();
 
-    public static MarkupString ToHtml(string? markdown) =>
-        string.IsNullOrWhiteSpace(markdown)
-            ? new MarkupString("")
-            : new MarkupString(global::Markdig.Markdown.ToHtml(markdown, Pipeline));
+    public static MarkupString ToHtml(string? markdown)
+    {
+        if (string.IsNullOrWhiteSpace(markdown))
+            return new MarkupString("");
+
+        var document = global::Markdig.Markdown.Parse(markdown, Pipeline);
+        foreach (var link in document.Descendants<LinkInline>())
+        {
+            if (link.IsImage)
+                continue;
+
+            var url = link.Url;
+            if (url is null
+                || (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                    && !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            // Hardening only — clicks are intercepted in chat-external-links.js (do not rely on target=_blank).
+            link.GetAttributes().AddPropertyIfNotExist("rel", "noopener noreferrer");
+        }
+
+        return new MarkupString(global::Markdig.Markdown.ToHtml(document, Pipeline));
+    }
 }

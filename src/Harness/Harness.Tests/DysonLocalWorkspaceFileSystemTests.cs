@@ -117,6 +117,49 @@ public class DysonLocalWorkspaceFileSystemTests
         }
     }
 
+    [Fact]
+    public async Task Move_renames_directory_rejects_collision_and_sandbox_escape()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            var created = await DysonWorkspaceFileSystems.CreateLocalAsync(root);
+            Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+            var fs = created.Value;
+
+            Assert.True(fs.CreateDirectory("alpha").IsSuccess);
+            Assert.True(fs.WriteAllText("alpha/note.txt", "hi").IsSuccess);
+            Assert.True(fs.CreateDirectory("beta").IsSuccess);
+
+            var renamed = fs.Move("alpha", "gamma");
+            Assert.True(renamed.IsSuccess, renamed.IsError ? renamed.Error : null);
+            Assert.True(fs.DirectoryExists("gamma").Value);
+            Assert.False(fs.DirectoryExists("alpha").Value);
+            Assert.Equal("hi", fs.ReadAllText("gamma/note.txt").Value);
+
+            var collision = fs.Move("gamma", "beta");
+            Assert.True(collision.IsError);
+            Assert.Contains("already exists", collision.Error, StringComparison.OrdinalIgnoreCase);
+
+            var intoSelf = fs.Move("gamma", "gamma/nested");
+            Assert.True(intoSelf.IsError);
+            Assert.Contains("into itself", intoSelf.Error, StringComparison.OrdinalIgnoreCase);
+
+            var escape = fs.Move("gamma", "../outside");
+            Assert.True(escape.IsError);
+            Assert.Contains("escapes", escape.Error, StringComparison.OrdinalIgnoreCase);
+
+            var fileMove = fs.Move("gamma/note.txt", "beta/note.txt");
+            Assert.True(fileMove.IsSuccess, fileMove.IsError ? fileMove.Error : null);
+            Assert.True(fs.FileExists("beta/note.txt").Value);
+            Assert.False(fs.FileExists("gamma/note.txt").Value);
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
     private static string CreateTempDir()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-wsfs-" + Guid.NewGuid().ToString("N"));

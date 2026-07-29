@@ -14,11 +14,23 @@
     {
         @foreach (var tracked in Turn.TrackedToolCalls)
         {
-            <ToolCallRow Tracked="tracked" />
+            <ToolCallRow Tracked="tracked"
+                         SessionBusy="SessionBusy"
+                         IsLatestTurn="IsLatestTurn"
+                         OnCancel="OnCancel" />
         }
     }
 </div>
 
 @code {
     [Parameter, EditorRequired] public DysonAgentTurn Turn { get; set; } = default!;
+
+    /// <summary>True while the host is running a prompt on the active session.</summary>
+    [Parameter] public bool SessionBusy { get; set; }
+
+    /// <summary>True when this turn is the latest in the transcript.</summary>
+    [Parameter] public bool IsLatestTurn { get; set; }
+
+    /// <summary>Cancels the in-flight prompt (wired only for the latest busy turn).</summary>
+    [Parameter] public EventCallback OnCancel { get; set; }
 }

@@ -8,6 +8,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
     private readonly DysonSessionStore? _store;
     private readonly DysonModelStore? _models;
     private Guid _workDirectoryId;
+    private readonly string? _workDirectoryPath;
 
     public DemoDysonAgentSession(
         string agentMode,
@@ -16,16 +17,22 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         DysonSessionStore? store = null,
         Guid workDirectoryId = default,
         DysonModelStore? models = null,
-        string? systemPromptSuffix = null)
+        string? systemPromptSuffix = null,
+        string? workDirectoryAbsolutePath = null)
         : base(agentMode, config, provider, systemPromptSuffix)
     {
         _store = store;
         SessionStore = store;
         _workDirectoryId = workDirectoryId;
         _models = models;
+        _workDirectoryPath = string.IsNullOrWhiteSpace(workDirectoryAbsolutePath)
+            ? null
+            : Path.GetFullPath(workDirectoryAbsolutePath);
     }
 
     public Guid WorkDirectoryId => _workDirectoryId;
+
+    public string? WorkDirectoryPath => _workDirectoryPath;
 
     /// <summary>
     /// Creates a new persisted root session and assigns <see cref="DysonAgentSession.PersistenceId"/>.
@@ -38,6 +45,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         DysonAgentSessionConfig? config = null,
         string? title = null,
         DysonModelStore? models = null,
+        string? workDirectoryAbsolutePath = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -49,11 +57,12 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         config ??= new DysonAgentSessionConfig();
         var providerKind = DysonProviderKinds.EffectiveKind(
             provider.ProviderKind, provider.BaseUrl, provider.ApiKey);
-        var modelsBlock = await DysonAgentSystemPrompts.BuildAvailableModelsBlockAsync(
-                models, providerKind, cancellationToken)
+        var suffix = await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                models, providerKind, workDirectoryAbsolutePath, cancellationToken)
             .ConfigureAwait(false);
         var session = new DemoDysonAgentSession(
-            agentMode, config, provider, store, workDirectoryId, models, modelsBlock);
+            agentMode, config, provider, store, workDirectoryId, models, suffix,
+            workDirectoryAbsolutePath);
         session.ConfigureRootInterAgentTools();
         var initialTitle = title ?? "New session";
         session.SetDisplayTitle(initialTitle);
@@ -100,6 +109,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         DysonAgentSessionConfig? config = null,
         DysonModelStore? models = null,
         bool appendResumeLog = true,
+        string? workDirectoryAbsolutePath = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -117,8 +127,8 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
 
         var providerKind = DysonProviderKinds.EffectiveKind(
             provider.ProviderKind, provider.BaseUrl, provider.ApiKey);
-        var modelsBlock = await DysonAgentSystemPrompts.BuildAvailableModelsBlockAsync(
-                models, providerKind, cancellationToken)
+        var suffix = await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                models, providerKind, workDirectoryAbsolutePath, cancellationToken)
             .ConfigureAwait(false);
         var session = new DemoDysonAgentSession(
             state.Session.AgentMode,
@@ -127,7 +137,8 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             store,
             state.Session.WorkDirectoryId ?? Guid.Empty,
             models,
-            modelsBlock);
+            suffix,
+            workDirectoryAbsolutePath);
         session.RestoreFromPersisted(state);
         if (state.Session.ParentSessionId is null)
             session.ConfigureRootInterAgentTools();
@@ -182,12 +193,13 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         var providerKind = childProvider is DemoDysonAgentProvider demoKind
             ? DysonProviderKinds.EffectiveKind(demoKind.ProviderKind, demoKind.BaseUrl, demoKind.ApiKey)
             : DysonProviderKinds.Demo;
-        var modelsBlock = await DysonAgentSystemPrompts.BuildAvailableModelsBlockAsync(
-                _models, providerKind, cancellationToken)
+        var suffix = await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                _models, providerKind, _workDirectoryPath, cancellationToken)
             .ConfigureAwait(false);
 
         var child = new DemoDysonAgentSession(
-            agentMode, Config, childProvider, _store, _workDirectoryId, _models, modelsBlock);
+            agentMode, Config, childProvider, _store, _workDirectoryId, _models, suffix,
+            _workDirectoryPath);
         RegisterSubagent(child);
 
         var title = TitleFromTask(task);

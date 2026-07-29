@@ -50,7 +50,9 @@ public interface IDysonBrowserTab
 
     Task<Result<string, string>> GetHtmlAsync(CancellationToken cancellationToken = default);
 
-    Task<Result<byte[], string>> TakeScreenshotAsync(CancellationToken cancellationToken = default);
+    Task<Result<byte[], string>> TakeScreenshotAsync(
+        int? timeoutMs = null,
+        CancellationToken cancellationToken = default);
 
     Task<Result<IReadOnlyList<DysonBrowserConsoleEntry>, string>> ReadConsoleLogAsync(
         CancellationToken cancellationToken = default);

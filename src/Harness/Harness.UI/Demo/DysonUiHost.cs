@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using DysonHarness;
+using Microsoft.JSInterop;
 
 namespace Harness.UI.Demo;
 
@@ -359,7 +360,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         Notify();
     }
 
-    /// <summary>Catalog for <c>/skill-</c> searcher (included + <c>.dyson/skills</c> when a workdir is available).</summary>
+    /// <summary>Catalog for <c>/skill-</c> searcher (included + <c>.dyson/skills</c> + openrules AgentOptional when a workdir is available).</summary>
     public async Task<IReadOnlyList<DysonSkillCatalogEntry>> ListSkillCatalogAsync(
         CancellationToken cancellationToken = default)
     {
@@ -643,6 +644,122 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             return VoidResult<string>.AsError($"Failed to open file: {ex.Message}");
         }
+    }
+
+    /// <summary>Opens an absolute folder path in the OS file manager (Explorer / Finder / xdg-open).</summary>
+    public VoidResult<string> OpenFolderInFileManager(string absolutePath)
+    {
+        if (string.IsNullOrWhiteSpace(absolutePath))
+            return VoidResult<string>.AsError("Path is empty.");
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(absolutePath.Trim());
+        }
+        catch (Exception ex)
+        {
+            return VoidResult<string>.AsError($"Invalid path: {ex.Message}");
+        }
+
+        if (!Directory.Exists(fullPath))
+            return VoidResult<string>.AsError("Directory does not exist.");
+
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    ArgumentList = { fullPath },
+                    UseShellExecute = true,
+                });
+            }
+            else if (OperatingSystem.IsMacOS())
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "open",
+                    ArgumentList = { fullPath },
+                    UseShellExecute = false,
+                });
+            }
+            else
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "xdg-open",
+                    ArgumentList = { fullPath },
+                    UseShellExecute = false,
+                });
+            }
+
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex)
+        {
+            return VoidResult<string>.AsError($"Failed to open folder: {ex.Message}");
+        }
+    }
+
+    /// <summary>Opens an http(s) URL in the OS default browser (not the in-app WebView).</summary>
+    public VoidResult<string> OpenUrlInDefaultBrowser(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            return VoidResult<string>.AsError("URL is empty.");
+
+        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            return VoidResult<string>.AsError("Only http/https URLs are allowed.");
+        }
+
+        var absolute = uri.AbsoluteUri;
+
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = absolute,
+                    UseShellExecute = true,
+                });
+            }
+            else if (OperatingSystem.IsMacOS())
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "open",
+                    ArgumentList = { absolute },
+                    UseShellExecute = false,
+                });
+            }
+            else
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "xdg-open",
+                    ArgumentList = { absolute },
+                    UseShellExecute = false,
+                });
+            }
+
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex)
+        {
+            return VoidResult<string>.AsError($"Failed to open URL: {ex.Message}");
+        }
+    }
+
+    /// <summary>JS bridge for chat/markdown http(s) link clicks.</summary>
+    [JSInvokable]
+    public Task OpenExternalChatUrlAsync(string url)
+    {
+        OpenUrlInDefaultBrowser(url);
+        return Task.CompletedTask;
     }
 
     public void CloseFileViewer()
@@ -961,6 +1078,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 workDirectoryId.Value,
                 agentMode,
                 models: _models,
+                workDirectoryAbsolutePath: workDir.Value.AbsolutePath,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (created.IsError)
@@ -1118,7 +1236,29 @@ public sealed class DysonUiHost : IAsyncDisposable
                 _models, providerKind, cancellationToken)
             .ConfigureAwait(false);
 
-        var applied = _session.ApplyAgentMode(agentMode, modelsBlock);
+        string? workPath = null;
+        if (ActiveWorkDirectoryId is Guid wdId)
+        {
+            var wd = await _workDirectories.GetAsync(wdId, cancellationToken).ConfigureAwait(false);
+            if (!wd.IsError)
+                workPath = wd.Value.AbsolutePath;
+        }
+        else
+        {
+            workPath = _session switch
+            {
+                OpenAiCompatibleAgentSession oai => oai.WorkDirectoryPath,
+                DemoDysonAgentSession demo => demo.WorkDirectoryPath,
+                _ => null,
+            };
+        }
+
+        var openRulesBlock = await DysonOpenRules
+            .BuildSystemPromptBlockAsync(workPath, cancellationToken)
+            .ConfigureAwait(false);
+        var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(modelsBlock, openRulesBlock);
+
+        var applied = _session.ApplyAgentMode(agentMode, suffix);
         if (applied.IsError)
         {
             LastError = applied.Error;
@@ -1862,6 +2002,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     .ConfigureAwait(false),
                 models: _models,
                 appendResumeLog: appendResumeLog,
+                workDirectoryAbsolutePath: workPath,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (demoLoaded.IsError)

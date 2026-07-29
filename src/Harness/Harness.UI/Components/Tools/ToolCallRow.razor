@@ -33,6 +33,18 @@
     @if (_expanded)
     {
         <div class="tool-row__body">
+            @if (Tracked.Status == DysonToolCallStatus.Working && CanCancel)
+            {
+                <button type="button"
+                        class="turn-block__cancel"
+                        title="Cancel"
+                        aria-label="Cancel prompt"
+                        @onclick:stopPropagation="true"
+                        @onclick="HandleCancelAsync">
+                    <span class="turn-block__spinner" aria-hidden="true"></span>
+                    <img class="turn-block__cancel-icon" src="icons/cancel.svg" alt="" />
+                </button>
+            }
             <ToolCallExpandedBody ToolName="@Tracked.Call.ToolName"
                                   CallId="@Tracked.Call.CallId"
                                   Stage="@Tracked.Call.Stage"
@@ -48,8 +60,19 @@
 @code {
     [Parameter, EditorRequired] public DysonTrackedToolCall Tracked { get; set; } = default!;
 
+    /// <summary>True while the host is running a prompt on the active session.</summary>
+    [Parameter] public bool SessionBusy { get; set; }
+
+    /// <summary>True when this turn is the latest in the transcript.</summary>
+    [Parameter] public bool IsLatestTurn { get; set; }
+
+    /// <summary>Cancels the in-flight prompt (same chain as turn-header cancel).</summary>
+    [Parameter] public EventCallback OnCancel { get; set; }
+
     private bool _expanded;
     private DysonToolCallUi.CollapsedSummary _summary = new();
+
+    private bool CanCancel => SessionBusy && IsLatestTurn && OnCancel.HasDelegate;
 
     protected override void OnParametersSet()
     {
@@ -61,6 +84,8 @@
     }
 
     private void ToggleExpanded() => _expanded = !_expanded;
+
+    private Task HandleCancelAsync() => CanCancel ? OnCancel.InvokeAsync() : Task.CompletedTask;
 
     private string StatusClass => Tracked.Status switch
     {

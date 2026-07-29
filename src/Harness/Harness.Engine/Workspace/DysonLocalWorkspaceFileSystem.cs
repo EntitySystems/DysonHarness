@@ -365,6 +365,65 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
         }
     }
 
+    public VoidResult<string> Move(string sourceRelativePath, string destinationRelativePath)
+    {
+        var sourceResolved = ResolvePath(sourceRelativePath);
+        if (sourceResolved.IsError)
+            return VoidResult<string>.AsError(sourceResolved.Error);
+
+        var destResolved = ResolvePath(destinationRelativePath);
+        if (destResolved.IsError)
+            return VoidResult<string>.AsError(destResolved.Error);
+
+        var source = sourceResolved.Value;
+        var dest = destResolved.Value;
+
+        if (string.Equals(source, dest, PathComparison))
+            return VoidResult<string>.AsError("Source and destination are the same.");
+
+        var isDirectory = Directory.Exists(source);
+        var isFile = File.Exists(source);
+        if (!isDirectory && !isFile)
+            return VoidResult<string>.AsError($"Path not found: {sourceRelativePath}");
+
+        if (isDirectory)
+        {
+            var sourcePrefix = source.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                               + Path.DirectorySeparatorChar;
+            if (dest.StartsWith(sourcePrefix, PathComparison))
+                return VoidResult<string>.AsError("Cannot move a directory into itself.");
+        }
+
+        var destName = Path.GetFileName(dest.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (string.IsNullOrWhiteSpace(destName)
+            || destName is "." or ".."
+            || destName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            return VoidResult<string>.AsError("Invalid destination name.");
+        }
+
+        if (Directory.Exists(dest) || File.Exists(dest))
+            return VoidResult<string>.AsError($"Destination already exists: {destinationRelativePath}");
+
+        var destParent = Path.GetDirectoryName(dest);
+        if (!string.IsNullOrEmpty(destParent) && !Directory.Exists(destParent))
+            return VoidResult<string>.AsError($"Destination parent not found: {destinationRelativePath}");
+
+        try
+        {
+            if (isDirectory)
+                Directory.Move(source, dest);
+            else
+                File.Move(source, dest);
+
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex)
+        {
+            return VoidResult<string>.AsError($"Failed to move: {ex.Message}", ex);
+        }
+    }
+
     public Result<IDysonWorkspaceChangeWatcher, string> CreateWatcher()
     {
         var ready = EnsureInitialized();

@@ -171,12 +171,12 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         config ??= new DysonAgentSessionConfig();
         var providerKind = DysonProviderKinds.EffectiveKind(
             provider.ProviderKind, provider.BaseUrl, provider.ApiKey);
-        var modelsBlock = await DysonAgentSystemPrompts.BuildAvailableModelsBlockAsync(
-                models, providerKind, cancellationToken)
+        var suffix = await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                models, providerKind, workDirectoryAbsolutePath, cancellationToken)
             .ConfigureAwait(false);
         var session = new OpenAiCompatibleAgentSession(
             agentMode, config, provider, http, workDirectoryAbsolutePath, store, workDirectoryId, models,
-            modelsBlock);
+            suffix);
         session.ConfigureRootInterAgentTools();
         var initialTitle = title ?? "New session";
         session.SetDisplayTitle(initialTitle);
@@ -240,8 +240,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         var providerKind = DysonProviderKinds.EffectiveKind(
             provider.ProviderKind, provider.BaseUrl, provider.ApiKey);
-        var modelsBlock = await DysonAgentSystemPrompts.BuildAvailableModelsBlockAsync(
-                models, providerKind, cancellationToken)
+        var suffix = await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                models, providerKind, workDirectoryAbsolutePath, cancellationToken)
             .ConfigureAwait(false);
         var session = new OpenAiCompatibleAgentSession(
             state.Session.AgentMode,
@@ -252,7 +252,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             store,
             state.Session.WorkDirectoryId ?? Guid.Empty,
             models,
-            modelsBlock);
+            suffix);
         session.RestoreFromPersisted(state);
         if (state.Session.ParentSessionId is null)
             session.ConfigureRootInterAgentTools();
@@ -306,8 +306,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         var providerKind = DysonProviderKinds.EffectiveKind(
             childProvider.ProviderKind, childProvider.BaseUrl, childProvider.ApiKey);
-        var modelsBlock = await DysonAgentSystemPrompts.BuildAvailableModelsBlockAsync(
-                _models, providerKind, cancellationToken)
+        var suffix = await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                _models, providerKind, _workDirectoryPath, cancellationToken)
             .ConfigureAwait(false);
 
         var child = new OpenAiCompatibleAgentSession(
@@ -319,7 +319,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             _store,
             _workDirectoryId,
             _models,
-            modelsBlock);
+            suffix);
 
         RegisterSubagent(child);
 

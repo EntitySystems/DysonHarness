@@ -909,13 +909,15 @@ public sealed class DysonMcpPipeline
         {
             Name = "BrowserTakeScreenshot",
             Description =
-                "Capture a screenshot of the tab (JPEG multimodal attachment + short JSON ack; no base64 in Content).",
+                "Capture a screenshot of the tab (JPEG multimodal attachment + short JSON ack; no base64 in Content). " +
+                "Optional timeoutMs (default 30000).",
             InputSchemaJson = """
                 {
                   "type": "object",
                   "properties": {
                     "windowId": { "type": "string" },
-                    "tabId": { "type": "string" }
+                    "tabId": { "type": "string" },
+                    "timeoutMs": { "type": "integer" }
                   },
                   "required": ["windowId", "tabId"]
                 }
@@ -1536,12 +1538,45 @@ public sealed class DysonMcpPipeline
 
         yield return new DysonMcpTool
         {
+            Name = "GetOpenRulesConfig",
+            Description =
+                "Return a JSON summary of work-root openrules.json (Root + Rules/Skills Path/Mode/Description/exists/isUrl/Providers). " +
+                "No file bodies. Returns all manifest rows (no provider filter). Missing manifest notes the implicit AGENTS.md Root when present. " +
+                "Use to discover AgentOptional entries for LoadSkill; AutoInclude content is already in the system prompt.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {}
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "InitializeOpenRules",
+            Description =
+                "Ensure work-root openrules.json exists. If missing, create a default document " +
+                "(Root AGENTS.md, empty Rules, and the EntitySystems/openrules AgentOptional skill URL). " +
+                "If present, leave it unchanged. Returns JSON { created, openrules } with the file contents.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {}
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
             Name = "LoadSkill",
             Description =
                 "Load an agent skill into the current turn (and return its markdown). " +
                 "Resolve order: (1) included Resources/Skills by file name or stem (e.g. JDSL / JDSL.md), " +
                 "(2) work-root .dyson/skills/{name}/ (or .dyson/skills/{name}), " +
-                "(3) literal work-relative path (file or directory). " +
+                "(3) literal work-relative path (file or directory), " +
+                "(4) openrules.json AgentOptional Rules/Skills (by relative path, stem, URL, or catalog name; http(s) Path fetched). " +
+                "Entries with a non-empty Providers list that excludes dyson are skipped. " +
+                "AutoInclude openrules entries are already in the system prompt — prefer GetOpenRulesConfig / do not re-LoadSkill them. " +
                 "loadIndexOnly is required: true = entry skill file only (SKILL.md if present, else first *.md; " +
                 "single files are that file); false = concatenate all *.md under the directory (entry first). " +
                 "Readonly — prefer this over ReadFile for known skills.",
@@ -1551,7 +1586,7 @@ public sealed class DysonMcpPipeline
                   "properties": {
                     "name": {
                       "type": "string",
-                      "description": "Skill id/stem (e.g. JDSL), .dyson/skills name, or work-relative path."
+                      "description": "Skill id/stem (e.g. JDSL), .dyson/skills name, work-relative path, or openrules AgentOptional path/stem/URL."
                     },
                     "loadIndexOnly": {
                       "type": "boolean",

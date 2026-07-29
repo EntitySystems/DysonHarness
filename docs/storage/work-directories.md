@@ -42,6 +42,7 @@ Sandboxed IO for tools, FileManager, file tree, and viewers goes through `IDyson
 - `NativeRootPath` is always the host-visible root for shells, `git -C`, and `Process.WorkingDirectory` (local path, mapped drive, or UNC/SMB mount — including Azure Files mounts).
 - Prefer `DysonWorkspaceFileSystems.CreateLocalAsync(absolutePath)` — validates the directory exists, constructs `DysonLocalWorkspaceFileSystem`, and initializes with `"local_fs"`.
 - Live updates: `CreateWatcher()` → `IDysonWorkspaceChangeWatcher` (`FileSystemWatcher` on the native root today).
+- `Move(sourceRelativePath, destinationRelativePath)` renames/moves files or directories inside the sandbox (rejects escape, destination collision, and moving a directory into itself). The rail file tree uses this for folder rename from the folder context menu; watcher `Renamed` events refresh the tree.
 
 For Azure Files (and similar) on this product path: mount the share (credentials/lifecycle owned by the host), then use `CreateLocalAsync` over the mount path — not a separate byte-API backend. `work_directories.AbsolutePath` remains the native root string. Custom `IDysonWorkspaceFileSystem` implementations are for cloud hosts that need different storage semantics (see below).
 
@@ -59,8 +60,8 @@ Cloud or multi-tenant hosts **must implement** their own `IDysonWorkspaceFileSys
 
 Plan mode publishes markdown under `{workRoot}/.dyson/plans/{slug}-{hash}.md` via `DysonFileManager` (constructed from an initialized workspace FS) / `SubmitPlan`. Paths stay sandboxed under the work root. See [engine README](../engine/README.md) (Plan artifacts).
 
-Agent skills may live under `{workRoot}/.dyson/skills/{name}/` (entry `SKILL.md` or first `*.md`). `LoadSkill` / composer `/skill-` resolve **included** embedded `Resources/Skills` first, then `.dyson/skills`, then a literal work-relative path. Repo-root Cursor `skills/` packaging is separate and not auto-cataloged unless also present under those resolve roots.
+Agent skills may live under `{workRoot}/.dyson/skills/{name}/` (entry `SKILL.md` or first `*.md`). `LoadSkill` / composer `/skill-` resolve **included** embedded `Resources/Skills` first, then `.dyson/skills`, then a literal work-relative path, then **openrules.json `AgentOptional`** Rules/Skills (local or http(s) `Path`; optional `Providers` filter). See [docs/openrules/README.md](../openrules/README.md). Work-root `openrules.json` (or implicit `AGENTS.md`) also injects Root + provider-filtered `AutoInclude` entries into the session system prompt on create/load/mode change. MCP **`InitializeOpenRules`** creates a default manifest (EntitySystems/openrules skill URL, no `Providers`) when the file is missing.
 
 ## UI
 
-Sidebar `WorkDirectorySwitcher` lists registered dirs, persists active id in `localStorage` (`dyson-workdir`), filters `SessionList` by that id. See [docs/ui/README.md](../ui/README.md).
+Sidebar `WorkDirectorySwitcher` lists registered dirs, persists active id in `localStorage` (`dyson-workdir`), filters `SessionList` by that id. Right-rail **Files** tree: right-click a **folder** for Rename (inline; calls workspace `Move`) or Open in Explorer / Finder / file manager (`DysonUiHost.OpenFolderInFileManager`). See [docs/ui/README.md](../ui/README.md).

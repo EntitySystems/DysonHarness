@@ -63,6 +63,12 @@ public interface IDysonWorkspaceFileSystem
 
     VoidResult<string> DeleteDirectory(string path, bool recursive = false);
 
+    /// <summary>
+    /// Moves or renames a file or directory within the sandbox.
+    /// Destination must not already exist; directory sources cannot move into themselves.
+    /// </summary>
+    VoidResult<string> Move(string sourceRelativePath, string destinationRelativePath);
+
     /// <summary>Creates a watcher for this initialized FS (does not start it).</summary>
     Result<IDysonWorkspaceChangeWatcher, string> CreateWatcher();
 }

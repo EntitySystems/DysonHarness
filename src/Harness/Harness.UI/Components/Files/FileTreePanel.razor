@@ -1,4 +1,5 @@
 @namespace Harness.UI.Components.Files
+@using DysonHarness
 @using Harness.UI.Demo
 @using Harness.UI.Files
 @implements IDisposable
@@ -29,12 +30,25 @@
         {
             <div class="file-tree__status file-tree__status--warn">@warn</div>
         }
+        else if (_status is { } status)
+        {
+            <div class="file-tree__status file-tree__status--warn">@status</div>
+        }
 
         var rootChildren = state.SnapshotChildren(state.Root);
         <ul class="file-tree__list" role="tree">
             @foreach (var child in rootChildren)
             {
-                <FileTreeNodeView Node="child" Depth="0" OnToggle="ToggleAsync" OnOpenFile="OpenFileAsync" />
+                <FileTreeNodeView Node="child"
+                                  Depth="0"
+                                  OnToggle="ToggleAsync"
+                                  OnOpenFile="OpenFileAsync"
+                                  OnFolderContextMenu="ShowContextMenu"
+                                  RenamingRelativePath="_renamingRelativePath"
+                                  RenameDraft="_renameDraft"
+                                  RenameDraftChanged="OnRenameDraftChanged"
+                                  OnRenameCommit="CommitRenameAsync"
+                                  OnRenameCancel="CancelRename" />
             }
         </ul>
 
@@ -45,10 +59,50 @@
     }
 </div>
 
+@if (_contextMenuNode is not null)
+{
+    <div class="file-tree__context-backdrop"
+         tabindex="-1"
+         @onclick="CloseContextMenu"
+         @onkeydown="OnContextBackdropKeyDown"></div>
+    <div class="file-tree__context-menu"
+         role="menu"
+         aria-label="Folder actions"
+         style="left:@(_contextMenuX.ToString(System.Globalization.CultureInfo.InvariantCulture))px;top:@(_contextMenuY.ToString(System.Globalization.CultureInfo.InvariantCulture))px;"
+         @onclick:stopPropagation="true">
+        <button type="button"
+                class="file-tree__context-menu-item"
+                role="menuitem"
+                @onclick="BeginRenameFromMenu">
+            Rename
+        </button>
+        <button type="button"
+                class="file-tree__context-menu-item"
+                role="menuitem"
+                @onclick="OpenInFileManager">
+            @OpenInFileManagerLabel
+        </button>
+    </div>
+}
+
 @code {
     private Guid? _boundWorkDirectoryId;
+    private DysonFileTreeNode? _contextMenuNode;
+    private double _contextMenuX;
+    private double _contextMenuY;
+    private string? _renamingRelativePath;
+    private string _renameDraft = "";
+    private bool _renameCommitting;
+    private string? _status;
 
     [Parameter] public Guid? ActiveWorkDirectoryId { get; set; }
+
+    private static string OpenInFileManagerLabel =>
+        OperatingSystem.IsWindows()
+            ? "Open in Explorer"
+            : OperatingSystem.IsMacOS()
+                ? "Open in Finder"
+                : "Open in file manager";
 
     protected override void OnInitialized() => FileTree.Changed += OnTreeChanged;
 
@@ -58,6 +112,9 @@
             return;
 
         _boundWorkDirectoryId = ActiveWorkDirectoryId;
+        CloseContextMenu();
+        CancelRename();
+        _status = null;
         await FileTree.SetActiveAsync(ActiveWorkDirectoryId);
     }
 
@@ -67,7 +124,7 @@
 
     private async Task ToggleAsync(DysonFileTreeNode node)
     {
-        if (!node.IsDirectory)
+        if (!node.IsDirectory || _renamingRelativePath is not null)
             return;
 
         if (node.IsExpanded)
@@ -85,5 +142,190 @@
             return;
 
         await Host.OpenFileViewerAsync(node.RelativePath, FileTree.Active?.AbsolutePath);
+    }
+
+    private void ShowContextMenu(FileTreeFolderContextMenuArgs args)
+    {
+        if (!args.Node.IsDirectory)
+            return;
+
+        CancelRename();
+        _status = null;
+        _contextMenuNode = args.Node;
+        _contextMenuX = args.ClientX;
+        _contextMenuY = args.ClientY;
+    }
+
+    private void CloseContextMenu() => _contextMenuNode = null;
+
+    private void OnContextBackdropKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            CloseContextMenu();
+    }
+
+    private void BeginRenameFromMenu()
+    {
+        var node = _contextMenuNode;
+        CloseContextMenu();
+        if (node is null || !node.IsDirectory)
+            return;
+
+        _status = null;
+        _renamingRelativePath = node.RelativePath;
+        _renameDraft = node.Name;
+    }
+
+    private Task OnRenameDraftChanged(string value)
+    {
+        _renameDraft = value;
+        return Task.CompletedTask;
+    }
+
+    private void CancelRename()
+    {
+        _renamingRelativePath = null;
+        _renameDraft = "";
+        _renameCommitting = false;
+    }
+
+    private async Task CommitRenameAsync()
+    {
+        if (_renameCommitting)
+            return;
+
+        var sourceRel = _renamingRelativePath;
+        if (sourceRel is null || FileTree.Active is null)
+        {
+            CancelRename();
+            return;
+        }
+
+        var newName = _renameDraft.Trim();
+        var currentName = Path.GetFileName(sourceRel.Replace('/', Path.DirectorySeparatorChar));
+        if (string.IsNullOrEmpty(newName)
+            || string.Equals(newName, currentName, StringComparison.Ordinal))
+        {
+            CancelRename();
+            return;
+        }
+
+        if (!IsValidFolderName(newName))
+        {
+            _status = "Invalid folder name.";
+            Host.ReportError(_status);
+            CancelRename();
+            return;
+        }
+
+        var parentRel = GetParentRelative(sourceRel);
+        var destRel = string.IsNullOrEmpty(parentRel) ? newName : $"{parentRel}/{newName}";
+
+        var node = FindNodeByRelativePath(sourceRel);
+        if (node is { IsExpanded: true })
+            FileTree.Collapse(node);
+
+        _renameCommitting = true;
+        var moved = FileTree.Active.FileSystem.Move(sourceRel, destRel);
+        _renameCommitting = false;
+        CancelRename();
+
+        if (moved.IsError)
+        {
+            _status = moved.Error;
+            Host.ReportError(moved.Error);
+        }
+        else
+        {
+            _status = null;
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private void OpenInFileManager()
+    {
+        var node = _contextMenuNode;
+        CloseContextMenu();
+        if (node is null || FileTree.Active is null)
+            return;
+
+        var absolute = ResolveAbsolutePath(node.RelativePath);
+        if (absolute is null)
+        {
+            _status = "Could not resolve folder path.";
+            Host.ReportError(_status);
+            return;
+        }
+
+        var opened = Host.OpenFolderInFileManager(absolute);
+        if (opened.IsError)
+        {
+            _status = opened.Error;
+            Host.ReportError(opened.Error);
+        }
+        else
+        {
+            _status = null;
+        }
+    }
+
+    private string? ResolveAbsolutePath(string relativePath)
+    {
+        var state = FileTree.Active;
+        if (state is null)
+            return null;
+
+        var resolved = state.FileSystem.ResolvePath(relativePath);
+        if (resolved.IsSuccess)
+            return resolved.Value;
+
+        try
+        {
+            return Path.GetFullPath(Path.Combine(
+                state.AbsolutePath,
+                relativePath.Replace('/', Path.DirectorySeparatorChar)));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool IsValidFolderName(string name) =>
+        name is not ("." or "..")
+        && !name.Contains('/')
+        && !name.Contains('\\')
+        && name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
+
+    private static string GetParentRelative(string relativePath)
+    {
+        var normalized = relativePath.Replace('\\', '/').Trim('/');
+        var slash = normalized.LastIndexOf('/');
+        return slash < 0 ? "" : normalized[..slash];
+    }
+
+    private DysonFileTreeNode? FindNodeByRelativePath(string relativePath)
+    {
+        var state = FileTree.Active;
+        if (state is null)
+            return null;
+
+        return FindNode(state.Root, relativePath);
+    }
+
+    private static DysonFileTreeNode? FindNode(DysonFileTreeNode node, string relativePath)
+    {
+        if (string.Equals(node.RelativePath, relativePath, StringComparison.Ordinal))
+            return node;
+
+        foreach (var child in node.Children)
+        {
+            var found = FindNode(child, relativePath);
+            if (found is not null)
+                return found;
+        }
+
+        return null;
     }
 }

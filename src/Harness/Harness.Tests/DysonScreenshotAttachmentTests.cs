@@ -22,6 +22,35 @@ public class DysonScreenshotAttachmentTests
         AssertScreenshotUiSummary();
     }
 
+    /// <summary>
+    /// Cancelled token or expired timeoutMs must fail quickly (same race as Cef TakeScreenshot).
+    /// </summary>
+    [Fact]
+    public async Task TakeScreenshot_CancelOrTimeout_FailsWithoutHanging()
+    {
+        var tab = new StubTab("tab1", "win1", [], hangUntilCancel: true);
+
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        var cancelSw = System.Diagnostics.Stopwatch.StartNew();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => tab.TakeScreenshotAsync(timeoutMs: 30_000, cancelled.Token));
+        if (cancelSw.Elapsed >= TimeSpan.FromSeconds(2))
+            throw new InvalidOperationException("Cancelled screenshot must not hang.");
+
+        var timeoutSw = System.Diagnostics.Stopwatch.StartNew();
+        var result = await tab.TakeScreenshotAsync(timeoutMs: 50, CancellationToken.None);
+        if (!result.IsError
+            || !result.Error.Contains("timed out", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Expected timeout error, got IsError={result.IsError} Error={result.Error}");
+        }
+
+        if (timeoutSw.Elapsed >= TimeSpan.FromSeconds(2))
+            throw new InvalidOperationException("Timed-out screenshot must not hang.");
+    }
+
     private static void AssertCatalog()
     {
         var pipeline = DysonMcpPipeline.CreateDefault(
@@ -29,10 +58,11 @@ public class DysonScreenshotAttachmentTests
             browserControlAvailable: true);
         if (!pipeline.Tools.TryGetValue("BrowserTakeScreenshot", out var tool)
             || tool.Description.Contains("base64 in the tool result", StringComparison.Ordinal)
-            || !tool.Description.Contains("multimodal", StringComparison.OrdinalIgnoreCase))
+            || !tool.Description.Contains("multimodal", StringComparison.OrdinalIgnoreCase)
+            || !tool.InputSchemaJson.Contains("timeoutMs", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "BrowserTakeScreenshot catalog must describe multimodal ack (no base64-in-Content).");
+                "BrowserTakeScreenshot catalog must describe multimodal ack (no base64-in-Content) and timeoutMs.");
         }
     }
 
@@ -651,7 +681,7 @@ public class DysonScreenshotAttachmentTests
             Task.FromResult(VoidResult<string>.Success);
     }
 
-    private sealed class StubTab(string id, string windowId, byte[] png) : IDysonBrowserTab
+    private sealed class StubTab(string id, string windowId, byte[] png, bool hangUntilCancel = false) : IDysonBrowserTab
     {
         public string Id { get; } = id;
         public string WindowId { get; } = windowId;
@@ -719,9 +749,45 @@ public class DysonScreenshotAttachmentTests
         public Task<Result<string, string>> GetHtmlAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(Result<string, string>.AsValue("<html></html>"));
 
-        public Task<Result<byte[], string>> TakeScreenshotAsync(
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(Result<byte[], string>.AsValue(png));
+        public async Task<Result<byte[], string>> TakeScreenshotAsync(
+            int? timeoutMs = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (!hangUntilCancel)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Result<byte[], string>.AsValue(png);
+            }
+
+            // Mirror Cef race: linked CT + CancelAfter vs hanging work (no STA host).
+            var timeout = timeoutMs is > 0 ? timeoutMs.Value : 30_000;
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            linked.CancelAfter(timeout);
+            linked.Token.ThrowIfCancellationRequested();
+
+            try
+            {
+                var hangTask = Task.Delay(Timeout.Infinite, CancellationToken.None);
+                var delayTask = Task.Delay(Timeout.Infinite, linked.Token);
+                var winner = await Task.WhenAny(hangTask, delayTask).ConfigureAwait(false);
+                if (winner != hangTask)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                        cancellationToken.ThrowIfCancellationRequested();
+                    return Result<byte[], string>.AsError($"Screenshot timed out after {timeout}ms.");
+                }
+
+                return Result<byte[], string>.AsError("unreachable");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                return Result<byte[], string>.AsError($"Screenshot timed out after {timeout}ms.");
+            }
+        }
 
         public Task<Result<IReadOnlyList<DysonBrowserConsoleEntry>, string>> ReadConsoleLogAsync(
             CancellationToken cancellationToken = default) =>

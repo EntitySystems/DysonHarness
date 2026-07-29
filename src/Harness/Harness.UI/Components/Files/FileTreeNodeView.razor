@@ -7,6 +7,9 @@
          style="--file-tree-depth:@Depth"
          @onclick="OnRowClickAsync"
          @onkeydown="OnKeyDownAsync"
+         @oncontextmenu="OnContextMenuAsync"
+         @oncontextmenu:preventDefault="@(Node.IsDirectory)"
+         @oncontextmenu:stopPropagation="@(Node.IsDirectory)"
          tabindex="0"
          role="button">
         @if (Node.IsDirectory)
@@ -17,7 +20,23 @@
         {
             <span class="file-tree__chevron file-tree__chevron--spacer" aria-hidden="true"></span>
         }
-        <span class="file-tree__name@(Node.IsDirectory ? " file-tree__name--dir" : null)" title="@Node.RelativePath">@Node.Name</span>
+        @if (IsRenaming)
+        {
+            <input @ref="_renameInput"
+                   class="file-tree__rename"
+                   value="@RenameDraft"
+                   @oninput="OnRenameInput"
+                   @onkeydown="OnRenameKeyDown"
+                   @onclick:stopPropagation="true"
+                   @onmousedown:stopPropagation="true"
+                   @onfocusout="OnRenameFocusOut"
+                   spellcheck="false"
+                   aria-label="Rename folder" />
+        }
+        else
+        {
+            <span class="file-tree__name@(Node.IsDirectory ? " file-tree__name--dir" : null)" title="@Node.RelativePath">@Node.Name</span>
+        }
     </div>
 
     @if (Node.IsDirectory && Node.IsExpanded)
@@ -28,7 +47,16 @@
             <ul class="file-tree__list" role="group">
                 @foreach (var child in children)
                 {
-                    <FileTreeNodeView Node="child" Depth="Depth + 1" OnToggle="OnToggle" OnOpenFile="OnOpenFile" />
+                    <FileTreeNodeView Node="child"
+                                      Depth="Depth + 1"
+                                      OnToggle="OnToggle"
+                                      OnOpenFile="OnOpenFile"
+                                      OnFolderContextMenu="OnFolderContextMenu"
+                                      RenamingRelativePath="RenamingRelativePath"
+                                      RenameDraft="RenameDraft"
+                                      RenameDraftChanged="RenameDraftChanged"
+                                      OnRenameCommit="OnRenameCommit"
+                                      OnRenameCancel="OnRenameCancel" />
                 }
             </ul>
         }
@@ -36,13 +64,60 @@
 </li>
 
 @code {
+    private ElementReference _renameInput;
+    private bool _shouldFocusRename;
+    private bool _renameFocusArmed;
+
     [Parameter, EditorRequired] public DysonFileTreeNode Node { get; set; } = default!;
     [Parameter] public int Depth { get; set; }
     [Parameter] public EventCallback<DysonFileTreeNode> OnToggle { get; set; }
     [Parameter] public EventCallback<DysonFileTreeNode> OnOpenFile { get; set; }
+    [Parameter] public EventCallback<FileTreeFolderContextMenuArgs> OnFolderContextMenu { get; set; }
+    [Parameter] public string? RenamingRelativePath { get; set; }
+    [Parameter] public string RenameDraft { get; set; } = "";
+    [Parameter] public EventCallback<string> RenameDraftChanged { get; set; }
+    [Parameter] public EventCallback OnRenameCommit { get; set; }
+    [Parameter] public EventCallback OnRenameCancel { get; set; }
+
+    private bool IsRenaming =>
+        Node.IsDirectory
+        && RenamingRelativePath is not null
+        && string.Equals(RenamingRelativePath, Node.RelativePath, StringComparison.Ordinal);
+
+    protected override void OnParametersSet()
+    {
+        if (IsRenaming && !_renameFocusArmed)
+        {
+            _shouldFocusRename = true;
+            _renameFocusArmed = true;
+        }
+        else if (!IsRenaming)
+        {
+            _renameFocusArmed = false;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_shouldFocusRename || !IsRenaming)
+            return;
+
+        _shouldFocusRename = false;
+        try
+        {
+            await _renameInput.FocusAsync();
+        }
+        catch
+        {
+            // Element may unmount if rename cancelled during render.
+        }
+    }
 
     private async Task OnRowClickAsync()
     {
+        if (IsRenaming)
+            return;
+
         if (Node.IsDirectory)
             await OnToggle.InvokeAsync(Node);
         else
@@ -51,9 +126,45 @@
 
     private async Task OnKeyDownAsync(KeyboardEventArgs e)
     {
+        if (IsRenaming)
+            return;
+
         if (e.Key is not ("Enter" or " "))
             return;
 
         await OnRowClickAsync();
+    }
+
+    private async Task OnContextMenuAsync(MouseEventArgs e)
+    {
+        if (!Node.IsDirectory || IsRenaming)
+            return;
+
+        await OnFolderContextMenu.InvokeAsync(new FileTreeFolderContextMenuArgs(Node, e.ClientX, e.ClientY));
+    }
+
+    private async Task OnRenameInput(ChangeEventArgs e)
+    {
+        await RenameDraftChanged.InvokeAsync(e.Value?.ToString() ?? "");
+    }
+
+    private async Task OnRenameKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await OnRenameCommit.InvokeAsync();
+            return;
+        }
+
+        if (e.Key == "Escape")
+            await OnRenameCancel.InvokeAsync();
+    }
+
+    private async Task OnRenameFocusOut()
+    {
+        if (!IsRenaming)
+            return;
+
+        await OnRenameCommit.InvokeAsync();
     }
 }

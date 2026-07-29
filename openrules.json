@@ -1,0 +1,47 @@
+{
+  "Root": "AGENTS.md",
+  "Rules": [
+    {
+      "Path": "rules/rules_csharp.md",
+      "Mode": "AgentOptional",
+      "Description": "C# Result pattern, abstraction cap, EF DateTime UTC rules"
+    },
+    {
+      "Path": "rules/rules_skills.md",
+      "Mode": "AgentOptional",
+      "Description": "Skills packaging and location rules"
+    },
+    {
+      "Path": "rules/rules_docs.md",
+      "Mode": "AgentOptional",
+      "Description": "Documentation update expectations"
+    },
+    {
+      "Path": "rules/rules_ui_restart.md",
+      "Mode": "AgentOptional",
+      "Description": "Local UI restart on port 5180 after UI/engine changes"
+    },
+    {
+      "Path": "rules/rules_ponytail.md",
+      "Mode": "AgentOptional",
+      "Description": "Ponytail lazy-senior efficiency ladder (mandatory)"
+    }
+  ],
+  "Skills": [
+    {
+      "Path": "https://github.com/EntitySystems/openrules",
+      "Mode": "AgentOptional",
+      "Description": "OpenRules skill — how agents should load and interpret openrules.json"
+    },
+    {
+      "Path": "skills/csharp/SKILL.md",
+      "Mode": "AgentOptional",
+      "Description": "Modern C# / .NET practices for DysonHarness"
+    },
+    {
+      "Path": "skills/ef-core-sqlite/SKILL.md",
+      "Mode": "AgentOptional",
+      "Description": "EF Core + SQLite conventions for DysonHarness"
+    }
+  ]
+}
