@@ -3,6 +3,7 @@ using Harness.UI.Components;
 using Harness.UI.Demo;
 using Harness.UI.Files;
 using Harness.UI.Theme;
+using Microsoft.AspNetCore.Components.Server.Circuits;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -16,22 +17,23 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
 builder.Services.AddHttpClient();
+builder.Services.AddHttpContextAccessor();
 
 DysonAppPaths.EnsureRoot(DysonBuildInfo.Current);
 var databasePath = DysonAppPaths.GetDatabasePath(DysonBuildInfo.Current);
-builder.Services.AddDbContextFactory<DysonDbContext>(options =>
-    DysonSqliteConfigurator.Configure(options, databasePath));
-builder.Services.AddSingleton(sp =>
-    new DysonDbAccessor(
-        sp.GetRequiredService<IDbContextFactory<DysonDbContext>>(),
-        databasePath));
 
-builder.Services.AddScoped<DysonModelStore>();
-builder.Services.AddScoped<DysonSessionStore>();
-builder.Services.AddScoped<DysonWorkDirectoryStore>();
-builder.Services.AddScoped<DysonAppSettingsStore>();
+builder.Services.Configure<DysonHostingOptions>(
+    builder.Configuration.GetSection(DysonHostingOptions.SectionName));
+
+var hostingMode = builder.Configuration
+    .GetSection(DysonHostingOptions.SectionName)
+    .Get<DysonHostingOptions>()?.Mode
+    ?? DysonHostingMode.Local;
+
+builder.Services.AddDysonHosting(hostingMode);
+builder.Services.AddDysonLocalDb(databasePath);
+
 builder.Services.AddScoped<DysonToolPolicyStore>();
-builder.Services.AddScoped<DysonConfiguredShellStore>();
 builder.Services.AddSingleton(sp =>
 {
     var factory = sp.GetRequiredService<IHttpClientFactory>();
@@ -51,6 +53,9 @@ builder.Services.AddScoped<DysonUiHost>();
 builder.Services.AddScoped<ThemeService>();
 builder.Services.AddSingleton<DysonFileTreeService>();
 builder.Services.AddSingleton<DysonGitChangesService>();
+
+if (hostingMode == DysonHostingMode.Cloud)
+    builder.Services.AddScoped<CircuitHandler, DysonCloudSubjectCircuitHandler>();
 
 var app = builder.Build();
 
@@ -83,6 +88,10 @@ if (!app.Environment.IsDevelopment())
 
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseHttpsRedirection();
+
+if (hostingMode == DysonHostingMode.Cloud)
+    app.UseMiddleware<DysonSubjectCookieMiddleware>();
+
 app.UseAntiforgery();
 
 app.MapStaticAssets();

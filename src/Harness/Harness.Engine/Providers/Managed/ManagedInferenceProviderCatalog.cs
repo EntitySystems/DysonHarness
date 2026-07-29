@@ -6,16 +6,16 @@ public sealed class ManagedInferenceProviderCatalog
     public ManagedInferenceProviderCatalog(
         DysonCliProxyHost host,
         HttpClient http,
-        DysonModelStore models,
-        DysonAppSettingsStore appSettings)
+        IDysonModelRepository models,
+        IDysonSubjectSettingsRepository subjectSettings)
     {
         All =
         [
-            new ManagedCodexInferenceProvider(host, http, models, appSettings),
-            new ManagedGrokInferenceProvider(host, http, models, appSettings),
-            new ManagedAntigravityInferenceProvider(host, http, models, appSettings),
-            new ManagedKimiInferenceProvider(host, http, models, appSettings),
-            new ManagedClaudeInferenceProvider(host, http, models, appSettings),
+            new ManagedCodexInferenceProvider(host, http, models, subjectSettings),
+            new ManagedGrokInferenceProvider(host, http, models, subjectSettings),
+            new ManagedAntigravityInferenceProvider(host, http, models, subjectSettings),
+            new ManagedKimiInferenceProvider(host, http, models, subjectSettings),
+            new ManagedClaudeInferenceProvider(host, http, models, subjectSettings),
         ];
     }
 

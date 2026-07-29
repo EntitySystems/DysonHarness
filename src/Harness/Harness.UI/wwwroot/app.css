@@ -3306,10 +3306,19 @@ code, .mono {
 
 .tool-row__header {
   display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+}
+
+.tool-row__toggle {
+  display: flex;
   justify-content: space-between;
   gap: 8px;
   align-items: center;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   margin: 0;
   padding: 8px;
   border: 0;
@@ -3318,13 +3327,52 @@ code, .mono {
   cursor: pointer;
 }
 
-.tool-row__header:hover {
+.tool-row__toggle:hover {
   background: var(--bg-hover);
 }
 
-.tool-row__header:focus-visible {
+.tool-row__toggle:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
+}
+
+.tool-row__cancel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin: 0 8px 0 0;
+  padding: 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.tool-row__cancel:hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  border-color: var(--danger);
+}
+
+.tool-row__cancel:focus-visible {
+  outline: 1px solid var(--danger);
+  outline-offset: 1px;
+}
+
+.tool-row__cancel-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  /* stroke SVG is black; tint to danger */
+  filter: brightness(0) saturate(100%) invert(42%) sepia(62%) saturate(1800%) hue-rotate(330deg) brightness(1.05);
+}
+
+.tool-row__cancel-label {
+  color: var(--danger);
 }
 
 .tool-row__lead {

@@ -6,9 +6,9 @@ namespace DysonHarness;
 public sealed class ManagedCodexInferenceProvider(
     DysonCliProxyHost host,
     HttpClient http,
-    DysonModelStore models,
-    DysonAppSettingsStore? appSettings = null)
-    : ManagedInferenceProviderBase(host, http, models, appSettings)
+    IDysonModelRepository models,
+    IDysonSubjectSettingsRepository? subjectSettings = null)
+    : ManagedInferenceProviderBase(host, http, models, subjectSettings)
 {
     /// <summary>Codex OAuth redirect port (hardcoded by OpenAI / CLIProxy web-UI forwarder).</summary>
     public const int CodexOAuthCallbackPort = 1455;

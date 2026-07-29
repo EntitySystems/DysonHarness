@@ -3,7 +3,7 @@ using DysonHarness;
 namespace Harness.Tests;
 
 /// <summary>
-/// ponytail: file-backed parallel store ops must not surface EF concurrent-context or SQLITE_BUSY.
+/// ponytail: file-backed parallel repo ops must not surface EF concurrent-context or SQLITE_BUSY.
 /// </summary>
 public class DysonDbConcurrencyTests
 {
@@ -13,8 +13,8 @@ public class DysonDbConcurrencyTests
         var (accessor, path) = DysonTempDb.OpenFileAccessor();
         try
         {
-            var sessions = new DysonSessionStore(accessor);
-            var settings = new DysonAppSettingsStore(accessor);
+            var sessions = DysonTempDb.Sessions(accessor);
+            var settings = DysonTempDb.Settings(accessor);
 
             var created = await sessions.CreateSessionAsync(new DysonSessionCreateRequest
             {
@@ -72,7 +72,7 @@ public class DysonDbConcurrencyTests
 
                 tasks.Add(Task.Run(async () =>
                 {
-                    var set = await settings.SetAsync($"k{n}", $"v{n}");
+                    var set = await settings.SetSettingAsync($"k{n}", $"v{n}");
                     if (set.IsError)
                         lock (errors) errors.Add(set.Error);
                 }));
@@ -121,7 +121,7 @@ public class DysonDbConcurrencyTests
         var (accessor, path) = DysonTempDb.OpenFileAccessor();
         try
         {
-            var sessions = new DysonSessionStore(accessor);
+            var sessions = DysonTempDb.Sessions(accessor);
             var created = await sessions.CreateSessionAsync(new DysonSessionCreateRequest
             {
                 RuntimeId = 2,

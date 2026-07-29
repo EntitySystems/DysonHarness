@@ -1346,7 +1346,7 @@ public abstract class DysonAgentSession
     public event EventHandler? TodosChanged;
 
     /// <summary>Optional store for durable todo mutations when <see cref="PersistenceId"/> is set.</summary>
-    protected DysonSessionStore? SessionStore { get; set; }
+    protected IDysonSessionRepository? SessionStore { get; set; }
 
     /// <summary>Raised after a turn is appended via <see cref="AddTurn"/> (hosts may UpsertTurn + TurnStarted log).</summary>
     public event EventHandler<DysonAgentTurn>? TurnAdded;
@@ -1727,7 +1727,7 @@ public abstract class DysonAgentSession
         return true;
     }
 
-    /// <summary>Assigns <see cref="PersistenceId"/> after <see cref="DysonSessionStore.CreateSessionAsync"/>.</summary>
+    /// <summary>Assigns <see cref="PersistenceId"/> after <see cref="IDysonSessionRepository.CreateSessionAsync"/>.</summary>
     protected void SetPersistenceId(Guid persistenceId) => PersistenceId = persistenceId;
 
     /// <summary>Sets <see cref="DisplayTitle"/> after create (mirrors persisted Title).</summary>

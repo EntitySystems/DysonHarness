@@ -5,8 +5,8 @@ namespace Harness.UI.Demo;
 
 public sealed class DemoDysonAgentSession : DysonAgentSession
 {
-    private readonly DysonSessionStore? _store;
-    private readonly DysonModelStore? _models;
+    private readonly IDysonSessionRepository? _store;
+    private readonly IDysonModelRepository? _models;
     private Guid _workDirectoryId;
     private readonly string? _workDirectoryPath;
 
@@ -14,9 +14,9 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         string agentMode,
         DysonAgentSessionConfig config,
         DysonAgentProvider provider,
-        DysonSessionStore? store = null,
+        IDysonSessionRepository? store = null,
         Guid workDirectoryId = default,
-        DysonModelStore? models = null,
+        IDysonModelRepository? models = null,
         string? systemPromptSuffix = null,
         string? workDirectoryAbsolutePath = null)
         : base(agentMode, config, provider, systemPromptSuffix)
@@ -38,13 +38,13 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
     /// Creates a new persisted root session and assigns <see cref="DysonAgentSession.PersistenceId"/>.
     /// </summary>
     public static async Task<Result<DemoDysonAgentSession, string>> CreateAsync(
-        DysonSessionStore store,
+        IDysonSessionRepository store,
         DemoDysonAgentProvider provider,
         Guid workDirectoryId,
         string agentMode = DysonAgentModes.Work,
         DysonAgentSessionConfig? config = null,
         string? title = null,
-        DysonModelStore? models = null,
+        IDysonModelRepository? models = null,
         string? workDirectoryAbsolutePath = null,
         CancellationToken cancellationToken = default)
     {
@@ -103,11 +103,11 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
     /// Loads a persisted session, hydrates turns/logs, and optionally appends a SessionResumed log.
     /// </summary>
     public static async Task<Result<DemoDysonAgentSession, string>> LoadAsync(
-        DysonSessionStore store,
+        IDysonSessionRepository store,
         Guid sessionId,
         DemoDysonAgentProvider provider,
         DysonAgentSessionConfig? config = null,
-        DysonModelStore? models = null,
+        IDysonModelRepository? models = null,
         bool appendResumeLog = true,
         string? workDirectoryAbsolutePath = null,
         CancellationToken cancellationToken = default)

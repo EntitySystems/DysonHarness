@@ -1,8 +1,10 @@
 @namespace Harness.UI.Components.Shell
+@using DysonHarness
 @using Harness.UI.Components.Files
 @using Harness.UI.Files
 @inject DysonFileTreeService FileTree
 @inject DysonGitChangesService GitChanges
+@inject IDysonSubjectContext Subject
 
 <div class="tool-panel rail-tabs">
     <div class="rail-tabs__tabs" role="tablist" aria-label="Rail panels">
@@ -71,8 +73,8 @@
 
         _boundWorkDirectoryId = ActiveWorkDirectoryId;
         // Always keep the workdir watcher + git status alive regardless of active tab.
-        await FileTree.SetActiveAsync(ActiveWorkDirectoryId);
-        await GitChanges.SetActiveAsync(ActiveWorkDirectoryId);
+        await FileTree.SetActiveAsync(ActiveWorkDirectoryId, Subject.SubjectId);
+        await GitChanges.SetActiveAsync(ActiveWorkDirectoryId, Subject.SubjectId);
     }
 
     private void Select(RailTab tab) => _activeTab = tab;

@@ -5,6 +5,7 @@
 @implements IDisposable
 @inject DysonFileTreeService FileTree
 @inject DysonUiHost Host
+@inject IDysonSubjectContext Subject
 
 <div class="file-tree">
     @if (ActiveWorkDirectoryId is null)
@@ -115,7 +116,7 @@
         CloseContextMenu();
         CancelRename();
         _status = null;
-        await FileTree.SetActiveAsync(ActiveWorkDirectoryId);
+        await FileTree.SetActiveAsync(ActiveWorkDirectoryId, Subject.SubjectId);
     }
 
     public void Dispose() => FileTree.Changed -= OnTreeChanged;

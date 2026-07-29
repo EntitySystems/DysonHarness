@@ -8,12 +8,13 @@ AI model harness.
 - [x] Add model provider interface
 - [x] Wire up first provider (demo + OpenAI-compatible)
 - [ ] Add evaluation / run loop
+- [ ] Cloud hosting support (subject-scoped storage, shared model providers, forever subject cookie; see [docs/storage/cloud-hosting.md](docs/storage/cloud-hosting.md))
 
 ## Docs
 
 - Engine: [docs/engine/README.md](docs/engine/README.md) · [api-surface](docs/engine/api-surface.md)
 - OpenRules: [docs/openrules/README.md](docs/openrules/README.md) (`openrules.json` + Root/AutoInclude system prompt)
-- Storage: [docs/storage/models.md](docs/storage/models.md) · [sessions](docs/storage/sessions.md) · [work-directories](docs/storage/work-directories.md)
+- Storage: [docs/storage/cloud-hosting.md](docs/storage/cloud-hosting.md) · [models](docs/storage/models.md) · [sessions](docs/storage/sessions.md) · [work-directories](docs/storage/work-directories.md)
 - Inference providers: [docs/inference-providers/README.md](docs/inference-providers/README.md)
 - UI: [docs/ui/README.md](docs/ui/README.md)
 - Packaging: [docs/packaging/webview.md](docs/packaging/webview.md) (CefSharp WPF host + agent browser)

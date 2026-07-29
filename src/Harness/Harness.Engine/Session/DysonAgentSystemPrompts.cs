@@ -239,7 +239,7 @@ public static class DysonAgentSystemPrompts
         string agentMode,
         DysonAgentSessionConfig config,
         string providerKind,
-        DysonModelStore? models,
+        IDysonModelRepository? models,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(config);
@@ -261,7 +261,7 @@ public static class DysonAgentSystemPrompts
     /// <paramref name="providerKind"/> (same filter as child modelSlug resolution). Null store → null.
     /// </summary>
     public static async Task<string?> BuildAvailableModelsBlockAsync(
-        DysonModelStore? models,
+        IDysonModelRepository? models,
         string providerKind,
         CancellationToken cancellationToken = default)
     {
@@ -294,7 +294,7 @@ public static class DysonAgentSystemPrompts
     /// Builds session system-prompt suffix: available-models catalog + openrules AutoInclude block.
     /// </summary>
     public static async Task<string?> BuildSessionSystemPromptSuffixAsync(
-        DysonModelStore? models,
+        IDysonModelRepository? models,
         string providerKind,
         string? workDirectoryAbsolutePath,
         CancellationToken cancellationToken = default)

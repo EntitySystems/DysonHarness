@@ -12,7 +12,7 @@ public static class DysonAgentModes
     /// <summary>Category label; lookup uses Config.CustomAgents keys, not this literal.</summary>
     public const string Custom = "Custom";
 
-    /// <summary>Built-in modes shown in the composer AgentModePicker.</summary>
+    /// <summary>All built-in modes (Settings tool policy, StartSubagent, ApplyAgentMode).</summary>
     public static IReadOnlyList<string> BuiltIns { get; } =
     [
         Ask,
@@ -20,6 +20,16 @@ public static class DysonAgentModes
         Work,
         Explore,
         Drone,
+        SecurityReview,
+        BugReview,
+    ];
+
+    /// <summary>Modes shown in the composer AgentModePicker. Explore/Drone are spawn-only.</summary>
+    public static IReadOnlyList<string> ComposerSelectable { get; } =
+    [
+        Ask,
+        Plan,
+        Work,
         SecurityReview,
         BugReview,
     ];

@@ -36,6 +36,7 @@ public sealed class DysonGitChangesService : IDisposable
     /// </summary>
     public async Task<VoidResult<string>> SetActiveAsync(
         Guid? workDirectoryId,
+        string? subjectId = null,
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -58,6 +59,8 @@ public sealed class DysonGitChangesService : IDisposable
                 _cache[id] = state;
             }
 
+            if (!string.IsNullOrWhiteSpace(subjectId))
+                state.SubjectId = subjectId;
             Active = state;
         }
 
@@ -167,7 +170,8 @@ public sealed class DysonGitChangesService : IDisposable
             if (string.IsNullOrWhiteSpace(state.WorkAbsolutePath))
             {
                 await using var scope = _scopeFactory.CreateAsyncScope();
-                var store = scope.ServiceProvider.GetRequiredService<DysonWorkDirectoryStore>();
+                DysonCloudSubjectScope.TryBind(scope.ServiceProvider, state.SubjectId);
+                var store = scope.ServiceProvider.GetRequiredService<IDysonWorkDirectoryRepository>();
                 var get = await store.GetAsync(state.WorkDirectoryId, ct)
                     .ConfigureAwait(false);
                 if (get.IsError)
@@ -269,6 +273,8 @@ public sealed class DysonGitChangesState
     }
 
     public Guid WorkDirectoryId { get; }
+    /// <summary>Cloud subject id for child-scope repository lookups; unused in Local mode.</summary>
+    public string? SubjectId { get; set; }
     public string WorkAbsolutePath { get; set; } = "";
     public string? RepoRoot { get; set; }
     public bool NoRepo { get; set; }

@@ -25,7 +25,7 @@ Conceptual overview: [README.md](README.md).
 | `DysonLocalWorkspaceFileSystem` / `DysonWorkspaceFileSystems` | Local/SMB/UNC path-backed FS + `CreateLocalAsync` factory |
 | `DysonShell` / `DysonWindowsShell` | Shell runners; path-based execute + basename fixed-arg heuristics; legacy `DysonShellType` map kept for tests |
 | `DysonConfiguredShellSpec` / `DysonShellType` / `DysonShellRunResult` | Session shell name+path+optional FixedArgs; legacy enum; process result |
-| `DysonConfiguredShellEntity` / `DysonConfiguredShellStore` | Persisted shells (`configured_shells`, optional `FixedArgsJson`); seed defaults; list enabled specs |
+| `DysonConfiguredShellEntity` / `IDysonConfiguredShellRepository` | Persisted shells (`configured_shells`, optional `FixedArgsJson`, `SubjectId`); seed defaults; list enabled specs |
 | `DysonLongRunningShellRegistry` / `DysonLongRunningShell` | Workdir-keyed in-memory background shells (rings, Abort/Cancel/Interact/List/Subscribe); identity via `ShellName`; not persisted across UI restart |
 | `DysonLongRunningShellStatus` / `DysonLongRunningShellInfo` / `DysonLongRunningShellTail` | Status enum + list/tail DTOs (`ShellName` on info) |
 | `DysonOpenAiApiModes` | `Completions` / `Responses` constants |
@@ -114,7 +114,7 @@ Conceptual overview: [README.md](README.md).
 | `DysonMcpAccessMode` | `FullAccess`, `AutoReview` |
 | `DysonMcpPipeline` | Tool catalog + optional auto-review proxy; `ConfigureShellExecuteForMode` / `CreateLongRunningShellTools` / `PlanShellExecuteWarning` for Plan soft shell gates; `CreateBrowserTools` when `browserControlAvailable` |
 | `DysonSessionToolsetBuilder` | Builds session catalog: default tools → structural gates → mode denylist (`ApplyDisabledTools`); `AllCatalogTools` / `AllCatalogToolNames` for Settings; used by session ctor / `ApplyAgentMode` rebuild / child gating |
-| `DysonToolPolicyDocument` / `DysonToolPolicyStore` / `DysonToolPolicyResolver` | App-settings JSON denylist (`agent_mode_tool_policy`); resolver applies mode list only (model overlay signature unused in v1) |
+| `DysonToolPolicyDocument` / `DysonToolPolicyStore` / `DysonToolPolicyResolver` | Subject-settings JSON denylist (`agent_mode_tool_policy` via `IDysonSubjectSettingsRepository`); resolver applies mode list only (model overlay signature unused in v1) |
 | `DysonMcpTool` | Name, description, input schema JSON |
 | `DysonJsonDynamicToolchainSchema` / `DysonJsonDynamicToolchainInterpreter` | Strict nested JDSL program parse + interpreter (`JsonDynamicStructuredLanguageToolchain`); flow/step result DTOs — [json-dynamic-toolchain.md](json-dynamic-toolchain.md) |
 | `DysonMcpAutoReviewProxy` | In-process review gate when mode is AutoReview |
@@ -197,18 +197,22 @@ Keep `TError` / user-facing messages clean — do not stringify exceptions into 
 | `DysonLocalWorkspaceFileSystem` | Path-based local/SMB/UNC (incl. Azure Files mounts); accepts only `"local_fs"` |
 | `DysonWorkspaceFileSystems.CreateLocalAsync` | Validate dir → construct → init with `"local_fs"` |
 
-Cloud hosts implement `IDysonWorkspaceFileSystem` themselves — see [Cloud hosting / custom implementations](../storage/work-directories.md#cloud-hosting--custom-implementations).
+Cloud hosts implement `IDysonWorkspaceFileSystem` themselves — see [Cloud hosting / custom implementations](../storage/work-directories.md#cloud-hosting--custom-implementations). Persistence subjects / cookies / RBAC: [cloud-hosting.md](../storage/cloud-hosting.md).
 
 ## Persistence-facing types
 
-Documented under [docs/storage](../storage/models.md), [sessions.md](../storage/sessions.md), and [work-directories.md](../storage/work-directories.md):
+Contracts in `Harness.Abstractions` (`Storage/`); SQLite impl in `Harness.LocalDb`. Overview: [docs/storage](../storage/models.md), [sessions.md](../storage/sessions.md), [work-directories.md](../storage/work-directories.md), [cloud-hosting.md](../storage/cloud-hosting.md).
 
 - `DysonAppMode`, `DysonAppPaths`, `DysonBuildInfo`
-- `DysonDbContext`, `DysonModelStore`, `DysonSessionStore`, `DysonWorkDirectoryStore`, `DysonAppSettingsStore`
-- `DysonModelProviderEntity` (providers own `ApiKey` / `BaseUrl` / `ProviderKind` / optional `ManagedSource` / `OpenAiApiMode`)
-- `DysonModelSlugEntity` (slugs own `Slug` + `DisplayAlias` + `IsEnabled` + optional `DefaultReasoningEffort` + `ReasoningModes`)
-- `DysonModelStore.UpsertManagedProviderAsync` / `SetSlugEnabledAsync` / `SetSlugDefaultReasoningEffortAsync` — managed import + per-slug enable + default effort (see [storage/models.md](../storage/models.md)#managed-providers-cliproxy)
-- `DysonAppSettingEntity` / `DysonAppSettingKeys` (key/value prefs, e.g. web search summarizer slug; `cliproxy_*` mirrors)
-- `DysonWorkDirectoryEntity`, `DysonNativeFolderPicker`, `DysonGitInfo`
-- Session/turn/log entities and `DysonPersistedSession` (sessions reference `ModelSlugId`, optional `ReasoningEffort`, + optional `WorkDirectoryId`; aggregate includes todos)
-- `DysonSessionTodoEntity` / `DysonSessionTodo` / `DysonSessionTodoStatus` / todo request DTOs on `DysonSessionStore`
+- `DysonSubjects` (`Local` = `"local"`, `Shared` = `"shared"`), `IDysonSubjectContext`, `DysonSubjectEntity`
+- `IDysonAccessEvaluator` / `DysonPermissiveAccessEvaluator` / `DysonRole` / `DysonPermission` (`ManageOwnSubjectData`, `ManageSharedProviders`)
+- `IDysonSessionRepository`, `IDysonWorkDirectoryRepository`, `IDysonModelRepository`, `IDysonConfiguredShellRepository`, `IDysonSubjectSettingsRepository`
+- `DysonDbContext`, `DysonDbAccessor`, `DysonSqliteConfigurator`, `AddDysonLocalDb` (LocalDb)
+- `DysonModelProviderEntity` (`SubjectId` + providers own `ApiKey` / `BaseUrl` / `ProviderKind` / optional `ManagedSource` / `OpenAiApiMode`)
+- `DysonModelSlugEntity` (slugs own `Slug` + `DisplayAlias` + `IsEnabled` + optional `DefaultReasoningEffort` + `ReasoningModes`; parent-scoped)
+- `IDysonModelRepository.UpsertManagedProviderAsync` / `SetSlugEnabledAsync` / `SetSlugDefaultReasoningEffortAsync` — managed import + per-slug enable + default effort; create/update/managed upsert take `shared` (see [storage/models.md](../storage/models.md)#managed-providers-cliproxy)
+- `DysonAppSettingEntity` / `DysonAppSettingKeys` (subject-scoped key/value; composite PK `(SubjectId, Key)`; e.g. web search summarizer slug; `cliproxy_*` mirrors)
+- `DysonModelFavoriteEntity` (subject-owned; unique `(SubjectId, ModelSlugId)`)
+- `DysonWorkDirectoryEntity` (`SubjectId`; unique `(SubjectId, AbsolutePath)`), `DysonNativeFolderPicker`, `DysonGitInfo`
+- Session/turn/log entities and `DysonPersistedSession` (sessions have `SubjectId`, reference `ModelSlugId`, optional `ReasoningEffort`, + optional `WorkDirectoryId`; aggregate includes todos)
+- `DysonSessionTodoEntity` / `DysonSessionTodo` / `DysonSessionTodoStatus` / todo request DTOs on `IDysonSessionRepository`

@@ -17,11 +17,11 @@ public sealed class DysonUiHost : IAsyncDisposable
     public const double MinToolPanelWidthPercent = 12;
     public const double MaxToolPanelWidthPercent = 50;
 
-    private readonly DysonSessionStore _sessions;
-    private readonly DysonModelStore _models;
-    private readonly DysonWorkDirectoryStore _workDirectories;
-    private readonly DysonAppSettingsStore _appSettings;
-    private readonly DysonConfiguredShellStore _configuredShells;
+    private readonly IDysonSessionRepository _sessions;
+    private readonly IDysonModelRepository _models;
+    private readonly IDysonWorkDirectoryRepository _workDirectories;
+    private readonly IDysonSubjectSettingsRepository _appSettings;
+    private readonly IDysonConfiguredShellRepository _configuredShells;
     private readonly DysonCliProxyHost _cliProxy;
     private readonly HttpClient _http;
     private readonly IDysonBrowserControl? _browserControl;
@@ -67,11 +67,11 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     public DysonUiHost(
-        DysonSessionStore sessions,
-        DysonModelStore models,
-        DysonWorkDirectoryStore workDirectories,
-        DysonAppSettingsStore appSettings,
-        DysonConfiguredShellStore configuredShells,
+        IDysonSessionRepository sessions,
+        IDysonModelRepository models,
+        IDysonWorkDirectoryRepository workDirectories,
+        IDysonSubjectSettingsRepository appSettings,
+        IDysonConfiguredShellRepository configuredShells,
         HttpClient http,
         DysonCliProxyHost cliProxy,
         IDysonBrowserControl? browserControl = null)
@@ -833,7 +833,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         _toolPanelWidthLoaded = true;
         var setting = await _appSettings
-            .GetAsync(DysonAppSettingKeys.ToolPanelWidthPercent, cancellationToken)
+            .GetSettingAsync(DysonAppSettingKeys.ToolPanelWidthPercent, cancellationToken)
             .ConfigureAwait(false);
 
         if (!setting.IsError
@@ -926,7 +926,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         var value = _toolPanelWidthPercent.ToString("0.##", CultureInfo.InvariantCulture);
         await _appSettings
-            .SetAsync(DysonAppSettingKeys.ToolPanelWidthPercent, value, cancellationToken)
+            .SetSettingAsync(DysonAppSettingKeys.ToolPanelWidthPercent, value, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -945,7 +945,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 DisplayName = "Demo Mock",
                 ProviderKind = DysonProviderKinds.Demo,
             },
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         if (createProvider.IsError)
             return new VoidResult<string>(createProvider.Error);
@@ -2112,7 +2112,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         var setting = await _appSettings
-            .GetAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId, cancellationToken)
+            .GetSettingAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId, cancellationToken)
             .ConfigureAwait(false);
 
         if (setting.IsError || string.IsNullOrWhiteSpace(setting.Value))

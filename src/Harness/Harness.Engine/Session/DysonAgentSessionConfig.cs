@@ -17,7 +17,7 @@ public class DysonAgentSessionConfig
     /// <summary>
     /// Enabled shells for ShellExecute / StartLongRunningShell (MCP enum = <see cref="DysonConfiguredShellSpec.Name"/>).
     /// Empty ⇒ those tools (and all long-running shell tools) are omitted. Hosts load from
-    /// <see cref="DysonConfiguredShellStore"/>; tests set explicitly.
+    /// <see cref="IDysonConfiguredShellRepository"/>; tests set explicitly.
     /// </summary>
     public IReadOnlyList<DysonConfiguredShellSpec> AvailableShells { get; set; } = [];
 

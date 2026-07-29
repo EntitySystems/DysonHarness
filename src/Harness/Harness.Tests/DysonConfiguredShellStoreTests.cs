@@ -1,10 +1,8 @@
 using DysonHarness;
-using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
 
 namespace Harness.Tests;
 
-/// <summary>ponytail: configured shell store seed / unique name / enabled-only list.</summary>
+/// <summary>ponytail: configured shell repo seed / unique name / enabled-only list.</summary>
 public class DysonConfiguredShellStoreTests
 {
     [Fact]
@@ -23,7 +21,7 @@ public class DysonConfiguredShellStoreTests
 
         var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
         using var _keepAlive = conn;
-        var store = new DysonConfiguredShellStore(accessor);
+        var store = DysonTempDb.Shells(accessor);
 
         var ensure = store.EnsureDefaultsAsync().GetAwaiter().GetResult();
         if (ensure.IsError)
@@ -62,7 +60,7 @@ public class DysonConfiguredShellStoreTests
     {
         var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
         using var _keepAlive = conn;
-        var store = new DysonConfiguredShellStore(accessor);
+        var store = DysonTempDb.Shells(accessor);
 
         var a = store.CreateAsync("MyShell", "cmd.exe").GetAwaiter().GetResult();
         if (a.IsError)
@@ -77,7 +75,7 @@ public class DysonConfiguredShellStoreTests
     {
         var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
         using var _keepAlive = conn;
-        var store = new DysonConfiguredShellStore(accessor);
+        var store = DysonTempDb.Shells(accessor);
 
         var created = store.CreateAsync("GitBash", @"C:\Git\bin\bash.exe", fixedArgs: ["-c"])
             .GetAwaiter().GetResult();
@@ -111,7 +109,7 @@ public class DysonConfiguredShellStoreTests
         if (after.Value.Single(s => s.Name == "GitBash").FixedArgs is not null)
             throw new InvalidOperationException("Clearing FixedArgs must yield null on specs.");
 
-        if (DysonConfiguredShellStore.ParseFixedArgsText("-NoProfile -Command") is not ["-NoProfile", "-Command"])
+        if (DysonConfiguredShellRepository.ParseFixedArgsText("-NoProfile -Command") is not ["-NoProfile", "-Command"])
             throw new InvalidOperationException("ParseFixedArgsText must split on whitespace.");
     }
 

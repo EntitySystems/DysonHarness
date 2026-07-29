@@ -1,6 +1,8 @@
 # Work directories
 
-Registered local folders that own agent sessions (Cursor-style workspace roots). Same SQLite DB as models/sessions ([models.md](models.md)).
+Registered local folders that own agent sessions (Cursor-style workspace roots). Same SQLite DB as models/sessions ([models.md](models.md)). Work directories are **subject-owned**; see [cloud-hosting.md](cloud-hosting.md).
+
+Contracts: `IDysonWorkDirectoryRepository` in `Harness.Abstractions`. Implementation: `Harness.LocalDb`.
 
 ## Schema
 
@@ -9,19 +11,20 @@ Registered local folders that own agent sessions (Cursor-style workspace roots).
 | Property | Notes |
 | -------- | ----- |
 | `Id` | Guid PK |
+| `SubjectId` | Owning subject |
 | `Name` | Display name (defaults to folder name) |
-| `AbsolutePath` | Normalized full path; **unique** index |
+| `AbsolutePath` | Normalized full path; **unique** per `(SubjectId, AbsolutePath)` |
 | `CreatedUtc`, `LastOpenedUtc` | `DateTime` UTC |
 
 ### Sessions link
 
-`sessions.WorkDirectoryId` → `work_directories.Id` (`OnDelete(SetNull)`). Existing rows may be null; **new sessions require** a selected work directory.
+`sessions.WorkDirectoryId` → `work_directories.Id` (`OnDelete(SetNull)`). Existing rows may be null; **new sessions require** a selected work directory. Both session and workdir must belong to the same subject.
 
-## `DysonWorkDirectoryStore`
+## `IDysonWorkDirectoryRepository`
 
-Result-pattern concrete store:
+Result-pattern functional repository (current subject only; cross-subject get-by-id → error):
 
-- `CreateAsync(absolutePath, name?)` — normalize path, require directory exists, unique path
+- `CreateAsync(absolutePath, name?)` — normalize path, require directory exists, unique path within subject
 - `GetAsync` / `ListAsync` (ordered by `LastOpenedUtc` desc)
 - `TouchOpenedAsync` — bump `LastOpenedUtc` when switching active
 - `DeleteAsync` — removes registration only (not disk folder); **blocked** if any sessions still reference the id
@@ -38,7 +41,7 @@ Result-pattern concrete store:
 
 Sandboxed IO for tools, FileManager, file tree, and viewers goes through `IDysonWorkspaceFileSystem` (contracts in `Harness.Abstractions`):
 
-- Call `InitializeAsync(subjectId)` before any IO or watcher creation. Local subject is fixed: `DysonWorkspaceSubjects.LocalFs` (`"local_fs"`). Wrong subjects are rejected; IO before init fails.
+- Call `InitializeAsync(subjectId)` before any IO or watcher creation. Local subject is fixed: `DysonWorkspaceSubjects.LocalFs` (`"local_fs"`). This is **not** the same as persistence `DysonSubjects.Local` (`"local"`) — see [cloud-hosting.md](cloud-hosting.md). Wrong subjects are rejected; IO before init fails.
 - `NativeRootPath` is always the host-visible root for shells, `git -C`, and `Process.WorkingDirectory` (local path, mapped drive, or UNC/SMB mount — including Azure Files mounts).
 - Prefer `DysonWorkspaceFileSystems.CreateLocalAsync(absolutePath)` — validates the directory exists, constructs `DysonLocalWorkspaceFileSystem`, and initializes with `"local_fs"`.
 - Live updates: `CreateWatcher()` → `IDysonWorkspaceChangeWatcher` (`FileSystemWatcher` on the native root today).
@@ -48,13 +51,15 @@ For Azure Files (and similar) on this product path: mount the share (credentials
 
 ### Cloud hosting / custom implementations
 
-Planned guidance (not a shipped cloud host): Dyson ships **only** `DysonLocalWorkspaceFileSystem` — local disk, SMB, and UNC mounts (including Azure Files mounts). That is the desktop / single-host path.
+Persistence subjects, shared providers, cookies, and RBAC: [cloud-hosting.md](cloud-hosting.md).
+
+Workspace FS note (not a shipped cloud host): Dyson ships **only** `DysonLocalWorkspaceFileSystem` — local disk, SMB, and UNC mounts (including Azure Files mounts). That is the desktop / single-host path.
 
 Cloud or multi-tenant hosts **must implement** their own `IDysonWorkspaceFileSystem` (and usually `IDysonWorkspaceChangeWatcher`) to match their storage, auth, and isolation model. Wire it through the same session, tool, and UI call sites that today use `CreateLocalAsync`.
 
 - Use `InitializeAsync(subjectId)` for auth and partitioning. Local uses `"local_fs"`; cloud subjects are host-defined.
 - `NativeRootPath` remains required for shells and `git`. Cloud hosts that keep `ShellExecute` must still expose a host-visible path (e.g. per-session mount or sandbox cwd). If a host cannot provide that, it must gate or replace shell tools itself.
-- Other host concerns cloud consumers typically own (not provided by the local desktop app): shared/multi-tenant persistence instead of per-user LocalAppData SQLite, identity, per-user/session shell isolation, folder-pick UX, and process-wide UI singletons (file tree / long-running shells). See existing engine and packaging docs for current single-host limits — this subsection does not define a full multi-tenant design.
+- Other host concerns cloud consumers typically own (not provided by the local desktop app): identity binding to persistence subjects, per-user/session shell isolation, folder-pick UX, and process-wide UI singletons (file tree / long-running shells). Shared/multi-tenant persistence uses the Abstred repository interfaces (LocalDb or an external provider) — not a second ad-hoc SQLite layout.
 
 ## Workspace artifacts (`.dyson`)
 

@@ -3,9 +3,9 @@ namespace DysonHarness;
 public sealed class ManagedGrokInferenceProvider(
     DysonCliProxyHost host,
     HttpClient http,
-    DysonModelStore models,
-    DysonAppSettingsStore? appSettings = null)
-    : ManagedInferenceProviderBase(host, http, models, appSettings)
+    IDysonModelRepository models,
+    IDysonSubjectSettingsRepository? subjectSettings = null)
+    : ManagedInferenceProviderBase(host, http, models, subjectSettings)
 {
     public override string ManagedSource => DysonManagedSources.CliProxyGrok;
     public override string DisplayName => "Grok Build (CLIProxy)";

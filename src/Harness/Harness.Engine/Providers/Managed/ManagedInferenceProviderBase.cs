@@ -15,19 +15,19 @@ public abstract class ManagedInferenceProviderBase
 
     private readonly DysonCliProxyHost _host;
     private readonly HttpClient _http;
-    private readonly DysonModelStore _models;
-    private readonly DysonAppSettingsStore? _appSettings;
+    private readonly IDysonModelRepository _models;
+    private readonly IDysonSubjectSettingsRepository? _subjectSettings;
 
     protected ManagedInferenceProviderBase(
         DysonCliProxyHost host,
         HttpClient http,
-        DysonModelStore models,
-        DysonAppSettingsStore? appSettings = null)
+        IDysonModelRepository models,
+        IDysonSubjectSettingsRepository? subjectSettings = null)
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _models = models ?? throw new ArgumentNullException(nameof(models));
-        _appSettings = appSettings;
+        _subjectSettings = subjectSettings;
     }
 
     public abstract string ManagedSource { get; }
@@ -75,7 +75,7 @@ public abstract class ManagedInferenceProviderBase
                 apiKey.Value,
                 OpenAiApiMode,
                 slugs: [],
-                cancellationToken)
+                cancellationToken: cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -197,7 +197,7 @@ public abstract class ManagedInferenceProviderBase
                 apiKey.Value,
                 OpenAiApiMode,
                 mapped,
-                cancellationToken)
+                cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
         if (upsert.IsError)
@@ -363,7 +363,7 @@ public abstract class ManagedInferenceProviderBase
 
     private async Task MirrorKeysToAppSettingsAsync(CancellationToken cancellationToken)
     {
-        if (_appSettings is null)
+        if (_subjectSettings is null)
             return;
 
         var api = _host.GetApiKey();
@@ -371,13 +371,17 @@ public abstract class ManagedInferenceProviderBase
         if (api.IsError || mgmt.IsError)
             return;
 
-        await _appSettings.SetAsync(DysonAppSettingKeys.CliProxyApiKey, api.Value, cancellationToken)
+        await _subjectSettings
+            .SetSettingAsync(DysonAppSettingKeys.CliProxyApiKey, api.Value, cancellationToken)
             .ConfigureAwait(false);
-        await _appSettings
-            .SetAsync(DysonAppSettingKeys.CliProxyManagementKey, mgmt.Value, cancellationToken)
+        await _subjectSettings
+            .SetSettingAsync(DysonAppSettingKeys.CliProxyManagementKey, mgmt.Value, cancellationToken)
             .ConfigureAwait(false);
-        await _appSettings
-            .SetAsync(DysonAppSettingKeys.CliProxyPort, DysonCliProxyHost.DefaultPort.ToString(), cancellationToken)
+        await _subjectSettings
+            .SetSettingAsync(
+                DysonAppSettingKeys.CliProxyPort,
+                DysonCliProxyHost.DefaultPort.ToString(),
+                cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -403,9 +407,3 @@ public sealed record ManagedModelInfo(
     string? OwnedBy,
     string? Type,
     string? DisplayName);
-
-public sealed record ManagedSlugSpec(
-    string Slug,
-    string DisplayAlias,
-    string? DefaultReasoningEffort,
-    IReadOnlyList<string> ReasoningModes);

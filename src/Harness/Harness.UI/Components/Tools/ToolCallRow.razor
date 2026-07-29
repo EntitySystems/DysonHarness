@@ -4,47 +4,49 @@
 @using Harness.UI.Demo
 
 <div class="tool-row @(_expanded ? "tool-row--expanded" : null)">
-    <button type="button"
-            class="tool-row__header"
-            aria-expanded="@(_expanded ? "true" : "false")"
-            @onclick="ToggleExpanded">
-        <span class="tool-row__lead">
-            <span class="tool-row__name mono">@Tracked.Call.ToolName</span>
-            @if (_summary.HasLineDelta)
-            {
-                <span class="tool-row__summary">
-                    @if (_summary.LinesAdded is int added)
-                    {
-                        <span class="tool-delta tool-delta--add">+@added</span>
-                    }
-                    @if (_summary.LinesRemoved is int removed)
-                    {
-                        <span class="tool-delta tool-delta--del">−@removed</span>
-                    }
-                </span>
-            }
-            else if (!string.IsNullOrEmpty(_summary.Text))
-            {
-                <span class="tool-row__summary mono">@_summary.Text</span>
-            }
-        </span>
-        <span class="tool-status @StatusClass" data-status-short="@StatusShort">@Tracked.Status</span>
-    </button>
+    <div class="tool-row__header">
+        <button type="button"
+                class="tool-row__toggle"
+                aria-expanded="@(_expanded ? "true" : "false")"
+                @onclick="ToggleExpanded">
+            <span class="tool-row__lead">
+                <span class="tool-row__name mono">@Tracked.Call.ToolName</span>
+                @if (_summary.HasLineDelta)
+                {
+                    <span class="tool-row__summary">
+                        @if (_summary.LinesAdded is int added)
+                        {
+                            <span class="tool-delta tool-delta--add">+@added</span>
+                        }
+                        @if (_summary.LinesRemoved is int removed)
+                        {
+                            <span class="tool-delta tool-delta--del">−@removed</span>
+                        }
+                    </span>
+                }
+                else if (!string.IsNullOrEmpty(_summary.Text))
+                {
+                    <span class="tool-row__summary mono">@_summary.Text</span>
+                }
+            </span>
+            <span class="tool-status @StatusClass" data-status-short="@StatusShort">@Tracked.Status</span>
+        </button>
+        @if (Tracked.Status == DysonToolCallStatus.Working && CanCancel)
+        {
+            <button type="button"
+                    class="tool-row__cancel"
+                    title="Cancel"
+                    aria-label="Cancel"
+                    @onclick:stopPropagation="true"
+                    @onclick="HandleCancelAsync">
+                <img class="tool-row__cancel-icon" src="icons/cancel.svg" alt="" />
+                <span class="tool-row__cancel-label">Cancel</span>
+            </button>
+        }
+    </div>
     @if (_expanded)
     {
         <div class="tool-row__body">
-            @if (Tracked.Status == DysonToolCallStatus.Working && CanCancel)
-            {
-                <button type="button"
-                        class="turn-block__cancel"
-                        title="Cancel"
-                        aria-label="Cancel prompt"
-                        @onclick:stopPropagation="true"
-                        @onclick="HandleCancelAsync">
-                    <span class="turn-block__spinner" aria-hidden="true"></span>
-                    <img class="turn-block__cancel-icon" src="icons/cancel.svg" alt="" />
-                </button>
-            }
             <ToolCallExpandedBody ToolName="@Tracked.Call.ToolName"
                                   CallId="@Tracked.Call.CallId"
                                   Stage="@Tracked.Call.Stage"

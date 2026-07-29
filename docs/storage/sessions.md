@@ -1,6 +1,8 @@
 # Sessions, turns & session log
 
-Durable session state lives in the same EF Core SQLite DB as model providers/slugs ([models.md](models.md)). **Turns** are the resume source of truth; the **session log** is an append-only audit / UI timeline.
+Durable session state lives in the same EF Core SQLite DB as model providers/slugs ([models.md](models.md)). Sessions are **subject-owned** (`SubjectId`); see [cloud-hosting.md](cloud-hosting.md). **Turns** are the resume source of truth; the **session log** is an append-only audit / UI timeline.
+
+Contracts: `IDysonSessionRepository` in `Harness.Abstractions`. Implementation: `Harness.LocalDb`.
 
 ## Schema
 
@@ -9,10 +11,11 @@ Durable session state lives in the same EF Core SQLite DB as model providers/slu
 | Property | Notes |
 | -------- | ----- |
 | `Id` | Guid PK — **persistence id** (distinct from runtime int `DysonAgentSession.Id`) |
+| `SubjectId` | Owning subject (`DysonSubjects.Local` or cloud subject id) |
 | `RuntimeId` | Root `0` / subagent ≥ `1` |
 | `ParentSessionId` | Guid? FK to parent persisted session |
 | `AgentMode` | Ask / Plan / Work / … |
-| `ModelSlugId` | Guid? FK to `model_slugs` (credentials via parent provider) |
+| `ModelSlugId` | Guid? FK to `model_slugs` (credentials via parent provider; may reference a shared provider’s slug) |
 | `ReasoningEffort` | Session-scoped `reasoning_effort` override; null = fall back to slug `DefaultReasoningEffort` on resolve; empty = omit from request |
 | `WorkDirectoryId` | Guid? FK to `work_directories` (`SetNull` on delete; required for new sessions) |
 | `McpAccessMode` | enum |
@@ -21,7 +24,7 @@ Durable session state lives in the same EF Core SQLite DB as model providers/slu
 | `SystemPromptSnapshot` | Prompt at create time; updated on mid-session `ApplyAgentMode` |
 | `CreatedUtc`, `UpdatedUtc`, `LastActivityUtc` | `DateTime` UTC |
 
-Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work directories: [work-directories.md](work-directories.md).
+Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work directories: [work-directories.md](work-directories.md). Child rows (`turns`, `session_logs`, `session_todos`) stay parent-scoped (no redundant `SubjectId`). Repository visibility: current subject only; cross-subject get-by-id → error.
 
 ### `turns`
 
@@ -95,9 +98,9 @@ Append-only. Filter by `Kind`; payload fields live in `PayloadJson`.
 
 Use small sealed records per kind plus a type-discriminator helper (`DysonSessionLogPayload`). Store `Kind` for SQL filtering; JSON carries the fields.
 
-## `DysonSessionStore` API
+## `IDysonSessionRepository` API
 
-Result-pattern concrete store:
+Result-pattern functional repository (subject-scoped):
 
 ```csharp
 Task<Result<Guid, string>> CreateSessionAsync(DysonSessionCreateRequest request, CancellationToken ct = default);
@@ -115,7 +118,7 @@ Task<VoidResult<string>> DeleteTodoAsync(Guid sessionId, string taskCode, Cancel
 Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ReplaceTodosAsync(Guid sessionId, IReadOnlyList<DysonSessionTodoReplaceItem> items, CancellationToken ct = default);
 ```
 
-`ListSessionsAsync` optionally filters by `WorkDirectoryId`. `ListChildSessionsAsync` returns direct children of a parent ordered by `RuntimeId`. `DysonSessionCreateRequest` / summaries include `WorkDirectoryId`. `DysonSessionMetaUpdate` can patch status/title/model/effort and, on mid-session mode switch, `AgentMode` + `SystemPromptSnapshot`.
+`ListSessionsAsync` optionally filters by `WorkDirectoryId` (within the current subject). `ListChildSessionsAsync` returns direct children of a parent ordered by `RuntimeId`. `DysonSessionCreateRequest` / summaries include `WorkDirectoryId`. `DysonSessionMetaUpdate` can patch status/title/model/effort and, on mid-session mode switch, `AgentMode` + `SystemPromptSnapshot`.
 
 `GetFullSessionAsync` returns session row + all turns (ordered) + all log entries (ordered by `Sequence`) + todos (ordered by `Sequence`).
 
@@ -136,8 +139,8 @@ Aggregate DTO: session entity + `IReadOnlyList` turns + `IReadOnlyList` log entr
 5. Host (`LoadAndFocusSessionAsync`) lists direct children via `ListChildSessionsAsync(parentId)`, loads each missing child (`appendResumeLog: false`), and calls `RestoreRegisteredSubagent` so `SubagentsById` / `SubSessions` are session-owned again (Wait / Inspect / Stop / ListSubagents work across turns and after cold resume)
 6. Session is ready for further `PromptAsync`
 
-Demo path: `DemoDysonAgentSession.LoadAsync(store, sessionId, provider)`.
-OpenAI-compatible path: `OpenAiCompatibleAgentSession.LoadAsync(store, sessionId, provider, http, workDirectoryAbsolutePath)`.
+Demo path: `DemoDysonAgentSession.LoadAsync(sessionRepository, sessionId, provider)`.
+OpenAI-compatible path: `OpenAiCompatibleAgentSession.LoadAsync(sessionRepository, sessionId, provider, http, workDirectoryAbsolutePath)`.
 
 ### Subagents
 

@@ -17,7 +17,7 @@ internal static class DysonWorkspaceTestFs
         DysonAgentSession session,
         string workRoot,
         HttpClient http,
-        DysonSessionStore? store = null,
+        IDysonSessionRepository? store = null,
         Guid workDirectoryId = default) =>
         new(session, CreateLocal(workRoot), http, store, workDirectoryId);
 }

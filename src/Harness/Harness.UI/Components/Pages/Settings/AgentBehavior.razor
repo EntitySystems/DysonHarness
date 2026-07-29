@@ -1,7 +1,7 @@
 @page "/settings/agent-behavior"
 @layout SettingsLayout
 @using DysonHarness
-@inject DysonAppSettingsStore AppSettings
+@inject IDysonSubjectSettingsRepository AppSettings
 
 <PageTitle>Agent behavior — Settings</PageTitle>
 
@@ -40,7 +40,7 @@
 
     protected override async Task OnInitializedAsync()
     {
-        var get = await AppSettings.GetAsync(DysonAppSettingKeys.EndOfTaskAutoReview);
+        var get = await AppSettings.GetSettingAsync(DysonAppSettingKeys.EndOfTaskAutoReview);
         if (get.IsError)
         {
             _error = get.Error;
@@ -58,7 +58,7 @@
             ? b
             : bool.TryParse(e.Value?.ToString(), out var parsed) && parsed;
 
-        var set = await AppSettings.SetAsync(
+        var set = await AppSettings.SetSettingAsync(
             DysonAppSettingKeys.EndOfTaskAutoReview,
             _endOfTaskAutoReview ? "true" : "false");
         if (set.IsError)

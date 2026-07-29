@@ -13,6 +13,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Harness.WindowsBrowser", "H
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Harness.Tests", "Harness.Tests\Harness.Tests.csproj", "{B0EEA764-8C95-464C-BED8-0340A14393B1}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Harness.LocalDb", "Harness.LocalDb\Harness.LocalDb.csproj", "{01FB1A3A-52A6-445C-91C1-826ED11234DF}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -83,6 +85,18 @@ Global
 		{B0EEA764-8C95-464C-BED8-0340A14393B1}.Release|x64.Build.0 = Release|Any CPU
 		{B0EEA764-8C95-464C-BED8-0340A14393B1}.Release|x86.ActiveCfg = Release|Any CPU
 		{B0EEA764-8C95-464C-BED8-0340A14393B1}.Release|x86.Build.0 = Release|Any CPU
+		{01FB1A3A-52A6-445C-91C1-826ED11234DF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{01FB1A3A-52A6-445C-91C1-826ED11234DF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{01FB1A3A-52A6-445C-91C1-826ED11234DF}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{01FB1A3A-52A6-445C-91C1-826ED11234DF}.Debug|x64.Build.0 = Debug|Any CPU
+		{01FB1A3A-52A6-445C-91C1-826ED11234DF}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{01FB1A3A-52A6-445C-91C1-826ED11234DF}.Debug|x86.Build.0 = Debug|Any CPU
+		{01FB1A3A-52A6-445C-91C1-826ED11234DF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{01FB1A3A-52A6-445C-91C1-826ED11234DF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{01FB1A3A-52A6-445C-91C1-826ED11234DF}.Release|x64.ActiveCfg = Release|Any CPU
+		{01FB1A3A-52A6-445C-91C1-826ED11234DF}.Release|x64.Build.0 = Release|Any CPU
+		{01FB1A3A-52A6-445C-91C1-826ED11234DF}.Release|x86.ActiveCfg = Release|Any CPU
+		{01FB1A3A-52A6-445C-91C1-826ED11234DF}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

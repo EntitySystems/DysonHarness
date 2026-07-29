@@ -112,13 +112,13 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 "An end-turn tool was called; this turn ends.",
         };
 
-    private readonly DysonSessionStore? _store;
+    private readonly IDysonSessionRepository? _store;
     private readonly HttpClient _http;
     private readonly string _workDirectoryPath;
     private Guid _workDirectoryId;
     private readonly OpenAiCompletionsClient _completions;
     private readonly OpenAiResponsesClient _responses;
-    private readonly DysonModelStore? _models;
+    private readonly IDysonModelRepository? _models;
 
     public OpenAiCompatibleAgentSession(
         string agentMode,
@@ -126,9 +126,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         OpenAiCompatibleAgentProvider provider,
         HttpClient http,
         string workDirectoryAbsolutePath,
-        DysonSessionStore? store = null,
+        IDysonSessionRepository? store = null,
         Guid workDirectoryId = default,
-        DysonModelStore? models = null,
+        IDysonModelRepository? models = null,
         string? systemPromptSuffix = null)
         : base(agentMode, config, provider, systemPromptSuffix)
     {
@@ -150,7 +150,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     public Guid WorkDirectoryId => _workDirectoryId;
 
     public static async Task<Result<OpenAiCompatibleAgentSession, string>> CreateAsync(
-        DysonSessionStore store,
+        IDysonSessionRepository store,
         OpenAiCompatibleAgentProvider provider,
         HttpClient http,
         Guid workDirectoryId,
@@ -158,7 +158,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         string agentMode = DysonAgentModes.Work,
         DysonAgentSessionConfig? config = null,
         string? title = null,
-        DysonModelStore? models = null,
+        IDysonModelRepository? models = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -214,13 +214,13 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     }
 
     public static async Task<Result<OpenAiCompatibleAgentSession, string>> LoadAsync(
-        DysonSessionStore store,
+        IDysonSessionRepository store,
         Guid sessionId,
         OpenAiCompatibleAgentProvider provider,
         HttpClient http,
         string workDirectoryAbsolutePath,
         DysonAgentSessionConfig? config = null,
-        DysonModelStore? models = null,
+        IDysonModelRepository? models = null,
         bool appendResumeLog = true,
         CancellationToken cancellationToken = default)
     {

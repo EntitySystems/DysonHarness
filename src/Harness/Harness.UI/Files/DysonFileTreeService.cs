@@ -29,6 +29,7 @@ public sealed class DysonFileTreeService : IDisposable
     /// </summary>
     public async Task<VoidResult<string>> SetActiveAsync(
         Guid? workDirectoryId,
+        string? subjectId = null,
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -55,7 +56,8 @@ public sealed class DysonFileTreeService : IDisposable
         string absolutePath;
         await using (var scope = _scopeFactory.CreateAsyncScope())
         {
-            var store = scope.ServiceProvider.GetRequiredService<DysonWorkDirectoryStore>();
+            DysonCloudSubjectScope.TryBind(scope.ServiceProvider, subjectId);
+            var store = scope.ServiceProvider.GetRequiredService<IDysonWorkDirectoryRepository>();
             var get = await store.GetAsync(id, cancellationToken).ConfigureAwait(false);
             if (get.IsError)
                 return VoidResult<string>.AsError(get.Error);

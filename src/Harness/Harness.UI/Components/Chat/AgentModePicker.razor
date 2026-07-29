@@ -78,7 +78,7 @@
     {
         get
         {
-            IEnumerable<string> query = DysonAgentModes.BuiltIns;
+            IEnumerable<string> query = DysonAgentModes.ComposerSelectable;
             if (!string.IsNullOrWhiteSpace(_search))
             {
                 var term = _search.Trim();

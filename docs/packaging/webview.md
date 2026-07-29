@@ -37,7 +37,7 @@ Boundary: `Harness.WindowsBrowser` only references Abstractions; it never calls 
 ## Constraints
 
 - Reuse app mode + platform paths from [docs/storage/models.md](../storage/models.md) — one `dyson.db` per mode folder
-- Do not fork session/resume semantics; use `DysonSessionStore.GetFullSessionAsync` / restore
+- Do not fork session/resume semantics; use `IDysonSessionRepository.GetFullSessionAsync` / restore
 - Keep providers ephemeral; model profiles remain SQLite rows
 - CefSharp NuGet restore supplies CEF binaries; Visual C++ 2022 redistributable is a deployment dependency
 - **Executable RID:** `Harness.UI` (Windows) must set `RuntimeIdentifier=win-x64` (and `PlatformTarget=x64`) so CefSharp copies natives (`libcef.dll`, `CefSharp.BrowserSubprocess.exe`, …) next to `Harness.UI.exe`. A library RID on `Harness.WindowsBrowser` alone is not enough — MSBuild only lays out architecture-specific CEF redistributables for the **host** project.

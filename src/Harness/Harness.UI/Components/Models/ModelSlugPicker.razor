@@ -1,7 +1,7 @@
 @namespace Harness.UI.Components.Models
 @using DysonHarness
 @using Microsoft.AspNetCore.Components.Web
-@inject DysonModelStore ModelStore
+@inject IDysonModelRepository ModelStore
 
 <div class="model-slug-picker">
     @if (!string.IsNullOrEmpty(_error))

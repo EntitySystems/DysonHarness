@@ -7,7 +7,7 @@ namespace DysonHarness;
 /// Loads/saves <see cref="DysonToolPolicyDocument"/> under
 /// <see cref="DysonAppSettingKeys.AgentModeToolPolicy"/>.
 /// </summary>
-public sealed class DysonToolPolicyStore(DysonAppSettingsStore settings)
+public sealed class DysonToolPolicyStore(IDysonSubjectSettingsRepository settings)
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -19,14 +19,14 @@ public sealed class DysonToolPolicyStore(DysonAppSettingsStore settings)
     private static readonly IReadOnlySet<string> EmptyDisabled =
         new HashSet<string>(StringComparer.Ordinal);
 
-    private readonly DysonAppSettingsStore _settings =
+    private readonly IDysonSubjectSettingsRepository _settings =
         settings ?? throw new ArgumentNullException(nameof(settings));
 
     public async Task<Result<DysonToolPolicyDocument, string>> GetDocumentAsync(
         CancellationToken cancellationToken = default)
     {
         var get = await _settings
-            .GetAsync(DysonAppSettingKeys.AgentModeToolPolicy, cancellationToken)
+            .GetSettingAsync(DysonAppSettingKeys.AgentModeToolPolicy, cancellationToken)
             .ConfigureAwait(false);
         if (get.IsError)
             return Result<DysonToolPolicyDocument, string>.AsError(get.Error);
@@ -66,7 +66,7 @@ public sealed class DysonToolPolicyStore(DysonAppSettingsStore settings)
         }
 
         return await _settings
-            .SetAsync(DysonAppSettingKeys.AgentModeToolPolicy, json, cancellationToken)
+            .SetSettingAsync(DysonAppSettingKeys.AgentModeToolPolicy, json, cancellationToken)
             .ConfigureAwait(false);
     }
 

@@ -20,13 +20,13 @@ public sealed partial class DysonWorkspaceToolExecutor
     private readonly IDysonWorkspaceFileSystem _fs;
     private readonly Guid _workDirectoryId;
     private readonly HttpClient _http;
-    private readonly DysonSessionStore? _store;
+    private readonly IDysonSessionRepository? _store;
 
     public DysonWorkspaceToolExecutor(
         DysonAgentSession session,
         IDysonWorkspaceFileSystem workspaceFileSystem,
         HttpClient http,
-        DysonSessionStore? store = null,
+        IDysonSessionRepository? store = null,
         Guid workDirectoryId = default)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));

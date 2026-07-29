@@ -6,9 +6,9 @@ namespace DysonHarness;
 public sealed class ManagedClaudeInferenceProvider(
     DysonCliProxyHost host,
     HttpClient http,
-    DysonModelStore models,
-    DysonAppSettingsStore? appSettings = null)
-    : ManagedInferenceProviderBase(host, http, models, appSettings)
+    IDysonModelRepository models,
+    IDysonSubjectSettingsRepository? subjectSettings = null)
+    : ManagedInferenceProviderBase(host, http, models, subjectSettings)
 {
     /// <summary>Claude Code OAuth web-UI forwarder port (hardcoded by CLIProxy).</summary>
     public const int ClaudeOAuthCallbackPort = 54545;

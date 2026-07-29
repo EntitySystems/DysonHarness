@@ -3,9 +3,9 @@ namespace DysonHarness;
 public sealed class ManagedKimiInferenceProvider(
     DysonCliProxyHost host,
     HttpClient http,
-    DysonModelStore models,
-    DysonAppSettingsStore? appSettings = null)
-    : ManagedInferenceProviderBase(host, http, models, appSettings)
+    IDysonModelRepository models,
+    IDysonSubjectSettingsRepository? subjectSettings = null)
+    : ManagedInferenceProviderBase(host, http, models, subjectSettings)
 {
     public override string ManagedSource => DysonManagedSources.CliProxyKimi;
     public override string DisplayName => "Kimi (CLIProxy)";

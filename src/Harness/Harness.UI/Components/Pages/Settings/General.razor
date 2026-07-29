@@ -2,7 +2,7 @@
 @layout SettingsLayout
 @using DysonHarness
 @using Harness.UI.Components.Models
-@inject DysonAppSettingsStore AppSettings
+@inject IDysonSubjectSettingsRepository AppSettings
 
 <PageTitle>General — Settings</PageTitle>
 
@@ -44,7 +44,7 @@
 
     protected override async Task OnInitializedAsync()
     {
-        var get = await AppSettings.GetAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId);
+        var get = await AppSettings.GetSettingAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId);
         if (get.IsError)
         {
             _error = get.Error;
@@ -62,7 +62,7 @@
         _summarizerSlugId = id;
 
         var value = id is Guid g && g != Guid.Empty ? g.ToString("D") : null;
-        var set = await AppSettings.SetAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId, value);
+        var set = await AppSettings.SetSettingAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId, value);
         if (set.IsError)
         {
             _error = set.Error;

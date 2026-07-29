@@ -1,6 +1,8 @@
 # Model providers, slugs & app data
 
-EF Core SQLite under platform app data stores **model providers** and their **model slugs** (and sessions — see [sessions.md](sessions.md)). Providers stay **ephemeral**: build a live `DysonAgentProvider` from a selected slug (credentials via the parent provider) when starting or resuming a session; do not persist provider instances.
+EF Core SQLite under platform app data stores **model providers** and their **model slugs** (and sessions — see [sessions.md](sessions.md)). Persistence is subject-scoped; see [cloud-hosting.md](cloud-hosting.md). Providers stay **ephemeral**: build a live `DysonAgentProvider` from a selected slug (credentials via the parent provider) when starting or resuming a session; do not persist provider instances.
+
+Contracts: `IDysonModelRepository`, `IDysonSubjectSettingsRepository`, `IDysonConfiguredShellRepository` in `Harness.Abstractions`. SQLite implementation: `Harness.LocalDb`.
 
 For provider-specific slug catalogs, auth, and thinking/effort contracts, see [inference-providers/](../inference-providers/). This page remains the harness data model for providers and slugs.
 
@@ -34,22 +36,35 @@ Single SQLite file holds providers, slugs, sessions, and app settings for that m
 
 ## Database
 
-- Packages: `Microsoft.EntityFrameworkCore.Sqlite`, `Microsoft.EntityFrameworkCore.Design` (private)
+Shipped SQLite lives in **`Harness.LocalDb`** (not Engine). External hosts may implement the same Abstred repository interfaces against other backends.
+
+- Packages: `Microsoft.EntityFrameworkCore.Sqlite`, `Microsoft.EntityFrameworkCore.Design` (private) on LocalDb
 - Connection: `DysonSqliteConfigurator` → `Data Source={path};Default Timeout=30`, plus `PRAGMA journal_mode=WAL` and `PRAGMA synchronous=NORMAL` on open
 - `DysonDbContext` via `IDbContextFactory` at `DysonAppPaths.GetDatabasePath(DysonBuildInfo.Current)`
 - Thread-safe entrypoint: singleton `DysonDbAccessor` (process-wide gate per DB path, fresh context per `RunAsync`)
-- Stores depend on the accessor (or a pass-down context with single-thread ownership) — never a shared scoped long-lived `DbContext`
-- `Database.Migrate()` **once** at startup; migrations under `Harness.Engine/Migrations/`
+- Repository impls depend on the accessor (or a pass-down context with single-thread ownership) — never a shared scoped long-lived `DbContext`
+- DI: `AddDysonLocalDb(databasePath)` (UI / hosts)
+- `Database.Migrate()` **once** at startup; migrations under `Harness.LocalDb/Migrations/`
 - Entity timestamps are `DateTime` (UTC). Do not use `DateTimeOffset` on EF entities or in EF `OrderBy` queries (SQLite limitation).
-- `UpsertTurnAsync` retries EF concurrent-context / SQLITE_BUSY (5) / locked (6) before failing; other store ops rely on the accessor gate + busy `SaveChanges` retry
+- `UpsertTurnAsync` retries EF concurrent-context / SQLITE_BUSY (5) / locked (6) before failing; other ops rely on the accessor gate + busy `SaveChanges` retry
+- Existing rows migrate to `SubjectId = "local"` (`DysonSubjects.Local`)
 
-## App settings (`app_settings`)
-
-Thin key/value store (`DysonAppSettingEntity` / `DysonAppSettingsStore`).
+### Subjects (`subjects`)
 
 | Property | Notes |
 | -------- | ----- |
-| `Key` | string PK |
+| `Id` | string PK |
+| `CreatedUtc` | `DateTime` UTC |
+| `UserId` | string? — reserved for future user binding; unused now |
+
+## App settings (`app_settings`)
+
+Subject-scoped key/value (`DysonAppSettingEntity`). Callers use `IDysonSubjectSettingsRepository` (`GetSettingAsync` / `SetSettingAsync`; null/whitespace value deletes). Composite PK `(SubjectId, Key)`.
+
+| Property | Notes |
+| -------- | ----- |
+| `SubjectId` | Owning subject (composite PK with `Key`) |
+| `Key` | Setting key |
 | `Value` | text |
 
 Known keys (`DysonAppSettingKeys`):
@@ -59,45 +74,51 @@ Known keys (`DysonAppSettingKeys`):
 - `end_of_task_auto_review` — `"true"` / `"false"`; when true, a reviewer agent should auto-run after task completion (persist only for now — no reviewer spawn yet). Missing / other ⇒ off. Edited via Settings → Agent behavior.
 - `cliproxy_api_key` / `cliproxy_management_key` / `cliproxy_port` — mirrored from `external/cliproxy/keys.json` when a managed provider connects (canonical secret store is the sidecar next to `config.yaml`).
 
+`DysonToolPolicyStore` depends on `IDysonSubjectSettingsRepository` for the tool-policy document.
+
 ## Configured shells (`configured_shells`)
 
-User-managed shell catalog for MCP `ShellExecute` / long-running shell tools (`DysonConfiguredShellEntity` / `DysonConfiguredShellStore`). Not stored in `app_settings`.
+Subject-owned shell catalog for MCP `ShellExecute` / long-running shell tools (`DysonConfiguredShellEntity` / `IDysonConfiguredShellRepository`). Not stored in `app_settings`.
 
 | Property | Notes |
 | -------- | ----- |
 | `Id` | Guid PK |
-| `Name` | Unique case-insensitive (SQLite `NOCASE`); MCP `shell` enum value |
+| `SubjectId` | Owning subject |
+| `Name` | Unique case-insensitive per subject (SQLite `NOCASE`); MCP `shell` enum value |
 | `ExecutablePath` | Absolute path or PATH-resolvable file name |
 | `FixedArgsJson` | Optional JSON string array of argv prefix before the command (e.g. `["-c"]`); null/empty ⇒ basename heuristics |
 | `IsEnabled` | When false, omitted from session `AvailableShells` / MCP catalog |
 | `SortOrder` | Stable UI / enum order (ascending) |
 | `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
 
-`EnsureDefaultsAsync` seeds Windows rows when the table is empty: `Pwsh`→`pwsh`, `PowerShell`→`powershell.exe`, `Cmd`→`cmd.exe` (all enabled). Other platforms seed nothing until Bash/Zsh runners exist. Settings → Shells edits the table (optional Fixed args as space-separated tokens → `FixedArgsJson`); new/resume sessions load enabled specs into `DysonAgentSessionConfig.AvailableShells` (`Name`, `ExecutablePath`, optional `FixedArgs`).
+Unique: `(SubjectId, Name)`. `EnsureDefaultsAsync` seeds Windows rows when the current subject has no rows: `Pwsh`→`pwsh`, `PowerShell`→`powershell.exe`, `Cmd`→`cmd.exe` (all enabled). Other platforms seed nothing until Bash/Zsh runners exist. Settings → Shells edits the table (optional Fixed args as space-separated tokens → `FixedArgsJson`); new/resume sessions load enabled specs into `DysonAgentSessionConfig.AvailableShells` (`Name`, `ExecutablePath`, optional `FixedArgs`).
 
 ## Model providers (`model_providers`)
 
-Credentials and endpoint live on the provider only. Slugs are children; add/remove freely without duplicating `ApiKey` / `BaseUrl`.
+Credentials and endpoint live on the provider only. Slugs are children; add/remove freely without duplicating `ApiKey` / `BaseUrl`. Each row is **subject-owned** (`SubjectId` = current subject) or **shared** (`SubjectId` = `DysonSubjects.Shared` / `"shared"`). See [cloud-hosting.md](cloud-hosting.md#shared-model-providers).
 
 | Property | Notes |
 | -------- | ----- |
 | `Id` | Guid PK |
+| `SubjectId` | Owning subject, or `"shared"` for deployment-wide providers |
 | `DisplayName` | UI label (e.g. “OpenAI work”) |
 | `ProviderKind` | Provider family string from `DysonProviderKinds` (`demo`, `OpenAICompatible`, `Anthropic`) |
 | `BaseUrl` | Optional API root (OpenAI-compatible default `https://api.openai.com/v1`; keep `/vN` if already present, else `/v1` is appended) |
 | `ApiKey` | Optional; **plaintext-local** (no OS keychain yet) |
 | `OpenAiApiMode` | OpenAICompatible only: `Completions` (default) or `Responses` — see `DysonOpenAiApiModes` |
-| `ManagedSource` | Optional; when set (e.g. `cliproxy-codex`, `cliproxy-grok`, `cliproxy-antigravity`, `cliproxy-kimi`, `cliproxy-claude`) the row is a managed third-party provider — view-only in UI; unique when non-null. Null = user-owned manual provider |
+| `ManagedSource` | Optional; when set (e.g. `cliproxy-codex`, `cliproxy-grok`, `cliproxy-antigravity`, `cliproxy-kimi`, `cliproxy-claude`) the row is a managed third-party provider — view-only in UI; unique when non-null within scope. Null = user-owned manual provider |
 | `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
 | `Slugs` | Navigation to child `model_slugs` |
 
-Cascade-delete: removing a provider deletes its slugs.
+Cascade-delete: removing a provider deletes its slugs. Shared + per-subject rows may coexist (Guid PKs); list/display is a union.
 
 ### Managed providers (CLIProxy)
 
 Settings → Models can **Import** ChatGPT Codex, Grok Build, Antigravity, Kimi, or Claude Code via a pinned local [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) binary under `{AppContext.BaseDirectory}/external/cliproxy/{version}/` (lazy download; not LocalAppData). Managed rows stay `ProviderKind=OpenAICompatible`, `OpenAiApiMode=Responses`, `BaseUrl=http://127.0.0.1:{port}/v1`, with `ApiKey` = the local proxy Bearer key. OAuth goes through CLIProxy Management API (`codex-auth-url` / `xai-auth-url` / `antigravity-auth-url` / `kimi-auth-url` / `anthropic-auth-url` + `get-auth-status`); **Verify** syncs `/v1/models` into the slug set. Claude uses the proxy’s OpenAI/Responses surface (not Anthropic Messages).
 
-`DysonModelStore.UpsertManagedProviderAsync` keeps an id-stable row per `ManagedSource` and **merges** slugs by name: existing rows keep `Id`, `IsEnabled`, and `DefaultReasoningEffort` while catalog fields (`DisplayAlias`, `ReasoningModes`, …) refresh; new API models insert enabled with catalog default effort; missing API models are removed. `UpdateProviderAsync` / slug add-update-remove reject when `ManagedSource` is set. `SetSlugEnabledAsync` toggles enablement for managed slugs only. `SetSlugDefaultReasoningEffortAsync` sets per-slug default effort for managed slugs only (blank → null/omit).
+`IDysonModelRepository.UpsertManagedProviderAsync` keeps an id-stable row per `ManagedSource` and **merges** slugs by name: existing rows keep `Id`, `IsEnabled`, and `DefaultReasoningEffort` while catalog fields (`DisplayAlias`, `ReasoningModes`, …) refresh; new API models insert enabled with catalog default effort; missing API models are removed. `UpdateProviderAsync` / slug add-update-remove reject when `ManagedSource` is set. `SetSlugEnabledAsync` toggles enablement for managed slugs only. `SetSlugDefaultReasoningEffortAsync` sets per-slug default effort for managed slugs only (blank → null/omit).
+
+On `IDysonModelRepository`, create / update / managed upsert take an explicit `shared` flag (`false` = current subject; `true` = `DysonSubjects.Shared`, gated by `ManageSharedProviders`).
 
 ## Model slugs (`model_slugs`)
 
@@ -117,22 +138,23 @@ Unique index on `(ProviderId, Slug)`.
 
 ## Model favorites (`model_favorites`)
 
-User-starred slugs for the Composer model picker (persisted per app-data DB).
+Subject-owned starred slugs for the Composer model picker (persisted per app-data DB). Favorites stay subject-owned even when they point at a shared provider’s slug.
 
 | Property | Notes |
 | -------- | ----- |
 | `Id` | Guid PK |
-| `ModelSlugId` | FK → `model_slugs` (cascade delete); unique |
+| `SubjectId` | Owning subject |
+| `ModelSlugId` | FK → `model_slugs` (cascade delete); unique per `(SubjectId, ModelSlugId)` |
 | `CreatedUtc` | `DateTime` UTC — when favorited |
 
-## `DysonModelStore`
+## `IDysonModelRepository`
 
-Thin CRUD over `DysonDbAccessor` / factory contexts using the Result pattern (`Result` / `VoidResult`):
+Functional API over LocalDb (Result / VoidResult). Visibility: list/resolve providers and slugs where `SubjectId == current OR SubjectId == shared`. Shared writes require `IDysonAccessEvaluator.Can(ManageSharedProviders)`.
 
-- **Providers:** list (include slugs), get, create, update (incl. `ApiKey` / `BaseUrl` / `OpenAiApiMode`; rejected when `ManagedSource` set), `UpsertManagedProviderAsync` (id-stable by source + merge slugs by name, preserving `Id`/`IsEnabled`/`DefaultReasoningEffort`), delete
+- **Providers:** list (include slugs), get, create (`shared` flag), update (incl. `ApiKey` / `BaseUrl` / `OpenAiApiMode`; rejected when `ManagedSource` set; `shared` flag), `UpsertManagedProviderAsync` (id-stable by source + merge slugs by name, preserving `Id`/`IsEnabled`/`DefaultReasoningEffort`; `shared` flag), delete
 - **Slugs:** add under a provider (optional `defaultReasoningEffort` + `reasoningModes`; rejected when provider is managed), update (alias / slug / default effort / modes / is-default; rejected when managed), remove (rejected when managed), `SetSlugEnabledAsync` (managed only), `SetSlugDefaultReasoningEffortAsync` (managed only; blank → omit)
-- **Selection:** get/set default slug (get prefers enabled `IsDefault`, else first enabled; set rejects disabled), get slug by id (with provider loaded; works for disabled — resume), `FindSlugByNameAsync` (enabled only; case-insensitive exact match on `Slug` then `DisplayAlias`)
-- **Favorites:** `ListFavoriteSlugIdsAsync`, `AddFavoriteAsync`, `RemoveFavoriteAsync`, `IsFavoriteAsync`
+- **Selection:** get/set default slug (get prefers enabled `IsDefault`, else first enabled; set rejects disabled), get slug by id (with provider loaded; works for disabled — resume), `FindSlugByNameAsync` (enabled only; case-insensitive exact match on `Slug` then `DisplayAlias`; visible = current + shared)
+- **Favorites:** `ListFavoriteSlugIdsAsync`, `AddFavoriteAsync`, `RemoveFavoriteAsync`, `IsFavoriteAsync` (current subject only)
 
 ## Reasoning effort
 
@@ -148,7 +170,7 @@ Per-slug **default** (`DefaultReasoningEffort`) plus a **session override** (`se
 
 ## System-prompt catalog
 
-At session create / load / child spawn (when a `DysonModelStore` is available), `DysonAgentSystemPrompts.FormatAvailableModelsBlock` appends a same-kind **enabled** slug list to the system prompt: display alias, API slug, `defaultEffort`, and registered `modes`. That snapshot is persisted as `SystemPromptSnapshot`. Tests/stubs without a model store skip the block.
+At session create / load / child spawn (when a model repository is available), `DysonAgentSystemPrompts.FormatAvailableModelsBlock` appends a same-kind **enabled** slug list to the system prompt: display alias, API slug, `defaultEffort`, and registered `modes`. That snapshot is persisted as `SystemPromptSnapshot`. Tests/stubs without a model repository skip the block.
 
 ## OpenAI-compatible API mode
 

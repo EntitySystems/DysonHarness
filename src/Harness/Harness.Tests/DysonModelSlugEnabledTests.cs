@@ -1,6 +1,4 @@
 using DysonHarness;
-using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
 
 namespace Harness.Tests;
 
@@ -26,7 +24,7 @@ public class DysonModelSlugEnabledTests
     {
         var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
         using var _keepAlive = conn;
-        var store = new DysonModelStore(accessor);
+        var store = DysonTempDb.Models(accessor);
 
         var first = store.UpsertManagedProviderAsync(
             "cliproxy-test",
@@ -91,7 +89,7 @@ public class DysonModelSlugEnabledTests
     {
         var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
         using var _keepAlive = conn;
-        var store = new DysonModelStore(accessor);
+        var store = DysonTempDb.Models(accessor);
 
         var first = store.UpsertManagedProviderAsync(
             "cliproxy-effort-merge",
@@ -147,7 +145,7 @@ public class DysonModelSlugEnabledTests
     {
         var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
         using var _keepAlive = conn;
-        var store = new DysonModelStore(accessor);
+        var store = DysonTempDb.Models(accessor);
 
         var create = store.CreateProviderAsync(new DysonModelProviderEntity
         {
@@ -172,7 +170,7 @@ public class DysonModelSlugEnabledTests
     {
         var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
         using var _keepAlive = conn;
-        var store = new DysonModelStore(accessor);
+        var store = DysonTempDb.Models(accessor);
 
         var upsert = store.UpsertManagedProviderAsync(
             "cliproxy-effort-set",
@@ -237,7 +235,7 @@ public class DysonModelSlugEnabledTests
     {
         var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
         using var _keepAlive = conn;
-        var store = new DysonModelStore(accessor);
+        var store = DysonTempDb.Models(accessor);
 
         var upsert = store.UpsertManagedProviderAsync(
             "cliproxy-fallback",
@@ -278,7 +276,7 @@ public class DysonModelSlugEnabledTests
     {
         var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
         using var _keepAlive = conn;
-        var store = new DysonModelStore(accessor);
+        var store = DysonTempDb.Models(accessor);
 
         var upsert = store.UpsertManagedProviderAsync(
             "cliproxy-find",
@@ -312,7 +310,7 @@ public class DysonModelSlugEnabledTests
     {
         var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
         using var _keepAlive = conn;
-        var store = new DysonModelStore(accessor);
+        var store = DysonTempDb.Models(accessor);
 
         var upsert = store.UpsertManagedProviderAsync(
             "cliproxy-default",
