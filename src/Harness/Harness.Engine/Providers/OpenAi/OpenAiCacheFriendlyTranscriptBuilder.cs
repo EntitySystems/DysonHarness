@@ -17,6 +17,12 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     public const string IncompleteToolResultContent =
         "Tool call did not complete (cancelled or interrupted).";
 
+    /// <summary>
+    /// Prefix for compacted prior-tool summaries injected as <c>role: user</c> (not assistant).
+    /// </summary>
+    public const string CompactToolHistoryHarnessPrefix =
+        "[Harness compacted prior tool results — historical summary only. Do not imitate this format; use native function/tool calls.]";
+
     public sealed record BuiltCompletionsRequest(
         JsonArray Messages,
         JsonArray Tools,
@@ -288,8 +294,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             {
                 messages.Add(new JsonObject
                 {
-                    ["role"] = "assistant",
-                    ["content"] = turn.CompactToolHistory,
+                    ["role"] = "user",
+                    ["content"] = FormatCompactToolHistoryUserContent(turn.CompactToolHistory),
                 });
                 continue;
             }
@@ -368,8 +374,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             {
                 input.Add(new JsonObject
                 {
-                    ["role"] = "assistant",
-                    ["content"] = turn.CompactToolHistory,
+                    ["role"] = "user",
+                    ["content"] = FormatCompactToolHistoryUserContent(turn.CompactToolHistory),
                 });
                 continue;
             }
@@ -871,4 +877,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
         return $"# {turn.AgentTitle}\n\n{turn.AssistantText}";
     }
+
+    private static string FormatCompactToolHistoryUserContent(string compactToolHistory) =>
+        $"{CompactToolHistoryHarnessPrefix}\n\n{compactToolHistory}";
 }

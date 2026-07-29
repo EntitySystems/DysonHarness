@@ -29,7 +29,7 @@
   ],
   "Skills": [
     {
-      "Path": "https://github.com/EntitySystems/openrules",
+      "Path": "https://github.com/EntitySystems/openrules/blob/main/SKILL.md",
       "Mode": "AgentOptional",
       "Description": "OpenRules skill — how agents should load and interpret openrules.json"
     },

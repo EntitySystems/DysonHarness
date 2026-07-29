@@ -716,9 +716,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     continue;
                 }
 
-                var text = string.IsNullOrWhiteSpace(reply.Content)
-                    ? "# Empty reply\n\nThe model returned no content."
-                    : reply.Content;
+                var text = ResolveFinalAssistantContent(reply.Content);
 
                 if (Parent is not null && !TurnHasSubmitSubagentReport(turn))
                 {
@@ -989,6 +987,19 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         {
             turn.AssistantText = text;
         }
+    }
+
+    /// <summary>
+    /// Final no-tool-call round body: drop pure compact-history echoes; otherwise empty → harness note.
+    /// </summary>
+    internal static string ResolveFinalAssistantContent(string? replyContent)
+    {
+        if (DysonContextOptimizer.IsOnlyCompactToolHistoryEcho(replyContent))
+            return "";
+
+        return string.IsNullOrWhiteSpace(replyContent)
+            ? "# Empty reply\n\nThe model returned no content."
+            : replyContent;
     }
 
     /// <summary>

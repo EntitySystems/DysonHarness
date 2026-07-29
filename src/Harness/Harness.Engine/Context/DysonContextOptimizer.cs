@@ -64,7 +64,7 @@ public sealed class DysonContextOptimizer
 
     /// <summary>
     /// Deterministic one-line compaction:
-    /// <c>Called {ToolName} with params: … || result: …</c> (no CallId by default).
+    /// <c>[compact] {ToolName} params: … || result: …</c> (no CallId by default).
     /// </summary>
     public static string FormatCompactToolLine(DysonToolCall call, DysonToolCallResult result)
     {
@@ -73,7 +73,40 @@ public sealed class DysonContextOptimizer
 
         var paramSummary = FormatParams(call.ArgumentsJson);
         var resultSummary = FormatResultSummary(result);
-        return $"Called {call.ToolName} with params: {paramSummary} || result: {resultSummary}";
+        return $"[compact] {call.ToolName} params: {paramSummary} || result: {resultSummary}";
+    }
+
+    /// <summary>
+    /// True when <paramref name="text"/> is only compact-history-shaped lines
+    /// (new <c>[compact]</c> or legacy <c>Called … with params:</c>), i.e. an echo of
+    /// compacted tool history rather than a real assistant reply.
+    /// </summary>
+    public static bool IsOnlyCompactToolHistoryEcho(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        var lines = text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length == 0)
+            return false;
+
+        foreach (var line in lines)
+        {
+            if (!IsCompactToolHistoryLine(line))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsCompactToolHistoryLine(string line)
+    {
+        if (line.StartsWith("[compact] ", StringComparison.Ordinal))
+            return true;
+
+        // Legacy FormatCompactToolLine: "Called {name} with params: …"
+        return line.StartsWith("Called ", StringComparison.Ordinal)
+            && line.Contains(" with params:", StringComparison.Ordinal);
     }
 
     private int GetCompactUntilExclusive(int turnCount)

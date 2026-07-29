@@ -95,7 +95,8 @@ public static class DysonOpenRules
     public const string DefaultRootPath = "AGENTS.md";
 
     /// <summary>Canonical EntitySystems openrules skill URL (InitializeOpenRules default).</summary>
-    public const string DefaultOpenRulesSkillUrl = "https://github.com/EntitySystems/openrules";
+    public const string DefaultOpenRulesSkillUrl =
+        "https://github.com/EntitySystems/openrules/blob/main/SKILL.md";
 
     /// <summary>Soft cap per Root/AutoInclude file body (chars).</summary>
     public const int MaxCharsPerFile = 50_000;

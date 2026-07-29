@@ -383,7 +383,7 @@ public class DysonOpenRulesTests
 
     private static void AssertUrlPathHelpers()
     {
-        if (!DysonOpenRules.IsPathUrl("https://github.com/EntitySystems/openrules")
+        if (!DysonOpenRules.IsPathUrl(DysonOpenRules.DefaultOpenRulesSkillUrl)
             || !DysonOpenRules.IsPathUrl("http://example.com/a.md")
             || DysonOpenRules.IsPathUrl("rules/x.md")
             || DysonOpenRules.IsPathUrl("ftp://example.com/x"))
@@ -397,13 +397,13 @@ public class DysonOpenRulesTests
             File.WriteAllText(Path.Combine(root, "AGENTS.md"), "# Root\n");
             File.WriteAllText(
                 Path.Combine(root, "openrules.json"),
-                """
+                $$"""
                 {
                   "Root": "AGENTS.md",
                   "Rules": [],
                   "Skills": [
                     {
-                      "Path": "https://github.com/EntitySystems/openrules",
+                      "Path": "{{DysonOpenRules.DefaultOpenRulesSkillUrl}}",
                       "Mode": "AgentOptional",
                       "Description": "OpenRules skill"
                     }
@@ -421,9 +421,9 @@ public class DysonOpenRulesTests
 
             var optional = DysonOpenRules.ListAgentOptional(fs);
             if (optional.Count != 1
-                || !DysonOpenRules.MatchesAgentOptionalName(optional[0], "openrules")
+                || !DysonOpenRules.MatchesAgentOptionalName(optional[0], "SKILL.md")
                 || !DysonOpenRules.MatchesAgentOptionalName(
-                    optional[0], "https://github.com/EntitySystems/openrules"))
+                    optional[0], DysonOpenRules.DefaultOpenRulesSkillUrl))
             {
                 throw new InvalidOperationException("URL AgentOptional match failed.");
             }

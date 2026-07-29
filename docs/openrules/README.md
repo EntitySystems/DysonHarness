@@ -22,7 +22,7 @@ Work-directory root manifest that controls which project docs are always injecte
   ],
   "Skills": [
     {
-      "Path": "https://github.com/EntitySystems/openrules",
+      "Path": "https://github.com/EntitySystems/openrules/blob/main/SKILL.md",
       "Mode": "AgentOptional",
       "Description": "OpenRules skill — how agents should load and interpret openrules.json"
     }
@@ -86,7 +86,7 @@ Default document:
   "Rules": [],
   "Skills": [
     {
-      "Path": "https://github.com/EntitySystems/openrules",
+      "Path": "https://github.com/EntitySystems/openrules/blob/main/SKILL.md",
       "Mode": "AgentOptional",
       "Description": "OpenRules skill — how agents should load and interpret openrules.json"
     }

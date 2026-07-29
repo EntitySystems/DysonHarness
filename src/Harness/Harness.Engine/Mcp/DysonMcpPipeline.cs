@@ -1556,7 +1556,7 @@ public sealed class DysonMcpPipeline
             Name = "InitializeOpenRules",
             Description =
                 "Ensure work-root openrules.json exists. If missing, create a default document " +
-                "(Root AGENTS.md, empty Rules, and the EntitySystems/openrules AgentOptional skill URL). " +
+                "(Root AGENTS.md, empty Rules, and the EntitySystems openrules AgentOptional SKILL.md URL). " +
                 "If present, leave it unchanged. Returns JSON { created, openrules } with the file contents.",
             InputSchemaJson = """
                 {
