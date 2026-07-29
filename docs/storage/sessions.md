@@ -33,7 +33,7 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `Id` | Guid PK — also `DysonAgentTurn.Id` |
 | `SessionId` | Guid FK |
 | `Sequence` | Order within session |
-| `Kind` | `DysonAgentTurnKind` (`PlanResult` = 6, `BeginBuildPlan` = 7, `SubagentReportProcessing` = 8, `ShellExited` = 9, `RethinkToolUsage` = 10) |
+| `Kind` | `DysonAgentTurnKind` (`PlanResult` = 6, `BeginBuildPlan` = 7, `SubagentReportProcessing` = 8, `ShellExited` = 9, `RethinkToolUsage` = 10, `DisplayInfo` = 11 — UI-only chrome, omitted from provider transcripts) |
 | `AgentTitle` | Parsed H1 / plan title |
 | `PlanRelativePath` | Workspace-relative plan path for `PlanResult` / `BeginBuildPlan` (e.g. `.dyson/plans/…`); null otherwise |
 | `Instruction` | Harness-injected instruction |

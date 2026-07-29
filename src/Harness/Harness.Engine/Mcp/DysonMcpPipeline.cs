@@ -1728,6 +1728,45 @@ public sealed class DysonMcpPipeline
 
         yield return new DysonMcpTool
         {
+            Name = "ConvertImage",
+            Description =
+                "Convert or re-encode a work-directory image via Magick.NET and write the result to outputFile. " +
+                "Supports SVG input and ICO output; desiredFormat may match the input (same-format re-encode / compress). " +
+                "quality (1–100, default 85) is Magick Quality — primary knob for shrinking large JPEG/WebP. " +
+                "overwrite defaults false (fail if output exists). Soft input ceiling 50 MB (not LoadBinary’s 5 MB). " +
+                "Returns JSON ack only (inputFile, outputFile, desiredFormat, quality, byteLength, width, height, inputByteLength) — no BinaryAttachment; use LoadBinary on the result if vision is needed.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "inputFile": {
+                      "type": "string",
+                      "description": "Work-directory-relative path to the source image (must exist)."
+                    },
+                    "outputFile": {
+                      "type": "string",
+                      "description": "Work-directory-relative destination path for the converted image."
+                    },
+                    "desiredFormat": {
+                      "type": "string",
+                      "description": "Output format: png, jpeg/jpg, webp, gif, bmp, tiff/tif, or ico. May match input for re-encode/compress."
+                    },
+                    "quality": {
+                      "type": "integer",
+                      "description": "Magick Quality 1–100 (default 85). Lower values shrink JPEG/WebP size."
+                    },
+                    "overwrite": {
+                      "type": "boolean",
+                      "description": "If true, replace outputFile when it already exists. Default false."
+                    }
+                  },
+                  "required": ["inputFile", "outputFile", "desiredFormat"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
             Name = "ListDirectory",
             Description = "List entries in a directory. Prefer this over shell for directory listing.",
             InputSchemaJson = """

@@ -3,6 +3,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
+using ImageMagick;
+
 namespace DysonHarness;
 
 /// <summary>
@@ -94,6 +96,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "WriteFile" => await WriteFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "Grep" => await GrepAsync(call, cancellationToken).ConfigureAwait(false),
                 "LoadBinary" => await LoadBinaryAsync(call, cancellationToken).ConfigureAwait(false),
+                "ConvertImage" => await ConvertImageAsync(call, cancellationToken).ConfigureAwait(false),
                 "ListDirectory" => await ListDirectoryAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateDirectory" => await CreateDirectoryAsync(call, cancellationToken).ConfigureAwait(false),
                 "ShellExecute" => await ShellExecuteAsync(call, cancellationToken).ConfigureAwait(false),
@@ -1609,6 +1612,7 @@ public sealed partial class DysonWorkspaceToolExecutor
     private const int GrepMaxLineChars = 400;
     private const int GrepMaxResultChars = 48 * 1024;
     private const int LoadBinaryMaxBytes = 5 * 1024 * 1024;
+    private const int ConvertImageMaxBytes = 50 * 1024 * 1024;
     private const int GrepBinarySniffBytes = 512;
 
     private static readonly HashSet<string> GrepExcludedDirNames = new(StringComparer.OrdinalIgnoreCase)
@@ -1810,24 +1814,146 @@ public sealed partial class DysonWorkspaceToolExecutor
         var fileName = Path.GetFileName(path.Value.Replace('/', Path.DirectorySeparatorChar));
         var extension = Path.GetExtension(fileName);
         var mimeType = MimeTypeFromExtension(extension);
+        var payload = bytes.Value;
+        string? convertedFromMimeType = null;
+
+        if (mimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+            && !DysonImageNormalize.IsProviderNativeImageMime(mimeType))
+        {
+            try
+            {
+                var normalized = DysonImageNormalize.ToPngMaxEdge(
+                    payload,
+                    readFormat: DysonImageNormalize.TryMagickFormatFromImageMime(mimeType));
+                convertedFromMimeType = mimeType;
+                payload = normalized.Bytes;
+                mimeType = "image/png";
+                var baseName = Path.GetFileNameWithoutExtension(fileName);
+                if (string.IsNullOrEmpty(baseName))
+                    baseName = "image";
+                fileName = baseName + ".png";
+                extension = ".png";
+            }
+            catch (Exception ex) when (ex is MagickException or ArgumentException or ArgumentOutOfRangeException)
+            {
+                return Task.FromResult(Error(call,
+                    $"LoadBinary: could not convert {fileName} ({mimeType}) to PNG: {ex.Message}"));
+            }
+        }
+
         var attachment = new DysonBinaryAttachment
         {
             FileName = fileName,
             Extension = extension,
             MimeType = mimeType,
-            Base64Data = Convert.ToBase64String(bytes.Value),
+            Base64Data = Convert.ToBase64String(payload),
         };
 
-        var ack = JsonSerializer.Serialize(new
-        {
-            path = path.Value.Replace('\\', '/'),
-            fileName,
-            extension,
-            mimeType,
-            byteLength = bytes.Value.Length,
-        });
+        object ackPayload = convertedFromMimeType is null
+            ? new
+            {
+                path = path.Value.Replace('\\', '/'),
+                fileName,
+                extension,
+                mimeType,
+                byteLength = payload.Length,
+            }
+            : new
+            {
+                path = path.Value.Replace('\\', '/'),
+                fileName,
+                extension,
+                mimeType,
+                byteLength = payload.Length,
+                convertedFromMimeType,
+                convertedToMimeType = "image/png",
+            };
 
-        return Task.FromResult(Ok(call, ack, attachment));
+        return Task.FromResult(Ok(call, JsonSerializer.Serialize(ackPayload), attachment));
+    }
+
+    private Task<DysonToolCallResult> ConvertImageAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+
+        var inputFile = RequireString(doc.RootElement, "inputFile");
+        if (inputFile.IsError)
+            return Task.FromResult(Error(call, inputFile.Error));
+
+        var outputFile = RequireString(doc.RootElement, "outputFile");
+        if (outputFile.IsError)
+            return Task.FromResult(Error(call, outputFile.Error));
+
+        var desiredFormat = RequireString(doc.RootElement, "desiredFormat");
+        if (desiredFormat.IsError)
+            return Task.FromResult(Error(call, desiredFormat.Error));
+
+        var quality = GetInt(doc.RootElement, "quality") ?? DysonImageConvert.DefaultQuality;
+        if (quality is < 1 or > 100)
+        {
+            return Task.FromResult(Error(call,
+                $"ConvertImage: quality must be 1–100 (got {quality})."));
+        }
+
+        var overwrite = GetBool(doc.RootElement, "overwrite");
+
+        var inputExists = _fs.FileExists(inputFile.Value);
+        if (inputExists.IsError)
+            return Task.FromResult(Error(call, inputExists.Error));
+        if (!inputExists.Value)
+            return Task.FromResult(Error(call, $"File not found: {inputFile.Value}"));
+
+        var length = _fs.GetFileLength(inputFile.Value);
+        if (length.IsError)
+            return Task.FromResult(Error(call, length.Error));
+        if (length.Value > ConvertImageMaxBytes)
+        {
+            return Task.FromResult(Error(call,
+                $"ConvertImage: file is {length.Value} bytes; max is {ConvertImageMaxBytes} bytes."));
+        }
+
+        var outputExists = _fs.FileExists(outputFile.Value);
+        if (outputExists.IsError)
+            return Task.FromResult(Error(call, outputExists.Error));
+        if (outputExists.Value && !overwrite)
+            return Task.FromResult(Error(call, $"File already exists: {outputFile.Value}"));
+
+        var bytes = _fs.ReadAllBytes(inputFile.Value);
+        if (bytes.IsError)
+            return Task.FromResult(Error(call, bytes.Error));
+
+        var extension = Path.GetExtension(
+            Path.GetFileName(inputFile.Value.Replace('/', Path.DirectorySeparatorChar)));
+        var readFormat = DysonImageConvert.TryMagickFormatFromExtension(extension);
+
+        var converted = DysonImageConvert.Convert(
+            bytes.Value,
+            desiredFormat.Value,
+            quality,
+            readFormat);
+        if (converted.IsError)
+            return Task.FromResult(Error(call, $"ConvertImage: {converted.Error}"));
+
+        var written = _fs.WriteAllBytes(outputFile.Value, converted.Value.Bytes);
+        if (written.IsError)
+            return Task.FromResult(Error(call, written.Error));
+
+        var ack = new
+        {
+            inputFile = inputFile.Value.Replace('\\', '/'),
+            outputFile = outputFile.Value.Replace('\\', '/'),
+            desiredFormat = converted.Value.DesiredFormat,
+            quality = converted.Value.Quality,
+            byteLength = converted.Value.Bytes.Length,
+            width = converted.Value.Width,
+            height = converted.Value.Height,
+            inputByteLength = bytes.Value.Length,
+        };
+
+        return Task.FromResult(Ok(call, JsonSerializer.Serialize(ack)));
     }
 
     private enum GrepFileKind

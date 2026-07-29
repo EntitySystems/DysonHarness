@@ -16,6 +16,7 @@ public static class DysonAgentTurnKindDisplay
         DysonAgentTurnKind.SubagentReportProcessing => "Subagent report",
         DysonAgentTurnKind.ShellExited => "Shell exited",
         DysonAgentTurnKind.RethinkToolUsage => "Rethink tool usage",
+        DysonAgentTurnKind.DisplayInfo => "Info",
         _ => kind.ToString(),
     };
 }

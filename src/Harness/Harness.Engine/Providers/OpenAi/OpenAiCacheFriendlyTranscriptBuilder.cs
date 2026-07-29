@@ -270,7 +270,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 break;
 
             var turn = turns[i];
-            if (turn.IsExcludedFromContext)
+            if (turn.IsExcludedFromContext || turn.Kind == DysonAgentTurnKind.DisplayInfo)
                 continue;
 
             // In-progress current turn: user content may get ephemeral rename / Plan mandates;
@@ -352,7 +352,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         for (var i = 0; i < turns.Count; i++)
         {
             var turn = turns[i];
-            if (turn.IsExcludedFromContext)
+            if (turn.IsExcludedFromContext || turn.Kind == DysonAgentTurnKind.DisplayInfo)
                 continue;
 
             var incompleteCurrent = i == incompleteIndex;
@@ -707,7 +707,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     {
         for (var i = turns.Count - 1; i >= 0; i--)
         {
-            if (turns[i].Kind == DysonAgentTurnKind.PlanResult)
+            if (turns[i].Kind is DysonAgentTurnKind.PlanResult or DysonAgentTurnKind.DisplayInfo)
                 continue;
             if (string.IsNullOrEmpty(turns[i].AssistantText))
                 return i;

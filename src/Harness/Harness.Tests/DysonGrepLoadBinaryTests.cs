@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 
 using DysonHarness;
+using ImageMagick;
 
 namespace Harness.Tests;
 
@@ -18,6 +19,7 @@ public class DysonGrepLoadBinaryTests
         AssertMimeMap();
         AssertGrepTextAndBinaryPaths();
         AssertLoadBinaryAttachmentAndTranscript();
+        AssertLoadBinaryNormalizesIcoAndBmpToPng();
     }
 
     private static void AssertCatalog()
@@ -257,6 +259,127 @@ public class DysonGrepLoadBinaryTests
             AssertResponsesInputFileFallback(dllResponsesFallback.Input, dllName);
 
             AssertResponsesInputFileViaUpload(session, dllCall, dllResult, dllName);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+                // best-effort temp cleanup
+            }
+        }
+    }
+
+    private static void AssertLoadBinaryNormalizesIcoAndBmpToPng()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dyson-loadbin-norm-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            byte[] ico;
+            using (var image = new MagickImage(MagickColors.Transparent, 16, 16))
+            {
+                image.Format = MagickFormat.Ico;
+                ico = image.ToByteArray();
+            }
+
+            File.WriteAllBytes(Path.Combine(root, "favicon.ico"), ico);
+
+            byte[] bmp;
+            using (var image = new MagickImage(MagickColors.Blue, 40, 20))
+            {
+                image.Format = MagickFormat.Bmp;
+                bmp = image.ToByteArray();
+            }
+
+            File.WriteAllBytes(Path.Combine(root, "sprite.bmp"), bmp);
+
+            // Allowlisted PNG must pass through unchanged (filename + mime).
+            var pngPassthrough = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00 };
+            File.WriteAllBytes(Path.Combine(root, "keep.png"), pngPassthrough);
+
+            var session = new StubSession();
+            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
+
+            var icoResult = executor.ExecuteAsync(new DysonToolCall
+            {
+                CallId = "ico1",
+                ToolName = "LoadBinary",
+                Stage = 0,
+                ArgumentsJson = """{"path":"favicon.ico"}""",
+            }).GetAwaiter().GetResult();
+
+            if (icoResult.IsError)
+                throw new InvalidOperationException($"LoadBinary ICO failed: {icoResult.Content}");
+            if (icoResult.BinaryAttachment is null
+                || icoResult.BinaryAttachment.MimeType != "image/png"
+                || icoResult.BinaryAttachment.Extension != ".png"
+                || icoResult.BinaryAttachment.FileName != "favicon.png")
+            {
+                throw new InvalidOperationException(
+                    "LoadBinary must convert image/x-icon to favicon.png / image/png.");
+            }
+
+            using var icoAck = JsonDocument.Parse(icoResult.Content);
+            if (icoAck.RootElement.GetProperty("convertedFromMimeType").GetString() != "image/x-icon"
+                || icoAck.RootElement.GetProperty("convertedToMimeType").GetString() != "image/png"
+                || icoAck.RootElement.GetProperty("mimeType").GetString() != "image/png"
+                || icoAck.RootElement.GetProperty("fileName").GetString() != "favicon.png")
+            {
+                throw new InvalidOperationException("LoadBinary ICO ack must include conversion metadata.");
+            }
+
+            var attBytes = Convert.FromBase64String(icoResult.BinaryAttachment.Base64Data);
+            if (attBytes.Length < 4
+                || attBytes[0] != 0x89
+                || attBytes[1] != 0x50
+                || attBytes[2] != 0x4E
+                || attBytes[3] != 0x47)
+            {
+                throw new InvalidOperationException("Converted ICO attachment must be PNG bytes.");
+            }
+
+            var bmpResult = executor.ExecuteAsync(new DysonToolCall
+            {
+                CallId = "bmp1",
+                ToolName = "LoadBinary",
+                Stage = 0,
+                ArgumentsJson = """{"path":"sprite.bmp"}""",
+            }).GetAwaiter().GetResult();
+
+            if (bmpResult.IsError
+                || bmpResult.BinaryAttachment is null
+                || bmpResult.BinaryAttachment.MimeType != "image/png"
+                || bmpResult.BinaryAttachment.FileName != "sprite.png")
+            {
+                throw new InvalidOperationException("LoadBinary must convert BMP to sprite.png / image/png.");
+            }
+
+            using var bmpAck = JsonDocument.Parse(bmpResult.Content);
+            if (bmpAck.RootElement.GetProperty("convertedFromMimeType").GetString() != "image/bmp")
+                throw new InvalidOperationException("LoadBinary BMP ack must report convertedFromMimeType.");
+
+            var pngResult = executor.ExecuteAsync(new DysonToolCall
+            {
+                CallId = "png1",
+                ToolName = "LoadBinary",
+                Stage = 0,
+                ArgumentsJson = """{"path":"keep.png"}""",
+            }).GetAwaiter().GetResult();
+
+            if (pngResult.IsError
+                || pngResult.BinaryAttachment is null
+                || pngResult.BinaryAttachment.FileName != "keep.png"
+                || pngResult.BinaryAttachment.MimeType != "image/png"
+                || pngResult.BinaryAttachment.Base64Data != Convert.ToBase64String(pngPassthrough)
+                || pngResult.Content.Contains("convertedFromMimeType", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Allowlisted PNG LoadBinary must pass through without conversion metadata.");
+            }
         }
         finally
         {

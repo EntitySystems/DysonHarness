@@ -1815,6 +1815,25 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
+    /// Appends a completed UI-only <see cref="DysonAgentTurnKind.DisplayInfo"/> turn
+    /// (message in <see cref="DysonAgentTurn.AssistantText"/>). No inference.
+    /// </summary>
+    public DysonAgentTurn AppendDisplayInfoTurn(string message)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+        var now = DateTime.UtcNow;
+        var turn = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.DisplayInfo,
+            AssistantText = message.Trim(),
+            StartedUtc = now,
+            CompletedUtc = now,
+        };
+        AddTurn(turn);
+        return turn;
+    }
+
+    /// <summary>
     /// Compacts eligible older turns' tool history when thresholds are met.
     /// Call before building the next provider request.
     /// </summary>

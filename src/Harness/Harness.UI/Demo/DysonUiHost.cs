@@ -1131,6 +1131,43 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
+    /// Appends a UI-only <see cref="DysonAgentTurnKind.DisplayInfo"/> turn (no inference).
+    /// Persists via the session <c>TurnAdded</c> path.
+    /// </summary>
+    public Task<VoidResult<string>> AppendDisplayInfoTurnAsync(
+        string message,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        LastError = null;
+
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            LastError = "Display info message is required.";
+            Notify();
+            return Task.FromResult(new VoidResult<string>(LastError));
+        }
+
+        if (_session is null)
+        {
+            LastError = "No active session.";
+            Notify();
+            return Task.FromResult(new VoidResult<string>(LastError));
+        }
+
+        if (IsBusy)
+        {
+            LastError = "Cannot append display info while a prompt is in flight.";
+            Notify();
+            return Task.FromResult(new VoidResult<string>(LastError));
+        }
+
+        _session.AppendDisplayInfoTurn(message);
+        Notify();
+        return Task.FromResult(VoidResult<string>.Success);
+    }
+
+    /// <summary>
     /// Consumes buffered Plan-mode Explore completion reports into a
     /// <see cref="DysonAgentTurnKind.BeginBuildPlan"/> turn, then switches to Work.
     /// Busy-rejects when a turn is in flight.

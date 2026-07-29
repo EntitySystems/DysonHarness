@@ -108,12 +108,17 @@
         {
             <PlanResultBlock Turn="Turn" />
         }
+        else if (Turn.Kind == DysonAgentTurnKind.DisplayInfo
+                 && !string.IsNullOrWhiteSpace(Turn.AssistantText))
+        {
+            <div class="turn-block__display-info">@MarkdownRenderer.ToHtml(Turn.AssistantText)</div>
+        }
         else if (IsHarnessInstructionTurn && !string.IsNullOrWhiteSpace(Turn.Instruction))
         {
             <div class="turn-block__instruction">@MarkdownRenderer.ToHtml(Turn.Instruction)</div>
         }
 
-        @if (HasAssistantBody || HasReasoning || HasTools)
+        @if (Turn.Kind != DysonAgentTurnKind.DisplayInfo && (HasAssistantBody || HasReasoning || HasTools))
         {
             <div @ref="_contentEl" class="turn-block__content">
                 <div class="turn-block__main">
@@ -304,7 +309,9 @@
     /// use the muted instruction strip via <c>!IsUserTurn</c>.
     /// </summary>
     private bool IsHarnessInstructionTurn =>
-        !IsUserTurn && Turn.Kind != DysonAgentTurnKind.PlanResult;
+        !IsUserTurn
+        && Turn.Kind != DysonAgentTurnKind.PlanResult
+        && Turn.Kind != DysonAgentTurnKind.DisplayInfo;
 
     private bool CanCancel => SessionBusy && IsLatestTurn && OnCancel.HasDelegate;
 

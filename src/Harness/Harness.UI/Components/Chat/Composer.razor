@@ -114,7 +114,8 @@
                         @onclick="OpenFilePickerAsync">
                     <img class="composer-attach__icon" src="icons/plus.svg" alt="" />
                 </button>
-                <ModelSlugPicker SelectedSlugId="SelectedSlugId"
+                <ModelSlugPicker @ref="_modelPicker"
+                                 SelectedSlugId="SelectedSlugId"
                                  SelectedSlugIdChanged="SelectedSlugIdChanged" />
                 <label class="composer-effort" title="Session reasoning_effort (None = omit)">
                     <span class="composer-effort__label">Effort</span>
@@ -154,6 +155,7 @@
     private string _text = "";
     private ElementReference _textarea;
     private ElementReference _shell;
+    private ModelSlugPicker? _modelPicker;
     private bool _textareaBound;
     private bool _imageCaptureBound;
     private bool _dragOver;
@@ -494,6 +496,9 @@
 
         await OnSubmit.InvokeAsync(raw?.Trim() ?? "");
     }
+
+    /// <summary>Opens the model selector modal (empty-state CTA).</summary>
+    public void OpenModelPicker() => _modelPicker?.Open();
 
     public async ValueTask DisposeAsync()
     {

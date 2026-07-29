@@ -232,6 +232,13 @@
         _focusSearch = true;
     }
 
+    /// <summary>Public entry for empty-state / external open (same as trigger click).</summary>
+    public void Open()
+    {
+        OpenModal();
+        StateHasChanged();
+    }
+
     private void CloseModal()
     {
         _modalOpen = false;

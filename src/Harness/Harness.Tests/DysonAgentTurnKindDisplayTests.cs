@@ -19,6 +19,7 @@ public class DysonAgentTurnKindDisplayTests
         AssertLabel(DysonAgentTurnKind.SubagentReportProcessing, "Subagent report");
         AssertLabel(DysonAgentTurnKind.ShellExited, "Shell exited");
         AssertLabel(DysonAgentTurnKind.RethinkToolUsage, "Rethink tool usage");
+        AssertLabel(DysonAgentTurnKind.DisplayInfo, "Info");
 
         foreach (var kind in Enum.GetValues<DysonAgentTurnKind>())
         {

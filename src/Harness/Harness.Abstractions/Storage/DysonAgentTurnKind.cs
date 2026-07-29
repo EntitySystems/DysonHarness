@@ -14,4 +14,6 @@ public enum DysonAgentTurnKind
     SubagentReportProcessing = 8,
     ShellExited = 9,
     RethinkToolUsage = 10,
+    /// <summary>UI-only chrome (empty-state CTAs); omitted from provider transcripts.</summary>
+    DisplayInfo = 11,
 }
