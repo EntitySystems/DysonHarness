@@ -26,6 +26,21 @@
         <p class="settings-page__copy" style="margin:0;">
             After an agent marks a task as completed, a new reviewer agent will automatically run to check the code (uses more tokens).
         </p>
+
+        <div class="field" style="margin-top:16px;">
+            <label for="self-review-intensity">Self review intensity</label>
+            <select id="self-review-intensity"
+                    value="@_selfReviewIntensity"
+                    @onchange="OnSelfReviewIntensityChangedAsync">
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high" disabled>high</option>
+            </select>
+        </div>
+        <p class="settings-page__copy" style="margin:0;">
+            How thoroughly the agent reviews its own work before finishing (persist only for now — not wired to the engine yet).
+        </p>
+
         @if (_saved)
         {
             <p class="settings-page__copy" style="margin:8px 0 0;">Saved.</p>
@@ -34,20 +49,32 @@
 </div>
 
 @code {
+    private const string DefaultSelfReviewIntensity = "medium";
+
     private bool _endOfTaskAutoReview;
+    private string _selfReviewIntensity = DefaultSelfReviewIntensity;
     private string? _error;
     private bool _saved;
 
     protected override async Task OnInitializedAsync()
     {
-        var get = await AppSettings.GetSettingAsync(DysonAppSettingKeys.EndOfTaskAutoReview);
-        if (get.IsError)
+        var autoReview = await AppSettings.GetSettingAsync(DysonAppSettingKeys.EndOfTaskAutoReview);
+        if (autoReview.IsError)
         {
-            _error = get.Error;
+            _error = autoReview.Error;
             return;
         }
 
-        _endOfTaskAutoReview = string.Equals(get.Value, "true", StringComparison.OrdinalIgnoreCase);
+        _endOfTaskAutoReview = string.Equals(autoReview.Value, "true", StringComparison.OrdinalIgnoreCase);
+
+        var intensity = await AppSettings.GetSettingAsync(DysonAppSettingKeys.SelfReviewIntensity);
+        if (intensity.IsError)
+        {
+            _error = intensity.Error;
+            return;
+        }
+
+        _selfReviewIntensity = NormalizeSelfReviewIntensity(intensity.Value);
     }
 
     private async Task OnEndOfTaskAutoReviewChangedAsync(ChangeEventArgs e)
@@ -69,4 +96,40 @@
 
         _saved = true;
     }
+
+    private async Task OnSelfReviewIntensityChangedAsync(ChangeEventArgs e)
+    {
+        _error = null;
+        _saved = false;
+
+        var next = NormalizeSelfReviewIntensity(e.Value?.ToString());
+        // high is display-only in the UI for now — refuse to persist it.
+        if (string.Equals(next, "high", StringComparison.Ordinal))
+        {
+            _selfReviewIntensity = DefaultSelfReviewIntensity;
+            return;
+        }
+
+        _selfReviewIntensity = next;
+
+        var set = await AppSettings.SetSettingAsync(
+            DysonAppSettingKeys.SelfReviewIntensity,
+            _selfReviewIntensity);
+        if (set.IsError)
+        {
+            _error = set.Error;
+            return;
+        }
+
+        _saved = true;
+    }
+
+    private static string NormalizeSelfReviewIntensity(string? value) =>
+        value switch
+        {
+            "low" => "low",
+            "medium" => "medium",
+            "high" => "high",
+            _ => DefaultSelfReviewIntensity,
+        };
 }

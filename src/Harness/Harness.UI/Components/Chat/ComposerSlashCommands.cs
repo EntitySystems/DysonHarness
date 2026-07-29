@@ -16,6 +16,13 @@ public static class ComposerSlashCommands
         Model,
         Skill,
         SkillSearch,
+        Help,
+    }
+
+    public enum HelpSection
+    {
+        BuiltIn,
+        Pattern,
     }
 
     public sealed record ModelOption(
@@ -43,8 +50,17 @@ public static class ComposerSlashCommands
         Suggestion Suggestion,
         string Remainder);
 
+    /// <summary>Row for the composer <c>/help</c> modal (patterns + built-ins, not a full model/skill dump).</summary>
+    public sealed record HelpEntry(
+        string Template,
+        string Description,
+        HelpSection Section);
+
     private static readonly Suggestion SkillSearchSuggestion =
         new("/skill-search", "Search skills", Kind.SkillSearch);
+
+    private static readonly Suggestion HelpSuggestion =
+        new("/help", "Command help", Kind.Help);
 
     private static readonly Suggestion[] BuiltIns =
     [
@@ -53,6 +69,22 @@ public static class ComposerSlashCommands
         new("/work", "Work mode", Kind.Mode, Mode: DysonAgentModes.Work),
         new("/new", "New session", Kind.NewSession),
         SkillSearchSuggestion,
+        HelpSuggestion,
+    ];
+
+    /// <summary>
+    /// Static help catalog for the <c>/help</c> modal (not limited by <see cref="MaxSuggestions"/>).
+    /// </summary>
+    public static IReadOnlyList<HelpEntry> HelpCatalog { get; } =
+    [
+        new("/ask ", "Ask mode", HelpSection.BuiltIn),
+        new("/plan ", "Plan mode", HelpSection.BuiltIn),
+        new("/work ", "Work mode", HelpSection.BuiltIn),
+        new("/new", "New session", HelpSection.BuiltIn),
+        new("/skill-search", "Search skills", HelpSection.BuiltIn),
+        new("/help", "Command help", HelpSection.BuiltIn),
+        new("/{model-alias}", "Switch model (registered slug aliases)", HelpSection.Pattern),
+        new("/skill-{name}", "Attach a catalog skill", HelpSection.Pattern),
     ];
 
     /// <summary>

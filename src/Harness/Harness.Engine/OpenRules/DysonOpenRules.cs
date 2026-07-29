@@ -476,9 +476,16 @@ public static class DysonOpenRules
             JsonOptions);
     }
 
-    /// <summary>Catalog name for an AgentOptional entry (relative path or URL).</summary>
-    public static string CatalogNameFor(DysonOpenRulesResolvedEntry entry) =>
-        NormalizePath(entry.Path);
+    /// <summary>
+    /// Short catalog id for an AgentOptional entry (slash <c>/skill-</c> token / LoadSkill name).
+    /// <c>SKILL.md</c> → parent folder, or GitHub <c>{repo}</c> for github.com URLs; else file stem.
+    /// </summary>
+    public static string CatalogNameFor(DysonOpenRulesResolvedEntry entry)
+    {
+        var path = NormalizePath(entry.Path);
+        var shortId = TryShortCatalogId(path);
+        return string.IsNullOrWhiteSpace(shortId) ? path : shortId;
+    }
 
     /// <summary>Display name: Description if set, else path stem / last URL segment.</summary>
     public static string CatalogDisplayNameFor(DysonOpenRulesResolvedEntry entry)
@@ -500,7 +507,7 @@ public static class DysonOpenRules
 
     /// <summary>
     /// True when <paramref name="name"/> matches an AgentOptional entry by relative path,
-    /// stem, URL, or catalog name.
+    /// stem, URL, short catalog id, or GitHub repo name when applicable.
     /// </summary>
     public static bool MatchesAgentOptionalName(DysonOpenRulesResolvedEntry entry, string name)
     {
@@ -512,11 +519,21 @@ public static class DysonOpenRules
         if (string.Equals(path, trimmed, StringComparison.OrdinalIgnoreCase))
             return true;
 
+        var catalogName = CatalogNameFor(entry);
+        if (string.Equals(catalogName, trimmed, StringComparison.OrdinalIgnoreCase))
+            return true;
+
         if (entry.IsUrl && Uri.TryCreate(path, UriKind.Absolute, out var uri))
         {
             var segment = uri.AbsolutePath.Trim('/').Split('/').LastOrDefault() ?? "";
             if (!string.IsNullOrWhiteSpace(segment)
                 && string.Equals(segment, trimmed, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (TryGitHubRepoName(uri, out var repo)
+                && string.Equals(repo, trimmed, StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
@@ -529,7 +546,7 @@ public static class DysonOpenRules
             return true;
         }
 
-        var fileName = Path.GetFileName(path);
+        var fileName = Path.GetFileName(path.TrimEnd('/').Replace('\\', '/'));
         if (!string.IsNullOrWhiteSpace(fileName)
             && string.Equals(fileName, trimmed, StringComparison.OrdinalIgnoreCase))
         {
@@ -538,6 +555,69 @@ public static class DysonOpenRules
 
         return false;
     }
+
+    /// <summary>
+    /// Short id from path/URL: <c>SKILL.md</c> parent folder (or GitHub repo), else file stem.
+    /// </summary>
+    private static string? TryShortCatalogId(string path)
+    {
+        var normalized = path.TrimEnd('/').Replace('\\', '/');
+        var leaf = Path.GetFileName(normalized);
+        var isSkillMd = leaf.Equals("SKILL.md", StringComparison.OrdinalIgnoreCase);
+
+        if (isSkillMd)
+        {
+            // github.com/{owner}/{repo}/…/SKILL.md → repo (parent is usually a branch).
+            if (Uri.TryCreate(normalized, UriKind.Absolute, out var uri)
+                && TryGitHubRepoName(uri, out var repo))
+            {
+                return repo;
+            }
+
+            var parent = ParentSegment(normalized);
+            if (IsUsableCatalogSegment(parent))
+                return parent;
+        }
+
+        var stem = Path.GetFileNameWithoutExtension(normalized);
+        if (IsUsableCatalogSegment(stem)
+            && !(isSkillMd && stem.Equals("SKILL", StringComparison.OrdinalIgnoreCase)))
+        {
+            return stem;
+        }
+
+        return null;
+    }
+
+    private static bool TryGitHubRepoName(Uri uri, out string repo)
+    {
+        repo = "";
+        if (!uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var segments = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        // github.com/{owner}/{repo}/…
+        if (segments.Length < 2 || string.IsNullOrWhiteSpace(segments[1]))
+            return false;
+
+        repo = segments[1];
+        return true;
+    }
+
+    private static string ParentSegment(string normalizedPath)
+    {
+        var slash = normalizedPath.LastIndexOf('/');
+        if (slash <= 0)
+            return "";
+
+        var withoutLeaf = normalizedPath[..slash];
+        var parentSlash = withoutLeaf.LastIndexOf('/');
+        return parentSlash < 0 ? withoutLeaf : withoutLeaf[(parentSlash + 1)..];
+    }
+
+    private static bool IsUsableCatalogSegment(string? segment) =>
+        !string.IsNullOrWhiteSpace(segment)
+        && segment is not "." and not "..";
 
     private static async Task<string?> BuildSystemPromptBlockCoreAsync(
         DysonOpenRulesConfig config,

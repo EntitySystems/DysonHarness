@@ -203,9 +203,9 @@ public class DysonOpenRulesTests
 
             if (!catalog.Any(e =>
                     e.Source == DysonSkillSource.OpenRules
-                    && e.Name.Contains("skills/csharp/SKILL.md", StringComparison.OrdinalIgnoreCase)))
+                    && e.Name.Equals("csharp", StringComparison.OrdinalIgnoreCase)))
             {
-                throw new InvalidOperationException("Catalog must list AgentOptional skill path.");
+                throw new InvalidOperationException("Catalog must list AgentOptional skill as short id csharp.");
             }
 
             if (catalog.Any(e => e.Name.Contains("auto.md", StringComparison.OrdinalIgnoreCase)))
@@ -218,6 +218,14 @@ public class DysonOpenRulesTests
                 throw new InvalidOperationException("Resolve by path failed for openrules skill file.");
             }
             // Literal resolve wins when the path exists; OpenRules is still in the catalog.
+
+            var byShort = DysonSkillLoader.ResolveAndLoad("csharp", loadIndexOnly: true, fs);
+            if (byShort.IsError
+                || byShort.Value.Source != DysonSkillSource.OpenRules
+                || !byShort.Value.Markdown.Contains("CSharp skill", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Resolve by short catalog id csharp failed.");
+            }
 
             var byStem = DysonSkillLoader.ResolveAndLoad("rules_csharp", loadIndexOnly: true, fs);
             if (byStem.IsError || byStem.Value.Source != DysonSkillSource.OpenRules
@@ -421,11 +429,21 @@ public class DysonOpenRulesTests
 
             var optional = DysonOpenRules.ListAgentOptional(fs);
             if (optional.Count != 1
+                || !DysonOpenRules.CatalogNameFor(optional[0]).Equals("openrules", StringComparison.OrdinalIgnoreCase)
                 || !DysonOpenRules.MatchesAgentOptionalName(optional[0], "SKILL.md")
+                || !DysonOpenRules.MatchesAgentOptionalName(optional[0], "openrules")
                 || !DysonOpenRules.MatchesAgentOptionalName(
                     optional[0], DysonOpenRules.DefaultOpenRulesSkillUrl))
             {
                 throw new InvalidOperationException("URL AgentOptional match failed.");
+            }
+
+            var catalog = DysonSkillLoader.ListCatalog(fs);
+            if (!catalog.Any(e =>
+                    e.Source == DysonSkillSource.OpenRules
+                    && e.Name.Equals("openrules", StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException("Catalog must list URL skill as short id openrules.");
             }
         }
         finally

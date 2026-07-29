@@ -704,6 +704,119 @@ code, .mono {
   to { transform: rotate(360deg); }
 }
 
+.composer-help-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.composer-help-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100%);
+  max-height: min(70vh, 560px);
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.composer-help-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.composer-help-modal__header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.composer-help-modal__close {
+  min-width: 28px;
+  padding: 2px 8px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.composer-help-modal__body {
+  flex: 1;
+  overflow: auto;
+  padding: 10px 14px 14px;
+}
+
+.composer-help-modal__note {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.composer-help-modal__section {
+  margin: 12px 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.composer-help-modal__section:first-of-type {
+  margin-top: 0;
+}
+
+.composer-help-modal__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer-help-modal__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+}
+
+.composer-help-modal__row:hover {
+  background: var(--bg-hover);
+}
+
+.composer-help-modal__meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer-help-modal__token {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.composer-help-modal__desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.composer-help-modal__insert {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
 .model-slug-modal__badge {
   flex-shrink: 0;
   font-size: 10px;
@@ -2546,6 +2659,9 @@ code, .mono {
 
 .composer-attach {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 30px;
   height: 30px;
   padding: 0;
@@ -2570,9 +2686,18 @@ code, .mono {
 }
 
 .composer-attach__icon {
+  display: block;
   width: 14px;
   height: 14px;
+  /* <img> SVGs resolve currentColor to black; mask paints with button color tokens */
+  background-color: currentColor;
+  -webkit-mask: url("icons/plus.svg") center / contain no-repeat;
+  mask: url("icons/plus.svg") center / contain no-repeat;
   opacity: 0.85;
+}
+
+.composer-attach:hover:not(:disabled) .composer-attach__icon {
+  opacity: 1;
 }
 
 .composer-attach__input {

@@ -13,6 +13,7 @@
     <AskQuestionPopover Ask="Ask" OnSubmit="OnAskSubmit" />
     <PlanReadyPopover Pending="Host.PendingPlanReady" />
     <SkillSearchModal @ref="_skillSearch" />
+    <ComposerHelpModal @ref="_helpModal" OnInsert="OnHelpInsert" />
     <div @ref="_shell"
          class="composer-shell @(_dragOver ? "is-drop-target" : null)">
         <div class="composer__prompt">
@@ -114,7 +115,7 @@
                         aria-label="Attach images"
                         disabled="@Disabled"
                         @onclick="OpenFilePickerAsync">
-                    <img class="composer-attach__icon" src="icons/plus.svg" alt="" />
+                    <span class="composer-attach__icon" aria-hidden="true"></span>
                 </button>
                 <ModelSlugPicker @ref="_modelPicker"
                                  SelectedSlugId="SelectedSlugId"
@@ -149,7 +150,7 @@
         </div>
     </div>
     <div class="composer__hint">
-        <span class="list-item__meta">Ctrl+Enter to send · paste/drop images · / for commands</span>
+        <span class="list-item__meta">Ctrl+Enter to send · paste/drop images · /help for commands</span>
     </div>
 </div>
 
@@ -159,6 +160,7 @@
     private ElementReference _shell;
     private ModelSlugPicker? _modelPicker;
     private SkillSearchModal? _skillSearch;
+    private ComposerHelpModal? _helpModal;
     private bool _textareaBound;
     private bool _imageCaptureBound;
     private bool _dragOver;
@@ -415,7 +417,18 @@
             case ComposerSlashCommands.Kind.SkillSearch:
                 OpenSkillSearch();
                 break;
+            case ComposerSlashCommands.Kind.Help:
+                OpenHelp();
+                break;
         }
+    }
+
+    private void OnHelpInsert(string template)
+    {
+        _text = template;
+        _slashOpen = false;
+        _suggestions = [];
+        _highlight = 0;
     }
 
     private async Task OpenFilePickerAsync()
@@ -508,6 +521,12 @@
 
     /// <summary>Opens the skill search modal (<c>/skill-search</c>).</summary>
     public void OpenSkillSearch() => _skillSearch?.Open();
+
+    /// <summary>Opens the composer command help modal (<c>/help</c>).</summary>
+    public void OpenHelp() => _helpModal?.Open();
+
+    /// <summary>Focuses the prompt textarea (empty-state CTAs).</summary>
+    public ValueTask FocusPromptAsync() => _textarea.FocusAsync();
 
     public async ValueTask DisposeAsync()
     {

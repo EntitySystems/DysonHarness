@@ -70,7 +70,16 @@ public class ComposerSlashCommandsTests
                 new DysonSkillCatalogEntry("JDSL", "JDSL", DysonSkillSource.Included)),
             ComposerSlashCommands.ToSkillOption(
                 new DysonSkillCatalogEntry("angular-skill", "angular-skill", DysonSkillSource.DysonSkills)),
+            ComposerSlashCommands.ToSkillOption(
+                new DysonSkillCatalogEntry("openrules", "OpenRules skill", DysonSkillSource.OpenRules)),
         };
+
+        var openrulesOpt = skills[^1];
+        if (openrulesOpt.Token != "/skill-openrules" || openrulesOpt.Name != "openrules")
+        {
+            throw new InvalidOperationException(
+                "ToSkillOption short Name must yield /skill-openrules (not a URL slug).");
+        }
 
         var skillRoot = ComposerSlashCommands.Filter("/skill", models, skills);
         if (skillRoot.Count == 0
@@ -150,6 +159,42 @@ public class ComposerSlashCommandsTests
             || stillSkills.Any(s => s.Kind != ComposerSlashCommands.Kind.Skill))
         {
             throw new InvalidOperationException("Filter(/skill) must still list local skills, not /skill-search.");
+        }
+
+        if (!ComposerSlashCommands.TryResolve("/help", models, out var helpParsed, skills)
+            || helpParsed!.Suggestion.Kind != ComposerSlashCommands.Kind.Help
+            || helpParsed.Remainder != "")
+        {
+            throw new InvalidOperationException("TryResolve(/help) failed.");
+        }
+
+        if (!ComposerSlashCommands.TryResolve("/help then docs", models, out var helpRemainder, skills)
+            || helpRemainder!.Suggestion.Kind != ComposerSlashCommands.Kind.Help
+            || helpRemainder.Remainder != "then docs")
+        {
+            throw new InvalidOperationException("TryResolve(/help then docs) remainder failed.");
+        }
+
+        var helpFilter = ComposerSlashCommands.Filter("/h", models, skills);
+        if (helpFilter.All(s => s.Kind != ComposerSlashCommands.Kind.Help)
+            || helpFilter.All(s => s.Token != "/help"))
+        {
+            throw new InvalidOperationException("Filter(/h) should include /help.");
+        }
+
+        var helpExact = ComposerSlashCommands.Filter("/help", models, skills);
+        if (helpExact.Count == 0
+            || helpExact[0].Kind != ComposerSlashCommands.Kind.Help
+            || helpExact[0].Token != "/help")
+        {
+            throw new InvalidOperationException("Filter(/help) should yield Help.");
+        }
+
+        if (ComposerSlashCommands.HelpCatalog.Count == 0
+            || ComposerSlashCommands.HelpCatalog.All(e => e.Template != "/help")
+            || ComposerSlashCommands.HelpCatalog.All(e => e.Section != ComposerSlashCommands.HelpSection.Pattern))
+        {
+            throw new InvalidOperationException("HelpCatalog must include /help and pattern rows.");
         }
     }
 }

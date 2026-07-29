@@ -1,0 +1,107 @@
+@namespace Harness.UI.Components.Chat
+@using Microsoft.AspNetCore.Components.Web
+
+@if (_open)
+{
+    <div class="composer-help-modal-backdrop"
+         @onclick="Close"
+         @onkeydown="OnBackdropKeyDown">
+        <div class="composer-help-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="composer-help-modal-title"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnModalKeyDown">
+            <div class="composer-help-modal__header">
+                <h3 id="composer-help-modal-title">Composer commands</h3>
+                <button type="button"
+                        class="btn btn-ghost composer-help-modal__close"
+                        @onclick="Close"
+                        aria-label="Close">×</button>
+            </div>
+
+            <div class="composer-help-modal__body">
+                <p class="composer-help-modal__note">
+                    Typing <span class="mono">/</span> in the composer shows live matches (models and skills are not listed here).
+                </p>
+
+                <h4 class="composer-help-modal__section">Built-in</h4>
+                <div class="composer-help-modal__list" role="list">
+                    @foreach (var entry in BuiltIns)
+                    {
+                        <div class="composer-help-modal__row" role="listitem">
+                            <div class="composer-help-modal__meta">
+                                <span class="composer-help-modal__token mono">@entry.Template</span>
+                                <span class="composer-help-modal__desc">@entry.Description</span>
+                            </div>
+                            <button type="button"
+                                    class="btn btn-ghost composer-help-modal__insert"
+                                    @onclick="() => InsertAsync(entry.Template)">
+                                Insert
+                            </button>
+                        </div>
+                    }
+                </div>
+
+                <h4 class="composer-help-modal__section">Patterns</h4>
+                <div class="composer-help-modal__list" role="list">
+                    @foreach (var entry in Patterns)
+                    {
+                        <div class="composer-help-modal__row" role="listitem">
+                            <div class="composer-help-modal__meta">
+                                <span class="composer-help-modal__token mono">@entry.Template</span>
+                                <span class="composer-help-modal__desc">@entry.Description</span>
+                            </div>
+                            <button type="button"
+                                    class="btn btn-ghost composer-help-modal__insert"
+                                    @onclick="() => InsertAsync(entry.Template)">
+                                Insert
+                            </button>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _open;
+
+    [Parameter] public EventCallback<string> OnInsert { get; set; }
+
+    private static IEnumerable<ComposerSlashCommands.HelpEntry> BuiltIns =>
+        ComposerSlashCommands.HelpCatalog
+            .Where(e => e.Section == ComposerSlashCommands.HelpSection.BuiltIn);
+
+    private static IEnumerable<ComposerSlashCommands.HelpEntry> Patterns =>
+        ComposerSlashCommands.HelpCatalog
+            .Where(e => e.Section == ComposerSlashCommands.HelpSection.Pattern);
+
+    /// <summary>Opens the help modal (<c>/help</c>).</summary>
+    public void Open()
+    {
+        _open = true;
+        StateHasChanged();
+    }
+
+    private void Close() => _open = false;
+
+    private async Task InsertAsync(string template)
+    {
+        await OnInsert.InvokeAsync(template);
+        Close();
+    }
+
+    private void OnBackdropKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            Close();
+    }
+
+    private void OnModalKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            Close();
+    }
+}

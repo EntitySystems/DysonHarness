@@ -252,6 +252,8 @@
             return;
 
         await Host.AppendDisplayInfoTurnAsync(CreatePlanDisplayInfo);
+        if (_composer is not null)
+            await _composer.FocusPromptAsync();
     }
 
     private async Task OnAskQuestionAsync()
@@ -265,6 +267,8 @@
             return;
 
         await Host.AppendDisplayInfoTurnAsync(AskQuestionDisplayInfo);
+        if (_composer is not null)
+            await _composer.FocusPromptAsync();
     }
 
     private void OnSwitchModel() => _composer?.OpenModelPicker();

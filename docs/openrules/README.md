@@ -63,7 +63,7 @@ Missing files / failed URL fetches become a short warning line (session create d
 - MCP `LoadSkill` resolve order (after included → `.dyson/skills` → literal); URL Paths are fetched
 - Composer `/skill-` via `DysonSkillLoader.ListCatalog` (`DysonSkillSource.OpenRules`)
 
-Match by relative path, file stem, URL, or catalog name. Single-file AgentOptional entries ignore `loadIndexOnly` (same as literal files).
+Catalog / `/skill-` ids are **short names** (e.g. `csharp` for `skills/csharp/SKILL.md`, `openrules` for the EntitySystems GitHub `SKILL.md` URL, file stem for ordinary `.md` rules) — not full paths or URLs. Match by relative path, file stem, URL, short catalog id, or GitHub repo name when applicable. Single-file AgentOptional entries ignore `loadIndexOnly` (same as literal files).
 
 Do not `LoadSkill` AutoInclude entries to re-inject them into the turn — they are already in the system prompt.
 

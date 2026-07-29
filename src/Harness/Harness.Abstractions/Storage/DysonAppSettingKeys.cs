@@ -40,4 +40,11 @@ public static class DysonAppSettingKeys
     /// auto-run (persist only for now — no reviewer spawn yet). Missing / other ⇒ off.
     /// </summary>
     public const string EndOfTaskAutoReview = "end_of_task_auto_review";
+
+    /// <summary>
+    /// Self-review intensity: <c>low</c> / <c>medium</c> / <c>high</c>.
+    /// Persist only for now — engine does not read this yet. Missing / other ⇒ <c>medium</c>.
+    /// UI currently disables selecting <c>high</c>.
+    /// </summary>
+    public const string SelfReviewIntensity = "self_review_intensity";
 }
