@@ -15,6 +15,7 @@ public static class ComposerSlashCommands
         NewSession,
         Model,
         Skill,
+        SkillSearch,
     }
 
     public sealed record ModelOption(
@@ -42,12 +43,16 @@ public static class ComposerSlashCommands
         Suggestion Suggestion,
         string Remainder);
 
+    private static readonly Suggestion SkillSearchSuggestion =
+        new("/skill-search", "Search skills", Kind.SkillSearch);
+
     private static readonly Suggestion[] BuiltIns =
     [
         new("/ask", "Ask mode", Kind.Mode, Mode: DysonAgentModes.Ask),
         new("/plan", "Plan mode", Kind.Mode, Mode: DysonAgentModes.Plan),
         new("/work", "Work mode", Kind.Mode, Mode: DysonAgentModes.Work),
         new("/new", "New session", Kind.NewSession),
+        SkillSearchSuggestion,
     ];
 
     /// <summary>
@@ -96,6 +101,10 @@ public static class ComposerSlashCommands
         var filter = typedToken.StartsWith('/') ? typedToken[1..] : typedToken;
         filter = filter.Trim();
 
+        // /skill-search must win over IsSkillFilter ("skill…") before local skill ranking.
+        if (IsSkillSearchFilter(filter))
+            return [SkillSearchSuggestion];
+
         if (IsSkillFilter(filter))
             return FilterSkills(filter, skills ?? []);
 
@@ -142,6 +151,13 @@ public static class ComposerSlashCommands
 
         var name = token.StartsWith('/') ? token[1..] : token;
         skills ??= [];
+
+        // Exact /skill-search before IsSkillFilter (token starts with "skill").
+        if (string.Equals(name, "skill-search", StringComparison.OrdinalIgnoreCase))
+        {
+            result = new ParseResult(SkillSearchSuggestion, remainder);
+            return true;
+        }
 
         if (IsSkillFilter(name))
         {
@@ -210,6 +226,13 @@ public static class ComposerSlashCommands
             token,
             $"{entry.DisplayName} · skill");
     }
+
+    /// <summary>
+    /// True when the typed filter targets <c>/skill-search</c> (not bare <c>/skill</c> / <c>/skill-</c>).
+    /// </summary>
+    private static bool IsSkillSearchFilter(string filter) =>
+        filter.Length >= "skill-s".Length
+        && "skill-search".StartsWith(filter, StringComparison.OrdinalIgnoreCase);
 
     private static bool IsSkillFilter(string filter) =>
         filter.StartsWith("skill", StringComparison.OrdinalIgnoreCase);

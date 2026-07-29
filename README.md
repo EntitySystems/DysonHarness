@@ -2,6 +2,8 @@
 
 **DysonHarness** is a multitasking orchestrator of smaller agents for large-scale work — not a single-agent chat wrapper. From [EntitySystems](https://github.com/EntitySystems).
 
+Website: [dysonharness.com](https://dysonharness.com/)
+
 > **Early development.** This project is still in early production / active development and is **not even in beta**. Expect change, rough edges, and incomplete surfaces.
 
 ![DysonHarness agent shell showing Work mode, Explore subagent results, and live tools](docs/images/ui-agent-shell.png)

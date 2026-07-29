@@ -103,5 +103,53 @@ public class ComposerSlashCommandsTests
         {
             throw new InvalidOperationException("TryResolve(/skill-jdsl) apply-only remainder failed.");
         }
+
+        var skillSearch = ComposerSlashCommands.Filter("/skill-s", models, skills);
+        if (skillSearch.Count != 1
+            || skillSearch[0].Kind != ComposerSlashCommands.Kind.SkillSearch
+            || skillSearch[0].Token != "/skill-search")
+        {
+            throw new InvalidOperationException("Filter(/skill-s) should yield /skill-search before skills.");
+        }
+
+        var skillSearchExact = ComposerSlashCommands.Filter("/skill-search", models, skills);
+        if (skillSearchExact.Count != 1
+            || skillSearchExact[0].Kind != ComposerSlashCommands.Kind.SkillSearch)
+        {
+            throw new InvalidOperationException("Filter(/skill-search) should yield SkillSearch only.");
+        }
+
+        var skillSearchCase = ComposerSlashCommands.Filter("/SKILL-SE", models, skills);
+        if (skillSearchCase.Count != 1
+            || skillSearchCase[0].Kind != ComposerSlashCommands.Kind.SkillSearch)
+        {
+            throw new InvalidOperationException("Filter(/SKILL-SE) should match SkillSearch case-insensitively.");
+        }
+
+        if (!ComposerSlashCommands.TryResolve("/skill-search", models, out var searchParsed, skills)
+            || searchParsed!.Suggestion.Kind != ComposerSlashCommands.Kind.SkillSearch
+            || searchParsed.Remainder != "")
+        {
+            throw new InvalidOperationException("TryResolve(/skill-search) failed.");
+        }
+
+        if (!ComposerSlashCommands.TryResolve("/skill-search then install", models, out var searchRemainder, skills)
+            || searchRemainder!.Suggestion.Kind != ComposerSlashCommands.Kind.SkillSearch
+            || searchRemainder.Remainder != "then install")
+        {
+            throw new InvalidOperationException("TryResolve(/skill-search then install) remainder failed.");
+        }
+
+        if (atRoot.All(s => s.Kind != ComposerSlashCommands.Kind.SkillSearch))
+        {
+            throw new InvalidOperationException("Filter(/) should include /skill-search among built-ins.");
+        }
+
+        var stillSkills = ComposerSlashCommands.Filter("/skill", models, skills);
+        if (stillSkills.Count == 0
+            || stillSkills.Any(s => s.Kind != ComposerSlashCommands.Kind.Skill))
+        {
+            throw new InvalidOperationException("Filter(/skill) must still list local skills, not /skill-search.");
+        }
     }
 }

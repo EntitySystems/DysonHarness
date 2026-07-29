@@ -377,6 +377,29 @@ public sealed class DysonUiHost : IAsyncDisposable
         return DysonSkillLoader.ListCatalog(fsResult.Value);
     }
 
+    /// <summary>
+    /// Workspace FS for the active session workdir, else composer workdir.
+    /// Used by skill explorer download into <c>.dyson/skills/</c>.
+    /// </summary>
+    public async Task<Result<IDysonWorkspaceFileSystem, string>> TryGetActiveWorkspaceFileSystemAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var root = await TryResolveCatalogWorkRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root is null)
+        {
+            return Result<IDysonWorkspaceFileSystem, string>.AsError(
+                "No active work directory. Select a work directory before downloading skills.");
+        }
+
+        var fsResult = await DysonWorkspaceFileSystems
+            .CreateLocalAsync(root, cancellationToken)
+            .ConfigureAwait(false);
+        if (fsResult.IsError)
+            return Result<IDysonWorkspaceFileSystem, string>.AsError(fsResult.Error);
+
+        return Result<IDysonWorkspaceFileSystem, string>.AsValue(fsResult.Value);
+    }
+
     /// <summary>Work directory of the focused session, if any.</summary>
     public Guid? ActiveWorkDirectoryId => _session switch
     {
@@ -491,19 +514,33 @@ public sealed class DysonUiHost : IAsyncDisposable
     public Task OpenFileViewerAsync(
         string relativePath,
         CancellationToken cancellationToken = default) =>
-        OpenFileViewerAsync(relativePath, workRoot: null, cancellationToken);
+        OpenFileViewerAsync(relativePath, workRoot: null, actions: null, cancellationToken);
 
     /// <summary>
     /// Opens the file viewer for a workspace-relative path.
     /// When <paramref name="workRoot"/> is set (e.g. FILES rail), uses that root;
     /// otherwise resolves from the focused session work directory.
     /// </summary>
+    public Task OpenFileViewerAsync(
+        string relativePath,
+        string? workRoot,
+        CancellationToken cancellationToken = default) =>
+        OpenFileViewerAsync(relativePath, workRoot, actions: null, cancellationToken);
+
+    /// <summary>
+    /// Opens the file viewer for a workspace-relative path with optional footer CTAs.
+    /// When <paramref name="workRoot"/> is set (e.g. FILES rail), uses that root;
+    /// otherwise resolves from the focused session work directory.
+    /// </summary>
     public async Task OpenFileViewerAsync(
         string relativePath,
         string? workRoot,
+        IReadOnlyList<DysonFileViewerAction>? actions,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
+
+        var actionList = NormalizeFileViewerActions(actions);
 
         // Stay on the Blazor sync context so Notify() paints FileViewerOverlay.
         var resolvedRoot = workRoot;
@@ -519,6 +556,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 Content = "",
                 IsMarkdown = false,
                 Error = "No active work directory to read the file.",
+                Actions = actionList,
             };
             Notify();
             return;
@@ -547,10 +585,10 @@ public sealed class DysonUiHost : IAsyncDisposable
                 RelativePath = path,
                 Title = Path.GetFileName(path) ?? path,
                 Content = "",
-                IsMarkdown = path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
-                             || path.EndsWith(".markdown", StringComparison.OrdinalIgnoreCase),
+                IsMarkdown = IsMarkdownPath(path),
                 AbsolutePath = absolutePath,
                 Error = fsResult.Error,
+                Actions = actionList,
             };
             Notify();
             return;
@@ -559,8 +597,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         var fm = new DysonFileManager(fsResult.Value);
         var read = fm.ReadText(path);
         var title = Path.GetFileName(path) ?? path;
-        var isMd = path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
-                   || path.EndsWith(".markdown", StringComparison.OrdinalIgnoreCase);
+        var isMd = IsMarkdownPath(path);
 
         if (read.IsSuccess)
         {
@@ -578,6 +615,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 IsMarkdown = isMd,
                 AbsolutePath = absolutePath,
                 Error = read.Error,
+                Actions = actionList,
             }
             : new DysonFileViewerState
             {
@@ -586,9 +624,44 @@ public sealed class DysonUiHost : IAsyncDisposable
                 Content = read.Value,
                 IsMarkdown = isMd,
                 AbsolutePath = absolutePath,
+                Actions = actionList,
             };
         Notify();
     }
+
+    /// <summary>
+    /// Opens the file viewer with caller-supplied content (no disk read).
+    /// <see cref="DysonFileViewerState.AbsolutePath"/> is null so "Open in default editor" is hidden.
+    /// </summary>
+    /// <param name="relativePath">Display path (e.g. <c>skillsdirectory:{slug}/SKILL.md</c>).</param>
+    public void OpenFileViewerContent(
+        string relativePath,
+        string content,
+        IReadOnlyList<DysonFileViewerAction>? actions = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
+        ArgumentNullException.ThrowIfNull(content);
+
+        var path = relativePath.Trim().Replace('\\', '/');
+        _fileViewer = new DysonFileViewerState
+        {
+            RelativePath = path,
+            Title = Path.GetFileName(path) ?? path,
+            Content = content,
+            IsMarkdown = IsMarkdownPath(path),
+            AbsolutePath = null,
+            Actions = NormalizeFileViewerActions(actions),
+        };
+        Notify();
+    }
+
+    private static IReadOnlyList<DysonFileViewerAction> NormalizeFileViewerActions(
+        IReadOnlyList<DysonFileViewerAction>? actions) =>
+        actions is { Count: > 0 } ? actions : [];
+
+    private static bool IsMarkdownPath(string path) =>
+        path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+        || path.EndsWith(".markdown", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Opens an absolute file path with the OS default application.</summary>
     public VoidResult<string> OpenFileInDefaultEditor(string absolutePath)

@@ -17,6 +17,53 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
 builder.Services.AddHttpClient();
+builder.Services.AddHttpClient(SkillsHubSkillExplorerProvider.ProviderId, client =>
+{
+    client.BaseAddress = new Uri("https://skillshub.wtf/");
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("DysonHarness/1.0");
+});
+builder.Services.AddHttpClient(SkillsShSkillExplorerProvider.ProviderId, client =>
+{
+    client.BaseAddress = new Uri("https://skills.sh/");
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("DysonHarness/1.0");
+});
+builder.Services.AddHttpClient(ClawHubSkillExplorerProvider.ProviderId, client =>
+{
+    client.BaseAddress = new Uri("https://clawhub.ai/");
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("DysonHarness/1.0");
+});
+builder.Services.AddHttpClient(SkillsDirectorySkillExplorerProvider.ProviderId, client =>
+{
+    client.BaseAddress = new Uri("https://www.skillsdirectory.com/");
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("DysonHarness/1.0");
+});
+// Registration order = SkillSearchModal tab order (GetServices preserves it).
+builder.Services.AddSingleton<IDysonSkillExplorerProvider>(sp =>
+{
+    var factory = sp.GetRequiredService<IHttpClientFactory>();
+    return new SkillsHubSkillExplorerProvider(
+        factory.CreateClient(SkillsHubSkillExplorerProvider.ProviderId));
+});
+builder.Services.AddSingleton<IDysonSkillExplorerProvider>(sp =>
+{
+    var factory = sp.GetRequiredService<IHttpClientFactory>();
+    return new SkillsShSkillExplorerProvider(
+        factory.CreateClient(SkillsShSkillExplorerProvider.ProviderId));
+});
+builder.Services.AddSingleton<IDysonSkillExplorerProvider>(sp =>
+{
+    var factory = sp.GetRequiredService<IHttpClientFactory>();
+    return new ClawHubSkillExplorerProvider(
+        factory.CreateClient(ClawHubSkillExplorerProvider.ProviderId));
+});
+builder.Services.AddSingleton<IDysonSkillExplorerProvider>(sp =>
+{
+    var factory = sp.GetRequiredService<IHttpClientFactory>();
+    return new SkillsDirectorySkillExplorerProvider(
+        factory.CreateClient(SkillsDirectorySkillExplorerProvider.ProviderId));
+});
+builder.Services.AddSingleton<IDysonSkillExplorer>(sp =>
+    new DysonSkillExplorer(sp.GetServices<IDysonSkillExplorerProvider>()));
 builder.Services.AddHttpContextAccessor();
 
 DysonAppPaths.EnsureRoot(DysonBuildInfo.Current);

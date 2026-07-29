@@ -498,6 +498,212 @@ code, .mono {
   white-space: nowrap;
 }
 
+.skill-search-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.skill-search-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 100%);
+  max-height: min(80vh, 640px);
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.skill-search-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.skill-search-modal__header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.skill-search-modal__close {
+  min-width: 28px;
+  padding: 2px 8px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.skill-search-modal__tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.skill-search-modal__tab {
+  padding: 8px 12px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.skill-search-modal__tab:hover {
+  color: var(--text);
+}
+
+.skill-search-modal__tab.is-active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+.skill-search-modal__search {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.skill-search-modal__search input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg-2);
+  color: var(--text);
+}
+
+.skill-search-modal__search input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.skill-search-modal__error {
+  margin: 8px 14px 0;
+}
+
+.skill-search-modal__status {
+  margin: 8px 14px 0;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.skill-search-modal__list {
+  flex: 1;
+  overflow: auto;
+  padding: 6px;
+}
+
+.skill-search-modal__empty {
+  padding: 16px 10px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.skill-search-modal__row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 4px;
+}
+
+.skill-search-modal__row:hover {
+  background: var(--bg-hover);
+}
+
+.skill-search-modal__meta {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.skill-search-modal__name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.skill-search-modal__slug {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.skill-search-modal__desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.skill-search-modal__extra {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.skill-search-modal__badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--accent-text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+.skill-search-modal__row-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.skill-search-modal__row-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.skill-search-modal__spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: skill-search-spin 0.7s linear infinite;
+}
+
+@keyframes skill-search-spin {
+  to { transform: rotate(360deg); }
+}
+
 .model-slug-modal__badge {
   flex-shrink: 0;
   font-size: 10px;
@@ -4005,6 +4211,22 @@ code, .mono {
   flex-direction: column;
   overflow: hidden;
   padding: 14px 16px 20px;
+}
+
+.file-viewer-modal__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.file-viewer-modal__footer-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .file-viewer-modal__content {

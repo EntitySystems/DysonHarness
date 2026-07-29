@@ -1,6 +1,7 @@
 @namespace Harness.UI.Components.Chat
 @using DysonHarness
 @using Harness.UI.Components.Models
+@using Harness.UI.Components.Skills
 @using Harness.UI.Demo
 @using Microsoft.AspNetCore.Components.Forms
 @implements IAsyncDisposable
@@ -11,6 +12,7 @@
 <div class="composer">
     <AskQuestionPopover Ask="Ask" OnSubmit="OnAskSubmit" />
     <PlanReadyPopover Pending="Host.PendingPlanReady" />
+    <SkillSearchModal @ref="_skillSearch" />
     <div @ref="_shell"
          class="composer-shell @(_dragOver ? "is-drop-target" : null)">
         <div class="composer__prompt">
@@ -156,6 +158,7 @@
     private ElementReference _textarea;
     private ElementReference _shell;
     private ModelSlugPicker? _modelPicker;
+    private SkillSearchModal? _skillSearch;
     private bool _textareaBound;
     private bool _imageCaptureBound;
     private bool _dragOver;
@@ -409,6 +412,9 @@
             case ComposerSlashCommands.Kind.Skill when suggestion.SkillName is not null:
                 Host.QueuePendingSkill(suggestion.SkillName);
                 break;
+            case ComposerSlashCommands.Kind.SkillSearch:
+                OpenSkillSearch();
+                break;
         }
     }
 
@@ -499,6 +505,9 @@
 
     /// <summary>Opens the model selector modal (empty-state CTA).</summary>
     public void OpenModelPicker() => _modelPicker?.Open();
+
+    /// <summary>Opens the skill search modal (<c>/skill-search</c>).</summary>
+    public void OpenSkillSearch() => _skillSearch?.Open();
 
     public async ValueTask DisposeAsync()
     {

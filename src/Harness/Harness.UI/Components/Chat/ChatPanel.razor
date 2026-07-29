@@ -55,6 +55,12 @@
                                 @onclick="OnSwitchModel">
                             Switch model
                         </button>
+                        <button type="button"
+                                class="btn"
+                                disabled="@SessionBusy"
+                                @onclick="OnBrowseSkills">
+                            Browse skills
+                        </button>
                     </div>
                 </div>
             }
@@ -262,4 +268,6 @@
     }
 
     private void OnSwitchModel() => _composer?.OpenModelPicker();
+
+    private void OnBrowseSkills() => _composer?.OpenSkillSearch();
 }

@@ -128,6 +128,26 @@
                     }
                 </div>
             </div>
+
+            @if (viewer.Actions.Count > 0)
+            {
+                <div class="file-viewer-modal__footer">
+                    @foreach (var action in viewer.Actions)
+                    {
+                        var showSpinner = _actionRunning && ReferenceEquals(_runningAction, action);
+                        <button type="button"
+                                class="btn @(action.IsPrimary ? "btn-primary" : "btn-ghost") file-viewer-modal__footer-action"
+                                disabled="@_actionRunning"
+                                @onclick="@(() => RunActionAsync(action))">
+                            @if (showSpinner)
+                            {
+                                <span class="turn-block__spinner" aria-hidden="true"></span>
+                            }
+                            @action.Label
+                        </button>
+                    }
+                </div>
+            }
         </div>
     </div>
 }
@@ -139,6 +159,8 @@
     private ElementReference _draftTextarea;
     private bool _focusDraft;
     private bool _submitting;
+    private bool _actionRunning;
+    private DysonFileViewerAction? _runningAction;
 
     private sealed class FileComment
     {
@@ -211,12 +233,32 @@
         _draft = null;
         _focusDraft = false;
         _submitting = false;
+        _actionRunning = false;
+        _runningAction = null;
     }
 
     private void Close()
     {
         ClearViewerState();
         Host.CloseFileViewer();
+    }
+
+    private async Task RunActionAsync(DysonFileViewerAction action)
+    {
+        if (_actionRunning)
+            return;
+
+        _actionRunning = true;
+        _runningAction = action;
+        try
+        {
+            await action.Invoke();
+        }
+        finally
+        {
+            _actionRunning = false;
+            _runningAction = null;
+        }
     }
 
     private static bool CanOpenInDefaultEditor(DysonFileViewerState viewer) =>

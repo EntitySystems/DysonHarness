@@ -1,0 +1,388 @@
+@namespace Harness.UI.Components.Skills
+@using DysonHarness
+@using Harness.UI.Demo
+@using Microsoft.AspNetCore.Components.Web
+@inject IDysonSkillExplorer Explorer
+@inject DysonUiHost Host
+
+@if (_open)
+{
+    <div class="skill-search-modal-backdrop"
+         @onclick="Close"
+         @onkeydown="OnBackdropKeyDown">
+        <div class="skill-search-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="skill-search-modal-title"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnModalKeyDown">
+            <div class="skill-search-modal__header">
+                <h3 id="skill-search-modal-title">Search skills</h3>
+                <button type="button"
+                        class="btn btn-ghost skill-search-modal__close"
+                        @onclick="Close"
+                        aria-label="Close">×</button>
+            </div>
+
+            @if (_providers.Count > 0)
+            {
+                <div class="skill-search-modal__tabs" role="tablist" aria-label="Skill providers">
+                    @foreach (var provider in _providers)
+                    {
+                        var name = provider.Name;
+                        var active = string.Equals(_providerName, name, StringComparison.OrdinalIgnoreCase);
+                        <button type="button"
+                                class="skill-search-modal__tab @(active ? "is-active" : null)"
+                                role="tab"
+                                aria-selected="@active"
+                                @onclick="() => SelectProviderAsync(name)">
+                            @provider.DisplayName
+                        </button>
+                    }
+                </div>
+            }
+
+            <div class="skill-search-modal__search">
+                <input @ref="_searchInput"
+                       type="search"
+                       placeholder="Search skills…"
+                       value="@_search"
+                       disabled="@(_providers.Count == 0)"
+                       @oninput="OnSearchInput"
+                       @onkeydown="OnModalKeyDown" />
+            </div>
+
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <div class="error-banner skill-search-modal__error">@_error</div>
+            }
+
+            @if (!string.IsNullOrEmpty(_status))
+            {
+                <div class="skill-search-modal__status">@_status</div>
+            }
+
+            <div class="skill-search-modal__list" role="listbox">
+                @if (_loading)
+                {
+                    <div class="skill-search-modal__empty">Searching…</div>
+                }
+                else if (_providers.Count == 0)
+                {
+                    <div class="skill-search-modal__empty">No skill providers registered.</div>
+                }
+                else if (_results.Count == 0)
+                {
+                    <div class="skill-search-modal__empty">No matching skills.</div>
+                }
+                else
+                {
+                    @foreach (var entry in _results)
+                    {
+                        var slug = entry.Slug;
+                        var busy = string.Equals(_downloadingSlug, slug, StringComparison.OrdinalIgnoreCase);
+                        <div class="skill-search-modal__row" role="option">
+                            <div class="skill-search-modal__meta">
+                                <div class="skill-search-modal__name">
+                                    @entry.Name
+                                    @if (entry.Verified)
+                                    {
+                                        <span class="skill-search-modal__badge">Verified</span>
+                                    }
+                                </div>
+                                <div class="skill-search-modal__slug mono">@entry.Slug</div>
+                                @if (!string.IsNullOrWhiteSpace(entry.Description))
+                                {
+                                    <div class="skill-search-modal__desc">@entry.Description</div>
+                                }
+                                <div class="skill-search-modal__extra">
+                                    @if (!string.IsNullOrWhiteSpace(entry.Author))
+                                    {
+                                        <span>@entry.Author</span>
+                                    }
+                                    @if (entry.Stars > 0)
+                                    {
+                                        <span>★ @entry.Stars</span>
+                                    }
+                                </div>
+                            </div>
+                            <div class="skill-search-modal__row-actions">
+                                <button type="button"
+                                        class="btn btn-ghost"
+                                        disabled="@(busy || _previewing)"
+                                        @onclick="() => ViewAsync(slug)">
+                                    View skill file
+                                </button>
+                                <button type="button"
+                                        class="btn btn-primary"
+                                        disabled="@busy"
+                                        @onclick="() => DownloadAsync(slug)">
+                                    @if (busy)
+                                    {
+                                        <span class="skill-search-modal__spinner" aria-hidden="true"></span>
+                                        <span>Downloading…</span>
+                                    }
+                                    else
+                                    {
+                                        <span>Download</span>
+                                    }
+                                </button>
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private const int SearchLimit = 25;
+    private const int DebounceMs = 280;
+
+    private bool _open;
+    private bool _focusSearch;
+    private bool _loading;
+    private bool _previewing;
+    private string _search = "";
+    private string? _error;
+    private string? _status;
+    private string? _providerName;
+    private string? _downloadingSlug;
+    private ElementReference _searchInput;
+    private CancellationTokenSource? _searchCts;
+    private int _searchGeneration;
+    private IReadOnlyList<DysonSkillExplorerProviderInfo> _providers = [];
+    private IReadOnlyList<DysonSkillExplorerEntry> _results = [];
+
+    /// <summary>Opens the skill search modal (slash command / external CTA).</summary>
+    public void Open()
+    {
+        CancelPendingSearch();
+        _open = true;
+        _search = "";
+        _error = null;
+        _status = null;
+        _downloadingSlug = null;
+        _focusSearch = true;
+        _providers = Explorer.ListProviders();
+        _providerName = _providers.Count > 0 ? _providers[0].Name : null;
+        _results = [];
+        StateHasChanged();
+        _ = SearchNowAsync();
+    }
+
+    private void Close()
+    {
+        _open = false;
+        _search = "";
+        _error = null;
+        _status = null;
+        _downloadingSlug = null;
+        CancelPendingSearch();
+    }
+
+    private async Task SelectProviderAsync(string providerName)
+    {
+        if (string.Equals(_providerName, providerName, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        CancelPendingSearch();
+        _providerName = providerName;
+        _error = null;
+        _status = null;
+        _results = [];
+        await SearchNowAsync();
+    }
+
+    private void OnSearchInput(ChangeEventArgs args)
+    {
+        _search = args.Value?.ToString() ?? "";
+        _ = DebouncedSearchAsync();
+    }
+
+    private async Task DebouncedSearchAsync()
+    {
+        CancelPendingSearch();
+        var cts = new CancellationTokenSource();
+        _searchCts = cts;
+        var generation = ++_searchGeneration;
+
+        try
+        {
+            await Task.Delay(DebounceMs, cts.Token);
+            if (generation != _searchGeneration)
+                return;
+            await SearchNowAsync(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async Task SearchNowAsync(CancellationToken cancellationToken = default)
+    {
+        if (!_open || string.IsNullOrWhiteSpace(_providerName))
+            return;
+
+        _loading = true;
+        _error = null;
+        StateHasChanged();
+
+        var providerName = _providerName;
+        var query = string.IsNullOrWhiteSpace(_search) ? null : _search.Trim();
+        var page = await Explorer.SearchAsync(providerName, query, SearchLimit, 0, cancellationToken);
+        if (cancellationToken.IsCancellationRequested)
+            return;
+
+        _loading = false;
+        if (page.IsError)
+        {
+            _results = [];
+            _error = page.Error;
+        }
+        else
+        {
+            _results = page.Value.Skills;
+            _error = null;
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task ViewAsync(string slug)
+    {
+        if (string.IsNullOrWhiteSpace(_providerName) || _previewing)
+            return;
+
+        _previewing = true;
+        _error = null;
+        _status = null;
+        StateHasChanged();
+
+        var providerName = _providerName;
+        try
+        {
+            var preview = await Explorer.PreviewSkillMarkdownAsync(providerName, slug);
+            if (preview.IsError)
+            {
+                _error = preview.Error;
+                return;
+            }
+
+            var path = $"{providerName}:{slug}/SKILL.md";
+            Host.OpenFileViewerContent(
+                path,
+                preview.Value,
+                [
+                    new DysonFileViewerAction
+                    {
+                        Label = "Download skill",
+                        IsPrimary = true,
+                        Invoke = () => DownloadFromViewerAsync(providerName, slug),
+                    },
+                ]);
+        }
+        finally
+        {
+            _previewing = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task DownloadAsync(string slug)
+    {
+        if (string.IsNullOrWhiteSpace(_providerName))
+            return;
+
+        await DownloadCoreAsync(_providerName, slug, closeViewer: false);
+    }
+
+    private async Task DownloadFromViewerAsync(string providerName, string slug)
+    {
+        await DownloadCoreAsync(providerName, slug, closeViewer: true);
+    }
+
+    private async Task DownloadCoreAsync(string providerName, string slug, bool closeViewer)
+    {
+        if (_downloadingSlug is not null)
+            return;
+
+        _downloadingSlug = slug;
+        _error = null;
+        _status = null;
+        StateHasChanged();
+
+        try
+        {
+            var fsResult = await Host.TryGetActiveWorkspaceFileSystemAsync();
+            if (fsResult.IsError)
+            {
+                _error = fsResult.Error;
+                if (closeViewer)
+                    Host.ReportError(fsResult.Error);
+                return;
+            }
+
+            var downloaded = await Explorer.DownloadAsync(providerName, slug, fsResult.Value);
+            if (downloaded.IsError)
+            {
+                _error = downloaded.Error;
+                if (closeViewer)
+                    Host.ReportError(downloaded.Error);
+                return;
+            }
+
+            _status = $"Downloaded to {downloaded.Value}";
+            if (closeViewer)
+                Host.CloseFileViewer();
+        }
+        finally
+        {
+            _downloadingSlug = null;
+            StateHasChanged();
+        }
+    }
+
+    private void OnBackdropKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            Close();
+    }
+
+    private void OnModalKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            Close();
+    }
+
+    private void CancelPendingSearch()
+    {
+        try
+        {
+            _searchCts?.Cancel();
+            _searchCts?.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        _searchCts = null;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_open || !_focusSearch)
+            return;
+
+        _focusSearch = false;
+        try
+        {
+            await _searchInput.FocusAsync();
+        }
+        catch
+        {
+            // Element may not be ready on first paint of the modal.
+        }
+    }
+}

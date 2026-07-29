@@ -9,4 +9,7 @@ public sealed class DysonFileViewerState
     public required bool IsMarkdown { get; init; }
     public string? AbsolutePath { get; init; }
     public string? Error { get; init; }
+
+    /// <summary>Ordered footer CTAs (stable button order). Empty when none.</summary>
+    public IReadOnlyList<DysonFileViewerAction> Actions { get; init; } = [];
 }
