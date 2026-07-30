@@ -11,6 +11,8 @@ permissions:
 jobs:
   version:
     name: Version
+    # Defense in depth: push is already master-only; also block workflow_dispatch on other refs.
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.calver.outputs.version }}

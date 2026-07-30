@@ -1,13 +1,13 @@
 # Continuous releases
 
-Every push to `master` publishes self-contained zips as a GitHub **pre-release** tagged with that run’s CalVer (`YYYY.M.run_number`).
+Every push to `master` publishes self-contained zips as a GitHub **pre-release** tagged with that run’s CalVer (`YYYY.M.run_number`). Pushes to other branches (for example `dev-bleeding-edge`) do not run continuous release.
 
 | RID | Publish project | Entrypoint |
 | --- | --------------- | ---------- |
 | `win-x64` | `DysonHarness.UI.Windows` | `DysonHarness.exe` (CefSharp WPF shell hosting Blazor in-process) |
 | `linux-x64` / `osx-*` | `Harness.UI` | `Harness.UI` |
 
-Pull requests to `master` run tests only (see [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)); they do not publish artifacts.
+Pull requests to `master` and pushes to non-`master` branches run tests only (see [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)); they do not publish artifacts. Manual **workflow_dispatch** of continuous release is also limited to `master`.
 
 > **Note:** This repo has [immutable releases](https://docs.github.com/en/repositories/releasing-projects-on-github/immutable-releases) enabled, so a fixed rolling tag like `continuous` cannot be reused after the first publish. Each build gets a unique CalVer tag instead.
 
