@@ -17,7 +17,7 @@ AI model harness.
 - Storage: [docs/storage/cloud-hosting.md](docs/storage/cloud-hosting.md) · [models](docs/storage/models.md) · [sessions](docs/storage/sessions.md) · [work-directories](docs/storage/work-directories.md)
 - Inference providers: [docs/inference-providers/README.md](docs/inference-providers/README.md)
 - UI: [docs/ui/README.md](docs/ui/README.md)
-- Packaging: [docs/packaging/webview.md](docs/packaging/webview.md) (CefSharp WPF host + agent browser)
+- Packaging: [docs/packaging/releases.md](docs/packaging/releases.md) (continuous downloads) · [webview.md](docs/packaging/webview.md) (CefSharp WPF host + agent browser)
 
 ## Rules
 

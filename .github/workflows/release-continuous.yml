@@ -1,0 +1,166 @@
+name: Continuous release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.calver.outputs.version }}
+      short_sha: ${{ steps.calver.outputs.short_sha }}
+    steps:
+      - name: Compute CalVer
+        id: calver
+        run: |
+          YEAR=$(date -u +%Y)
+          MONTH=$((10#$(date -u +%m)))
+          VERSION="${YEAR}.${MONTH}.${GITHUB_RUN_NUMBER}"
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "VERSION=${VERSION} InformationalVersion=${VERSION}+${SHORT_SHA}"
+
+  test:
+    name: Test (Release)
+    runs-on: ubuntu-latest
+    needs: version
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Test
+        run: dotnet test src/Harness/Harness.Tests/Harness.Tests.csproj -c Release --nologo
+
+  publish:
+    name: Publish ${{ matrix.rid }}
+    needs: [version, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            os: windows-latest
+          - rid: linux-x64
+            os: ubuntu-latest
+          - rid: osx-arm64
+            os: macos-latest
+          - rid: osx-x64
+            os: macos-13
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      SHORT_SHA: ${{ needs.version.outputs.short_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="artifacts/publish/${{ matrix.rid }}"
+          mkdir -p "$OUT"
+          dotnet publish src/Harness/Harness.UI/Harness.UI.csproj \
+            -c Release \
+            -r "${{ matrix.rid }}" \
+            --self-contained true \
+            -p:Version="${VERSION}" \
+            -p:InformationalVersion="${VERSION}+${SHORT_SHA}" \
+            -o "$OUT"
+
+      - name: Zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $rid = "${{ matrix.rid }}"
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $zipName = "DysonHarness-$env:VERSION-$rid.zip"
+          Compress-Archive -Path "artifacts/publish/$rid/*" -DestinationPath "artifacts/$zipName" -Force
+
+      - name: Zip (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          RID="${{ matrix.rid }}"
+          ZIP_NAME="DysonHarness-${VERSION}-${RID}.zip"
+          mkdir -p artifacts
+          (cd "artifacts/publish/${RID}" && zip -r "../../${ZIP_NAME}" .)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DysonHarness-${{ env.VERSION }}-${{ matrix.rid }}
+          path: artifacts/DysonHarness-${{ env.VERSION }}-${{ matrix.rid }}.zip
+          if-no-files-found: error
+
+  release:
+    name: Continuous pre-release
+    needs: [version, publish]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      SHORT_SHA: ${{ needs.version.outputs.short_sha }}
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: DysonHarness-${{ env.VERSION }}-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -la release-assets
+
+      # CalVer zip names change each run; drop prior continuous assets so the tag stays rolling.
+      - name: Clear previous continuous assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view continuous >/dev/null 2>&1; then
+            mapfile -t assets < <(gh release view continuous --json assets -q '.assets[].name' 2>/dev/null || true)
+            for a in "${assets[@]:-}"; do
+              [[ -z "$a" ]] && continue
+              gh release delete-asset continuous "$a" --yes || true
+            done
+          fi
+
+      - name: Publish continuous pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: continuous
+          name: Continuous build ${{ env.VERSION }}
+          prerelease: true
+          make_latest: false
+          body: |
+            Rolling continuous build of **Harness.UI** (self-contained).
+
+            | | |
+            |---|---|
+            | **Version** | `${{ env.VERSION }}` |
+            | **Commit** | `${{ github.sha }}` (`${{ env.SHORT_SHA }}`) |
+            | **Workflow** | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |
+
+            Unzip and run `Harness.UI` / `Harness.UI.exe`. See [docs/packaging/releases.md](https://github.com/${{ github.repository }}/blob/master/docs/packaging/releases.md).
+          files: release-assets/DysonHarness-*.zip
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

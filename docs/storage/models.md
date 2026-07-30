@@ -12,7 +12,13 @@ For provider-specific slug catalogs, auth, and thinking/effort contracts, see [i
 public enum DysonAppMode { Dev = 0, Test = 1, Prod = 2 }
 ```
 
-Prebuild scripts (`scripts/resolve-app-mode.sh` / `.ps1`) and MSBuild `GenerateAppMode` write `DysonBuildInfo.g.cs` with `Current` and `BranchName`. No git / failure → `Dev`.
+Prebuild scripts (`scripts/resolve-app-mode.sh` / `.ps1`) and MSBuild `GenerateAppMode` write `DysonBuildInfo.g.cs` with `Current` and `BranchName`. Branch resolution order:
+
+1. `DYSON_APP_MODE` (`Dev` / `Test` / `Prod`) if set
+2. `DYSON_BRANCH_NAME` if set (mapped like a git branch)
+3. `GITHUB_REF_NAME` when `GITHUB_ACTIONS=true` and the ref is a branch (Actions checkouts are often detached `HEAD`)
+4. `git rev-parse --abbrev-ref HEAD`
+5. No git / failure → `Dev`
 
 | Git branch | `DysonAppMode` | App-data folder |
 | ---------- | -------------- | --------------- |

@@ -2,6 +2,8 @@
 
 Blazor Interactive Server remains the **current** UI host. This note records the Windows packaging direction and how agent browser windows share that CEF lifecycle.
 
+Shipped continuous zips (all RIDs): [releases.md](releases.md).
+
 ## Intent
 
 Ship a **Windows desktop shell** that hosts Dyson UI inside **CefSharp WPF** (not WebView2), talking to in-process `Harness.Engine` and the SQLite app-data store. The same CEF process/lifecycle already backs **agent browser windows** opened via MCP (`OpenBrowser`, …).

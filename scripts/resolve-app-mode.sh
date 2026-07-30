@@ -1,28 +1,61 @@
 #!/usr/bin/env bash
 # Resolves git branch → DysonAppMode and writes DysonBuildInfo.g.cs
+# Priority: DYSON_APP_MODE → DYSON_BRANCH_NAME → GITHUB_REF_NAME (Actions branch) → git HEAD
 set -euo pipefail
 
 OUTPUT_PATH="${1:?OutputPath required}"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 branch=""
-mode="Dev"
+mode=""
 
-if branch="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)"; then
-  branch="$(printf '%s' "$branch" | tr -d '\r\n')"
-  if [[ -z "$branch" || "$branch" == "HEAD" ]]; then
+mode_from_branch() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    main|master) printf 'Prod' ;;
+    develop|test|testing) printf 'Test' ;;
+    *) printf 'Dev' ;;
+  esac
+}
+
+normalize_mode() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    prod) printf 'Prod' ;;
+    test) printf 'Test' ;;
+    dev) printf 'Dev' ;;
+    *) printf '' ;;
+  esac
+}
+
+if [[ -n "${DYSON_APP_MODE:-}" ]]; then
+  mode="$(normalize_mode "$DYSON_APP_MODE")"
+fi
+
+if [[ -n "${DYSON_BRANCH_NAME:-}" ]]; then
+  branch="$(printf '%s' "$DYSON_BRANCH_NAME" | tr -d '\r\n')"
+elif [[ "${GITHUB_ACTIONS:-}" == "true" && -n "${GITHUB_REF_NAME:-}" ]]; then
+  # Prefer Actions branch name (checkout is often detached HEAD).
+  if [[ "${GITHUB_REF_TYPE:-}" == "branch" || "${GITHUB_REF:-}" == refs/heads/* ]]; then
+    branch="$(printf '%s' "$GITHUB_REF_NAME" | tr -d '\r\n')"
+  fi
+fi
+
+if [[ -z "$branch" ]]; then
+  if branch="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)"; then
+    branch="$(printf '%s' "$branch" | tr -d '\r\n')"
+    if [[ -z "$branch" || "$branch" == "HEAD" ]]; then
+      branch=""
+    fi
+  else
     branch=""
+  fi
+fi
+
+if [[ -z "$mode" ]]; then
+  if [[ -z "$branch" ]]; then
     mode="Dev"
   else
-    case "$(printf '%s' "$branch" | tr '[:upper:]' '[:lower:]')" in
-      main|master) mode="Prod" ;;
-      develop|test|testing) mode="Test" ;;
-      *) mode="Dev" ;;
-    esac
+    mode="$(mode_from_branch "$branch")"
   fi
-else
-  branch=""
-  mode="Dev"
 fi
 
 escaped_branch="${branch//\\/\\\\}"

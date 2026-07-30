@@ -1,4 +1,5 @@
 # Resolves git branch → DysonAppMode and writes DysonBuildInfo.g.cs
+# Priority: DYSON_APP_MODE → DYSON_BRANCH_NAME → GITHUB_REF_NAME (Actions branch) → git HEAD
 param(
     [Parameter(Mandatory = $true)]
     [string]$OutputPath
@@ -6,33 +7,72 @@ param(
 
 $ErrorActionPreference = "Continue"
 
-$branch = ""
-$mode = "Dev"
+function Get-ModeFromBranch([string]$BranchName) {
+    switch ($BranchName.ToLowerInvariant()) {
+        { $_ -in @("main", "master") } { return "Prod" }
+        { $_ -in @("develop", "test", "testing") } { return "Test" }
+        default { return "Dev" }
+    }
+}
 
-try {
-    Push-Location (Split-Path -Parent $PSScriptRoot)
-    $gitOut = & git rev-parse --abbrev-ref HEAD 2>$null
-    if ($LASTEXITCODE -eq 0 -and $gitOut) {
-        $branch = [string]$gitOut.Trim()
-        if ([string]::IsNullOrWhiteSpace($branch) -or $branch -eq "HEAD") {
-            $branch = ""
-            $mode = "Dev"
-        }
-        else {
-            switch ($branch.ToLowerInvariant()) {
-                { $_ -in @("main", "master") } { $mode = "Prod" }
-                { $_ -in @("develop", "test", "testing") } { $mode = "Test" }
-                default { $mode = "Dev" }
+function Get-NormalizedMode([string]$Raw) {
+    switch ($Raw.ToLowerInvariant()) {
+        "prod" { return "Prod" }
+        "test" { return "Test" }
+        "dev" { return "Dev" }
+        default { return $null }
+    }
+}
+
+$branch = ""
+$mode = $null
+
+$appModeOverride = [Environment]::GetEnvironmentVariable("DYSON_APP_MODE")
+if (-not [string]::IsNullOrWhiteSpace($appModeOverride)) {
+    $mode = Get-NormalizedMode $appModeOverride.Trim()
+}
+
+$branchOverride = [Environment]::GetEnvironmentVariable("DYSON_BRANCH_NAME")
+if (-not [string]::IsNullOrWhiteSpace($branchOverride)) {
+    $branch = $branchOverride.Trim()
+}
+elseif ([Environment]::GetEnvironmentVariable("GITHUB_ACTIONS") -eq "true") {
+    $refName = [Environment]::GetEnvironmentVariable("GITHUB_REF_NAME")
+    $refType = [Environment]::GetEnvironmentVariable("GITHUB_REF_TYPE")
+    $ref = [Environment]::GetEnvironmentVariable("GITHUB_REF")
+    if (-not [string]::IsNullOrWhiteSpace($refName) -and (
+            $refType -eq "branch" -or
+            ($ref -and $ref.StartsWith("refs/heads/")))) {
+        $branch = $refName.Trim()
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($branch)) {
+    try {
+        Push-Location (Split-Path -Parent $PSScriptRoot)
+        $gitOut = & git rev-parse --abbrev-ref HEAD 2>$null
+        if ($LASTEXITCODE -eq 0 -and $gitOut) {
+            $branch = [string]$gitOut.Trim()
+            if ([string]::IsNullOrWhiteSpace($branch) -or $branch -eq "HEAD") {
+                $branch = ""
             }
         }
     }
+    catch {
+        $branch = ""
+    }
+    finally {
+        Pop-Location -ErrorAction SilentlyContinue
+    }
 }
-catch {
-    $branch = ""
-    $mode = "Dev"
-}
-finally {
-    Pop-Location -ErrorAction SilentlyContinue
+
+if ([string]::IsNullOrWhiteSpace($mode)) {
+    if ([string]::IsNullOrWhiteSpace($branch)) {
+        $mode = "Dev"
+    }
+    else {
+        $mode = Get-ModeFromBranch $branch
+    }
 }
 
 $escapedBranch = $branch.Replace("\", "\\").Replace("""", "\""")

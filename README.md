@@ -42,6 +42,8 @@ dotnet run --project src/Harness/Harness.UI --urls http://localhost:5180
 
 Open the agent shell at http://localhost:5180. Configure providers under **Settings → Models**.
 
+**Downloads:** continuous self-contained builds (Windows / Linux / macOS) are on the [`continuous` pre-release](https://github.com/EntitySystems/DysonHarness/releases/tag/continuous). See [releases](docs/packaging/releases.md).
+
 Contributor and agent notes: [AGENTS.md](AGENTS.md).
 
 ## Planned
@@ -56,6 +58,7 @@ Contributor and agent notes: [AGENTS.md](AGENTS.md).
 - [Sessions & resume](docs/storage/sessions.md) — turns, session log, resume
 - [Work directories](docs/storage/work-directories.md) — registered workspace roots
 - [UI](docs/ui/README.md) — agent shell
+- [Continuous releases](docs/packaging/releases.md) — download zips, RIDs, CalVer
 - [Windows packaging](docs/packaging/webview.md) — desktop / browser packaging
 
 ## Rules
