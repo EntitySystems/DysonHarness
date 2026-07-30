@@ -109,6 +109,37 @@ public static class OpenAiCompatibleHttp
     }
 
     /// <summary>
+    /// True for OpenAI-compatible HTTP errors that are safe to retry on a fresh stream request:
+    /// rate limit (429) and gateway/upstream (502/503/504). Matches leading
+    /// <c>OpenAI API {code}</c> from <see cref="ReadSseJsonPayloadsAsync"/> / SendJsonAsync.
+    /// </summary>
+    public static bool IsTransientServerError(string? error)
+    {
+        if (string.IsNullOrEmpty(error))
+            return false;
+
+        const string prefix = "OpenAI API ";
+        if (!error.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+
+        var rest = error.AsSpan(prefix.Length);
+        if (rest.Length < 3
+            || !char.IsDigit(rest[0])
+            || !char.IsDigit(rest[1])
+            || !char.IsDigit(rest[2]))
+        {
+            return false;
+        }
+
+        // Require a non-digit boundary after the three digits (space in "503 Service…").
+        if (rest.Length > 3 && char.IsDigit(rest[3]))
+            return false;
+
+        var code = (rest[0] - '0') * 100 + (rest[1] - '0') * 10 + (rest[2] - '0');
+        return code is 429 or 502 or 503 or 504;
+    }
+
+    /// <summary>
     /// Usable Responses <c>call_id</c> for <c>function_call_output</c>: must be <c>call_…</c>-style,
     /// never item <c>id</c> (<c>fc_…</c>) or a Guid fallback.
     /// </summary>

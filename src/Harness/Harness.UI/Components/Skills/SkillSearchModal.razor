@@ -81,53 +81,95 @@
                     {
                         var slug = entry.Slug;
                         var busy = string.Equals(_downloadingSlug, slug, StringComparison.OrdinalIgnoreCase);
-                        <div class="skill-search-modal__row" role="option">
-                            <div class="skill-search-modal__meta">
-                                <div class="skill-search-modal__name">
-                                    @entry.Name
-                                    @if (entry.Verified)
+                        var hasMatches = _ambiguousBySlug.TryGetValue(slug, out var matches) && matches.Count > 0;
+                        <div class="skill-search-modal__row-group">
+                            <div class="skill-search-modal__row" role="option">
+                                <div class="skill-search-modal__meta">
+                                    <div class="skill-search-modal__name">
+                                        @entry.Name
+                                        @if (entry.Verified)
+                                        {
+                                            <span class="skill-search-modal__badge">Verified</span>
+                                        }
+                                    </div>
+                                    <div class="skill-search-modal__slug mono">@entry.Slug</div>
+                                    @if (!string.IsNullOrWhiteSpace(entry.Description))
                                     {
-                                        <span class="skill-search-modal__badge">Verified</span>
+                                        <div class="skill-search-modal__desc">@entry.Description</div>
                                     }
+                                    <div class="skill-search-modal__extra">
+                                        @if (!string.IsNullOrWhiteSpace(entry.Author))
+                                        {
+                                            <span>@entry.Author</span>
+                                        }
+                                        @if (entry.Stars > 0)
+                                        {
+                                            <span>★ @entry.Stars</span>
+                                        }
+                                    </div>
                                 </div>
-                                <div class="skill-search-modal__slug mono">@entry.Slug</div>
-                                @if (!string.IsNullOrWhiteSpace(entry.Description))
-                                {
-                                    <div class="skill-search-modal__desc">@entry.Description</div>
-                                }
-                                <div class="skill-search-modal__extra">
-                                    @if (!string.IsNullOrWhiteSpace(entry.Author))
-                                    {
-                                        <span>@entry.Author</span>
-                                    }
-                                    @if (entry.Stars > 0)
-                                    {
-                                        <span>★ @entry.Stars</span>
-                                    }
+                                <div class="skill-search-modal__row-actions">
+                                    <button type="button"
+                                            class="btn btn-ghost"
+                                            disabled="@(busy || _previewing)"
+                                            @onclick="() => ViewAsync(slug)">
+                                        View skill file
+                                    </button>
+                                    <button type="button"
+                                            class="btn btn-primary"
+                                            disabled="@busy"
+                                            @onclick="() => DownloadAsync(slug)">
+                                        @if (busy)
+                                        {
+                                            <span class="skill-search-modal__spinner" aria-hidden="true"></span>
+                                            <span>Downloading…</span>
+                                        }
+                                        else
+                                        {
+                                            <span>Download</span>
+                                        }
+                                    </button>
                                 </div>
                             </div>
-                            <div class="skill-search-modal__row-actions">
-                                <button type="button"
-                                        class="btn btn-ghost"
-                                        disabled="@(busy || _previewing)"
-                                        @onclick="() => ViewAsync(slug)">
-                                    View skill file
-                                </button>
-                                <button type="button"
-                                        class="btn btn-primary"
-                                        disabled="@busy"
-                                        @onclick="() => DownloadAsync(slug)">
-                                    @if (busy)
+                            @if (hasMatches)
+                            {
+                                <div class="skill-search-modal__matches" role="group" aria-label="Choose publisher">
+                                    <div class="skill-search-modal__matches-hint">Multiple publishers — pick one:</div>
+                                    @foreach (var match in matches!)
                                     {
-                                        <span class="skill-search-modal__spinner" aria-hidden="true"></span>
-                                        <span>Downloading…</span>
+                                        var matchSlug = match.Slug;
+                                        var matchBusy = string.Equals(
+                                            _downloadingSlug,
+                                            matchSlug,
+                                            StringComparison.OrdinalIgnoreCase);
+                                        <div class="skill-search-modal__match-row">
+                                            <div class="skill-search-modal__match-label mono">@match.Label</div>
+                                            <div class="skill-search-modal__row-actions">
+                                                <button type="button"
+                                                        class="btn btn-ghost"
+                                                        disabled="@(matchBusy || _previewing)"
+                                                        @onclick="() => ViewAsync(matchSlug, parentSlug: slug)">
+                                                    View
+                                                </button>
+                                                <button type="button"
+                                                        class="btn btn-primary"
+                                                        disabled="@matchBusy"
+                                                        @onclick="() => DownloadAsync(matchSlug, parentSlug: slug)">
+                                                    @if (matchBusy)
+                                                    {
+                                                        <span class="skill-search-modal__spinner" aria-hidden="true"></span>
+                                                        <span>Downloading…</span>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span>Download</span>
+                                                    }
+                                                </button>
+                                            </div>
+                                        </div>
                                     }
-                                    else
-                                    {
-                                        <span>Download</span>
-                                    }
-                                </button>
-                            </div>
+                                </div>
+                            }
                         </div>
                     }
                 }
@@ -154,6 +196,8 @@
     private int _searchGeneration;
     private IReadOnlyList<DysonSkillExplorerProviderInfo> _providers = [];
     private IReadOnlyList<DysonSkillExplorerEntry> _results = [];
+    private readonly Dictionary<string, IReadOnlyList<DysonSkillExplorerMatch>> _ambiguousBySlug =
+        new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Opens the skill search modal (slash command / external CTA).</summary>
     public void Open()
@@ -168,6 +212,7 @@
         _providers = Explorer.ListProviders();
         _providerName = _providers.Count > 0 ? _providers[0].Name : null;
         _results = [];
+        ClearAmbiguousMatches();
         StateHasChanged();
         _ = SearchNowAsync();
     }
@@ -179,6 +224,7 @@
         _error = null;
         _status = null;
         _downloadingSlug = null;
+        ClearAmbiguousMatches();
         CancelPendingSearch();
     }
 
@@ -192,6 +238,7 @@
         _error = null;
         _status = null;
         _results = [];
+        ClearAmbiguousMatches();
         await SearchNowAsync();
     }
 
@@ -227,6 +274,7 @@
 
         _loading = true;
         _error = null;
+        ClearAmbiguousMatches();
         StateHasChanged();
 
         var providerName = _providerName;
@@ -250,7 +298,7 @@
         StateHasChanged();
     }
 
-    private async Task ViewAsync(string slug)
+    private async Task ViewAsync(string slug, string? parentSlug = null)
     {
         if (string.IsNullOrWhiteSpace(_providerName) || _previewing)
             return;
@@ -261,6 +309,7 @@
         StateHasChanged();
 
         var providerName = _providerName;
+        var expandKey = parentSlug ?? slug;
         try
         {
             var preview = await Explorer.PreviewSkillMarkdownAsync(providerName, slug);
@@ -270,16 +319,29 @@
                 return;
             }
 
+            if (preview.Value is DysonSkillExplorerPreviewOutcome.Ambiguous ambiguous)
+            {
+                SetAmbiguousMatches(expandKey, ambiguous.Matches);
+                return;
+            }
+
+            if (preview.Value is not DysonSkillExplorerPreviewOutcome.Markdown markdown)
+            {
+                _error = "Unexpected skill preview result.";
+                return;
+            }
+
+            ClearAmbiguousMatchesFor(expandKey);
             var path = $"{providerName}:{slug}/SKILL.md";
             Host.OpenFileViewerContent(
                 path,
-                preview.Value,
+                markdown.Content,
                 [
                     new DysonFileViewerAction
                     {
                         Label = "Download skill",
                         IsPrimary = true,
-                        Invoke = () => DownloadFromViewerAsync(providerName, slug),
+                        Invoke = () => DownloadFromViewerAsync(providerName, slug, parentSlug: expandKey),
                     },
                 ]);
         }
@@ -290,20 +352,24 @@
         }
     }
 
-    private async Task DownloadAsync(string slug)
+    private async Task DownloadAsync(string slug, string? parentSlug = null)
     {
         if (string.IsNullOrWhiteSpace(_providerName))
             return;
 
-        await DownloadCoreAsync(_providerName, slug, closeViewer: false);
+        await DownloadCoreAsync(_providerName, slug, closeViewer: false, parentSlug: parentSlug);
     }
 
-    private async Task DownloadFromViewerAsync(string providerName, string slug)
+    private async Task DownloadFromViewerAsync(string providerName, string slug, string? parentSlug = null)
     {
-        await DownloadCoreAsync(providerName, slug, closeViewer: true);
+        await DownloadCoreAsync(providerName, slug, closeViewer: true, parentSlug: parentSlug);
     }
 
-    private async Task DownloadCoreAsync(string providerName, string slug, bool closeViewer)
+    private async Task DownloadCoreAsync(
+        string providerName,
+        string slug,
+        bool closeViewer,
+        string? parentSlug = null)
     {
         if (_downloadingSlug is not null)
             return;
@@ -313,6 +379,7 @@
         _status = null;
         StateHasChanged();
 
+        var expandKey = parentSlug ?? slug;
         try
         {
             var fsResult = await Host.TryGetActiveWorkspaceFileSystemAsync();
@@ -333,7 +400,23 @@
                 return;
             }
 
-            _status = $"Downloaded to {downloaded.Value}";
+            if (downloaded.Value is DysonSkillExplorerDownloadOutcome.Ambiguous ambiguous)
+            {
+                SetAmbiguousMatches(expandKey, ambiguous.Matches);
+                return;
+            }
+
+            if (downloaded.Value is not DysonSkillExplorerDownloadOutcome.Installed installed)
+            {
+                _error = "Unexpected skill download result.";
+                if (closeViewer)
+                    Host.ReportError(_error);
+                return;
+            }
+
+            ClearAmbiguousMatches();
+            _status = $"Downloaded to {installed.RelativePath}";
+            Host.NotifySkillCatalogChanged();
             if (closeViewer)
                 Host.CloseFileViewer();
         }
@@ -343,6 +426,16 @@
             StateHasChanged();
         }
     }
+
+    private void SetAmbiguousMatches(string slug, IReadOnlyList<DysonSkillExplorerMatch> matches)
+    {
+        _ambiguousBySlug[slug] = matches;
+        _error = null;
+    }
+
+    private void ClearAmbiguousMatches() => _ambiguousBySlug.Clear();
+
+    private void ClearAmbiguousMatchesFor(string slug) => _ambiguousBySlug.Remove(slug);
 
     private void OnBackdropKeyDown(KeyboardEventArgs args)
     {

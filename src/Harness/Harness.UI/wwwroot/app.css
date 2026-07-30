@@ -615,6 +615,14 @@ code, .mono {
   text-align: center;
 }
 
+.skill-search-modal__row-group {
+  border-radius: 4px;
+}
+
+.skill-search-modal__row-group:hover {
+  background: var(--bg-hover);
+}
+
 .skill-search-modal__row {
   display: flex;
   align-items: flex-start;
@@ -624,8 +632,39 @@ code, .mono {
   border-radius: 4px;
 }
 
-.skill-search-modal__row:hover {
-  background: var(--bg-hover);
+.skill-search-modal__matches {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 10px 0.75rem;
+  padding: 8px 10px;
+  border-left: 2px solid var(--border-strong);
+  background: var(--bg-2);
+  border-radius: 0 4px 4px 0;
+}
+
+.skill-search-modal__matches-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.skill-search-modal__match-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.skill-search-modal__match-label {
+  min-width: 0;
+  flex: 1;
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .skill-search-modal__meta {
@@ -2606,6 +2645,25 @@ code, .mono {
   white-space: nowrap;
 }
 
+.composer-context__open {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-context__open:hover {
+  text-decoration: underline;
+}
+
 .composer-context__remove {
   flex: 0 0 auto;
   width: 22px;
@@ -2639,11 +2697,23 @@ code, .mono {
   background: var(--bg-1);
 }
 
+.composer-context__thumb-open {
+  display: block;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
 .composer-context__thumb img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
+  pointer-events: none;
 }
 
 .composer-context__thumb .composer-context__remove {
@@ -2800,12 +2870,48 @@ code, .mono {
   flex-direction: column;
   gap: 1px;
   max-height: 180px;
-  overflow: auto;
+  overflow: hidden;
   padding: 4px;
   background: var(--bg-2);
   border: 1px solid var(--border-strong);
   border-radius: 4px;
   box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.35);
+}
+
+.composer-queue__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+}
+
+.composer-queue__toggle:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.composer-queue__chevron {
+  width: 1em;
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
+.composer-queue__list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow: auto;
 }
 
 .composer-queue__item {
@@ -4281,6 +4387,12 @@ code, .mono {
   overflow: hidden;
 }
 
+.file-viewer-modal--pdf,
+.file-viewer-modal--image {
+  width: min(1100px, 96%);
+  max-height: min(92vh, 1000px);
+}
+
 .file-viewer-modal__header {
   display: flex;
   align-items: flex-start;
@@ -4358,6 +4470,33 @@ code, .mono {
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+
+.file-viewer-modal__content--pdf,
+.file-viewer-modal__content--image {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.file-viewer-modal__pdf {
+  flex: 1;
+  width: 100%;
+  min-height: min(70vh, 720px);
+  border: 0;
+  background: var(--bg-0);
+}
+
+.file-viewer-modal__image {
+  flex: 1;
+  max-width: 100%;
+  max-height: min(70vh, 720px);
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  margin: 0 auto;
+  display: block;
+  background: var(--bg-0);
 }
 
 .file-viewer-modal__markdown {

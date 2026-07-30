@@ -10,7 +10,7 @@
     <div class="file-viewer-modal-backdrop"
          @onclick="Close"
          @onkeydown="OnBackdropKeyDown">
-        <div class="file-viewer-modal"
+        <div class="file-viewer-modal @(viewer.IsPdf ? "file-viewer-modal--pdf" : viewer.IsImage ? "file-viewer-modal--image" : null)"
              role="dialog"
              aria-modal="true"
              aria-labelledby="file-viewer-modal-title"
@@ -73,10 +73,23 @@
                     </div>
                 }
 
-                <div class="file-viewer-modal__content">
+                <div class="file-viewer-modal__content @(viewer.IsPdf ? "file-viewer-modal__content--pdf" : viewer.IsImage ? "file-viewer-modal__content--image" : null)">
                     @if (!string.IsNullOrEmpty(viewer.Error))
                     {
                         <div class="error-banner">@viewer.Error</div>
+                    }
+                    else if (viewer.IsPdf && !string.IsNullOrEmpty(viewer.PdfPreviewUrl))
+                    {
+                        <iframe class="file-viewer-modal__pdf"
+                                title="@viewer.Title"
+                                src="@viewer.PdfPreviewUrl"
+                                type="application/pdf"></iframe>
+                    }
+                    else if (viewer.IsImage && !string.IsNullOrEmpty(viewer.ImagePreviewUrl))
+                    {
+                        <img class="file-viewer-modal__image"
+                             src="@viewer.ImagePreviewUrl"
+                             alt="@viewer.Title" />
                     }
                     else if (viewer.IsMarkdown)
                     {

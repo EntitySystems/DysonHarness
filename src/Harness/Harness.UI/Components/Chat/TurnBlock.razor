@@ -113,12 +113,19 @@
         {
             <div class="turn-block__display-info">@MarkdownRenderer.ToHtml(Turn.AssistantText)</div>
         }
+        else if (Turn.Kind == DysonAgentTurnKind.ModeSwitch
+                 && !string.IsNullOrWhiteSpace(Turn.AssistantText))
+        {
+            <div class="turn-block__display-info">@MarkdownRenderer.ToHtml(Turn.AssistantText)</div>
+        }
         else if (IsHarnessInstructionTurn && !string.IsNullOrWhiteSpace(Turn.Instruction))
         {
             <div class="turn-block__instruction">@MarkdownRenderer.ToHtml(Turn.Instruction)</div>
         }
 
-        @if (Turn.Kind != DysonAgentTurnKind.DisplayInfo && (HasAssistantBody || HasReasoning || HasTools))
+        @if (Turn.Kind != DysonAgentTurnKind.DisplayInfo
+             && Turn.Kind != DysonAgentTurnKind.ModeSwitch
+             && (HasAssistantBody || HasReasoning || HasTools))
         {
             <div @ref="_contentEl" class="turn-block__content">
                 <div class="turn-block__main">
@@ -311,7 +318,8 @@
     private bool IsHarnessInstructionTurn =>
         !IsUserTurn
         && Turn.Kind != DysonAgentTurnKind.PlanResult
-        && Turn.Kind != DysonAgentTurnKind.DisplayInfo;
+        && Turn.Kind != DysonAgentTurnKind.DisplayInfo
+        && Turn.Kind != DysonAgentTurnKind.ModeSwitch;
 
     private bool CanCancel => SessionBusy && IsLatestTurn && OnCancel.HasDelegate;
 

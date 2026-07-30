@@ -38,25 +38,39 @@
             }
             else if (Host.QueuedPrompts.Count > 0)
             {
-                <div class="composer-queue" role="list" aria-label="Queued prompts">
-                    @foreach (var item in Host.QueuedPrompts)
+                var queueCount = Host.QueuedPrompts.Count;
+                <div class="composer-queue" aria-label="Queued prompts">
+                    <button type="button"
+                            class="composer-queue__toggle"
+                            aria-expanded="@_queueExpanded"
+                            @onmousedown:preventDefault="true"
+                            @onclick="ToggleQueueExpanded">
+                        <span class="composer-queue__chevron" aria-hidden="true">@(_queueExpanded ? "▾" : "▸")</span>
+                        <span>@(queueCount == 1 ? "1 pending action" : $"{queueCount} pending actions")</span>
+                    </button>
+                    @if (_queueExpanded)
                     {
-                        var queued = item;
-                        <div class="composer-queue__item" role="listitem">
-                            <span class="composer-queue__text" title="@queued.FirstLine">@queued.FirstLine</span>
-                            <button type="button"
-                                    class="composer-queue__remove"
-                                    title="Remove from queue"
-                                    aria-label="Remove queued prompt"
-                                    @onmousedown:preventDefault="true"
-                                    @onclick="() => Host.RemoveQueuedPrompt(queued.Id)">
-                                ×
-                            </button>
+                        <div class="composer-queue__list" role="list">
+                            @foreach (var item in Host.QueuedPrompts)
+                            {
+                                var queued = item;
+                                <div class="composer-queue__item" role="listitem">
+                                    <span class="composer-queue__text" title="@queued.FirstLine">@queued.FirstLine</span>
+                                    <button type="button"
+                                            class="composer-queue__remove"
+                                            title="Remove from queue"
+                                            aria-label="Remove queued prompt"
+                                            @onmousedown:preventDefault="true"
+                                            @onclick="() => Host.RemoveQueuedPrompt(queued.Id)">
+                                        ×
+                                    </button>
+                                </div>
+                            }
                         </div>
                     }
                 </div>
             }
-            @if (Host.PendingSkillNames.Count > 0 || Host.PendingImages.Count > 0)
+            @if (Host.PendingSkillNames.Count > 0 || Host.PendingImages.Count > 0 || Host.PendingFilePaths.Count > 0)
             {
                 <div class="composer-context" aria-label="Pending attachments">
                     @foreach (var skillName in Host.PendingSkillNames)
@@ -75,16 +89,47 @@
                             </button>
                         </span>
                     }
+                    @foreach (var filePath in Host.PendingFilePaths)
+                    {
+                        var path = filePath;
+                        var fileLabel = System.IO.Path.GetFileName(path.Replace('/', System.IO.Path.DirectorySeparatorChar));
+                        if (string.IsNullOrWhiteSpace(fileLabel))
+                            fileLabel = path;
+                        <span class="composer-context__chip" title="@path">
+                            <button type="button"
+                                    class="composer-context__label composer-context__open"
+                                    title="@($"Preview {fileLabel}")"
+                                    @onclick="() => OpenPendingFileAsync(path)">
+                                File · @fileLabel
+                            </button>
+                            <button type="button"
+                                    class="composer-context__remove"
+                                    title="Remove pending file"
+                                    aria-label="@($"Remove pending file {fileLabel}")"
+                                    @onmousedown:preventDefault="true"
+                                    @onclick:stopPropagation="true"
+                                    @onclick="() => Host.RemovePendingFilePath(path)">
+                                ×
+                            </button>
+                        </span>
+                    }
                     @foreach (var image in Host.PendingImages)
                     {
                         var pending = image;
                         <span class="composer-context__thumb" title="@pending.FileName">
-                            <img src="@pending.DataUrl" alt="@pending.FileName" />
+                            <button type="button"
+                                    class="composer-context__thumb-open"
+                                    title="@($"Preview {pending.FileName}")"
+                                    aria-label="@($"Preview image {pending.FileName}")"
+                                    @onclick="() => Host.OpenPendingImageViewer(pending)">
+                                <img src="@pending.DataUrl" alt="@pending.FileName" />
+                            </button>
                             <button type="button"
                                     class="composer-context__remove"
                                     title="Remove image"
                                     aria-label="@($"Remove image {pending.FileName}")"
                                     @onmousedown:preventDefault="true"
+                                    @onclick:stopPropagation="true"
                                     @onclick="() => Host.RemovePendingImage(pending.Id)">
                                 ×
                             </button>
@@ -105,14 +150,13 @@
             <div class="composer__toolbar">
                 <InputFile @key="_fileInputKey"
                            OnChange="OnFilesSelectedAsync"
-                           accept="image/*"
                            multiple
                            class="composer-attach__input"
                            disabled="@Disabled" />
                 <button type="button"
                         class="composer-attach"
-                        title="Attach images"
-                        aria-label="Attach images"
+                        title="Attach files or images"
+                        aria-label="Attach files or images"
                         disabled="@Disabled"
                         @onclick="OpenFilePickerAsync">
                     <span class="composer-attach__icon" aria-hidden="true"></span>
@@ -150,7 +194,7 @@
         </div>
     </div>
     <div class="composer__hint">
-        <span class="list-item__meta">Ctrl+Enter to send · paste/drop images · /help for commands</span>
+        <span class="list-item__meta">Ctrl+Enter to send · paste/drop files or images · /help for commands</span>
     </div>
 </div>
 
@@ -171,6 +215,8 @@
     private IReadOnlyList<ComposerSlashCommands.Suggestion> _suggestions = [];
     private bool _slashOpen;
     private int _highlight;
+    private int _slashRefreshGeneration;
+    private bool _queueExpanded;
 
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public Guid? SelectedSlugId { get; set; }
@@ -189,7 +235,9 @@
     private readonly Dictionary<Guid, IReadOnlyList<string>> _slugReasoningModes = new();
 
     private bool CanSubmit =>
-        !string.IsNullOrWhiteSpace(_text) || Host.PendingImages.Count > 0;
+        !string.IsNullOrWhiteSpace(_text)
+        || Host.PendingImages.Count > 0
+        || Host.PendingFilePaths.Count > 0;
 
     private IEnumerable<string> EffortOptions
     {
@@ -329,20 +377,42 @@
         return skillName;
     }
 
-    private void OnTextChanged()
-    {
-        RefreshSlashState();
-    }
+    private Task OnTextChanged() => RefreshSlashStateAsync();
 
-    private void RefreshSlashState()
+    private void ToggleQueueExpanded() => _queueExpanded = !_queueExpanded;
+
+    private async Task RefreshSlashStateAsync()
     {
+        var generation = ++_slashRefreshGeneration;
+
         if (!ComposerSlashCommands.TryGetActiveToken(_text, out var token))
         {
+            if (generation != _slashRefreshGeneration)
+                return;
+
             _slashOpen = false;
             _suggestions = [];
             _highlight = 0;
             return;
         }
+
+        if (ComposerSlashCommands.IsSkillCatalogToken(token))
+        {
+            await RefreshSkillsAsync();
+            if (generation != _slashRefreshGeneration)
+                return;
+
+            if (!ComposerSlashCommands.TryGetActiveToken(_text, out token))
+            {
+                _slashOpen = false;
+                _suggestions = [];
+                _highlight = 0;
+                return;
+            }
+        }
+
+        if (generation != _slashRefreshGeneration)
+            return;
 
         _suggestions = ComposerSlashCommands.Filter(token, _models, _skills);
         _slashOpen = _suggestions.Count > 0;
@@ -445,41 +515,38 @@
         }
     }
 
+    private Task OpenPendingFileAsync(string path) => Host.OpenFileViewerAsync(path);
+
     private async Task OnFilesSelectedAsync(InputFileChangeEventArgs e)
     {
         if (Disabled)
-            return;
-
-        foreach (var file in e.GetMultipleFiles(DysonUserImageFactory.MaxPendingImages))
         {
-            if (!file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-                continue;
+            Host.ReportError("Cannot attach files while the composer is busy.");
+            _fileInputKey++;
+            return;
+        }
 
+        var maxCount = Math.Max(DysonUserImageFactory.MaxPendingImages, DysonComposerUploads.MaxPendingFiles);
+        foreach (var file in e.GetMultipleFiles(maxCount))
+        {
             try
             {
-                await using var stream = file.OpenReadStream(DysonUserImageFactory.MaxRawBytes);
+                await using var stream = file.OpenReadStream(DysonComposerUploads.MaxRawBytes);
                 using var ms = new MemoryStream();
                 await stream.CopyToAsync(ms);
-                Host.QueuePendingImageFromBytes(file.Name, ms.ToArray());
+                var bytes = ms.ToArray();
+                if (DysonComposerUploads.LooksLikeImage(file.ContentType, file.Name))
+                    Host.QueuePendingImageFromBytes(file.Name, bytes);
+                else
+                    await Host.QueuePendingFileFromBytesAsync(file.Name, bytes);
             }
             catch (Exception ex)
             {
-                Host.ReportError($"Could not read image: {ex.Message}");
+                Host.ReportError($"Could not read file: {ex.Message}");
             }
         }
 
         _fileInputKey++;
-    }
-
-    [JSInvokable]
-    public Task OnImageDataUrlFromJs(string fileName, string dataUrl)
-    {
-        if (Disabled)
-            return Task.CompletedTask;
-
-        var queued = Host.QueuePendingImageFromDataUrl(fileName, dataUrl);
-        _ = queued;
-        return InvokeAsync(StateHasChanged);
     }
 
     [JSInvokable]
@@ -509,8 +576,10 @@
         _suggestions = [];
         _highlight = 0;
 
-        // Empty after strip: apply-only (mode/model/new/skill) unless images are pending.
-        if (string.IsNullOrWhiteSpace(raw) && Host.PendingImages.Count == 0)
+        // Empty after strip: apply-only (mode/model/new/skill) unless images/files are pending.
+        if (string.IsNullOrWhiteSpace(raw)
+            && Host.PendingImages.Count == 0
+            && Host.PendingFilePaths.Count == 0)
             return;
 
         await OnSubmit.InvokeAsync(raw?.Trim() ?? "");

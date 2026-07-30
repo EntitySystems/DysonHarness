@@ -115,39 +115,52 @@ public sealed class SkillsShSkillExplorerProvider(HttpClient http) : IDysonSkill
                 Tags: []));
     }
 
-    public async Task<Result<string, string>> PreviewSkillMarkdownAsync(
+    public async Task<Result<DysonSkillExplorerPreviewOutcome, string>> PreviewSkillMarkdownAsync(
         string slug,
         CancellationToken cancellationToken = default)
     {
         var zip = await DownloadSkillPackageZipAsync(slug, cancellationToken).ConfigureAwait(false);
         if (zip.IsError)
-            return Result<string, string>.AsError(zip.Error);
+            return Result<DysonSkillExplorerPreviewOutcome, string>.AsError(zip.Error);
 
-        return DysonSkillPackageInstall.ReadSkillMarkdownFromZip(zip.Value);
+        var md = DysonSkillPackageInstall.ReadSkillMarkdownFromZip(zip.Value);
+        if (md.IsError)
+            return Result<DysonSkillExplorerPreviewOutcome, string>.AsError(md.Error);
+
+        return Result<DysonSkillExplorerPreviewOutcome, string>.AsValue(
+            new DysonSkillExplorerPreviewOutcome.Markdown(md.Value));
     }
 
-    public async Task<Result<string, string>> DownloadAsync(
+    public async Task<Result<DysonSkillExplorerDownloadOutcome, string>> DownloadAsync(
         string slug,
         IDysonWorkspaceFileSystem fs,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(fs);
         if (!fs.IsInitialized)
-            return Result<string, string>.AsError("Workspace filesystem is not initialized.");
+        {
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(
+                "Workspace filesystem is not initialized.");
+        }
 
         var parsed = ParseSlug(slug);
         if (parsed.IsError)
-            return Result<string, string>.AsError(parsed.Error);
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(parsed.Error);
 
         var safe = DysonSkillPackageInstall.SanitizeFolderSlug(parsed.Value.Id);
         if (safe.IsError)
-            return Result<string, string>.AsError(safe.Error);
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(safe.Error);
 
         var zip = await DownloadSkillPackageZipAsync(parsed.Value.Id, cancellationToken).ConfigureAwait(false);
         if (zip.IsError)
-            return Result<string, string>.AsError(zip.Error);
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(zip.Error);
 
-        return DysonSkillPackageInstall.ExtractZipToSkillDir(zip.Value, safe.Value, fs);
+        var extracted = DysonSkillPackageInstall.ExtractZipToSkillDir(zip.Value, safe.Value, fs);
+        if (extracted.IsError)
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(extracted.Error);
+
+        return Result<DysonSkillExplorerDownloadOutcome, string>.AsValue(
+            new DysonSkillExplorerDownloadOutcome.Installed(extracted.Value));
     }
 
     private async Task<Result<byte[], string>> DownloadSkillPackageZipAsync(

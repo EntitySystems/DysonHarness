@@ -260,6 +260,19 @@ public static class ComposerSlashCommands
     }
 
     /// <summary>
+    /// True when the active slash token targets the skill catalog (<c>/skill…</c>), including
+    /// <c>/skill-search</c> — Composer reloads skills from disk while this filter is active.
+    /// </summary>
+    public static bool IsSkillCatalogToken(string token)
+    {
+        if (string.IsNullOrEmpty(token))
+            return false;
+
+        var filter = token.StartsWith('/') ? token[1..] : token;
+        return IsSkillFilter(filter);
+    }
+
+    /// <summary>
     /// True when the typed filter targets <c>/skill-search</c> (not bare <c>/skill</c> / <c>/skill-</c>).
     /// </summary>
     private static bool IsSkillSearchFilter(string filter) =>

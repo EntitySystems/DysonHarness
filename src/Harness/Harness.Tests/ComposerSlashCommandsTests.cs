@@ -196,5 +196,17 @@ public class ComposerSlashCommandsTests
         {
             throw new InvalidOperationException("HelpCatalog must include /help and pattern rows.");
         }
+
+        if (!ComposerSlashCommands.IsSkillCatalogToken("/skill")
+            || !ComposerSlashCommands.IsSkillCatalogToken("/skill-")
+            || !ComposerSlashCommands.IsSkillCatalogToken("/skill-foo")
+            || !ComposerSlashCommands.IsSkillCatalogToken("/skill-search")
+            || !ComposerSlashCommands.IsSkillCatalogToken("skill-bar")
+            || ComposerSlashCommands.IsSkillCatalogToken("/ask")
+            || ComposerSlashCommands.IsSkillCatalogToken("/help")
+            || ComposerSlashCommands.IsSkillCatalogToken("/"))
+        {
+            throw new InvalidOperationException("IsSkillCatalogToken should match /skill… only.");
+        }
     }
 }

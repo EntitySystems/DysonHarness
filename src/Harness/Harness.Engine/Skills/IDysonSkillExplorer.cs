@@ -22,13 +22,13 @@ public interface IDysonSkillExplorer
         CancellationToken cancellationToken = default);
 
     /// <summary>Fetch SKILL.md text for preview without installing (provider-specific).</summary>
-    Task<Result<string, string>> PreviewSkillMarkdownAsync(
+    Task<Result<DysonSkillExplorerPreviewOutcome, string>> PreviewSkillMarkdownAsync(
         string providerName,
         string slug,
         CancellationToken cancellationToken = default);
 
     /// <summary>Install skill package into workdir <c>.dyson/skills/{slug}/</c>.</summary>
-    Task<Result<string, string>> DownloadAsync(
+    Task<Result<DysonSkillExplorerDownloadOutcome, string>> DownloadAsync(
         string providerName,
         string slug,
         IDysonWorkspaceFileSystem fs,

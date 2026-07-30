@@ -55,18 +55,18 @@ public sealed class DysonSkillExplorer : IDysonSkillExplorer
         return resolved.Value.GetAsync(slug, cancellationToken);
     }
 
-    public Task<Result<string, string>> PreviewSkillMarkdownAsync(
+    public Task<Result<DysonSkillExplorerPreviewOutcome, string>> PreviewSkillMarkdownAsync(
         string providerName,
         string slug,
         CancellationToken cancellationToken = default)
     {
         var resolved = Resolve(providerName);
         if (resolved.IsError)
-            return Task.FromResult(Result<string, string>.AsError(resolved.Error));
+            return Task.FromResult(Result<DysonSkillExplorerPreviewOutcome, string>.AsError(resolved.Error));
         return resolved.Value.PreviewSkillMarkdownAsync(slug, cancellationToken);
     }
 
-    public Task<Result<string, string>> DownloadAsync(
+    public Task<Result<DysonSkillExplorerDownloadOutcome, string>> DownloadAsync(
         string providerName,
         string slug,
         IDysonWorkspaceFileSystem fs,
@@ -75,7 +75,7 @@ public sealed class DysonSkillExplorer : IDysonSkillExplorer
         ArgumentNullException.ThrowIfNull(fs);
         var resolved = Resolve(providerName);
         if (resolved.IsError)
-            return Task.FromResult(Result<string, string>.AsError(resolved.Error));
+            return Task.FromResult(Result<DysonSkillExplorerDownloadOutcome, string>.AsError(resolved.Error));
         return resolved.Value.DownloadAsync(slug, fs, cancellationToken);
     }
 

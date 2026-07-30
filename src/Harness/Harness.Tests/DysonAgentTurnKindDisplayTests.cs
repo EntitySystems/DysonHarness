@@ -20,6 +20,7 @@ public class DysonAgentTurnKindDisplayTests
         AssertLabel(DysonAgentTurnKind.ShellExited, "Shell exited");
         AssertLabel(DysonAgentTurnKind.RethinkToolUsage, "Rethink tool usage");
         AssertLabel(DysonAgentTurnKind.DisplayInfo, "Info");
+        AssertLabel(DysonAgentTurnKind.ModeSwitch, "Mode switch");
 
         foreach (var kind in Enum.GetValues<DysonAgentTurnKind>())
         {

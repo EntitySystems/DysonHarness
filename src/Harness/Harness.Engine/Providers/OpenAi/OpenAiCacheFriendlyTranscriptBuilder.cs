@@ -273,6 +273,16 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             if (turn.IsExcludedFromContext || turn.Kind == DysonAgentTurnKind.DisplayInfo)
                 continue;
 
+            if (turn.Kind == DysonAgentTurnKind.ModeSwitch)
+            {
+                messages.Add(new JsonObject
+                {
+                    ["role"] = "user",
+                    ["content"] = FormatModeSwitchHarnessUserMessage(turn),
+                });
+                continue;
+            }
+
             // In-progress current turn: user content may get ephemeral rename / Plan mandates;
             // tool rounds come from inFlightRounds. PlanResult may append after the live turn.
             var incompleteCurrent = i == incompleteIndex;
@@ -354,6 +364,16 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             var turn = turns[i];
             if (turn.IsExcludedFromContext || turn.Kind == DysonAgentTurnKind.DisplayInfo)
                 continue;
+
+            if (turn.Kind == DysonAgentTurnKind.ModeSwitch)
+            {
+                input.Add(new JsonObject
+                {
+                    ["role"] = "user",
+                    ["content"] = FormatModeSwitchHarnessUserMessage(turn),
+                });
+                continue;
+            }
 
             var incompleteCurrent = i == incompleteIndex;
             if (!string.IsNullOrEmpty(turn.Instruction) || turn.UserImages.Count > 0)
@@ -707,7 +727,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     {
         for (var i = turns.Count - 1; i >= 0; i--)
         {
-            if (turns[i].Kind is DysonAgentTurnKind.PlanResult or DysonAgentTurnKind.DisplayInfo)
+            if (turns[i].Kind is DysonAgentTurnKind.PlanResult
+                or DysonAgentTurnKind.DisplayInfo
+                or DysonAgentTurnKind.ModeSwitch)
                 continue;
             if (string.IsNullOrEmpty(turns[i].AssistantText))
                 return i;
@@ -868,6 +890,31 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 ["content"] = $"[Skill: {skill.DisplayName}]\n\n{skill.MarkdownContent}",
             });
         }
+    }
+
+    /// <summary>
+    /// Short harness boundary for <see cref="DysonAgentTurnKind.ModeSwitch"/>
+    /// (<see cref="DysonAgentTurn.Instruction"/> = <c>From→To</c>).
+    /// </summary>
+    private static string FormatModeSwitchHarnessUserMessage(DysonAgentTurn turn)
+    {
+        var from = "?";
+        var to = "?";
+        var instruction = turn.Instruction ?? "";
+        var arrow = instruction.IndexOf('→');
+        if (arrow > 0 && arrow < instruction.Length - 1)
+        {
+            from = instruction[..arrow].Trim();
+            to = instruction[(arrow + 1)..].Trim();
+        }
+
+        if (string.IsNullOrEmpty(from))
+            from = "?";
+        if (string.IsNullOrEmpty(to))
+            to = "?";
+
+        return
+            $"[Harness: agent mode switched from {from} to {to}. Follow the current system instructions for {to} mode from this point on.]";
     }
 
     private static string FormatAssistantReply(DysonAgentTurn turn)

@@ -17,6 +17,7 @@ public static class DysonAgentTurnKindDisplay
         DysonAgentTurnKind.ShellExited => "Shell exited",
         DysonAgentTurnKind.RethinkToolUsage => "Rethink tool usage",
         DysonAgentTurnKind.DisplayInfo => "Info",
+        DysonAgentTurnKind.ModeSwitch => "Mode switch",
         _ => kind.ToString(),
     };
 }

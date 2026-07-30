@@ -20,3 +20,39 @@ public sealed record DysonSkillExplorerSearchPage(
     int Limit,
     int Offset,
     bool HasMore);
+
+/// <summary>
+/// One ambiguous publisher/ref match. <see cref="Slug"/> is the retry id
+/// (<c>owner/slug</c>); <see cref="Label"/> is display (prefer <c>ref</c>).
+/// </summary>
+public sealed record DysonSkillExplorerMatch(
+    string Slug,
+    string Label,
+    string? OwnerHandle,
+    string? Ref);
+
+/// <summary>Download result: installed path or ambiguous publisher matches.</summary>
+public abstract record DysonSkillExplorerDownloadOutcome
+{
+    private DysonSkillExplorerDownloadOutcome()
+    {
+    }
+
+    public sealed record Installed(string RelativePath) : DysonSkillExplorerDownloadOutcome;
+
+    public sealed record Ambiguous(IReadOnlyList<DysonSkillExplorerMatch> Matches)
+        : DysonSkillExplorerDownloadOutcome;
+}
+
+/// <summary>Preview result: markdown body or ambiguous publisher matches.</summary>
+public abstract record DysonSkillExplorerPreviewOutcome
+{
+    private DysonSkillExplorerPreviewOutcome()
+    {
+    }
+
+    public sealed record Markdown(string Content) : DysonSkillExplorerPreviewOutcome;
+
+    public sealed record Ambiguous(IReadOnlyList<DysonSkillExplorerMatch> Matches)
+        : DysonSkillExplorerPreviewOutcome;
+}

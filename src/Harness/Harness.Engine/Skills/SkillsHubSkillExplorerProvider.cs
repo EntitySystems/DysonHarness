@@ -144,13 +144,13 @@ public sealed class SkillsHubSkillExplorerProvider(HttpClient http) : IDysonSkil
         }
     }
 
-    public async Task<Result<string, string>> PreviewSkillMarkdownAsync(
+    public async Task<Result<DysonSkillExplorerPreviewOutcome, string>> PreviewSkillMarkdownAsync(
         string slug,
         CancellationToken cancellationToken = default)
     {
         var parts = ParseCompositeSlug(slug);
         if (parts.IsError)
-            return Result<string, string>.AsError(parts.Error);
+            return Result<DysonSkillExplorerPreviewOutcome, string>.AsError(parts.Error);
 
         var (owner, repo, skill) = parts.Value;
         var url = string.Join(
@@ -159,30 +159,47 @@ public sealed class SkillsHubSkillExplorerProvider(HttpClient http) : IDysonSkil
             Uri.EscapeDataString(repo),
             Uri.EscapeDataString(skill)) + "?format=md";
 
-        return await GetStringAsync(url, cancellationToken).ConfigureAwait(false);
+        var md = await GetStringAsync(url, cancellationToken).ConfigureAwait(false);
+        if (md.IsError)
+            return Result<DysonSkillExplorerPreviewOutcome, string>.AsError(md.Error);
+
+        return Result<DysonSkillExplorerPreviewOutcome, string>.AsValue(
+            new DysonSkillExplorerPreviewOutcome.Markdown(md.Value));
     }
 
-    public async Task<Result<string, string>> DownloadAsync(
+    public async Task<Result<DysonSkillExplorerDownloadOutcome, string>> DownloadAsync(
         string slug,
         IDysonWorkspaceFileSystem fs,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(fs);
         if (!fs.IsInitialized)
-            return Result<string, string>.AsError("Workspace filesystem is not initialized.");
+        {
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(
+                "Workspace filesystem is not initialized.");
+        }
 
         var md = await PreviewSkillMarkdownAsync(slug, cancellationToken).ConfigureAwait(false);
         if (md.IsError)
-            return Result<string, string>.AsError(md.Error);
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(md.Error);
 
-        if (string.IsNullOrWhiteSpace(md.Value))
-            return Result<string, string>.AsError("SkillsHub returned empty skill markdown.");
+        if (md.Value is not DysonSkillExplorerPreviewOutcome.Markdown markdown
+            || string.IsNullOrWhiteSpace(markdown.Content))
+        {
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(
+                "SkillsHub returned empty skill markdown.");
+        }
 
         var folder = DysonSkillPackageInstall.SanitizeFolderSlug(slug.Trim());
         if (folder.IsError)
-            return Result<string, string>.AsError(folder.Error);
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(folder.Error);
 
-        return DysonSkillPackageInstall.WriteSkillMarkdown(md.Value, folder.Value, fs);
+        var written = DysonSkillPackageInstall.WriteSkillMarkdown(markdown.Content, folder.Value, fs);
+        if (written.IsError)
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(written.Error);
+
+        return Result<DysonSkillExplorerDownloadOutcome, string>.AsValue(
+            new DysonSkillExplorerDownloadOutcome.Installed(written.Value));
     }
 
     private static DysonSkillExplorerEntry? MapEntry(SkillDto dto)

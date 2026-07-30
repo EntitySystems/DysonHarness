@@ -97,6 +97,7 @@ builder.Services.AddScoped<ManagedInferenceProviderCatalog>();
 builder.Services.AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>();
 #endif
 builder.Services.AddScoped<DysonUiHost>();
+builder.Services.AddSingleton<DysonFilePreviewStore>();
 builder.Services.AddScoped<ThemeService>();
 builder.Services.AddSingleton<DysonFileTreeService>();
 builder.Services.AddSingleton<DysonGitChangesService>();
@@ -142,6 +143,14 @@ if (hostingMode == DysonHostingMode.Cloud)
 app.UseAntiforgery();
 
 app.MapStaticAssets();
+app.MapGet(DysonFilePreviewStore.RoutePrefix + "/{id}", (string id, DysonFilePreviewStore store) =>
+{
+    // ponytail: unguessable GUID tokens only; no subject binding — fine for local, tighten if cloud shares previews.
+    if (!store.TryGet(id, out var entry))
+        return Results.NotFound();
+
+    return Results.File(entry.Bytes, entry.ContentType, enableRangeProcessing: true);
+});
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 

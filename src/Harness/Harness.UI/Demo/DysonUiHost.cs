@@ -25,6 +25,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly DysonCliProxyHost _cliProxy;
     private readonly HttpClient _http;
     private readonly IDysonBrowserControl? _browserControl;
+    private readonly DysonFilePreviewStore _filePreviews;
     private readonly SemaphoreSlim _persistGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, DysonAgentSession> _sessionsById = new();
     private readonly ConcurrentDictionary<DysonAgentSession, byte> _hookedSessions = new();
@@ -48,6 +49,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly object _pendingSkillsGate = new();
     private readonly List<PendingComposerImage> _pendingImages = [];
     private readonly object _pendingImagesGate = new();
+    private readonly List<string> _pendingFilePaths = [];
+    private readonly object _pendingFilesGate = new();
     private Guid? _composerWorkDirectoryId;
 
     private DemoDysonEngine? _engine;
@@ -74,6 +77,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         IDysonConfiguredShellRepository configuredShells,
         HttpClient http,
         DysonCliProxyHost cliProxy,
+        DysonFilePreviewStore filePreviews,
         IDysonBrowserControl? browserControl = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
@@ -83,6 +87,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _configuredShells = configuredShells ?? throw new ArgumentNullException(nameof(configuredShells));
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _cliProxy = cliProxy ?? throw new ArgumentNullException(nameof(cliProxy));
+        _filePreviews = filePreviews ?? throw new ArgumentNullException(nameof(filePreviews));
         _browserControl = browserControl;
         if (_browserControl is not null)
             _browserControl.SnipCaptured += OnBrowserSnipCaptured;
@@ -207,6 +212,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         _composerWorkDirectoryId = workDirectoryId;
         Notify();
     }
+
+    /// <summary>
+    /// Signals that the on-disk skill catalog changed (e.g. after SkillSearchModal install)
+    /// so Composer can reload <c>/skill-</c> suggestions via <see cref="Changed"/>.
+    /// </summary>
+    public void NotifySkillCatalogChanged() => Notify();
 
     /// <summary>Skill names queued to attach on the next non-empty <see cref="PromptAsync"/>.</summary>
     public IReadOnlyList<string> PendingSkillNames
@@ -358,6 +369,123 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         Notify();
+    }
+
+    /// <summary>Workspace-relative file paths queued to attach on the next <see cref="PromptAsync"/>.</summary>
+    public IReadOnlyList<string> PendingFilePaths
+    {
+        get
+        {
+            lock (_pendingFilesGate)
+                return [.. _pendingFilePaths];
+        }
+    }
+
+    /// <summary>Queue an already-resolved workspace-relative path for the next prompt.</summary>
+    public void QueuePendingFilePath(string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return;
+
+        var normalized = relativePath.Trim().Replace('\\', '/');
+        lock (_pendingFilesGate)
+        {
+            if (_pendingFilePaths.Count >= DysonComposerUploads.MaxPendingFiles)
+            {
+                LastError = $"At most {DysonComposerUploads.MaxPendingFiles} files can be attached.";
+                Notify();
+                return;
+            }
+
+            _pendingFilePaths.Add(normalized);
+        }
+
+        Notify();
+    }
+
+    /// <summary>Remove the first queued pending file path matching <paramref name="relativePath"/>.</summary>
+    public void RemovePendingFilePath(string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return;
+
+        var normalized = relativePath.Trim().Replace('\\', '/');
+        lock (_pendingFilesGate)
+        {
+            var index = _pendingFilePaths.FindIndex(p =>
+                string.Equals(p, normalized, StringComparison.OrdinalIgnoreCase));
+            if (index < 0)
+                return;
+            _pendingFilePaths.RemoveAt(index);
+        }
+
+        Notify();
+    }
+
+    /// <summary>Clear all file paths queued for the next prompt.</summary>
+    public void ClearPendingFilePaths()
+    {
+        lock (_pendingFilesGate)
+        {
+            if (_pendingFilePaths.Count == 0)
+                return;
+            _pendingFilePaths.Clear();
+        }
+
+        Notify();
+    }
+
+    /// <summary>
+    /// Writes bytes under <c>.dyson/composer-uploads</c> in the active/catalog work root
+    /// and queues the workspace-relative path for the next prompt.
+    /// </summary>
+    public async Task<VoidResult<string>> QueuePendingFileFromBytesAsync(
+        string? fileName,
+        byte[] bytes,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
+
+        lock (_pendingFilesGate)
+        {
+            if (_pendingFilePaths.Count >= DysonComposerUploads.MaxPendingFiles)
+            {
+                LastError = $"At most {DysonComposerUploads.MaxPendingFiles} files can be attached.";
+                Notify();
+                return new VoidResult<string>(LastError);
+            }
+        }
+
+        var root = await TryResolveCatalogWorkRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root is null)
+        {
+            LastError = "Select a work directory before attaching files.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        var fsResult = await DysonWorkspaceFileSystems
+            .CreateLocalAsync(root, cancellationToken)
+            .ConfigureAwait(false);
+        if (fsResult.IsError)
+        {
+            LastError = fsResult.Error;
+            Notify();
+            return new VoidResult<string>(fsResult.Error);
+        }
+
+        var written = DysonComposerUploads.Write(fsResult.Value, fileName, bytes);
+        if (written.IsError)
+        {
+            LastError = written.Error;
+            Notify();
+            return new VoidResult<string>(written.Error);
+        }
+
+        QueuePendingFilePath(written.Value);
+        LastError = null;
+        Notify();
+        return VoidResult<string>.Success;
     }
 
     /// <summary>Catalog for <c>/skill-</c> searcher (included + <c>.dyson/skills</c> + openrules AgentOptional when a workdir is available).</summary>
@@ -549,7 +677,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (resolvedRoot is null)
         {
-            _fileViewer = new DysonFileViewerState
+            SetFileViewer(new DysonFileViewerState
             {
                 RelativePath = relativePath.Trim().Replace('\\', '/'),
                 Title = Path.GetFileName(relativePath) ?? relativePath,
@@ -557,8 +685,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 IsMarkdown = false,
                 Error = "No active work directory to read the file.",
                 Actions = actionList,
-            };
-            Notify();
+            });
             return;
         }
 
@@ -580,7 +707,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             .ConfigureAwait(true);
         if (fsResult.IsError)
         {
-            _fileViewer = new DysonFileViewerState
+            SetFileViewer(new DysonFileViewerState
             {
                 RelativePath = path,
                 Title = Path.GetFileName(path) ?? path,
@@ -589,24 +716,112 @@ public sealed class DysonUiHost : IAsyncDisposable
                 AbsolutePath = absolutePath,
                 Error = fsResult.Error,
                 Actions = actionList,
-            };
-            Notify();
+            });
             return;
         }
 
-        var fm = new DysonFileManager(fsResult.Value);
-        var read = fm.ReadText(path);
+        var fs = fsResult.Value;
         var title = Path.GetFileName(path) ?? path;
         var isMd = IsMarkdownPath(path);
+        var isPdf = DysonFileViewerState.IsPdfPath(path);
+        var isImage = DysonComposerUploads.LooksLikeImage(contentType: null, path);
 
-        if (read.IsSuccess)
+        var resolved = fs.ResolvePath(path);
+        if (resolved.IsSuccess)
+            absolutePath = resolved.Value;
+
+        if (isPdf)
         {
-            var resolved = fsResult.Value.ResolvePath(path);
-            if (resolved.IsSuccess)
-                absolutePath = resolved.Value;
+            var bytes = fs.ReadAllBytes(path);
+            if (bytes.IsError)
+            {
+                SetFileViewer(new DysonFileViewerState
+                {
+                    RelativePath = path,
+                    Title = title,
+                    Content = "",
+                    IsMarkdown = false,
+                    IsPdf = true,
+                    AbsolutePath = absolutePath,
+                    Error = bytes.Error,
+                    Actions = actionList,
+                });
+                return;
+            }
+
+            // Extension said PDF; also accept %PDF magic so mislabeled empties still fail clearly.
+            if (bytes.Value.Length > 0 && !DysonFileViewerState.LooksLikePdf(bytes.Value))
+            {
+                SetFileViewer(new DysonFileViewerState
+                {
+                    RelativePath = path,
+                    Title = title,
+                    Content = "",
+                    IsMarkdown = false,
+                    IsPdf = true,
+                    AbsolutePath = absolutePath,
+                    Error = "File extension is .pdf but contents are not a PDF.",
+                    Actions = actionList,
+                });
+                return;
+            }
+
+            var previewId = _filePreviews.Put(bytes.Value, "application/pdf");
+            SetFileViewer(new DysonFileViewerState
+            {
+                RelativePath = path,
+                Title = title,
+                Content = "",
+                IsMarkdown = false,
+                IsPdf = true,
+                PdfPreviewId = previewId,
+                PdfPreviewUrl = DysonFilePreviewStore.UrlFor(previewId),
+                AbsolutePath = absolutePath,
+                Actions = actionList,
+            });
+            return;
         }
 
-        _fileViewer = read.IsError
+        if (isImage)
+        {
+            var bytes = fs.ReadAllBytes(path);
+            if (bytes.IsError)
+            {
+                SetFileViewer(new DysonFileViewerState
+                {
+                    RelativePath = path,
+                    Title = title,
+                    Content = "",
+                    IsMarkdown = false,
+                    IsImage = true,
+                    AbsolutePath = absolutePath,
+                    Error = bytes.Error,
+                    Actions = actionList,
+                });
+                return;
+            }
+
+            var contentType = DysonComposerUploads.ImageContentTypeFromFileName(path);
+            var previewId = _filePreviews.Put(bytes.Value, contentType);
+            SetFileViewer(new DysonFileViewerState
+            {
+                RelativePath = path,
+                Title = title,
+                Content = "",
+                IsMarkdown = false,
+                IsImage = true,
+                ImagePreviewId = previewId,
+                ImagePreviewUrl = DysonFilePreviewStore.UrlFor(previewId),
+                AbsolutePath = absolutePath,
+                Actions = actionList,
+            });
+            return;
+        }
+
+        var fm = new DysonFileManager(fs);
+        var read = fm.ReadText(path);
+
+        SetFileViewer(read.IsError
             ? new DysonFileViewerState
             {
                 RelativePath = path,
@@ -625,8 +840,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 IsMarkdown = isMd,
                 AbsolutePath = absolutePath,
                 Actions = actionList,
-            };
-        Notify();
+            });
     }
 
     /// <summary>
@@ -643,7 +857,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(content);
 
         var path = relativePath.Trim().Replace('\\', '/');
-        _fileViewer = new DysonFileViewerState
+        SetFileViewer(new DysonFileViewerState
         {
             RelativePath = path,
             Title = Path.GetFileName(path) ?? path,
@@ -651,8 +865,66 @@ public sealed class DysonUiHost : IAsyncDisposable
             IsMarkdown = IsMarkdownPath(path),
             AbsolutePath = null,
             Actions = NormalizeFileViewerActions(actions),
-        };
+        });
+    }
+
+    /// <summary>
+    /// Opens the file viewer for a pending composer image (in-memory bytes via preview store).
+    /// No disk path — "Open in default editor" stays hidden. Preview token revoked on close.
+    /// </summary>
+    public void OpenPendingImageViewer(PendingComposerImage image)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(image.Base64Data);
+        }
+        catch (FormatException)
+        {
+            SetFileViewer(new DysonFileViewerState
+            {
+                RelativePath = image.FileName,
+                Title = image.FileName,
+                Content = "",
+                IsMarkdown = false,
+                IsImage = true,
+                Error = "Could not decode pending image.",
+            });
+            return;
+        }
+
+        var contentType = string.IsNullOrWhiteSpace(image.MimeType)
+            ? DysonComposerUploads.ImageContentTypeFromFileName(image.FileName)
+            : image.MimeType.Trim();
+        var previewId = _filePreviews.Put(bytes, contentType);
+        SetFileViewer(new DysonFileViewerState
+        {
+            RelativePath = image.FileName,
+            Title = image.FileName,
+            Content = "",
+            IsMarkdown = false,
+            IsImage = true,
+            ImagePreviewId = previewId,
+            ImagePreviewUrl = DysonFilePreviewStore.UrlFor(previewId),
+            AbsolutePath = null,
+        });
+    }
+
+    private void SetFileViewer(DysonFileViewerState state)
+    {
+        RevokeFileViewerPreview(_fileViewer);
+        _fileViewer = state;
         Notify();
+    }
+
+    private void RevokeFileViewerPreview(DysonFileViewerState? viewer)
+    {
+        if (viewer?.PdfPreviewId is { } pdfId)
+            _filePreviews.Remove(pdfId);
+        if (viewer?.ImagePreviewId is { } imageId)
+            _filePreviews.Remove(imageId);
     }
 
     private static IReadOnlyList<DysonFileViewerAction> NormalizeFileViewerActions(
@@ -839,6 +1111,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         if (_fileViewer is null)
             return;
+        RevokeFileViewerPreview(_fileViewer);
         _fileViewer = null;
         Notify();
     }
@@ -1312,8 +1585,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (string.Equals(_session.Mode, agentMode, StringComparison.OrdinalIgnoreCase))
             return VoidResult<string>.Success;
 
+        var fromMode = _session.Mode;
         var leavingPlan = string.Equals(
-            _session.Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase);
+            fromMode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase);
 
         // Refresh denylist for the target mode before ApplyAgentMode rebuilds the catalog.
         if (_session.Config.ToolPolicy is not null)
@@ -1375,6 +1649,9 @@ public sealed class DysonUiHost : IAsyncDisposable
             Notify();
             return applied;
         }
+
+        // ModeSwitch before any subsequent Normal user turn (PromptAsync) or DisplayInfo CTA.
+        _session.AppendModeSwitchTurn(fromMode, _session.Mode);
 
         if (_session.PersistenceId != Guid.Empty)
         {
@@ -1791,7 +2068,11 @@ public sealed class DysonUiHost : IAsyncDisposable
         lock (_pendingImagesGate)
             hasPendingImages = _pendingImages.Count > 0;
 
-        if (string.IsNullOrWhiteSpace(prompt) && !hasPendingImages)
+        var hasPendingFiles = false;
+        lock (_pendingFilesGate)
+            hasPendingFiles = _pendingFilePaths.Count > 0;
+
+        if (string.IsNullOrWhiteSpace(prompt) && !hasPendingImages && !hasPendingFiles)
         {
             LastError = "Prompt is empty.";
             Notify();
@@ -1833,17 +2114,21 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(turnBuild.Error);
         }
 
-        var turn = turnBuild.Value;
+        var built = turnBuild.Value;
         var sessionId = session.PersistenceId;
         if (_busySessions.ContainsKey(sessionId))
         {
-            EnqueuePrompt(sessionId, turn);
+            EnqueuePrompt(sessionId, built.Turn, built.FilePaths);
             LastError = null;
             Notify();
             return VoidResult<string>.Success;
         }
 
-        var result = await PromptHarnessTurnOnSessionAsync(session, turn, cancellationToken)
+        var result = await PromptHarnessTurnOnSessionAsync(
+                session,
+                built.Turn,
+                built.FilePaths,
+                cancellationToken)
             .ConfigureAwait(false);
         if (result.IsError)
             LastError = result.Error;
@@ -1852,7 +2137,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         return result;
     }
 
-    private async Task<Result<DysonAgentTurn, string>> BuildUserTurnWithPendingContextAsync(
+    private async Task<Result<BuiltUserTurn, string>> BuildUserTurnWithPendingContextAsync(
         string prompt,
         CancellationToken cancellationToken)
     {
@@ -1868,6 +2153,13 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             pendingImages = [.. _pendingImages];
             _pendingImages.Clear();
+        }
+
+        List<string> pendingFiles;
+        lock (_pendingFilesGate)
+        {
+            pendingFiles = [.. _pendingFilePaths];
+            _pendingFilePaths.Clear();
         }
 
         var turn = string.IsNullOrWhiteSpace(prompt)
@@ -1891,7 +2183,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         if (pendingSkills.Count == 0)
-            return Result<DysonAgentTurn, string>.AsValue(turn);
+            return Result<BuiltUserTurn, string>.AsValue(new BuiltUserTurn(turn, pendingFiles));
 
         IDysonWorkspaceFileSystem? fs = null;
         var root = await TryResolveActiveWorkRootAsync(cancellationToken).ConfigureAwait(false);
@@ -1901,7 +2193,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 .CreateLocalAsync(root, cancellationToken)
                 .ConfigureAwait(false);
             if (fsResult.IsError)
-                return Result<DysonAgentTurn, string>.AsError(fsResult.Error);
+                return Result<BuiltUserTurn, string>.AsError(fsResult.Error);
             fs = fsResult.Value;
         }
 
@@ -1910,11 +2202,11 @@ public sealed class DysonUiHost : IAsyncDisposable
             // Slash picks always load index-only; agent can LoadSkill(false) for full dir later.
             var loaded = DysonSkillLoader.ResolveAndLoad(name, loadIndexOnly: true, fs);
             if (loaded.IsError)
-                return Result<DysonAgentTurn, string>.AsError(loaded.Error);
+                return Result<BuiltUserTurn, string>.AsError(loaded.Error);
             turn.AttachLoadedSkill(loaded.Value);
         }
 
-        return Result<DysonAgentTurn, string>.AsValue(turn);
+        return Result<BuiltUserTurn, string>.AsValue(new BuiltUserTurn(turn, pendingFiles));
     }
 
     private async Task<VoidResult<string>> LoadAndFocusSessionAsync(
@@ -2454,10 +2746,13 @@ public sealed class DysonUiHost : IAsyncDisposable
         lock (_subagentEventUiGate)
             _subagentEventUi.Clear();
         _pendingAskUi = null;
+        RevokeFileViewerPreview(_fileViewer);
         _fileViewer = null;
         _skillViewer = null;
         lock (_pendingSkillsGate)
             _pendingSkillNames.Clear();
+        lock (_pendingFilesGate)
+            _pendingFilePaths.Clear();
 
         foreach (var cts in _promptCtsBySession.Values)
         {
@@ -3206,14 +3501,18 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
     }
 
-    private void EnqueuePrompt(Guid sessionId, DysonAgentTurn turn)
+    private void EnqueuePrompt(
+        Guid sessionId,
+        DysonAgentTurn turn,
+        IReadOnlyList<string>? filePaths = null)
     {
         ArgumentNullException.ThrowIfNull(turn);
         var instruction = turn.Instruction ?? turn.Kind.ToString();
         var entry = new QueuedPromptEntry(
             Guid.NewGuid(),
             turn,
-            DysonSubagentHostLogic.PromptFirstLine(instruction));
+            DysonSubagentHostLogic.PromptFirstLine(instruction),
+            filePaths is { Count: > 0 } ? [.. filePaths] : []);
         lock (_promptQueueGate)
         {
             if (!_promptQueues.TryGetValue(sessionId, out var list))
@@ -3256,7 +3555,11 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
 
         Notify();
-        var result = await PromptHarnessTurnOnSessionAsync(session, next.Turn, CancellationToken.None)
+        var result = await PromptHarnessTurnOnSessionAsync(
+                session,
+                next.Turn,
+                next.FilePaths,
+                CancellationToken.None)
             .ConfigureAwait(false);
 
         if (result.IsError && ActiveSessionId == sessionId)
@@ -3268,9 +3571,11 @@ public sealed class DysonUiHost : IAsyncDisposable
     private async Task<VoidResult<string>> PromptHarnessTurnOnSessionAsync(
         DysonAgentSession session,
         DysonAgentTurn turn,
+        IReadOnlyList<string> filePaths,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(turn);
+        ArgumentNullException.ThrowIfNull(filePaths);
 
         return await ExecutePromptOnSessionAsync(
                 session,
@@ -3281,7 +3586,9 @@ public sealed class DysonUiHost : IAsyncDisposable
                         var userLog = DysonSessionLogPayload.CreateEntry(
                             s.PersistenceId,
                             DysonSessionLogKind.UserPrompt,
-                            new DysonSessionLogUserPrompt(turn.Instruction ?? string.Empty));
+                            new DysonSessionLogUserPrompt(
+                                turn.Instruction ?? string.Empty,
+                                filePaths.Count > 0 ? filePaths : null));
 
                         var appendUser = await PersistAsync(
                             () => _sessions.AppendLogAsync(userLog, token),
@@ -3290,7 +3597,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                             return appendUser;
                     }
 
-                    return await s.PromptHarnessTurnAsync(turn, token).ConfigureAwait(false);
+                    return await s.PromptHarnessTurnAsync(turn, filePaths, token).ConfigureAwait(false);
                 },
                 cancellationToken)
             .ConfigureAwait(false);
@@ -3328,10 +3635,15 @@ public sealed class DysonUiHost : IAsyncDisposable
             .ConfigureAwait(false);
     }
 
+    private sealed record BuiltUserTurn(
+        DysonAgentTurn Turn,
+        IReadOnlyList<string> FilePaths);
+
     private sealed record QueuedPromptEntry(
         Guid Id,
         DysonAgentTurn Turn,
-        string FirstLine);
+        string FirstLine,
+        IReadOnlyList<string> FilePaths);
 
     private async Task PersistTurnCompletedIfNeededAsync(DysonAgentTurn turn)
     {

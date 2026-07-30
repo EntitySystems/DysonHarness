@@ -1834,6 +1834,31 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
+    /// Appends a completed <see cref="DysonAgentTurnKind.ModeSwitch"/> turn
+    /// (<see cref="DysonAgentTurn.Instruction"/> = <c>From→To</c>, banner in
+    /// <see cref="DysonAgentTurn.AssistantText"/>). No inference. Included in provider
+    /// transcripts as a short harness user message.
+    /// </summary>
+    public DysonAgentTurn AppendModeSwitchTurn(string fromMode, string toMode)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fromMode);
+        ArgumentException.ThrowIfNullOrWhiteSpace(toMode);
+        var from = fromMode.Trim();
+        var to = toMode.Trim();
+        var now = DateTime.UtcNow;
+        var turn = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.ModeSwitch,
+            Instruction = $"{from}→{to}",
+            AssistantText = $"Switched to {to}",
+            StartedUtc = now,
+            CompletedUtc = now,
+        };
+        AddTurn(turn);
+        return turn;
+    }
+
+    /// <summary>
     /// Compacts eligible older turns' tool history when thresholds are met.
     /// Call before building the next provider request.
     /// </summary>
@@ -1864,6 +1889,20 @@ public abstract class DysonAgentSession
     public abstract Task<VoidResult<string>> PromptHarnessTurnAsync(
         DysonAgentTurn turn,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Same as <see cref="PromptHarnessTurnAsync(DysonAgentTurn, CancellationToken)"/> with
+    /// workspace-relative paths appended to the round-0 user message (<c>Attached paths:</c>).
+    /// Default ignores paths; OpenAI-compatible sessions honor them.
+    /// </summary>
+    public virtual Task<VoidResult<string>> PromptHarnessTurnAsync(
+        DysonAgentTurn turn,
+        IReadOnlyList<string> filePaths,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(filePaths);
+        return PromptHarnessTurnAsync(turn, cancellationToken);
+    }
 
     /// <summary>
     /// Work-mode Build plan: creates a <see cref="DysonAgentTurnKind.BeginBuildPlan"/> turn

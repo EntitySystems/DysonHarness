@@ -60,12 +60,16 @@ window.dysonComposer = {
     if (input) input.click();
   },
 
-  attachImageCapture: function (el, dotNetRef) {
+  /**
+   * Paste/drop → hidden InputFile (Blazor OpenReadStream), not base64 hub interop.
+   * Capture-phase dragover/drop so textarea never triggers browser navigation.
+   */
+  attachFileCapture: function (el, dotNetRef) {
     if (!el || el._dysonImageCapture || !dotNetRef) return;
     el._dysonImageCapture = true;
     el._dysonImageDotNet = dotNetRef;
 
-    function hasImageFile(dt) {
+    function hasFilePayload(dt) {
       if (!dt || !dt.types) return false;
       for (var i = 0; i < dt.types.length; i++) {
         if (dt.types[i] === "Files") return true;
@@ -73,38 +77,37 @@ window.dysonComposer = {
       return false;
     }
 
-    function readAndSend(file) {
-      if (!file || !(file.type || "").startsWith("image/")) return;
-      var reader = new FileReader();
-      reader.onload = function () {
-        var dataUrl = reader.result;
-        if (typeof dataUrl !== "string") return;
-        el._dysonImageDotNet.invokeMethodAsync(
-          "OnImageDataUrlFromJs",
-          file.name || "clipboard.png",
-          dataUrl
-        );
-      };
-      reader.readAsDataURL(file);
+    function forwardFilesToInput(fileList) {
+      var input = el.querySelector(".composer-attach__input");
+      if (!input || !fileList || !fileList.length) return;
+      var dt = new DataTransfer();
+      for (var i = 0; i < fileList.length; i++)
+        dt.items.add(fileList[i]);
+      input.files = dt.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
     }
 
     el._dysonPaste = function (e) {
       var items = e.clipboardData && e.clipboardData.items;
       if (!items) return;
-      var found = false;
+      var dt = new DataTransfer();
       for (var i = 0; i < items.length; i++) {
-        if ((items[i].type || "").indexOf("image/") === 0) {
-          found = true;
-          var file = items[i].getAsFile();
-          if (file) readAndSend(file);
-        }
+        var item = items[i];
+        if (item.kind !== "file") continue;
+        var file = item.getAsFile();
+        if (!file) continue;
+        dt.items.add(file);
       }
-      if (found) e.preventDefault();
+      if (!dt.files.length) return;
+      e.preventDefault();
+      e.stopPropagation();
+      forwardFilesToInput(dt.files);
     };
 
     el._dysonDragOver = function (e) {
-      if (!hasImageFile(e.dataTransfer)) return;
+      if (!hasFilePayload(e.dataTransfer)) return;
       e.preventDefault();
+      e.stopPropagation();
       if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
       el._dysonImageDotNet.invokeMethodAsync("SetDragOver", true);
     };
@@ -115,33 +118,39 @@ window.dysonComposer = {
     };
 
     el._dysonDrop = function (e) {
+      if (!hasFilePayload(e.dataTransfer)) return;
+      // Always cancel default when Files are advertised (even if files.length is briefly 0).
+      e.preventDefault();
+      e.stopPropagation();
       el._dysonImageDotNet.invokeMethodAsync("SetDragOver", false);
       var files = e.dataTransfer && e.dataTransfer.files;
       if (!files || !files.length) return;
-      var anyImage = false;
-      for (var i = 0; i < files.length; i++) {
-        if ((files[i].type || "").indexOf("image/") === 0) {
-          anyImage = true;
-          readAndSend(files[i]);
-        }
-      }
-      if (anyImage) e.preventDefault();
+      forwardFilesToInput(files);
     };
 
-    el.addEventListener("paste", el._dysonPaste);
-    el.addEventListener("dragover", el._dysonDragOver);
-    el.addEventListener("dragleave", el._dysonDragLeave);
-    el.addEventListener("drop", el._dysonDrop);
+    el.addEventListener("paste", el._dysonPaste, true);
+    el.addEventListener("dragover", el._dysonDragOver, true);
+    el.addEventListener("dragleave", el._dysonDragLeave, true);
+    el.addEventListener("drop", el._dysonDrop, true);
+  },
+
+  /** Alias for existing Blazor call sites. */
+  attachImageCapture: function (el, dotNetRef) {
+    return this.attachFileCapture(el, dotNetRef);
+  },
+
+  detachFileCapture: function (el) {
+    if (!el || !el._dysonImageCapture) return;
+    el.removeEventListener("paste", el._dysonPaste, true);
+    el.removeEventListener("dragover", el._dysonDragOver, true);
+    el.removeEventListener("dragleave", el._dysonDragLeave, true);
+    el.removeEventListener("drop", el._dysonDrop, true);
+    el._dysonImageCapture = false;
+    el._dysonImageDotNet = null;
   },
 
   detachImageCapture: function (el) {
-    if (!el || !el._dysonImageCapture) return;
-    el.removeEventListener("paste", el._dysonPaste);
-    el.removeEventListener("dragover", el._dysonDragOver);
-    el.removeEventListener("dragleave", el._dysonDragLeave);
-    el.removeEventListener("drop", el._dysonDrop);
-    el._dysonImageCapture = false;
-    el._dysonImageDotNet = null;
+    return this.detachFileCapture(el);
   }
 };
 

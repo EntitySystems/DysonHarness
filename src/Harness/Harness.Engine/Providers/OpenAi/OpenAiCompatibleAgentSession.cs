@@ -454,10 +454,17 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
     public override Task<VoidResult<string>> PromptHarnessTurnAsync(
         DysonAgentTurn turn,
+        CancellationToken cancellationToken = default) =>
+        PromptHarnessTurnAsync(turn, [], cancellationToken);
+
+    public override Task<VoidResult<string>> PromptHarnessTurnAsync(
+        DysonAgentTurn turn,
+        IReadOnlyList<string> filePaths,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(turn);
-        return PromptWithTurnAsync(turn, [], cancellationToken);
+        ArgumentNullException.ThrowIfNull(filePaths);
+        return PromptWithTurnAsync(turn, filePaths, cancellationToken);
     }
 
     public override Task<VoidResult<string>> PromptBeginBuildPlanAsync(
@@ -591,8 +598,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                             AppendPathsToLastUser(built.Input, filePaths);
                     }
 
-                    replyResult = await ConsumeStreamAsync(
-                        _responses.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
+                    replyResult = await ConsumeStreamWithTransientRetryAsync(
+                        () => _responses.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
                         turn,
                         cancellationToken).ConfigureAwait(false);
 
@@ -614,8 +621,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                         if (round == 0 && filePaths.Count > 0)
                             AppendPathsToLastUser(retryBuilt.Input, filePaths);
 
-                        replyResult = await ConsumeStreamAsync(
-                            _responses.StreamCreateAsync(OpenAiProvider, retryBuilt, cancellationToken),
+                        replyResult = await ConsumeStreamWithTransientRetryAsync(
+                            () => _responses.StreamCreateAsync(OpenAiProvider, retryBuilt, cancellationToken),
                             turn,
                             cancellationToken).ConfigureAwait(false);
                     }
@@ -630,8 +637,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     if (round == 0 && filePaths.Count > 0)
                         AppendPathsToLastUser(built.Messages, filePaths);
 
-                    replyResult = await ConsumeStreamAsync(
-                        _completions.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
+                    replyResult = await ConsumeStreamWithTransientRetryAsync(
+                        () => _completions.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
                         turn,
                         cancellationToken).ConfigureAwait(false);
                 }
@@ -801,8 +808,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 inFlightRounds: inFlight,
                 previousResponseId: null);
             built.Tools.Clear();
-            replyResult = await ConsumeStreamAsync(
-                _responses.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
+            replyResult = await ConsumeStreamWithTransientRetryAsync(
+                () => _responses.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
                 turn,
                 cancellationToken).ConfigureAwait(false);
         }
@@ -814,8 +821,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 currentFilePaths: null,
                 inFlightRounds: inFlight);
             built.Tools.Clear();
-            replyResult = await ConsumeStreamAsync(
-                _completions.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
+            replyResult = await ConsumeStreamWithTransientRetryAsync(
+                () => _completions.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
                 turn,
                 cancellationToken).ConfigureAwait(false);
         }
@@ -937,6 +944,75 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             msg["content"] = sb.ToString().TrimEnd();
             return;
         }
+    }
+
+    /// <summary>
+    /// Backoff between transient stream retries (ms). 4 delays ⇒ 5 attempts total.
+    /// Tests may replace with zeros; restore defaults afterward.
+    /// </summary>
+    internal static int[] TransientRetryBackoffMs { get; set; } = [2000, 5000, 10000, 10000];
+
+    /// <summary>
+    /// Consumes one inference stream round, reopening the request on transient 429/502/503/504
+    /// (fixed backoff). Clears streaming/reasoning previews before each retry.
+    /// </summary>
+    private async Task<Result<OpenAiModelReply, string>> ConsumeStreamWithTransientRetryAsync(
+        Func<IAsyncEnumerable<Result<OpenAiStreamChunk, string>>> streamFactory,
+        DysonAgentTurn turn,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(streamFactory);
+        ArgumentNullException.ThrowIfNull(turn);
+
+        var delays = TransientRetryBackoffMs;
+        var maxAttempts = delays.Length + 1;
+        string? lastError = null;
+
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            if (attempt > 0)
+            {
+                var delayMs = delays[attempt - 1];
+                AppendLog(FormatTransientRetryLog(lastError, attempt, delays.Length, delayMs));
+                turn.ClearStreamingPreview();
+                turn.ClearReasoningPreview();
+                await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
+            }
+
+            var result = await ConsumeStreamAsync(streamFactory(), turn, cancellationToken)
+                .ConfigureAwait(false);
+            if (!result.IsError)
+                return result;
+
+            lastError = result.Error;
+            if (!OpenAiCompatibleHttp.IsTransientServerError(lastError) || attempt == maxAttempts - 1)
+                return result;
+        }
+
+        return Result<OpenAiModelReply, string>.AsError(lastError ?? "OpenAI request failed.");
+    }
+
+    private static string FormatTransientRetryLog(
+        string? error,
+        int retryIndex,
+        int retryCount,
+        int delayMs)
+    {
+        var code = "error";
+        const string prefix = "OpenAI API ";
+        if (!string.IsNullOrEmpty(error) && error.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            var rest = error.AsSpan(prefix.Length);
+            if (rest.Length >= 3
+                && char.IsDigit(rest[0])
+                && char.IsDigit(rest[1])
+                && char.IsDigit(rest[2]))
+            {
+                code = rest[..3].ToString();
+            }
+        }
+
+        return $"OpenAI transient {code} — retry {retryIndex}/{retryCount} after {delayMs / 1000}s";
     }
 
     private static async Task<Result<OpenAiModelReply, string>> ConsumeStreamAsync(

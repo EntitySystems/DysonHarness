@@ -128,43 +128,71 @@ public sealed class ClawHubSkillExplorerProvider(HttpClient http) : IDysonSkillE
         }
     }
 
-    public async Task<Result<string, string>> PreviewSkillMarkdownAsync(
+    public async Task<Result<DysonSkillExplorerPreviewOutcome, string>> PreviewSkillMarkdownAsync(
         string slug,
         CancellationToken cancellationToken = default)
     {
         var parsed = ParseSlug(slug);
         if (parsed.IsError)
-            return Result<string, string>.AsError(parsed.Error);
+            return Result<DysonSkillExplorerPreviewOutcome, string>.AsError(parsed.Error);
 
         var url = BrowsePath + "/" + Uri.EscapeDataString(parsed.Value.SkillSlug)
             + "/file?path=" + Uri.EscapeDataString("SKILL.md")
             + OwnerQuery(parsed.Value.OwnerHandle, leadingAmpersand: true);
 
-        return await GetStringAsync(url, cancellationToken).ConfigureAwait(false);
+        var body = await GetStringAllowingAmbiguousAsync(url, cancellationToken).ConfigureAwait(false);
+        if (body.IsError)
+            return Result<DysonSkillExplorerPreviewOutcome, string>.AsError(body.Error);
+
+        if (body.Value.Matches is not null)
+        {
+            return Result<DysonSkillExplorerPreviewOutcome, string>.AsValue(
+                new DysonSkillExplorerPreviewOutcome.Ambiguous(body.Value.Matches));
+        }
+
+        return Result<DysonSkillExplorerPreviewOutcome, string>.AsValue(
+            new DysonSkillExplorerPreviewOutcome.Markdown(body.Value.Text ?? ""));
     }
 
-    public async Task<Result<string, string>> DownloadAsync(
+    public async Task<Result<DysonSkillExplorerDownloadOutcome, string>> DownloadAsync(
         string slug,
         IDysonWorkspaceFileSystem fs,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(fs);
         if (!fs.IsInitialized)
-            return Result<string, string>.AsError("Workspace filesystem is not initialized.");
+        {
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(
+                "Workspace filesystem is not initialized.");
+        }
 
         var parsed = ParseSlug(slug);
         if (parsed.IsError)
-            return Result<string, string>.AsError(parsed.Error);
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(parsed.Error);
 
         var folder = DysonSkillPackageInstall.SanitizeFolderSlug(parsed.Value.DisplaySlug);
         if (folder.IsError)
-            return Result<string, string>.AsError(folder.Error);
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(folder.Error);
 
         var zip = await ResolvePackageZipAsync(parsed.Value, cancellationToken).ConfigureAwait(false);
         if (zip.IsError)
-            return Result<string, string>.AsError(zip.Error);
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(zip.Error);
 
-        return DysonSkillPackageInstall.ExtractZipToSkillDir(zip.Value, folder.Value, fs);
+        if (zip.Value.Matches is not null)
+        {
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsValue(
+                new DysonSkillExplorerDownloadOutcome.Ambiguous(zip.Value.Matches));
+        }
+
+        var extracted = DysonSkillPackageInstall.ExtractZipToSkillDir(
+            zip.Value.ZipBytes!,
+            folder.Value,
+            fs);
+        if (extracted.IsError)
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(extracted.Error);
+
+        return Result<DysonSkillExplorerDownloadOutcome, string>.AsValue(
+            new DysonSkillExplorerDownloadOutcome.Installed(extracted.Value));
     }
 
     private async Task<Result<DysonSkillExplorerSearchPage, string>> BrowseAsync(
@@ -207,7 +235,7 @@ public sealed class ClawHubSkillExplorerProvider(HttpClient http) : IDysonSkillE
         }
     }
 
-    private async Task<Result<byte[], string>> ResolvePackageZipAsync(
+    private async Task<Result<ZipOrAmbiguous, string>> ResolvePackageZipAsync(
         ParsedSlug parsed,
         CancellationToken cancellationToken)
     {
@@ -224,33 +252,40 @@ public sealed class ClawHubSkillExplorerProvider(HttpClient http) : IDysonSkillE
                 .ConfigureAwait(false);
 
             var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+            var bodyText = Encoding.UTF8.GetString(bytes);
             if (!response.IsSuccessStatusCode)
             {
-                return Result<byte[], string>.AsError(
-                    FormatHttpError(response, Encoding.UTF8.GetString(bytes)));
+                if (TryParseAmbiguousMatches(response.StatusCode, bodyText, out var matches))
+                    return Result<ZipOrAmbiguous, string>.AsValue(ZipOrAmbiguous.FromMatches(matches));
+
+                return Result<ZipOrAmbiguous, string>.AsError(FormatHttpError(response, bodyText));
             }
 
             if (bytes.Length == 0)
-                return Result<byte[], string>.AsError("ClawHub download returned an empty package.");
+                return Result<ZipOrAmbiguous, string>.AsError("ClawHub download returned an empty package.");
 
             if (LooksLikeZip(bytes))
-                return Result<byte[], string>.AsValue(bytes);
+                return Result<ZipOrAmbiguous, string>.AsValue(ZipOrAmbiguous.FromZip(bytes));
 
             if (!LooksLikeJson(bytes, response.Content.Headers.ContentType?.MediaType))
             {
-                return Result<byte[], string>.AsError(
+                return Result<ZipOrAmbiguous, string>.AsError(
                     "ClawHub download returned an unrecognized package payload.");
             }
 
-            return await ResolveGithubHandoffZipAsync(bytes, cancellationToken).ConfigureAwait(false);
+            var handoff = await ResolveGithubHandoffZipAsync(bytes, cancellationToken).ConfigureAwait(false);
+            if (handoff.IsError)
+                return Result<ZipOrAmbiguous, string>.AsError(handoff.Error);
+
+            return Result<ZipOrAmbiguous, string>.AsValue(ZipOrAmbiguous.FromZip(handoff.Value));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return Result<byte[], string>.AsError("ClawHub download was cancelled.");
+            return Result<ZipOrAmbiguous, string>.AsError("ClawHub download was cancelled.");
         }
         catch (Exception ex)
         {
-            return Result<byte[], string>.AsError("ClawHub download failed: " + ex.Message, ex);
+            return Result<ZipOrAmbiguous, string>.AsError("ClawHub download failed: " + ex.Message, ex);
         }
     }
 
@@ -339,6 +374,26 @@ public sealed class ClawHubSkillExplorerProvider(HttpClient http) : IDysonSkillE
         string relativeUrl,
         CancellationToken cancellationToken)
     {
+        var result = await GetStringAllowingAmbiguousAsync(relativeUrl, cancellationToken)
+            .ConfigureAwait(false);
+        if (result.IsError)
+            return Result<string, string>.AsError(result.Error);
+
+        if (result.Value.Matches is not null)
+        {
+            return Result<string, string>.AsError(
+                "ClawHub HTTP 409: AMBIGUOUS_SKILL_SLUG ("
+                + result.Value.Matches.Count
+                + " matches).");
+        }
+
+        return Result<string, string>.AsValue(result.Value.Text ?? "");
+    }
+
+    private async Task<Result<TextOrAmbiguous, string>> GetStringAllowingAmbiguousAsync(
+        string relativeUrl,
+        CancellationToken cancellationToken)
+    {
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, relativeUrl);
@@ -350,17 +405,22 @@ public sealed class ClawHubSkillExplorerProvider(HttpClient http) : IDysonSkillE
 
             var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
-                return Result<string, string>.AsError(FormatHttpError(response, body));
+            {
+                if (TryParseAmbiguousMatches(response.StatusCode, body, out var matches))
+                    return Result<TextOrAmbiguous, string>.AsValue(TextOrAmbiguous.FromMatches(matches));
 
-            return Result<string, string>.AsValue(body);
+                return Result<TextOrAmbiguous, string>.AsError(FormatHttpError(response, body));
+            }
+
+            return Result<TextOrAmbiguous, string>.AsValue(TextOrAmbiguous.FromText(body));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return Result<string, string>.AsError("ClawHub request was cancelled.");
+            return Result<TextOrAmbiguous, string>.AsError("ClawHub request was cancelled.");
         }
         catch (Exception ex)
         {
-            return Result<string, string>.AsError("ClawHub request failed: " + ex.Message, ex);
+            return Result<TextOrAmbiguous, string>.AsError("ClawHub request failed: " + ex.Message, ex);
         }
     }
 
@@ -409,19 +469,81 @@ public sealed class ClawHubSkillExplorerProvider(HttpClient http) : IDysonSkillE
         if (string.IsNullOrWhiteSpace(skillSlug))
             return null;
 
+        var owner = dto.OwnerHandle?.Trim()
+            ?? dto.Owner?.Handle?.Trim();
+        var displaySlug = string.IsNullOrWhiteSpace(owner) ? skillSlug : owner + "/" + skillSlug;
+
         var name = string.IsNullOrWhiteSpace(dto.DisplayName) ? skillSlug : dto.DisplayName.Trim();
         var description = !string.IsNullOrWhiteSpace(dto.Summary)
             ? dto.Summary.Trim()
             : dto.Description?.Trim() ?? "";
+        var author = dto.Owner?.DisplayName?.Trim();
+        if (string.IsNullOrWhiteSpace(author))
+            author = owner;
 
         return new DysonSkillExplorerEntry(
-            Slug: skillSlug,
+            Slug: displaySlug,
             Name: name,
             Description: description,
-            Author: null,
+            Author: author,
             Stars: dto.Stats?.Stars ?? dto.Stats?.Downloads ?? 0,
             Verified: false,
             Tags: dto.Topics ?? []);
+    }
+
+    private static bool TryParseAmbiguousMatches(
+        HttpStatusCode status,
+        string body,
+        out IReadOnlyList<DysonSkillExplorerMatch> matches)
+    {
+        matches = [];
+        if (status != HttpStatusCode.Conflict || string.IsNullOrWhiteSpace(body))
+            return false;
+
+        try
+        {
+            var dto = JsonSerializer.Deserialize<AmbiguousErrorDto>(body, JsonOptions);
+            if (dto is null
+                || !IsAmbiguousSkillSlug(dto)
+                || dto.Matches is null
+                || dto.Matches.Count == 0)
+            {
+                return false;
+            }
+
+            var mapped = new List<DysonSkillExplorerMatch>(dto.Matches.Count);
+            foreach (var item in dto.Matches)
+            {
+                var skillSlug = item.Slug?.Trim();
+                if (string.IsNullOrWhiteSpace(skillSlug))
+                    continue;
+
+                var owner = item.OwnerHandle?.Trim();
+                var retrySlug = string.IsNullOrWhiteSpace(owner)
+                    ? skillSlug
+                    : owner + "/" + skillSlug;
+                var reference = item.Ref?.Trim();
+                var label = !string.IsNullOrWhiteSpace(reference)
+                    ? reference
+                    : retrySlug;
+
+                mapped.Add(new DysonSkillExplorerMatch(
+                    Slug: retrySlug,
+                    Label: label,
+                    OwnerHandle: owner,
+                    Ref: reference));
+            }
+
+            if (mapped.Count == 0)
+                return false;
+
+            matches = mapped;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static DysonSkillExplorerEntry MapDetailEntry(SkillDetailResponse dto, string displaySlug)
@@ -567,6 +689,26 @@ public sealed class ClawHubSkillExplorerProvider(HttpClient http) : IDysonSkillE
 
     private readonly record struct ParsedSlug(string? OwnerHandle, string SkillSlug, string DisplaySlug);
 
+    private readonly record struct ZipOrAmbiguous(
+        byte[]? ZipBytes,
+        IReadOnlyList<DysonSkillExplorerMatch>? Matches)
+    {
+        public static ZipOrAmbiguous FromZip(byte[] bytes) => new(bytes, null);
+
+        public static ZipOrAmbiguous FromMatches(IReadOnlyList<DysonSkillExplorerMatch> matches) =>
+            new(null, matches);
+    }
+
+    private readonly record struct TextOrAmbiguous(
+        string? Text,
+        IReadOnlyList<DysonSkillExplorerMatch>? Matches)
+    {
+        public static TextOrAmbiguous FromText(string text) => new(text, null);
+
+        public static TextOrAmbiguous FromMatches(IReadOnlyList<DysonSkillExplorerMatch> matches) =>
+            new(null, matches);
+    }
+
     private sealed class SearchResponse
     {
         public List<SearchResultDto>? Results { get; set; }
@@ -597,8 +739,28 @@ public sealed class ClawHubSkillExplorerProvider(HttpClient http) : IDysonSkillE
         public string? DisplayName { get; set; }
         public string? Summary { get; set; }
         public string? Description { get; set; }
+        public string? OwnerHandle { get; set; }
         public string[]? Topics { get; set; }
+        public OwnerDto? Owner { get; set; }
         public StatsDto? Stats { get; set; }
+    }
+
+    private static bool IsAmbiguousSkillSlug(AmbiguousErrorDto dto) =>
+        string.Equals(dto.Code, "AMBIGUOUS_SKILL_SLUG", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(dto.Error, "AMBIGUOUS_SKILL_SLUG", StringComparison.OrdinalIgnoreCase);
+
+    private sealed class AmbiguousErrorDto
+    {
+        public string? Code { get; set; } // live API
+        public string? Error { get; set; } // legacy
+        public List<AmbiguousMatchDto>? Matches { get; set; }
+    }
+
+    private sealed class AmbiguousMatchDto
+    {
+        public string? OwnerHandle { get; set; }
+        public string? Slug { get; set; }
+        public string? Ref { get; set; }
     }
 
     private sealed class SkillDetailResponse

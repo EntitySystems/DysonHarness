@@ -197,7 +197,8 @@ public class DysonSkillExplorerTests
 
         var preview = await provider.PreviewSkillMarkdownAsync("memory-curator");
         Assert.True(preview.IsSuccess, preview.IsError ? preview.Error : null);
-        Assert.Contains("Memory Curator", preview.Value, StringComparison.Ordinal);
+        var previewMd = Assert.IsType<DysonSkillExplorerPreviewOutcome.Markdown>(preview.Value);
+        Assert.Contains("Memory Curator", previewMd.Content, StringComparison.Ordinal);
 
         var root = Path.Combine(Path.GetTempPath(), "dyson-skill-explorer-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -206,7 +207,8 @@ public class DysonSkillExplorerTests
             var fs = DysonWorkspaceTestFs.CreateLocal(root);
             var installed = await provider.DownloadAsync("memory-curator", fs);
             Assert.True(installed.IsSuccess, installed.IsError ? installed.Error : null);
-            Assert.Equal(".dyson/skills/memory-curator", installed.Value.Replace('\\', '/'));
+            var installedPath = Assert.IsType<DysonSkillExplorerDownloadOutcome.Installed>(installed.Value);
+            Assert.Equal(".dyson/skills/memory-curator", installedPath.RelativePath.Replace('\\', '/'));
 
             var skillMd = fs.ReadAllText(".dyson/skills/memory-curator/SKILL.md");
             Assert.True(skillMd.IsSuccess, skillMd.IsError ? skillMd.Error : null);
@@ -378,6 +380,8 @@ public class DysonSkillExplorerTests
                           "slug": "self-improving-agent",
                           "displayName": "self-improving agent",
                           "summary": "Learns",
+                          "ownerHandle": "clawd",
+                          "owner": { "handle": "clawd", "displayName": "Clawd" },
                           "topics": ["self-improvement"],
                           "stats": { "stars": 3957, "downloads": 471223 }
                         }
@@ -397,7 +401,8 @@ public class DysonSkillExplorerTests
         Assert.True(page.IsSuccess, page.IsError ? page.Error : null);
         Assert.Equal(1, calls);
         Assert.Single(page.Value.Skills);
-        Assert.Equal("self-improving-agent", page.Value.Skills[0].Slug);
+        Assert.Equal("clawd/self-improving-agent", page.Value.Skills[0].Slug);
+        Assert.Equal("Clawd", page.Value.Skills[0].Author);
         Assert.Equal(3957, page.Value.Skills[0].Stars);
         Assert.False(page.Value.HasMore);
 
@@ -447,7 +452,8 @@ public class DysonSkillExplorerTests
 
         var preview = await provider.PreviewSkillMarkdownAsync("ivangdavila/git");
         Assert.True(preview.IsSuccess, preview.IsError ? preview.Error : null);
-        Assert.Contains("From ClawHub", preview.Value, StringComparison.Ordinal);
+        var previewMd = Assert.IsType<DysonSkillExplorerPreviewOutcome.Markdown>(preview.Value);
+        Assert.Contains("From ClawHub", previewMd.Content, StringComparison.Ordinal);
 
         var root = Path.Combine(Path.GetTempPath(), "dyson-clawhub-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -456,12 +462,186 @@ public class DysonSkillExplorerTests
             var fs = DysonWorkspaceTestFs.CreateLocal(root);
             var installed = await provider.DownloadAsync("ivangdavila/git", fs);
             Assert.True(installed.IsSuccess, installed.IsError ? installed.Error : null);
-            Assert.Equal(".dyson/skills/ivangdavila-git", installed.Value.Replace('\\', '/'));
+            var installedPath = Assert.IsType<DysonSkillExplorerDownloadOutcome.Installed>(installed.Value);
+            Assert.Equal(".dyson/skills/ivangdavila-git", installedPath.RelativePath.Replace('\\', '/'));
         }
         finally
         {
             try { Directory.Delete(root, recursive: true); } catch { /* best-effort */ }
         }
+    }
+
+    [Fact]
+    public async Task ClawHub_409_ambiguous_slug_returns_matches_and_owner_retry_installs()
+    {
+        var zipBytes = BuildSkillZip(
+            rootFolder: "skill-vetter",
+            skillMarkdown: "# Skill Vetter\n\nOK.",
+            extraRelativePath: null,
+            extraContents: null);
+
+        var handler = new StubHandler(req =>
+        {
+            var path = req.RequestUri!.AbsolutePath;
+            var query = req.RequestUri.Query;
+
+            if (path.Contains("/api/v1/download", StringComparison.Ordinal)
+                && query.Contains("slug=skill-vetter", StringComparison.Ordinal)
+                && !query.Contains("ownerHandle=", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.Conflict)
+                {
+                    Content = new StringContent(
+                        """
+                        {
+                          "code": "AMBIGUOUS_SKILL_SLUG",
+                          "message": "Multiple skills share this slug; specify ownerHandle.",
+                          "slug": "skill-vetter",
+                          "matches": [
+                            {
+                              "ownerHandle": "spclaudehome",
+                              "slug": "skill-vetter",
+                              "ref": "@spclaudehome/skill-vetter",
+                              "url": "https://clawhub.ai/@spclaudehome/skill-vetter"
+                            },
+                            {
+                              "ownerHandle": "otherpub",
+                              "slug": "skill-vetter",
+                              "ref": "@otherpub/skill-vetter",
+                              "url": "https://clawhub.ai/@otherpub/skill-vetter"
+                            }
+                          ]
+                        }
+                        """,
+                        Encoding.UTF8,
+                        "application/json"),
+                };
+            }
+
+            if (path.Contains("/api/v1/download", StringComparison.Ordinal)
+                && query.Contains("slug=skill-vetter", StringComparison.Ordinal)
+                && query.Contains("ownerHandle=spclaudehome", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(zipBytes)
+                    {
+                        Headers =
+                        {
+                            ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/zip"),
+                        },
+                    },
+                };
+            }
+
+            if (path.EndsWith("/file", StringComparison.Ordinal)
+                && !query.Contains("ownerHandle=", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.Conflict)
+                {
+                    Content = new StringContent(
+                        """
+                        {
+                          "code": "AMBIGUOUS_SKILL_SLUG",
+                          "message": "Multiple skills share this slug; specify ownerHandle.",
+                          "slug": "skill-vetter",
+                          "matches": [
+                            {
+                              "ownerHandle": "spclaudehome",
+                              "slug": "skill-vetter",
+                              "ref": "@spclaudehome/skill-vetter",
+                              "url": "https://clawhub.ai/@spclaudehome/skill-vetter"
+                            },
+                            {
+                              "ownerHandle": "otherpub",
+                              "slug": "skill-vetter",
+                              "ref": "@otherpub/skill-vetter",
+                              "url": "https://clawhub.ai/@otherpub/skill-vetter"
+                            }
+                          ]
+                        }
+                        """,
+                        Encoding.UTF8,
+                        "application/json"),
+                };
+            }
+
+            throw new InvalidOperationException("Unexpected request: " + req.RequestUri);
+        });
+
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://clawhub.ai/") };
+        var provider = new ClawHubSkillExplorerProvider(http);
+
+        var preview = await provider.PreviewSkillMarkdownAsync("skill-vetter");
+        Assert.True(preview.IsSuccess, preview.IsError ? preview.Error : null);
+        var previewAmbiguous = Assert.IsType<DysonSkillExplorerPreviewOutcome.Ambiguous>(preview.Value);
+        Assert.Equal(2, previewAmbiguous.Matches.Count);
+        Assert.Equal("spclaudehome/skill-vetter", previewAmbiguous.Matches[0].Slug);
+        Assert.Equal("@spclaudehome/skill-vetter", previewAmbiguous.Matches[0].Label);
+        Assert.Equal("otherpub/skill-vetter", previewAmbiguous.Matches[1].Slug);
+        Assert.Equal("@otherpub/skill-vetter", previewAmbiguous.Matches[1].Label);
+
+        var root = Path.Combine(Path.GetTempPath(), "dyson-clawhub-409-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var fs = DysonWorkspaceTestFs.CreateLocal(root);
+
+            var ambiguous = await provider.DownloadAsync("skill-vetter", fs);
+            Assert.True(ambiguous.IsSuccess, ambiguous.IsError ? ambiguous.Error : null);
+            var downloadAmbiguous = Assert.IsType<DysonSkillExplorerDownloadOutcome.Ambiguous>(ambiguous.Value);
+            Assert.Equal(2, downloadAmbiguous.Matches.Count);
+            Assert.Equal("spclaudehome/skill-vetter", downloadAmbiguous.Matches[0].Slug);
+            Assert.Equal("otherpub/skill-vetter", downloadAmbiguous.Matches[1].Slug);
+
+            var installed = await provider.DownloadAsync("spclaudehome/skill-vetter", fs);
+            Assert.True(installed.IsSuccess, installed.IsError ? installed.Error : null);
+            var path = Assert.IsType<DysonSkillExplorerDownloadOutcome.Installed>(installed.Value);
+            Assert.Equal(".dyson/skills/spclaudehome-skill-vetter", path.RelativePath.Replace('\\', '/'));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    [Fact]
+    public async Task ClawHub_409_legacy_error_field_still_parses_ambiguous()
+    {
+        var handler = new StubHandler(req =>
+        {
+            if (!req.RequestUri!.AbsolutePath.EndsWith("/file", StringComparison.Ordinal))
+                throw new InvalidOperationException("Unexpected request: " + req.RequestUri);
+
+            return new HttpResponseMessage(HttpStatusCode.Conflict)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "error": "AMBIGUOUS_SKILL_SLUG",
+                      "matches": [
+                        {
+                          "ownerHandle": "legacyowner",
+                          "slug": "skill-vetter",
+                          "ref": "@legacyowner/skill-vetter"
+                        }
+                      ]
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json"),
+            };
+        });
+
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://clawhub.ai/") };
+        var provider = new ClawHubSkillExplorerProvider(http);
+
+        var preview = await provider.PreviewSkillMarkdownAsync("skill-vetter");
+        Assert.True(preview.IsSuccess, preview.IsError ? preview.Error : null);
+        var ambiguous = Assert.IsType<DysonSkillExplorerPreviewOutcome.Ambiguous>(preview.Value);
+        Assert.Single(ambiguous.Matches);
+        Assert.Equal("legacyowner/skill-vetter", ambiguous.Matches[0].Slug);
+        Assert.Equal("@legacyowner/skill-vetter", ambiguous.Matches[0].Label);
     }
 
     [Fact]
@@ -517,6 +697,7 @@ public class DysonSkillExplorerTests
             var fs = DysonWorkspaceTestFs.CreateLocal(root);
             var installed = await provider.DownloadAsync("acme/git", fs);
             Assert.True(installed.IsSuccess, installed.IsError ? installed.Error : null);
+            Assert.IsType<DysonSkillExplorerDownloadOutcome.Installed>(installed.Value);
 
             var skillMd = fs.ReadAllText(".dyson/skills/acme-git/SKILL.md");
             Assert.True(skillMd.IsSuccess, skillMd.IsError ? skillMd.Error : null);
@@ -656,8 +837,9 @@ public class DysonSkillExplorerTests
 
         var preview = await provider.PreviewSkillMarkdownAsync("anthropics/skills/pdf");
         Assert.True(preview.IsSuccess, preview.IsError ? preview.Error : null);
-        Assert.Contains("From skills.sh", preview.Value, StringComparison.Ordinal);
-        Assert.DoesNotContain("XLSX", preview.Value, StringComparison.Ordinal);
+        var previewMd = Assert.IsType<DysonSkillExplorerPreviewOutcome.Markdown>(preview.Value);
+        Assert.Contains("From skills.sh", previewMd.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("XLSX", previewMd.Content, StringComparison.Ordinal);
 
         var root = Path.Combine(Path.GetTempPath(), "dyson-skillssh-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -666,7 +848,8 @@ public class DysonSkillExplorerTests
             var fs = DysonWorkspaceTestFs.CreateLocal(root);
             var installed = await provider.DownloadAsync("anthropics/skills/pdf", fs);
             Assert.True(installed.IsSuccess, installed.IsError ? installed.Error : null);
-            Assert.Equal(".dyson/skills/anthropics-skills-pdf", installed.Value.Replace('\\', '/'));
+            var installedPath = Assert.IsType<DysonSkillExplorerDownloadOutcome.Installed>(installed.Value);
+            Assert.Equal(".dyson/skills/anthropics-skills-pdf", installedPath.RelativePath.Replace('\\', '/'));
 
             var skillMd = fs.ReadAllText(".dyson/skills/anthropics-skills-pdf/SKILL.md");
             Assert.True(skillMd.IsSuccess, skillMd.IsError ? skillMd.Error : null);
