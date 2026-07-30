@@ -263,6 +263,10 @@
                                                 {
                                                     <text> · effort @slug.DefaultReasoningEffort</text>
                                                 }
+                                                @if (slug.DefaultMaxTargetContextTokens is int ctxDefault)
+                                                {
+                                                    <text> · context @DysonMaxTargetContextTokens.FormatCompact(ctxDefault)</text>
+                                                }
                                             </span>
                                             @if (!isManaged)
                                             {
@@ -290,6 +294,30 @@
                                                             }
                                                         </select>
                                                     </label>
+                                                    <div class="models-panel__context" title="Default max target context (blank = harness 100K)">
+                                                        <span class="models-panel__effort-label">context</span>
+                                                        <button type="button"
+                                                                class="composer-context-limit__step"
+                                                                aria-label="Decrease default context by 10K"
+                                                                @onclick="() => StepManagedSlugContextAsync(slug, -DysonMaxTargetContextTokens.Step)">−</button>
+                                                        <span class="composer-context-limit__value">
+                                                            @(slug.DefaultMaxTargetContextTokens is int d
+                                                                ? DysonMaxTargetContextTokens.FormatCompact(d)
+                                                                : "100K")
+                                                        </span>
+                                                        <button type="button"
+                                                                class="composer-context-limit__step"
+                                                                aria-label="Increase default context by 10K"
+                                                                @onclick="() => StepManagedSlugContextAsync(slug, DysonMaxTargetContextTokens.Step)">+</button>
+                                                        @if (slug.DefaultMaxTargetContextTokens is not null)
+                                                        {
+                                                            <button type="button"
+                                                                    class="btn btn-ghost"
+                                                                    style="padding:2px 6px;font-size:10px;"
+                                                                    title="Clear to harness default 100K"
+                                                                    @onclick="() => SetManagedSlugContextAsync(slug, null)">Clear</button>
+                                                        }
+                                                    </div>
                                                     @if (!slug.IsDefault && slug.IsEnabled)
                                                     {
                                                         <button type="button" class="btn" style="padding:2px 6px;font-size:10px;" @onclick="() => SetDefaultAsync(slug.Id)">Default</button>
@@ -1048,6 +1076,31 @@
         }
 
         _status = "Default effort updated.";
+        await RefreshAsync();
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task StepManagedSlugContextAsync(DysonModelSlugEntity slug, int delta)
+    {
+        var current = slug.DefaultMaxTargetContextTokens ?? DysonMaxTargetContextTokens.HarnessDefault;
+        var next = Math.Clamp(current + delta, 0, DysonMaxTargetContextTokens.Ceiling);
+        await SetManagedSlugContextAsync(slug, next);
+    }
+
+    private async Task SetManagedSlugContextAsync(DysonModelSlugEntity slug, int? maxTarget)
+    {
+        _error = null;
+        _status = null;
+        var set = await ModelStore.SetSlugDefaultMaxTargetContextTokensAsync(slug.Id, maxTarget);
+        if (set.IsError)
+        {
+            _error = set.Error;
+            return;
+        }
+
+        _status = maxTarget is null
+            ? "Default context cleared (harness 100K)."
+            : "Default context updated.";
         await RefreshAsync();
         await OnChanged.InvokeAsync();
     }

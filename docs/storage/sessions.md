@@ -17,6 +17,7 @@ Contracts: `IDysonSessionRepository` in `Harness.Abstractions`. Implementation: 
 | `AgentMode` | Ask / Plan / Work / … |
 | `ModelSlugId` | Guid? FK to `model_slugs` (credentials via parent provider; may reference a shared provider’s slug) |
 | `ReasoningEffort` | Session-scoped `reasoning_effort` override; null = fall back to slug `DefaultReasoningEffort` on resolve; empty = omit from request |
+| `MaxTargetContextTokens` | Session max target context; null = inherit slug `DefaultMaxTargetContextTokens` / harness 100K; `0` = Off (no DropContext inject) |
 | `WorkDirectoryId` | Guid? FK to `work_directories` (`SetNull` on delete; required for new sessions) |
 | `McpAccessMode` | enum |
 | `Status` | `Active` / `Completed` / `Stopped` / `Failed` |

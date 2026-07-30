@@ -21,4 +21,9 @@ public enum DysonAgentTurnKind
     /// as a short harness user message; modes encoded in <c>Instruction</c> (<c>From→To</c>).
     /// </summary>
     ModeSwitch = 12,
+    /// <summary>
+    /// Context budget hygiene: agent may DropTurnContext on turns older than the last four
+    /// when estimated outgoing tokens exceed the session max target.
+    /// </summary>
+    DropContext = 13,
 }

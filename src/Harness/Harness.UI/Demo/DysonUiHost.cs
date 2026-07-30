@@ -43,6 +43,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly List<DysonSubagentEventUiItem> _subagentEventUi = [];
     private readonly object _subagentEventUiGate = new();
     private DysonAskUiState? _pendingAskUi;
+    private DysonUserDialogUiState? _pendingUserDialogUi;
     private DysonFileViewerState? _fileViewer;
     private DysonSkillViewerState? _skillViewer;
     private readonly List<string> _pendingSkillNames = [];
@@ -61,6 +62,12 @@ public sealed class DysonUiHost : IAsyncDisposable
     private CancellationTokenSource? _toolPanelSaveCts;
     /// <summary>Pre-session composer effort; applied on next <see cref="StartNewSessionAsync"/>.</summary>
     private string? _pendingReasoningEffort;
+
+    /// <summary>Pre-session max target override; null = inherit slug/harness on next session.</summary>
+    private int? _pendingMaxTargetContextTokens;
+
+    /// <summary>Pre-session slug default for max target (updated on model pick).</summary>
+    private int? _pendingSlugDefaultMaxTargetContextTokens;
 
     static DysonUiHost()
     {
@@ -169,6 +176,25 @@ public sealed class DysonUiHost : IAsyncDisposable
             _ => OpenAiCompatibleAgentProvider.NormalizeReasoningEffort(_pendingReasoningEffort),
         };
 
+    /// <summary>
+    /// Effective max target context for the composer stepper
+    /// (session override → slug default → 100K; 0 = Off).
+    /// </summary>
+    public int SessionMaxTargetContextTokens =>
+        _session is not null
+            ? _session.ResolveEffectiveMaxTargetContextTokens()
+            : DysonMaxTargetContextTokens.Resolve(
+                _pendingMaxTargetContextTokens,
+                _pendingSlugDefaultMaxTargetContextTokens);
+
+    /// <summary>Estimated outgoing context tokens for the focused session (0 when none).</summary>
+    public int SessionOutgoingContextTokens =>
+        _session?.EstimateOutgoingContextTokens() ?? 0;
+
+    /// <summary>Last provider-reported prompt/input tokens (optional secondary).</summary>
+    public int? SessionLastReportedPromptTokens =>
+        _session?.LastReportedPromptTokens;
+
     /// <summary>True when the focused session has an in-flight host <see cref="PromptAsync"/>.</summary>
     public bool IsBusy =>
         ActiveSessionId is Guid id && _busySessions.ContainsKey(id);
@@ -197,6 +223,9 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     /// <summary>Pending AskQuestion / askQuestion parent-event UI (null when idle).</summary>
     public DysonAskUiState? PendingAskUi => _pendingAskUi;
+
+    /// <summary>Pending PromptUserDialog / promptUserDialog parent-event UI (null when idle).</summary>
+    public DysonUserDialogUiState? PendingUserDialogUi => _pendingUserDialogUi;
 
     /// <summary>Open file viewer overlay (null when closed).</summary>
     public DysonFileViewerState? FileViewer => _fileViewer;
@@ -1358,7 +1387,11 @@ public sealed class DysonUiHost : IAsyncDisposable
         // Keep New Session effort aligned with the composer when a session is focused
         // (pending is otherwise only set pre-session / on model switch).
         if (_session is not null)
+        {
             _pendingReasoningEffort = SessionReasoningEffort ?? "";
+            _pendingMaxTargetContextTokens = _session.MaxTargetContextTokens;
+            _pendingSlugDefaultMaxTargetContextTokens = _session.SlugDefaultMaxTargetContextTokens;
+        }
 
         if (workDirectoryId is null || workDirectoryId == Guid.Empty)
         {
@@ -1414,6 +1447,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return new VoidResult<string>(created.Error);
             }
 
+            ApplyPendingMaxTargetToSession(created.Value);
             FocusSession(created.Value, parentSessionId: null);
         }
         else
@@ -1434,11 +1468,35 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return new VoidResult<string>(created.Error);
             }
 
+            ApplyPendingMaxTargetToSession(created.Value);
             FocusSession(created.Value, parentSessionId: null);
         }
 
+        if (_pendingMaxTargetContextTokens is not null
+            && _session is not null
+            && _session.PersistenceId != Guid.Empty)
+        {
+            await _sessions.UpdateSessionMetaAsync(
+                new DysonSessionMetaUpdate
+                {
+                    SessionId = _session.PersistenceId,
+                    UpdateMaxTargetContextTokens = true,
+                    MaxTargetContextTokens = _session.MaxTargetContextTokens,
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        _pendingMaxTargetContextTokens = null;
+        _pendingSlugDefaultMaxTargetContextTokens = null;
+
         Notify();
         return VoidResult<string>.Success;
+    }
+
+    private void ApplyPendingMaxTargetToSession(DysonAgentSession session)
+    {
+        if (_pendingMaxTargetContextTokens is int overrideTokens)
+            session.MaxTargetContextTokens = DysonMaxTargetContextTokens.Normalize(overrideTokens);
     }
 
     /// <summary>
@@ -1727,6 +1785,9 @@ public sealed class DysonUiHost : IAsyncDisposable
 
             _pendingReasoningEffort = pending.Value.OpenAi?.ReasoningEffort
                 ?? pending.Value.Demo?.ReasoningEffort;
+            _pendingSlugDefaultMaxTargetContextTokens =
+                pending.Value.OpenAi?.DefaultMaxTargetContextTokens
+                ?? pending.Value.Demo?.DefaultMaxTargetContextTokens;
             Notify();
             return VoidResult<string>.Success;
         }
@@ -1775,6 +1836,13 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             OpenAiCompatibleAgentProvider oai => oai.ReasoningEffort,
             DemoDysonAgentProvider demo => demo.ReasoningEffort,
+            _ => null,
+        };
+
+        _session.SlugDefaultMaxTargetContextTokens = nextProvider switch
+        {
+            OpenAiCompatibleAgentProvider oai => oai.DefaultMaxTargetContextTokens,
+            DemoDysonAgentProvider demo => demo.DefaultMaxTargetContextTokens,
             _ => null,
         };
 
@@ -1850,6 +1918,57 @@ public sealed class DysonUiHost : IAsyncDisposable
                     SessionId = _session.PersistenceId,
                     UpdateReasoningEffort = true,
                     ReasoningEffort = stored,
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (persist.IsError)
+            {
+                LastError = persist.Error;
+                Notify();
+                return new VoidResult<string>(persist.Error);
+            }
+        }
+
+        Notify();
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Session-scoped max target context override (does not change the slug default).
+    /// Null clears to inherit slug/harness; 0 = Off. Persists when a session is focused.
+    /// </summary>
+    public async Task<VoidResult<string>> SetSessionMaxTargetContextTokensAsync(
+        int? maxTargetContextTokens,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+
+        var normalized = DysonMaxTargetContextTokens.Normalize(maxTargetContextTokens);
+
+        if (_session is null)
+        {
+            _pendingMaxTargetContextTokens = normalized;
+            Notify();
+            return VoidResult<string>.Success;
+        }
+
+        if (IsBusy)
+        {
+            LastError = "Cannot change max target context while a prompt is in flight.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        _session.MaxTargetContextTokens = normalized;
+
+        if (_session.PersistenceId != Guid.Empty)
+        {
+            var persist = await _sessions.UpdateSessionMetaAsync(
+                new DysonSessionMetaUpdate
+                {
+                    SessionId = _session.PersistenceId,
+                    UpdateMaxTargetContextTokens = true,
+                    MaxTargetContextTokens = normalized,
                 },
                 cancellationToken).ConfigureAwait(false);
 
@@ -2596,6 +2715,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _session = session;
         _engine = new DemoDysonEngine(session);
         SyncAskUiFromSession(session);
+        SyncUserDialogUiFromSession(session);
         SyncSubagentEventUiFromSession(session);
     }
 
@@ -2746,6 +2866,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         lock (_subagentEventUiGate)
             _subagentEventUi.Clear();
         _pendingAskUi = null;
+        _pendingUserDialogUi = null;
         RevokeFileViewerPreview(_fileViewer);
         _fileViewer = null;
         _skillViewer = null;
@@ -2920,10 +3041,10 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             UpsertSubagentEventUi(parent, interrupt);
             MaybeOpenAskUiForEvent(parent, interrupt);
+            MaybeOpenUserDialogUiForEvent(parent, interrupt);
             Notify();
 
-            // Ask UI only when kind=askQuestion AND payload parses as questions JSON.
-            // Plain-text askQuestion and all other kinds enqueue a parent auto-turn.
+            // Ask / Dialog UI only when kind+payload parse; otherwise enqueue a parent auto-turn.
             if (!DysonSubagentHostLogic.RequiresParentAutoTurn(interrupt.EventKind, interrupt.Payload))
                 return;
 
@@ -2976,6 +3097,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
 
         SyncAskUiFromSession(session);
+        SyncUserDialogUiFromSession(session);
         SyncSubagentEventUiFromSession(session);
         Notify();
     }
@@ -3102,6 +3224,45 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
     }
 
+    private void SyncUserDialogUiFromSession(DysonAgentSession session)
+    {
+        if (session.Parent is null && session.PendingUserDialog is { } rootDialog)
+        {
+            _pendingUserDialogUi = new DysonUserDialogUiState
+            {
+                Source = DysonUserDialogUiSource.RootPromptUserDialog,
+                SessionPersistenceId = session.PersistenceId,
+                Dialog = rootDialog,
+            };
+            return;
+        }
+
+        foreach (var evt in session.PendingOrRecentParentEvents)
+        {
+            if (evt.Status != DysonParentEventStatus.Pending)
+                continue;
+            if (!DysonSubagentHostLogic.TryBuildUserDialogUi(evt.Kind, evt.Payload, out var dialog))
+                continue;
+
+            _pendingUserDialogUi = new DysonUserDialogUiState
+            {
+                Source = DysonUserDialogUiSource.ParentEventPromptUserDialog,
+                SessionPersistenceId = session.PersistenceId,
+                EventId = evt.EventId,
+                SubagentId = evt.SubagentId,
+                Dialog = dialog,
+            };
+            return;
+        }
+
+        if (_pendingUserDialogUi is not null
+            && _pendingUserDialogUi.SessionPersistenceId == session.PersistenceId
+            && session.PendingUserDialog is null)
+        {
+            _pendingUserDialogUi = null;
+        }
+    }
+
     private void MaybeOpenAskUiForEvent(DysonAgentSession parent, DysonAgentInterrupt interrupt)
     {
         if (!DysonSubagentHostLogic.TryBuildAskUi(interrupt.EventKind, interrupt.Payload, out var questions))
@@ -3114,6 +3275,21 @@ public sealed class DysonUiHost : IAsyncDisposable
             EventId = interrupt.EventId,
             SubagentId = interrupt.SubagentId,
             Questions = questions,
+        };
+    }
+
+    private void MaybeOpenUserDialogUiForEvent(DysonAgentSession parent, DysonAgentInterrupt interrupt)
+    {
+        if (!DysonSubagentHostLogic.TryBuildUserDialogUi(interrupt.EventKind, interrupt.Payload, out var dialog))
+            return;
+
+        _pendingUserDialogUi = new DysonUserDialogUiState
+        {
+            Source = DysonUserDialogUiSource.ParentEventPromptUserDialog,
+            SessionPersistenceId = parent.PersistenceId,
+            EventId = interrupt.EventId,
+            SubagentId = interrupt.SubagentId,
+            Dialog = dialog,
         };
     }
 
@@ -3164,6 +3340,74 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (result.IsSuccess)
         {
             _pendingAskUi = null;
+            Notify();
+        }
+        else
+        {
+            LastError = result.Error;
+            Notify();
+        }
+
+        return result;
+    }
+
+    /// <summary>Submit chosen action for pending PromptUserDialog UI (root or parent-event).</summary>
+    public Result<string, string> SubmitUserDialogAction(string actionLabel, bool skipped)
+    {
+        var dialog = _pendingUserDialogUi;
+        if (dialog is null)
+            return Result<string, string>.AsError("No pending PromptUserDialog UI.");
+
+        if (!_sessionsById.TryGetValue(dialog.SessionPersistenceId, out var session)
+            && !ReferenceEquals(_session, null)
+            && _session.PersistenceId == dialog.SessionPersistenceId)
+        {
+            session = _session;
+        }
+
+        if (session is null && dialog.SessionPersistenceId == Guid.Empty && _session is not null)
+            session = _session;
+
+        if (session is null)
+            return Result<string, string>.AsError("Dialog session is not registered.");
+
+        if (!skipped)
+        {
+            var allowed = dialog.Dialog.Actions.Any(a =>
+                string.Equals(a.Label, actionLabel, StringComparison.Ordinal));
+            if (!allowed)
+                return Result<string, string>.AsError("Unknown dialog action.");
+        }
+
+        string formatted;
+        try
+        {
+            formatted = DysonPromptUserDialog.FormatResult(
+                skipped ? DysonPromptUserDialog.SkipActionLabel : actionLabel,
+                skipped);
+        }
+        catch (Exception ex)
+        {
+            return Result<string, string>.AsError(ex.Message);
+        }
+
+        Result<string, string> result;
+        if (dialog.Source == DysonUserDialogUiSource.RootPromptUserDialog)
+        {
+            result = session.RespondToPromptUserDialog(formatted);
+        }
+        else
+        {
+            if (dialog.EventId is not Guid eventId || dialog.SubagentId is not int subagentId)
+                return Result<string, string>.AsError("Dialog parent-event correlation missing.");
+
+            result = session.RespondToSubagentEvent(subagentId, eventId, formatted);
+            MarkSubagentEventAddressed(eventId);
+        }
+
+        if (result.IsSuccess)
+        {
+            _pendingUserDialogUi = null;
             Notify();
         }
         else

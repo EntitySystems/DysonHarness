@@ -99,6 +99,16 @@ public interface IDysonModelRepository
         string? effort,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Set default max target context tokens for a managed provider slug.
+    /// Manual providers are rejected. Null clears → inherit harness 100K.
+    /// Values are clamped to 0…1_000_000.
+    /// </summary>
+    Task<VoidResult<string>> SetSlugDefaultMaxTargetContextTokensAsync(
+        Guid id,
+        int? maxTargetContextTokens,
+        CancellationToken cancellationToken = default);
+
     Task<Result<DysonModelSlugEntity, string>> GetSlugAsync(
         Guid id,
         CancellationToken cancellationToken = default);

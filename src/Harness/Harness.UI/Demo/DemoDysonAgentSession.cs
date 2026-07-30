@@ -64,6 +64,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             agentMode, config, provider, store, workDirectoryId, models, suffix,
             workDirectoryAbsolutePath);
         session.ConfigureRootInterAgentTools();
+        session.SlugDefaultMaxTargetContextTokens = provider.DefaultMaxTargetContextTokens;
         var initialTitle = title ?? "New session";
         session.SetDisplayTitle(initialTitle);
 
@@ -75,6 +76,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                 ModelSlugId = provider.SlugId,
                 WorkDirectoryId = workDirectoryId,
                 ReasoningEffort = provider.ReasoningEffort,
+                MaxTargetContextTokens = null,
                 McpAccessMode = config.McpAccessMode,
                 Title = initialTitle,
                 SystemPromptSnapshot = session.SystemPrompt,
@@ -140,6 +142,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             suffix,
             workDirectoryAbsolutePath);
         session.RestoreFromPersisted(state);
+        session.SlugDefaultMaxTargetContextTokens = provider.DefaultMaxTargetContextTokens;
         if (state.Session.ParentSessionId is null)
             session.ConfigureRootInterAgentTools();
 
@@ -204,6 +207,8 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
 
         var title = TitleFromTask(task);
         child.SetDisplayTitle(title);
+        if (childProvider is DemoDysonAgentProvider demoSlug)
+            child.SlugDefaultMaxTargetContextTokens = demoSlug.DefaultMaxTargetContextTokens;
 
         Guid? modelSlugId = childProvider is DemoDysonAgentProvider demo ? demo.SlugId : null;
 
@@ -218,6 +223,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                 ReasoningEffort = childProvider is DemoDysonAgentProvider dEffort
                     ? dEffort.ReasoningEffort
                     : null,
+                MaxTargetContextTokens = null,
                 McpAccessMode = Config.McpAccessMode,
                 Title = title,
                 SystemPromptSnapshot = child.SystemPrompt,
@@ -474,11 +480,27 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
     private async Task<VoidResult<string>> PromptWithTurnAsync(
         DysonAgentTurn turn,
         string promptForReply,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowDropContextInject = true)
     {
         ArgumentNullException.ThrowIfNull(turn);
 
         OptimizeContextIfNeeded();
+
+        if (allowDropContextInject
+            && turn.Kind != DysonAgentTurnKind.DropContext
+            && DysonDropContextFlow.ShouldInjectDropContext(this))
+        {
+            var dropTurn = CreateDropContextTurn();
+            var drop = await PromptWithTurnAsync(
+                    dropTurn,
+                    dropTurn.Instruction ?? "Drop context",
+                    cancellationToken,
+                    allowDropContextInject: false)
+                .ConfigureAwait(false);
+            if (drop.IsError)
+                return drop;
+        }
 
         AppendLog($"prompt: {Truncate(turn.Instruction ?? turn.Kind.ToString(), 120)}");
         AddTurn(turn);

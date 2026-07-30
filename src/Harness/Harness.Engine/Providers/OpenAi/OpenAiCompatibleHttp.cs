@@ -354,6 +354,19 @@ public static class OpenAiCompatibleHttp
     }
 
     /// <summary>
+    /// Reads Completions <c>prompt_tokens</c> or Responses <c>input_tokens</c> from usage when present.
+    /// </summary>
+    public static int? TryParsePromptTokens(JsonObject response)
+    {
+        var usage = response["usage"] as JsonObject;
+        if (usage is null)
+            return null;
+
+        return usage["prompt_tokens"]?.GetValue<int?>()
+               ?? usage["input_tokens"]?.GetValue<int?>();
+    }
+
+    /// <summary>
     /// POST JSON and read Server-Sent Events <c>data:</c> payloads until <c>[DONE]</c>.
     /// Yields each JSON payload string; first item may be an error Result.
     /// </summary>

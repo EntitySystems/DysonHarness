@@ -1,0 +1,75 @@
+@namespace Harness.UI.Components.Chat
+@using DysonHarness
+@using Harness.UI.Demo
+@using Microsoft.AspNetCore.Components.Web
+@inject DysonUiHost Host
+@implements IDisposable
+
+@if (Host.PendingUserDialogUi is { } dialog)
+{
+    <div class="prompt-user-dialog-backdrop"
+         role="presentation">
+        <div class="prompt-user-dialog"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="prompt-user-dialog-title"
+             @onkeydown="OnKeyDown">
+            <div class="prompt-user-dialog__header">
+                <h3 id="prompt-user-dialog-title">@dialog.Dialog.Title</h3>
+                <span class="prompt-user-dialog__source">
+                    @(dialog.Source == DysonUserDialogUiSource.RootPromptUserDialog
+                        ? "PromptUserDialog"
+                        : "PromptUserDialog from subagent")
+                </span>
+            </div>
+            <div class="prompt-user-dialog__body">
+                <p class="prompt-user-dialog__description">@dialog.Dialog.Description</p>
+            </div>
+            <div class="prompt-user-dialog__actions">
+                @foreach (var action in dialog.Dialog.Actions)
+                {
+                    <button type="button"
+                            class="@(action.Primary ? "btn btn-primary" : "btn")"
+                            disabled="@_busy"
+                            @onclick="() => ChooseAsync(action.Label, skipped: false)">
+                        @action.Label
+                    </button>
+                }
+                <button type="button"
+                        class="btn"
+                        disabled="@_busy"
+                        @onclick="() => ChooseAsync(DysonPromptUserDialog.SkipActionLabel, skipped: true)">
+                    @DysonPromptUserDialog.SkipActionLabel
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _busy;
+
+    protected override void OnInitialized() => Host.Changed += OnHostChanged;
+
+    public void Dispose() => Host.Changed -= OnHostChanged;
+
+    private void OnHostChanged() => InvokeAsync(StateHasChanged);
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        // Escape maps to Skip (always-on secondary).
+        if (e.Key is "Escape" && !_busy)
+            _ = ChooseAsync(DysonPromptUserDialog.SkipActionLabel, skipped: true);
+    }
+
+    private Task ChooseAsync(string actionLabel, bool skipped)
+    {
+        if (_busy)
+            return Task.CompletedTask;
+
+        _busy = true;
+        Host.SubmitUserDialogAction(actionLabel, skipped);
+        _busy = false;
+        return Task.CompletedTask;
+    }
+}

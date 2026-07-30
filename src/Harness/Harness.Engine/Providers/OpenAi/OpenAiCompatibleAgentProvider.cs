@@ -25,6 +25,7 @@ public sealed class OpenAiCompatibleAgentProvider : DysonAgentProvider
         ManagedSource = provider?.ManagedSource ?? slug?.Provider?.ManagedSource;
         ReasoningEffort = NormalizeReasoningEffort(
             reasoningEffort ?? slug?.DefaultReasoningEffort);
+        DefaultMaxTargetContextTokens = slug?.DefaultMaxTargetContextTokens;
     }
 
     /// <summary>Convenience: slug must include <see cref="DysonModelSlugEntity.Provider"/>.</summary>
@@ -53,6 +54,7 @@ public sealed class OpenAiCompatibleAgentProvider : DysonAgentProvider
         OpenAiApiMode = source.OpenAiApiMode;
         ManagedSource = source.ManagedSource;
         ReasoningEffort = NormalizeReasoningEffort(reasoningEffort);
+        DefaultMaxTargetContextTokens = source.DefaultMaxTargetContextTokens;
     }
 
     public Guid? ProviderId { get; }
@@ -68,6 +70,8 @@ public sealed class OpenAiCompatibleAgentProvider : DysonAgentProvider
     public string? ManagedSource { get; }
     /// <summary>Top-level request reasoning_effort; null/empty = omit.</summary>
     public string? ReasoningEffort { get; set; }
+    /// <summary>Slug default max target context; null = harness 100K.</summary>
+    public int? DefaultMaxTargetContextTokens { get; }
 
     public static string? NormalizeReasoningEffort(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

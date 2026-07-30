@@ -10,7 +10,7 @@ namespace DysonHarness;
 /// <summary>
 /// Executes workspace-scoped MCP tools against a work directory root, plus RenameSession,
 /// GetDateTime, GetOpenRulesConfig, InitializeOpenRules, WaitForSeconds, ShellExecute, long-running shell tools, subagent spawn/list/report tools,
-/// inter-agent events / AskQuestion, session todo CRUD, task completion tools, ResumeCurrentTask,
+/// inter-agent events / AskQuestion / PromptUserDialog, session todo CRUD, task completion tools, ResumeCurrentTask,
 /// ExpandThoughtProcess / StartNewTurn / DropTurnContext / RestoreTurnContext, in-process web search/fetch tools,
 /// <c>JsonDynamicStructuredLanguageToolchain</c>, and browser control tools
 /// (when <see cref="DysonAgentSessionConfig.BrowserControl"/> is set).
@@ -73,6 +73,8 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "SubmitSubagentReport" => await SubmitSubagentReportAsync(call, cancellationToken).ConfigureAwait(false),
                 "AskQuestion" => await AskQuestionAsync(call, cancellationToken).ConfigureAwait(false),
                 "AskQuestionFromParent" => await AskQuestionFromParentAsync(call, cancellationToken).ConfigureAwait(false),
+                "PromptUserDialog" => await PromptUserDialogAsync(call, cancellationToken).ConfigureAwait(false),
+                "PromptUserDialogFromParent" => await PromptUserDialogFromParentAsync(call, cancellationToken).ConfigureAwait(false),
                 "TriggerParentEvent" => await TriggerParentEventAsync(call, cancellationToken).ConfigureAwait(false),
                 "RespondToSubagentEvent" => RespondToSubagentEvent(call),
                 "TriggerSubagentEvent" => await TriggerSubagentEventAsync(call, cancellationToken).ConfigureAwait(false),
@@ -810,6 +812,32 @@ public sealed partial class DysonWorkspaceToolExecutor
         return asked.IsError ? Error(call, asked.Error) : Ok(call, asked.Value);
     }
 
+    private async Task<DysonToolCallResult> PromptUserDialogAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var dialogJson = ExtractDialogJson(call);
+        if (dialogJson.IsError)
+            return Error(call, dialogJson.Error);
+
+        var prompted = await _session.PromptUserDialogAsync(dialogJson.Value, cancellationToken)
+            .ConfigureAwait(false);
+        return prompted.IsError ? Error(call, prompted.Error) : Ok(call, prompted.Value);
+    }
+
+    private async Task<DysonToolCallResult> PromptUserDialogFromParentAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var dialogJson = ExtractDialogJson(call);
+        if (dialogJson.IsError)
+            return Error(call, dialogJson.Error);
+
+        var prompted = await _session.PromptUserDialogFromParentAsync(dialogJson.Value, cancellationToken)
+            .ConfigureAwait(false);
+        return prompted.IsError ? Error(call, prompted.Error) : Ok(call, prompted.Value);
+    }
+
     private async Task<DysonToolCallResult> TriggerParentEventAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)
@@ -1372,6 +1400,23 @@ public sealed partial class DysonWorkspaceToolExecutor
                 return Result<string, string>.AsError("questions is required.");
 
             return Result<string, string>.AsValue(questions.GetRawText());
+        }
+        catch (JsonException)
+        {
+            return Result<string, string>.AsError("invalid JSON arguments.");
+        }
+    }
+
+    private static Result<string, string> ExtractDialogJson(DysonToolCall call)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var parsed = DysonPromptUserDialog.ParseDialogElement(doc.RootElement);
+            if (parsed.IsError)
+                return Result<string, string>.AsError(parsed.Error);
+
+            return Result<string, string>.AsValue(DysonPromptUserDialog.SerializeRequest(parsed.Value));
         }
         catch (JsonException)
         {

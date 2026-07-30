@@ -20,6 +20,7 @@ public sealed class DemoDysonAgentProvider : DysonAgentProvider
         ProviderDisplayName = provider?.DisplayName ?? slug?.Provider?.DisplayName ?? "Demo";
         ReasoningEffort = OpenAiCompatibleAgentProvider.NormalizeReasoningEffort(
             reasoningEffort ?? slug?.DefaultReasoningEffort);
+        DefaultMaxTargetContextTokens = slug?.DefaultMaxTargetContextTokens;
     }
 
     /// <summary>Convenience: slug must include <see cref="DysonModelSlugEntity.Provider"/>.</summary>
@@ -46,6 +47,7 @@ public sealed class DemoDysonAgentProvider : DysonAgentProvider
         BaseUrl = source.BaseUrl;
         ProviderDisplayName = source.ProviderDisplayName;
         ReasoningEffort = OpenAiCompatibleAgentProvider.NormalizeReasoningEffort(reasoningEffort);
+        DefaultMaxTargetContextTokens = source.DefaultMaxTargetContextTokens;
     }
 
     public Guid? ProviderId { get; }
@@ -58,4 +60,6 @@ public sealed class DemoDysonAgentProvider : DysonAgentProvider
     public string ProviderDisplayName { get; }
     /// <summary>Carried for parity with OpenAI provider; demo client ignores it.</summary>
     public string? ReasoningEffort { get; set; }
+    /// <summary>Slug default max target context; null = harness 100K.</summary>
+    public int? DefaultMaxTargetContextTokens { get; }
 }

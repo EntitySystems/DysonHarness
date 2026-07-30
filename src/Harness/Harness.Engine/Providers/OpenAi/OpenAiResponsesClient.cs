@@ -214,6 +214,9 @@ public sealed class OpenAiResponsesClient(HttpClient http)
         var usageHint = completedResponse is not null
             ? OpenAiCompatibleHttp.FormatUsageCacheHint(completedResponse)
             : null;
+        var promptTokens = completedResponse is not null
+            ? OpenAiCompatibleHttp.TryParsePromptTokens(completedResponse)
+            : null;
 
         // Prefer streamed accumulation; fall back to completed response payload if empty.
         var reasoningContent = reasoning.Length == 0
@@ -230,6 +233,7 @@ public sealed class OpenAiResponsesClient(HttpClient http)
                 ToolCalls = toolCalls,
                 ResponseId = responseId,
                 UsageCacheHint = usageHint,
+                PromptTokens = promptTokens,
                 ReasoningOutputItems = reasoningItems,
             },
         });
@@ -353,6 +357,7 @@ public sealed class OpenAiResponsesClient(HttpClient http)
             ToolCalls = toolCalls,
             ResponseId = response["id"]?.GetValue<string>(),
             UsageCacheHint = OpenAiCompatibleHttp.FormatUsageCacheHint(response),
+            PromptTokens = OpenAiCompatibleHttp.TryParsePromptTokens(response),
             ReasoningOutputItems = reasoningItems,
         });
     }

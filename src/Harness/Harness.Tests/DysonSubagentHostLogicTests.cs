@@ -74,6 +74,7 @@ public class DysonSubagentHostLogicTests
         }
 
         AssertAskUiRouting();
+        AssertUserDialogUiRouting();
         AssertKickOffFailureSummaries();
         AssertPromptQueueFifo();
     }
@@ -121,6 +122,38 @@ public class DysonSubagentHostLogicTests
         {
             throw new InvalidOperationException(
                 "Plain-text askQuestion auto-turn prompt must include eventId + RespondToSubagentEvent.");
+        }
+    }
+
+    private static void AssertUserDialogUiRouting()
+    {
+        const string validDialog =
+            """
+            {
+              "title": "Next",
+              "description": "Pick one",
+              "actions": [{ "label": "Go", "primary": true }, { "label": "Wait" }]
+            }
+            """;
+
+        if (!DysonSubagentHostLogic.TryBuildUserDialogUi(
+                DysonPromptUserDialog.PromptUserDialogKind, validDialog, out var dialog)
+            || dialog.Actions.Count != 2
+            || DysonSubagentHostLogic.RequiresParentAutoTurn(
+                DysonPromptUserDialog.PromptUserDialogKind, validDialog))
+        {
+            throw new InvalidOperationException(
+                "Valid promptUserDialog JSON should open Dialog UI and skip auto-turn.");
+        }
+
+        const string plainText = "Should we continue?";
+        if (DysonSubagentHostLogic.TryBuildUserDialogUi(
+                DysonPromptUserDialog.PromptUserDialogKind, plainText, out _)
+            || !DysonSubagentHostLogic.RequiresParentAutoTurn(
+                DysonPromptUserDialog.PromptUserDialogKind, plainText))
+        {
+            throw new InvalidOperationException(
+                "Plain-text promptUserDialog must require parent auto-turn (no Dialog UI).");
         }
     }
 

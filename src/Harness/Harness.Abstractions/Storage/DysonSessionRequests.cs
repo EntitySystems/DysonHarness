@@ -11,6 +11,11 @@ public sealed class DysonSessionCreateRequest
     /// <summary>Copied from slug default on create; empty = omit; null = fall back later.</summary>
     public string? ReasoningEffort { get; init; }
 
+    /// <summary>
+    /// Session max target context. Null = inherit slug / harness default; 0 = Off.
+    /// </summary>
+    public int? MaxTargetContextTokens { get; init; }
+
     public DysonMcpAccessMode McpAccessMode { get; init; } = DysonMcpAccessMode.FullAccess;
     public string? Title { get; init; }
     public required string SystemPromptSnapshot { get; init; }
@@ -29,6 +34,12 @@ public sealed class DysonSessionMetaUpdate
     public bool UpdateReasoningEffort { get; init; }
 
     public string? ReasoningEffort { get; init; }
+
+    /// <summary>When true, write <see cref="MaxTargetContextTokens"/> (null allowed = inherit).</summary>
+    public bool UpdateMaxTargetContextTokens { get; init; }
+
+    /// <summary>Session max target context; null = inherit; 0 = Off.</summary>
+    public int? MaxTargetContextTokens { get; init; }
 
     /// <summary>When set, updates persisted <c>AgentMode</c> (mid-session mode switch).</summary>
     public string? AgentMode { get; init; }

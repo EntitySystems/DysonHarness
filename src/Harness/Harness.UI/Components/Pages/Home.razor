@@ -1,4 +1,4 @@
-﻿@page "/"
+@page "/"
 @using DysonHarness
 @using Harness.UI.Components.Chat
 @using Harness.UI.Components.Files
@@ -53,6 +53,10 @@
                    SelectedSlugIdChanged="OnSelectedSlugIdChangedAsync"
                    ReasoningEffort="@_reasoningEffort"
                    ReasoningEffortChanged="OnReasoningEffortChangedAsync"
+                   MaxTargetContextTokens="_maxTargetContextTokens"
+                   MaxTargetContextTokensChanged="OnMaxTargetContextTokensChangedAsync"
+                   OutgoingContextTokens="_outgoingContextTokens"
+                   LastReportedPromptTokens="_lastReportedPromptTokens"
                    SelectedAgentMode="@_selectedAgentMode"
                    SelectedAgentModeChanged="OnAgentModeChanged"
                    GitBranch="@_gitBranch"
@@ -66,7 +70,7 @@
             <div class="list" style="max-height:240px;">
                 @if (Host.Session is null)
                 {
-                    <div class="empty-state" style="padding:8px 0;">—</div>
+                    <div class="empty-state" style="padding:8px 0;">?</div>
                 }
                 else
                 {
@@ -82,6 +86,7 @@
 
 <FileViewerOverlay />
 <SkillViewerOverlay />
+<PromptUserDialogModal />
 
 @code {
     private IReadOnlyList<DysonSessionSummary> _sessions = [];
@@ -89,6 +94,9 @@
     private string? _activeTitle;
     private Guid? _selectedSlugId;
     private string? _reasoningEffort;
+    private int _maxTargetContextTokens = DysonMaxTargetContextTokens.HarnessDefault;
+    private int _outgoingContextTokens;
+    private int? _lastReportedPromptTokens;
     private string _selectedAgentMode = DysonAgentModes.Work;
     private Guid? _activeWorkDirectoryId;
     private string? _gitBranch;
@@ -181,6 +189,7 @@
     {
         SyncSelectedSlugFromSession();
         SyncReasoningEffortFromHost();
+        SyncContextTokensFromHost();
         SyncSelectedAgentModeFromSession();
         UpdateActiveTitle();
         try
@@ -203,6 +212,7 @@
         {
             SyncSelectedSlugFromSession();
             SyncReasoningEffortFromHost();
+            SyncContextTokensFromHost();
             return;
         }
 
@@ -210,6 +220,7 @@
         if (Host.Session is null)
             _selectedSlugId = id;
         SyncReasoningEffortFromHost();
+        SyncContextTokensFromHost();
     }
 
     private async Task OnReasoningEffortChangedAsync(string? effort)
@@ -217,6 +228,14 @@
         _reasoningEffort = effort;
         await Host.SetSessionReasoningEffortAsync(effort);
         SyncReasoningEffortFromHost();
+        SyncContextTokensFromHost();
+    }
+
+    private async Task OnMaxTargetContextTokensChangedAsync(int maxTarget)
+    {
+        _maxTargetContextTokens = maxTarget;
+        await Host.SetSessionMaxTargetContextTokensAsync(maxTarget);
+        SyncContextTokensFromHost();
     }
 
     private void SyncSelectedSlugFromSession()
@@ -230,6 +249,13 @@
     private void SyncReasoningEffortFromHost()
     {
         _reasoningEffort = Host.SessionReasoningEffort;
+    }
+
+    private void SyncContextTokensFromHost()
+    {
+        _maxTargetContextTokens = Host.SessionMaxTargetContextTokens;
+        _outgoingContextTokens = Host.SessionOutgoingContextTokens;
+        _lastReportedPromptTokens = Host.SessionLastReportedPromptTokens;
     }
 
     private void SyncSelectedAgentModeFromSession()
@@ -402,6 +428,7 @@
             _listError = result.Error;
         SyncSelectedSlugFromSession();
         SyncReasoningEffortFromHost();
+        SyncContextTokensFromHost();
         SyncSelectedAgentModeFromSession();
         await RefreshSessionsAsync();
     }
@@ -413,6 +440,7 @@
             _listError = result.Error;
         SyncSelectedSlugFromSession();
         SyncReasoningEffortFromHost();
+        SyncContextTokensFromHost();
         SyncSelectedAgentModeFromSession();
         await RefreshSessionsAsync();
     }
@@ -439,6 +467,7 @@
             _listError = result.Error;
         SyncSelectedSlugFromSession();
         SyncReasoningEffortFromHost();
+        SyncContextTokensFromHost();
         SyncSelectedAgentModeFromSession();
         await RefreshSessionsAsync();
     }

@@ -178,6 +178,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             agentMode, config, provider, http, workDirectoryAbsolutePath, store, workDirectoryId, models,
             suffix);
         session.ConfigureRootInterAgentTools();
+        session.SlugDefaultMaxTargetContextTokens = provider.DefaultMaxTargetContextTokens;
         var initialTitle = title ?? "New session";
         session.SetDisplayTitle(initialTitle);
 
@@ -189,6 +190,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 ModelSlugId = provider.SlugId,
                 WorkDirectoryId = workDirectoryId,
                 ReasoningEffort = provider.ReasoningEffort,
+                MaxTargetContextTokens = null,
                 McpAccessMode = config.McpAccessMode,
                 Title = initialTitle,
                 SystemPromptSnapshot = session.SystemPrompt,
@@ -254,6 +256,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             models,
             suffix);
         session.RestoreFromPersisted(state);
+        session.SlugDefaultMaxTargetContextTokens = provider.DefaultMaxTargetContextTokens;
         if (state.Session.ParentSessionId is null)
             session.ConfigureRootInterAgentTools();
 
@@ -325,6 +328,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         var title = TitleFromTask(task);
         child.SetDisplayTitle(title);
+        child.SlugDefaultMaxTargetContextTokens = childProvider.DefaultMaxTargetContextTokens;
 
         var create = await _store.CreateSessionAsync(
             new DysonSessionCreateRequest
@@ -335,6 +339,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 ModelSlugId = childProvider.SlugId,
                 WorkDirectoryId = _workDirectoryId,
                 ReasoningEffort = childProvider.ReasoningEffort,
+                MaxTargetContextTokens = null,
                 McpAccessMode = Config.McpAccessMode,
                 Title = title,
                 SystemPromptSnapshot = child.SystemPrompt,
@@ -522,13 +527,28 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     private async Task<VoidResult<string>> PromptWithTurnAsync(
         DysonAgentTurn turn,
         IReadOnlyList<string> filePaths,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowDropContextInject = true)
     {
         ArgumentNullException.ThrowIfNull(turn);
         ArgumentNullException.ThrowIfNull(filePaths);
 
         // Compaction before the next provider request so the new prefix stays byte-stable.
         OptimizeContextIfNeeded();
+
+        if (allowDropContextInject
+            && turn.Kind != DysonAgentTurnKind.DropContext
+            && DysonDropContextFlow.ShouldInjectDropContext(this))
+        {
+            var drop = await PromptWithTurnAsync(
+                    CreateDropContextTurn(),
+                    [],
+                    cancellationToken,
+                    allowDropContextInject: false)
+                .ConfigureAwait(false);
+            if (drop.IsError)
+                return drop;
+        }
 
         AppendLog($"prompt: {Truncate(turn.Instruction ?? turn.Kind.ToString(), 120)}");
         AddTurn(turn);
@@ -655,6 +675,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 var reply = replyResult.Value;
                 if (!string.IsNullOrEmpty(reply.UsageCacheHint))
                     AppendLog(reply.UsageCacheHint);
+                if (reply.PromptTokens is int promptTokens)
+                    LastReportedPromptTokens = promptTokens;
 
                 if (supportsResponsesChaining && !string.IsNullOrEmpty(reply.ResponseId))
                     previousResponseId = reply.ResponseId;
@@ -842,6 +864,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         var reply = replyResult.Value;
         if (!string.IsNullOrEmpty(reply.UsageCacheHint))
             AppendLog(reply.UsageCacheHint);
+        if (reply.PromptTokens is int promptTokens)
+            LastReportedPromptTokens = promptTokens;
 
         // Ignore tool_calls on this no-tools recap — budget is already exhausted.
         var text = string.IsNullOrWhiteSpace(reply.Content)

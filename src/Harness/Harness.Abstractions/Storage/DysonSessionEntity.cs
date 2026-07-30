@@ -27,6 +27,12 @@ public sealed class DysonSessionEntity
     /// </summary>
     public string? ReasoningEffort { get; set; }
 
+    /// <summary>
+    /// Session max target context tokens. Null = inherit slug / harness default (100K);
+    /// 0 = Off (no DropContext inject).
+    /// </summary>
+    public int? MaxTargetContextTokens { get; set; }
+
     public DysonMcpAccessMode McpAccessMode { get; set; }
     public DysonSessionStatus Status { get; set; }
     public string? Title { get; set; }

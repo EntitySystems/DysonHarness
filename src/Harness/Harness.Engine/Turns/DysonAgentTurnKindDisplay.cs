@@ -18,6 +18,7 @@ public static class DysonAgentTurnKindDisplay
         DysonAgentTurnKind.RethinkToolUsage => "Rethink tool usage",
         DysonAgentTurnKind.DisplayInfo => "Info",
         DysonAgentTurnKind.ModeSwitch => "Mode switch",
+        DysonAgentTurnKind.DropContext => "Drop context",
         _ => kind.ToString(),
     };
 }

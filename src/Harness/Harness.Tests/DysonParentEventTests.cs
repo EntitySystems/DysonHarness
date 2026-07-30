@@ -28,6 +28,8 @@ public class DysonParentEventTests
         root.ConfigureInterAgentTools(0);
         AssertHas(root, "AskQuestion");
         AssertMissing(root, "AskQuestionFromParent");
+        AssertHas(root, "PromptUserDialog");
+        AssertMissing(root, "PromptUserDialogFromParent");
         AssertMissing(root, "TriggerParentEvent");
         AssertHas(root, "RespondToSubagentEvent");
         AssertHas(root, "TriggerSubagentEvent");
@@ -36,6 +38,8 @@ public class DysonParentEventTests
         l1.ConfigureInterAgentTools(1);
         AssertMissing(l1, "AskQuestion");
         AssertHas(l1, "AskQuestionFromParent");
+        AssertMissing(l1, "PromptUserDialog");
+        AssertHas(l1, "PromptUserDialogFromParent");
         AssertHas(l1, "TriggerParentEvent");
         AssertHas(l1, "RespondToSubagentEvent");
         AssertHas(l1, "TriggerSubagentEvent");
@@ -44,6 +48,8 @@ public class DysonParentEventTests
         deep.ConfigureInterAgentTools(2);
         AssertMissing(deep, "AskQuestion");
         AssertMissing(deep, "AskQuestionFromParent");
+        AssertMissing(deep, "PromptUserDialog");
+        AssertMissing(deep, "PromptUserDialogFromParent");
         AssertHas(deep, "TriggerParentEvent");
         AssertHas(deep, "RespondToSubagentEvent");
         AssertHas(deep, "TriggerSubagentEvent");
@@ -61,7 +67,9 @@ public class DysonParentEventTests
         child.ConfigureRootForTest(); // depth-0 gate (Parent still null) — strips TriggerParentEvent
         AssertMissing(child.McpPipeline, "TriggerParentEvent");
         AssertMissing(child.McpPipeline, "AskQuestionFromParent");
+        AssertMissing(child.McpPipeline, "PromptUserDialogFromParent");
         AssertHas(child.McpPipeline, "AskQuestion");
+        AssertHas(child.McpPipeline, "PromptUserDialog");
 
         child.SetRuntimeIdForTest(1);
         parent.RestoreRegisteredSubagent(child);
@@ -71,7 +79,9 @@ public class DysonParentEventTests
 
         AssertHas(child.McpPipeline, "TriggerParentEvent");
         AssertHas(child.McpPipeline, "AskQuestionFromParent");
+        AssertHas(child.McpPipeline, "PromptUserDialogFromParent");
         AssertMissing(child.McpPipeline, "AskQuestion");
+        AssertMissing(child.McpPipeline, "PromptUserDialog");
     }
 
     private static void AssertFormatter()

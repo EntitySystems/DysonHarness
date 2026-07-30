@@ -87,11 +87,15 @@
         }
     </div>
     <Composer @ref="_composer"
-              Disabled="@(Disabled || Host.PendingAskUi is not null)"
+              Disabled="@(Disabled || Host.PendingAskUi is not null || Host.PendingUserDialogUi is not null)"
               SelectedSlugId="SelectedSlugId"
               SelectedSlugIdChanged="SelectedSlugIdChanged"
               ReasoningEffort="@ReasoningEffort"
               ReasoningEffortChanged="ReasoningEffortChanged"
+              MaxTargetContextTokens="MaxTargetContextTokens"
+              MaxTargetContextTokensChanged="MaxTargetContextTokensChanged"
+              OutgoingContextTokens="OutgoingContextTokens"
+              LastReportedPromptTokens="LastReportedPromptTokens"
               SelectedAgentMode="@SelectedAgentMode"
               SelectedAgentModeChanged="SelectedAgentModeChanged"
               GitBranch="@GitBranch"
@@ -123,6 +127,10 @@
     [Parameter] public EventCallback<Guid?> SelectedSlugIdChanged { get; set; }
     [Parameter] public string? ReasoningEffort { get; set; }
     [Parameter] public EventCallback<string?> ReasoningEffortChanged { get; set; }
+    [Parameter] public int MaxTargetContextTokens { get; set; } = DysonMaxTargetContextTokens.HarnessDefault;
+    [Parameter] public EventCallback<int> MaxTargetContextTokensChanged { get; set; }
+    [Parameter] public int OutgoingContextTokens { get; set; }
+    [Parameter] public int? LastReportedPromptTokens { get; set; }
     [Parameter] public string SelectedAgentMode { get; set; } = DysonAgentModes.Work;
     [Parameter] public EventCallback<string> SelectedAgentModeChanged { get; set; }
     [Parameter] public string? GitBranch { get; set; }

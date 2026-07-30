@@ -172,6 +172,9 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
         var usageHint = usageResponse is not null
             ? OpenAiCompatibleHttp.FormatUsageCacheHint(usageResponse)
             : null;
+        var promptTokens = usageResponse is not null
+            ? OpenAiCompatibleHttp.TryParsePromptTokens(usageResponse)
+            : null;
 
         yield return Result<OpenAiStreamChunk, string>.AsValue(new OpenAiStreamChunk
         {
@@ -183,6 +186,7 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
                 ToolCalls = toolCalls,
                 ResponseId = responseId,
                 UsageCacheHint = usageHint,
+                PromptTokens = promptTokens,
             },
         });
     }
@@ -234,6 +238,7 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
             ToolCalls = toolCalls,
             ResponseId = response["id"]?.GetValue<string>(),
             UsageCacheHint = OpenAiCompatibleHttp.FormatUsageCacheHint(response),
+            PromptTokens = OpenAiCompatibleHttp.TryParsePromptTokens(response),
         });
     }
 

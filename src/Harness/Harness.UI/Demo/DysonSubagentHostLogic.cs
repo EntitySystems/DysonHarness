@@ -64,9 +64,34 @@ public static class DysonSubagentHostLogic
         return true;
     }
 
-    /// <summary>Parent must enqueue DrainAutoTurnsAsync whenever Ask UI is not opened for this event.</summary>
+    /// <summary>
+    /// True only when kind is promptUserDialog and payload parses as PromptUserDialog JSON (modal path).
+    /// </summary>
+    public static bool TryBuildUserDialogUi(
+        string? eventKind,
+        string? payload,
+        out DysonPromptUserDialogRequest dialog)
+    {
+        dialog = null!;
+        if (!string.Equals(
+                eventKind,
+                DysonPromptUserDialog.PromptUserDialogKind,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var parsed = DysonPromptUserDialog.ParseDialogJson(payload);
+        if (parsed.IsError)
+            return false;
+
+        dialog = parsed.Value;
+        return true;
+    }
+
+    /// <summary>Parent must enqueue DrainAutoTurnsAsync whenever Ask / Dialog UI is not opened for this event.</summary>
     public static bool RequiresParentAutoTurn(string? eventKind, string? payload) =>
-        !TryBuildAskUi(eventKind, payload, out _);
+        !TryBuildAskUi(eventKind, payload, out _) && !TryBuildUserDialogUi(eventKind, payload, out _);
 
     /// <summary>First non-empty line of a prompt (queue popover preview).</summary>
     public static string PromptFirstLine(string prompt)
@@ -116,6 +141,21 @@ public sealed class DysonAskUiState
     public Guid? EventId { get; init; }
     public int? SubagentId { get; init; }
     public required IReadOnlyList<DysonAskQuestionItem> Questions { get; init; }
+}
+
+public enum DysonUserDialogUiSource
+{
+    RootPromptUserDialog = 0,
+    ParentEventPromptUserDialog = 1,
+}
+
+public sealed class DysonUserDialogUiState
+{
+    public required DysonUserDialogUiSource Source { get; init; }
+    public required Guid SessionPersistenceId { get; init; }
+    public Guid? EventId { get; init; }
+    public int? SubagentId { get; init; }
+    public required DysonPromptUserDialogRequest Dialog { get; init; }
 }
 
 public sealed class DysonSubagentEventUiItem

@@ -96,10 +96,10 @@ public static class DysonAgentSystemPrompts
         - Do the work yourself only when it is short, single-turn, and obvious (no exploration needed).
         - After spawn, prefer continuing other work; completion arrives as a harness turn with SubmitSubagentReport content — incorporate and proceed.
         - Call WaitForSubagent only when an Explore (or similar) child’s output blocks the next automatic turn. Otherwise do not Wait — keep multitasking until the notification turn.
-        - Never call WaitForSubagent while also expecting a child TriggerParentEvent / AskQuestionFromParent — Wait blocks the orchestrator from addressing new parent events (deadlock). Prefer notification turns, or RespondToSubagentEvent for already-pending events (Respond works even mid-Wait).
-        - When a harness continuation reports a subagent event, call RespondToSubagentEvent with the eventId so the child unblocks. askQuestion events are answered by the Auto UI (you do not Respond for those).
+        - Never call WaitForSubagent while also expecting a child TriggerParentEvent / AskQuestionFromParent / PromptUserDialogFromParent — Wait blocks the orchestrator from addressing new parent events (deadlock). Prefer notification turns, or RespondToSubagentEvent for already-pending events (Respond works even mid-Wait).
+        - When a harness continuation reports a subagent event, call RespondToSubagentEvent with the eventId so the child unblocks. askQuestion / promptUserDialog events are answered by the Auto UI (you do not Respond for those).
         - Use TriggerSubagentEvent to inject instructions into a child (queued next turn by default; interruptSubagent=true cancels the child’s in-flight turn / pending parent-event wait and runs immediately).
-        - Root clarifying questions: AskQuestion (composer UI). Do not use AskQuestionFromParent on the root.
+        - Root clarifying / design questions: AskQuestion (composer UI). Root concrete action choices: PromptUserDialog (modal). Do not use FromParent tools on the root.
         - Use ListSubagents to rediscover child ids after resume or when StartSubagent results are no longer in recent context; then InspectSubagentLog / StopSubagent / Wait as needed — never busy-wait in a tight loop.
         - Keep diffs focused when you do implement; follow project rules (including C# Result pattern and /skills location).
         - When done, summarize what changed and how it was verified.
@@ -120,7 +120,7 @@ public static class DysonAgentSystemPrompts
         - When investigation is done — or blocked — call SubmitSubagentReport with structured findings (`completed` or `failed`) so the parent can continue.
         - Blocked or incomplete investigation: SubmitSubagentReport with status `failed` and a concrete failure reason (missing data, access blocker, tool error) — do not silently abandon, and do not retry SubmitSubagentReport after a successful submit.
         - Prefer SubmitSubagentReport for final handoff. Mid-run parent coordination: TriggerParentEvent (blocks until RespondToSubagentEvent). Do not TriggerParentEvent while the parent may be inside WaitForSubagent — that call fails (deadlock guard).
-        - L1 clarifying questions for the user: AskQuestionFromParent (not AskQuestion). Deeper layers: TriggerParentEvent only (no AskQuestionFromParent).
+        - L1 clarifying / design questions for the user: AskQuestionFromParent (not AskQuestion). L1 concrete action choices: PromptUserDialogFromParent. Deeper layers: TriggerParentEvent only (no AskQuestionFromParent / PromptUserDialogFromParent).
         """;
 
     public const string DroneDirective = """
@@ -135,7 +135,7 @@ public static class DysonAgentSystemPrompts
         - Optional reasoningEffort on StartSubagent (omit → slug defaultEffort; when inheriting, omit keeps your current effort).
         - May spawn Explore only — never another Drone by default.
         - Same Wait/notify rules as Work for any Explore children: Wait only when an Explore child’s output blocks the next automatic turn; otherwise continue and incorporate SubmitSubagentReport notification turns.
-        - Prefer AskQuestionFromParent (L1) for clarifying questions that must reach the user; do not invent answers. If blocked without that path, SubmitSubagentReport with status failed and a concrete failure reason, then stop.
+        - Prefer AskQuestionFromParent (L1) for clarifying / design questions that must reach the user; Prefer PromptUserDialogFromParent (L1) for concrete action choices; do not invent answers. If blocked without that path, SubmitSubagentReport with status failed and a concrete failure reason, then stop.
         - Mid-run parent coordination: TriggerParentEvent (blocks until parent RespondToSubagentEvent). Do not expect a reply while the parent may be WaitForSubagent — that Trigger fails.
         - After a tool failure: diagnose, retry or take an alternate approach, and keep working until the task is done or truly blocked. Do not stop after a single failed tool or wait for the user to say “resume”.
         - On success: verify as required, update todos, then SubmitSubagentReport with status completed and a crisp handoff the parent can consume without re-deriving your steps.

@@ -178,6 +178,26 @@
                         }
                     </select>
                 </label>
+                <div class="composer-context-limit" title="Max target context (0 = Off). DropContext injects when estimated outgoing tokens exceed this.">
+                    <span class="composer-effort__label">Context</span>
+                    <button type="button"
+                            class="composer-context-limit__step"
+                            disabled="@Disabled"
+                            aria-label="Decrease max target context by 10K"
+                            @onclick="() => StepMaxTargetAsync(-DysonMaxTargetContextTokens.Step)">−</button>
+                    <span class="composer-context-limit__value">@DysonMaxTargetContextTokens.FormatCompact(MaxTargetContextTokens, zeroAsOff: true)</span>
+                    <button type="button"
+                            class="composer-context-limit__step"
+                            disabled="@Disabled"
+                            aria-label="Increase max target context by 10K"
+                            @onclick="() => StepMaxTargetAsync(DysonMaxTargetContextTokens.Step)">+</button>
+                    <span class="composer-chip composer-chip--context"
+                          title="@(LastReportedPromptTokens is int reported
+                              ? $"Estimated outgoing / max (last reported prompt: {DysonMaxTargetContextTokens.FormatCompact(reported)})"
+                              : "Estimated outgoing / max")">
+                        @FormatContextReadout()
+                    </span>
+                </div>
                 <AgentModePicker SelectedMode="@SelectedAgentMode"
                                  SelectedModeChanged="SelectedAgentModeChanged" />
                 <span class="composer-chip composer-chip--branch @(string.IsNullOrEmpty(GitBranch) ? "is-muted" : null)"
@@ -223,6 +243,10 @@
     [Parameter] public EventCallback<Guid?> SelectedSlugIdChanged { get; set; }
     [Parameter] public string? ReasoningEffort { get; set; }
     [Parameter] public EventCallback<string?> ReasoningEffortChanged { get; set; }
+    [Parameter] public int MaxTargetContextTokens { get; set; } = DysonMaxTargetContextTokens.HarnessDefault;
+    [Parameter] public EventCallback<int> MaxTargetContextTokensChanged { get; set; }
+    [Parameter] public int OutgoingContextTokens { get; set; }
+    [Parameter] public int? LastReportedPromptTokens { get; set; }
     [Parameter] public string SelectedAgentMode { get; set; } = DysonAgentModes.Work;
     [Parameter] public EventCallback<string> SelectedAgentModeChanged { get; set; }
     [Parameter] public string? GitBranch { get; set; }
@@ -278,6 +302,26 @@
             return;
 
         await ReasoningEffortChanged.InvokeAsync(next);
+    }
+
+    private async Task StepMaxTargetAsync(int delta)
+    {
+        var next = Math.Clamp(
+            MaxTargetContextTokens + delta,
+            0,
+            DysonMaxTargetContextTokens.Ceiling);
+        if (next == MaxTargetContextTokens)
+            return;
+
+        await MaxTargetContextTokensChanged.InvokeAsync(next);
+    }
+
+    private string FormatContextReadout()
+    {
+        var used = DysonMaxTargetContextTokens.FormatCompact(OutgoingContextTokens);
+        if (MaxTargetContextTokens <= 0)
+            return used;
+        return $"{used} / {DysonMaxTargetContextTokens.FormatCompact(MaxTargetContextTokens, zeroAsOff: true)}";
     }
 
     protected override async Task OnInitializedAsync()

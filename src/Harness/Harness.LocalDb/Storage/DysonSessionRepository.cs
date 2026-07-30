@@ -201,6 +201,7 @@ public sealed class DysonSessionRepository(
                 ModelSlugId = request.ModelSlugId,
                 WorkDirectoryId = request.WorkDirectoryId,
                 ReasoningEffort = request.ReasoningEffort,
+                MaxTargetContextTokens = request.MaxTargetContextTokens,
                 McpAccessMode = request.McpAccessMode,
                 Status = request.Status,
                 Title = request.Title,
@@ -254,6 +255,9 @@ public sealed class DysonSessionRepository(
 
             if (update.UpdateReasoningEffort)
                 entity.ReasoningEffort = update.ReasoningEffort;
+
+            if (update.UpdateMaxTargetContextTokens)
+                entity.MaxTargetContextTokens = update.MaxTargetContextTokens;
 
             if (update.AgentMode is not null)
                 entity.AgentMode = update.AgentMode;

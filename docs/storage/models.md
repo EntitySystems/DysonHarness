@@ -132,6 +132,7 @@ On `IDysonModelRepository`, create / update / managed upsert take an explicit `s
 | `IsDefault` | Global default selection for new sessions (one default across all providers) |
 | `IsEnabled` | When false, omitted from new selection catalogs (picker, Composer `/model`, system-prompt catalog, `FindSlugByNameAsync`); Settings → Models still lists it. Managed providers only expose Enable/Disable; manual/custom slugs stay always selectable (API rejects toggle). Default `true` (migration + new inserts). |
 | `DefaultReasoningEffort` | Optional freeform default effort (e.g. `high` / `low`); null/empty = omit. Wire shape depends on API mode: Completions → top-level `reasoning_effort`; Responses → nested `reasoning.effort` |
+| `DefaultMaxTargetContextTokens` | Optional default max target context for new sessions; null = harness 100K. Session override via `sessions.MaxTargetContextTokens` (0 = Off) |
 | `ReasoningModes` | Freeform `List<string>` of effort values for the Composer dropdown; stored as JSON TEXT via `StringListJsonValueConverter` (normalize on write; empty list on bad JSON read); default `[]` |
 | `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
 
@@ -153,7 +154,7 @@ Subject-owned starred slugs for the Composer model picker (persisted per app-dat
 Functional API over LocalDb (Result / VoidResult). Visibility: list/resolve providers and slugs where `SubjectId == current OR SubjectId == shared`. Shared writes require `IDysonAccessEvaluator.Can(ManageSharedProviders)`.
 
 - **Providers:** list (include slugs), get, create (`shared` flag), update (incl. `ApiKey` / `BaseUrl` / `OpenAiApiMode`; rejected when `ManagedSource` set; `shared` flag), `UpsertManagedProviderAsync` (id-stable by source + merge slugs by name, preserving `Id`/`IsEnabled`/`DefaultReasoningEffort`; `shared` flag), delete
-- **Slugs:** add under a provider (optional `defaultReasoningEffort` + `reasoningModes`; rejected when provider is managed), update (alias / slug / default effort / modes / is-default; rejected when managed), remove (rejected when managed), `SetSlugEnabledAsync` (managed only), `SetSlugDefaultReasoningEffortAsync` (managed only; blank → omit)
+- **Slugs:** add under a provider (optional `defaultReasoningEffort` + `reasoningModes`; rejected when provider is managed), update (alias / slug / default effort / modes / is-default; rejected when managed), remove (rejected when managed), `SetSlugEnabledAsync` (managed only), `SetSlugDefaultReasoningEffortAsync` (managed only; blank → omit), `SetSlugDefaultMaxTargetContextTokensAsync` (managed only; null → harness 100K)
 - **Selection:** get/set default slug (get prefers enabled `IsDefault`, else first enabled; set rejects disabled), get slug by id (with provider loaded; works for disabled — resume), `FindSlugByNameAsync` (enabled only; case-insensitive exact match on `Slug` then `DisplayAlias`; visible = current + shared)
 - **Favorites:** `ListFavoriteSlugIdsAsync`, `AddFavoriteAsync`, `RemoveFavoriteAsync`, `IsFavoriteAsync` (current subject only)
 
@@ -168,6 +169,16 @@ Per-slug **default** (`DefaultReasoningEffort`) plus a **session override** (`se
 5. Live `OpenAiCompatibleAgentProvider.ReasoningEffort` is built as session value when set (including empty = omit); if session value is null (legacy rows), fall back to slug default.
 6. When non-empty, Completions request bodies include top-level `"reasoning_effort": "<value>"` and Responses include nested `"reasoning": { "effort": "<value>" }`; blank/null omits the field.
 7. `StartSubagent.reasoningEffort` (optional) sets the child’s effort; omit/null uses the chosen slug’s default (or keeps the parent’s current effort when inheriting the parent model).
+
+## Max target context
+
+Per-slug **default** (`DefaultMaxTargetContextTokens`) plus a **session override** (`sessions.MaxTargetContextTokens`):
+
+1. Cascade: session value if set → else slug default if set → else harness **100_000**. Session **0** = Off (unlimited; no DropContext inject).
+2. New sessions leave session override null (inherit). Composer ±10K stepper writes the session override (floor 0 / Off, ceiling 1_000_000).
+3. Models page (managed slugs): **Default context** stepper next to effort; Clear → null (harness 100K). Summary line shows `· context 200K` when set.
+4. Before each provider request (after `OptimizeContextIfNeeded`), if estimated outgoing tokens exceed the effective max and older-than-last-4 turns exist, the harness injects a `DropContext` turn (agent may call `DropTurnContext`), then resumes the original prompt. Nested inject is blocked while DropContext is in flight.
+5. Footer live readout: estimated outgoing tokens from the same transcript-builder counter (`12.4K / 100K`, or just `12.4K` when Off).
 
 ## System-prompt catalog
 

@@ -14,6 +14,7 @@ public class DysonModelSlugEnabledTests
         AssertUpsertMergePreservesDefaultReasoningEffort();
         AssertSetSlugEnabledRejectsManual();
         AssertSetSlugDefaultReasoningEffortManagedAndRejectsManual();
+        AssertSetSlugDefaultMaxTargetContextTokensManagedAndRejectsManual();
         AssertDisabledDefaultFallsBack();
         AssertFindSlugSkipsDisabled();
         AssertSetDefaultRejectsDisabled();
@@ -229,6 +230,71 @@ public class DysonModelSlugEnabledTests
         var reject = store.SetSlugDefaultReasoningEffortAsync(add.Value, "high").GetAwaiter().GetResult();
         if (!reject.IsError)
             throw new InvalidOperationException("SetSlugDefaultReasoningEffortAsync must reject manual provider slugs.");
+    }
+
+    private static void AssertSetSlugDefaultMaxTargetContextTokensManagedAndRejectsManual()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var store = DysonTempDb.Models(accessor);
+
+        var upsert = store.UpsertManagedProviderAsync(
+            "cliproxy-context-set",
+            "Context Set",
+            "http://127.0.0.1:1/v1",
+            "key",
+            DysonOpenAiApiModes.Responses,
+            [new ManagedSlugSpec("m", "M", "high", ["high"])]).GetAwaiter().GetResult();
+        if (upsert.IsError)
+            throw new InvalidOperationException(upsert.Error);
+
+        var listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+        if (listed.IsError)
+            throw new InvalidOperationException(listed.Error);
+
+        var managedId = listed.Value.Single().Slugs.Single().Id;
+        var set = store.SetSlugDefaultMaxTargetContextTokensAsync(managedId, 200_000)
+            .GetAwaiter().GetResult();
+        if (set.IsError)
+            throw new InvalidOperationException(set.Error);
+
+        listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+        if (listed.IsError)
+            throw new InvalidOperationException(listed.Error);
+        if (listed.Value.Single().Slugs.Single().DefaultMaxTargetContextTokens != 200_000)
+            throw new InvalidOperationException(
+                "SetSlugDefaultMaxTargetContextTokensAsync must persist for managed slugs.");
+
+        var clear = store.SetSlugDefaultMaxTargetContextTokensAsync(managedId, null)
+            .GetAwaiter().GetResult();
+        if (clear.IsError)
+            throw new InvalidOperationException(clear.Error);
+
+        listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+        if (listed.IsError)
+            throw new InvalidOperationException(listed.Error);
+        if (listed.Value.Single().Slugs.Single().DefaultMaxTargetContextTokens is not null)
+            throw new InvalidOperationException("Null must clear DefaultMaxTargetContextTokens.");
+
+        var create = store.CreateProviderAsync(new DysonModelProviderEntity
+        {
+            DisplayName = "Manual Context",
+            ProviderKind = DysonProviderKinds.OpenAICompatible,
+            BaseUrl = "https://api.openai.com/v1",
+            ApiKey = "k",
+        }).GetAwaiter().GetResult();
+        if (create.IsError)
+            throw new InvalidOperationException(create.Error);
+
+        var add = store.AddSlugAsync(create.Value, "gpt-4o", "GPT-4o").GetAwaiter().GetResult();
+        if (add.IsError)
+            throw new InvalidOperationException(add.Error);
+
+        var reject = store.SetSlugDefaultMaxTargetContextTokensAsync(add.Value, 100_000)
+            .GetAwaiter().GetResult();
+        if (!reject.IsError)
+            throw new InvalidOperationException(
+                "SetSlugDefaultMaxTargetContextTokensAsync must reject manual provider slugs.");
     }
 
     private static void AssertDisabledDefaultFallsBack()

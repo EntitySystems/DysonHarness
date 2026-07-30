@@ -22,6 +22,7 @@ public abstract class DysonAgentSession
     private readonly ConcurrentQueue<DysonAgentTurn> _pendingTurns = new();
     private TaskCompletionSource<Result<string, string>>? _parentEventWaitTcs;
     private TaskCompletionSource<Result<string, string>>? _askQuestionTcs;
+    private TaskCompletionSource<Result<string, string>>? _promptUserDialogTcs;
     private readonly object _askQuestionGate = new();
 
     protected DysonAgentSession(
@@ -93,6 +94,9 @@ public abstract class DysonAgentSession
 
     /// <summary>Root AskQuestion pending questions (null when idle).</summary>
     public IReadOnlyList<DysonAskQuestionItem>? PendingAskQuestions { get; private set; }
+
+    /// <summary>Root PromptUserDialog pending request (null when idle).</summary>
+    public DysonPromptUserDialogRequest? PendingUserDialog { get; private set; }
 
     /// <summary>Pending + recently addressed inbound parent events (host Subagent-event UI).</summary>
     public IReadOnlyList<DysonParentEvent> PendingOrRecentParentEvents =>
@@ -321,7 +325,7 @@ public abstract class DysonAgentSession
     /// <summary>Raised after <see cref="RegisterSubagent"/> (host session registry).</summary>
     public event EventHandler<DysonAgentSession>? SubagentSpawned;
 
-    /// <summary>Raised when inbound parent events or root AskQuestion pending state changes (UI).</summary>
+    /// <summary>Raised when inbound parent events or root AskQuestion / PromptUserDialog pending state changes (UI).</summary>
     public event EventHandler? ParentEventsChanged;
 
     public bool TryDequeueInterrupt(out DysonAgentInterrupt interrupt)
@@ -741,6 +745,9 @@ public abstract class DysonAgentSession
             if (_askQuestionTcs is { Task.IsCompleted: false })
                 return Result<string, string>.AsError("AskQuestion: another question set is already pending.");
 
+            if (_promptUserDialogTcs is { Task.IsCompleted: false })
+                return Result<string, string>.AsError("AskQuestion: a PromptUserDialog is already pending.");
+
             tcs = new TaskCompletionSource<Result<string, string>>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             _askQuestionTcs = tcs;
@@ -807,6 +814,88 @@ public abstract class DysonAgentSession
         }));
 
         return TriggerParentEventAsync(DysonAskQuestion.AskQuestionKind, payload, cancellationToken);
+    }
+
+    /// <summary>Root-only: block until the host UI picks a modal action (or Skip).</summary>
+    public async Task<Result<string, string>> PromptUserDialogAsync(
+        string dialogJson,
+        CancellationToken cancellationToken = default)
+    {
+        if (Parent is not null)
+            return Result<string, string>.AsError("PromptUserDialog: root sessions only.");
+
+        var parsed = DysonPromptUserDialog.ParseDialogJson(dialogJson);
+        if (parsed.IsError)
+            return Result<string, string>.AsError(parsed.Error);
+
+        TaskCompletionSource<Result<string, string>> tcs;
+        lock (_askQuestionGate)
+        {
+            if (_promptUserDialogTcs is { Task.IsCompleted: false })
+                return Result<string, string>.AsError("PromptUserDialog: another dialog is already pending.");
+
+            if (_askQuestionTcs is { Task.IsCompleted: false })
+                return Result<string, string>.AsError("PromptUserDialog: an AskQuestion is already pending.");
+
+            tcs = new TaskCompletionSource<Result<string, string>>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            _promptUserDialogTcs = tcs;
+            PendingUserDialog = parsed.Value;
+        }
+
+        RaiseParentEventsChanged();
+
+        try
+        {
+            using var reg = cancellationToken.Register(() =>
+                tcs.TrySetResult(Result<string, string>.AsError("PromptUserDialog was cancelled.")));
+
+            return await tcs.Task.ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_askQuestionGate)
+            {
+                if (ReferenceEquals(_promptUserDialogTcs, tcs))
+                {
+                    _promptUserDialogTcs = null;
+                    PendingUserDialog = null;
+                }
+            }
+
+            RaiseParentEventsChanged();
+        }
+    }
+
+    /// <summary>Completes a pending root <see cref="PromptUserDialogAsync"/> with a pre-formatted JSON result.</summary>
+    public Result<string, string> RespondToPromptUserDialog(string formattedResult)
+    {
+        lock (_askQuestionGate)
+        {
+            if (_promptUserDialogTcs is null || _promptUserDialogTcs.Task.IsCompleted)
+                return Result<string, string>.AsError("RespondToPromptUserDialog: no pending PromptUserDialog.");
+
+            var body = formattedResult ?? "";
+            _promptUserDialogTcs.TrySetResult(Result<string, string>.AsValue(body));
+            PendingUserDialog = null;
+            _promptUserDialogTcs = null;
+        }
+
+        RaiseParentEventsChanged();
+        return Result<string, string>.AsValue("ok");
+    }
+
+    /// <summary>L1 wrapper: <see cref="TriggerParentEventAsync"/> with kind promptUserDialog.</summary>
+    public Task<Result<string, string>> PromptUserDialogFromParentAsync(
+        string dialogJson,
+        CancellationToken cancellationToken = default)
+    {
+        var parsed = DysonPromptUserDialog.ParseDialogJson(dialogJson);
+        if (parsed.IsError)
+            return Task.FromResult(Result<string, string>.AsError(parsed.Error));
+
+        var payload = DysonPromptUserDialog.SerializeRequest(parsed.Value);
+        return TriggerParentEventAsync(DysonPromptUserDialog.PromptUserDialogKind, payload, cancellationToken);
     }
 
     internal void CancelPendingParentEventWait(string reason)
@@ -907,6 +996,50 @@ public abstract class DysonAgentSession
                    && current.CompletedUtc is null;
         }
     }
+
+    /// <summary>
+    /// True while the in-flight turn is <see cref="DysonAgentTurnKind.DropContext"/>
+    /// (blocks nested DropContext inject).
+    /// </summary>
+    public bool IsInDropContextPhase
+    {
+        get
+        {
+            if (TurnHistory.Count == 0)
+                return false;
+
+            var current = TurnHistory[^1];
+            return current.Kind == DysonAgentTurnKind.DropContext
+                   && current.CompletedUtc is null;
+        }
+    }
+
+    /// <summary>
+    /// Session override for max target context tokens.
+    /// Null = inherit slug / harness default; 0 = Off (no DropContext inject).
+    /// </summary>
+    public int? MaxTargetContextTokens { get; set; }
+
+    /// <summary>Current slug <c>DefaultMaxTargetContextTokens</c> (null = harness default).</summary>
+    public int? SlugDefaultMaxTargetContextTokens { get; set; }
+
+    /// <summary>
+    /// Last provider-reported <c>prompt_tokens</c> / <c>input_tokens</c> from usage (optional UI secondary).
+    /// </summary>
+    public int? LastReportedPromptTokens { get; set; }
+
+    /// <summary>
+    /// Cascade: session override if set → slug default if set → harness 100K.
+    /// 0 means Off / unlimited (no inject).
+    /// </summary>
+    public int ResolveEffectiveMaxTargetContextTokens() =>
+        DysonMaxTargetContextTokens.Resolve(MaxTargetContextTokens, SlugDefaultMaxTargetContextTokens);
+
+    /// <summary>
+    /// Estimated tokens for the outbound Completions/Responses payload (idle: no in-flight rounds).
+    /// </summary>
+    public int EstimateOutgoingContextTokens() =>
+        DysonOutgoingContextTokens.Count(this, TokenCounter);
 
     private void RaiseParentEventsChanged() => ParentEventsChanged?.Invoke(this, EventArgs.Empty);
 
@@ -1377,6 +1510,7 @@ public abstract class DysonAgentSession
         Id = state.Session.RuntimeId;
         DisplayTitle = state.Session.Title;
         Status = state.Session.Status;
+        MaxTargetContextTokens = state.Session.MaxTargetContextTokens;
         if (IsTerminal)
             _terminalTcs.TrySetResult((Status, LastReportSummary));
 
@@ -1775,6 +1909,13 @@ public abstract class DysonAgentSession
     /// </summary>
     public DysonAgentTurn CreateExpandThoughtProcessTurn(string? focus = null) =>
         DysonExpandThoughtProcess.CreateTurn(focus);
+
+    /// <summary>
+    /// Creates a DropContext turn (prune older noise when over max target).
+    /// Does not append to <see cref="TurnHistory"/>.
+    /// </summary>
+    public DysonAgentTurn CreateDropContextTurn() =>
+        DysonDropContextFlow.CreateTurn();
 
     /// <summary>
     /// Creates a TaskCompletionConfirm turn after CompleteTask.

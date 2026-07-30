@@ -14,6 +14,12 @@ public sealed class DysonModelSlugEntity
     /// <summary>Default top-level reasoning_effort for this slug; null/empty = omit.</summary>
     public string? DefaultReasoningEffort { get; set; }
 
+    /// <summary>
+    /// Default max target context tokens for new sessions on this slug.
+    /// Null = harness default (100K).
+    /// </summary>
+    public int? DefaultMaxTargetContextTokens { get; set; }
+
     /// <summary>reasoning_effort values for the composer dropdown; empty = None only.</summary>
     public List<string> ReasoningModes { get; set; } = [];
 

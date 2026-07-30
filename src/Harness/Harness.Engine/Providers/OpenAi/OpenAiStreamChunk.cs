@@ -12,6 +12,9 @@ public sealed class OpenAiModelReply
     public string? ResponseId { get; init; }
     public string? UsageCacheHint { get; init; }
 
+    /// <summary>Provider <c>prompt_tokens</c> / <c>input_tokens</c> when usage is present.</summary>
+    public int? PromptTokens { get; init; }
+
     /// <summary>
     /// Raw Responses <c>type:reasoning</c> output items (incl. <c>encrypted_content</c>) for
     /// stateless tool-loop replay. Separate from UI <see cref="ReasoningContent"/>.

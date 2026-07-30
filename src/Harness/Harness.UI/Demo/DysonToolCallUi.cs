@@ -79,6 +79,8 @@ public static class DysonToolCallUi
             "SubmitSubagentReport" => SummarizeSubmitReport(argumentsJson),
             "AskQuestion" => SummarizeAskQuestion(argumentsJson, viaParent: false),
             "AskQuestionFromParent" => SummarizeAskQuestion(argumentsJson, viaParent: true),
+            "PromptUserDialog" => SummarizePromptUserDialog(argumentsJson, viaParent: false),
+            "PromptUserDialogFromParent" => SummarizePromptUserDialog(argumentsJson, viaParent: true),
             "TriggerParentEvent" => SummarizeTriggerParent(argumentsJson),
             "RespondToSubagentEvent" => SummarizeRespondToSubagent(argumentsJson),
             "TriggerSubagentEvent" => SummarizeTriggerSubagent(argumentsJson),
@@ -824,6 +826,23 @@ public static class DysonToolCallUi
         if (viaParent)
             text += " · via parent";
         return TextSummary(text);
+    }
+
+    private static CollapsedSummary SummarizePromptUserDialog(string? argumentsJson, bool viaParent)
+    {
+        var title = Truncate(GetString(argumentsJson, "title") ?? "dialog", 32);
+        var n = 0;
+        if (TryParseObject(argumentsJson, out var root)
+            && root.TryGetProperty("actions", out var actions)
+            && actions.ValueKind == JsonValueKind.Array)
+        {
+            n = actions.GetArrayLength();
+        }
+
+        var text = $"{title} · {n} action{(n == 1 ? "" : "s")}";
+        if (viaParent)
+            text += " · via parent";
+        return TextSummary(Truncate(text, SummaryMaxLength));
     }
 
     private static CollapsedSummary SummarizeTriggerParent(string? argumentsJson)

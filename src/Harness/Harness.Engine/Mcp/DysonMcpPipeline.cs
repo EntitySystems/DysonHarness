@@ -384,21 +384,24 @@ public sealed class DysonMcpPipeline
         if (depth <= 0)
         {
             Tools.Remove("AskQuestionFromParent");
+            Tools.Remove("PromptUserDialogFromParent");
             Tools.Remove("TriggerParentEvent");
-            // AskQuestion, RespondToSubagentEvent, TriggerSubagentEvent stay
+            // AskQuestion, PromptUserDialog, RespondToSubagentEvent, TriggerSubagentEvent stay
             return;
         }
 
         Tools.Remove("AskQuestion");
+        Tools.Remove("PromptUserDialog");
 
         if (depth == 1)
         {
-            // AskQuestionFromParent, TriggerParentEvent, Respond, TriggerSubagentEvent stay
+            // AskQuestionFromParent, PromptUserDialogFromParent, TriggerParentEvent, Respond, TriggerSubagentEvent stay
             return;
         }
 
-        // Deeper: no AskQuestionFromParent
+        // Deeper: no AskQuestionFromParent / PromptUserDialogFromParent
         Tools.Remove("AskQuestionFromParent");
+        Tools.Remove("PromptUserDialogFromParent");
     }
 
     private void EnsureInterAgentToolsPresent()
@@ -413,12 +416,14 @@ public sealed class DysonMcpPipeline
     private static IEnumerable<DysonMcpTool> InterAgentTools()
     {
         var questionsSchema = DysonAskQuestion.SharedQuestionsSchemaJson();
+        var dialogSchema = DysonPromptUserDialog.SharedDialogSchemaJson();
 
         yield return new DysonMcpTool
         {
             Name = "AskQuestion",
             Description =
-                "Root-only: ask the user 1–8 clarifying questions via the composer UI and block until answered. " +
+                "Root-only: ask the user 1–8 clarifying / design questions via the composer UI and block until answered. " +
+                "Use for open-ended clarification — not for picking among concrete next actions (use PromptUserDialog for that). " +
                 "Per-question Skip is allowed; allowMultiple permits multi-select; custom answers always allowed. " +
                 "Result is a Q#/A# text block.",
             InputSchemaJson = $$"""
@@ -436,8 +441,9 @@ public sealed class DysonMcpPipeline
         {
             Name = "AskQuestionFromParent",
             Description =
-                "L1 subagent only: ask the parent user clarifying questions (wraps TriggerParentEvent kind=askQuestion). " +
-                "Blocks until the user answers in the Auto UI. Same questions schema as AskQuestion.",
+                "L1 subagent only: ask the parent user clarifying / design questions (wraps TriggerParentEvent kind=askQuestion). " +
+                "Blocks until the user answers in the Auto UI. Same questions schema as AskQuestion. " +
+                "For concrete action choices use PromptUserDialogFromParent instead.",
             InputSchemaJson = $$"""
                 {
                   "type": "object",
@@ -451,25 +457,47 @@ public sealed class DysonMcpPipeline
 
         yield return new DysonMcpTool
         {
+            Name = "PromptUserDialog",
+            Description =
+                "Root-only: show a modal action picker (title, description, 1–4 actions) and block until the user chooses. " +
+                "Use when a future step is unclear and you need a quick choice among concrete options. " +
+                "Do not use for open-ended design clarification (use AskQuestion). " +
+                "UI always adds a non-primary Skip. Result JSON: { action, skipped } (Skip includes guidance).",
+            InputSchemaJson = dialogSchema,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "PromptUserDialogFromParent",
+            Description =
+                "L1 subagent only: modal action picker for the parent user (wraps TriggerParentEvent kind=promptUserDialog). " +
+                "Blocks until the user chooses in the Auto UI. Same schema as PromptUserDialog. " +
+                "For clarifying / design questions use AskQuestionFromParent instead.",
+            InputSchemaJson = dialogSchema,
+        };
+
+        yield return new DysonMcpTool
+        {
             Name = "TriggerParentEvent",
             Description =
                 "Subagent → parent: queue an event and block until the parent calls RespondToSubagentEvent. " +
                 "Fails immediately if the parent is inside WaitForSubagent for any child (deadlock guard). " +
                 "Prefer SubmitSubagentReport for final handoff; use this for mid-run coordination. " +
                 "For agent-to-agent text use kind like message or status (parent gets a harness continuation turn). " +
-                "askQuestion opens Ask UI only when payload is the AskQuestion questions schema — prefer AskQuestionFromParent for that; " +
-                "plain-text askQuestion is treated like other kinds (parent auto-turn).",
+                "askQuestion opens Ask UI only when payload is the AskQuestion questions schema — prefer AskQuestionFromParent; " +
+                "promptUserDialog opens the action modal when payload is the PromptUserDialog schema — prefer PromptUserDialogFromParent; " +
+                "plain-text askQuestion / promptUserDialog is treated like other kinds (parent auto-turn).",
             InputSchemaJson = """
                 {
                   "type": "object",
                   "properties": {
                     "kind": {
                       "type": "string",
-                      "description": "Event kind. Use message/status for agent-to-agent text. askQuestion only with AskQuestion questions JSON (prefer AskQuestionFromParent)."
+                      "description": "Event kind. Use message/status for agent-to-agent text. askQuestion / promptUserDialog only with their schemas (prefer AskQuestionFromParent / PromptUserDialogFromParent)."
                     },
                     "payload": {
                       "type": "string",
-                      "description": "Event payload (JSON or text) for the parent. For askQuestion, must be AskQuestion questions schema to open Ask UI."
+                      "description": "Event payload (JSON or text) for the parent. For askQuestion / promptUserDialog, must match the tool schema to open host UI."
                     }
                   },
                   "required": ["kind", "payload"]
@@ -481,7 +509,7 @@ public sealed class DysonMcpPipeline
         {
             Name = "RespondToSubagentEvent",
             Description =
-                "Parent: complete a pending child event from TriggerParentEvent / AskQuestionFromParent. " +
+                "Parent: complete a pending child event from TriggerParentEvent / AskQuestionFromParent / PromptUserDialogFromParent. " +
                 "Always allowed for a matching pending eventId even while WaitForSubagent is in progress.",
             InputSchemaJson = """
                 {

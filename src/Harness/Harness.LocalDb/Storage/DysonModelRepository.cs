@@ -640,6 +640,49 @@ public sealed class DysonModelRepository(
         }, cancellationToken);
     }
 
+    public Task<VoidResult<string>> SetSlugDefaultMaxTargetContextTokensAsync(
+        Guid id,
+        int? maxTargetContextTokens,
+        CancellationToken cancellationToken = default)
+    {
+        var currentSubject = _subjectContext.SubjectId;
+        return _accessor.RunAsync(async (db, cancellationToken) =>
+        {
+            try
+            {
+                var existing = await db.ModelSlugs
+                    .Include(s => s.Provider)
+                    .FirstOrDefaultAsync(s => s.Id == id, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (existing is null)
+                    return new VoidResult<string>($"Model slug '{id}' not found.");
+
+                var writeGate = GateProviderWrite(existing.Provider, currentSubject);
+                if (writeGate is not null)
+                    return new VoidResult<string>(writeGate);
+
+                if (string.IsNullOrWhiteSpace(existing.Provider?.ManagedSource))
+                {
+                    return new VoidResult<string>(
+                        "Default max target context can only be set for managed provider slugs.");
+                }
+
+                existing.DefaultMaxTargetContextTokens =
+                    DysonMaxTargetContextTokens.Normalize(maxTargetContextTokens);
+                existing.UpdatedUtc = DateTime.UtcNow;
+
+                await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
+                return VoidResult<string>.Success;
+            }
+            catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+            {
+                return new VoidResult<string>(
+                    $"Failed to set model slug default max target context: {ex.Message}");
+            }
+        }, cancellationToken);
+    }
+
     public Task<Result<DysonModelSlugEntity, string>> GetSlugAsync(
         Guid id,
         CancellationToken cancellationToken = default)
