@@ -148,15 +148,15 @@ jobs:
           echo "Assets to publish:"
           ls -la "${assets[@]}"
 
-          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/continuous" --jq .id 2>/dev/null || true)"
-          if [[ -n "${release_id}" ]]; then
-            echo "Deleting existing continuous release id=${release_id}"
-            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${release_id}"
+          if gh release view continuous >/dev/null 2>&1; then
+            echo "Deleting existing continuous release"
+            gh release delete continuous --yes
           else
             echo "No existing continuous release"
           fi
 
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/continuous" >/dev/null 2>&1; then
+          # Drop stale tag so create can point continuous at this SHA.
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/continuous" --silent >/dev/null 2>&1; then
             echo "Deleting tag refs/tags/continuous"
             gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/continuous"
           fi
