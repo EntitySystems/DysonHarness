@@ -60,7 +60,8 @@ Boundary: `Harness.WindowsBrowser` only references Abstractions; it never calls 
 - **Direct CefSharp package on the exe:** the Windows shell (and `Harness.UI` on Windows) need a `PackageReference` to `CefSharp.Wpf.NETCore` so CefSharp `buildTransitive` targets run (notably `locales\*.pak`). A `ProjectReference` to `Harness.WindowsBrowser` alone does not import those targets into the executable.
 - Reuse `DysonNativeFolderPicker` for work-directory registration (host-process OS dialog; interactive desktop required — not for headless/remote Blazor hosts)
 - STA: shell owns the WPF message loop; Blazor Server stays MTA and marshals agent CEF work via the STA dispatcher
-- CEF cache + `cef-debug.log` live under `%LocalAppData%\DysonHarness\`
+- CEF `RootCachePath` is `%LocalAppData%\DysonHarness\` with `CachePath` = `...\cef-cache` and `cef-debug.log` beside it. Chromium allows **one process** per root: a second launch activates the existing window and exits (`Cef.GetExitCode` = `NormalExitProcessNotified`). Do not run `Harness.UI` agent CEF and the desktop shell against the same cache at once.
+- If `Cef.Initialize` fails for other reasons, the exception includes `ResultCode`, cache paths, and `BrowserSubprocessPath` (also check `%LocalAppData%\DysonHarness\cef-debug.log` and the VC++ 2022 x64 redistributable)
 
 ## Non-goals
 

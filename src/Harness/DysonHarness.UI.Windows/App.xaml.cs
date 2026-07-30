@@ -22,6 +22,12 @@ public partial class App : Application
         try
         {
             DysonCefStaHost.AttachToExistingApplication();
+            if (DysonCefStaHost.ShutdownBecauseAlreadyRunning)
+            {
+                // Chromium process singleton: existing instance was activated via OnAlreadyRunningAppRelaunch.
+                Shutdown(0);
+                return;
+            }
 
             _webHostCts = new CancellationTokenSource();
             var options = new DysonUiWebHostOptions

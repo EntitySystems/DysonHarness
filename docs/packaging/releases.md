@@ -47,7 +47,8 @@ Builds on `master` resolve app mode to **Prod** (`DysonProd` app data) via `GITH
 ## Windows notes
 
 - **VC++ redistributable:** CefSharp needs the [Visual C++ 2022 x64 redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) on machines that do not already have it.
-- First launch may unpack CEF natives next to the exe; keep the unzipped folder intact.
+- Keep the unzipped folder intact (`CefSharp.BrowserSubprocess.exe`, `libcef.dll`, `locales\`, etc. must stay next to `DysonHarness.exe`).
+- **Single instance:** CEF uses a process singleton on `%LocalAppData%\DysonHarness\`. A second double-click focuses the running window and exits; that is not a packaging failure.
 - External http(s) links and popups open in the **OS default browser**; the shell CEF view stays on the local Blazor origin.
 
 Desktop / CefSharp packaging details: [webview.md](webview.md).
