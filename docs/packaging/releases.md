@@ -1,6 +1,11 @@
 # Continuous releases
 
-Every push to `master` publishes self-contained **Harness.UI** zips as a GitHub **pre-release** tagged with that run’s CalVer (`YYYY.M.run_number`).
+Every push to `master` publishes self-contained zips as a GitHub **pre-release** tagged with that run’s CalVer (`YYYY.M.run_number`).
+
+| RID | Publish project | Entrypoint |
+| --- | --------------- | ---------- |
+| `win-x64` | `DysonHarness.UI.Windows` | `DysonHarness.exe` (CefSharp WPF shell hosting Blazor in-process) |
+| `linux-x64` / `osx-*` | `Harness.UI` | `Harness.UI` |
 
 Pull requests to `master` run tests only (see [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)); they do not publish artifacts.
 
@@ -14,7 +19,7 @@ Pull requests to `master` run tests only (see [`.github/workflows/ci.yml`](../..
 
 | RID | Runner / OS | Notes |
 | --- | ----------- | ----- |
-| `win-x64` | Windows | Includes CefSharp browser build (`net10.0-windows`) |
+| `win-x64` | Windows | CEF shell + agent browser (`net10.0-windows`) |
 | `linux-x64` | Linux | Blazor host only (no agent browser) |
 | `osx-arm64` | macOS Apple Silicon | Blazor host only |
 | `osx-x64` | macOS Intel (cross-published from Apple Silicon runner) | Blazor host only |
@@ -34,8 +39,8 @@ Example: `2026.7.142`
 ## Run
 
 1. Download the zip for your RID and unzip.
-2. Run `Harness.UI.exe` (Windows) or `Harness.UI` (Linux / macOS).
-3. Open the agent shell URL printed in the console (default http://localhost:5180) if the browser does not open automatically.
+2. **Windows:** run `DysonHarness.exe` (desktop CEF shell; no separate browser URL needed).
+3. **Linux / macOS:** run `Harness.UI` and open the agent shell URL printed in the console (default http://localhost:5180) if the browser does not open automatically.
 
 Builds on `master` resolve app mode to **Prod** (`DysonProd` app data) via `GITHUB_REF_NAME` in the resolve-app-mode scripts — see [storage/models.md](../storage/models.md).
 
@@ -43,5 +48,6 @@ Builds on `master` resolve app mode to **Prod** (`DysonProd` app data) via `GITH
 
 - **VC++ redistributable:** CefSharp needs the [Visual C++ 2022 x64 redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) on machines that do not already have it.
 - First launch may unpack CEF natives next to the exe; keep the unzipped folder intact.
+- External http(s) links and popups open in the **OS default browser**; the shell CEF view stays on the local Blazor origin.
 
 Desktop / CefSharp packaging details: [webview.md](webview.md).

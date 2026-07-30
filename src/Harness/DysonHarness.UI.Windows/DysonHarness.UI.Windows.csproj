@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>DysonHarness</AssemblyName>
+    <RootNamespace>DysonHarness.UI.Windows</RootNamespace>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
+    <PlatformTarget>x64</PlatformTarget>
+    <SelfContained Condition="'$(SelfContained)' == ''">false</SelfContained>
+    <ApplicationIcon>Assets\dyson.ico</ApplicationIcon>
+    <ApplicationManifest>..\Harness.WindowsBrowser\app.manifest</ApplicationManifest>
+    <CefSharpBuildAction>Default</CefSharpBuildAction>
+    <!-- Shell hosts Blazor from Harness.UI; no local Razor pages. -->
+    <EnableDefaultContentItems>true</EnableDefaultContentItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Harness.UI\Harness.UI.csproj" />
+    <ProjectReference Include="..\Harness.WindowsBrowser\Harness.WindowsBrowser.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CefSharp.Wpf.NETCore" Version="149.0.40" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\dyson.ico" />
+    <Resource Include="Assets\dyson-light.ico" />
+    <None Include="Assets\dysonlogo.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

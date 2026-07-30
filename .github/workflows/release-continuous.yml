@@ -78,7 +78,11 @@ jobs:
           set -euo pipefail
           OUT="artifacts/publish/${{ matrix.rid }}"
           mkdir -p "$OUT"
-          dotnet publish src/Harness/Harness.UI/Harness.UI.csproj \
+          PROJECT="src/Harness/Harness.UI/Harness.UI.csproj"
+          if [[ "${{ matrix.rid }}" == "win-x64" ]]; then
+            PROJECT="src/Harness/DysonHarness.UI.Windows/DysonHarness.UI.Windows.csproj"
+          fi
+          dotnet publish "$PROJECT" \
             -c Release \
             -r "${{ matrix.rid }}" \
             --self-contained true \
@@ -157,7 +161,7 @@ jobs:
           fi
 
           cat > "${RUNNER_TEMP}/continuous-notes.md" <<EOF
-          Continuous build of **Harness.UI** (self-contained).
+          Continuous build of DysonHarness (self-contained).
 
           | | |
           |---|---|
@@ -165,7 +169,7 @@ jobs:
           | **Commit** | \`${GITHUB_SHA}\` (\`${SHORT_SHA}\`) |
           | **Workflow** | ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} |
 
-          Unzip and run \`Harness.UI\` / \`Harness.UI.exe\`. See [docs/packaging/releases.md](https://github.com/${GITHUB_REPOSITORY}/blob/master/docs/packaging/releases.md).
+          **Windows:** unzip and run \`DysonHarness.exe\` (CefSharp WPF shell). **Linux / macOS:** run \`Harness.UI\`. See [docs/packaging/releases.md](https://github.com/${GITHUB_REPOSITORY}/blob/master/docs/packaging/releases.md).
           EOF
           sed -i 's/^          //' "${RUNNER_TEMP}/continuous-notes.md"
 

@@ -1,20 +1,28 @@
 # UI
 
-Landing project: [`src/Harness/Harness.UI`](../../src/Harness/Harness.UI) — Blazor Interactive Server (`net10.0-windows` on Windows, else `net10.0`), references `Harness.Engine` and (Windows only) `Harness.WindowsBrowser`.
+Landing project: [`src/Harness/Harness.UI`](../../src/Harness/Harness.UI) — Blazor Interactive Server (`net10.0-windows` on Windows, else `net10.0`), references `Harness.Engine` and (Windows only) `Harness.WindowsBrowser`. Shared host builder: `DysonUiWebHost` / `DysonUiWebHostOptions`.
 
 ## How to run
 
 From repo root:
 
+**Windows desktop shell (CefSharp):**
+
+```bash
+dotnet run --project src/Harness/DysonHarness.UI.Windows
+```
+
+**Browser-based Blazor (all platforms):**
+
 ```bash
 dotnet run --project src/Harness/Harness.UI --urls http://localhost:5180
 ```
 
-Or open the solution and set **Harness.UI** as the startup project. The app uses Interactive Server rendering globally.
+Or open the solution and set **DysonHarness.UI.Windows** (Windows) or **Harness.UI** as the startup project. The app uses Interactive Server rendering globally.
 
 DI: `AddDysonHosting` + `AddDysonLocalDb` (registers `IDyson*Repository` / `DysonDbContext` factory), scoped `DysonToolPolicyStore`, `ThemeService`, `HttpClient` (via `IHttpClientFactory`), `ManagedInferenceProviderCatalog`, `DysonUiHost`. Singleton: `DysonCliProxyHost` (disposed on app shutdown).
 
-**Windows only:** `Program.cs` also registers `AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>()`. `DysonUiHost` injects that singleton into every `DysonAgentSessionConfig.BrowserControl` (new + resume) and subscribes to `SnipCaptured` so browser chrome snips become pending composer images. When set, the engine MCP catalog includes browser tools (`OpenBrowser`, …) that open in-process CefSharp WPF windows. See [packaging/webview](../packaging/webview.md) (Snip button + `HtmlRef` future TODO).
+**Windows only:** `DysonUiWebHost` also registers `AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>()`. `DysonUiHost` injects that singleton into every `DysonAgentSessionConfig.BrowserControl` (new + resume) and subscribes to `SnipCaptured` so browser chrome snips become pending composer images. When set, the engine MCP catalog includes browser tools (`OpenBrowser`, …) that open in-process CefSharp WPF windows. Continuous **win-x64** zips ship `DysonHarness.exe` from `DysonHarness.UI.Windows` — see [packaging/webview](../packaging/webview.md) and [releases](../packaging/releases.md).
 
 On first open, a default **Demo Mock** provider + slug is seeded if none exists. SQLite lives under the platform app-data folder for the current `DysonAppMode` (see [storage/models](../storage/models.md)).
 

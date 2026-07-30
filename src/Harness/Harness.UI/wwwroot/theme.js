@@ -11,10 +11,14 @@ window.dysonTheme = {
     localStorage.setItem("dyson-theme", JSON.stringify({ theme: theme, accent: accent }));
     document.documentElement.setAttribute("data-theme", theme);
     document.documentElement.setAttribute("data-accent", accent);
+    if (window.dysonShell && window.dysonShell.notifyTheme)
+      window.dysonShell.notifyTheme(theme);
   },
   apply: function (theme, accent) {
     document.documentElement.setAttribute("data-theme", theme);
     document.documentElement.setAttribute("data-accent", accent);
+    if (window.dysonShell && window.dysonShell.notifyTheme)
+      window.dysonShell.notifyTheme(theme);
   }
 };
 

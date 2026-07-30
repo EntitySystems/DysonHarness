@@ -36,13 +36,21 @@ Practical defaults: use Work to orchestrate, Explore to research, and Drone to i
 
 Requires .NET 10 (`net10.0`). From the repo root:
 
+**Windows desktop shell:**
+
+```bash
+dotnet run --project src/Harness/DysonHarness.UI.Windows
+```
+
+**Browser-based UI (all platforms):**
+
 ```bash
 dotnet run --project src/Harness/Harness.UI --urls http://localhost:5180
 ```
 
-Open the agent shell at http://localhost:5180. Configure providers under **Settings → Models**.
+Open the agent shell (desktop window, or http://localhost:5180). Configure providers under **Settings → Models**.
 
-**Downloads:** continuous self-contained builds (Windows / Linux / macOS) are on [GitHub Releases](https://github.com/EntitySystems/DysonHarness/releases) (CalVer pre-releases). See [releases](docs/packaging/releases.md).
+**Downloads:** continuous self-contained builds (Windows / Linux / macOS) are on [GitHub Releases](https://github.com/EntitySystems/DysonHarness/releases) (CalVer pre-releases). Windows zips run `DysonHarness.exe`. See [releases](docs/packaging/releases.md).
 
 Contributor and agent notes: [AGENTS.md](AGENTS.md).
 
