@@ -122,6 +122,10 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       SHORT_SHA: ${{ needs.version.outputs.short_sha }}
     steps:
+      # gh release create needs a git checkout to create/move the tag.
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
