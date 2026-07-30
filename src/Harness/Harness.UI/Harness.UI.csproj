@@ -24,11 +24,12 @@
     <DefineConstants Condition="$([MSBuild]::IsOSPlatform('Windows'))">$(DefineConstants);WINDOWS</DefineConstants>
   </PropertyGroup>
 
-  <!-- CefSharp requires an RID on the executable so natives (libcef.dll) copy next to the exe. -->
+  <!-- CefSharp requires an RID on the executable so natives (libcef.dll) copy next to the exe.
+       SelfContained defaults false for local FDD runs; CI may override via self-contained / SelfContained=true. -->
   <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
     <PlatformTarget>x64</PlatformTarget>
-    <SelfContained>false</SelfContained>
+    <SelfContained Condition="'$(SelfContained)' == ''">false</SelfContained>
     <UseWPF>true</UseWPF>
     <ApplicationManifest>..\Harness.WindowsBrowser\app.manifest</ApplicationManifest>
   </PropertyGroup>

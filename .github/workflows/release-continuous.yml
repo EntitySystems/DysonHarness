@@ -81,6 +81,8 @@ jobs:
             -c Release \
             -r "${{ matrix.rid }}" \
             --self-contained true \
+            -p:SelfContained=true \
+            -p:PublishSingleFile=false \
             -p:Version="${VERSION}" \
             -p:InformationalVersion="${VERSION}+${SHORT_SHA}" \
             -o "$OUT"

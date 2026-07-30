@@ -173,7 +173,9 @@ public sealed class DysonWindowsShell : DysonShell
             return Result<(string, string[]), string>.AsError("Executable path is empty.");
 
         var fileName = executablePath.Trim();
-        var baseName = Path.GetFileNameWithoutExtension(fileName);
+        // Windows paths use `\`; normalize so Linux CI Path APIs still resolve the leaf basename.
+        var baseName = Path.GetFileNameWithoutExtension(
+            fileName.Replace('\\', Path.DirectorySeparatorChar));
         if (string.IsNullOrWhiteSpace(baseName))
             return Result<(string, string[]), string>.AsError("Executable path has no file name.");
 
