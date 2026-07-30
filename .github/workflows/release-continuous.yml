@@ -132,26 +132,24 @@ jobs:
       - name: List assets
         run: ls -la release-assets
 
-      # CalVer zip names change each run; drop prior continuous assets so the tag stays rolling.
-      - name: Clear previous continuous assets
+      # Immutable releases forbid uploading/replacing assets after publish. Delete + recreate as draft, then publish.
+      - name: Delete previous continuous release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           if gh release view continuous >/dev/null 2>&1; then
-            mapfile -t assets < <(gh release view continuous --json assets -q '.assets[].name' 2>/dev/null || true)
-            for a in "${assets[@]:-}"; do
-              [[ -z "$a" ]] && continue
-              gh release delete-asset continuous "$a" --yes || true
-            done
+            gh release delete continuous --yes
           fi
 
-      - name: Publish continuous pre-release
+      - name: Create continuous pre-release draft
         uses: softprops/action-gh-release@v2
         with:
           tag_name: continuous
+          target_commitish: ${{ github.sha }}
           name: Continuous build ${{ env.VERSION }}
           prerelease: true
+          draft: true
           make_latest: false
           body: |
             Rolling continuous build of **Harness.UI** (self-contained).
@@ -167,3 +165,8 @@ jobs:
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish continuous draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit continuous --draft=false --prerelease
