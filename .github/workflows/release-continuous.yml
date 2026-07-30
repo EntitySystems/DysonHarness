@@ -132,41 +132,70 @@ jobs:
       - name: List assets
         run: ls -la release-assets
 
-      # Immutable releases forbid uploading/replacing assets after publish. Delete + recreate as draft, then publish.
-      - name: Delete previous continuous release
+      # Immutable releases: cannot mutate published assets / target_commitish.
+      # Delete release+tag, create draft with zips, then publish the draft.
+      - name: Recreate continuous pre-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          if gh release view continuous >/dev/null 2>&1; then
-            gh release delete continuous --yes
+          shopt -s nullglob
+          assets=(release-assets/DysonHarness-*.zip)
+          if (( ${#assets[@]} == 0 )); then
+            echo "No zip assets under release-assets/" >&2
+            exit 1
+          fi
+          echo "Assets to publish:"
+          ls -la "${assets[@]}"
+
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/continuous" --jq .id 2>/dev/null || true)"
+          if [[ -n "${release_id}" ]]; then
+            echo "Deleting existing continuous release id=${release_id}"
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${release_id}"
+          else
+            echo "No existing continuous release"
           fi
 
-      - name: Create continuous pre-release draft
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: continuous
-          target_commitish: ${{ github.sha }}
-          name: Continuous build ${{ env.VERSION }}
-          prerelease: true
-          draft: true
-          make_latest: false
-          body: |
-            Rolling continuous build of **Harness.UI** (self-contained).
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/continuous" >/dev/null 2>&1; then
+            echo "Deleting tag refs/tags/continuous"
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/continuous"
+          fi
 
-            | | |
-            |---|---|
-            | **Version** | `${{ env.VERSION }}` |
-            | **Commit** | `${{ github.sha }}` (`${{ env.SHORT_SHA }}`) |
-            | **Workflow** | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |
+          if gh release view continuous >/dev/null 2>&1; then
+            echo "continuous release still exists after delete" >&2
+            exit 1
+          fi
 
-            Unzip and run `Harness.UI` / `Harness.UI.exe`. See [docs/packaging/releases.md](https://github.com/${{ github.repository }}/blob/master/docs/packaging/releases.md).
-          files: release-assets/DysonHarness-*.zip
-          fail_on_unmatched_files: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          cat > "${RUNNER_TEMP}/continuous-notes.md" <<EOF
+          Rolling continuous build of **Harness.UI** (self-contained).
 
-      - name: Publish continuous draft
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit continuous --draft=false --prerelease
+          | | |
+          |---|---|
+          | **Version** | \`${VERSION}\` |
+          | **Commit** | \`${GITHUB_SHA}\` (\`${SHORT_SHA}\`) |
+          | **Workflow** | ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} |
+
+          Unzip and run \`Harness.UI\` / \`Harness.UI.exe\`. See [docs/packaging/releases.md](https://github.com/${GITHUB_REPOSITORY}/blob/master/docs/packaging/releases.md).
+          EOF
+          # YAML keeps a common indent; strip it so the notes file is clean markdown.
+          sed -i 's/^          //' "${RUNNER_TEMP}/continuous-notes.md"
+
+          echo "Creating draft continuous release ${VERSION}"
+          gh release create continuous \
+            --target "${GITHUB_SHA}" \
+            --title "Continuous build ${VERSION}" \
+            --notes-file "${RUNNER_TEMP}/continuous-notes.md" \
+            --prerelease \
+            --draft \
+            "${assets[@]}"
+
+          echo "Publishing draft"
+          gh release edit continuous --draft=false --prerelease
+
+          echo "Published assets:"
+          gh release view continuous --json assets --jq '.assets[] | "\(.name) (\(.size) bytes)"'
+          count="$(gh release view continuous --json assets --jq '.assets | length')"
+          if [[ "${count}" -lt 4 ]]; then
+            echo "Expected 4 RID zips, found ${count}" >&2
+            exit 1
+          fi
