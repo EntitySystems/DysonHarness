@@ -261,7 +261,9 @@ During any turn the model may call **`DropTurnContext`** (`turnIds` from `[turnI
 
 ### Max target context + DropContext inject
 
-When estimated outgoing Completions/Responses tokens (same `OpenAiCacheFriendlyTranscriptBuilder` path + tiktoken; see `DysonOutgoingContextTokens`) exceed the effective max target (`session.MaxTargetContextTokens` → slug `DefaultMaxTargetContextTokens` → **100_000**; session **0** = Off), `PromptWithTurnAsync` injects a `DropContext` turn (`DysonDropContextFlow`, keep last **4** turns) so the agent can `DropTurnContext` on older noise, then continues the original prompt (`allowDropContextInject: false` prevents nesting). Covered by `DysonDropContextTests`.
+When estimated outgoing Completions/Responses tokens (same `OpenAiCacheFriendlyTranscriptBuilder` path + tiktoken; see `DysonOutgoingContextTokens`) exceed the effective max target (`session.MaxTargetContextTokens` → slug `DefaultMaxTargetContextTokens` → **100_000**; session **0** = Off), the next **Send** (`PromptWithTurnAsync`) may inject a `DropContext` turn (`DysonDropContextFlow`, keep last **4** turns) so the agent can `DropTurnContext` on older noise, then continues the original prompt (`allowDropContextInject: false` prevents nesting). Footer/idle overage does **not** inject — only the start of the next prompt.
+
+Gates: effective max > 0; not already in a DropContext phase; at least one non-excluded turn older than the keep-last-4 window; and a **5-user-turn throttle** after a DropContext (`Normal` | `InitializeSession` counts; first inject with no prior DropContext is immediate). Session log: `drop-context: inject (estimated=… max=…)` on inject, or `drop-context: skip (reason; estimated=… max=…)` when over a positive max but skipping (`in-phase`, `no-droppable-older`, `throttle`; Evaluate also returns `off` when max is 0). Covered by `DysonDropContextTests`.
 
 ## Context optimizer
 

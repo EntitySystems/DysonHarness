@@ -183,8 +183,9 @@ Per-slug **default** (`DefaultMaxTargetContextTokens`) plus a **session override
 1. Cascade: session value if set → else slug default if set → else harness **100_000**. Session **0** = Off (unlimited; no DropContext inject).
 2. New sessions leave session override null (inherit). Composer ±10K stepper writes the session override (floor 0 / Off, ceiling 1_000_000).
 3. Models page (managed slugs): **Default context** stepper next to effort; Clear → null (harness 100K). Summary line shows `· context 200K` when set.
-4. Before each provider request (after `OptimizeContextIfNeeded`), if estimated outgoing tokens exceed the effective max and older-than-last-4 turns exist, the harness injects a `DropContext` turn (agent may call `DropTurnContext`), then resumes the original prompt. Nested inject is blocked while DropContext is in flight.
-5. Footer live readout: estimated outgoing tokens from the same transcript-builder counter (`12.4K / 100K`, or just `12.4K` when Off).
+4. On **Send** only (`PromptWithTurnAsync`, after `OptimizeContextIfNeeded`): if estimated outgoing tokens exceed the effective max and older-than-last-4 turns exist, the harness may inject a `DropContext` turn (agent may call `DropTurnContext`), then resumes the original prompt. Nested inject is blocked while DropContext is in flight. After a DropContext, at most one inject per **5** user turns (`Normal` | `InitializeSession`); first inject (never DropContext’d) is not throttled. Idle/footer overage does not inject.
+5. Session log lines: `drop-context: inject (estimated=… max=…)` or `drop-context: skip (in-phase|no-droppable-older|throttle; estimated=… max=…)` when over a positive max but skipping.
+6. Footer live readout: estimated outgoing tokens from the same transcript-builder counter (`12.4K / 100K`, or just `12.4K` when Off).
 
 ## System-prompt catalog
 

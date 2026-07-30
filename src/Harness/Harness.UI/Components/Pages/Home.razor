@@ -65,7 +65,7 @@
         <RailSidePanel ActiveWorkDirectoryId="_activeWorkDirectoryId" />
         <div class="tool-panel" style="border-top:1px solid var(--border);">
             <div class="tool-panel__title">Session log</div>
-            <div class="list" style="max-height:240px;">
+            <div class="session-log">
                 @if (Host.Session is null)
                 {
                     <div class="empty-state" style="padding:8px 0;">?</div>
@@ -74,7 +74,17 @@
                 {
                     @foreach (var line in Host.Session.SnapshotLog(40).Reverse())
                     {
-                        <div class="list-item__meta mono" style="padding:2px 0;">@line</div>
+                        var row = DysonSessionLogDisplay.Parse(line);
+                        var levelClass = row.Level switch
+                        {
+                            DysonSessionLogLevel.Error => "error",
+                            DysonSessionLogLevel.Warn => "warn",
+                            _ => "info",
+                        };
+                        <div class="session-log__row session-log__row--@levelClass">
+                            <span class="badge session-log__badge session-log__badge--@levelClass">@row.Badge</span>
+                            <span class="session-log__body mono">@row.Body</span>
+                        </div>
                     }
                 }
             </div>

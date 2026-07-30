@@ -63,7 +63,7 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `Components/Models/` | `ModelsPanel` (settings CRUD), `ModelSlugPicker` (agent pick) |
 | `Components/Theme/` | `ThemeSwitcher` |
 | `Theme/ThemeService.cs` | Theme/accent state + JS interop |
-| `Demo/` | `DemoDysonEngine`, `DemoDysonAgentSession`, `DemoDysonAgentProvider`, `DysonUiHost`, `DysonToolCallUi` (tool-row parse/summary helpers; Facts in `Harness.Tests`) |
+| `Demo/` | `DemoDysonEngine`, `DemoDysonAgentSession`, `DemoDysonAgentProvider`, `DysonUiHost`, `DysonToolCallUi` (tool-row parse/summary helpers; Facts in `Harness.Tests`), `DysonSessionLogDisplay` (rail Session log info/warn/error classifier from line text; Facts in `Harness.Tests`) |
 | `wwwroot/app.css` | Charcoal IDE theme (CSS variables); markdown styles under `.turn-block__body` |
 | `Markdown/MarkdownRenderer.cs` | Markdig pipeline for agent turn bodies (`DisableHtml` for XSS safety); links get `rel="noopener noreferrer"` (hardening only — do not rely on `target="_blank"` in WebView) |
 | `wwwroot/chat-external-links.js` | Capture-phase click intercept on chat/markdown containers; absolute `http(s)` → `DysonUiHost.OpenExternalChatUrlAsync` → OS default browser |
@@ -79,7 +79,7 @@ All absolute `http://` / `https://` links in chat turn markdown (assistant body,
 | --------- | ---- |
 | `AppShell` | Sidebar \| main \| right rail |
 | `ErrorToast` | Home-only `Host.LastError` banner: 20s auto-clear (`ClearLastError`), CSS border-thickness countdown, dismiss X (`icons/cancel.svg`); Settings form `error-banner`s stay until the next action |
-| `RailSidePanel` | Right-rail Files / Git / Usage tabs; Files hosts `FileTreePanel` (lazy tree; folder context menu: Rename + Open in Explorer/Finder); Session log stays as a sibling panel on `Home` |
+| `RailSidePanel` | Right-rail Files / Git / Usage tabs; Files hosts `FileTreePanel` (lazy tree; folder context menu: Rename + Open in Explorer/Finder); Session log stays as a sibling panel on `Home` — newest-first rows classified by `DysonSessionLogDisplay` (info/warn/error badges + wrap; heuristic only, no engine log schema change) |
 | `Sidebar` | Work directory switcher, sessions, Settings link, app-mode badge |
 | `WorkDirectorySwitcher` | Register/switch/remove workdirs; native folder pick via `DysonNativeFolderPicker`; **`Open()`** public for New-session when no workdir is selected |
 | Settings → Shells | Enable/disable/edit/remove configured shells; optional Fixed args (space-separated → JSON); Browse via `DysonNativeFolderPicker.PickFileAsync`; seeds Windows defaults when empty |

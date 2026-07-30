@@ -538,7 +538,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         if (allowDropContextInject
             && turn.Kind != DysonAgentTurnKind.DropContext
-            && DysonDropContextFlow.ShouldInjectDropContext(this))
+            && DysonDropContextFlow.TryBeginInject(this))
         {
             var drop = await PromptWithTurnAsync(
                     CreateDropContextTurn(),

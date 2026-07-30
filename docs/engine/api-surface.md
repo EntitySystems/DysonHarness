@@ -153,7 +153,7 @@ Assert coverage for spawn gates, parent events, session todos, PlanResult, rethi
 | `DysonAgentInterruptKind` | `SubagentCompleted`, `SubagentStopped`, `SubagentFailed` |
 | `DysonSubagentInterruptEvent` | Session-event shape for subagent interrupts |
 | `DysonExpandThoughtProcess` | Expand-thought turn factory; Instruction includes optional `DropTurnContext` hygiene (anytime, not expand-only); `ContinuationPrompt` + `ShouldEnqueueContinuation` (host Normal follow-up) |
-| `DysonDropContextFlow` | DropContext turn factory (`KeepRecentTurns = 4`); `ShouldInjectDropContext` gate when estimated outgoing tokens exceed effective max |
+| `DysonDropContextFlow` | DropContext turn factory (`KeepRecentTurns = 4`, `MinUserTurnsBetweenInject = 5`); `EvaluateInject` / `TryBeginInject` (session log) / `ShouldInjectDropContext` when over max, droppable older history, and throttle allow |
 | `DysonOutgoingContextTokens` | Counts tiktoken estimate from Completions/Responses transcript builder payload (image data URLs → placeholder); shared by inject gate + composer footer |
 | `DysonMaxTargetContextTokens` | Harness default 100K, ±10K step, ceiling 1M; `Resolve` cascade session → slug → harness; `FormatCompact` |
 | `DysonSessionInitialization` | First-prompt turn factory; periodic rename review mandate (ephemeral, not in subsequent history) |

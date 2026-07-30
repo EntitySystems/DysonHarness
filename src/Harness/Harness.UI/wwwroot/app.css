@@ -1619,6 +1619,64 @@ code, .mono {
   color: var(--success);
 }
 
+.session-log {
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.session-log__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.session-log__row:last-child {
+  border-bottom: none;
+}
+
+.session-log__badge {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.session-log__badge--info {
+  background: var(--bg-3);
+  color: var(--text-dim);
+}
+
+.session-log__badge--warn {
+  background: color-mix(in srgb, var(--warning) 18%, var(--bg-2));
+  color: var(--warning);
+}
+
+.session-log__badge--error {
+  background: color-mix(in srgb, var(--danger) 18%, var(--bg-2));
+  color: var(--danger);
+}
+
+.session-log__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.session-log__row--warn .session-log__body {
+  color: var(--warning);
+}
+
+.session-log__row--error .session-log__body {
+  color: var(--danger);
+}
+
 .session-todos__comments {
   list-style: none;
   margin: 4px 0 0;

@@ -489,7 +489,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
 
         if (allowDropContextInject
             && turn.Kind != DysonAgentTurnKind.DropContext
-            && DysonDropContextFlow.ShouldInjectDropContext(this))
+            && DysonDropContextFlow.TryBeginInject(this))
         {
             var dropTurn = CreateDropContextTurn();
             var drop = await PromptWithTurnAsync(
