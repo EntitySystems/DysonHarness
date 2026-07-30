@@ -56,8 +56,9 @@ jobs:
             os: ubuntu-latest
           - rid: osx-arm64
             os: macos-latest
+          # macos-13 retired Dec 2025; cross-publish osx-x64 from arm64 macOS (managed .NET).
           - rid: osx-x64
-            os: macos-13
+            os: macos-latest
     runs-on: ${{ matrix.os }}
     env:
       VERSION: ${{ needs.version.outputs.version }}

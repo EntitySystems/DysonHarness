@@ -14,7 +14,7 @@ Pull requests to `master` run tests only (see [`.github/workflows/ci.yml`](../..
 | `win-x64` | Windows | Includes CefSharp browser build (`net10.0-windows`) |
 | `linux-x64` | Linux | Blazor host only (no agent browser) |
 | `osx-arm64` | macOS Apple Silicon | Blazor host only |
-| `osx-x64` | macOS Intel | Blazor host only |
+| `osx-x64` | macOS Intel (cross-published from Apple Silicon runner) | Blazor host only |
 
 ## Version (CalVer)
 
