@@ -136,9 +136,8 @@ jobs:
       - name: List assets
         run: ls -la release-assets
 
-      # Immutable releases: cannot mutate published assets / target_commitish.
-      # Delete release+tag, create draft with zips, then publish the draft.
-      - name: Recreate continuous pre-release
+      # Immutable releases burn each tag forever after publish — use unique CalVer tags.
+      - name: Publish continuous pre-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -152,26 +151,13 @@ jobs:
           echo "Assets to publish:"
           ls -la "${assets[@]}"
 
-          if gh release view continuous >/dev/null 2>&1; then
-            echo "Deleting existing continuous release"
-            gh release delete continuous --yes
-          else
-            echo "No existing continuous release"
-          fi
-
-          # Drop stale tag so create can point continuous at this SHA.
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/continuous" --silent >/dev/null 2>&1; then
-            echo "Deleting tag refs/tags/continuous"
-            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/continuous"
-          fi
-
-          if gh release view continuous >/dev/null 2>&1; then
-            echo "continuous release still exists after delete" >&2
+          if gh release view "${VERSION}" >/dev/null 2>&1; then
+            echo "Release ${VERSION} already exists; refusing to overwrite immutable tag" >&2
             exit 1
           fi
 
           cat > "${RUNNER_TEMP}/continuous-notes.md" <<EOF
-          Rolling continuous build of **Harness.UI** (self-contained).
+          Continuous build of **Harness.UI** (self-contained).
 
           | | |
           |---|---|
@@ -181,24 +167,19 @@ jobs:
 
           Unzip and run \`Harness.UI\` / \`Harness.UI.exe\`. See [docs/packaging/releases.md](https://github.com/${GITHUB_REPOSITORY}/blob/master/docs/packaging/releases.md).
           EOF
-          # YAML keeps a common indent; strip it so the notes file is clean markdown.
           sed -i 's/^          //' "${RUNNER_TEMP}/continuous-notes.md"
 
-          echo "Creating draft continuous release ${VERSION}"
-          gh release create continuous \
+          echo "Creating pre-release ${VERSION}"
+          gh release create "${VERSION}" \
             --target "${GITHUB_SHA}" \
             --title "Continuous build ${VERSION}" \
             --notes-file "${RUNNER_TEMP}/continuous-notes.md" \
             --prerelease \
-            --draft \
             "${assets[@]}"
 
-          echo "Publishing draft"
-          gh release edit continuous --draft=false --prerelease
-
           echo "Published assets:"
-          gh release view continuous --json assets --jq '.assets[] | "\(.name) (\(.size) bytes)"'
-          count="$(gh release view continuous --json assets --jq '.assets | length')"
+          gh release view "${VERSION}" --json assets --jq '.assets[] | "\(.name) (\(.size) bytes)"'
+          count="$(gh release view "${VERSION}" --json assets --jq '.assets | length')"
           if [[ "${count}" -lt 4 ]]; then
             echo "Expected 4 RID zips, found ${count}" >&2
             exit 1

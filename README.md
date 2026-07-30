@@ -42,7 +42,7 @@ dotnet run --project src/Harness/Harness.UI --urls http://localhost:5180
 
 Open the agent shell at http://localhost:5180. Configure providers under **Settings → Models**.
 
-**Downloads:** continuous self-contained builds (Windows / Linux / macOS) are on the [`continuous` pre-release](https://github.com/EntitySystems/DysonHarness/releases/tag/continuous). See [releases](docs/packaging/releases.md).
+**Downloads:** continuous self-contained builds (Windows / Linux / macOS) are on [GitHub Releases](https://github.com/EntitySystems/DysonHarness/releases) (CalVer pre-releases). See [releases](docs/packaging/releases.md).
 
 Contributor and agent notes: [AGENTS.md](AGENTS.md).
 
