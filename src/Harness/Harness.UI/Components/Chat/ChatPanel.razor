@@ -16,20 +16,18 @@
         {
             @if (Host.Session is null)
             {
-                var canCreate = CanCreateSession && !SessionBusy;
                 <div class="chat-panel__empty">
                     <p class="chat-panel__empty-message">Welcome Operator, let's get the job done.</p>
-                    <button type="button"
-                            class="btn btn-primary"
-                            disabled="@(!canCreate)"
-                            title="@(CanCreateSession ? "Start new session" : "New disabled until a workdir is selected")"
-                            @onclick="OnNewSessionAsync">
-                        Start new session
-                    </button>
-                    @if (!CanCreateSession)
-                    {
-                        <p class="chat-panel__empty-hint">New disabled until a workdir is selected</p>
-                    }
+                    <div class="btn-row empty-state__actions">
+                        <button type="button"
+                                class="btn btn-primary"
+                                disabled="@SessionBusy"
+                                title="Start new session"
+                                @onclick="OnNewSessionAsync">
+                            Start new session
+                        </button>
+                        <a class="btn" href="/settings/models">Manage models</a>
+                    </div>
                 </div>
             }
             else
@@ -136,8 +134,6 @@
     [Parameter] public string? GitBranch { get; set; }
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
     [Parameter] public EventCallback OnNewSession { get; set; }
-    /// <summary>Same gate as SessionList New — workdir must be selected.</summary>
-    [Parameter] public bool CanCreateSession { get; set; }
 
     private IEnumerable<DysonSubagentEventUiItem> FocusedSubagentEvents
     {

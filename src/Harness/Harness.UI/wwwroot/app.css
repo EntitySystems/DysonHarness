@@ -2035,13 +2035,6 @@ code, .mono {
   max-width: 28rem;
 }
 
-.chat-panel__empty-hint {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.35;
-  opacity: 0.9;
-}
-
 .turn-block {
   border: 1px solid var(--border);
   border-radius: 5px;
@@ -2065,7 +2058,7 @@ code, .mono {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   padding: 8px 10px;
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
@@ -2075,6 +2068,38 @@ code, .mono {
 .turn-block--collapsed .turn-block__header {
   border-bottom: none;
   padding: 6px 10px;
+}
+
+.turn-block__icons {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+
+.turn-block__role-icon,
+.turn-block__kind-icon {
+  display: block;
+  width: 15px;
+  height: 15px;
+  background-color: currentColor;
+}
+
+.turn-block__role-icon--user {
+  -webkit-mask: url("icons/user.svg") center / contain no-repeat;
+  mask: url("icons/user.svg") center / contain no-repeat;
+}
+
+.turn-block__role-icon--agent {
+  -webkit-mask: url("icons/agent.svg") center / contain no-repeat;
+  mask: url("icons/agent.svg") center / contain no-repeat;
+}
+
+.turn-block__kind-icon {
+  -webkit-mask: var(--turn-kind-icon) center / contain no-repeat;
+  mask: var(--turn-kind-icon) center / contain no-repeat;
 }
 
 .turn-block__header-main {
@@ -2367,6 +2392,11 @@ code, .mono {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  z-index: 1;
+  background: var(--bg-1);
 }
 
 .turn-block__content .turn-block__body {
@@ -2477,6 +2507,10 @@ code, .mono {
     flex: 1 1 auto;
     max-width: none;
     width: 100%;
+    position: static;
+  }
+
+  .turn-block__content .turn-block__main {
     position: static;
   }
 }

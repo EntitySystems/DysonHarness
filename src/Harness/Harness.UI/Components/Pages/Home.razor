@@ -23,7 +23,6 @@
                 <SessionList Sessions="_sessions"
                              ActiveSessionId="Host.ActiveSessionId"
                              Busy="Host.IsBusy"
-                             CanCreate="_activeWorkDirectoryId is not null"
                              Error="@_listError"
                              OnNew="StartNewAsync"
                              OnResume="ResumeAsync"
@@ -47,7 +46,6 @@
         <ChatPanel Turns="@(Host.Session?.Turns ?? Array.Empty<DysonAgentTurn>())"
                    Disabled="@(Host.Session is null)"
                    SessionBusy="Host.IsBusy"
-                   CanCreateSession="_activeWorkDirectoryId is not null"
                    OnCancelPrompt="CancelPrompt"
                    SelectedSlugId="_selectedSlugId"
                    SelectedSlugIdChanged="OnSelectedSlugIdChangedAsync"
@@ -420,6 +418,12 @@
 
     private async Task StartNewAsync()
     {
+        if (_activeWorkDirectoryId is null)
+        {
+            _workdirSwitcher?.Open();
+            return;
+        }
+
         var result = await Host.StartNewSessionAsync(
             _selectedAgentMode,
             _selectedSlugId,

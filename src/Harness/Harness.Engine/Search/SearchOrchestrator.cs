@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace DysonHarness;
 
@@ -303,7 +304,7 @@ public static class SearchOrchestrator
         int enrichMax,
         CancellationToken cancellationToken)
     {
-        // ponytail: enrich only low-confidence tops via Jina; skip full-page crawl matrix
+        // ponytail: enrich only low-confidence tops via WebFetch; skip full-page crawl matrix
         var toEnrich = results
             .Where(r => r.Confidence <= 1)
             .Take(Math.Clamp(enrichMax, 1, 10))
@@ -311,10 +312,19 @@ public static class SearchOrchestrator
 
         foreach (var hit in toEnrich)
         {
-            var extracted = await SearchFetch.FreeExtractAsync(hit.Url, maxLength: 800, cancellationToken)
+            var fetched = await SearchFetch.WebFetchAsync(hit.Url, maxBytes: 16_000, cancellationToken)
                 .ConfigureAwait(false);
-            if (extracted.IsSuccess && !string.IsNullOrWhiteSpace(extracted.Value))
-                hit.Snippet = extracted.Value.Trim();
+            if (fetched.IsError || string.IsNullOrWhiteSpace(fetched.Value.Html))
+                continue;
+
+            // ponytail: naive tag strip + whitespace collapse for SERP snippets; upgrade to a real HTML→text extractor if noise becomes a problem
+            var noTags = Regex.Replace(fetched.Value.Html, "<[^>]+>", " ");
+            var collapsed = Regex.Replace(noTags, @"\s+", " ").Trim();
+            if (collapsed.Length == 0)
+                continue;
+            if (collapsed.Length > 800)
+                collapsed = collapsed[..800];
+            hit.Snippet = collapsed;
         }
 
         return results;

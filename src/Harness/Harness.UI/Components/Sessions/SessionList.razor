@@ -7,8 +7,8 @@
     <div class="btn-row" style="margin-bottom:8px;">
         <button type="button"
                 class="btn btn-primary btn-icon"
-                disabled="@(Busy || !CanCreate)"
-                title="@(CanCreate ? "New session" : "Select a work directory first")"
+                disabled="@Busy"
+                title="New session"
                 aria-label="New session"
                 @onclick="OnNewAsync">
             <img src="icons/plus.svg" alt="" />
@@ -22,11 +22,6 @@
             <img src="icons/refresh.svg" alt="" />
         </button>
     </div>
-
-    @if (!CanCreate)
-    {
-        <div class="list-item__meta" style="margin:0 0 8px;">Select a work directory to create sessions.</div>
-    }
 
     @if (!string.IsNullOrEmpty(Error))
     {
@@ -73,7 +68,6 @@
     [Parameter] public IReadOnlyList<DysonSessionSummary> Sessions { get; set; } = [];
     [Parameter] public Guid? ActiveSessionId { get; set; }
     [Parameter] public bool Busy { get; set; }
-    [Parameter] public bool CanCreate { get; set; } = true;
     [Parameter] public string? Error { get; set; }
     [Parameter] public EventCallback OnNew { get; set; }
     [Parameter] public EventCallback<Guid> OnResume { get; set; }

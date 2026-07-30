@@ -1919,33 +1919,10 @@ public sealed class DysonMcpPipeline
 
         yield return new DysonMcpTool
         {
-            Name = "FreeExtract",
-            Description =
-                "Extract page content as markdown via Jina Reader (r.jina.ai/{url}). SSRF-guarded. " +
-                "Raw extract stays inside the tool; parent receives a harness summary (skipped when already ≤~1500 tokens).",
-            InputSchemaJson = """
-                {
-                  "type": "object",
-                  "properties": {
-                    "url": { "type": "string", "description": "Public http(s) URL to extract." },
-                    "maxLength": { "type": "integer", "description": "Max characters to return (default 5000)." },
-                    "summarizePrompt": {
-                      "type": "string",
-                      "description": "Optional focus for the harness summarizer (e.g. what facts to keep). Raw payloads stay inside the tool; parent receives the summary."
-                    }
-                  },
-                  "required": ["url"]
-                }
-                """,
-        };
-
-        yield return new DysonMcpTool
-        {
             Name = "WebFetch",
             Description =
-                "Fetch a URL. Default: load the page, summarize with the harness summarizer, return only the summary " +
-                "(HTML never enters the parent transcript). Use fullHtml only when the agent truly needs raw markup. " +
-                "Prefer FreeExtract for readable article text; use WebFetch when HTML structure or a directed summary is required. SSRF-guarded.",
+                "Default tool for fetching public page content. Summarizes with the harness summarizer by default " +
+                "(HTML never enters the parent transcript). Use fullHtml only when raw markup is required. SSRF-guarded.",
             InputSchemaJson = """
                 {
                   "type": "object",

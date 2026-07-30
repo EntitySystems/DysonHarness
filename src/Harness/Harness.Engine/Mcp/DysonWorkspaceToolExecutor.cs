@@ -112,7 +112,6 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "FreeSearch" => await FreeSearchAsync(call, cancellationToken).ConfigureAwait(false),
                 "FreeSearchAdvanced" => await FreeSearchAdvancedAsync(call, cancellationToken).ConfigureAwait(false),
                 "SearchWithSynthesis" => await SearchWithSynthesisAsync(call, cancellationToken).ConfigureAwait(false),
-                "FreeExtract" => await FreeExtractAsync(call, cancellationToken).ConfigureAwait(false),
                 "WebFetch" => await WebFetchAsync(call, cancellationToken).ConfigureAwait(false),
                 "FetchGithubReadme" => await FetchGithubReadmeAsync(call, cancellationToken).ConfigureAwait(false),
                 "OpenBrowser" or "ListBrowserWindows" or "CloseBrowser" or "ResizeBrowser"
@@ -2630,27 +2629,6 @@ public sealed partial class DysonWorkspaceToolExecutor
                 SearchOrchestrator.ToJson(result.Value),
                 ReadSummarizePrompt(call),
                 cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    private async Task<DysonToolCallResult> FreeExtractAsync(
-        DysonToolCall call,
-        CancellationToken cancellationToken)
-    {
-        using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
-        var root = doc.RootElement;
-        var url = RequireString(root, "url");
-        if (url.IsError)
-            return Error(call, url.Error);
-
-        var maxLength = GetInt(root, "maxLength") ?? 5000;
-        var summarizePrompt = GetOptionalString(root, "summarizePrompt");
-        var result = await SearchFetch.FreeExtractAsync(url.Value, maxLength, cancellationToken)
-            .ConfigureAwait(false);
-        if (result.IsError)
-            return Error(call, result.Error);
-
-        return await SummarizeWebOkAsync(call, result.Value, summarizePrompt, cancellationToken)
             .ConfigureAwait(false);
     }
 

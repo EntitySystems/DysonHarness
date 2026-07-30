@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace DysonHarness;
 
-/// <summary>WebFetch / FreeExtract / FetchGithubReadme with shared SSRF validation.</summary>
+/// <summary>WebFetch / FetchGithubReadme with shared SSRF validation.</summary>
 public static class SearchFetch
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -96,42 +96,6 @@ public static class SearchFetch
             truncated = result.Truncated,
             html = result.Html,
         }, JsonOptions);
-
-    public static async Task<Result<string, string>> FreeExtractAsync(
-        string url,
-        int maxLength = 5000,
-        CancellationToken cancellationToken = default)
-    {
-        var validation = SearchHttp.ValidateUrl(url);
-        if (validation.IsError)
-            return Result<string, string>.AsError(validation.Error);
-
-        var cap = Math.Clamp(maxLength <= 0 ? 5000 : maxLength, 100, 100_000);
-
-        try
-        {
-            var jinaUrl = "https://r.jina.ai/" + url.Trim();
-            using var req = new HttpRequestMessage(HttpMethod.Get, jinaUrl);
-            req.Headers.TryAddWithoutValidation("Accept", "text/markdown");
-
-            using var res = await SearchHttp.Client.SendAsync(req, cancellationToken).ConfigureAwait(false);
-            if (!res.IsSuccessStatusCode)
-                return Result<string, string>.AsError($"HTTP {(int)res.StatusCode}");
-
-            var content = await res.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            if (content.Length > cap)
-                content = content[..cap];
-            return Result<string, string>.AsValue(content);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return Result<string, string>.AsError(ex.Message);
-        }
-    }
 
     public static async Task<Result<string, string>> FetchGithubReadmeAsync(
         string url,

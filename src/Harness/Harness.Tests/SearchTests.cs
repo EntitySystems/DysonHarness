@@ -106,8 +106,8 @@ public class SearchTests
             return new VoidResult<string>("FreeSearch should skip when well under 1500 tokens.");
 
         var dense = new string('x', 20_000);
-        if (!DysonWebSearchSummarizer.ShouldSummarize("FreeExtract", dense, tokens))
-            return new VoidResult<string>("FreeExtract should summarize when over 1500 tokens.");
+        if (!DysonWebSearchSummarizer.ShouldSummarize("FetchGithubReadme", dense, tokens))
+            return new VoidResult<string>("FetchGithubReadme should summarize when over 1500 tokens.");
 
         var trimmed = DysonWebSearchSummarizer.TrimToMaxTokens(dense, tokens, 50);
         if (tokens.CountTokens(trimmed) > 50)

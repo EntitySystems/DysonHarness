@@ -17,7 +17,6 @@ public static class DysonWebSearchSummarizer
         "FreeSearch",
         "FreeSearchAdvanced",
         "SearchWithSynthesis",
-        "FreeExtract",
         "WebFetch",
         "FetchGithubReadme",
     };

@@ -15,6 +15,17 @@
             aria-expanded="@IsExpanded"
             @onclick="OnToggleExpand"
             @onkeydown="HandleHeaderKeyDown">
+        <span class="turn-block__icons" aria-hidden="false">
+            <span class="turn-block__role-icon @(IsUserTurn ? "turn-block__role-icon--user" : "turn-block__role-icon--agent")"
+                  role="img"
+                  title="@(IsUserTurn ? "User" : "Agent")"
+                  aria-label="@(IsUserTurn ? "User turn" : "Agent turn")"></span>
+            <span class="turn-block__kind-icon"
+                  role="img"
+                  title="@DysonAgentTurnKindDisplay.GetDisplayName(Turn.Kind)"
+                  aria-label="@DysonAgentTurnKindDisplay.GetDisplayName(Turn.Kind)"
+                  style="--turn-kind-icon: url('@DysonAgentTurnKindIcons.GetIconUrl(Turn.Kind)')"></span>
+        </span>
         <div class="turn-block__header-main">
             <div class="turn-block__title-row">
                 <div class="turn-block__title">@(Turn.AgentTitle ?? DysonAgentTurnKindDisplay.GetDisplayName(Turn.Kind))</div>
