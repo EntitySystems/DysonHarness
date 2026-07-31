@@ -2,10 +2,12 @@
   <PropertyGroup>
     <OutputType>Package</OutputType>
     <InstallerPlatform>x64</InstallerPlatform>
+    <!-- Version = CalVer for OutputName; ProductVersion = MSI-safe (major under 256). -->
     <Version Condition="'$(Version)' == ''">0.0.0</Version>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">$(Version)</ProductVersion>
     <OutputName>DysonHarness-$(Version)-win-x64</OutputName>
     <PublishDir Condition="'$(PublishDir)' == ''">..\..\artifacts\publish\win-x64</PublishDir>
-    <DefineConstants>ProductVersion=$(Version)</DefineConstants>
+    <DefineConstants>ProductVersion=$(ProductVersion)</DefineConstants>
     <DefaultCompressionLevel>high</DefaultCompressionLevel>
   </PropertyGroup>
   <ItemGroup>
