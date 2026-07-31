@@ -118,9 +118,16 @@ jobs:
         shell: pwsh
         run: |
           $publishDir = (Resolve-Path "artifacts/publish/win-x64").Path
+          # MSI ProductVersion requires major < 256; map CalVer YYYY.M.N → (YYYY%100).M.N
+          $parts = $env:VERSION -split '\.'
+          if ($parts.Count -lt 3) { throw "Unexpected VERSION '$env:VERSION' (want YYYY.M.N)" }
+          $msiProductVersion = "{0}.{1}.{2}" -f ([int]$parts[0] % 100), [int]$parts[1], [int]$parts[2]
+          Write-Host "CalVer=$env:VERSION MSI ProductVersion=$msiProductVersion"
           dotnet build packaging/wix/DysonHarness.Installer.wixproj -c Release `
             -p:Version=$env:VERSION `
+            -p:ProductVersion=$msiProductVersion `
             -p:PublishDir=$publishDir
+          if ($LASTEXITCODE -ne 0) { throw "WiX MSI build failed with exit $LASTEXITCODE" }
           $msi = Get-ChildItem -Path packaging/wix/bin -Recurse -Filter "DysonHarness-$env:VERSION-win-x64.msi" |
             Select-Object -First 1
           if (-not $msi) {
