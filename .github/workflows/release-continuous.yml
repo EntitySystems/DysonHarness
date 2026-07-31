@@ -113,11 +113,27 @@ jobs:
           mkdir -p artifacts
           (cd "artifacts/publish/${RID}" && zip -r "../../${ZIP_NAME}" .)
 
+      - name: Build MSI (win-x64)
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        run: |
+          $publishDir = (Resolve-Path "artifacts/publish/win-x64").Path
+          dotnet build packaging/wix/DysonHarness.Installer.wixproj -c Release `
+            -p:Version=$env:VERSION `
+            -p:PublishDir=$publishDir
+          $msi = Get-ChildItem -Path packaging/wix/bin -Recurse -Filter "DysonHarness-$env:VERSION-win-x64.msi" |
+            Select-Object -First 1
+          if (-not $msi) {
+            throw "MSI not found under packaging/wix/bin for version $env:VERSION"
+          }
+          Copy-Item $msi.FullName "artifacts/$($msi.Name)" -Force
+          Write-Host "Copied MSI to artifacts/$($msi.Name)"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: DysonHarness-${{ env.VERSION }}-${{ matrix.rid }}
-          path: artifacts/DysonHarness-${{ env.VERSION }}-${{ matrix.rid }}.zip
+          path: artifacts/DysonHarness-${{ env.VERSION }}-${{ matrix.rid }}.*
           if-no-files-found: error
 
   release:
@@ -149,9 +165,9 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          assets=(release-assets/DysonHarness-*.zip)
+          assets=(release-assets/DysonHarness-*.zip release-assets/DysonHarness-*.msi)
           if (( ${#assets[@]} == 0 )); then
-            echo "No zip assets under release-assets/" >&2
+            echo "No zip/MSI assets under release-assets/" >&2
             exit 1
           fi
           echo "Assets to publish:"
@@ -171,7 +187,7 @@ jobs:
           | **Commit** | \`${GITHUB_SHA}\` (\`${SHORT_SHA}\`) |
           | **Workflow** | ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} |
 
-          **Windows:** unzip and run \`DysonHarness.exe\` (CefSharp WPF shell). **Linux / macOS:** run \`Harness.UI\`. See [docs/packaging/releases.md](https://github.com/${GITHUB_REPOSITORY}/blob/master/docs/packaging/releases.md).
+          **Windows:** prefer the MSI (\`DysonHarness-${VERSION}-win-x64.msi\`) for a per-user install (Start Menu shortcut + Apps & Features as **Dyson Harness**, manufacturer **Entity Systems**); zip remains portable. VC++ 2022 x64 redistributable required. **Linux / macOS:** unzip and run \`Harness.UI\`. See [docs/packaging/releases.md](https://github.com/${GITHUB_REPOSITORY}/blob/master/docs/packaging/releases.md).
           EOF
           sed -i 's/^          //' "${RUNNER_TEMP}/continuous-notes.md"
 
@@ -185,8 +201,9 @@ jobs:
 
           echo "Published assets:"
           gh release view "${VERSION}" --json assets --jq '.assets[] | "\(.name) (\(.size) bytes)"'
-          count="$(gh release view "${VERSION}" --json assets --jq '.assets | length')"
-          if [[ "${count}" -lt 4 ]]; then
-            echo "Expected 4 RID zips, found ${count}" >&2
+          zip_count="$(gh release view "${VERSION}" --json assets --jq '[.assets[] | select(.name | endswith(".zip"))] | length')"
+          msi_count="$(gh release view "${VERSION}" --json assets --jq '[.assets[] | select(.name | endswith(".msi"))] | length')"
+          if [[ "${zip_count}" -ne 4 ]] || [[ "${msi_count}" -ne 1 ]]; then
+            echo "Expected 4 zips + 1 MSI, found ${zip_count} zips + ${msi_count} MSI" >&2
             exit 1
           fi

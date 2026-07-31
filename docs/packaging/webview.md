@@ -2,7 +2,7 @@
 
 Blazor Interactive Server remains the UI stack. On Windows continuous builds, **`DysonHarness.UI.Windows`** hosts that UI inside a CefSharp WPF window (`DysonHarness.exe`). Agent browser windows share the same CEF lifecycle.
 
-Shipped continuous zips (all RIDs): [releases.md](releases.md).
+Shipped continuous zips (all RIDs) and Windows MSI: [releases.md](releases.md).
 
 ## Intent
 
@@ -68,7 +68,6 @@ Boundary: `Harness.WindowsBrowser` only references Abstractions; it never calls 
 
 - Custom title-bar UI beyond standard Windows chrome
 - macOS/Linux desktop shells
-- Installers (MSI etc.)
 - Full CDP parity (rich network waterfall, DOM highlight, cookie store UI)
 - Committing Cef redistributables beyond NuGet restore
 

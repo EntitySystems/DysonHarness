@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="Dyson Harness"
+    Manufacturer="Entity Systems"
+    Version="$(ProductVersion)"
+    UpgradeCode="3887F848-1A76-413B-91F0-04CA3CB459AF"
+    Scope="perUserOrMachine"
+    UpgradeStrategy="majorUpgrade">
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="DysonHarness" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppStartMenuFolder" Name="Dyson Harness" />
+    </StandardDirectory>
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="AppIcon.exe" SourceFile="..\..\src\Harness\DysonHarness.UI.Windows\Assets\dyson.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.exe" />
+
+    <Feature Id="Main" Title="Dyson Harness" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+
+    <Component Id="StartMenuShortcut" Directory="AppStartMenuFolder" Guid="1E5DB2C9-836C-4DF7-9F4C-A919E74DC731">
+      <Shortcut
+        Id="AppStartMenuShortcut"
+        Name="Dyson Harness"
+        Target="[INSTALLFOLDER]DysonHarness.exe"
+        WorkingDirectory="INSTALLFOLDER"
+        Icon="AppIcon.exe" />
+      <RemoveFolder Id="RemoveAppStartMenuFolder" Directory="AppStartMenuFolder" On="uninstall" />
+      <RegistryValue
+        Root="HKCU"
+        Key="Software\Entity Systems\Dyson Harness"
+        Name="Installed"
+        Type="integer"
+        Value="1"
+        KeyPath="yes" />
+    </Component>
+  </Package>
+</Wix>

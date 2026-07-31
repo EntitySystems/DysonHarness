@@ -50,7 +50,7 @@ dotnet run --project src/Harness/Harness.UI --urls http://localhost:5180
 
 Open the agent shell (desktop window, or http://localhost:5180). Configure providers under **Settings → Models**.
 
-**Downloads:** continuous self-contained builds (Windows / Linux / macOS) are on [GitHub Releases](https://github.com/EntitySystems/DysonHarness/releases) (CalVer pre-releases). Windows zips run `DysonHarness.exe`. See [releases](docs/packaging/releases.md).
+**Downloads:** continuous self-contained builds (Windows / Linux / macOS) are on [GitHub Releases](https://github.com/EntitySystems/DysonHarness/releases) (CalVer pre-releases). Windows: MSI installer or zip (`DysonHarness.exe`). See [releases](docs/packaging/releases.md).
 
 Contributor and agent notes: [AGENTS.md](AGENTS.md).
 
@@ -66,7 +66,7 @@ Contributor and agent notes: [AGENTS.md](AGENTS.md).
 - [Sessions & resume](docs/storage/sessions.md) — turns, session log, resume
 - [Work directories](docs/storage/work-directories.md) — registered workspace roots
 - [UI](docs/ui/README.md) — agent shell
-- [Continuous releases](docs/packaging/releases.md) — download zips, RIDs, CalVer
+- [Continuous releases](docs/packaging/releases.md) — download zips / Windows MSI, RIDs, CalVer
 - [Windows packaging](docs/packaging/webview.md) — desktop / browser packaging
 
 ## Rules
