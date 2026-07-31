@@ -289,25 +289,18 @@
         var node = _contextMenuNode;
         CloseContextMenu();
         if (node is null
-            || FileTree.Active is null
             || !DysonComposerUploads.IsComposerUploadsDirectory(node.RelativePath))
             return;
 
-        var cleared = DysonComposerUploads.ClearAll(FileTree.Active.FileSystem);
+        var cleared = await Host.ClearComposerUploadsAsync();
         if (cleared.IsError)
         {
             _status = cleared.Error;
-            Host.ReportError(cleared.Error);
             return;
         }
 
-        Host.RemovePendingFilePathsUnderComposerUploads();
-
         // Force a shallow reload so the tree drops deleted children without waiting on the watcher.
-        node.Children.Clear();
-        node.ChildrenLoaded = false;
-        if (node.IsExpanded)
-            await FileTree.ExpandAsync(node);
+        await FileTree.InvalidateDirectoryAsync(DysonComposerUploads.RelativeDirectory);
 
         _status = cleared.Value == 0
             ? "Composer uploads already empty."

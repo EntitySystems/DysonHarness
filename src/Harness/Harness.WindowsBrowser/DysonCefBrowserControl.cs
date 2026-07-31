@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using CefSharp;
 
 namespace DysonHarness;
 
@@ -66,6 +67,79 @@ public sealed class DysonCefBrowserControl : IDysonBrowserControl
             return Task.FromResult(Result<IDysonBrowserWindow, string>.AsError($"Window not found: {windowId}"));
 
         return Task.FromResult(Result<IDysonBrowserWindow, string>.AsValue(window));
+    }
+
+    public async Task<Result<DysonBrowserCacheClearResult, string>> ClearBrowserCacheAsync(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var windows = _windows.Values.ToArray();
+        if (windows.Length == 0)
+        {
+            return Result<DysonBrowserCacheClearResult, string>.AsValue(new DysonBrowserCacheClearResult
+            {
+                Windows = 0,
+                TabsReloaded = 0,
+            });
+        }
+
+        var tabs = windows.SelectMany(w => w.SnapshotTabs()).ToArray();
+        if (tabs.Length == 0)
+        {
+            return Result<DysonBrowserCacheClearResult, string>.AsValue(new DysonBrowserCacheClearResult
+            {
+                Windows = windows.Length,
+                TabsReloaded = 0,
+            });
+        }
+
+        try
+        {
+            await DysonCefStaHost.InvokeAsync(async () =>
+            {
+                using var client = tabs[0].BrowserControl.GetDevToolsClient();
+                await client.Network.ClearBrowserCacheAsync().ConfigureAwait(true);
+            }).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            return Result<DysonBrowserCacheClearResult, string>.AsError(
+                "ClearBrowserCache failed: " + ex.Message,
+                exception: ex);
+        }
+
+        var reloaded = 0;
+        string? firstError = null;
+        foreach (var tab in tabs)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                await DysonCefStaHost.InvokeAsync(() =>
+                {
+                    tab.BrowserControl.Reload(ignoreCache: true);
+                }).ConfigureAwait(false);
+                reloaded++;
+            }
+            catch (Exception ex)
+            {
+                firstError ??= ex.Message;
+            }
+        }
+
+        if (reloaded == 0)
+        {
+            return Result<DysonBrowserCacheClearResult, string>.AsError(
+                "ClearBrowserCache: all tab reloads failed"
+                + (firstError is null ? "." : ": " + firstError));
+        }
+
+        return Result<DysonBrowserCacheClearResult, string>.AsValue(new DysonBrowserCacheClearResult
+        {
+            Windows = windows.Length,
+            TabsReloaded = reloaded,
+        });
     }
 
     internal void NotifyWindowClosed(string windowId) => _windows.TryRemove(windowId, out _);

@@ -178,6 +178,7 @@ Optional process-wide `IDysonBrowserControl` on `DysonAgentSessionConfig.Browser
 | `ListBrowserWindows` / `CloseBrowser` / `ResizeBrowser` | Window list / close / resize |
 | `ListBrowserTabs` / `NewBrowserTab` / `CloseBrowserTab` / `ActivateBrowserTab` | Tab management |
 | `BrowserNavigate` / `BrowserGoBack` / `BrowserGoForward` / `BrowserReload` | Navigation |
+| `ClearBrowserCache` | Clear shared CEF HTTP cache once, then hard-reload every tab in every open agent window (no args). Does not clear cookies/storage. Empty windows → `{ windows: 0, tabsReloaded: 0 }`. Profile-wide: agent + shell share `%LocalAppData%\DysonHarness\cef-cache` (shell is not hard-reloaded) |
 | `BrowserClick` / `BrowserType` / `BrowserFill` / `BrowserHover` / `BrowserPressKey` | Interaction (JS helpers for click/type/etc.) |
 | `BrowserWaitForSelector` / `BrowserWaitForNavigation` | Waits |
 | `BrowserExecuteJavaScript` / `BrowserGetHtml` / `BrowserTakeScreenshot` | Page inspection (screenshot via DevTools CDP; optional `timeoutMs`, default 30000) |

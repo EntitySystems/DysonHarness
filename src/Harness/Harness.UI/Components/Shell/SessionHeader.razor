@@ -1,8 +1,10 @@
 @namespace Harness.UI.Components.Shell
 @using DysonHarness
 @using Harness.UI.Demo
+@using Harness.UI.Files
 @implements IDisposable
 @inject DysonUiHost Host
+@inject DysonFileTreeService FileTree
 
 <div class="session-header">
     @if (Session is null)
@@ -34,34 +36,40 @@
                     @onclick="OpenShellsModal">
                 Shells @Host.LongRunningShellRunningCount
             </button>
-            @if (Host.IsBrowserControlAvailable)
-            {
-                <div class="session-header__tools @(_toolsMenuOpen ? "is-open" : null)">
-                    <button type="button"
-                            class="session-header__meta-pill @(_toolsMenuOpen ? "is-open" : null)"
-                            title="Tools"
-                            aria-haspopup="menu"
-                            aria-expanded="@_toolsMenuOpen"
-                            @onclick="ToggleToolsMenu"
-                            @onclick:stopPropagation="true">
-                        Tools ▾
-                    </button>
-                    @if (_toolsMenuOpen)
-                    {
-                        <div class="session-header__tools-menu"
-                             role="menu"
-                             aria-label="Tools"
-                             @onclick:stopPropagation="true">
+            <div class="session-header__tools @(_toolsMenuOpen ? "is-open" : null)">
+                <button type="button"
+                        class="session-header__meta-pill @(_toolsMenuOpen ? "is-open" : null)"
+                        title="Tools"
+                        aria-haspopup="menu"
+                        aria-expanded="@_toolsMenuOpen"
+                        @onclick="ToggleToolsMenu"
+                        @onclick:stopPropagation="true">
+                    Tools ▾
+                </button>
+                @if (_toolsMenuOpen)
+                {
+                    <div class="session-header__tools-menu"
+                         role="menu"
+                         aria-label="Tools"
+                         @onclick:stopPropagation="true">
+                        <button type="button"
+                                class="session-header__tools-menu-item"
+                                role="menuitem"
+                                @onclick="ClearComposerUploadsAsync">
+                            Clear composer uploads
+                        </button>
+                        @if (Host.IsBrowserControlAvailable)
+                        {
                             <button type="button"
                                     class="session-header__tools-menu-item"
                                     role="menuitem"
                                     @onclick="OpenBrowserAsync">
                                 Open Browser
                             </button>
-                        </div>
-                    }
-                </div>
-            }
+                        }
+                    </div>
+                }
+            </div>
             @if (Session.Provider is DemoDysonAgentProvider demo)
             {
                 <span>@demo.DisplayAlias · @demo.ProviderDisplayName / @demo.Slug</span>
@@ -207,6 +215,16 @@
         await Host.OpenBrowserAsync();
         if (Host.LastError is null)
             CloseToolsMenu();
+    }
+
+    private async Task ClearComposerUploadsAsync()
+    {
+        var cleared = await Host.ClearComposerUploadsAsync();
+        if (cleared.IsError)
+            return;
+
+        await FileTree.InvalidateDirectoryAsync(DysonComposerUploads.RelativeDirectory);
+        CloseToolsMenu();
     }
 
     private void BackToList()

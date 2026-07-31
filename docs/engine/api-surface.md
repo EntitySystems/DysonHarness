@@ -184,7 +184,7 @@ Keep `TError` / user-facing messages clean — do not stringify exceptions into 
 
 | Type | Notes |
 | ---- | ----- |
-| `IDysonBrowserControl` | Process-wide singleton: `OpenBrowserAsync` / `ListWindowsAsync` / `GetWindowAsync`; `SnipCaptured` (`DysonBrowserSnipPayload`) for chrome snips → UI host pending images |
+| `IDysonBrowserControl` | Process-wide singleton: `OpenBrowserAsync` / `ListWindowsAsync` / `GetWindowAsync` / `ClearBrowserCacheAsync` (`DysonBrowserCacheClearResult`); `SnipCaptured` (`DysonBrowserSnipPayload`) for chrome snips → UI host pending images |
 | `IDysonBrowserWindow` | Tabs + close/resize/bring-to-front |
 | `IDysonBrowserTab` | Navigate, interact, JS, screenshot (`TakeScreenshotAsync` optional `timeoutMs`, default 30s when omitted/invalid; races CDP vs linked prompt CT), console/network logs |
 | `DysonBrowserClickRequest` / `DysonBrowserTypeRequest` / `DysonBrowserKeyRequest` | Interaction DTOs |

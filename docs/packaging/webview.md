@@ -61,6 +61,7 @@ Boundary: `Harness.WindowsBrowser` only references Abstractions; it never calls 
 - Reuse `DysonNativeFolderPicker` for work-directory registration (host-process OS dialog; interactive desktop required — not for headless/remote Blazor hosts)
 - STA: shell owns the WPF message loop; Blazor Server stays MTA and marshals agent CEF work via the STA dispatcher
 - CEF `RootCachePath` is `%LocalAppData%\DysonHarness\` with `CachePath` = `...\cef-cache` and `cef-debug.log` beside it. Chromium allows **one process** per root: a second launch activates the existing window and exits (`Cef.GetExitCode` = `NormalExitProcessNotified`). Do not run `Harness.UI` agent CEF and the desktop shell against the same cache at once.
+- **`ClearBrowserCache` MCP:** clears that shared HTTP cache via CDP (`Network.ClearBrowserCache`) once, then hard-reloads every tab in every open **agent** browser window. Cookies/site storage are untouched. The shell WebView is not hard-reloaded, but its HTTP cache is cleared because it shares the same CEF profile.
 - If `Cef.Initialize` fails for other reasons, the exception includes `ResultCode`, cache paths, and `BrowserSubprocessPath` (also check `%LocalAppData%\DysonHarness\cef-debug.log` and the VC++ 2022 x64 redistributable)
 
 ## Non-goals

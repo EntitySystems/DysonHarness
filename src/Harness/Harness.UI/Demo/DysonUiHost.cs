@@ -594,6 +594,45 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
+    /// Clears <c>.dyson/composer-uploads</c> on disk and drops matching pending file paths.
+    /// Maps failures to <see cref="LastError"/>. Works without the Files-rail folder selected.
+    /// </summary>
+    public async Task<Result<int, string>> ClearComposerUploadsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var root = await TryResolveCatalogWorkRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root is null)
+        {
+            LastError = "Select a work directory before clearing composer uploads.";
+            Notify();
+            return Result<int, string>.AsError(LastError);
+        }
+
+        var fsResult = await DysonWorkspaceFileSystems
+            .CreateLocalAsync(root, cancellationToken)
+            .ConfigureAwait(false);
+        if (fsResult.IsError)
+        {
+            LastError = fsResult.Error;
+            Notify();
+            return Result<int, string>.AsError(fsResult.Error);
+        }
+
+        var cleared = DysonComposerUploads.ClearAll(fsResult.Value);
+        if (cleared.IsError)
+        {
+            LastError = cleared.Error;
+            Notify();
+            return Result<int, string>.AsError(cleared.Error);
+        }
+
+        RemovePendingFilePathsUnderComposerUploads();
+        LastError = null;
+        Notify();
+        return Result<int, string>.AsValue(cleared.Value);
+    }
+
+    /// <summary>
     /// Writes bytes under <c>.dyson/composer-uploads</c> in the active/catalog work root
     /// and queues the workspace-relative path for the next prompt.
     /// </summary>

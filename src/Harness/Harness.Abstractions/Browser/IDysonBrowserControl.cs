@@ -24,4 +24,11 @@ public interface IDysonBrowserControl
     Task<Result<IDysonBrowserWindow, string>> GetWindowAsync(
         string windowId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Clear the shared CEF HTTP cache once, then hard-reload every tab in every open agent window.
+    /// Does not clear cookies or site storage. Empty window list is success with zeros.
+    /// </summary>
+    Task<Result<DysonBrowserCacheClearResult, string>> ClearBrowserCacheAsync(
+        CancellationToken cancellationToken = default);
 }

@@ -38,6 +38,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             "BrowserGoBack" => await BrowserGoBackAsync(call, control, root, cancellationToken).ConfigureAwait(false),
             "BrowserGoForward" => await BrowserGoForwardAsync(call, control, root, cancellationToken).ConfigureAwait(false),
             "BrowserReload" => await BrowserReloadAsync(call, control, root, cancellationToken).ConfigureAwait(false),
+            "ClearBrowserCache" => await ClearBrowserCacheAsync(call, control, cancellationToken).ConfigureAwait(false),
             "BrowserClick" => await BrowserClickAsync(call, control, root, cancellationToken).ConfigureAwait(false),
             "BrowserType" => await BrowserTypeAsync(call, control, root, cancellationToken).ConfigureAwait(false),
             "BrowserFill" => await BrowserFillAsync(call, control, root, cancellationToken).ConfigureAwait(false),
@@ -246,6 +247,22 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Error(call, tab.Error);
         var result = await tab.Value.ReloadAsync(cancellationToken).ConfigureAwait(false);
         return result.IsError ? Error(call, result.Error) : Ok(call, "ok");
+    }
+
+    private static async Task<DysonToolCallResult> ClearBrowserCacheAsync(
+        DysonToolCall call,
+        IDysonBrowserControl control,
+        CancellationToken cancellationToken)
+    {
+        var result = await control.ClearBrowserCacheAsync(cancellationToken).ConfigureAwait(false);
+        if (result.IsError)
+            return Error(call, result.Error);
+
+        return Ok(call, JsonSerializer.Serialize(new
+        {
+            windows = result.Value.Windows,
+            tabsReloaded = result.Value.TabsReloaded,
+        }));
     }
 
     private static async Task<DysonToolCallResult> BrowserClickAsync(

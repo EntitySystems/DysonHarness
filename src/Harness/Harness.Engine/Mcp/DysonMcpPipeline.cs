@@ -762,6 +762,23 @@ public sealed class DysonMcpPipeline
 
         yield return new DysonMcpTool
         {
+            Name = "ClearBrowserCache",
+            Description =
+                "Clear the shared CEF HTTP cache for open agent browser windows, then hard-reload every tab. " +
+                "Does not clear cookies or site storage. No args — always all open windows. " +
+                "Empty window list returns success with windows=0, tabsReloaded=0. " +
+                "Agent windows and the Windows shell UI share %LocalAppData%\\DysonHarness\\cef-cache; " +
+                "CDP cache clear is profile-wide (shell is not hard-reloaded).",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {}
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
             Name = "BrowserClick",
             Description =
                 "Click in a tab via selector and/or x/y coordinates. Optional button (left|middle|right) and modifiers.",

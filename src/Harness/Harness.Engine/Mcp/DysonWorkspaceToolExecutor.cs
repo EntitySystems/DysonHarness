@@ -117,6 +117,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "OpenBrowser" or "ListBrowserWindows" or "CloseBrowser" or "ResizeBrowser"
                     or "ListBrowserTabs" or "NewBrowserTab" or "CloseBrowserTab" or "ActivateBrowserTab"
                     or "BrowserNavigate" or "BrowserGoBack" or "BrowserGoForward" or "BrowserReload"
+                    or "ClearBrowserCache"
                     or "BrowserClick" or "BrowserType" or "BrowserFill" or "BrowserHover" or "BrowserPressKey"
                     or "BrowserWaitForSelector" or "BrowserWaitForNavigation"
                     or "BrowserExecuteJavaScript" or "BrowserGetHtml" or "BrowserTakeScreenshot"

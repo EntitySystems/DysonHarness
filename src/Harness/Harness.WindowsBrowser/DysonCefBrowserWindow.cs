@@ -137,6 +137,8 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
 
     public string Id { get; }
 
+    internal DysonCefBrowserTab[] SnapshotTabs() => _tabs.Values.ToArray();
+
     public Task<Result<IReadOnlyList<IDysonBrowserTab>, string>> ListTabsAsync(
         CancellationToken cancellationToken = default) =>
         DysonCefStaHost.InvokeAsync(() =>

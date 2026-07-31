@@ -29,4 +29,8 @@ public sealed class DysonNullBrowserControl : IDysonBrowserControl
         string windowId,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(Result<IDysonBrowserWindow, string>.AsError(Unavailable));
+
+    public Task<Result<DysonBrowserCacheClearResult, string>> ClearBrowserCacheAsync(
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(Result<DysonBrowserCacheClearResult, string>.AsError(Unavailable));
 }

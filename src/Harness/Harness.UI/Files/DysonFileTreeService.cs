@@ -153,6 +153,37 @@ public sealed class DysonFileTreeService : IDisposable
         Notify();
     }
 
+    /// <summary>
+    /// Force a shallow reload of a directory node (e.g. after clearing composer-uploads).
+    /// No-op when the active tree has not loaded that path yet.
+    /// </summary>
+    public async Task InvalidateDirectoryAsync(
+        string relativePath,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
+
+        DysonFileTreeState? state;
+        lock (_gate)
+            state = Active;
+
+        if (state is null)
+            return;
+
+        var normalized = relativePath.Replace('\\', '/').TrimEnd('/');
+        var node = state.TryFindNode(normalized);
+        if (node is null || !node.IsDirectory)
+            return;
+
+        node.Children.Clear();
+        node.ChildrenLoaded = false;
+        if (node.IsExpanded)
+            await ExpandAsync(node, cancellationToken).ConfigureAwait(false);
+        else
+            Notify();
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -718,6 +749,8 @@ public sealed class DysonFileTreeState : IDisposable
 
         return list;
     }
+
+    internal DysonFileTreeNode? TryFindNode(string relativePath) => FindNode(relativePath);
 
     private DysonFileTreeNode? FindNode(string relativePath)
     {

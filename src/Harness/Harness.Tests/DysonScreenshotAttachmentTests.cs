@@ -639,6 +639,14 @@ public class DysonScreenshotAttachmentTests
             string.Equals(id, _window.Id, StringComparison.Ordinal)
                 ? Task.FromResult(Result<IDysonBrowserWindow, string>.AsValue(_window))
                 : Task.FromResult(Result<IDysonBrowserWindow, string>.AsError($"Window not found: {id}"));
+
+        public Task<Result<DysonBrowserCacheClearResult, string>> ClearBrowserCacheAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result<DysonBrowserCacheClearResult, string>.AsValue(new DysonBrowserCacheClearResult
+            {
+                Windows = 1,
+                TabsReloaded = 1,
+            }));
     }
 
     private sealed class StubWindow(string windowId, string tabId, byte[] png) : IDysonBrowserWindow
