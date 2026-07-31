@@ -1,0 +1,14 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <Version Condition="'$(Version)' == ''">0.0.0</Version>
+    <OutputName>DysonHarness-$(Version)-win-x64</OutputName>
+    <PublishDir Condition="'$(PublishDir)' == ''">..\..\artifacts\publish\win-x64</PublishDir>
+    <DefineConstants>ProductVersion=$(Version)</DefineConstants>
+    <DefaultCompressionLevel>high</DefaultCompressionLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <BindPath Include="$(PublishDir)" BindName="publish" />
+  </ItemGroup>
+</Project>
