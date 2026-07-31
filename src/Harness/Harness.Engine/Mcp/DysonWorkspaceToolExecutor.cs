@@ -704,7 +704,6 @@ public sealed partial class DysonWorkspaceToolExecutor
     {
         string summary;
         var failed = false;
-        var skipTasksCheck = false;
         try
         {
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
@@ -725,8 +724,6 @@ public sealed partial class DysonWorkspaceToolExecutor
                     return Error(call, "SubmitSubagentReport: status must be 'completed' or 'failed'.");
                 }
             }
-
-            skipTasksCheck = GetBool(doc.RootElement, "skipTasksCheck");
         }
         catch (JsonException)
         {
@@ -734,7 +731,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
 
         var submitted = await _session
-            .SubmitSubagentReportAsync(summary, failed, skipTasksCheck, cancellationToken)
+            .SubmitSubagentReportAsync(summary, failed, cancellationToken)
             .ConfigureAwait(false);
         if (submitted.IsError)
             return Error(call, submitted.Error);

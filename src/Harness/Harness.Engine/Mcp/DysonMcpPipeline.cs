@@ -1244,7 +1244,8 @@ public sealed class DysonMcpPipeline
                 "Subagents must call this when finished (or blocked). " +
                 "Summary may be a success handoff or, when status is failed, a concrete failure reason. " +
                 "Notifies the parent with the summary so the host can queue a parent turn. " +
-                "Complete all session todos (or pass skipTasksCheck) before finishing. " +
+                "All session todos must be Complete before a successful (completed) report; " +
+                "failed reports may leave todos incomplete. " +
                 "After a successful completed report, further calls are accepted as no-ops (idempotent). " +
                 "Do not use from a root Work session unless debugging.",
             InputSchemaJson = """
@@ -1259,10 +1260,6 @@ public sealed class DysonMcpPipeline
                       "type": "string",
                       "enum": ["completed", "failed"],
                       "description": "Report outcome (default: completed)."
-                    },
-                    "skipTasksCheck": {
-                      "type": "boolean",
-                      "description": "When true, allow report despite incomplete session todos; incomplete todos are returned in the result."
                     }
                   },
                   "required": ["summary"]

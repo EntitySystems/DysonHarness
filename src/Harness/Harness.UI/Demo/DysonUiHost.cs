@@ -106,22 +106,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     private void OnBrowserSnipCaptured(DysonBrowserSnipPayload payload)
     {
         ArgumentNullException.ThrowIfNull(payload);
-        var created = DysonUserImageFactory.CreateFromBytes(payload.FileName, payload.ImageBytes);
-        if (created.IsError)
-        {
-            ReportError(created.Error);
-            return;
-        }
-
-        var compressed = created.Value;
-        QueuePendingImage(new DysonBinaryAttachment
-        {
-            FileName = compressed.FileName,
-            Extension = compressed.Extension,
-            MimeType = compressed.MimeType,
-            Base64Data = compressed.Base64Data,
-            HtmlRef = string.IsNullOrWhiteSpace(payload.HtmlRef) ? null : payload.HtmlRef.Trim(),
-        });
+        var htmlRef = string.IsNullOrWhiteSpace(payload.HtmlRef) ? null : payload.HtmlRef.Trim();
+        _ = QueuePendingImageFromBytesAsync(payload.FileName, payload.ImageBytes, htmlRef);
     }
 
     public DemoDysonEngine? Engine => _engine;
@@ -312,7 +298,9 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>Queue a composer image (already compressed) for the next prompt.</summary>
-    public VoidResult<string> QueuePendingImage(DysonBinaryAttachment attachment)
+    public VoidResult<string> QueuePendingImage(
+        DysonBinaryAttachment attachment,
+        string? attachedRelativePath = null)
     {
         ArgumentNullException.ThrowIfNull(attachment);
         if (!attachment.IsImage)
@@ -321,6 +309,10 @@ public sealed class DysonUiHost : IAsyncDisposable
             Notify();
             return new VoidResult<string>(LastError);
         }
+
+        var path = string.IsNullOrWhiteSpace(attachedRelativePath)
+            ? null
+            : attachedRelativePath.Trim().Replace('\\', '/');
 
         lock (_pendingImagesGate)
         {
@@ -337,7 +329,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 attachment.MimeType,
                 attachment.Base64Data,
                 attachment.Extension,
-                attachment.HtmlRef));
+                attachment.HtmlRef,
+                path));
         }
 
         LastError = null;
@@ -345,9 +338,18 @@ public sealed class DysonUiHost : IAsyncDisposable
         return VoidResult<string>.Success;
     }
 
-    /// <summary>Decode bytes / data URL, compress, and queue for the next prompt.</summary>
-    public VoidResult<string> QueuePendingImageFromBytes(string? fileName, byte[] imageBytes)
+    /// <summary>
+    /// Decode/compress image bytes, queue vision, and dual-write JPEG under
+    /// <c>.dyson/composer-uploads</c> as a pending path for the next prompt.
+    /// </summary>
+    public async Task<VoidResult<string>> QueuePendingImageFromBytesAsync(
+        string? fileName,
+        byte[] imageBytes,
+        string? htmlRef = null,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(imageBytes);
+
         var created = DysonUserImageFactory.CreateFromBytes(fileName, imageBytes);
         if (created.IsError)
         {
@@ -356,33 +358,137 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(created.Error);
         }
 
-        return QueuePendingImage(created.Value);
+        lock (_pendingImagesGate)
+        {
+            if (_pendingImages.Count >= DysonUserImageFactory.MaxPendingImages)
+            {
+                LastError = $"At most {DysonUserImageFactory.MaxPendingImages} images can be attached.";
+                Notify();
+                return new VoidResult<string>(LastError);
+            }
+        }
+
+        lock (_pendingFilesGate)
+        {
+            if (_pendingFilePaths.Count >= DysonComposerUploads.MaxPendingFiles)
+            {
+                LastError = $"At most {DysonComposerUploads.MaxPendingFiles} files can be attached.";
+                Notify();
+                return new VoidResult<string>(LastError);
+            }
+        }
+
+        var root = await TryResolveCatalogWorkRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root is null)
+        {
+            LastError = "Select a work directory before attaching files.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        var fsResult = await DysonWorkspaceFileSystems
+            .CreateLocalAsync(root, cancellationToken)
+            .ConfigureAwait(false);
+        if (fsResult.IsError)
+        {
+            LastError = fsResult.Error;
+            Notify();
+            return new VoidResult<string>(fsResult.Error);
+        }
+
+        var attachment = created.Value;
+        if (!string.IsNullOrWhiteSpace(htmlRef))
+        {
+            attachment = new DysonBinaryAttachment
+            {
+                FileName = attachment.FileName,
+                Extension = attachment.Extension,
+                MimeType = attachment.MimeType,
+                Base64Data = attachment.Base64Data,
+                HtmlRef = htmlRef.Trim(),
+            };
+        }
+
+        byte[] jpegBytes;
+        try
+        {
+            jpegBytes = Convert.FromBase64String(attachment.Base64Data);
+        }
+        catch (FormatException ex)
+        {
+            LastError = $"Could not decode compressed image: {ex.Message}";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        var written = DysonComposerUploads.Write(fsResult.Value, attachment.FileName, jpegBytes);
+        if (written.IsError)
+        {
+            LastError = written.Error;
+            Notify();
+            return new VoidResult<string>(written.Error);
+        }
+
+        var queued = QueuePendingImage(attachment, written.Value);
+        if (queued.IsError)
+            return queued;
+
+        QueuePendingFilePath(written.Value);
+        LastError = null;
+        Notify();
+        return VoidResult<string>.Success;
     }
 
-    /// <summary>Decode a data URL, compress, and queue for the next prompt.</summary>
-    public VoidResult<string> QueuePendingImageFromDataUrl(string? fileName, string dataUrl)
+    /// <summary>Decode a data URL, compress, dual-write, and queue for the next prompt.</summary>
+    public Task<VoidResult<string>> QueuePendingImageFromDataUrlAsync(
+        string? fileName,
+        string dataUrl,
+        CancellationToken cancellationToken = default)
     {
         var created = DysonUserImageFactory.CreateFromDataUrl(fileName, dataUrl);
         if (created.IsError)
         {
             LastError = created.Error;
             Notify();
-            return new VoidResult<string>(created.Error);
+            return Task.FromResult(new VoidResult<string>(created.Error));
         }
 
-        return QueuePendingImage(created.Value);
+        byte[] jpegBytes;
+        try
+        {
+            jpegBytes = Convert.FromBase64String(created.Value.Base64Data);
+        }
+        catch (FormatException ex)
+        {
+            LastError = $"Could not decode compressed image: {ex.Message}";
+            Notify();
+            return Task.FromResult(new VoidResult<string>(LastError));
+        }
+
+        // Re-enter via bytes path so uploads dual-write stays in one place.
+        // JPEG bytes are already compressed; CreateFromBytes will re-encode (cheap for small thumbs).
+        return QueuePendingImageFromBytesAsync(
+            created.Value.FileName,
+            jpegBytes,
+            created.Value.HtmlRef,
+            cancellationToken);
     }
 
-    /// <summary>Remove a pending composer image by id.</summary>
+    /// <summary>Remove a pending composer image by id (and its dual-written path chip, if any).</summary>
     public void RemovePendingImage(Guid id)
     {
+        string? attachedPath = null;
         lock (_pendingImagesGate)
         {
             var index = _pendingImages.FindIndex(i => i.Id == id);
             if (index < 0)
                 return;
+            attachedPath = _pendingImages[index].AttachedRelativePath;
             _pendingImages.RemoveAt(index);
         }
+
+        if (attachedPath is not null)
+            RemovePendingFilePath(attachedPath);
 
         Notify();
     }
@@ -462,6 +568,29 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         Notify();
+    }
+
+    /// <summary>
+    /// Drop queued pending file paths under <c>.dyson/composer-uploads</c>
+    /// (e.g. after clearing that folder on disk).
+    /// </summary>
+    public int RemovePendingFilePathsUnderComposerUploads()
+    {
+        var removed = 0;
+        lock (_pendingFilesGate)
+        {
+            for (var i = _pendingFilePaths.Count - 1; i >= 0; i--)
+            {
+                if (!DysonComposerUploads.IsUnderComposerUploads(_pendingFilePaths[i]))
+                    continue;
+                _pendingFilePaths.RemoveAt(i);
+                removed++;
+            }
+        }
+
+        if (removed > 0)
+            Notify();
+        return removed;
     }
 
     /// <summary>
@@ -4122,7 +4251,12 @@ public sealed record PendingComposerImage(
     string Base64Data,
     string Extension,
     /// <summary>Optional browser snip DOM ref (empty today; future HTML element hit-test).</summary>
-    string? HtmlRef = null)
+    string? HtmlRef = null,
+    /// <summary>
+    /// Workspace-relative path dual-written under <c>.dyson/composer-uploads</c>
+    /// (also queued in <see cref="DysonUiHost.PendingFilePaths"/>; Composer hides the path chip).
+    /// </summary>
+    string? AttachedRelativePath = null)
 {
     public string DataUrl => $"data:{MimeType};base64,{Base64Data}";
 }

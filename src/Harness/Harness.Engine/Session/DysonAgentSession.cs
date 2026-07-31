@@ -1073,7 +1073,6 @@ public abstract class DysonAgentSession
     public Task<Result<string, string>> SubmitSubagentReportAsync(
         string summary,
         bool failed = false,
-        bool skipTasksCheck = false,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -1083,20 +1082,14 @@ public abstract class DysonAgentSession
 
         var incomplete = Todos
             .Where(t => t.Status is DysonSessionTodoStatus.Pending or DysonSessionTodoStatus.Ongoing)
-            .Select(t => new
-            {
-                taskCode = t.TaskCode,
-                displayName = t.DisplayName,
-                status = t.Status.ToString(),
-            })
+            .Select(t => $"{t.TaskCode} ({t.DisplayName})={t.Status}")
             .ToArray();
 
-        if (incomplete.Length > 0 && !skipTasksCheck)
+        // Failed reports may leave todos incomplete (blocker handoff). Successful reports require all Complete.
+        if (incomplete.Length > 0 && !failed)
         {
-            var list = string.Join("; ", incomplete.Select(t =>
-                $"{t.taskCode} ({t.displayName})={t.status}"));
             return Task.FromResult(Result<string, string>.AsError(
-                "SubmitSubagentReport: incomplete todos (pass skipTasksCheck to override): " + list));
+                "SubmitSubagentReport: incomplete todos: " + string.Join("; ", incomplete)));
         }
 
         var trimmed = summary.Trim();
@@ -1122,19 +1115,6 @@ public abstract class DysonAgentSession
                 Parent.NotifySubagentFailed(Id, trimmed, PersistenceId == Guid.Empty ? null : PersistenceId);
             else
                 Parent.NotifySubagentCompleted(Id, trimmed, PersistenceId == Guid.Empty ? null : PersistenceId);
-        }
-
-        if (incomplete.Length > 0)
-        {
-            return Task.FromResult(Result<string, string>.AsValue(JsonSerializer.Serialize(new
-            {
-                subagentId = Id,
-                persistenceId = PersistenceId,
-                status = Status.ToString(),
-                summary = trimmed,
-                incompleteTodos = incomplete,
-                skipTasksCheck = true,
-            })));
         }
 
         return Task.FromResult(Result<string, string>.AsValue(JsonSerializer.Serialize(new

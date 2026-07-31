@@ -1,8 +1,12 @@
 using DysonHarness;
+using ImageMagick;
 
 namespace Harness.Tests;
 
-/// <summary>ponytail: composer non-image uploads land under .dyson/composer-uploads with unique names.</summary>
+/// <summary>
+/// ponytail: composer uploads land under .dyson/composer-uploads; images dual-write JPEG;
+/// ClearAll empties the folder; path helpers gate the Files-rail clear menu.
+/// </summary>
 public class DysonComposerUploadsTests
 {
     [Fact]
@@ -12,6 +16,9 @@ public class DysonComposerUploadsTests
         AssertDedupeSuffix();
         AssertRejectsEmptyAndOversized();
         AssertLooksLikeImage();
+        AssertComposerUploadsPathHelpers();
+        AssertImageDualWriteUnderComposerUploads();
+        AssertClearAllEmptiesDirectory();
     }
 
     private static void AssertLooksLikeImage()
@@ -33,6 +40,26 @@ public class DysonComposerUploadsTests
             || DysonComposerUploads.ImageContentTypeFromFileName("notes.pdf") != "application/octet-stream")
         {
             throw new InvalidOperationException("ImageContentTypeFromFileName mismatch.");
+        }
+    }
+
+    private static void AssertComposerUploadsPathHelpers()
+    {
+        if (!DysonComposerUploads.IsComposerUploadsDirectory(".dyson/composer-uploads")
+            || !DysonComposerUploads.IsComposerUploadsDirectory(@".dyson\composer-uploads\")
+            || DysonComposerUploads.IsComposerUploadsDirectory(".dyson/composer-uploads/shot.jpg")
+            || DysonComposerUploads.IsComposerUploadsDirectory(".dyson")
+            || DysonComposerUploads.IsComposerUploadsDirectory(""))
+        {
+            throw new InvalidOperationException("IsComposerUploadsDirectory mismatch.");
+        }
+
+        if (!DysonComposerUploads.IsUnderComposerUploads(".dyson/composer-uploads")
+            || !DysonComposerUploads.IsUnderComposerUploads(".dyson/composer-uploads/a.jpg")
+            || DysonComposerUploads.IsUnderComposerUploads(".dyson/other/a.jpg")
+            || DysonComposerUploads.IsUnderComposerUploads(".dyson/composer-uploads-old/x"))
+        {
+            throw new InvalidOperationException("IsUnderComposerUploads mismatch.");
         }
     }
 
@@ -105,6 +132,83 @@ public class DysonComposerUploadsTests
         {
             try { Directory.Delete(root, recursive: true); } catch { /* best-effort */ }
         }
+    }
+
+    private static void AssertImageDualWriteUnderComposerUploads()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dyson-upload-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var fs = CreateFs(root);
+            var pngBytes = TinyPng();
+            var created = DysonUserImageFactory.CreateFromBytes("paste-shot.png", pngBytes);
+            if (created.IsError)
+                throw new InvalidOperationException(created.Error);
+
+            var jpegBytes = Convert.FromBase64String(created.Value.Base64Data);
+            var written = DysonComposerUploads.Write(fs, created.Value.FileName, jpegBytes);
+            if (written.IsError)
+                throw new InvalidOperationException(written.Error);
+
+            var relative = written.Value.Replace('\\', '/');
+            if (!relative.StartsWith(".dyson/composer-uploads/", StringComparison.Ordinal)
+                || !relative.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"Expected uploads JPEG path, got {relative}");
+            }
+
+            var onDisk = Path.Combine(
+                root,
+                relative.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(onDisk) || new FileInfo(onDisk).Length == 0)
+                throw new InvalidOperationException("Compressed image was not written under composer-uploads.");
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    private static void AssertClearAllEmptiesDirectory()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dyson-upload-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var fs = CreateFs(root);
+            var a = DysonComposerUploads.Write(fs, "a.txt", "one"u8.ToArray());
+            var b = DysonComposerUploads.Write(fs, "b.txt", "two"u8.ToArray());
+            if (a.IsError || b.IsError)
+                throw new InvalidOperationException(a.IsError ? a.Error : b.Error);
+
+            var cleared = DysonComposerUploads.ClearAll(fs);
+            if (cleared.IsError)
+                throw new InvalidOperationException(cleared.Error);
+            if (cleared.Value != 2)
+                throw new InvalidOperationException($"Expected 2 deleted, got {cleared.Value}");
+
+            var dir = Path.Combine(root, ".dyson", "composer-uploads");
+            if (!Directory.Exists(dir))
+                throw new InvalidOperationException("ClearAll must keep the uploads folder.");
+            if (Directory.GetFileSystemEntries(dir).Length != 0)
+                throw new InvalidOperationException("ClearAll must empty the uploads folder.");
+
+            var again = DysonComposerUploads.ClearAll(fs);
+            if (again.IsError || again.Value != 0)
+                throw new InvalidOperationException("Second ClearAll on empty folder must return 0.");
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    private static byte[] TinyPng()
+    {
+        using var image = new MagickImage(MagickColors.Red, 8, 8);
+        image.Format = MagickFormat.Png;
+        return image.ToByteArray();
     }
 
     private static IDysonWorkspaceFileSystem CreateFs(string root)

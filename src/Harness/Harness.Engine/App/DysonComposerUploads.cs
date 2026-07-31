@@ -1,7 +1,7 @@
 namespace DysonHarness;
 
 /// <summary>
-/// Writes composer-pasted/dropped non-image files under <c>.dyson/composer-uploads</c>
+/// Writes composer-pasted/dropped files and compressed images under <c>.dyson/composer-uploads</c>
 /// and returns a workspace-relative path for <c>AppendPathsToLastUser</c>.
 /// </summary>
 public static class DysonComposerUploads
@@ -58,6 +58,35 @@ public static class DysonComposerUploads
     }
 
     /// <summary>
+    /// True when <paramref name="relativePath"/> is exactly <see cref="RelativeDirectory"/>
+    /// (slash-normalized, trailing slash ignored).
+    /// </summary>
+    public static bool IsComposerUploadsDirectory(string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return false;
+
+        var normalized = relativePath.Trim().Replace('\\', '/').TrimEnd('/');
+        return string.Equals(normalized, RelativeDirectory, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// True when <paramref name="relativePath"/> is <see cref="RelativeDirectory"/> or a child of it.
+    /// </summary>
+    public static bool IsUnderComposerUploads(string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return false;
+
+        var normalized = relativePath.Trim().Replace('\\', '/');
+        if (string.Equals(normalized, RelativeDirectory, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var prefix = RelativeDirectory + "/";
+        return normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Ensures the upload dir exists, writes <paramref name="bytes"/> under a sanitized unique name,
     /// and returns the workspace-relative path (forward slashes).
     /// </summary>
@@ -84,6 +113,49 @@ public static class DysonComposerUploads
             return Result<string, string>.AsError(written.Error);
 
         return Result<string, string>.AsValue(relative);
+    }
+
+    /// <summary>
+    /// Deletes all files and subdirectories under <see cref="RelativeDirectory"/>, keeping the folder.
+    /// Creates the directory if missing. Returns the number of direct children removed.
+    /// </summary>
+    public static Result<int, string> ClearAll(IDysonWorkspaceFileSystem fs)
+    {
+        ArgumentNullException.ThrowIfNull(fs);
+
+        var exists = fs.DirectoryExists(RelativeDirectory);
+        if (exists.IsError)
+            return Result<int, string>.AsError(exists.Error);
+
+        if (!exists.Value)
+        {
+            var created = fs.CreateDirectory(RelativeDirectory);
+            if (created.IsError)
+                return Result<int, string>.AsError(created.Error);
+            return Result<int, string>.AsValue(0);
+        }
+
+        var entries = fs.EnumerateEntries(RelativeDirectory);
+        if (entries.IsError)
+            return Result<int, string>.AsError(entries.Error);
+
+        var deleted = 0;
+        foreach (var entry in entries.Value)
+        {
+            if (string.IsNullOrEmpty(entry.Name))
+                continue;
+
+            var child = $"{RelativeDirectory}/{entry.Name}";
+            var removed = entry.IsDirectory
+                ? fs.DeleteDirectory(child, recursive: true)
+                : fs.DeleteFile(child);
+            if (removed.IsError)
+                return Result<int, string>.AsError(removed.Error);
+
+            deleted++;
+        }
+
+        return Result<int, string>.AsValue(deleted);
     }
 
     private static string AllocateRelativePath(IDysonWorkspaceFileSystem fs, string? fileName)

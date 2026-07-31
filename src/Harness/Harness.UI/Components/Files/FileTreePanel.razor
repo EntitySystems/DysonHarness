@@ -83,6 +83,15 @@
                 @onclick="OpenInFileManager">
             @OpenInFileManagerLabel
         </button>
+        @if (IsComposerUploadsContextTarget)
+        {
+            <button type="button"
+                    class="file-tree__context-menu-item"
+                    role="menuitem"
+                    @onclick="ClearComposerUploadsAsync">
+                Clear composer uploads
+            </button>
+        }
     </div>
 }
 
@@ -104,6 +113,10 @@
             : OperatingSystem.IsMacOS()
                 ? "Open in Finder"
                 : "Open in file manager";
+
+    private bool IsComposerUploadsContextTarget =>
+        _contextMenuNode is not null
+        && DysonComposerUploads.IsComposerUploadsDirectory(_contextMenuNode.RelativePath);
 
     protected override void OnInitialized() => FileTree.Changed += OnTreeChanged;
 
@@ -269,6 +282,36 @@
         {
             _status = null;
         }
+    }
+
+    private async Task ClearComposerUploadsAsync()
+    {
+        var node = _contextMenuNode;
+        CloseContextMenu();
+        if (node is null
+            || FileTree.Active is null
+            || !DysonComposerUploads.IsComposerUploadsDirectory(node.RelativePath))
+            return;
+
+        var cleared = DysonComposerUploads.ClearAll(FileTree.Active.FileSystem);
+        if (cleared.IsError)
+        {
+            _status = cleared.Error;
+            Host.ReportError(cleared.Error);
+            return;
+        }
+
+        Host.RemovePendingFilePathsUnderComposerUploads();
+
+        // Force a shallow reload so the tree drops deleted children without waiting on the watcher.
+        node.Children.Clear();
+        node.ChildrenLoaded = false;
+        if (node.IsExpanded)
+            await FileTree.ExpandAsync(node);
+
+        _status = cleared.Value == 0
+            ? "Composer uploads already empty."
+            : $"Cleared {cleared.Value} composer upload(s).";
     }
 
     private string? ResolveAbsolutePath(string relativePath)

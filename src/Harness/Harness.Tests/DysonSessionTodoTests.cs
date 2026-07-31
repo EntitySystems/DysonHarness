@@ -126,7 +126,7 @@ public class DysonSessionTodoTests
         if (complete.Status != DysonSessionStatus.Completed)
             throw new InvalidOperationException("Expected all-complete session to be Completed.");
 
-        // Incomplete without skip → error, not terminal
+        // Incomplete + completed → error, not terminal
         var blocked = new StubSession();
         var pending = await blocked.CreateTodoAsync("t2", "Two", DysonSessionTodoStatus.Pending)
             .ConfigureAwait(false);
@@ -143,26 +143,39 @@ public class DysonSessionTodoTests
         if (blocked.IsTerminal)
             throw new InvalidOperationException("Expected blocked session to stay non-terminal.");
 
-        // Incomplete with skipTasksCheck → success + incompleteTodos
-        var skipped = new StubSession();
-        var ongoing = await skipped.CreateTodoAsync("t3", "Three", DysonSessionTodoStatus.Ongoing)
+        // Incomplete without failed still errors (no skip override)
+        var stillBlocked = new StubSession();
+        var ongoing = await stillBlocked.CreateTodoAsync("t3", "Three", DysonSessionTodoStatus.Ongoing)
             .ConfigureAwait(false);
         if (ongoing.IsError)
             throw new InvalidOperationException($"Expected create ongoing todo ok, got: {ongoing.Error}");
-        var skipOk = await skipped
-            .SubmitSubagentReportAsync("forced", skipTasksCheck: true)
+        var stillBlockedResult = await stillBlocked
+            .SubmitSubagentReportAsync("still incomplete")
             .ConfigureAwait(false);
-        if (skipOk.IsError)
-            throw new InvalidOperationException($"Expected skipTasksCheck report ok, got: {skipOk.Error}");
-        if (skipped.Status != DysonSessionStatus.Completed)
-            throw new InvalidOperationException("Expected skipTasksCheck session to be Completed.");
-        if (skipOk.Value.IndexOf("incompleteTodos", StringComparison.Ordinal) < 0
-            || skipOk.Value.IndexOf("\"skipTasksCheck\":true", StringComparison.Ordinal) < 0
-            || skipOk.Value.IndexOf("t3", StringComparison.Ordinal) < 0)
+        if (!stillBlockedResult.IsError
+            || stillBlockedResult.Error.IndexOf("incomplete todos", StringComparison.OrdinalIgnoreCase) < 0
+            || stillBlockedResult.Error.IndexOf("t3", StringComparison.Ordinal) < 0)
         {
             throw new InvalidOperationException(
-                $"Expected skip payload to include incompleteTodos/skipTasksCheck/t3, got: {skipOk.Value}");
+                $"Expected incomplete-todos error mentioning t3, got: {(stillBlockedResult.IsError ? stillBlockedResult.Error : "ok")}");
         }
+
+        if (stillBlocked.IsTerminal)
+            throw new InvalidOperationException("Expected still-blocked session to stay non-terminal.");
+
+        // Incomplete + failed → success (blocker handoff)
+        var failedOk = new StubSession();
+        var failedTodo = await failedOk.CreateTodoAsync("t4", "Four", DysonSessionTodoStatus.Pending)
+            .ConfigureAwait(false);
+        if (failedTodo.IsError)
+            throw new InvalidOperationException($"Expected create pending todo ok, got: {failedTodo.Error}");
+        var failedReport = await failedOk
+            .SubmitSubagentReportAsync("blocked: missing schema", failed: true)
+            .ConfigureAwait(false);
+        if (failedReport.IsError)
+            throw new InvalidOperationException($"Expected failed report with incomplete todos ok, got: {failedReport.Error}");
+        if (failedOk.Status != DysonSessionStatus.Failed)
+            throw new InvalidOperationException("Expected incomplete+failed session to be Failed.");
     }
 
     private static async Task AssertSubmitSubagentReportFailedSupersede()

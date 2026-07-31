@@ -783,14 +783,10 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                 }
             }
 
-            var skipTasksCheck = root.TryGetProperty("skipTasksCheck", out var skipProp)
-                && skipProp.ValueKind == JsonValueKind.True;
-
             var summary = summaryProp.GetString()!;
             var submitted = await SubmitSubagentReportAsync(
                     summary,
                     failed,
-                    skipTasksCheck,
                     cancellationToken)
                 .ConfigureAwait(false);
             if (submitted.IsError)

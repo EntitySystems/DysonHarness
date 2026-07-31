@@ -115,7 +115,7 @@ public static class DysonAgentSystemPrompts
         - Prefer breadth-first discovery, then deepen on the hottest paths.
         - Call out uncertainty explicitly when evidence is incomplete.
         - Never spawn subagents (StartSubagent is forbidden in Explore).
-        - Finish session todos via UpdateTodo before SubmitSubagentReport, or set skipTasksCheck and expect incompleteTodos in the result.
+        - Mark all session todos Complete via UpdateTodo before SubmitSubagentReport (`completed`); if blocked, report `failed` without requiring todo completion.
         - SubmitSubagentReport is mandatory: do not end a turn with findings-only text (including an H1 + prose) as if the session is finished.
         - When investigation is done — or blocked — call SubmitSubagentReport with structured findings (`completed` or `failed`) so the parent can continue.
         - Blocked or incomplete investigation: SubmitSubagentReport with status `failed` and a concrete failure reason (missing data, access blocker, tool error) — do not silently abandon, and do not retry SubmitSubagentReport after a successful submit.
@@ -140,7 +140,7 @@ public static class DysonAgentSystemPrompts
         - After a tool failure: diagnose, retry or take an alternate approach, and keep working until the task is done or truly blocked. Do not stop after a single failed tool or wait for the user to say “resume”.
         - On success: verify as required, update todos, then SubmitSubagentReport with status completed and a crisp handoff the parent can consume without re-deriving your steps.
         - Prefer minimal output: completed work, files touched, verification, and any residual risks.
-        - Finish session todos via UpdateTodo before SubmitSubagentReport, or set skipTasksCheck and expect incompleteTodos in the result.
+        - Mark all session todos Complete via UpdateTodo before SubmitSubagentReport (`completed`); if blocked, report `failed` without requiring todo completion.
         """;
 
     /// <summary>

@@ -91,6 +91,8 @@
                     }
                     @foreach (var filePath in Host.PendingFilePaths)
                     {
+                        if (IsPathAttachedToPendingImage(filePath))
+                            continue;
                         var path = filePath;
                         var fileLabel = System.IO.Path.GetFileName(path.Replace('/', System.IO.Path.DirectorySeparatorChar));
                         if (string.IsNullOrWhiteSpace(fileLabel))
@@ -561,6 +563,18 @@
 
     private Task OpenPendingFileAsync(string path) => Host.OpenFileViewerAsync(path);
 
+    private bool IsPathAttachedToPendingImage(string filePath)
+    {
+        foreach (var image in Host.PendingImages)
+        {
+            if (image.AttachedRelativePath is { } attached
+                && string.Equals(attached, filePath, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
     private async Task OnFilesSelectedAsync(InputFileChangeEventArgs e)
     {
         if (Disabled)
@@ -580,7 +594,7 @@
                 await stream.CopyToAsync(ms);
                 var bytes = ms.ToArray();
                 if (DysonComposerUploads.LooksLikeImage(file.ContentType, file.Name))
-                    Host.QueuePendingImageFromBytes(file.Name, bytes);
+                    await Host.QueuePendingImageFromBytesAsync(file.Name, bytes);
                 else
                     await Host.QueuePendingFileFromBytesAsync(file.Name, bytes);
             }
