@@ -1,0 +1,98 @@
+@namespace Harness.UI.Components.Models
+@using DysonHarness
+
+<div class="models-panel__slug @(Slug.IsDefault ? "is-active" : null) @(IsManaged && !Slug.IsEnabled ? "is-disabled" : null)">
+    <span class="list-item__title">@Slug.DisplayAlias</span>
+    <span class="list-item__meta mono">
+        @Slug.Slug
+        @(Slug.IsDefault ? " · default" : "")
+        @if (IsManaged)
+        {
+            <text> · @(Slug.IsEnabled ? "enabled" : "disabled")</text>
+        }
+        else if (!string.IsNullOrWhiteSpace(Slug.DefaultReasoningEffort))
+        {
+            <text> · effort @Slug.DefaultReasoningEffort</text>
+        }
+        @if (!IsManaged && Slug.DefaultMaxTargetContextTokens is int manualCtx)
+        {
+            <text> · context @DysonMaxTargetContextTokens.FormatCompact(manualCtx)</text>
+        }
+    </span>
+
+    @if (Slug.ReasoningModes.Count > 0)
+    {
+        <div class="models-panel__modes">
+            @foreach (var mode in Slug.ReasoningModes)
+            {
+                <span class="models-panel__mode-chip"><span class="mono">@mode</span></span>
+            }
+        </div>
+    }
+
+    @if (!IsManaged)
+    {
+        <div class="btn-row">
+            <button type="button" class="btn btn--xs" @onclick="OnEditSlug">Edit</button>
+            <EffortPickerPopup Slug="Slug"
+                               IsManaged="IsManaged"
+                               Busy="ContextStepBusy"
+                               OnSetEffort="OnSetEffort"
+                               OnModesChanged="OnModesChanged" />
+            @if (!Slug.IsDefault)
+            {
+                <button type="button" class="btn btn--xs" @onclick="OnSetDefault">Default</button>
+            }
+            <button type="button" class="btn btn-ghost btn--xs" @onclick="OnRemoveSlug">Remove</button>
+        </div>
+    }
+    else
+    {
+        <div class="btn-row models-panel__slug-actions">
+            <EffortPickerPopup Slug="Slug"
+                               IsManaged="IsManaged"
+                               Busy="ContextStepBusy"
+                               OnSetEffort="OnSetEffort"
+                               OnModesChanged="OnModesChanged" />
+            <div class="models-panel__context" title="Default max target context (blank = harness 100K)">
+                <span class="models-panel__effort-label">context</span>
+                <button type="button"
+                        class="composer-context-limit__step"
+                        aria-label="Decrease default context by 10K"
+                        disabled="@ContextStepBusy"
+                        @onclick="() => OnStepContext.InvokeAsync(-DysonMaxTargetContextTokens.Step)">−</button>
+                <span class="composer-context-limit__value">
+                    @(Slug.DefaultMaxTargetContextTokens is int d
+                        ? DysonMaxTargetContextTokens.FormatCompact(d)
+                        : "100K")
+                </span>
+                <button type="button"
+                        class="composer-context-limit__step"
+                        aria-label="Increase default context by 10K"
+                        disabled="@ContextStepBusy"
+                        @onclick="() => OnStepContext.InvokeAsync(DysonMaxTargetContextTokens.Step)">+</button>
+            </div>
+            @if (!Slug.IsDefault && Slug.IsEnabled)
+            {
+                <button type="button" class="btn btn--xs" @onclick="OnSetDefault">Default</button>
+            }
+            <button type="button" class="btn btn-ghost btn--xs" @onclick="OnToggleEnabled">
+                @(Slug.IsEnabled ? "Disable" : "Enable")
+            </button>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public DysonModelSlugEntity Slug { get; set; } = default!;
+    [Parameter] public bool IsManaged { get; set; }
+    [Parameter] public bool ContextStepBusy { get; set; }
+
+    [Parameter] public EventCallback OnSetDefault { get; set; }
+    [Parameter] public EventCallback OnToggleEnabled { get; set; }
+    [Parameter] public EventCallback OnEditSlug { get; set; }
+    [Parameter] public EventCallback OnRemoveSlug { get; set; }
+    [Parameter] public EventCallback<string> OnSetEffort { get; set; }
+    [Parameter] public EventCallback<List<string>> OnModesChanged { get; set; }
+    [Parameter] public EventCallback<int> OnStepContext { get; set; }
+}

@@ -1,21 +1,31 @@
 @namespace Harness.UI.Components.Models
 @using DysonHarness
+@using Harness.UI.Services
 @inject IDysonModelRepository ModelStore
 @inject DysonCliProxyHost CliProxy
 @inject ManagedInferenceProviderCatalog ManagedCatalog
+@inject ConfirmDialogService ConfirmDialog
 
 <div class="models-panel panel">
     <div class="tool-panel__title">Providers &amp; slugs</div>
 
-    @if (!string.IsNullOrEmpty(_error))
-    {
-        <div class="error-banner" style="margin:0;">@_error</div>
-    }
+    <StatusToast Status="@_status"
+                 Error="@_error"
+                 OnStatusCleared="ClearStatus"
+                 OnErrorCleared="ClearError" />
 
-    @if (!string.IsNullOrEmpty(_status))
-    {
-        <div class="list-item__meta" style="margin:4px 0 0;">@_status</div>
-    }
+    <div class="models-panel__toolbar">
+        <input class="models-panel__search"
+               @bind="_searchText"
+               @bind:event="oninput"
+               placeholder="Filter providers or slugs…" />
+        <button type="button" class="btn btn-primary btn--sm" @onclick="OpenAddProviderModal">
+            Add provider
+        </button>
+        <button type="button" class="btn btn-ghost btn--sm" @onclick="RepairMisTaggedProvidersAsync">
+            Repair mis-tagged providers
+        </button>
+    </div>
 
     <div class="models-panel__managed" style="margin:10px 0 12px;padding:8px 0;border-bottom:1px solid var(--border, #333);">
         <div class="tool-panel__title" style="font-size:12px;">Third-party managed providers</div>
@@ -31,7 +41,7 @@
             </div>
         }
 
-        @if (_downloadProgress is { } prog)
+        @if (_downloadProgress is { } prog && _importingSource is not null)
         {
             <div style="margin:6px 0 10px;">
                 <div class="list-item__meta mono" style="margin-bottom:4px;">
@@ -62,8 +72,7 @@
                 var source = managed.ManagedSource;
                 var already = _providers.Any(p => string.Equals(p.ManagedSource, source, StringComparison.Ordinal));
                 <button type="button"
-                        class="btn"
-                        style="padding:3px 7px;font-size:11px;"
+                        class="btn btn--sm"
                         disabled="@(already || _busy)"
                         @onclick="() => ImportManagedAsync(managed)">
                     @(already ? $"Imported: {managed.DisplayName}" : $"Import {managed.DisplayName}")
@@ -72,442 +81,86 @@
         </div>
     </div>
 
-    <div class="btn-row" style="margin:8px 0;">
-        <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="RepairMisTaggedProvidersAsync">
-            Repair mis-tagged providers
-        </button>
-    </div>
-
-    <div class="models-panel__body">
-        <div class="models-panel__list list">
-            @if (_providers.Count == 0)
+    <div class="models-panel__list list" style="max-height:none;">
+        @if (_providers.Count == 0)
+        {
+            <div class="empty-state" style="padding:8px 0;">No providers</div>
+        }
+        else
+        {
+            var filtered = FilteredProviders.ToList();
+            @if (filtered.Count == 0)
             {
-                <div class="empty-state" style="padding:8px 0;">No providers</div>
+                <div class="empty-state" style="padding:8px 0;">No providers match "@_searchText"</div>
             }
-            else
+            @foreach (var provider in filtered)
             {
-                @foreach (var provider in _providers)
-                {
-                    var isManaged = !string.IsNullOrWhiteSpace(provider.ManagedSource);
-                    <div class="list-item" style="cursor:default;">
-                        @if (!isManaged && _editingProviderId == provider.Id)
-                        {
-                            <div class="field">
-                                <label>Display name</label>
-                                <input @bind="_editDisplayName" />
-                            </div>
-                            <div class="field">
-                                <label>Provider kind</label>
-                                <select @bind="_editProviderKind">
-                                    @foreach (var kind in ProviderKindOptions(_editProviderKind))
-                                    {
-                                        <option value="@kind">@kind</option>
-                                    }
-                                </select>
-                            </div>
-                            <div class="field">
-                                <label>Base URL</label>
-                                <input @bind="_editBaseUrl" />
-                            </div>
-                            <div class="field">
-                                <label>API key</label>
-                                <input @bind="_editApiKey" type="password" autocomplete="off" />
-                            </div>
-                            @if (string.Equals(_editProviderKind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
-                            {
-                                <div class="field">
-                                    <label>API mode</label>
-                                    <select @bind="_editOpenAiApiMode">
-                                        @foreach (var mode in DysonOpenAiApiModes.All)
-                                        {
-                                            <option value="@mode">@mode</option>
-                                        }
-                                    </select>
-                                </div>
-                            }
-                            <div class="btn-row" style="margin-top:4px;">
-                                <button type="button" class="btn btn-primary" style="padding:3px 7px;font-size:11px;" @onclick="() => SaveProviderAsync(provider.Id)">Save</button>
-                                <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="CancelEditProvider">Cancel</button>
-                            </div>
-                        }
-                        else
-                        {
-                            <span class="list-item__title">@provider.DisplayName</span>
-                            <span class="list-item__meta mono">
-                                @provider.ProviderKind
-                                @if (isManaged)
-                                {
-                                    <text> · managed @provider.ManagedSource</text>
-                                }
-                                @if (string.Equals(provider.ProviderKind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
-                                {
-                                    <text> · @DysonOpenAiApiModes.Normalize(provider.OpenAiApiMode)</text>
-                                }
-                                @if (!string.IsNullOrEmpty(provider.BaseUrl))
-                                {
-                                    <text> · @provider.BaseUrl</text>
-                                }
-                                @(string.IsNullOrEmpty(provider.ApiKey) ? "" : " · key set")
-                            </span>
-                            @if (isManaged && !_cliProxyInstalled)
-                            {
-                                <div class="error-banner" style="margin:6px 0;">
-                                    CLIProxyAPI binary missing — Connect blocked until reinstall (use Import above).
-                                </div>
-                            }
-                            @if (isManaged
-                                && _pendingAuth.TryGetValue(provider.ManagedSource!, out var pending)
-                                && !string.IsNullOrWhiteSpace(pending.UserCode))
-                            {
-                                <div class="list-item__meta" style="margin:4px 0;">
-                                    Device code: <span class="mono">@pending.UserCode</span>
-                                    @if (!string.IsNullOrWhiteSpace(pending.AuthUrl))
-                                    {
-                                        <text> · <a href="@pending.AuthUrl" target="_blank" rel="noopener">open auth URL</a></text>
-                                    }
-                                </div>
-                            }
-                            <div class="btn-row" style="margin-top:4px;flex-wrap:wrap;gap:4px;">
-                                @if (isManaged)
-                                {
-                                    <button type="button" class="btn btn-primary" style="padding:3px 7px;font-size:11px;"
-                                            disabled="@(_busy || !_cliProxyInstalled)"
-                                            @onclick="() => ConnectManagedAsync(provider)">Connect</button>
-                                    <button type="button" class="btn" style="padding:3px 7px;font-size:11px;"
-                                            disabled="@(_busy || !_pendingAuth.ContainsKey(provider.ManagedSource!))"
-                                            @onclick="() => CompleteManagedAsync(provider)">Complete</button>
-                                    <button type="button" class="btn" style="padding:3px 7px;font-size:11px;"
-                                            disabled="@(_busy || !_cliProxyInstalled)"
-                                            @onclick="() => VerifyManagedAsync(provider)">Verify / Refresh models</button>
-                                    <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;"
-                                            disabled="@_busy"
-                                            @onclick="() => DisconnectManagedAsync(provider)">Disconnect</button>
-                                    <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;"
-                                            disabled="@_busy"
-                                            @onclick="() => DeleteProviderAsync(provider.Id)">Delete</button>
-                                }
-                                else
-                                {
-                                    <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="() => BeginEditProvider(provider)">Edit</button>
-                                    <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="() => DeleteProviderAsync(provider.Id)">Delete</button>
-                                }
-                            </div>
-                        }
-
-                        <div class="models-panel__slugs">
-                            @if (provider.Slugs.Count == 0)
-                            {
-                                <div class="list-item__meta" style="padding:4px 0;">
-                                    @(isManaged ? "No slugs yet — Connect then Verify / Refresh models." : "No slugs")
-                                </div>
-                            }
-                            else
-                            {
-                                @foreach (var slug in provider.Slugs)
-                                {
-                                    @if (!isManaged && _editingSlugId == slug.Id)
-                                    {
-                                        <div class="models-panel__slug" style="margin-top:4px;">
-                                            <div class="field">
-                                                <label>Display alias</label>
-                                                <input @bind="_editSlugAlias" />
-                                            </div>
-                                            <div class="field">
-                                                <label>Slug</label>
-                                                <input @bind="_editSlugValue" />
-                                            </div>
-                                            <div class="field">
-                                                <label>Default reasoning effort</label>
-                                                <input @bind="_editSlugEffort" placeholder="blank = omit" />
-                                            </div>
-                                            <div class="field">
-                                                <label>Reasoning modes</label>
-                                                <div class="models-panel__modes">
-                                                    @foreach (var mode in _editSlugReasoningModes)
-                                                    {
-                                                        var m = mode;
-                                                        <span class="models-panel__mode-chip">
-                                                            <span class="mono">@m</span>
-                                                            <button type="button" class="btn btn-ghost" style="padding:0 4px;font-size:10px;" @onclick="() => RemoveEditSlugMode(m)" title="Remove">×</button>
-                                                        </span>
-                                                    }
-                                                </div>
-                                                <div class="btn-row" style="margin-top:4px;align-items:center;">
-                                                    <input @bind="_editSlugModeDraft" @bind:event="oninput" placeholder="e.g. high" style="flex:1;min-width:0;"
-                                                           @onkeydown="OnEditSlugModeKeyDown" />
-                                                    <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="AddEditSlugMode">Add</button>
-                                                </div>
-                                            </div>
-                                            <label class="checkbox-row">
-                                                <input type="checkbox" @bind="_editSlugIsDefault" />
-                                                Set as default
-                                            </label>
-                                            <div class="btn-row" style="margin-top:2px;">
-                                                <button type="button" class="btn btn-primary" style="padding:2px 6px;font-size:10px;" @onclick="() => SaveSlugAsync(slug)">Save</button>
-                                                <button type="button" class="btn btn-ghost" style="padding:2px 6px;font-size:10px;" @onclick="CancelEditSlug">Cancel</button>
-                                            </div>
-                                        </div>
-                                    }
-                                    else
-                                    {
-                                        <div class="models-panel__slug @(slug.IsDefault ? "is-active" : null)">
-                                            <span class="list-item__title">@slug.DisplayAlias</span>
-                                            <span class="list-item__meta mono">
-                                                @slug.Slug
-                                                @(slug.IsDefault ? " · default" : "")
-                                                @if (isManaged)
-                                                {
-                                                    <text> · @(slug.IsEnabled ? "enabled" : "disabled")</text>
-                                                }
-                                                else if (!string.IsNullOrWhiteSpace(slug.DefaultReasoningEffort))
-                                                {
-                                                    <text> · effort @slug.DefaultReasoningEffort</text>
-                                                }
-                                                @if (slug.DefaultMaxTargetContextTokens is int ctxDefault)
-                                                {
-                                                    <text> · context @DysonMaxTargetContextTokens.FormatCompact(ctxDefault)</text>
-                                                }
-                                            </span>
-                                            @if (!isManaged)
-                                            {
-                                                <div class="btn-row" style="margin-top:2px;">
-                                                    <button type="button" class="btn" style="padding:2px 6px;font-size:10px;" @onclick="() => BeginEditSlug(slug)">Edit</button>
-                                                    @if (!slug.IsDefault)
-                                                    {
-                                                        <button type="button" class="btn" style="padding:2px 6px;font-size:10px;" @onclick="() => SetDefaultAsync(slug.Id)">Default</button>
-                                                    }
-                                                    <button type="button" class="btn btn-ghost" style="padding:2px 6px;font-size:10px;" @onclick="() => RemoveSlugAsync(slug.Id)">Remove</button>
-                                                </div>
-                                            }
-                                            else
-                                            {
-                                                <div class="btn-row models-panel__slug-actions">
-                                                    <label class="models-panel__effort">
-                                                        <span class="models-panel__effort-label">effort</span>
-                                                        <select class="models-panel__effort-select"
-                                                                value="@(slug.DefaultReasoningEffort ?? "")"
-                                                                @onchange="e => SetManagedSlugEffortAsync(slug, e.Value?.ToString())">
-                                                            <option value="">omit</option>
-                                                            @foreach (var mode in ManagedEffortModes(slug))
-                                                            {
-                                                                <option value="@mode">@mode</option>
-                                                            }
-                                                        </select>
-                                                    </label>
-                                                    <div class="models-panel__context" title="Default max target context (blank = harness 100K)">
-                                                        <span class="models-panel__effort-label">context</span>
-                                                        <button type="button"
-                                                                class="composer-context-limit__step"
-                                                                aria-label="Decrease default context by 10K"
-                                                                @onclick="() => StepManagedSlugContextAsync(slug, -DysonMaxTargetContextTokens.Step)">−</button>
-                                                        <span class="composer-context-limit__value">
-                                                            @(slug.DefaultMaxTargetContextTokens is int d
-                                                                ? DysonMaxTargetContextTokens.FormatCompact(d)
-                                                                : "100K")
-                                                        </span>
-                                                        <button type="button"
-                                                                class="composer-context-limit__step"
-                                                                aria-label="Increase default context by 10K"
-                                                                @onclick="() => StepManagedSlugContextAsync(slug, DysonMaxTargetContextTokens.Step)">+</button>
-                                                        @if (slug.DefaultMaxTargetContextTokens is not null)
-                                                        {
-                                                            <button type="button"
-                                                                    class="btn btn-ghost"
-                                                                    style="padding:2px 6px;font-size:10px;"
-                                                                    title="Clear to harness default 100K"
-                                                                    @onclick="() => SetManagedSlugContextAsync(slug, null)">Clear</button>
-                                                        }
-                                                    </div>
-                                                    @if (!slug.IsDefault && slug.IsEnabled)
-                                                    {
-                                                        <button type="button" class="btn" style="padding:2px 6px;font-size:10px;" @onclick="() => SetDefaultAsync(slug.Id)">Default</button>
-                                                    }
-                                                    <button type="button" class="btn btn-ghost" style="padding:2px 6px;font-size:10px;" @onclick="() => ToggleSlugEnabledAsync(slug)">
-                                                        @(slug.IsEnabled ? "Disable" : "Enable")
-                                                    </button>
-                                                </div>
-                                            }
-                                        </div>
-                                    }
-                                }
-                            }
-
-                            @if (!isManaged)
-                            {
-                                @if (_addSlugProviderId == provider.Id)
-                                {
-                                    <div style="margin-top:6px;">
-                                        <div class="field">
-                                            <label>Display alias</label>
-                                            <input @bind="_slugAlias" />
-                                        </div>
-                                        <div class="field">
-                                            <label>Slug</label>
-                                            <input @bind="_slugValue" placeholder="gpt-4o" />
-                                        </div>
-                                        <div class="field">
-                                            <label>Default reasoning effort</label>
-                                            <input @bind="_slugEffort" placeholder="blank = omit" />
-                                        </div>
-                                        <div class="field">
-                                            <label>Reasoning modes</label>
-                                            <div class="models-panel__modes">
-                                                @foreach (var mode in _addSlugReasoningModes)
-                                                {
-                                                    var m = mode;
-                                                    <span class="models-panel__mode-chip">
-                                                        <span class="mono">@m</span>
-                                                        <button type="button" class="btn btn-ghost" style="padding:0 4px;font-size:10px;" @onclick="() => RemoveAddSlugMode(m)" title="Remove">×</button>
-                                                    </span>
-                                                }
-                                            </div>
-                                            <div class="btn-row" style="margin-top:4px;align-items:center;">
-                                                <input @bind="_addSlugModeDraft" @bind:event="oninput" placeholder="e.g. high" style="flex:1;min-width:0;"
-                                                       @onkeydown="OnAddSlugModeKeyDown" />
-                                                <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="AddAddSlugMode">Add</button>
-                                            </div>
-                                        </div>
-                                        <label class="checkbox-row">
-                                            <input type="checkbox" @bind="_slugIsDefault" />
-                                            Set as default
-                                        </label>
-                                        <div class="btn-row">
-                                            <button type="button" class="btn btn-primary" style="padding:3px 7px;font-size:11px;" @onclick="() => AddSlugAsync(provider.Id)">Add</button>
-                                            <button type="button" class="btn btn-ghost" style="padding:3px 7px;font-size:11px;" @onclick="CancelAddSlug">Cancel</button>
-                                        </div>
-                                    </div>
-                                }
-                                else
-                                {
-                                    <button type="button" class="btn" style="margin-top:6px;padding:3px 7px;font-size:11px;" @onclick="() => BeginAddSlug(provider.Id)">Add slug</button>
-                                }
-                            }
-                        </div>
-                    </div>
-                }
+                var p = provider;
+                <ProviderCard Provider="p"
+                              CliProxyInstalled="_cliProxyInstalled"
+                              AuthPending="IsAuthPending(p)"
+                              ConnectBusy="IsConnectBusy(p)"
+                              VerifyBusy="IsVerifyBusy(p)"
+                              PendingUserCode="PendingAuth(p)?.UserCode"
+                              PendingAuthUrl="PendingAuth(p)?.AuthUrl"
+                              DownloadProgress="CardDownloadProgress(p)"
+                              ContextStepBusySlugId="_contextStepBusySlugId"
+                              OnConnect="() => ConnectManagedAsync(p)"
+                              OnComplete="() => CompleteManagedAsync(p)"
+                              OnVerify="() => VerifyManagedAsync(p)"
+                              OnDisconnect="() => DisconnectManagedAsync(p)"
+                              OnDelete="() => ConfirmDeleteProviderAsync(p)"
+                              OnEditProvider="() => OpenEditProviderModal(p)"
+                              OnDeleteProvider="() => ConfirmDeleteProviderAsync(p)"
+                              OnAddSlug="() => OpenAddSlugModal(p.Id)"
+                              OnSetDefault="slug => SetDefaultAsync(slug.Id)"
+                              OnToggleEnabled="slug => ToggleSlugEnabledAsync(slug)"
+                              OnEditSlug="slug => OpenEditSlugModal(slug)"
+                              OnRemoveSlug="slug => ConfirmRemoveSlugAsync(p, slug)"
+                              OnSetEffort="args => SetManagedSlugEffortAsync(args.slug, string.IsNullOrWhiteSpace(args.effort) ? null : args.effort)"
+                              OnModesChanged="args => SetSlugModesAsync(args.slug, args.modes)"
+                              OnStepContext="args => StepManagedSlugContextAsync(args.slug, args.delta)" />
             }
-        </div>
-
-        <details class="models-panel__add" open="@_providerFormOpen">
-            <summary @onclick:preventDefault="false">Add provider</summary>
-            <div class="models-panel__add-form">
-                <div class="field">
-                    <label>Display name</label>
-                    <input @bind="_displayName" />
-                </div>
-                <div class="field">
-                    <label>Provider kind</label>
-                    <select @bind="_providerKind">
-                        @foreach (var kind in DysonProviderKinds.All)
-                        {
-                            <option value="@kind">@kind</option>
-                        }
-                    </select>
-                </div>
-                <div class="field">
-                    <label>Base URL (optional)</label>
-                    <input @bind="_baseUrl" />
-                </div>
-                <div class="field">
-                    <label>API key (optional, plaintext local)</label>
-                    <input @bind="_apiKey" type="password" autocomplete="off" />
-                </div>
-                @if (string.Equals(_providerKind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
-                {
-                    <div class="field">
-                        <label>API mode</label>
-                        <select @bind="_openAiApiMode">
-                            @foreach (var mode in DysonOpenAiApiModes.All)
-                            {
-                                <option value="@mode">@mode</option>
-                            }
-                        </select>
-                    </div>
-                }
-                <div class="field">
-                    <label>Initial slug</label>
-                    <input @bind="_initialSlug" placeholder="demo-mock" />
-                </div>
-                <div class="field">
-                    <label>Initial display alias</label>
-                    <input @bind="_initialAlias" placeholder="Demo Mock" />
-                </div>
-                <div class="field">
-                    <label>Default reasoning effort (optional)</label>
-                    <input @bind="_initialEffort" placeholder="blank = omit" />
-                </div>
-                <div class="field">
-                    <label>Reasoning modes</label>
-                    <div class="models-panel__modes">
-                        @foreach (var mode in _initialReasoningModes)
-                        {
-                            var m = mode;
-                            <span class="models-panel__mode-chip">
-                                <span class="mono">@m</span>
-                                <button type="button" class="btn btn-ghost" style="padding:0 4px;font-size:10px;" @onclick="() => RemoveInitialMode(m)" title="Remove">×</button>
-                            </span>
-                        }
-                    </div>
-                    <div class="btn-row" style="margin-top:4px;align-items:center;">
-                        <input @bind="_initialModeDraft" @bind:event="oninput" placeholder="e.g. high" style="flex:1;min-width:0;"
-                               @onkeydown="OnInitialModeKeyDown" />
-                        <button type="button" class="btn" style="padding:3px 7px;font-size:11px;" @onclick="AddInitialMode">Add</button>
-                    </div>
-                </div>
-                <label class="checkbox-row">
-                    <input type="checkbox" @bind="_initialIsDefault" />
-                    Set slug as default
-                </label>
-                <button type="button" class="btn btn-primary" @onclick="CreateProviderAsync">Create</button>
-            </div>
-        </details>
+        }
     </div>
 </div>
+
+<ProviderFormModal IsOpen="_providerModalOpen"
+                   ProviderToEdit="_providerDraft"
+                   OnClose="CloseProviderModal"
+                   OnSubmit="OnProviderFormSubmitAsync" />
+
+<SlugFormModal IsOpen="_slugModalOpen"
+               SlugToEdit="_slugDraft"
+               OnClose="CloseSlugModal"
+               OnSubmit="OnSlugFormSubmitAsync" />
 
 @code {
     private List<DysonModelProviderEntity> _providers = [];
     private string? _error;
     private string? _status;
-    private bool _providerFormOpen = true;
+    private string _searchText = "";
     private bool _cliProxyInstalled;
     private bool _busy;
     private CliProxyDownloadProgress? _downloadProgress;
     private readonly Dictionary<string, ManagedConnectionBegin> _pendingAuth = new(StringComparer.Ordinal);
 
-    private string _displayName = "";
-    private string _providerKind = DysonProviderKinds.OpenAICompatible;
-    private string? _baseUrl;
-    private string? _apiKey;
-    private string _openAiApiMode = DysonOpenAiApiModes.Completions;
-    private string _initialSlug = "";
-    private string _initialAlias = "";
-    private string _initialEffort = "high";
-    private bool _initialIsDefault;
-    private List<string> _initialReasoningModes = [];
-    private string _initialModeDraft = "";
+    // Per-source busy tracking so Connect/Verify spinners don't freeze the whole panel.
+    private string? _connectingSource;
+    private string? _verifyingSource;
+    private string? _importingSource;
+    private Guid? _contextStepBusySlugId;
 
+    // Provider modal state (null draft = add mode).
+    private bool _providerModalOpen;
+    private ProviderFormModal.ProviderFormDraft? _providerDraft;
     private Guid? _editingProviderId;
-    private string _editDisplayName = "";
-    private string _editProviderKind = DysonProviderKinds.Demo;
-    private string? _editBaseUrl;
-    private string? _editApiKey;
-    private string _editOpenAiApiMode = DysonOpenAiApiModes.Completions;
 
+    // Slug modal state (null draft = add mode).
+    private bool _slugModalOpen;
+    private SlugFormModal.SlugFormDraft? _slugDraft;
     private Guid? _addSlugProviderId;
-    private string _slugAlias = "";
-    private string _slugValue = "";
-    private string _slugEffort = "high";
-    private bool _slugIsDefault;
-    private List<string> _addSlugReasoningModes = [];
-    private string _addSlugModeDraft = "";
-
-    private Guid? _editingSlugId;
-    private string _editSlugAlias = "";
-    private string _editSlugValue = "";
-    private string _editSlugEffort = "";
-    private bool _editSlugIsDefault;
-    private List<string> _editSlugReasoningModes = [];
-    private string _editSlugModeDraft = "";
+    private DysonModelSlugEntity? _editingSlug;
 
     [Parameter] public EventCallback OnChanged { get; set; }
 
@@ -527,6 +180,48 @@
         _providers = result.Value.ToList();
     }
 
+    private void ClearStatus() => _status = null;
+
+    private void ClearError() => _error = null;
+
+    private IEnumerable<DysonModelProviderEntity> FilteredProviders
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(_searchText))
+                return _providers;
+
+            // NOTE: a slug-only match still shows the whole provider card
+            // (ProviderCard renders all slugs); no slug-level filtering.
+            return _providers.Where(p =>
+                p.DisplayName.Contains(_searchText, StringComparison.OrdinalIgnoreCase)
+                || p.Slugs.Any(s =>
+                    s.Slug.Contains(_searchText, StringComparison.OrdinalIgnoreCase)
+                    || s.DisplayAlias.Contains(_searchText, StringComparison.OrdinalIgnoreCase)));
+        }
+    }
+
+    private bool IsAuthPending(DysonModelProviderEntity provider) =>
+        provider.ManagedSource is not null && _pendingAuth.ContainsKey(provider.ManagedSource);
+
+    private ManagedConnectionBegin? PendingAuth(DysonModelProviderEntity provider) =>
+        provider.ManagedSource is not null
+        && _pendingAuth.TryGetValue(provider.ManagedSource, out var pending)
+            ? pending
+            : null;
+
+    private bool IsConnectBusy(DysonModelProviderEntity provider) =>
+        provider.ManagedSource is not null && _connectingSource == provider.ManagedSource;
+
+    private bool IsVerifyBusy(DysonModelProviderEntity provider) =>
+        provider.ManagedSource is not null && _verifyingSource == provider.ManagedSource;
+
+    private CliProxyDownloadProgress? CardDownloadProgress(DysonModelProviderEntity provider) =>
+        provider.ManagedSource is not null
+        && (_connectingSource == provider.ManagedSource || _verifyingSource == provider.ManagedSource)
+            ? _downloadProgress
+            : null;
+
     private Progress<CliProxyDownloadProgress> CreateDownloadProgress() =>
         new(p =>
         {
@@ -534,11 +229,33 @@
             _ = InvokeAsync(StateHasChanged);
         });
 
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:0.#} KB";
+        return $"{bytes / (1024.0 * 1024.0):0.##} MB";
+    }
+
+    private static IEnumerable<string> ProviderKindOptions(string current)
+    {
+        if (!string.IsNullOrWhiteSpace(current)
+            && !DysonProviderKinds.All.Contains(current, StringComparer.Ordinal))
+        {
+            yield return current;
+        }
+
+        foreach (var kind in DysonProviderKinds.All)
+            yield return kind;
+    }
+
+    // --- Managed provider flow ---
+
     private async Task ImportManagedAsync(ManagedInferenceProviderBase managed)
     {
         _error = null;
         _status = null;
         _busy = true;
+        _importingSource = managed.ManagedSource;
         _downloadProgress = null;
         try
         {
@@ -559,6 +276,7 @@
         finally
         {
             _busy = false;
+            _importingSource = null;
             _downloadProgress = null;
         }
     }
@@ -574,7 +292,7 @@
 
         _error = null;
         _status = null;
-        _busy = true;
+        _connectingSource = managed.ManagedSource;
         _downloadProgress = null;
         try
         {
@@ -619,7 +337,7 @@
         }
         finally
         {
-            _busy = false;
+            _connectingSource = null;
             _downloadProgress = null;
         }
     }
@@ -640,7 +358,7 @@
         }
 
         _error = null;
-        _busy = true;
+        _connectingSource = managed.ManagedSource;
         try
         {
             var complete = await managed.CompleteConnectionAsync(pending.State);
@@ -672,7 +390,7 @@
         }
         finally
         {
-            _busy = false;
+            _connectingSource = null;
         }
     }
 
@@ -686,7 +404,7 @@
         }
 
         _error = null;
-        _busy = true;
+        _verifyingSource = managed.ManagedSource;
         _downloadProgress = null;
         try
         {
@@ -705,7 +423,7 @@
         }
         finally
         {
-            _busy = false;
+            _verifyingSource = null;
             _downloadProgress = null;
         }
     }
@@ -719,41 +437,70 @@
         return Task.CompletedTask;
     }
 
-    private static string FormatBytes(long bytes)
+    // --- Provider add/edit/delete (modal-driven) ---
+
+    private void OpenAddProviderModal()
     {
-        if (bytes < 1024) return $"{bytes} B";
-        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:0.#} KB";
-        return $"{bytes / (1024.0 * 1024.0):0.##} MB";
+        _editingProviderId = null;
+        _providerDraft = null;
+        _providerModalOpen = true;
     }
 
-    private async Task CreateProviderAsync()
+    private void OpenEditProviderModal(DysonModelProviderEntity provider)
+    {
+        _editingProviderId = provider.Id;
+        _providerDraft = new ProviderFormModal.ProviderFormDraft
+        {
+            DisplayName = provider.DisplayName,
+            ProviderKind = provider.ProviderKind,
+            BaseUrl = provider.BaseUrl,
+            ApiKey = provider.ApiKey,
+            OpenAiApiMode = provider.OpenAiApiMode,
+        };
+        _providerModalOpen = true;
+    }
+
+    private void CloseProviderModal() => _providerModalOpen = false;
+
+    private async Task OnProviderFormSubmitAsync(ProviderFormModal.ProviderFormResult result)
+    {
+        if (_editingProviderId is Guid editId)
+            await SaveEditProviderAsync(editId, result);
+        else
+            await CreateProviderAsync(result);
+
+        if (_error is null)
+            _providerModalOpen = false;
+    }
+
+    private async Task CreateProviderAsync(ProviderFormModal.ProviderFormResult result)
     {
         _error = null;
         _status = null;
-        if (string.IsNullOrWhiteSpace(_displayName))
+        if (string.IsNullOrWhiteSpace(result.DisplayName))
         {
             _error = "Display name is required.";
             return;
         }
 
-        var baseUrl = string.IsNullOrWhiteSpace(_baseUrl) ? null : _baseUrl.Trim();
-        var apiKey = string.IsNullOrWhiteSpace(_apiKey) ? null : _apiKey;
-        var rawKind = string.IsNullOrWhiteSpace(_providerKind) ? DysonProviderKinds.Demo : _providerKind.Trim();
+        var baseUrl = string.IsNullOrWhiteSpace(result.BaseUrl) ? null : result.BaseUrl.Trim();
+        var apiKey = string.IsNullOrWhiteSpace(result.ApiKey) ? null : result.ApiKey;
+        var rawKind = string.IsNullOrWhiteSpace(result.ProviderKind) ? DysonProviderKinds.Demo : result.ProviderKind.Trim();
         var kind = DysonProviderKinds.EffectiveKind(rawKind, baseUrl, apiKey);
         if (!string.Equals(rawKind, kind, StringComparison.Ordinal))
             _status = "Provider kind set to OpenAICompatible (credentials require a real provider).";
 
-        var slug = string.IsNullOrWhiteSpace(_initialSlug) ? "demo-mock" : _initialSlug.Trim();
-        var alias = string.IsNullOrWhiteSpace(_initialAlias) ? _displayName.Trim() : _initialAlias.Trim();
-        var makeDefault = _initialIsDefault || !_providers.Any(p => p.Slugs.Any(s => s.IsDefault));
+        var slug = result.InitialSlug.Trim();
+        var alias = string.IsNullOrWhiteSpace(result.InitialAlias) ? result.DisplayName.Trim() : result.InitialAlias.Trim();
+        var makeDefault = !_providers.Any(p => p.Slugs.Any(s => s.IsDefault));
 
         var create = await ModelStore.CreateProviderAsync(new DysonModelProviderEntity
         {
-            DisplayName = _displayName.Trim(),
+            DisplayName = result.DisplayName.Trim(),
             ProviderKind = kind,
             BaseUrl = baseUrl,
             ApiKey = apiKey,
-            OpenAiApiMode = DysonOpenAiApiModes.Normalize(_openAiApiMode),
+            OpenAiApiMode = DysonOpenAiApiModes.Normalize(result.OpenAiApiMode),
         });
 
         if (create.IsError)
@@ -767,129 +514,31 @@
             slug,
             alias,
             makeDefault,
-            string.IsNullOrWhiteSpace(_initialEffort) ? null : _initialEffort.Trim(),
-            _initialReasoningModes);
+            string.IsNullOrWhiteSpace(result.InitialEffort) ? null : result.InitialEffort.Trim(),
+            result.InitialModes);
         if (addSlug.IsError)
         {
             _error = addSlug.Error;
             return;
         }
 
-        _displayName = "";
-        _providerKind = DysonProviderKinds.OpenAICompatible;
-        _baseUrl = null;
-        _apiKey = null;
-        _openAiApiMode = DysonOpenAiApiModes.Completions;
-        _initialReasoningModes = [];
-        _initialModeDraft = "";
-        _initialSlug = "";
-        _initialAlias = "";
-        _initialEffort = "high";
-        _initialIsDefault = false;
         await RefreshAsync();
         await OnChanged.InvokeAsync();
     }
 
-    private void BeginEditProvider(DysonModelProviderEntity provider)
-    {
-        _editingProviderId = provider.Id;
-        _editDisplayName = provider.DisplayName;
-        _editProviderKind = string.IsNullOrWhiteSpace(provider.ProviderKind)
-            ? DysonProviderKinds.Demo
-            : provider.ProviderKind;
-        _editBaseUrl = provider.BaseUrl;
-        _editApiKey = provider.ApiKey;
-        _editOpenAiApiMode = DysonOpenAiApiModes.Normalize(provider.OpenAiApiMode);
-    }
-
-    private void CancelEditProvider()
-    {
-        _editingProviderId = null;
-    }
-
-    private void AddInitialMode()
-    {
-        if (!TryAddMode(_initialReasoningModes, _initialModeDraft))
-            return;
-        _initialModeDraft = "";
-    }
-
-    private void RemoveInitialMode(string mode) => _initialReasoningModes.Remove(mode);
-
-    private void OnInitialModeKeyDown(KeyboardEventArgs e)
-    {
-        if (e.Key == "Enter")
-            AddInitialMode();
-    }
-
-    private void AddAddSlugMode()
-    {
-        if (!TryAddMode(_addSlugReasoningModes, _addSlugModeDraft))
-            return;
-        _addSlugModeDraft = "";
-    }
-
-    private void RemoveAddSlugMode(string mode) => _addSlugReasoningModes.Remove(mode);
-
-    private void OnAddSlugModeKeyDown(KeyboardEventArgs e)
-    {
-        if (e.Key == "Enter")
-            AddAddSlugMode();
-    }
-
-    private void AddEditSlugMode()
-    {
-        if (!TryAddMode(_editSlugReasoningModes, _editSlugModeDraft))
-            return;
-        _editSlugModeDraft = "";
-    }
-
-    private void RemoveEditSlugMode(string mode) => _editSlugReasoningModes.Remove(mode);
-
-    private void OnEditSlugModeKeyDown(KeyboardEventArgs e)
-    {
-        if (e.Key == "Enter")
-            AddEditSlugMode();
-    }
-
-    private static bool TryAddMode(List<string> modes, string? draft)
-    {
-        if (string.IsNullOrWhiteSpace(draft))
-            return false;
-
-        var trimmed = draft.Trim();
-        if (modes.Contains(trimmed, StringComparer.Ordinal))
-            return false;
-
-        modes.Add(trimmed);
-        return true;
-    }
-
-    private static IEnumerable<string> ProviderKindOptions(string current)
-    {
-        if (!string.IsNullOrWhiteSpace(current)
-            && !DysonProviderKinds.All.Contains(current, StringComparer.Ordinal))
-        {
-            yield return current;
-        }
-
-        foreach (var kind in DysonProviderKinds.All)
-            yield return kind;
-    }
-
-    private async Task SaveProviderAsync(Guid id)
+    private async Task SaveEditProviderAsync(Guid id, ProviderFormModal.ProviderFormResult result)
     {
         _error = null;
         _status = null;
-        if (string.IsNullOrWhiteSpace(_editDisplayName))
+        if (string.IsNullOrWhiteSpace(result.DisplayName))
         {
             _error = "Display name is required.";
             return;
         }
 
-        var baseUrl = string.IsNullOrWhiteSpace(_editBaseUrl) ? null : _editBaseUrl.Trim();
-        var apiKey = string.IsNullOrWhiteSpace(_editApiKey) ? null : _editApiKey;
-        var rawKind = string.IsNullOrWhiteSpace(_editProviderKind) ? DysonProviderKinds.Demo : _editProviderKind.Trim();
+        var baseUrl = string.IsNullOrWhiteSpace(result.BaseUrl) ? null : result.BaseUrl.Trim();
+        var apiKey = string.IsNullOrWhiteSpace(result.ApiKey) ? null : result.ApiKey;
+        var rawKind = string.IsNullOrWhiteSpace(result.ProviderKind) ? DysonProviderKinds.Demo : result.ProviderKind.Trim();
         var kind = DysonProviderKinds.EffectiveKind(rawKind, baseUrl, apiKey);
         if (!string.Equals(rawKind, kind, StringComparison.Ordinal))
             _status = "Provider kind set to OpenAICompatible (credentials require a real provider).";
@@ -897,11 +546,11 @@
         var update = await ModelStore.UpdateProviderAsync(new DysonModelProviderEntity
         {
             Id = id,
-            DisplayName = _editDisplayName.Trim(),
+            DisplayName = result.DisplayName.Trim(),
             ProviderKind = kind,
             BaseUrl = baseUrl,
             ApiKey = apiKey,
-            OpenAiApiMode = DysonOpenAiApiModes.Normalize(_editOpenAiApiMode),
+            OpenAiApiMode = DysonOpenAiApiModes.Normalize(result.OpenAiApiMode),
         });
 
         if (update.IsError)
@@ -913,6 +562,28 @@
         _editingProviderId = null;
         await RefreshAsync();
         await OnChanged.InvokeAsync();
+    }
+
+    private async Task ConfirmDeleteProviderAsync(DysonModelProviderEntity provider)
+    {
+        var confirmed = await ConfirmDialog.ConfirmAsync(
+            title: "Delete provider",
+            message: $"Delete provider '{provider.DisplayName}' and all its slugs? This cannot be undone.",
+            confirmLabel: "Delete",
+            cancelLabel: "Cancel",
+            danger: true);
+        if (!confirmed)
+            return;
+
+        _busy = true;
+        try
+        {
+            await DeleteProviderAsync(provider.Id);
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
     private async Task DeleteProviderAsync(Guid id)
@@ -933,62 +604,59 @@
         await OnChanged.InvokeAsync();
     }
 
-    private void BeginAddSlug(Guid providerId)
+    // --- Slug add/edit/remove (modal-driven) ---
+
+    private void OpenAddSlugModal(Guid providerId)
     {
         _addSlugProviderId = providerId;
-        _editingSlugId = null;
-        _slugAlias = "";
-        _slugValue = "";
-        _slugEffort = "high";
-        _slugIsDefault = false;
-        _addSlugReasoningModes = [];
-        _addSlugModeDraft = "";
+        _editingSlug = null;
+        _slugDraft = null;
+        _slugModalOpen = true;
     }
 
-    private void CancelAddSlug()
+    private void OpenEditSlugModal(DysonModelSlugEntity slug)
     {
         _addSlugProviderId = null;
-        _addSlugModeDraft = "";
+        _editingSlug = slug;
+        _slugDraft = new SlugFormModal.SlugFormDraft
+        {
+            Slug = slug.Slug,
+            DisplayAlias = slug.DisplayAlias,
+            DefaultReasoningEffort = slug.DefaultReasoningEffort,
+            IsDefault = slug.IsDefault,
+            Modes = [..slug.ReasoningModes],
+        };
+        _slugModalOpen = true;
     }
 
-    private void BeginEditSlug(DysonModelSlugEntity slug)
+    private void CloseSlugModal() => _slugModalOpen = false;
+
+    private async Task OnSlugFormSubmitAsync(SlugFormModal.SlugFormResult result)
     {
-        _addSlugProviderId = null;
-        _editingSlugId = slug.Id;
-        _editSlugAlias = slug.DisplayAlias;
-        _editSlugValue = slug.Slug;
-        _editSlugEffort = slug.DefaultReasoningEffort ?? "";
-        _editSlugIsDefault = slug.IsDefault;
-        _editSlugReasoningModes = [..slug.ReasoningModes];
-        _editSlugModeDraft = "";
+        if (_editingSlug is not null)
+            await SaveSlugAsync(result);
+        else if (_addSlugProviderId is Guid providerId)
+            await AddSlugAsync(providerId, result);
+
+        if (_error is null)
+            _slugModalOpen = false;
     }
 
-    private void CancelEditSlug()
-    {
-        _editingSlugId = null;
-        _editSlugModeDraft = "";
-    }
-
-    private async Task SaveSlugAsync(DysonModelSlugEntity slug)
+    private async Task SaveSlugAsync(SlugFormModal.SlugFormResult result)
     {
         _error = null;
-        if (string.IsNullOrWhiteSpace(_editSlugValue) || string.IsNullOrWhiteSpace(_editSlugAlias))
-        {
-            _error = "Slug and display alias are required.";
+        if (_editingSlug is not { } slug)
             return;
-        }
 
         var update = await ModelStore.UpdateSlugAsync(new DysonModelSlugEntity
         {
             Id = slug.Id,
             ProviderId = slug.ProviderId,
-            Slug = _editSlugValue.Trim(),
-            DisplayAlias = _editSlugAlias.Trim(),
-            IsDefault = _editSlugIsDefault,
-            DefaultReasoningEffort = string.IsNullOrWhiteSpace(_editSlugEffort)
-                ? null
-                : _editSlugEffort.Trim(),
-            ReasoningModes = [.._editSlugReasoningModes],
+            Slug = result.Slug,
+            DisplayAlias = result.DisplayAlias,
+            IsDefault = result.IsDefault,
+            DefaultReasoningEffort = result.DefaultReasoningEffort,
+            ReasoningModes = [..result.Modes],
         });
 
         if (update.IsError)
@@ -997,27 +665,22 @@
             return;
         }
 
-        _editingSlugId = null;
+        _editingSlug = null;
         await RefreshAsync();
         await OnChanged.InvokeAsync();
     }
 
-    private async Task AddSlugAsync(Guid providerId)
+    private async Task AddSlugAsync(Guid providerId, SlugFormModal.SlugFormResult result)
     {
         _error = null;
-        if (string.IsNullOrWhiteSpace(_slugValue) || string.IsNullOrWhiteSpace(_slugAlias))
-        {
-            _error = "Slug and display alias are required.";
-            return;
-        }
 
         var add = await ModelStore.AddSlugAsync(
             providerId,
-            _slugValue.Trim(),
-            _slugAlias.Trim(),
-            _slugIsDefault,
-            string.IsNullOrWhiteSpace(_slugEffort) ? null : _slugEffort.Trim(),
-            _addSlugReasoningModes);
+            result.Slug,
+            result.DisplayAlias,
+            result.IsDefault,
+            result.DefaultReasoningEffort,
+            result.Modes);
 
         if (add.IsError)
         {
@@ -1029,6 +692,35 @@
         await RefreshAsync();
         await OnChanged.InvokeAsync();
     }
+
+    private async Task ConfirmRemoveSlugAsync(DysonModelProviderEntity provider, DysonModelSlugEntity slug)
+    {
+        var confirmed = await ConfirmDialog.ConfirmAsync(
+            "Remove slug",
+            $"Remove slug '{slug.Slug}' from '{provider.DisplayName}'? This cannot be undone.",
+            "Remove",
+            "Cancel",
+            true);
+        if (!confirmed)
+            return;
+
+        await RemoveSlugAsync(slug.Id);
+    }
+
+    private async Task RemoveSlugAsync(Guid slugId)
+    {
+        var del = await ModelStore.RemoveSlugAsync(slugId);
+        if (del.IsError)
+        {
+            _error = del.Error;
+            return;
+        }
+
+        await RefreshAsync();
+        await OnChanged.InvokeAsync();
+    }
+
+    // --- Slug flags / defaults / managed tunables ---
 
     private async Task SetDefaultAsync(Guid slugId)
     {
@@ -1059,11 +751,6 @@
         await OnChanged.InvokeAsync();
     }
 
-    private static IReadOnlyList<string> ManagedEffortModes(DysonModelSlugEntity slug) =>
-        slug.ReasoningModes is { Count: > 0 } modes
-            ? modes
-            : ManagedInferenceProviderBase.DefaultReasoningModes;
-
     private async Task SetManagedSlugEffortAsync(DysonModelSlugEntity slug, string? effort)
     {
         _error = null;
@@ -1080,11 +767,47 @@
         await OnChanged.InvokeAsync();
     }
 
+    private async Task SetSlugModesAsync(DysonModelSlugEntity slug, List<string> modes)
+    {
+        // Custom providers only: replace modes, normalize effort if it fell out of the set.
+        var provider = _providers.FirstOrDefault(p => p.Id == slug.ProviderId);
+        if (provider?.ManagedSource is not null)
+            return;
+
+        _error = null;
+        _status = null;
+        slug.ReasoningModes = modes.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (!string.IsNullOrWhiteSpace(slug.DefaultReasoningEffort)
+            && slug.ReasoningModes.Count > 0
+            && !slug.ReasoningModes.Contains(slug.DefaultReasoningEffort, StringComparer.OrdinalIgnoreCase))
+        {
+            slug.DefaultReasoningEffort = null; // effort no longer offered → clear
+        }
+
+        var update = await ModelStore.UpdateSlugAsync(slug, CancellationToken.None);
+        if (update.IsError)
+        {
+            _error = update.Error;
+            return;
+        }
+
+        await RefreshAsync();
+        await OnChanged.InvokeAsync();
+    }
+
     private async Task StepManagedSlugContextAsync(DysonModelSlugEntity slug, int delta)
     {
-        var current = slug.DefaultMaxTargetContextTokens ?? DysonMaxTargetContextTokens.HarnessDefault;
-        var next = Math.Clamp(current + delta, 0, DysonMaxTargetContextTokens.Ceiling);
-        await SetManagedSlugContextAsync(slug, next);
+        _contextStepBusySlugId = slug.Id;
+        try
+        {
+            var current = slug.DefaultMaxTargetContextTokens ?? DysonMaxTargetContextTokens.HarnessDefault;
+            var next = Math.Clamp(current + delta, 0, DysonMaxTargetContextTokens.Ceiling);
+            await SetManagedSlugContextAsync(slug, next);
+        }
+        finally
+        {
+            _contextStepBusySlugId = null;
+        }
     }
 
     private async Task SetManagedSlugContextAsync(DysonModelSlugEntity slug, int? maxTarget)
@@ -1120,19 +843,6 @@
         _status = repair.Value == 0
             ? "No mis-tagged providers found."
             : $"Repaired {repair.Value} provider{(repair.Value == 1 ? "" : "s")} (demo → OpenAICompatible).";
-
-        await RefreshAsync();
-        await OnChanged.InvokeAsync();
-    }
-
-    private async Task RemoveSlugAsync(Guid slugId)
-    {
-        var del = await ModelStore.RemoveSlugAsync(slugId);
-        if (del.IsError)
-        {
-            _error = del.Error;
-            return;
-        }
 
         await RefreshAsync();
         await OnChanged.InvokeAsync();

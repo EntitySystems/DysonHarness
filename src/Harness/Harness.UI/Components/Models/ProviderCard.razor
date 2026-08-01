@@ -1,0 +1,212 @@
+@namespace Harness.UI.Components.Models
+@using DysonHarness
+
+<div class="list-item provider-card">
+    <div class="provider-card__header">
+        <span class="list-item__title">@Provider.DisplayName</span>
+        @if (IsManaged)
+        {
+            <span class="models-panel__badge--managed">managed @Provider.ManagedSource</span>
+        }
+    </div>
+    <span class="list-item__meta mono">
+        @Provider.ProviderKind
+        @if (string.Equals(Provider.ProviderKind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
+        {
+            <text> · @DysonOpenAiApiModes.Normalize(Provider.OpenAiApiMode)</text>
+        }
+        @(string.IsNullOrEmpty(Provider.ApiKey) ? "" : " · key set")
+    </span>
+    @if (!string.IsNullOrEmpty(Provider.BaseUrl))
+    {
+        <span class="list-item__meta mono">@Provider.BaseUrl</span>
+    }
+
+    @if (IsManaged && !CliProxyInstalled)
+    {
+        <div class="error-banner">
+            CLIProxyAPI binary missing — Connect blocked until reinstall (use Import above).
+        </div>
+    }
+
+    @if (IsManaged && DownloadProgress is { } prog)
+    {
+        <div class="provider-card__download">
+            <div class="list-item__meta mono">
+                Downloading CLIProxyAPI…
+                @if (prog.TotalBytes is long total && total > 0)
+                {
+                    <text>@FormatBytes(prog.BytesReceived) / @FormatBytes(total)</text>
+                }
+                else
+                {
+                    <text>@FormatBytes(prog.BytesReceived)</text>
+                }
+            </div>
+            @if (prog.Fraction is double frac)
+            {
+                <progress value="@frac" max="1"></progress>
+            }
+            else
+            {
+                <progress></progress>
+            }
+        </div>
+    }
+
+    @if (IsManaged
+        && AuthPending
+        && (!string.IsNullOrWhiteSpace(PendingUserCode) || !string.IsNullOrWhiteSpace(PendingAuthUrl)))
+    {
+        <div class="list-item__meta">
+            @if (!string.IsNullOrWhiteSpace(PendingUserCode))
+            {
+                <text>Device code: <span class="mono">@PendingUserCode</span></text>
+            }
+            @if (!string.IsNullOrWhiteSpace(PendingAuthUrl))
+            {
+                <text> · <a href="@PendingAuthUrl" target="_blank" rel="noopener">open auth URL</a></text>
+            }
+        </div>
+    }
+
+    <div class="btn-row provider-card__actions">
+        @if (IsManaged)
+        {
+            @if (AuthPending)
+            {
+                <button type="button" class="btn btn-primary btn--sm"
+                        disabled="@ConnectBusy"
+                        @onclick="OnComplete">
+                    @(ConnectBusy ? "Completing…" : "Complete")
+                </button>
+            }
+            else
+            {
+                <button type="button" class="btn btn-primary btn--sm"
+                        disabled="@(ConnectBusy || !CliProxyInstalled)"
+                        @onclick="OnConnect">
+                    @(ConnectBusy ? "Connecting…" : "Connect")
+                </button>
+            }
+            <button type="button" class="btn btn--sm"
+                    disabled="@(VerifyBusy || !CliProxyInstalled)"
+                    @onclick="OnVerify">
+                @(VerifyBusy ? "Verifying…" : "Verify / Refresh models")
+            </button>
+            <button type="button" class="btn btn-ghost btn--sm"
+                    @onclick="OnDisconnect">Disconnect</button>
+            <button type="button" class="btn btn-ghost btn--sm"
+                    @onclick="OnDelete">Delete</button>
+        }
+        else
+        {
+            <button type="button" class="btn btn--sm" @onclick="OnEditProvider">Edit</button>
+            <button type="button" class="btn btn-ghost btn--sm" @onclick="OnDeleteProvider">Delete</button>
+        }
+    </div>
+
+    <details class="provider-card__slugs" open>
+        <summary>@SlugSummary</summary>
+        <div class="models-panel__slugs">
+            @if (Provider.Slugs.Count == 0)
+            {
+                <div class="list-item__meta">
+                    @(IsManaged ? "No slugs yet — Connect then Verify / Refresh models." : "No slugs")
+                </div>
+            }
+            else
+            {
+                @foreach (var slug in Provider.Slugs)
+                {
+                    <SlugRow Slug="slug"
+                             IsManaged="IsManaged"
+                             ContextStepBusy="ContextStepBusySlugId == slug.Id"
+                             OnSetDefault="() => OnSetDefault.InvokeAsync(slug)"
+                             OnToggleEnabled="() => OnToggleEnabled.InvokeAsync(slug)"
+                             OnEditSlug="() => OnEditSlug.InvokeAsync(slug)"
+                             OnRemoveSlug="() => OnRemoveSlug.InvokeAsync(slug)"
+                             OnSetEffort="effort => OnSetEffort.InvokeAsync((slug, effort))"
+                             OnModesChanged="modes => OnModesChanged.InvokeAsync((slug, modes))"
+                             OnStepContext="delta => OnStepContext.InvokeAsync((slug, delta))" />
+                }
+            }
+        </div>
+        @if (!IsManaged)
+        {
+            <div class="btn-row provider-card__add-slug">
+                <button type="button" class="btn btn--xs btn-ghost" @onclick="OnAddSlug">＋ Add slug</button>
+            </div>
+        }
+    </details>
+</div>
+
+@code {
+    /// <summary>Provider to render.</summary>
+    [Parameter] public DysonModelProviderEntity Provider { get; set; } = default!;
+
+    /// <summary>Computed: managed when <see cref="DysonModelProviderEntity.ManagedSource"/> is set.</summary>
+    public bool IsManaged => Provider.ManagedSource is not null;
+
+    /// <summary>False blocks Connect / Verify (CLIProxyAPI binary missing).</summary>
+    [Parameter] public bool CliProxyInstalled { get; set; }
+
+    /// <summary>Parent-managed: a Connect auth session is pending for this provider.</summary>
+    [Parameter] public bool AuthPending { get; set; }
+
+    /// <summary>Parent-managed per-provider busy flags.</summary>
+    [Parameter] public bool ConnectBusy { get; set; }
+    [Parameter] public bool VerifyBusy { get; set; }
+
+    /// <summary>Optional pending device code / auth URL shown while <see cref="AuthPending"/>.</summary>
+    [Parameter] public string? PendingUserCode { get; set; }
+    [Parameter] public string? PendingAuthUrl { get; set; }
+
+    /// <summary>CLIProxy download progress; renders a progress bar when non-null.</summary>
+    [Parameter] public CliProxyDownloadProgress? DownloadProgress { get; set; }
+
+    /// <summary>Slug id currently applying a context step (dims its stepper buttons).</summary>
+    [Parameter] public Guid? ContextStepBusySlugId { get; set; }
+
+    // Managed-flow callbacks (parent owns the flow logic).
+    [Parameter] public EventCallback OnConnect { get; set; }
+    [Parameter] public EventCallback OnComplete { get; set; }
+    [Parameter] public EventCallback OnVerify { get; set; }
+    [Parameter] public EventCallback OnDisconnect { get; set; }
+    [Parameter] public EventCallback OnDelete { get; set; }
+    [Parameter] public EventCallback OnImport { get; set; }
+
+    // Manual-provider callbacks.
+    [Parameter] public EventCallback OnEditProvider { get; set; }
+    [Parameter] public EventCallback OnDeleteProvider { get; set; }
+
+    /// <summary>Additive hook: opens the parent-owned add-slug flow for this provider.</summary>
+    [Parameter] public EventCallback OnAddSlug { get; set; }
+
+    // Slug callbacks (parent owns the logic; events bubble up with the slug).
+    [Parameter] public EventCallback<DysonModelSlugEntity> OnSetDefault { get; set; }
+    [Parameter] public EventCallback<DysonModelSlugEntity> OnToggleEnabled { get; set; }
+    [Parameter] public EventCallback<DysonModelSlugEntity> OnEditSlug { get; set; }
+    [Parameter] public EventCallback<DysonModelSlugEntity> OnRemoveSlug { get; set; }
+    [Parameter] public EventCallback<(DysonModelSlugEntity slug, string effort)> OnSetEffort { get; set; }
+    [Parameter] public EventCallback<(DysonModelSlugEntity slug, List<string> modes)> OnModesChanged { get; set; }
+    [Parameter] public EventCallback<(DysonModelSlugEntity slug, int delta)> OnStepContext { get; set; }
+
+    private string SlugSummary
+    {
+        get
+        {
+            var count = Provider.Slugs.Count;
+            var label = count == 1 ? "1 slug" : $"{count} slugs";
+            var defaultAlias = Provider.Slugs.FirstOrDefault(s => s.IsDefault)?.DisplayAlias;
+            return defaultAlias is null ? label : $"{label} · default: {defaultAlias}";
+        }
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:0.#} KB";
+        return $"{bytes / (1024.0 * 1024.0):0.##} MB";
+    }
+}

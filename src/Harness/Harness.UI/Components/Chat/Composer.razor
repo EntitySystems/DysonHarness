@@ -166,20 +166,10 @@
                 <ModelSlugPicker @ref="_modelPicker"
                                  SelectedSlugId="SelectedSlugId"
                                  SelectedSlugIdChanged="SelectedSlugIdChanged" />
-                <label class="composer-effort" title="Session reasoning_effort (None = omit)">
-                    <span class="composer-effort__label">Effort</span>
-                    <select @key="SelectedSlugId"
-                            class="composer-effort__input composer-effort__select"
-                            value="@(_effortDraft)"
-                            disabled="@Disabled"
-                            @onchange="OnEffortSelectedAsync">
-                        <option value="">None</option>
-                        @foreach (var mode in EffortOptions)
-                        {
-                            <option value="@mode">@mode</option>
-                        }
-                    </select>
-                </label>
+<ComposerEffortPicker Options="EffortOptions"
+                      Value="@_effortDraft"
+                      Disabled="@Disabled"
+                      OnPick="OnEffortPickedAsync" />
                 <div class="composer-context-limit" title="Max target context (0 = Off). DropContext injects when estimated outgoing tokens exceed this.">
                     <span class="composer-effort__label">Context</span>
                     <button type="button"
@@ -295,9 +285,9 @@
         _effortDraft = ReasoningEffort ?? "";
     }
 
-    private async Task OnEffortSelectedAsync(ChangeEventArgs e)
+    private async Task OnEffortPickedAsync(string? next)
     {
-        var next = string.IsNullOrWhiteSpace(e.Value?.ToString()) ? null : e.Value!.ToString()!.Trim();
+        next = string.IsNullOrWhiteSpace(next) ? null : next.Trim();
         _effortDraft = next ?? "";
         var current = string.IsNullOrWhiteSpace(ReasoningEffort) ? null : ReasoningEffort.Trim();
         if (string.Equals(next, current, StringComparison.Ordinal))

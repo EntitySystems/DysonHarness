@@ -1,0 +1,117 @@
+@namespace Harness.UI.Components.Models
+@using DysonHarness
+
+<div class="effort-picker" @onkeydown="HandleKeyDown">
+    <button type="button"
+            class="btn btn--xs effort-picker__trigger"
+            disabled="@Busy"
+            aria-haspopup="true"
+            aria-expanded="@_open"
+            @onclick="Toggle">
+        <span class="models-panel__effort-label">effort</span>
+        <span class="effort-picker__value mono">@(string.IsNullOrWhiteSpace(Slug.DefaultReasoningEffort) ? "omit" : Slug.DefaultReasoningEffort)</span>
+        <span class="effort-picker__caret">▾</span>
+    </button>
+
+    @if (_open)
+    {
+        <div class="effort-picker__backdrop" @onclick="Close"></div>
+        <div class="effort-picker__panel" tabindex="0">
+            <div class="effort-picker__section-label">Current effort</div>
+            <button type="button"
+                    class="effort-picker__option @(string.IsNullOrWhiteSpace(Slug.DefaultReasoningEffort) ? "is-selected" : null)"
+                    @onclick="PickOmit">
+                <span class="mono">omit</span>
+            </button>
+            @foreach (var mode in EffortModes)
+            {
+                var m = mode;
+                <button type="button"
+                        class="effort-picker__option @(string.Equals(Slug.DefaultReasoningEffort, m, StringComparison.OrdinalIgnoreCase) ? "is-selected" : null)"
+                        @onclick="() => PickEffort(m)">
+                    <span class="mono">@m</span>
+                </button>
+            }
+
+            <div class="effort-picker__divider"></div>
+
+            <div class="effort-picker__section-label">Reasoning modes</div>
+            @if (IsManaged)
+            {
+                @if (Slug.ReasoningModes.Count == 0)
+                {
+                    <div class="list-item__meta">No modes synced yet.</div>
+                }
+                else
+                {
+                    <div class="models-panel__modes">
+                        @foreach (var mode in Slug.ReasoningModes)
+                        {
+                            <span class="models-panel__mode-chip"><span class="mono">@mode</span></span>
+                        }
+                    </div>
+                }
+            }
+            else
+            {
+                <ReasoningModesEditor Modes="_workingModes" ModesChanged="HandleModesChanged" />
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private static readonly string[] FallbackEffortModes =
+        ["none", "minimal", "low", "medium", "high", "xhigh"];
+
+    private bool _open;
+    private List<string> _workingModes = [];
+
+    [Parameter] public DysonModelSlugEntity Slug { get; set; } = default!;
+    [Parameter] public bool IsManaged { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<string> OnSetEffort { get; set; }
+    [Parameter] public EventCallback<List<string>> OnModesChanged { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        // Keep the popup working copy in sync with the slug; managed rows never edit it.
+        _workingModes = [..Slug.ReasoningModes];
+    }
+
+    private IReadOnlyList<string> EffortModes =>
+        !IsManaged && _workingModes is { Count: > 0 } working
+            ? working
+            : Slug.ReasoningModes is { Count: > 0 } modes
+                ? modes
+                : FallbackEffortModes;
+
+    private void Toggle()
+    {
+        if (Busy)
+            return;
+        _open = !_open;
+    }
+
+    private void Close() => _open = false;
+
+    private Task PickOmit() => PickEffort("");
+
+    private async Task PickEffort(string effort)
+    {
+        _open = false;
+        await OnSetEffort.InvokeAsync(effort);
+    }
+
+    private async Task HandleModesChanged(List<string> modes)
+    {
+        _workingModes = modes;
+        await OnModesChanged.InvokeAsync(modes);
+    }
+
+    private void HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            _open = false;
+    }
+}

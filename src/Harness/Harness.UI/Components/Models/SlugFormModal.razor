@@ -1,0 +1,178 @@
+@namespace Harness.UI.Components.Models
+@using DysonHarness
+@using Microsoft.AspNetCore.Components.Web
+
+@if (IsOpen)
+{
+    <div class="confirm-dialog-backdrop"
+         role="presentation"
+         @onclick="CancelAsync">
+        <div class="confirm-dialog"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="slug-form-modal-title"
+             style="max-width:560px;width:100%;"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnKeyDown">
+            <div class="confirm-dialog__header">
+                <h3 id="slug-form-modal-title">@(IsEditMode ? "Edit slug" : "Add slug")</h3>
+            </div>
+            <div class="confirm-dialog__body">
+                @if (!string.IsNullOrEmpty(_error))
+                {
+                    <div class="error-banner" style="margin:0 0 8px;">@_error</div>
+                }
+
+                <div class="field">
+                    <label>Display alias</label>
+                    <input class="field" @bind="_alias" />
+                </div>
+                <div class="field">
+                    <label>Slug</label>
+                    <input class="field" @bind="_slug" placeholder="gpt-4o" disabled="@IsEditMode" />
+                </div>
+                <div class="field">
+                    <label>Default reasoning effort</label>
+                    <input class="field" @bind="_effort" placeholder="blank = omit" />
+                </div>
+                <div class="field">
+                    <label>Reasoning modes</label>
+                    <ReasoningModesEditor Modes="_modes" />
+                </div>
+                <label class="checkbox-row">
+                    <input type="checkbox" @bind="_isDefault" />
+                    Set as default
+                </label>
+            </div>
+            <div class="confirm-dialog__actions">
+                <button type="button"
+                        class="btn btn-ghost btn--sm"
+                        disabled="@_busy"
+                        @onclick="CancelAsync">
+                    Cancel
+                </button>
+                <button type="button"
+                        class="btn btn-primary btn--sm"
+                        disabled="@_busy"
+                        @onclick="SubmitAsync">
+                    @(IsEditMode ? "Save" : "Add")
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback<SlugFormResult> OnSubmit { get; set; }
+    [Parameter] public SlugFormDraft? SlugToEdit { get; set; }
+
+    private bool IsEditMode => SlugToEdit is not null;
+
+    private string _alias = "";
+    private string _slug = "";
+    private string _effort = "";
+    private bool _isDefault;
+    private List<string> _modes = [];
+
+    private string? _error;
+    private bool _busy;
+    private bool _initializedForOpen;
+
+    protected override void OnParametersSet()
+    {
+        // Re-initialize draft state each time the modal transitions closed -> open.
+        if (IsOpen && !_initializedForOpen)
+        {
+            _initializedForOpen = true;
+            _error = null;
+            _busy = false;
+
+            if (SlugToEdit is { } edit)
+            {
+                _alias = edit.DisplayAlias;
+                _slug = edit.Slug;
+                _effort = edit.DefaultReasoningEffort ?? "";
+                _isDefault = edit.IsDefault;
+                _modes = [..edit.Modes];
+            }
+            else
+            {
+                _alias = "";
+                _slug = "";
+                _effort = "high";
+                _isDefault = false;
+                _modes = [];
+            }
+        }
+        else if (!IsOpen)
+        {
+            _initializedForOpen = false;
+        }
+    }
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape" && !_busy)
+            _ = CancelAsync();
+    }
+
+    private async Task CancelAsync()
+    {
+        if (_busy)
+            return;
+
+        await OnClose.InvokeAsync();
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (_busy)
+            return;
+
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_slug) || string.IsNullOrWhiteSpace(_alias))
+        {
+            _error = "Slug and display alias are required.";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            await OnSubmit.InvokeAsync(new SlugFormResult
+            {
+                Slug = _slug.Trim(),
+                DisplayAlias = _alias.Trim(),
+                DefaultReasoningEffort = string.IsNullOrWhiteSpace(_effort) ? null : _effort.Trim(),
+                IsDefault = _isDefault,
+                Modes = [.._modes],
+            });
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>Submitted values for add/edit slug.</summary>
+    public sealed class SlugFormResult
+    {
+        public string Slug { get; set; } = "";
+        public string DisplayAlias { get; set; } = "";
+        public string? DefaultReasoningEffort { get; set; }
+        public bool IsDefault { get; set; }
+        public List<string> Modes { get; set; } = [];
+    }
+
+    /// <summary>Prefill values when opening the modal in edit mode.</summary>
+    public sealed class SlugFormDraft
+    {
+        public string Slug { get; set; } = "";
+        public string DisplayAlias { get; set; } = "";
+        public string? DefaultReasoningEffort { get; set; }
+        public bool IsDefault { get; set; }
+        public List<string> Modes { get; set; } = [];
+    }
+}

@@ -1,0 +1,60 @@
+@namespace Harness.UI.Components.Models
+@implements IDisposable
+
+<div class="models-panel__modes">
+    @foreach (var mode in Modes)
+    {
+        var m = mode;
+        <span class="models-panel__mode-chip">
+            <span class="mono">@m</span>
+            <button type="button" class="btn btn-ghost btn--xs" style="padding:0 4px;" @onclick="() => RemoveMode(m)" title="Remove">×</button>
+        </span>
+    }
+</div>
+<div class="btn-row" style="margin-top:4px;align-items:center;">
+    <input class="field" @bind="_draft" @bind:event="oninput" placeholder="@Placeholder" style="flex:1;min-width:0;"
+           @onkeydown="OnKeyDown" />
+    <button type="button" class="btn btn--sm" @onclick="AddMode">@AddLabel</button>
+</div>
+
+@code {
+    [Parameter] public List<string> Modes { get; set; } = new();
+    [Parameter] public EventCallback<List<string>> ModesChanged { get; set; }
+    [Parameter] public string? Placeholder { get; set; } = "e.g. high";
+    [Parameter] public string AddLabel { get; set; } = "Add";
+
+    private string _draft = "";
+
+    private async Task AddMode()
+    {
+        if (string.IsNullOrWhiteSpace(_draft))
+            return;
+
+        var trimmed = _draft.Trim();
+        if (Modes.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
+        {
+            _draft = "";
+            return;
+        }
+
+        Modes.Add(trimmed);
+        _draft = "";
+        await ModesChanged.InvokeAsync(Modes);
+    }
+
+    private async Task RemoveMode(string mode)
+    {
+        Modes.Remove(mode);
+        await ModesChanged.InvokeAsync(Modes);
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await AddMode();
+    }
+
+    public void Dispose()
+    {
+    }
+}
