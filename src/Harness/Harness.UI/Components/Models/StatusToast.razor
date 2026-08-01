@@ -1,0 +1,99 @@
+@namespace Harness.UI.Components.Models
+@implements IDisposable
+
+@if (!string.IsNullOrEmpty(Error))
+{
+    <div class="error-banner error-banner--toast" role="alert">
+        <span class="error-banner__text">@Error</span>
+        <button type="button"
+                class="error-banner__dismiss"
+                title="Dismiss"
+                aria-label="Dismiss error"
+                @onclick="DismissErrorAsync">
+            <img class="error-banner__dismiss-icon" src="icons/cancel.svg" alt="" />
+        </button>
+    </div>
+}
+else if (!string.IsNullOrEmpty(Status))
+{
+    <div class="error-banner error-banner--toast is-ok"
+         role="status"
+         style="border-color:color-mix(in srgb, var(--success) 70%, var(--border));outline-color:color-mix(in srgb, var(--success) 25%, var(--border));background:color-mix(in srgb, var(--success) 12%, var(--bg-1));color:var(--success);animation:none;">
+        <span class="error-banner__text">@Status</span>
+        <button type="button"
+                class="error-banner__dismiss"
+                title="Dismiss"
+                aria-label="Dismiss status"
+                style="color:var(--success);"
+                @onclick="DismissStatusAsync">
+            <img class="error-banner__dismiss-icon" src="icons/cancel.svg" alt=""
+                 style="filter:brightness(0) saturate(100%) invert(58%) sepia(40%) saturate(900%) hue-rotate(100deg) brightness(1.0);" />
+        </button>
+    </div>
+}
+
+@code {
+    private static readonly TimeSpan StatusLifetime = TimeSpan.FromSeconds(5);
+
+    [Parameter] public string? Status { get; set; }
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public EventCallback OnStatusCleared { get; set; }
+    [Parameter] public EventCallback OnErrorCleared { get; set; }
+
+    private CancellationTokenSource? _statusCts;
+    private string? _armedStatus;
+
+    protected override void OnParametersSet()
+    {
+        if (string.IsNullOrEmpty(Status))
+        {
+            CancelStatusTimer();
+            _armedStatus = null;
+            return;
+        }
+
+        // (Re)arm the auto-dismiss timer whenever a new status value arrives.
+        if (!string.Equals(_armedStatus, Status, StringComparison.Ordinal))
+        {
+            CancelStatusTimer();
+            _armedStatus = Status;
+            _statusCts = new CancellationTokenSource();
+            _ = ExpireStatusAsync(Status, _statusCts.Token);
+        }
+    }
+
+    private void CancelStatusTimer()
+    {
+        _statusCts?.Cancel();
+        _statusCts?.Dispose();
+        _statusCts = null;
+    }
+
+    private async Task ExpireStatusAsync(string status, CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(StatusLifetime, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        if (!string.Equals(Status, status, StringComparison.Ordinal))
+            return;
+
+        await InvokeAsync(OnStatusCleared.InvokeAsync);
+    }
+
+    private async Task DismissStatusAsync()
+    {
+        CancelStatusTimer();
+        _armedStatus = null;
+        await OnStatusCleared.InvokeAsync();
+    }
+
+    private async Task DismissErrorAsync() => await OnErrorCleared.InvokeAsync();
+
+    public void Dispose() => CancelStatusTimer();
+}

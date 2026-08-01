@@ -52,3 +52,6 @@ artifacts/
 
 ## Workspace plan artifacts (local; see docs/storage/work-directories.md)
 .dyson/plans/
+
+# Cursor IDE rules (migrated to openrules.json; files live in rules/)
+/.cursor/

@@ -1,0 +1,264 @@
+@namespace Harness.UI.Components.Models
+@using DysonHarness
+@using Microsoft.AspNetCore.Components.Web
+
+@if (IsOpen)
+{
+    <div class="confirm-dialog-backdrop"
+         role="presentation"
+         @onclick="CancelAsync">
+        <div class="confirm-dialog"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="provider-form-modal-title"
+             style="max-width:560px;width:100%;"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnKeyDown">
+            <div class="confirm-dialog__header">
+                <h3 id="provider-form-modal-title">@(IsEditMode ? "Edit provider" : "Add provider")</h3>
+            </div>
+            <div class="confirm-dialog__body">
+                @if (!string.IsNullOrEmpty(_error))
+                {
+                    <div class="error-banner" style="margin:0 0 8px;">@_error</div>
+                }
+
+                <div class="field">
+                    <label>Display name</label>
+                    <input class="field" @bind="_displayName" />
+                </div>
+                <div class="field">
+                    <label>Provider kind</label>
+                    <select class="field" @bind="_providerKind">
+                        @foreach (var kind in ProviderKindOptions(_providerKind))
+                        {
+                            <option value="@kind">@kind</option>
+                        }
+                    </select>
+                </div>
+                <div class="field">
+                    <label>Base URL (optional)</label>
+                    <input class="field" @bind="_baseUrl" />
+                </div>
+                <div class="field">
+                    <label>API key (optional, plaintext local)</label>
+                    <input class="field" @bind="_apiKey" type="password" autocomplete="off" />
+                </div>
+                @if (string.Equals(_providerKind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
+                {
+                    <div class="field">
+                        <label>API mode</label>
+                        <select class="field" @bind="_openAiApiMode">
+                            @foreach (var mode in DysonOpenAiApiModes.All)
+                            {
+                                <option value="@mode">@mode</option>
+                            }
+                        </select>
+                    </div>
+                }
+
+                @if (!IsEditMode)
+                {
+                    <div class="field">
+                        <label>Initial slug</label>
+                        <input class="field" @bind="_initialSlug" placeholder="demo-mock" />
+                    </div>
+                    <div class="field">
+                        <label>Initial display alias</label>
+                        <input class="field" @bind="_initialAlias" placeholder="Demo Mock" />
+                    </div>
+                    <div class="field">
+                        <label>Default reasoning effort (optional)</label>
+                        <input class="field" @bind="_initialEffort" placeholder="blank = omit" />
+                    </div>
+                    <div class="field">
+                        <label>Reasoning modes</label>
+                        <ReasoningModesEditor Modes="_initialModes" />
+                    </div>
+                    <label class="checkbox-row">
+                        <input type="checkbox" @bind="_initialIsDefault" />
+                        Set slug as default
+                    </label>
+                }
+            </div>
+            <div class="confirm-dialog__actions">
+                <button type="button"
+                        class="btn btn-ghost btn--sm"
+                        disabled="@_busy"
+                        @onclick="CancelAsync">
+                    Cancel
+                </button>
+                <button type="button"
+                        class="btn btn-primary btn--sm"
+                        disabled="@_busy"
+                        @onclick="SubmitAsync">
+                    @(IsEditMode ? "Save" : "Add")
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback<ProviderFormResult> OnSubmit { get; set; }
+    [Parameter] public ProviderFormDraft? ProviderToEdit { get; set; }
+
+    private bool IsEditMode => ProviderToEdit is not null;
+
+    private string _displayName = "";
+    private string _providerKind = DysonProviderKinds.OpenAICompatible;
+    private string? _baseUrl;
+    private string? _apiKey;
+    private string _openAiApiMode = DysonOpenAiApiModes.Completions;
+    private string _initialSlug = "";
+    private string _initialAlias = "";
+    private string _initialEffort = "high";
+    private bool _initialIsDefault;
+    private List<string> _initialModes = [];
+
+    private string? _error;
+    private bool _busy;
+    private bool _initializedForOpen;
+
+    protected override void OnParametersSet()
+    {
+        // Re-initialize draft state each time the modal transitions closed -> open.
+        if (IsOpen && !_initializedForOpen)
+        {
+            _initializedForOpen = true;
+            _error = null;
+            _busy = false;
+
+            if (ProviderToEdit is { } edit)
+            {
+                _displayName = edit.DisplayName;
+                _providerKind = string.IsNullOrWhiteSpace(edit.ProviderKind)
+                    ? DysonProviderKinds.Demo
+                    : edit.ProviderKind;
+                _baseUrl = edit.BaseUrl;
+                _apiKey = edit.ApiKey;
+                _openAiApiMode = DysonOpenAiApiModes.Normalize(edit.OpenAiApiMode);
+                _initialSlug = edit.InitialSlug;
+                _initialAlias = edit.InitialAlias;
+                _initialEffort = edit.InitialEffort ?? "";
+                _initialModes = [..edit.InitialModes];
+                _initialIsDefault = false;
+            }
+            else
+            {
+                _displayName = "";
+                _providerKind = DysonProviderKinds.OpenAICompatible;
+                _baseUrl = null;
+                _apiKey = null;
+                _openAiApiMode = DysonOpenAiApiModes.Completions;
+                _initialSlug = "";
+                _initialAlias = "";
+                _initialEffort = "high";
+                _initialModes = [];
+                _initialIsDefault = false;
+            }
+        }
+        else if (!IsOpen)
+        {
+            _initializedForOpen = false;
+        }
+    }
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape" && !_busy)
+            _ = CancelAsync();
+    }
+
+    private async Task CancelAsync()
+    {
+        if (_busy)
+            return;
+
+        await OnClose.InvokeAsync();
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (_busy)
+            return;
+
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_displayName))
+        {
+            _error = "Display name is required.";
+            return;
+        }
+
+        if (!IsEditMode && string.IsNullOrWhiteSpace(_initialSlug))
+        {
+            _error = "Initial slug is required.";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            await OnSubmit.InvokeAsync(new ProviderFormResult
+            {
+                DisplayName = _displayName.Trim(),
+                ProviderKind = string.IsNullOrWhiteSpace(_providerKind)
+                    ? DysonProviderKinds.Demo
+                    : _providerKind.Trim(),
+                BaseUrl = string.IsNullOrWhiteSpace(_baseUrl) ? null : _baseUrl.Trim(),
+                ApiKey = string.IsNullOrWhiteSpace(_apiKey) ? null : _apiKey,
+                OpenAiApiMode = DysonOpenAiApiModes.Normalize(_openAiApiMode),
+                InitialSlug = _initialSlug.Trim(),
+                InitialAlias = _initialAlias.Trim(),
+                InitialEffort = string.IsNullOrWhiteSpace(_initialEffort) ? null : _initialEffort.Trim(),
+                InitialModes = [.._initialModes],
+            });
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static IEnumerable<string> ProviderKindOptions(string current)
+    {
+        if (!string.IsNullOrWhiteSpace(current)
+            && !DysonProviderKinds.All.Contains(current, StringComparer.Ordinal))
+        {
+            yield return current;
+        }
+
+        foreach (var kind in DysonProviderKinds.All)
+            yield return kind;
+    }
+
+    /// <summary>Submitted values for add/edit provider (add-mode initial-slug fields are empty in edit mode).</summary>
+    public sealed class ProviderFormResult
+    {
+        public string DisplayName { get; set; } = "";
+        public string ProviderKind { get; set; } = DysonProviderKinds.OpenAICompatible;
+        public string? BaseUrl { get; set; }
+        public string? ApiKey { get; set; }
+        public string OpenAiApiMode { get; set; } = DysonOpenAiApiModes.Completions;
+        public string InitialSlug { get; set; } = "";
+        public string InitialAlias { get; set; } = "";
+        public string? InitialEffort { get; set; }
+        public List<string> InitialModes { get; set; } = [];
+    }
+
+    /// <summary>Prefill values when opening the modal in edit mode.</summary>
+    public sealed class ProviderFormDraft
+    {
+        public string DisplayName { get; set; } = "";
+        public string ProviderKind { get; set; } = DysonProviderKinds.OpenAICompatible;
+        public string? BaseUrl { get; set; }
+        public string? ApiKey { get; set; }
+        public string OpenAiApiMode { get; set; } = DysonOpenAiApiModes.Completions;
+        public string InitialSlug { get; set; } = "";
+        public string InitialAlias { get; set; } = "";
+        public string? InitialEffort { get; set; }
+        public List<string> InitialModes { get; set; } = [];
+    }
+}

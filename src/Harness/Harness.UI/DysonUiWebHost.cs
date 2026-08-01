@@ -2,6 +2,7 @@ using DysonHarness;
 using Harness.UI.Components;
 using Harness.UI.Demo;
 using Harness.UI.Files;
+using Harness.UI.Services;
 using Harness.UI.Theme;
 using Microsoft.AspNetCore.Components.Server.Circuits;
 using Microsoft.EntityFrameworkCore;
@@ -121,6 +122,7 @@ public static class DysonUiWebHost
         builder.Services.AddScoped<DysonUiHost>();
         builder.Services.AddSingleton<DysonFilePreviewStore>();
         builder.Services.AddScoped<ThemeService>();
+        builder.Services.AddScoped<ConfirmDialogService>();
         builder.Services.AddSingleton<DysonFileTreeService>();
         builder.Services.AddSingleton<DysonGitChangesService>();
 

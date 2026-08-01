@@ -1,6 +1,7 @@
 @namespace Harness.UI.Components.Sessions
 @using DysonHarness
-@inject IJSRuntime Js
+@using Harness.UI.Services
+@inject ConfirmDialogService ConfirmDialog
 
 <div class="session-list">
     <div class="sidebar__section-label">Sessions</div>
@@ -82,9 +83,13 @@
 
     private async Task OnDeleteClickAsync(Guid id, string title)
     {
-        var ok = await Js.InvokeAsync<bool>("confirm", $"Delete session '{title}'?");
-        if (!ok)
-            return;
-        await OnDelete.InvokeAsync(id);
+        var ok = await ConfirmDialog.ConfirmAsync(
+            title: "Delete session",
+            message: $"Delete session '{title}'? This removes the session and its history. This cannot be undone.",
+            confirmLabel: "Delete",
+            cancelLabel: "Cancel",
+            danger: true);
+        if (ok)
+            await OnDelete.InvokeAsync(id);
     }
 }

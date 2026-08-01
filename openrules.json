@@ -25,6 +25,18 @@
       "Path": "rules/rules_ponytail.md",
       "Mode": "AgentOptional",
       "Description": "Ponytail lazy-senior efficiency ladder (mandatory)"
+    },
+    {
+      "Path": "rules/rules_cursor_rules.md",
+      "Mode": "AgentOptional",
+      "Description": "Cursor rules lifecycle — .cursor/ is gitignored; author rules in rules/ per openrules spec",
+      "Providers": ["cursor"]
+    },
+    {
+      "Path": "rules/rules_model_roles.md",
+      "Mode": "AgentOptional",
+      "Description": "Model roles for harness orchestration (migrated from .cursor/rules)",
+      "Providers": ["cursor"]
     }
   ],
   "Skills": [

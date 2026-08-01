@@ -1,0 +1,70 @@
+@namespace Harness.UI.Components.Dialogs
+@using Microsoft.AspNetCore.Components.Web
+@using Harness.UI.Services
+@inject ConfirmDialogService ConfirmDialogService
+@implements IDisposable
+
+@if (ConfirmDialogService.Current is { } request)
+{
+    <div class="confirm-dialog-backdrop"
+         role="presentation"
+         @onclick="Cancel">
+        <div class="confirm-dialog"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="confirm-dialog-title"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnKeyDown">
+            <div class="confirm-dialog__header">
+                <h3 id="confirm-dialog-title">@request.Title</h3>
+            </div>
+            <div class="confirm-dialog__body">
+                <p class="confirm-dialog__message">@request.Message</p>
+            </div>
+            <div class="confirm-dialog__actions">
+                <button type="button"
+                        class="btn btn-ghost"
+                        disabled="@_busy"
+                        @onclick="Cancel">
+                    @request.CancelLabel
+                </button>
+                <button type="button"
+                        class="@(request.Danger ? "btn btn-primary confirm-dialog__confirm--danger" : "btn btn-primary")"
+                        disabled="@_busy"
+                        @onclick="Confirm">
+                    @request.ConfirmLabel
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _busy;
+
+    protected override void OnInitialized() => ConfirmDialogService.Changed += OnConfirmDialogChanged;
+
+    public void Dispose() => ConfirmDialogService.Changed -= OnConfirmDialogChanged;
+
+    private void OnConfirmDialogChanged() => InvokeAsync(StateHasChanged);
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is "Escape" && !_busy)
+            Cancel();
+    }
+
+    private void Confirm() => Resolve(confirmed: true);
+
+    private void Cancel() => Resolve(confirmed: false);
+
+    private void Resolve(bool confirmed)
+    {
+        if (_busy)
+            return;
+
+        _busy = true;
+        ConfirmDialogService.Resolve(confirmed);
+        _busy = false;
+    }
+}

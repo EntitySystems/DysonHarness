@@ -923,6 +923,78 @@ code, .mono {
   border-top: 1px solid var(--border);
 }
 
+.confirm-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.confirm-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(440px, 100%);
+  max-height: min(70vh, 480px);
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.confirm-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.confirm-dialog__header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.confirm-dialog__body {
+  flex: 1;
+  overflow: auto;
+  padding: 12px 14px;
+}
+
+.confirm-dialog__message {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.confirm-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.confirm-dialog__confirm--danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.confirm-dialog__confirm--danger:hover:not(:disabled) {
+  filter: brightness(1.05);
+  border-color: var(--danger);
+}
+
 .model-slug-modal__badge {
   flex-shrink: 0;
   font-size: 10px;
@@ -4525,6 +4597,58 @@ code, .mono {
   }
 }
 
+/* Models â€” UX overhaul additions */
+.btn--sm {
+  padding: 0.32rem 0.6rem;
+  font-size: 0.78rem;
+}
+
+.btn--xs {
+  padding: 0.2rem 0.45rem;
+  font-size: 0.7rem;
+}
+
+.models-panel__toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.models-panel__search {
+  flex: 1;
+  min-width: 180px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  color: var(--text);
+  outline: none;
+}
+
+.models-panel__search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.models-panel__badge--managed {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent-text);
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.models-panel__slug.is-disabled {
+  opacity: 0.55;
+}
+
 @media (max-width: 1100px) {
   .app-shell {
     grid-template-columns: 220px 1fr;
@@ -5066,3 +5190,94 @@ code, .mono {
   margin-bottom: 4px;
 }
 
+
+/* Models — effort picker popup */
+.effort-picker {
+  position: relative;
+  display: inline-flex;
+}
+
+.effort-picker__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.effort-picker__value {
+  font-weight: 600;
+}
+
+.effort-picker__caret {
+  font-size: 9px;
+  color: var(--text-muted);
+  line-height: 1;
+}
+
+.effort-picker__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: transparent;
+}
+
+.effort-picker__panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1200;
+  min-width: 200px;
+  max-height: min(50vh, 360px);
+  overflow: auto;
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+.effort-picker__section-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.effort-picker__option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.effort-picker__option:hover {
+  background: var(--bg-hover);
+}
+
+.effort-picker__option.is-selected {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent-text);
+}
+
+.effort-picker__divider {
+  border-top: 1px solid var(--border);
+  margin: 6px 0;
+}
+
+/* Composer effort picker — panel opens upward above the composer */
+.effort-picker--up .effort-picker__panel {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.composer-effort__trigger {
+  align-self: center;
+}
