@@ -149,27 +149,39 @@
                       data-slash-open="@(_slashOpen ? "1" : null)"></textarea>
         </div>
         <div class="composer__footer">
-            <div class="composer__toolbar">
-                <InputFile @key="_fileInputKey"
-                           OnChange="OnFilesSelectedAsync"
-                           multiple
-                           class="composer-attach__input"
-                           disabled="@Disabled" />
+            <div class="composer__footer-primary">
+                <div class="composer__toolbar">
+                    <InputFile @key="_fileInputKey"
+                               OnChange="OnFilesSelectedAsync"
+                               multiple
+                               class="composer-attach__input"
+                               disabled="@Disabled" />
+                    <button type="button"
+                            class="composer-attach"
+                            title="Attach files or images"
+                            aria-label="Attach files or images"
+                            disabled="@Disabled"
+                            @onclick="OpenFilePickerAsync">
+                        <span class="composer-attach__icon" aria-hidden="true"></span>
+                    </button>
+                    <ModelSlugPicker @ref="_modelPicker"
+                                     SelectedSlugId="SelectedSlugId"
+                                     SelectedSlugIdChanged="SelectedSlugIdChanged" />
+                    <ComposerEffortPicker Options="EffortOptions"
+                                          Value="@_effortDraft"
+                                          Disabled="@Disabled"
+                                          OnPick="OnEffortPickedAsync" />
+                    <AgentModePicker SelectedMode="@SelectedAgentMode"
+                                     SelectedModeChanged="SelectedAgentModeChanged" />
+                </div>
                 <button type="button"
-                        class="composer-attach"
-                        title="Attach files or images"
-                        aria-label="Attach files or images"
-                        disabled="@Disabled"
-                        @onclick="OpenFilePickerAsync">
-                    <span class="composer-attach__icon" aria-hidden="true"></span>
+                        class="btn btn-primary composer__send"
+                        disabled="@(Disabled || !CanSubmit)"
+                        @onclick="SubmitAsync">
+                    Send
                 </button>
-                <ModelSlugPicker @ref="_modelPicker"
-                                 SelectedSlugId="SelectedSlugId"
-                                 SelectedSlugIdChanged="SelectedSlugIdChanged" />
-<ComposerEffortPicker Options="EffortOptions"
-                      Value="@_effortDraft"
-                      Disabled="@Disabled"
-                      OnPick="OnEffortPickedAsync" />
+            </div>
+            <div class="composer__footer-secondary">
                 <div class="composer-context-limit" title="Max target context (0 = Off). DropContext injects when estimated outgoing tokens exceed this.">
                     <span class="composer-effort__label">Context</span>
                     <button type="button"
@@ -190,23 +202,11 @@
                         @FormatContextReadout()
                     </span>
                 </div>
-                <AgentModePicker SelectedMode="@SelectedAgentMode"
-                                 SelectedModeChanged="SelectedAgentModeChanged" />
-                <span class="composer-chip composer-chip--branch @(string.IsNullOrEmpty(GitBranch) ? "is-muted" : null)"
-                      title="@(GitBranch ?? "No git repo")">
-                    @(string.IsNullOrEmpty(GitBranch) ? "No git repo" : GitBranch)
-                </span>
+                <div class="composer__hint">
+                    <span class="list-item__meta">Ctrl+Enter to send · paste/drop files or images · /help for commands</span>
+                </div>
             </div>
-            <button type="button"
-                    class="btn btn-primary composer__send"
-                    disabled="@(Disabled || !CanSubmit)"
-                    @onclick="SubmitAsync">
-                Send
-            </button>
         </div>
-    </div>
-    <div class="composer__hint">
-        <span class="list-item__meta">Ctrl+Enter to send · paste/drop files or images · /help for commands</span>
     </div>
 </div>
 
@@ -241,7 +241,6 @@
     [Parameter] public int? LastReportedPromptTokens { get; set; }
     [Parameter] public string SelectedAgentMode { get; set; } = DysonAgentModes.Work;
     [Parameter] public EventCallback<string> SelectedAgentModeChanged { get; set; }
-    [Parameter] public string? GitBranch { get; set; }
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
     [Parameter] public EventCallback OnNewSession { get; set; }
     [Parameter] public DysonAskUiState? Ask { get; set; }

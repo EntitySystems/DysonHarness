@@ -2327,6 +2327,52 @@ code, .mono {
   opacity: 0.55;
 }
 
+.turn-block__context-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: transparent;
+}
+
+.turn-block__context-menu {
+  position: fixed;
+  z-index: 42;
+  min-width: 148px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+.turn-block__context-menu-item {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.turn-block__context-menu-item:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.turn-block__context-menu-item:disabled {
+  color: var(--text-dim);
+  cursor: default;
+  opacity: 0.55;
+}
+
 .turn-block__dropped-badge {
   flex: 0 0 auto;
   font-size: 0.72rem;
@@ -3022,8 +3068,8 @@ code, .mono {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: var(--composer-attach-size, 30px);
+  height: var(--composer-attach-size, 30px);
   padding: 0;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
@@ -3288,13 +3334,32 @@ code, .mono {
 }
 
 .composer__footer {
+  --composer-attach-size: 30px;
+  --composer-toolbar-gap: 6px;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px 8px;
+  border-top: 1px solid var(--border);
+}
+
+.composer__footer-primary {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.composer__footer-secondary {
+  display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 8px 8px;
-  border-top: 1px solid var(--border);
+  min-width: 0;
+  /* Skip attach button + toolbar gap so CONTEXT aligns with the model selector */
+  padding-left: calc(var(--composer-attach-size) + var(--composer-toolbar-gap));
 }
 
 .composer__toolbar {
@@ -3302,7 +3367,7 @@ code, .mono {
   flex-wrap: wrap;
   justify-content: flex-start;
   align-items: center;
-  gap: 6px;
+  gap: var(--composer-toolbar-gap);
   min-width: 0;
   flex: 1 1 auto;
 }
@@ -3310,6 +3375,7 @@ code, .mono {
 .composer__send {
   flex: 0 0 auto;
   margin-left: auto;
+  align-self: flex-start;
 }
 
 .composer-effort {
@@ -3421,7 +3487,6 @@ code, .mono {
   white-space: nowrap;
 }
 
-.composer-chip--branch.is-muted,
 .composer-chip.is-muted {
   color: var(--text-dim);
   border-style: dashed;
@@ -3565,9 +3630,13 @@ code, .mono {
 
 .composer__hint {
   display: flex;
-  justify-content: flex-start;
+  justify-content: flex-end;
   align-items: center;
-  padding: 0 2px;
+  margin-left: auto;
+  min-width: 0;
+  padding: 0;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .workdir-switcher {
