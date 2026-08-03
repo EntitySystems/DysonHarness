@@ -33,7 +33,7 @@
             else
             {
                 <div class="empty-state empty-state--session">
-                    <p class="empty-state__message">Send a prompt to begin.</p>
+                    <p class="empty-state__message">Welcome Operator. What's the mission?</p>
                     <div class="btn-row empty-state__actions">
                         <button type="button"
                                 class="btn"
@@ -96,7 +96,6 @@
               LastReportedPromptTokens="LastReportedPromptTokens"
               SelectedAgentMode="@SelectedAgentMode"
               SelectedAgentModeChanged="SelectedAgentModeChanged"
-              GitBranch="@GitBranch"
               OnSubmit="HandleSubmitAsync"
               OnNewSession="OnNewSession"
               Ask="Host.PendingAskUi"
@@ -131,7 +130,6 @@
     [Parameter] public int? LastReportedPromptTokens { get; set; }
     [Parameter] public string SelectedAgentMode { get; set; } = DysonAgentModes.Work;
     [Parameter] public EventCallback<string> SelectedAgentModeChanged { get; set; }
-    [Parameter] public string? GitBranch { get; set; }
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
     [Parameter] public EventCallback OnNewSession { get; set; }
 

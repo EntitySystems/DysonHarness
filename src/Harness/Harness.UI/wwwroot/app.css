@@ -1,4 +1,4 @@
-/* DysonHarness UI — Cursor/Factory charcoal IDE look */
+/* DysonHarness UI ? Cursor/Factory charcoal IDE look */
 
 :root,
 [data-theme="dark"] {
@@ -168,6 +168,44 @@ code, .mono {
   font-weight: 600;
   letter-spacing: 0.02em;
   font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__collapse-toggle {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.sidebar__collapse-toggle:hover:not(:disabled) {
+  color: var(--accent-text);
+}
+
+.sidebar__collapse-icon {
+  display: block;
+  transition: transform 0.15s ease;
+}
+
+.app-shell--sidebar-collapsed {
+  grid-template-columns: 48px 1fr 300px;
+}
+
+.app-shell--sidebar-collapsed .sidebar__title,
+.app-shell--sidebar-collapsed .sidebar__section,
+.app-shell--sidebar-collapsed .sidebar__footer {
+  display: none;
+}
+
+.app-shell--sidebar-collapsed .sidebar__brand {
+  justify-content: center;
+  padding: 10px 8px;
+  border-bottom: none;
+}
+
+.app-shell--sidebar-collapsed .sidebar__collapse-icon {
+  transform: scaleX(-1);
 }
 
 .badge {
@@ -1386,6 +1424,27 @@ code, .mono {
   box-shadow: var(--shadow);
 }
 
+.session-header__rail-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.session-header__rail-toggle:hover:not(:disabled) {
+  color: var(--accent-text);
+}
+
+.session-header__rail-icon {
+  display: block;
+  transition: transform 0.15s ease;
+  /* Mirror sidebar icon so the panel strip sits on the right when the rail is open. */
+  transform: scaleX(-1);
+}
+
+.session-header__rail-toggle:not(.is-open) .session-header__rail-icon {
+  transform: none;
+}
+
 .session-header__back {
   flex-shrink: 0;
   padding: 4px 8px;
@@ -1804,7 +1863,7 @@ code, .mono {
   overflow-y: auto;
 }
 
-/* Parent → child subagent cards (inside TurnBlock) */
+/* Parent ? child subagent cards (inside TurnBlock) */
 .turn-block__subagents {
   display: flex;
   flex-direction: column;
@@ -1912,7 +1971,7 @@ code, .mono {
   animation: turn-block-spin 0.7s linear infinite;
 }
 
-/* Subagent event block — reuses .turn-block chrome; sibling gap from .chat-panel__turns */
+/* Subagent event block ? reuses .turn-block chrome; sibling gap from .chat-panel__turns */
 .subagent-event-block.is-addressed {
   opacity: 0.72;
 }
@@ -2265,6 +2324,52 @@ code, .mono {
 .turn-block--dropped .turn-block__kind,
 .turn-block--dropped .turn-block__timestamp,
 .turn-block--dropped .turn-block__dropped-badge {
+  opacity: 0.55;
+}
+
+.turn-block__context-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: transparent;
+}
+
+.turn-block__context-menu {
+  position: fixed;
+  z-index: 42;
+  min-width: 148px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+.turn-block__context-menu-item {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.turn-block__context-menu-item:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.turn-block__context-menu-item:disabled {
+  color: var(--text-dim);
+  cursor: default;
   opacity: 0.55;
 }
 
@@ -2963,8 +3068,8 @@ code, .mono {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: var(--composer-attach-size, 30px);
+  height: var(--composer-attach-size, 30px);
   padding: 0;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
@@ -3229,13 +3334,32 @@ code, .mono {
 }
 
 .composer__footer {
+  --composer-attach-size: 30px;
+  --composer-toolbar-gap: 6px;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px 8px;
+  border-top: 1px solid var(--border);
+}
+
+.composer__footer-primary {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.composer__footer-secondary {
+  display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 8px 8px;
-  border-top: 1px solid var(--border);
+  min-width: 0;
+  /* Skip attach button + toolbar gap so CONTEXT aligns with the model selector */
+  padding-left: calc(var(--composer-attach-size) + var(--composer-toolbar-gap));
 }
 
 .composer__toolbar {
@@ -3243,7 +3367,7 @@ code, .mono {
   flex-wrap: wrap;
   justify-content: flex-start;
   align-items: center;
-  gap: 6px;
+  gap: var(--composer-toolbar-gap);
   min-width: 0;
   flex: 1 1 auto;
 }
@@ -3251,6 +3375,7 @@ code, .mono {
 .composer__send {
   flex: 0 0 auto;
   margin-left: auto;
+  align-self: flex-start;
 }
 
 .composer-effort {
@@ -3362,7 +3487,6 @@ code, .mono {
   white-space: nowrap;
 }
 
-.composer-chip--branch.is-muted,
 .composer-chip.is-muted {
   color: var(--text-dim);
   border-style: dashed;
@@ -3506,9 +3630,13 @@ code, .mono {
 
 .composer__hint {
   display: flex;
-  justify-content: flex-start;
+  justify-content: flex-end;
   align-items: center;
-  padding: 0 2px;
+  margin-left: auto;
+  min-width: 0;
+  padding: 0;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .workdir-switcher {
@@ -3773,7 +3901,15 @@ code, .mono {
   justify-content: flex-start;
   padding: 4px 0 8px;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* Size to content so the body (not a nested flex shrink) owns scrolling. */
+.rail-tabs__body--files > .file-tree,
+.rail-tabs__body--git > .git-changes {
+  flex: 0 0 auto;
+  min-height: auto;
 }
 
 .rail-tabs__placeholder {
@@ -4597,7 +4733,7 @@ code, .mono {
   }
 }
 
-/* Models — UX overhaul additions */
+/* Models ? UX overhaul additions */
 .btn--sm {
   padding: 0.32rem 0.6rem;
   font-size: 0.78rem;
@@ -4649,13 +4785,61 @@ code, .mono {
   opacity: 0.55;
 }
 
+/* Desktop / wide: rail collapsible (expanded by default). */
+@media (min-width: 1101px) {
+  .app-shell--rail-closed {
+    grid-template-columns: 260px 1fr;
+  }
+
+  .app-shell--sidebar-collapsed.app-shell--rail-closed {
+    grid-template-columns: 48px 1fr;
+  }
+
+  .app-shell--rail-closed .app-shell__rail {
+    display: none;
+  }
+
+  .app-shell__rail-backdrop {
+    display: none;
+  }
+}
+
+/* Narrow: rail is a closed-by-default drawer. */
 @media (max-width: 1100px) {
   .app-shell {
     grid-template-columns: 220px 1fr;
   }
 
+  .app-shell--sidebar-collapsed {
+    grid-template-columns: 48px 1fr;
+  }
+
   .app-shell__rail {
-    display: none;
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(300px, 90vw);
+    z-index: 70;
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
+    /* Keep drawer off-screen until hydrated open (avoids flash from desktop default). */
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .app-shell--rail-hydrated.app-shell--rail-open .app-shell__rail {
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  .app-shell__rail-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 69;
+    background: rgba(0, 0, 0, 0.4);
   }
 }
 
@@ -4665,10 +4849,19 @@ code, .mono {
     grid-template-rows: auto 1fr;
   }
 
+  .app-shell--sidebar-collapsed {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
   .app-shell__sidebar {
     max-height: 40vh;
     border-right: none;
     border-bottom: 1px solid var(--border);
+  }
+
+  .app-shell--sidebar-collapsed .app-shell__sidebar {
+    max-height: none;
   }
 }
 
@@ -5191,7 +5384,7 @@ code, .mono {
 }
 
 
-/* Models � effort picker popup */
+/* Models ? effort picker popup */
 .effort-picker {
   position: relative;
   display: inline-flex;
@@ -5272,7 +5465,7 @@ code, .mono {
   margin: 6px 0;
 }
 
-/* Composer effort picker � panel opens upward above the composer */
+/* Composer effort picker ? panel opens upward above the composer */
 .effort-picker--up .effort-picker__panel {
   top: auto;
   bottom: calc(100% + 4px);

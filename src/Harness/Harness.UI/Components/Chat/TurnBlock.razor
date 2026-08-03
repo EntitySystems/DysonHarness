@@ -8,7 +8,10 @@
 @inject IJSRuntime Js
 @inject DysonUiHost Host
 
-<article class="turn-block @(IsExpanded ? null : "turn-block--collapsed") @(Turn.IsExcludedFromContext ? "turn-block--dropped" : null)">
+<article class="turn-block @(IsExpanded ? null : "turn-block--collapsed") @(Turn.IsExcludedFromContext ? "turn-block--dropped" : null)"
+         @oncontextmenu="OnContextMenu"
+         @oncontextmenu:preventDefault="true"
+         @oncontextmenu:stopPropagation="true">
     <header class="turn-block__header"
             role="button"
             tabindex="0"
@@ -291,6 +294,28 @@
     }
 </article>
 
+@if (_contextMenuOpen)
+{
+    <div class="turn-block__context-backdrop"
+         tabindex="-1"
+         @onclick="CloseContextMenu"
+         @onkeydown="OnContextBackdropKeyDown"></div>
+    <div class="turn-block__context-menu"
+         role="menu"
+         aria-label="Turn actions"
+         style="left:@(_contextMenuX.ToString(System.Globalization.CultureInfo.InvariantCulture))px;top:@(_contextMenuY.ToString(System.Globalization.CultureInfo.InvariantCulture))px;"
+         @onclick:stopPropagation="true">
+        <button type="button"
+                class="turn-block__context-menu-item"
+                role="menuitem"
+                disabled="@(!CanDropTurn)"
+                title="@DropTurnTitle"
+                @onclick="HandleDropTurnAsync">
+            Drop turn
+        </button>
+    </div>
+}
+
 @code {
     private ElementReference _contentEl;
     private ElementReference _resizerEl;
@@ -298,6 +323,9 @@
     private bool _resizerAttached;
     private readonly HashSet<string> _expandedKeys = new(StringComparer.Ordinal);
     private string? _expandPolicyFingerprint;
+    private bool _contextMenuOpen;
+    private double _contextMenuX;
+    private double _contextMenuY;
 
     [Parameter, EditorRequired] public DysonAgentTurn Turn { get; set; } = default!;
 
@@ -494,6 +522,44 @@
             return;
 
         await Host.RestoreTurnContextAsync(session.PersistenceId, Turn.Id);
+    }
+
+    private bool CanDropTurn =>
+        !Turn.IsExcludedFromContext && !(SessionBusy && IsLatestTurn);
+
+    private string DropTurnTitle =>
+        Turn.IsExcludedFromContext
+            ? "Turn is already dropped from model context"
+            : SessionBusy && IsLatestTurn
+                ? "Cannot drop the in-flight turn"
+                : "Exclude this turn from model context";
+
+    private void OnContextMenu(MouseEventArgs e)
+    {
+        _contextMenuX = e.ClientX;
+        _contextMenuY = e.ClientY;
+        _contextMenuOpen = true;
+    }
+
+    private void CloseContextMenu() => _contextMenuOpen = false;
+
+    private void OnContextBackdropKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            CloseContextMenu();
+    }
+
+    private async Task HandleDropTurnAsync()
+    {
+        CloseContextMenu();
+        if (!CanDropTurn)
+            return;
+
+        var session = Host.Session;
+        if (session is null)
+            return;
+
+        await Host.DropTurnContextAsync(session.PersistenceId, Turn.Id);
     }
 
     private async Task HandleHeaderKeyDown(KeyboardEventArgs e)

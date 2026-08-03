@@ -1,3 +1,27 @@
+window.dysonUi = {
+  isNarrow: function (maxWidthPx) {
+    return window.matchMedia("(max-width: " + maxWidthPx + "px)").matches;
+  },
+  watchNarrow: function (maxWidthPx, dotNetRef) {
+    var mql = window.matchMedia("(max-width: " + maxWidthPx + "px)");
+    var handler = function (e) {
+      dotNetRef.invokeMethodAsync("OnNarrowChanged", e.matches);
+    };
+    if (mql.addEventListener)
+      mql.addEventListener("change", handler);
+    else
+      mql.addListener(handler);
+    return {
+      dispose: function () {
+        if (mql.removeEventListener)
+          mql.removeEventListener("change", handler);
+        else
+          mql.removeListener(handler);
+      }
+    };
+  }
+};
+
 window.dysonTheme = {
   get: function () {
     try {

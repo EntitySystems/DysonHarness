@@ -2176,6 +2176,78 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
+    /// Sets <see cref="DysonAgentTurn.IsExcludedFromContext"/> on a turn and persists
+    /// (same effect as the DropTurnContext MCP tool; turn stays in the UI).
+    /// </summary>
+    public async Task<VoidResult<string>> DropTurnContextAsync(
+        Guid sessionId,
+        Guid turnId,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+
+        DysonAgentSession? session = null;
+        if (sessionId != Guid.Empty && _sessionsById.TryGetValue(sessionId, out var byId))
+            session = byId;
+        else if (_session is not null
+                 && (sessionId == Guid.Empty || _session.PersistenceId == sessionId))
+            session = _session;
+
+        if (session is null)
+        {
+            LastError = "Session not found.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        var turn = session.Turns.FirstOrDefault(t => t.Id == turnId);
+        if (turn is null)
+        {
+            LastError = "Turn not found.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        if (_busySessions.ContainsKey(session.PersistenceId)
+            && session.Turns.Count > 0
+            && session.Turns[^1].Id == turnId)
+        {
+            LastError = "Cannot drop the in-flight turn.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        if (turn.IsExcludedFromContext)
+        {
+            Notify();
+            return VoidResult<string>.Success;
+        }
+
+        turn.IsExcludedFromContext = true;
+        session.AppendLog($"Turn {turnId:D} dropped, reason: Dropped from UI");
+
+        if (session.PersistenceId != Guid.Empty)
+        {
+            var sequence = IndexOfTurn(session, turn);
+            var entity = DysonTurnPersistence.ToEntity(turn, session.PersistenceId, sequence);
+            var upserted = await PersistAsync(
+                    () => _sessions.UpsertTurnAsync(entity, cancellationToken),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (upserted.IsError)
+            {
+                turn.IsExcludedFromContext = false;
+                LastError = upserted.Error;
+                Notify();
+                return upserted;
+            }
+        }
+
+        Notify();
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
     /// Clears <see cref="DysonAgentTurn.IsExcludedFromContext"/> on a dropped turn and persists.
     /// </summary>
     public async Task<VoidResult<string>> RestoreTurnContextAsync(
