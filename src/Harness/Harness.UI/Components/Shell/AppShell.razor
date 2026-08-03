@@ -1,19 +1,144 @@
 @namespace Harness.UI.Components.Shell
+@inject IJSRuntime Js
+@implements IAsyncDisposable
 
-<div class="app-shell">
-    <aside class="app-shell__sidebar">
-        @Sidebar
-    </aside>
-    <main class="app-shell__main">
-        @Main
-    </main>
-    <aside class="app-shell__rail">
-        @Rail
-    </aside>
-</div>
+<CascadingValue Value="this" IsFixed="true">
+    <div class="@ShellClass">
+        <aside id="app-shell-sidebar"
+               class="app-shell__sidebar"
+               aria-label="Sidebar">
+            @Sidebar
+        </aside>
+        <main class="app-shell__main">
+            @Main
+        </main>
+        @if (ShowRailBackdrop)
+        {
+            <div class="app-shell__rail-backdrop"
+                 tabindex="-1"
+                 @onclick="CloseRail"
+                 @onkeydown="OnBackdropKeyDown"></div>
+        }
+        <aside id="app-shell-rail"
+               class="app-shell__rail"
+               aria-hidden="@(!RailOpen)">
+            @Rail
+        </aside>
+    </div>
+</CascadingValue>
 
 @code {
+    /// <summary>Viewport width at/below which the rail is a closed-by-default drawer.</summary>
+    public const int NarrowBreakpointPx = 1100;
+
     [Parameter] public RenderFragment? Sidebar { get; set; }
     [Parameter] public RenderFragment? Main { get; set; }
     [Parameter] public RenderFragment? Rail { get; set; }
+
+    private bool _railOpen = true;
+    private bool _sidebarOpen = true;
+    private bool _hydrated;
+    private bool _narrow;
+    private DotNetObjectReference<AppShell>? _selfRef;
+    private IJSObjectReference? _viewport;
+
+    public bool RailOpen => _railOpen;
+
+    public bool SidebarOpen => _sidebarOpen;
+
+    public bool IsNarrow => _narrow;
+
+    private bool ShowRailBackdrop => _hydrated && _narrow && _railOpen;
+
+    private string ShellClass
+    {
+        get
+        {
+            var css = "app-shell";
+            if (_hydrated)
+                css += " app-shell--rail-hydrated";
+            css += _railOpen ? " app-shell--rail-open" : " app-shell--rail-closed";
+            css += _sidebarOpen ? " app-shell--sidebar-open" : " app-shell--sidebar-collapsed";
+            return css;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _hydrated)
+            return;
+
+        try
+        {
+            _narrow = await Js.InvokeAsync<bool>("dysonUi.isNarrow", NarrowBreakpointPx);
+            _railOpen = !_narrow;
+            _selfRef = DotNetObjectReference.Create(this);
+            _viewport = await Js.InvokeAsync<IJSObjectReference>(
+                "dysonUi.watchNarrow",
+                NarrowBreakpointPx,
+                _selfRef);
+        }
+        catch (JSException)
+        {
+            // Keep desktop-expanded default if JS is unavailable.
+            _narrow = false;
+            _railOpen = true;
+        }
+
+        _hydrated = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public void OnNarrowChanged(bool narrow)
+    {
+        if (_narrow == narrow)
+            return;
+
+        _narrow = narrow;
+        // Crossing the breakpoint resets to the viewport default.
+        _railOpen = !narrow;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void ToggleRail()
+    {
+        _railOpen = !_railOpen;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void ToggleSidebar()
+    {
+        _sidebarOpen = !_sidebarOpen;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void CloseRail()
+    {
+        if (!_railOpen)
+            return;
+        _railOpen = false;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void OnBackdropKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            CloseRail();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_viewport is not null)
+        {
+            try { await _viewport.InvokeVoidAsync("dispose"); }
+            catch (JSDisconnectedException) { /* circuit gone */ }
+            try { await _viewport.DisposeAsync(); }
+            catch (JSDisconnectedException) { /* circuit gone */ }
+            _viewport = null;
+        }
+
+        _selfRef?.Dispose();
+        _selfRef = null;
+    }
 }

@@ -1,6 +1,5 @@
 @namespace Harness.UI.Components.Shell
 @using DysonHarness
-@using Harness.UI.Demo
 @using Harness.UI.Files
 @implements IDisposable
 @inject DysonUiHost Host
@@ -25,7 +24,6 @@
         <strong>@(Title ?? Session.DisplayTitle ?? "Session")</strong>
         <div class="session-header__meta">
             <span>Mode @Session.Mode</span>
-            <span class="mono">Persist @ShortGuid(Session.PersistenceId)</span>
             @if (!string.IsNullOrEmpty(GitBranch))
             {
                 <span class="mono" title="Active work directory branch">⎇ @GitBranch</span>
@@ -70,15 +68,33 @@
                     </div>
                 }
             </div>
-            @if (Session.Provider is DemoDysonAgentProvider demo)
-            {
-                <span>@demo.DisplayAlias · @demo.ProviderDisplayName / @demo.Slug</span>
-            }
-            else if (Session.Provider is OpenAiCompatibleAgentProvider oai)
-            {
-                <span>@oai.DisplayAlias · @oai.ProviderDisplayName / @oai.Slug · @oai.OpenAiApiMode</span>
-            }
         </div>
+    }
+
+    @if (Shell is not null)
+    {
+        <button type="button"
+                class="session-header__rail-toggle btn btn-icon btn-ghost @(Shell.RailOpen ? "is-open" : null)"
+                title="@(Shell.RailOpen ? "Collapse panel" : "Expand panel")"
+                aria-label="@(Shell.RailOpen ? "Collapse files and git panel" : "Expand files and git panel")"
+                aria-controls="app-shell-rail"
+                aria-expanded="@Shell.RailOpen"
+                @onclick="ToggleRail">
+            <svg class="session-header__rail-icon"
+                 viewBox="0 0 16 16"
+                 width="16"
+                 height="16"
+                 aria-hidden="true"
+                 focusable="false">
+                <rect x="1.75" y="2.25" width="12.5" height="11.5" rx="1.5"
+                      fill="none" stroke="currentColor" stroke-width="1.25" />
+                <path d="M6.25 2.25v11.5"
+                      fill="none" stroke="currentColor" stroke-width="1.25" />
+                <path d="M10.25 5.75 8 8l2.25 2.25"
+                      fill="none" stroke="currentColor" stroke-width="1.25"
+                      stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+        </button>
     }
 </div>
 
@@ -166,6 +182,8 @@
 }
 
 @code {
+    [CascadingParameter] public AppShell? Shell { get; set; }
+
     [Parameter] public DysonAgentSession? Session { get; set; }
     [Parameter] public string? Title { get; set; }
     [Parameter] public string? GitBranch { get; set; }
@@ -176,6 +194,8 @@
     private CancellationTokenSource? _pollCts;
     private bool _hostHooked;
     private bool _toolsMenuOpen;
+
+    private void ToggleRail() => Shell?.ToggleRail();
 
     protected override void OnInitialized()
     {
@@ -296,9 +316,6 @@
             _hostHooked = false;
         }
     }
-
-    private static string ShortGuid(Guid id) =>
-        id == Guid.Empty ? "—" : id.ToString("N")[..8];
 
     private static string ShortCommand(string? command)
     {
