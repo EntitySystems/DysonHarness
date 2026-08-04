@@ -16,6 +16,19 @@ public static class DysonAppSettingKeys
     public const string ToolPanelWidthPercent = "tool_panel_width_percent";
 
     /// <summary>
+    /// Right rail (files/git) open preference: <c>"true"</c> / <c>"false"</c>.
+    /// Restored on desktop hydrate; narrow viewports still start closed (drawer UX)
+    /// and re-apply this when returning to desktop. Missing ⇒ <c>true</c>.
+    /// </summary>
+    public const string UiRailOpen = "ui_rail_open";
+
+    /// <summary>
+    /// Left sidebar open preference: <c>"true"</c> / <c>"false"</c> (collapsed when false).
+    /// Restored on AppShell hydrate. Missing ⇒ <c>true</c>.
+    /// </summary>
+    public const string UiSidebarOpen = "ui_sidebar_open";
+
+    /// <summary>
     /// JSON agent-mode tool policy document — per-mode (and future per-model) tool denylists.
     /// Empty / missing ⇒ all tools enabled.
     /// </summary>

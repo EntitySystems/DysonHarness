@@ -2225,6 +2225,8 @@ code, .mono {
 }
 
 .turn-block {
+  --turn-header-sticky-offset: 52px;
+  position: relative;
   border: 1px solid var(--border);
   border-radius: 5px;
   background: var(--bg-1);
@@ -2233,7 +2235,8 @@ code, .mono {
   flex-shrink: 0;
 }
 
-.turn-block > :first-child {
+/* Sentinel is first in DOM (absolute); radius targets the real chrome. */
+.turn-block > .turn-block__header {
   border-top-left-radius: 5px;
   border-top-right-radius: 5px;
 }
@@ -2241,6 +2244,20 @@ code, .mono {
 .turn-block > :last-child {
   border-bottom-left-radius: 5px;
   border-bottom-right-radius: 5px;
+}
+
+/* Zero-layout marker above sticky header for IntersectionObserver stuck detection. */
+.turn-block__sticky-sentinel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
 }
 
 .turn-block__header {
@@ -2252,11 +2269,32 @@ code, .mono {
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
   cursor: pointer;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+/* Stuck-only: bubble separation while pinned over scrolling turn body. */
+.turn-block__header--stuck {
+  top: 6px;
+  margin-inline: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-3);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+}
+
+.turn-block:has(.turn-block__header--stuck) {
+  --turn-header-sticky-offset: 58px;
 }
 
 .turn-block--collapsed .turn-block__header {
   border-bottom: none;
   padding: 6px 10px;
+}
+
+.turn-block--collapsed .turn-block__header--stuck {
+  border: 1px solid var(--border-strong);
 }
 
 .turn-block__icons {
@@ -2628,7 +2666,7 @@ code, .mono {
   display: flex;
   flex-direction: column;
   position: sticky;
-  top: 0;
+  top: var(--turn-header-sticky-offset);
   align-self: flex-start;
   z-index: 1;
   background: var(--bg-1);
@@ -2702,7 +2740,7 @@ code, .mono {
   padding: 10px;
   box-sizing: border-box;
   position: sticky;
-  top: 0;
+  top: var(--turn-header-sticky-offset);
   align-self: flex-start;
   z-index: 1;
   background: var(--bg-1);

@@ -12,7 +12,9 @@
          @oncontextmenu="OnContextMenu"
          @oncontextmenu:preventDefault="true"
          @oncontextmenu:stopPropagation="true">
-    <header class="turn-block__header"
+    <div @ref="_stickySentinel" class="turn-block__sticky-sentinel" aria-hidden="true"></div>
+    <header @ref="_headerEl"
+            class="turn-block__header"
             role="button"
             tabindex="0"
             aria-expanded="@IsExpanded"
@@ -317,9 +319,12 @@
 }
 
 @code {
+    private ElementReference _stickySentinel;
+    private ElementReference _headerEl;
     private ElementReference _contentEl;
     private ElementReference _resizerEl;
     private DotNetObjectReference<TurnBlock>? _dotNetRef;
+    private bool _stickyAttached;
     private bool _resizerAttached;
     private readonly HashSet<string> _expandedKeys = new(StringComparer.Ordinal);
     private string? _expandPolicyFingerprint;
@@ -571,6 +576,8 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        await EnsureStickyHeaderAsync();
+
         if (!IsExpanded || !HasTools)
         {
             await DetachResizerAsync();
@@ -582,6 +589,42 @@
             _dotNetRef ??= DotNetObjectReference.Create(this);
             await Js.InvokeVoidAsync("dysonToolsCol.attach", _resizerEl, _contentEl, _dotNetRef);
             _resizerAttached = true;
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private async Task EnsureStickyHeaderAsync()
+    {
+        if (_stickyAttached)
+            return;
+
+        try
+        {
+            await Js.InvokeVoidAsync("dysonStickyHeader.attach", _stickySentinel, _headerEl);
+            _stickyAttached = true;
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private async Task DetachStickyHeaderAsync()
+    {
+        if (!_stickyAttached)
+            return;
+
+        _stickyAttached = false;
+        try
+        {
+            await Js.InvokeVoidAsync("dysonStickyHeader.detach", _headerEl);
         }
         catch (JSException)
         {
@@ -619,6 +662,7 @@
 
     public async ValueTask DisposeAsync()
     {
+        await DetachStickyHeaderAsync();
         await DetachResizerAsync();
         _dotNetRef?.Dispose();
         _dotNetRef = null;

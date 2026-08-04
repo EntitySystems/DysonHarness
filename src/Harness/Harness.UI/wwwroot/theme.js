@@ -182,6 +182,40 @@ window.dysonComposer = {
   }
 };
 
+/**
+ * Sticky turn headers: IntersectionObserver on a sentinel above `.turn-block__header`
+ * toggles `.turn-block__header--stuck` when the header is pinned inside `.chat-panel__turns`.
+ * Class toggle only — no Blazor round-trip (keeps expand/collapse + context menu intact).
+ */
+window.dysonStickyHeader = {
+  attach: function (sentinel, header) {
+    if (!sentinel || !header || header._dysonStickyBound) return;
+    var root = header.closest(".chat-panel__turns");
+    if (!root) return;
+
+    var observer = new IntersectionObserver(
+      function (entries) {
+        var entry = entries[0];
+        if (!entry) return;
+        header.classList.toggle("turn-block__header--stuck", !entry.isIntersecting);
+      },
+      { root: root, threshold: 0 }
+    );
+    observer.observe(sentinel);
+    header._dysonStickyBound = true;
+    header._dysonStickyObserver = observer;
+  },
+  detach: function (header) {
+    if (!header || !header._dysonStickyBound) return;
+    if (header._dysonStickyObserver) {
+      header._dysonStickyObserver.disconnect();
+      header._dysonStickyObserver = null;
+    }
+    header.classList.remove("turn-block__header--stuck");
+    header._dysonStickyBound = false;
+  }
+};
+
 /** Stick-to-bottom helpers for `.chat-panel__turns`. Stick flag lives on the element so scroll can clear it synchronously (Blazor @onscroll is too late vs streaming AfterRender). */
 window.dysonChat = {
   /** Default near-bottom threshold (px). Keep tight so a small upward scroll unsticks. */
