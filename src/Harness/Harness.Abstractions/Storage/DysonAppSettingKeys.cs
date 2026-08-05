@@ -29,6 +29,12 @@ public static class DysonAppSettingKeys
     public const string UiSidebarOpen = "ui_sidebar_open";
 
     /// <summary>
+    /// CalVer of an in-app update the user declined (e.g. <c>"2026.8.142"</c>).
+    /// The updater prompts again only for a strictly newer release. Missing ⇒ nothing skipped.
+    /// </summary>
+    public const string UiUpdateSkippedVersion = "ui_update_skipped_version";
+
+    /// <summary>
     /// JSON agent-mode tool policy document — per-mode (and future per-model) tool denylists.
     /// Empty / missing ⇒ all tools enabled.
     /// </summary>

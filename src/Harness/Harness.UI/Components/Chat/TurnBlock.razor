@@ -141,7 +141,7 @@
 
         @if (Turn.Kind != DysonAgentTurnKind.DisplayInfo
              && Turn.Kind != DysonAgentTurnKind.ModeSwitch
-             && (HasAssistantBody || HasReasoning || HasTools))
+             && (HasAssistantBody || HasReasoning || HasTools || ShowThinkingIdleDots))
         {
             <div @ref="_contentEl" class="turn-block__content">
                 <div class="turn-block__main">
@@ -263,6 +263,13 @@
                     else if (!string.IsNullOrWhiteSpace(Turn.AssistantText))
                     {
                         <div class="turn-block__body">@MarkdownRenderer.ToHtml(Turn.AssistantText)</div>
+                    }
+
+                    @if (ShowThinkingIdleDots)
+                    {
+                        <div class="turn-block__thinking-idle" role="status" aria-label="Waiting for model">
+                            <span></span><span></span><span></span>
+                        </div>
                     }
                 </div>
 
@@ -392,6 +399,30 @@
                 return true;
 
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Animated idle dots under the thought column while the live turn is busy
+    /// but neither reasoning nor reply text is currently streaming.
+    /// </summary>
+    private bool ShowThinkingIdleDots
+    {
+        get
+        {
+            if (!(SessionBusy && IsLatestTurn))
+                return false;
+
+            if (Turn.IsReasoningStreaming && !string.IsNullOrEmpty(Turn.ReasoningStreamingPreview))
+                return false;
+
+            if (Turn.IsStreaming && !string.IsNullOrEmpty(Turn.StreamingPreview))
+                return false;
+
+            if (!string.IsNullOrWhiteSpace(Turn.AssistantText))
+                return false;
+
+            return true;
         }
     }
 

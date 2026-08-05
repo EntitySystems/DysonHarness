@@ -1,0 +1,134 @@
+@namespace Harness.UI.Components.Dialogs
+@using Microsoft.AspNetCore.Components.Web
+@using Harness.UI.Services
+@inject DysonAppUpdateService Updates
+@inject IDysonSubjectSettingsRepository AppSettings
+@implements IDisposable
+
+@if (Visible)
+{
+    <div class="confirm-dialog-backdrop"
+         role="presentation"
+         @onclick="OnBackdropClick">
+        <div class="confirm-dialog"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="update-dialog-title"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnKeyDown">
+            <div class="confirm-dialog__header">
+                <h3 id="update-dialog-title">Update available</h3>
+            </div>
+            <div class="confirm-dialog__body">
+                <p class="confirm-dialog__message">
+                    DysonHarness @Updates.AvailableVersion is available (you have @Updates.LocalVersion).
+                    @(Locked ? "Downloading the installer — the app will restart to finish." : "Download and install it now?")
+                </p>
+                @if (Updates.Phase is DysonAppUpdatePhase.Downloading)
+                {
+                    <div class="confirm-dialog__progress">
+                        <div class="confirm-dialog__progress-track">
+                            <div class="confirm-dialog__progress-bar" style="width: @(PercentText)"></div>
+                        </div>
+                        <p class="confirm-dialog__progress-text">@ProgressText</p>
+                    </div>
+                }
+                @if (Updates.Error is { Length: > 0 } error)
+                {
+                    <p class="confirm-dialog__progress-text">@error</p>
+                }
+            </div>
+            <div class="confirm-dialog__actions">
+                @if (Updates.Phase is DysonAppUpdatePhase.Failed)
+                {
+                    <button type="button" class="btn btn-ghost" @onclick="Close">Close</button>
+                }
+                else if (!Locked)
+                {
+                    <button type="button" class="btn btn-ghost" @onclick="SkipAsync">Not now</button>
+                    <button type="button" class="btn btn-primary" @onclick="InstallAsync">Update</button>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private string? _skippedVersion;
+    private bool _loaded;
+
+    private bool Locked => Updates.Phase is DysonAppUpdatePhase.Downloading;
+
+    private bool Visible => _loaded
+        && Updates.Phase is not DysonAppUpdatePhase.Idle
+        && !string.Equals(Updates.AvailableVersion, _skippedVersion, StringComparison.OrdinalIgnoreCase);
+
+    private string PercentText =>
+        Updates.TotalBytes > 0
+            ? $"{Math.Clamp(Updates.ReceivedBytes * 100d / Updates.TotalBytes, 0, 100):0}%"
+            : "100%";
+
+    private string ProgressText =>
+        Updates.TotalBytes > 0
+            ? $"{Megabytes(Updates.ReceivedBytes)} / {Megabytes(Updates.TotalBytes)} MB · {PercentText}"
+            : $"{Megabytes(Updates.ReceivedBytes)} MB";
+
+    protected override void OnInitialized() => Updates.Changed += OnUpdatesChanged;
+
+    public void Dispose() => Updates.Changed -= OnUpdatesChanged;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        var skipped = await AppSettings.GetSettingAsync(DysonAppSettingKeys.UiUpdateSkippedVersion);
+        if (!skipped.IsError)
+            _skippedVersion = skipped.Value;
+
+        _loaded = true;
+        Updates.StartBackgroundCheck();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void OnUpdatesChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is "Escape")
+            _ = DismissAsync();
+    }
+
+    private void OnBackdropClick()
+    {
+        if (!Locked)
+            _ = DismissAsync();
+    }
+
+    /// <summary>Escape / backdrop / "Not now" all mean skip this version until a newer one ships.</summary>
+    private Task SkipAsync() => DismissAsync();
+
+    private async Task DismissAsync()
+    {
+        if (Locked)
+            return;
+
+        if (Updates.AvailableVersion is { Length: > 0 } version)
+        {
+            _skippedVersion = version;
+            await AppSettings.SetSettingAsync(DysonAppSettingKeys.UiUpdateSkippedVersion, version);
+        }
+
+        Close();
+    }
+
+    private void Close() => Updates.Dismiss();
+
+    private async Task InstallAsync()
+    {
+        // Only returns on failure — the success path launches msiexec and exits the process.
+        await Updates.DownloadAndInstallAsync();
+    }
+
+    private static string Megabytes(long bytes) => (bytes / 1024d / 1024d).ToString("0.0");
+}

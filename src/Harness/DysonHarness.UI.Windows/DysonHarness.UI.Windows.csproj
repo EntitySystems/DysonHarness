@@ -33,4 +33,28 @@
     <None Include="Assets\dysonlogo.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- Prebuild: stamped version → obj/.../version.json → next to DysonHarness.exe (in-app updater reads it). -->
+  <PropertyGroup>
+    <_DysonWriteVersionJsonPs1>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\scripts\write-version-json.ps1'))</_DysonWriteVersionJsonPs1>
+    <_DysonWriteVersionJsonSh>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\scripts\write-version-json.sh'))</_DysonWriteVersionJsonSh>
+  </PropertyGroup>
+
+  <!-- AssignTargetPaths is where None items get their output target path, so the item must exist by then. -->
+  <Target Name="GenerateVersionJson" BeforeTargets="AssignTargetPaths">
+    <PropertyGroup>
+      <_DysonVersionJsonPath>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\$(IntermediateOutputPath)version.json'))</_DysonVersionJsonPath>
+      <_DysonVersionJsonDir>$([System.IO.Path]::GetDirectoryName('$(_DysonVersionJsonPath)'))</_DysonVersionJsonDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(_DysonVersionJsonDir)" />
+    <Exec Condition="!$([MSBuild]::IsOSUnixLike())" Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(_DysonWriteVersionJsonPs1)&quot; -OutputPath &quot;$(_DysonVersionJsonPath)&quot; -Version &quot;$(Version)&quot; -InformationalVersion &quot;$(InformationalVersion)&quot; -Rid &quot;$(RuntimeIdentifier)&quot;" IgnoreExitCode="false" />
+    <Exec Condition="$([MSBuild]::IsOSUnixLike())" Command="bash &quot;$(_DysonWriteVersionJsonSh)&quot; &quot;$(_DysonVersionJsonPath)&quot; &quot;$(Version)&quot; &quot;$(InformationalVersion)&quot; &quot;$(RuntimeIdentifier)&quot;" IgnoreExitCode="false" />
+    <ItemGroup>
+      <None Include="$(_DysonVersionJsonPath)"
+            Link="version.json"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
+      <FileWrites Include="$(_DysonVersionJsonPath)" />
+    </ItemGroup>
+  </Target>
+
 </Project>

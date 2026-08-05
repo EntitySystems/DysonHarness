@@ -495,8 +495,10 @@ public static class DysonToolCallUi
         var parsed = TryParseWriteFile(argumentsJson);
         if (parsed is null)
             return TextSummary(null);
+        var name = Basename(parsed.Path);
         return new CollapsedSummary
         {
+            Text = string.IsNullOrEmpty(name) ? null : Truncate(name, SummaryMaxLength),
             LinesAdded = parsed.LinesAdded,
             LinesRemoved = parsed.IsFullRewrite ? null : parsed.LinesRemoved,
         };

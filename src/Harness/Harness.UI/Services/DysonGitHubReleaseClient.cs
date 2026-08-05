@@ -1,0 +1,115 @@
+using System.Net.Http.Headers;
+using System.Text.Json;
+using DysonHarness;
+
+namespace Harness.UI.Services;
+
+/// <summary>A GitHub release that ships a Windows MSI asset.</summary>
+public sealed record DysonGitHubMsiRelease(
+    string TagName,
+    System.Version Version,
+    string AssetName,
+    string DownloadUrl,
+    long SizeBytes);
+
+/// <summary>
+/// Lists GitHub releases for the app repo and picks the newest one carrying a
+/// <c>*-win-x64.msi</c> asset. Continuous builds are pre-releases, so <c>/latest</c> is not usable.
+/// </summary>
+public sealed class DysonGitHubReleaseClient(HttpClient http)
+{
+    public const string HttpClientName = "github-releases";
+    public const string MsiAssetSuffix = "-win-x64.msi";
+
+    private readonly HttpClient _http = http ?? throw new ArgumentNullException(nameof(http));
+
+    /// <summary>Newest non-draft release with an MSI asset; success with a null value when none qualifies.</summary>
+    public async Task<Result<DysonGitHubMsiRelease?, string>> FindNewestMsiReleaseAsync(
+        string repo,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var url = $"https://api.github.com/repos/{repo}/releases?per_page=15";
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.UserAgent.Add(new ProductInfoHeaderValue("DysonHarness", "1.0"));
+            request.Headers.Accept.ParseAdd("application/vnd.github+json");
+
+            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+                return Result<DysonGitHubMsiRelease?, string>.AsError($"GitHub releases HTTP {(int)response.StatusCode}.");
+
+            var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            return Result<DysonGitHubMsiRelease?, string>.AsValue(SelectNewestMsiRelease(json));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return Result<DysonGitHubMsiRelease?, string>.AsError("Update check was cancelled.");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            return Result<DysonGitHubMsiRelease?, string>.AsError($"Update check failed: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>Picks the highest CalVer non-draft release with an MSI asset from a releases API payload.</summary>
+    public static DysonGitHubMsiRelease? SelectNewestMsiRelease(string releasesJson)
+    {
+        if (string.IsNullOrWhiteSpace(releasesJson))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(releasesJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+                return null;
+
+            DysonGitHubMsiRelease? best = null;
+            foreach (var release in document.RootElement.EnumerateArray())
+            {
+                if (release.ValueKind != JsonValueKind.Object)
+                    continue;
+                if (release.TryGetProperty("draft", out var draft) && draft.ValueKind == JsonValueKind.True)
+                    continue;
+
+                var tag = release.TryGetProperty("tag_name", out var tagName) ? tagName.GetString() : null;
+                var version = DysonAppVersionInfo.ParseCalVer(tag);
+                if (version is null || (best is not null && version <= best.Version))
+                    continue;
+
+                if (FindMsiAsset(release) is { } asset)
+                    best = new DysonGitHubMsiRelease(tag!, version, asset.Name, asset.Url, asset.SizeBytes);
+            }
+
+            return best;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static (string Name, string Url, long SizeBytes)? FindMsiAsset(JsonElement release)
+    {
+        if (!release.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array)
+            return null;
+
+        foreach (var asset in assets.EnumerateArray())
+        {
+            var name = asset.TryGetProperty("name", out var nameElement) ? nameElement.GetString() : null;
+            if (name is null || !name.EndsWith(MsiAssetSuffix, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var url = asset.TryGetProperty("browser_download_url", out var urlElement) ? urlElement.GetString() : null;
+            if (string.IsNullOrWhiteSpace(url))
+                continue;
+
+            var size = asset.TryGetProperty("size", out var sizeElement) && sizeElement.TryGetInt64(out var bytes)
+                ? bytes
+                : 0;
+            return (name, url, size);
+        }
+
+        return null;
+    }
+}
