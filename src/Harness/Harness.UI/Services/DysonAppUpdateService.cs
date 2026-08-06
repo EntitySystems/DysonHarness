@@ -21,8 +21,8 @@ public enum DysonAppUpdatePhase
 
 /// <summary>
 /// Windows-only in-app updater: compares the build-stamped CalVer against GitHub
-/// pre-releases, then downloads the MSI and hands off to <c>msiexec</c>.
-/// Singleton — one check per process, UI subscribes via <see cref="Changed"/>.
+/// releases on the same track (<c>stable</c> / <c>preview</c>), then downloads the MSI
+/// and hands off to <c>msiexec</c>. Singleton — one check per process, UI subscribes via <see cref="Changed"/>.
 /// </summary>
 public sealed class DysonAppUpdateService(HttpClient http)
 {
@@ -70,7 +70,8 @@ public sealed class DysonAppUpdateService(HttpClient http)
         if (!OperatingSystem.IsWindows() || !local.IsStampedRelease)
             return VoidResult<string>.Success;
 
-        var found = await _releases.FindNewestMsiReleaseAsync(local.EffectiveRepo, cancellationToken)
+        var found = await _releases
+            .FindNewestMsiReleaseAsync(local.EffectiveRepo, local.EffectiveChannel, cancellationToken)
             .ConfigureAwait(false);
         if (found.IsError)
             return VoidResult<string>.AsError(found.Error);

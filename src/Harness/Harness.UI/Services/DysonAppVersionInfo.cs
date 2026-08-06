@@ -12,6 +12,8 @@ public sealed class DysonAppVersionInfo
 {
     public const string FileName = "version.json";
     public const string DefaultRepo = "EntitySystems/DysonHarness";
+    public const string ChannelStable = "stable";
+    public const string ChannelPreview = "preview";
 
     /// <summary>Continuous CalVer is <c>YYYY.M.run</c>; anything below this year is a local/dev build.</summary>
     private const int FirstCalVerYear = 2026;
@@ -21,6 +23,7 @@ public sealed class DysonAppVersionInfo
 
     public string Version { get; init; } = "";
     public string InformationalVersion { get; init; } = "";
+    public string Channel { get; init; } = "";
     public string Rid { get; init; } = "";
     public string Repo { get; init; } = "";
 
@@ -33,6 +36,15 @@ public sealed class DysonAppVersionInfo
     public bool IsStampedRelease => CalVer is { Major: >= FirstCalVerYear };
 
     public string EffectiveRepo => string.IsNullOrWhiteSpace(Repo) ? DefaultRepo : Repo.Trim();
+
+    /// <summary>
+    /// Release track for the updater: <c>stable</c> or <c>preview</c>.
+    /// Missing/unknown channel defaults to <c>preview</c> (matches historical all-prerelease publishes).
+    /// </summary>
+    public string EffectiveChannel => NormalizeChannel(Channel);
+
+    /// <summary>Sidebar badge text; null on unstamped local builds so we do not fake a track.</summary>
+    public string? ChannelBadge => IsStampedRelease ? EffectiveChannel : null;
 
     /// <summary>Reads <c>version.json</c> from <paramref name="directory"/>; null when missing or unreadable.</summary>
     public static DysonAppVersionInfo? ReadFrom(string directory)
@@ -51,6 +63,12 @@ public sealed class DysonAppVersionInfo
             return null;
         }
     }
+
+    /// <summary>Normalizes a channel string; missing/unknown → <see cref="ChannelPreview"/>.</summary>
+    public static string NormalizeChannel(string? raw) =>
+        string.Equals(raw?.Trim(), ChannelStable, StringComparison.OrdinalIgnoreCase)
+            ? ChannelStable
+            : ChannelPreview;
 
     /// <summary>Parses a CalVer tag (<c>2026.8.142</c>, optional <c>v</c> prefix and <c>+sha</c> suffix).</summary>
     public static System.Version? ParseCalVer(string? raw)
@@ -90,6 +108,7 @@ public sealed class DysonAppVersionInfo
         {
             Version = plus >= 0 ? informational[..plus] : informational,
             InformationalVersion = informational,
+            Channel = "",
             Rid = "",
             Repo = DefaultRepo,
         };

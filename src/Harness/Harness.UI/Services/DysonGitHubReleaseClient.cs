@@ -13,8 +13,9 @@ public sealed record DysonGitHubMsiRelease(
     long SizeBytes);
 
 /// <summary>
-/// Lists GitHub releases for the app repo and picks the newest one carrying a
-/// <c>*-win-x64.msi</c> asset. Continuous builds are pre-releases, so <c>/latest</c> is not usable.
+/// Lists GitHub releases for the app repo and picks the newest one on the local
+/// release track (<c>stable</c> = non-prerelease, <c>preview</c> = prerelease)
+/// carrying a <c>*-win-x64.msi</c> asset.
 /// </summary>
 public sealed class DysonGitHubReleaseClient(HttpClient http)
 {
@@ -23,9 +24,10 @@ public sealed class DysonGitHubReleaseClient(HttpClient http)
 
     private readonly HttpClient _http = http ?? throw new ArgumentNullException(nameof(http));
 
-    /// <summary>Newest non-draft release with an MSI asset; success with a null value when none qualifies.</summary>
+    /// <summary>Newest non-draft release on <paramref name="channel"/> with an MSI asset; success with a null value when none qualifies.</summary>
     public async Task<Result<DysonGitHubMsiRelease?, string>> FindNewestMsiReleaseAsync(
         string repo,
+        string channel = DysonAppVersionInfo.ChannelPreview,
         CancellationToken cancellationToken = default)
     {
         try
@@ -40,7 +42,7 @@ public sealed class DysonGitHubReleaseClient(HttpClient http)
                 return Result<DysonGitHubMsiRelease?, string>.AsError($"GitHub releases HTTP {(int)response.StatusCode}.");
 
             var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            return Result<DysonGitHubMsiRelease?, string>.AsValue(SelectNewestMsiRelease(json));
+            return Result<DysonGitHubMsiRelease?, string>.AsValue(SelectNewestMsiRelease(json, channel));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -52,11 +54,19 @@ public sealed class DysonGitHubReleaseClient(HttpClient http)
         }
     }
 
-    /// <summary>Picks the highest CalVer non-draft release with an MSI asset from a releases API payload.</summary>
-    public static DysonGitHubMsiRelease? SelectNewestMsiRelease(string releasesJson)
+    /// <summary>
+    /// Picks the highest CalVer non-draft release with an MSI asset whose
+    /// <c>prerelease</c> flag matches <paramref name="channel"/>
+    /// (<c>preview</c> → prerelease, <c>stable</c> → full release).
+    /// </summary>
+    public static DysonGitHubMsiRelease? SelectNewestMsiRelease(
+        string releasesJson,
+        string channel = DysonAppVersionInfo.ChannelPreview)
     {
         if (string.IsNullOrWhiteSpace(releasesJson))
             return null;
+
+        var wantPrerelease = DysonAppVersionInfo.NormalizeChannel(channel) == DysonAppVersionInfo.ChannelPreview;
 
         try
         {
@@ -70,6 +80,11 @@ public sealed class DysonGitHubReleaseClient(HttpClient http)
                 if (release.ValueKind != JsonValueKind.Object)
                     continue;
                 if (release.TryGetProperty("draft", out var draft) && draft.ValueKind == JsonValueKind.True)
+                    continue;
+
+                var isPrerelease = release.TryGetProperty("prerelease", out var prerelease)
+                    && prerelease.ValueKind == JsonValueKind.True;
+                if (isPrerelease != wantPrerelease)
                     continue;
 
                 var tag = release.TryGetProperty("tag_name", out var tagName) ? tagName.GetString() : null;

@@ -22,9 +22,11 @@ Prebuild scripts (`scripts/resolve-app-mode.sh` / `.ps1`) and MSBuild `GenerateA
 
 | Git branch | `DysonAppMode` | App-data folder |
 | ---------- | -------------- | --------------- |
-| `main`, `master` | `Prod` | `DysonProd` |
+| `main`, `master`, `release-preview` | `Prod` | `DysonProd` |
 | `develop`, `test`, `testing` | `Test` | `DysonTest` |
 | anything else / no git | `Dev` | `DysonDev` |
+
+`release-preview` shares **Prod** app data with `master`/`main`; the release **channel** (`stable` / `preview` in `version.json`) is independent of Dev/Test/Prod — see [packaging/releases.md](../packaging/releases.md).
 
 ## Platform paths (`DysonAppPaths`)
 

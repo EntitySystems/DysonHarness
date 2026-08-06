@@ -164,6 +164,13 @@ code, .mono {
   gap: 8px;
 }
 
+.sidebar__brand-start {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .sidebar__title {
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -192,7 +199,7 @@ code, .mono {
   grid-template-columns: 48px 1fr 300px;
 }
 
-.app-shell--sidebar-collapsed .sidebar__title,
+.app-shell--sidebar-collapsed .sidebar__brand-start,
 .app-shell--sidebar-collapsed .sidebar__section,
 .app-shell--sidebar-collapsed .sidebar__footer {
   display: none;

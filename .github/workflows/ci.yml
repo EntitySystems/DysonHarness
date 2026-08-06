@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [master]
+    branches: [master, release-preview]
   push:
-    branches-ignore: [master]
+    branches-ignore: [master, release-preview]
 
 jobs:
   test:

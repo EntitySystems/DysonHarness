@@ -2,7 +2,7 @@ name: Continuous release
 
 on:
   push:
-    branches: [master]
+    branches: [master, release-preview]
   workflow_dispatch:
 
 permissions:
@@ -11,23 +11,30 @@ permissions:
 jobs:
   version:
     name: Version
-    # Defense in depth: push is already master-only; also block workflow_dispatch on other refs.
-    if: github.ref == 'refs/heads/master'
+    # Defense in depth: push is already branch-filtered; also block workflow_dispatch on other refs.
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/release-preview'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.calver.outputs.version }}
       short_sha: ${{ steps.calver.outputs.short_sha }}
+      channel: ${{ steps.calver.outputs.channel }}
     steps:
-      - name: Compute CalVer
+      - name: Compute CalVer + channel
         id: calver
         run: |
           YEAR=$(date -u +%Y)
           MONTH=$((10#$(date -u +%m)))
           VERSION="${YEAR}.${MONTH}.${GITHUB_RUN_NUMBER}"
           SHORT_SHA="${GITHUB_SHA:0:7}"
+          if [[ "${GITHUB_REF_NAME}" == "master" ]]; then
+            CHANNEL="stable"
+          else
+            CHANNEL="preview"
+          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-          echo "VERSION=${VERSION} InformationalVersion=${VERSION}+${SHORT_SHA}"
+          echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
+          echo "VERSION=${VERSION} InformationalVersion=${VERSION}+${SHORT_SHA} channel=${CHANNEL}"
 
   test:
     name: Test (Release)
@@ -65,6 +72,7 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
       SHORT_SHA: ${{ needs.version.outputs.short_sha }}
+      CHANNEL: ${{ needs.version.outputs.channel }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -92,6 +100,7 @@ jobs:
             -p:PublishSingleFile=false \
             -p:Version="${VERSION}" \
             -p:InformationalVersion="${VERSION}+${SHORT_SHA}" \
+            -p:DysonReleaseChannel="${CHANNEL}" \
             -o "$OUT"
 
       - name: Zip (Windows)
@@ -122,7 +131,7 @@ jobs:
           $parts = $env:VERSION -split '\.'
           if ($parts.Count -lt 3) { throw "Unexpected VERSION '$env:VERSION' (want YYYY.M.N)" }
           $msiProductVersion = "{0}.{1}.{2}" -f ([int]$parts[0] % 100), [int]$parts[1], [int]$parts[2]
-          Write-Host "CalVer=$env:VERSION MSI ProductVersion=$msiProductVersion"
+          Write-Host "CalVer=$env:VERSION MSI ProductVersion=$msiProductVersion channel=$env:CHANNEL"
           dotnet build packaging/wix/DysonHarness.Installer.wixproj -c Release `
             -p:Version=$env:VERSION `
             -p:ProductVersion=$msiProductVersion `
@@ -144,12 +153,13 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Continuous pre-release
+    name: Publish ${{ needs.version.outputs.channel }} release
     needs: [version, publish]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.version.outputs.version }}
       SHORT_SHA: ${{ needs.version.outputs.short_sha }}
+      CHANNEL: ${{ needs.version.outputs.channel }}
     steps:
       # gh release create needs a git checkout to create/move the tag.
       - name: Checkout
@@ -166,7 +176,7 @@ jobs:
         run: ls -la release-assets
 
       # Immutable releases burn each tag forever after publish — use unique CalVer tags.
-      - name: Publish continuous pre-release
+      - name: Publish continuous release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -185,12 +195,21 @@ jobs:
             exit 1
           fi
 
+          if [[ "${CHANNEL}" == "stable" ]]; then
+            TRACK_LABEL="Stable"
+            NOTES_BLURB="Stable continuous build of DysonHarness (self-contained)."
+          else
+            TRACK_LABEL="Preview"
+            NOTES_BLURB="Preview continuous build of DysonHarness (self-contained, pre-release)."
+          fi
+
           cat > "${RUNNER_TEMP}/continuous-notes.md" <<EOF
-          Continuous build of DysonHarness (self-contained).
+          ${NOTES_BLURB}
 
           | | |
           |---|---|
           | **Version** | \`${VERSION}\` |
+          | **Channel** | \`${CHANNEL}\` |
           | **Commit** | \`${GITHUB_SHA}\` (\`${SHORT_SHA}\`) |
           | **Workflow** | ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} |
 
@@ -198,12 +217,17 @@ jobs:
           EOF
           sed -i 's/^          //' "${RUNNER_TEMP}/continuous-notes.md"
 
-          echo "Creating pre-release ${VERSION}"
+          PRERELEASE_ARGS=()
+          if [[ "${CHANNEL}" == "preview" ]]; then
+            PRERELEASE_ARGS=(--prerelease)
+          fi
+
+          echo "Creating ${CHANNEL} release ${VERSION}"
           gh release create "${VERSION}" \
             --target "${GITHUB_SHA}" \
-            --title "Continuous build ${VERSION}" \
+            --title "${TRACK_LABEL} build ${VERSION}" \
             --notes-file "${RUNNER_TEMP}/continuous-notes.md" \
-            --prerelease \
+            "${PRERELEASE_ARGS[@]}" \
             "${assets[@]}"
 
           echo "Published assets:"
