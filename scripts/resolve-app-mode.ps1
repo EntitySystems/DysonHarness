@@ -9,7 +9,7 @@ $ErrorActionPreference = "Continue"
 
 function Get-ModeFromBranch([string]$BranchName) {
     switch ($BranchName.ToLowerInvariant()) {
-        { $_ -in @("main", "master") } { return "Prod" }
+        { $_ -in @("main", "master", "release-preview") } { return "Prod" }
         { $_ -in @("develop", "test", "testing") } { return "Test" }
         default { return "Dev" }
     }

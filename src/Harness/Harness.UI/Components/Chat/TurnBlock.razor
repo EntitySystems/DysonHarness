@@ -12,7 +12,9 @@
          @oncontextmenu="OnContextMenu"
          @oncontextmenu:preventDefault="true"
          @oncontextmenu:stopPropagation="true">
-    <header class="turn-block__header"
+    <div @ref="_stickySentinel" class="turn-block__sticky-sentinel" aria-hidden="true"></div>
+    <header @ref="_headerEl"
+            class="turn-block__header"
             role="button"
             tabindex="0"
             aria-expanded="@IsExpanded"
@@ -139,7 +141,7 @@
 
         @if (Turn.Kind != DysonAgentTurnKind.DisplayInfo
              && Turn.Kind != DysonAgentTurnKind.ModeSwitch
-             && (HasAssistantBody || HasReasoning || HasTools))
+             && (HasAssistantBody || HasReasoning || HasTools || ShowThinkingIdleDots))
         {
             <div @ref="_contentEl" class="turn-block__content">
                 <div class="turn-block__main">
@@ -262,6 +264,13 @@
                     {
                         <div class="turn-block__body">@MarkdownRenderer.ToHtml(Turn.AssistantText)</div>
                     }
+
+                    @if (ShowThinkingIdleDots)
+                    {
+                        <div class="turn-block__thinking-idle" role="status" aria-label="Waiting for model">
+                            <span></span><span></span><span></span>
+                        </div>
+                    }
                 </div>
 
                 @if (HasTools)
@@ -317,9 +326,12 @@
 }
 
 @code {
+    private ElementReference _stickySentinel;
+    private ElementReference _headerEl;
     private ElementReference _contentEl;
     private ElementReference _resizerEl;
     private DotNetObjectReference<TurnBlock>? _dotNetRef;
+    private bool _stickyAttached;
     private bool _resizerAttached;
     private readonly HashSet<string> _expandedKeys = new(StringComparer.Ordinal);
     private string? _expandPolicyFingerprint;
@@ -387,6 +399,30 @@
                 return true;
 
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Animated idle dots under the thought column while the live turn is busy
+    /// but neither reasoning nor reply text is currently streaming.
+    /// </summary>
+    private bool ShowThinkingIdleDots
+    {
+        get
+        {
+            if (!(SessionBusy && IsLatestTurn))
+                return false;
+
+            if (Turn.IsReasoningStreaming && !string.IsNullOrEmpty(Turn.ReasoningStreamingPreview))
+                return false;
+
+            if (Turn.IsStreaming && !string.IsNullOrEmpty(Turn.StreamingPreview))
+                return false;
+
+            if (!string.IsNullOrWhiteSpace(Turn.AssistantText))
+                return false;
+
+            return true;
         }
     }
 
@@ -571,6 +607,8 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        await EnsureStickyHeaderAsync();
+
         if (!IsExpanded || !HasTools)
         {
             await DetachResizerAsync();
@@ -582,6 +620,42 @@
             _dotNetRef ??= DotNetObjectReference.Create(this);
             await Js.InvokeVoidAsync("dysonToolsCol.attach", _resizerEl, _contentEl, _dotNetRef);
             _resizerAttached = true;
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private async Task EnsureStickyHeaderAsync()
+    {
+        if (_stickyAttached)
+            return;
+
+        try
+        {
+            await Js.InvokeVoidAsync("dysonStickyHeader.attach", _stickySentinel, _headerEl);
+            _stickyAttached = true;
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private async Task DetachStickyHeaderAsync()
+    {
+        if (!_stickyAttached)
+            return;
+
+        _stickyAttached = false;
+        try
+        {
+            await Js.InvokeVoidAsync("dysonStickyHeader.detach", _headerEl);
         }
         catch (JSException)
         {
@@ -619,6 +693,7 @@
 
     public async ValueTask DisposeAsync()
     {
+        await DetachStickyHeaderAsync();
         await DetachResizerAsync();
         _dotNetRef?.Dispose();
         _dotNetRef = null;

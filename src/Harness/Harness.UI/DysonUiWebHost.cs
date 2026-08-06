@@ -125,6 +125,17 @@ public static class DysonUiWebHost
         builder.Services.AddScoped<ConfirmDialogService>();
         builder.Services.AddSingleton<DysonFileTreeService>();
         builder.Services.AddSingleton<DysonGitChangesService>();
+        builder.Services.AddHttpClient(DysonGitHubReleaseClient.HttpClientName, client =>
+        {
+            // Same client streams the MSI, so the default 100s timeout is far too short.
+            client.Timeout = TimeSpan.FromMinutes(20);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("DysonHarness/1.0");
+        });
+        builder.Services.AddSingleton(sp =>
+        {
+            var factory = sp.GetRequiredService<IHttpClientFactory>();
+            return new DysonAppUpdateService(factory.CreateClient(DysonGitHubReleaseClient.HttpClientName));
+        });
 
         if (hostingMode == DysonHostingMode.Cloud)
             builder.Services.AddScoped<CircuitHandler, DysonCloudSubjectCircuitHandler>();
