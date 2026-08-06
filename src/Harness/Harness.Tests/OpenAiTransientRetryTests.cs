@@ -15,6 +15,7 @@ public class OpenAiTransientRetryTests
     {
         AssertTransientClassifier();
         AssertRetrySucceedsAfterTwo503s();
+        AssertRetrySucceedsAfterStreamReadFail();
         AssertRetryExhaustionPreserves503();
     }
 
@@ -34,10 +35,19 @@ public class OpenAiTransientRetryTests
         Expect("OpenAI API 429 Too Many Requests: rate", true);
         Expect("OpenAI API 502 Bad Gateway: x", true);
         Expect("OpenAI API 504 Gateway Timeout: x", true);
-        Expect("OpenAI API 400 Bad Request: no", false);
-        Expect("OpenAI API 500 Internal Server Error: x", false);
+        Expect("OpenAI API 400 Bad Request: no", true);
+        Expect("OpenAI API 500 Internal Server Error: x", true);
+        Expect("OpenAI API 401 Unauthorized: no", false);
+        Expect("OpenAI API 403 Forbidden: no", false);
         Expect("OpenAI API request was cancelled.", false);
-        Expect("OpenAI API HTTP error: connection reset", false);
+        Expect("OpenAI API stream was cancelled.", false);
+        Expect("OpenAI API HTTP error: connection reset", true);
+        Expect("OpenAI API stream read failed: disconnect", true);
+        Expect("OpenAI API request failed: boom", true);
+        Expect("OpenAI API returned a non-object JSON payload.", true);
+        Expect("Invalid JSON from OpenAI API: bad token", true);
+        Expect("OpenAI Responses stream error: mid-stream", true);
+        Expect("OpenAI stream ended without a completed reply.", true);
         Expect("OpenAI stream was cancelled.", false);
         Expect(null, false);
         Expect("", false);
@@ -76,6 +86,61 @@ public class OpenAiTransientRetryTests
                 || !logs.Contains("OpenAI transient 503 — retry 2/4 after 0s", StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("Expected two transient retry log lines.\n" + logs);
+            }
+
+            var turn = session.Turns[^1];
+            if (turn.AssistantText is null
+                || turn.AssistantText.IndexOf("Done", StringComparison.Ordinal) < 0)
+            {
+                throw new InvalidOperationException(
+                    $"Expected assistant body with Done; got '{turn.AssistantText ?? "null"}'.");
+            }
+        }
+        finally
+        {
+            OpenAiCompatibleAgentSession.TransientRetryBackoffMs = prior;
+            try
+            {
+                Directory.Delete(workDir, recursive: true);
+            }
+            catch
+            {
+                // best-effort temp cleanup
+            }
+        }
+    }
+
+    private static void AssertRetrySucceedsAfterStreamReadFail()
+    {
+        var prior = OpenAiCompatibleAgentSession.TransientRetryBackoffMs;
+        OpenAiCompatibleAgentSession.TransientRetryBackoffMs = [0, 0, 0, 0];
+        var workDir = Path.Combine(Path.GetTempPath(), "dyson-transient-readfail-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var handler = new SequencingHandler(
+            [
+                CompletionsSseStreamReadFail,
+                CompletionsSseSuccess,
+            ]);
+            using var http = new HttpClient(handler);
+            var session = CreateSession(http, workDir);
+
+            var result = session.PromptAsync("# Hi\n\nping").GetAwaiter().GetResult();
+            if (result.IsError)
+                throw new InvalidOperationException("Expected success after stream-read retry: " + result.Error);
+
+            if (handler.PostCount != 2)
+            {
+                throw new InvalidOperationException(
+                    $"Expected 2 Completions posts (stream-read-fail + success), got {handler.PostCount}.");
+            }
+
+            var logs = string.Join('\n', session.SnapshotLog());
+            if (!logs.Contains("OpenAI transient error — retry 1/4 after 0s", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Expected transient retry log after stream read fail.\n" + logs);
             }
 
             var turn = session.Turns[^1];
@@ -205,6 +270,35 @@ public class OpenAiTransientRetryTests
         {
             Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
         };
+    }
+
+    private static HttpResponseMessage CompletionsSseStreamReadFail() =>
+        new(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(new ThrowingReadStream()),
+        };
+
+    /// <summary>Throws on first read so SSE parsing surfaces stream-read-failed.</summary>
+    private sealed class ThrowingReadStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => 0;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() { }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new IOException("simulated disconnect");
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private sealed class SequencingHandler(IReadOnlyList<Func<HttpResponseMessage>> responses) : HttpMessageHandler

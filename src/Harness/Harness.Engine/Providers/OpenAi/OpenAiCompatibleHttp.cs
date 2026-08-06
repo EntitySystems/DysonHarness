@@ -109,34 +109,49 @@ public static class OpenAiCompatibleHttp
     }
 
     /// <summary>
-    /// True for OpenAI-compatible HTTP errors that are safe to retry on a fresh stream request:
-    /// rate limit (429) and gateway/upstream (502/503/504). Matches leading
-    /// <c>OpenAI API {code}</c> from <see cref="ReadSseJsonPayloadsAsync"/> / SendJsonAsync.
+    /// True when an OpenAI stream/endpoint error should auto-retry on a fresh request.
+    /// Retries known OpenAI error shapes (HTTP statuses, transport, stream read, incomplete SSE,
+    /// Responses stream errors) except <c>401</c>/<c>403</c> and cancellations.
     /// </summary>
     public static bool IsTransientServerError(string? error)
     {
         if (string.IsNullOrEmpty(error))
             return false;
 
-        const string prefix = "OpenAI API ";
-        if (!error.StartsWith(prefix, StringComparison.Ordinal))
+        if (error.Contains("cancelled", StringComparison.Ordinal))
             return false;
 
-        var rest = error.AsSpan(prefix.Length);
-        if (rest.Length < 3
-            || !char.IsDigit(rest[0])
-            || !char.IsDigit(rest[1])
-            || !char.IsDigit(rest[2]))
+        const string apiPrefix = "OpenAI API ";
+        if (error.StartsWith(apiPrefix, StringComparison.Ordinal))
         {
-            return false;
+            var rest = error.AsSpan(apiPrefix.Length);
+            if (rest.Length >= 3
+                && char.IsDigit(rest[0])
+                && char.IsDigit(rest[1])
+                && char.IsDigit(rest[2])
+                && (rest.Length == 3 || !char.IsDigit(rest[3])))
+            {
+                var code = (rest[0] - '0') * 100 + (rest[1] - '0') * 10 + (rest[2] - '0');
+                return code is not (401 or 403);
+            }
+
+            return rest.StartsWith("HTTP error", StringComparison.Ordinal)
+                || rest.StartsWith("stream read failed", StringComparison.Ordinal)
+                || rest.StartsWith("request failed", StringComparison.Ordinal)
+                || rest.StartsWith("returned a non-object", StringComparison.Ordinal);
         }
 
-        // Require a non-digit boundary after the three digits (space in "503 Service…").
-        if (rest.Length > 3 && char.IsDigit(rest[3]))
-            return false;
+        // SendJsonAsync uses this wording (not the "OpenAI API …" prefix).
+        if (error.StartsWith("Invalid JSON from OpenAI API", StringComparison.Ordinal))
+            return true;
 
-        var code = (rest[0] - '0') * 100 + (rest[1] - '0') * 10 + (rest[2] - '0');
-        return code is 429 or 502 or 503 or 504;
+        if (error.StartsWith("OpenAI Responses stream error", StringComparison.Ordinal))
+            return true;
+
+        if (error.StartsWith("OpenAI stream ended without a completed reply.", StringComparison.Ordinal))
+            return true;
+
+        return false;
     }
 
     /// <summary>
