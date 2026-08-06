@@ -25,8 +25,8 @@ public class DysonToolCallUiTests
         var writeSummary = DysonToolCallUi.GetCollapsedSummary("WriteFile", writeArgs, null, hasResult: false);
         if (!writeSummary.HasLineDelta || writeSummary.LinesAdded != 6 || writeSummary.LinesRemoved != 4)
             throw new InvalidOperationException("WriteFile collapsed summary must expose line deltas.");
-        if (!string.IsNullOrEmpty(writeSummary.Text))
-            throw new InvalidOperationException("WriteFile collapsed summary must not include path text.");
+        if (writeSummary.Text != "A.cs")
+            throw new InvalidOperationException("WriteFile collapsed summary must include truncated basename.");
 
         var shellArgs = """{"shell":"pwsh","command":"dotnet build","workingDirectory":"src"}""";
         var shellResult =

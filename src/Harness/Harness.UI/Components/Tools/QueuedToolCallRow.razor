@@ -10,9 +10,13 @@
             @onclick="ToggleExpanded">
         <span class="tool-row__lead">
             <span class="tool-row__name mono">@Call.ToolName</span>
-            @if (_summary.HasLineDelta)
+            @if (!string.IsNullOrEmpty(_summary.Text) || _summary.HasLineDelta)
             {
                 <span class="tool-row__summary">
+                    @if (!string.IsNullOrEmpty(_summary.Text))
+                    {
+                        <span class="mono">@_summary.Text</span>
+                    }
                     @if (_summary.LinesAdded is int added)
                     {
                         <span class="tool-delta tool-delta--add">+@added</span>
@@ -22,10 +26,6 @@
                         <span class="tool-delta tool-delta--del">−@removed</span>
                     }
                 </span>
-            }
-            else if (!string.IsNullOrEmpty(_summary.Text))
-            {
-                <span class="tool-row__summary mono">@_summary.Text</span>
             }
         </span>
         <span class="tool-status queued" data-status-short="QUE">Queued</span>

@@ -1,20 +1,27 @@
 # Continuous releases
 
-Every push to `master` publishes self-contained zips (all RIDs) and a Windows **MSI** (`win-x64`) as a GitHub **pre-release** tagged with that run’s CalVer (`YYYY.M.run_number`). Pushes to other branches (for example `dev-bleeding-edge`) do not run continuous release.
+Continuous publishing has two tracks:
+
+| Git branch | Channel (`version.json`) | GitHub release |
+| ---------- | ------------------------ | -------------- |
+| `master` | `stable` | Full release (not pre-release) |
+| `release-preview` | `preview` | Pre-release (`--prerelease`) |
+
+Every push to either branch publishes self-contained zips (all RIDs) and a Windows **MSI** (`win-x64`) tagged with that run’s CalVer (`YYYY.M.run_number`). Pushes to other branches (for example `dev-bleeding-edge`) do not run continuous release.
 
 | RID | Publish project | Entrypoint |
 | --- | --------------- | ---------- |
 | `win-x64` | `DysonHarness.UI.Windows` | `DysonHarness.exe` (CefSharp WPF shell hosting Blazor in-process) |
 | `linux-x64` / `osx-*` | `Harness.UI` | `Harness.UI` |
 
-Pull requests to `master` and pushes to non-`master` branches run tests only (see [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)); they do not publish artifacts. Manual **workflow_dispatch** of continuous release is also limited to `master`.
+Pull requests to `master` / `release-preview` and pushes to other branches run tests only (see [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)); they do not publish artifacts. Manual **workflow_dispatch** of continuous release is limited to those two refs.
 
-> **Note:** This repo has [immutable releases](https://docs.github.com/en/repositories/releasing-projects-on-github/immutable-releases) enabled, so a fixed rolling tag like `continuous` cannot be reused after the first publish. Each build gets a unique CalVer tag instead.
+> **Note:** This repo has [immutable releases](https://docs.github.com/en/repositories/releasing-projects-on-github/immutable-releases) enabled, so a fixed rolling tag like `continuous` cannot be reused after the first publish. Each build gets a unique CalVer tag instead. Stable and preview share the same CalVer scheme (no separate numbering per track).
 
 ## Download
 
 - Releases: https://github.com/EntitySystems/DysonHarness/releases
-- Newest continuous build (example): https://github.com/EntitySystems/DysonHarness/releases/tag/2026.7.7
+- Prefer the latest **stable** (non-prerelease) MSI for production installs; preview builds are marked as GitHub pre-releases
 - Asset names: `DysonHarness-{version}-{rid}.zip` (all RIDs); `DysonHarness-{version}-win-x64.msi` (Windows installer)
 
 | RID | Runner / OS | Notes |
@@ -35,6 +42,46 @@ Example: `2026.7.142`
 - Git tag and release title version segment use the same CalVer
 - Stamped as `-p:Version=…`
 - `InformationalVersion` appends `+{shortSha}` (not in the zip filename)
+- Channel stamped as `-p:DysonReleaseChannel=stable|preview` (from the publishing branch)
+
+### `version.json`
+
+`DysonHarness.UI.Windows` writes `version.json` next to `DysonHarness.exe` at build time (MSBuild target `GenerateVersionJson` → [`scripts/write-version-json.ps1`](../../scripts/write-version-json.ps1) / [`.sh`](../../scripts/write-version-json.sh), mirroring the `GenerateAppMode` pattern). It rides along in the publish folder → zip → MSI harvest. CI passes `-p:DysonReleaseChannel=…`; local builds leave the property empty and the script derives channel from `GITHUB_REF_NAME` / the current git branch (`master`/`main` → `stable`, `release-preview` → `preview`, else `preview`).
+
+```json
+{
+  "version": "2026.8.142",
+  "informationalVersion": "2026.8.142+abc1234",
+  "channel": "preview",
+  "rid": "win-x64",
+  "repo": "EntitySystems/DysonHarness"
+}
+```
+
+Unstamped local builds fall back to `1.0.0`, which disables the in-app updater (and omits the sidebar channel badge).
+
+## In-app updater (Windows)
+
+The Windows shell checks for a newer build on the **same channel** once per process, shortly after the UI is ready.
+
+1. `DysonAppVersionInfo` reads `version.json` from `AppContext.BaseDirectory` (assembly `InformationalVersion` as fallback). The updater only runs on Windows and only when the CalVer year is ≥ 2026 — dev builds (`1.0.0`) never check. Missing/unknown `channel` defaults to `preview`.
+2. `DysonGitHubReleaseClient` calls `GET /repos/{repo}/releases?per_page=15` and picks the highest-CalVer non-draft release whose `prerelease` flag matches the local channel (`preview` → prerelease only; `stable` → non-prerelease only) and that carries a `*-win-x64.msi` asset. (`/latest` is not used — it only surfaces non-prereleases, so preview builds would never see updates.)
+3. If that tag is strictly newer, `UpdateAvailableModal` prompts with local vs remote version. **Not now** / Escape / backdrop persist the tag in `app_settings` under `ui_update_skipped_version`, so the prompt only returns for a newer release.
+4. **Update** streams the MSI to `%TEMP%` with a byte progress bar (modal locks — no dismiss), then runs `cmd /c ping -n 4 127.0.0.1 >nul & msiexec /i "<msi>"` and calls `Environment.Exit(0)`. The short delay plus process exit releases CEF/WPF file locks before the WiX major upgrade replaces `%LocalAppData%\Programs\DysonHarness`. (`ping` rather than `timeout`: a `WinExe` host has no console and `timeout` aborts without one.)
+
+Download or hand-off failures unlock the modal with the message and a **Close** button — the install is never forced. Types live in [`Harness.UI/Services`](../../src/Harness/Harness.UI/Services); parsing Facts are in `DysonAppUpdateTests`.
+
+Stable and preview share the same MSI ProductCode / major-upgrade path — operators on one track update within that track; side-by-side stable+preview installs are not supported.
+
+## Website download contract
+
+Patch instructions for [dysonharness.com](https://dysonharness.com) (Website repo — **not** edited in this workspace):
+
+1. **Stable only on the marketing download card.** Prefer `GET https://api.github.com/repos/EntitySystems/DysonHarness/releases/latest` (GitHub’s latest **non-prerelease**), or when listing releases filter `prerelease === false`, `draft === false`, asset `DysonHarness-*-win-x64.msi`, then sort by CalVer or `published_at`.
+2. **Do not** use “newest including pre-release” logic in `site.js` for the primary installer card.
+3. Label: e.g. “Stable release” (drop “Continuous build — pre-release” on that card).
+4. Optional: separate “Preview builds” link to `https://github.com/EntitySystems/DysonHarness/releases` (GitHub’s pre-release UI) — not required for the primary CTA.
+5. Cache key: bump `dh-windows-msi-v1` → `dh-windows-msi-stable-v1` so old cached prerelease URLs are not reused.
 
 ## Run
 
@@ -42,7 +89,7 @@ Example: `2026.7.142`
 2. **Windows (portable):** download the `win-x64` zip, unzip, and run `DysonHarness.exe` (desktop CEF shell; no separate browser URL needed).
 3. **Linux / macOS:** download the zip for your RID, unzip, run `Harness.UI`, and open the agent shell URL printed in the console (default http://localhost:5180) if the browser does not open automatically.
 
-Builds on `master` resolve app mode to **Prod** (`DysonProd` app data) via `GITHUB_REF_NAME` in the resolve-app-mode scripts — see [storage/models.md](../storage/models.md).
+Builds on `master` and `release-preview` resolve app mode to **Prod** (`DysonProd` app data) via `GITHUB_REF_NAME` in the resolve-app-mode scripts — channel is independent of Dev/Test/Prod. See [storage/models.md](../storage/models.md).
 
 ## Windows notes
 

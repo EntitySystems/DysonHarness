@@ -164,6 +164,13 @@ code, .mono {
   gap: 8px;
 }
 
+.sidebar__brand-start {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .sidebar__title {
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -192,7 +199,7 @@ code, .mono {
   grid-template-columns: 48px 1fr 300px;
 }
 
-.app-shell--sidebar-collapsed .sidebar__title,
+.app-shell--sidebar-collapsed .sidebar__brand-start,
 .app-shell--sidebar-collapsed .sidebar__section,
 .app-shell--sidebar-collapsed .sidebar__footer {
   display: none;
@@ -1020,6 +1027,30 @@ code, .mono {
   gap: 8px;
   padding: 12px 14px;
   border-top: 1px solid var(--border);
+}
+
+.confirm-dialog__progress {
+  margin-top: 12px;
+}
+
+.confirm-dialog__progress-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+
+.confirm-dialog__progress-bar {
+  height: 100%;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+.confirm-dialog__progress-text {
+  margin: 6px 0 0;
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .confirm-dialog__confirm--danger {
@@ -2225,6 +2256,8 @@ code, .mono {
 }
 
 .turn-block {
+  --turn-header-sticky-offset: 52px;
+  position: relative;
   border: 1px solid var(--border);
   border-radius: 5px;
   background: var(--bg-1);
@@ -2233,7 +2266,8 @@ code, .mono {
   flex-shrink: 0;
 }
 
-.turn-block > :first-child {
+/* Sentinel is first in DOM (absolute); radius targets the real chrome. */
+.turn-block > .turn-block__header {
   border-top-left-radius: 5px;
   border-top-right-radius: 5px;
 }
@@ -2241,6 +2275,20 @@ code, .mono {
 .turn-block > :last-child {
   border-bottom-left-radius: 5px;
   border-bottom-right-radius: 5px;
+}
+
+/* Zero-layout marker above sticky header for IntersectionObserver stuck detection. */
+.turn-block__sticky-sentinel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
 }
 
 .turn-block__header {
@@ -2252,11 +2300,32 @@ code, .mono {
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
   cursor: pointer;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+/* Stuck-only: bubble separation while pinned over scrolling turn body. */
+.turn-block__header--stuck {
+  top: 6px;
+  margin-inline: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-3);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+}
+
+.turn-block:has(.turn-block__header--stuck) {
+  --turn-header-sticky-offset: 58px;
 }
 
 .turn-block--collapsed .turn-block__header {
   border-bottom: none;
   padding: 6px 10px;
+}
+
+.turn-block--collapsed .turn-block__header--stuck {
+  border: 1px solid var(--border-strong);
 }
 
 .turn-block__icons {
@@ -2628,7 +2697,7 @@ code, .mono {
   display: flex;
   flex-direction: column;
   position: sticky;
-  top: 0;
+  top: var(--turn-header-sticky-offset);
   align-self: flex-start;
   z-index: 1;
   background: var(--bg-1);
@@ -2644,6 +2713,42 @@ code, .mono {
   flex-direction: column;
   gap: 2px;
   margin: 6px 10px 0;
+}
+
+.turn-block__thinking-idle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 8px 10px 4px 20px;
+  min-height: 12px;
+}
+
+.turn-block__thinking-idle span {
+  display: block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  animation: turn-block-thinking-idle 1.2s ease-in-out infinite;
+}
+
+.turn-block__thinking-idle span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.turn-block__thinking-idle span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes turn-block-thinking-idle {
+  0%, 80%, 100% {
+    transform: scale(0.55);
+    opacity: 0.4;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 .turn-block__reasoning {
@@ -2702,7 +2807,7 @@ code, .mono {
   padding: 10px;
   box-sizing: border-box;
   position: sticky;
-  top: 0;
+  top: var(--turn-header-sticky-offset);
   align-self: flex-start;
   z-index: 1;
   background: var(--bg-1);

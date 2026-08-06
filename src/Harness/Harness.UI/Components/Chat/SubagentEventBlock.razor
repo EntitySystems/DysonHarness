@@ -1,8 +1,12 @@
 @namespace Harness.UI.Components.Chat
 @using Harness.UI.Demo
+@implements IAsyncDisposable
+@inject IJSRuntime Js
 
 <article class="turn-block subagent-event-block @(_expanded ? null : "turn-block--collapsed") @(Item.IsAddressed ? "is-addressed" : null)">
-    <header class="turn-block__header"
+    <div @ref="_stickySentinel" class="turn-block__sticky-sentinel" aria-hidden="true"></div>
+    <header @ref="_headerEl"
+            class="turn-block__header"
             role="button"
             tabindex="0"
             aria-expanded="@_expanded"
@@ -45,6 +49,9 @@
 </article>
 
 @code {
+    private ElementReference _stickySentinel;
+    private ElementReference _headerEl;
+    private bool _stickyAttached;
     private bool _expanded;
 
     [Parameter, EditorRequired] public DysonSubagentEventUiItem Item { get; set; } = default!;
@@ -55,6 +62,42 @@
     {
         if (e.Key is "Enter" or " ")
             Toggle();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_stickyAttached)
+            return;
+
+        try
+        {
+            await Js.InvokeVoidAsync("dysonStickyHeader.attach", _stickySentinel, _headerEl);
+            _stickyAttached = true;
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (!_stickyAttached)
+            return;
+
+        _stickyAttached = false;
+        try
+        {
+            await Js.InvokeVoidAsync("dysonStickyHeader.detach", _headerEl);
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
     }
 
     private static string ShortId(Guid id) => id.ToString("N")[..8];

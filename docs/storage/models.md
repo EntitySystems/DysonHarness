@@ -22,9 +22,11 @@ Prebuild scripts (`scripts/resolve-app-mode.sh` / `.ps1`) and MSBuild `GenerateA
 
 | Git branch | `DysonAppMode` | App-data folder |
 | ---------- | -------------- | --------------- |
-| `main`, `master` | `Prod` | `DysonProd` |
+| `main`, `master`, `release-preview` | `Prod` | `DysonProd` |
 | `develop`, `test`, `testing` | `Test` | `DysonTest` |
 | anything else / no git | `Dev` | `DysonDev` |
+
+`release-preview` shares **Prod** app data with `master`/`main`; the release **channel** (`stable` / `preview` in `version.json`) is independent of Dev/Test/Prod — see [packaging/releases.md](../packaging/releases.md).
 
 ## Platform paths (`DysonAppPaths`)
 
@@ -76,6 +78,9 @@ Subject-scoped key/value (`DysonAppSettingEntity`). Callers use `IDysonSubjectSe
 Known keys (`DysonAppSettingKeys`):
 - `web_search_summarizer_model_slug_id` — Guid string of the model slug for web-search/fetch summarization; empty / missing ⇒ session model.
 - `tool_panel_width_percent` — chat tools column width as a percent of the turn content row (clamped 12–50, default 30); empty / missing ⇒ 30.
+- `ui_rail_open` — `"true"` / `"false"`; right rail (files/git) open preference. Restored on desktop AppShell hydrate; narrow viewports still start with the rail closed (drawer UX) and re-apply this preference when returning to desktop. Intentional toggles (header button / backdrop close) persist. Missing ⇒ `"true"`.
+- `ui_sidebar_open` — `"true"` / `"false"`; left sidebar open vs collapsed. Restored on AppShell hydrate; toggles persist. Missing ⇒ `"true"`.
+
 - `agent_mode_tool_policy` — JSON `DysonToolPolicyDocument`: `modes.{Mode}.disabledTools` string arrays (denylist); optional `models.{slugGuid}.modes.{Mode}.disabledTools` plumbing for future per-model overlays (resolver ignores `models` in v1). Missing document / mode ⇒ all tools enabled. Edited via Settings → Agent modes (`DysonToolPolicyStore`).
 - `end_of_task_auto_review` — `"true"` / `"false"`; when true, a reviewer agent should auto-run after task completion (persist only for now — no reviewer spawn yet). Missing / other ⇒ off. Edited via Settings → Agent behavior.
 - `self_review_intensity` — `"low"` / `"medium"` / `"high"`; how thoroughly the agent reviews its own work (persist only for now — engine does not read this yet). Missing / other ⇒ `"medium"`. Settings UI currently disables selecting `"high"`. Edited via Settings → Agent behavior.

@@ -1,7 +1,14 @@
 @namespace Harness.UI.Components.Shell
+@using Harness.UI.Services
 
 <div class="sidebar__brand">
-    <div class="sidebar__title">DysonHarness</div>
+    <div class="sidebar__brand-start">
+        <div class="sidebar__title">DysonHarness</div>
+        @if (_channelBadge is not null)
+        {
+            <span class="badge mono">@_channelBadge</span>
+        }
+    </div>
     @if (Shell is not null)
     {
         <button type="button"
@@ -45,6 +52,8 @@
     [CascadingParameter] public AppShell? Shell { get; set; }
     [Parameter] public RenderFragment? WorkDirectory { get; set; }
     [Parameter] public RenderFragment? SessionList { get; set; }
+
+    private readonly string? _channelBadge = DysonAppVersionInfo.Local.ChannelBadge;
 
     private void ToggleSidebar() => Shell?.ToggleSidebar();
 }

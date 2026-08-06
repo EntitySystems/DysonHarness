@@ -11,7 +11,7 @@ mode=""
 
 mode_from_branch() {
   case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
-    main|master) printf 'Prod' ;;
+    main|master|release-preview) printf 'Prod' ;;
     develop|test|testing) printf 'Test' ;;
     *) printf 'Dev' ;;
   esac

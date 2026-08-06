@@ -1,5 +1,6 @@
 @namespace Harness.UI.Components.Shell
 @inject IJSRuntime Js
+@inject IDysonSubjectSettingsRepository AppSettings
 @implements IAsyncDisposable
 
 <CascadingValue Value="this" IsFixed="true">
@@ -37,6 +38,8 @@
 
     private bool _railOpen = true;
     private bool _sidebarOpen = true;
+    /// <summary>Last loaded/saved rail preference; used when leaving the narrow drawer.</summary>
+    private bool _savedRailOpen = true;
     private bool _hydrated;
     private bool _narrow;
     private DotNetObjectReference<AppShell>? _selfRef;
@@ -71,7 +74,9 @@
         try
         {
             _narrow = await Js.InvokeAsync<bool>("dysonUi.isNarrow", NarrowBreakpointPx);
-            _railOpen = !_narrow;
+            await LoadChromePrefsAsync();
+            // Desktop: restore saved rail. Narrow: closed drawer (avoid overlay flash).
+            _railOpen = _narrow ? false : _savedRailOpen;
             _selfRef = DotNetObjectReference.Create(this);
             _viewport = await Js.InvokeAsync<IJSObjectReference>(
                 "dysonUi.watchNarrow",
@@ -80,9 +85,10 @@
         }
         catch (JSException)
         {
-            // Keep desktop-expanded default if JS is unavailable.
+            // Keep desktop-expanded defaults if JS is unavailable.
             _narrow = false;
-            _railOpen = true;
+            await LoadChromePrefsAsync();
+            _railOpen = _savedRailOpen;
         }
 
         _hydrated = true;
@@ -96,20 +102,31 @@
             return;
 
         _narrow = narrow;
-        // Crossing the breakpoint resets to the viewport default.
-        _railOpen = !narrow;
+        if (narrow)
+        {
+            // Drawer default: close without overwriting the saved desktop preference.
+            _railOpen = false;
+        }
+        else
+        {
+            _railOpen = _savedRailOpen;
+        }
+
         _ = InvokeAsync(StateHasChanged);
     }
 
     public void ToggleRail()
     {
         _railOpen = !_railOpen;
+        _savedRailOpen = _railOpen;
+        _ = PersistBoolSettingAsync(DysonAppSettingKeys.UiRailOpen, _railOpen);
         _ = InvokeAsync(StateHasChanged);
     }
 
     public void ToggleSidebar()
     {
         _sidebarOpen = !_sidebarOpen;
+        _ = PersistBoolSettingAsync(DysonAppSettingKeys.UiSidebarOpen, _sidebarOpen);
         _ = InvokeAsync(StateHasChanged);
     }
 
@@ -118,8 +135,31 @@
         if (!_railOpen)
             return;
         _railOpen = false;
+        _savedRailOpen = false;
+        _ = PersistBoolSettingAsync(DysonAppSettingKeys.UiRailOpen, false);
         _ = InvokeAsync(StateHasChanged);
     }
+
+    private async Task LoadChromePrefsAsync()
+    {
+        var rail = await AppSettings.GetSettingAsync(DysonAppSettingKeys.UiRailOpen);
+        if (!rail.IsError)
+            _savedRailOpen = ParseBoolSetting(rail.Value, defaultValue: true);
+
+        var sidebar = await AppSettings.GetSettingAsync(DysonAppSettingKeys.UiSidebarOpen);
+        if (!sidebar.IsError)
+            _sidebarOpen = ParseBoolSetting(sidebar.Value, defaultValue: true);
+    }
+
+    private async Task PersistBoolSettingAsync(string key, bool value)
+    {
+        await AppSettings.SetSettingAsync(key, value ? "true" : "false");
+    }
+
+    private static bool ParseBoolSetting(string? value, bool defaultValue) =>
+        string.IsNullOrWhiteSpace(value)
+            ? defaultValue
+            : string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
 
     private void OnBackdropKeyDown(KeyboardEventArgs e)
     {
