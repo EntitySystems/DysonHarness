@@ -12,8 +12,9 @@ namespace DysonHarness;
 /// GetDateTime, GetOpenRulesConfig, InitializeOpenRules, WaitForSeconds, ShellExecute, long-running shell tools, subagent spawn/list/report tools,
 /// inter-agent events / AskQuestion / PromptUserDialog, session todo CRUD, task completion tools, ResumeCurrentTask,
 /// ExpandThoughtProcess / StartNewTurn / DropTurnContext / RestoreTurnContext, in-process web search/fetch tools,
-/// <c>JsonDynamicStructuredLanguageToolchain</c>, and browser control tools
-/// (when <see cref="DysonAgentSessionConfig.BrowserControl"/> is set).
+/// <c>JsonDynamicStructuredLanguageToolchain</c>, browser control tools
+/// (when <see cref="DysonAgentSessionConfig.BrowserControl"/> is set), and custom MCP tools
+/// (when <see cref="DysonAgentSessionConfig.CustomMcpHost"/> is set and active).
 /// Other catalog tools return a not-implemented stub result.
 /// </summary>
 public sealed partial class DysonWorkspaceToolExecutor
@@ -58,6 +59,10 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         try
         {
+            var customHost = _session.Config.CustomMcpHost;
+            if (customHost is not null && customHost.IsCustomTool(call.ToolName))
+                return await ExecuteCustomMcpToolAsync(call, customHost, cancellationToken).ConfigureAwait(false);
+
             return call.ToolName switch
             {
                 "RenameSession" => await RenameSessionAsync(call, cancellationToken).ConfigureAwait(false),
@@ -134,6 +139,23 @@ public sealed partial class DysonWorkspaceToolExecutor
         {
             return Error(call, $"{call.ToolName} failed: {ex.Message}");
         }
+    }
+
+    private async Task<DysonToolCallResult> ExecuteCustomMcpToolAsync(
+        DysonToolCall call,
+        DysonCustomMcpHost host,
+        CancellationToken cancellationToken)
+    {
+        if (!host.McpActive)
+            return Error(call, "Custom MCP is disabled for this work directory.");
+
+        var result = await host
+            .CallToolAsync(call.ToolName, call.ArgumentsJson, cancellationToken)
+            .ConfigureAwait(false);
+
+        return result.IsError
+            ? Error(call, result.Error)
+            : Ok(call, result.Value);
     }
 
     private static DysonToolCallResult Stub(DysonToolCall call) =>

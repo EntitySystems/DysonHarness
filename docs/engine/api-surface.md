@@ -29,7 +29,7 @@ Conceptual overview: [README.md](README.md).
 | `DysonLongRunningShellRegistry` / `DysonLongRunningShell` | Workdir-keyed in-memory background shells (rings, Abort/Cancel/Interact/List/Subscribe); identity via `ShellName`; not persisted across UI restart |
 | `DysonLongRunningShellStatus` / `DysonLongRunningShellInfo` / `DysonLongRunningShellTail` | Status enum + list/tail DTOs (`ShellName` on info) |
 | `DysonOpenAiApiModes` | `Completions` / `Responses` constants |
-| `DysonAgentSessionConfig` | `CustomAgents`, `McpAccessMode`, `AvailableShells`, optional `BraveApiKey`, optional `SummarizerProvider`, optional `BrowserControl` (`IDysonBrowserControl`), optional `DisabledTools` / `ToolPolicy` (mode denylist; see MCP) |
+| `DysonAgentSessionConfig` | `CustomAgents`, `McpAccessMode`, `AvailableShells`, optional `BraveApiKey`, optional `SummarizerProvider`, optional `BrowserControl` (`IDysonBrowserControl`), optional `CustomMcpHost` (`DysonCustomMcpHost`), optional `DisabledTools` / `ToolPolicy` (mode denylist; see MCP) |
 | `DysonAgentSessionEvent` | Abstract notify payload for `WaitForNotifyAsync` |
 
 ### Managed / CLIProxy
@@ -116,6 +116,12 @@ Conceptual overview: [README.md](README.md).
 | ---- | ----- |
 | `DysonMcpAccessMode` | `FullAccess`, `AutoReview` |
 | `DysonMcpPipeline` | Tool catalog + optional auto-review proxy; `ConfigureShellExecuteForMode` / `CreateLongRunningShellTools` / `PlanShellExecuteWarning` for Plan soft shell gates; `CreateBrowserTools` when `browserControlAvailable` |
+| `DysonSessionToolsetBuilder` | Builds catalog: CreateDefault → gates → denylist → optional custom MCP merge |
+| `DysonCustomMcpHost` / `DysonCustomMcpHostRegistry` | Workdir-scoped live MCP clients (refcount retain/release); gated by `mcpActive` |
+| `DysonCustomMcpPromptUpdater` | Idle→Debouncing→Refreshing state machine; watches `.dyson/mcp`; bumps `SystemPromptGeneration` |
+| `DysonCustomMcpConfigLoader` / `DysonCustomMcpEnv` | Load/write `.dyson/mcp/{serverId}.json`; `${env:}` + `envFile`; transport inference |
+| `DysonCustomMcpClientFactory` | Thin `ModelContextProtocol.Core` wrappers (Stdio + HttpClientTransport) |
+| `DysonCustomMcpToolMap` / `DysonCustomMcpServerStatus` | Catalog name ↔ remote tool; UI status rows |
 | `DysonSessionToolsetBuilder` | Builds session catalog: default tools → structural gates → mode denylist (`ApplyDisabledTools`); `AllCatalogTools` / `AllCatalogToolNames` for Settings; used by session ctor / `ApplyAgentMode` rebuild / child gating |
 | `DysonToolPolicyDocument` / `DysonToolPolicyStore` / `DysonToolPolicyResolver` | Subject-settings JSON denylist (`agent_mode_tool_policy` via `IDysonSubjectSettingsRepository`); resolver applies mode list only (model overlay signature unused in v1) |
 | `DysonMcpTool` | Name, description, input schema JSON |
@@ -214,13 +220,13 @@ Contracts in `Harness.Abstractions` (`Storage/`); SQLite impl in `Harness.LocalD
 - `DysonAppMode`, `DysonAppPaths`, `DysonBuildInfo`
 - `DysonSubjects` (`Local` = `"local"`, `Shared` = `"shared"`), `IDysonSubjectContext`, `DysonSubjectEntity`
 - `IDysonAccessEvaluator` / `DysonPermissiveAccessEvaluator` / `DysonRole` / `DysonPermission` (`ManageOwnSubjectData`, `ManageSharedProviders`)
-- `IDysonSessionRepository`, `IDysonWorkDirectoryRepository`, `IDysonModelRepository`, `IDysonConfiguredShellRepository`, `IDysonSubjectSettingsRepository`
+- `IDysonSessionRepository`, `IDysonWorkDirectoryRepository`, `IDysonWorkDirectoryConfigurationRepository`, `IDysonModelRepository`, `IDysonConfiguredShellRepository`, `IDysonSubjectSettingsRepository`
 - `DysonDbContext`, `DysonDbAccessor`, `DysonSqliteConfigurator`, `AddDysonLocalDb` (LocalDb)
 - `DysonModelProviderEntity` (`SubjectId` + providers own `ApiKey` / `BaseUrl` / `ProviderKind` / optional `ManagedSource` / `OpenAiApiMode`)
 - `DysonModelSlugEntity` (slugs own `Slug` + `DisplayAlias` + `IsEnabled` + optional `DefaultReasoningEffort` + optional `DefaultMaxTargetContextTokens` + `ReasoningModes`; parent-scoped)
 - `IDysonModelRepository.UpsertManagedProviderAsync` / `SetSlugEnabledAsync` / `SetSlugDefaultReasoningEffortAsync` / `SetSlugDefaultMaxTargetContextTokensAsync` — managed import + per-slug enable + default effort + default max target context; create/update/managed upsert take `shared` (see [storage/models.md](../storage/models.md)#managed-providers-cliproxy)
 - `DysonAppSettingEntity` / `DysonAppSettingKeys` (subject-scoped key/value; composite PK `(SubjectId, Key)`; e.g. web search summarizer slug; `cliproxy_*` mirrors)
 - `DysonModelFavoriteEntity` (subject-owned; unique `(SubjectId, ModelSlugId)`)
-- `DysonWorkDirectoryEntity` (`SubjectId`; unique `(SubjectId, AbsolutePath)`), `DysonNativeFolderPicker`, `DysonGitInfo`
+- `DysonWorkDirectoryEntity` (`SubjectId`; unique `(SubjectId, AbsolutePath)`), `DysonWorkDirectoryConfigurationEntity` (`ConfigJson` TEXT / `JsonNode`; `mcpActive` default true), `DysonWorkDirectoryConfig` helpers, `DysonNativeFolderPicker`, `DysonGitInfo`
 - Session/turn/log entities and `DysonPersistedSession` (sessions have `SubjectId`, reference `ModelSlugId`, optional `ReasoningEffort`, optional `MaxTargetContextTokens`, + optional `WorkDirectoryId`; aggregate includes todos)
 - `DysonSessionTodoEntity` / `DysonSessionTodo` / `DysonSessionTodoStatus` / todo request DTOs on `IDysonSessionRepository`

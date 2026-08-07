@@ -82,6 +82,15 @@
                                 </span>
                             </button>
                             <button type="button"
+                                    class="btn btn-ghost btn-icon workdir-modal__settings"
+                                    disabled="@Busy"
+                                    title="Work directory settings"
+                                    aria-label="Settings for @item.Name"
+                                    @onclick="() => OpenSettingsAsync(item)"
+                                    @onclick:stopPropagation="true">
+                                <img src="icons/cog.svg" alt="Work directory settings" />
+                            </button>
+                            <button type="button"
                                     class="btn btn-ghost btn-icon workdir-modal__remove"
                                     disabled="@Busy"
                                     title="Remove from list (does not delete disk folder)"
@@ -109,6 +118,8 @@
     </div>
 }
 
+<WorkDirectorySettingsModal @ref="_settingsModal" Busy="Busy" OnChanged="OnChanged" />
+
 @code {
     private readonly List<DysonWorkDirectoryEntity> _items = [];
     private string? _error;
@@ -116,6 +127,7 @@
     private bool _focusSearch;
     private string _search = "";
     private ElementReference _searchInput;
+    private WorkDirectorySettingsModal? _settingsModal;
 
     [Parameter] public Guid? ActiveWorkDirectoryId { get; set; }
     [Parameter] public EventCallback<Guid?> ActiveWorkDirectoryIdChanged { get; set; }
@@ -202,6 +214,13 @@
     {
         _modalOpen = false;
         _search = "";
+    }
+
+    private async Task OpenSettingsAsync(DysonWorkDirectoryEntity item)
+    {
+        CloseModal();
+        if (_settingsModal is not null)
+            await _settingsModal.OpenAsync(item);
     }
 
     private void OnSearchInput(ChangeEventArgs args) =>

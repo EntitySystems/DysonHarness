@@ -138,6 +138,11 @@ public abstract class DysonAgentSession
     /// </summary>
     public int SystemPromptGeneration { get; private set; }
 
+    /// <summary>
+    /// Bumps the prompt-cache generation (e.g. after custom MCP catalog merge/strip).
+    /// </summary>
+    public void BumpSystemPromptGeneration() => SystemPromptGeneration++;
+
     public DysonMcpPipeline McpPipeline { get; private set; }
 
     /// <summary>
@@ -175,6 +180,7 @@ public abstract class DysonAgentSession
             interAgentDepth: ComputeDepth(),
             omitRootTaskCompletionTools: Parent is not null,
             modelSlugId: ResolveModelSlugId());
+        Config.CustomMcpHost?.ApplyToPipeline(McpPipeline);
         SystemPromptGeneration++;
         AppendLog($"mode → {Mode} (system prompt + toolset rebuilt)");
         return VoidResult<string>.Success;
@@ -277,6 +283,7 @@ public abstract class DysonAgentSession
         child.McpPipeline.ConfigureInterAgentTools(child.ComputeDepth());
         DysonSessionToolsetBuilder.ReapplyDisabledTools(
             child.McpPipeline, child.Config, child.Mode, child.ResolveModelSlugId());
+        child.Config.CustomMcpHost?.AttachSession(child);
     }
 
     public bool TryGetSubagent(int subagentId, out DysonAgentSession child) =>

@@ -43,7 +43,17 @@ public static class SearchHttp
     }
 
     /// <summary>Rejects non-http(s), localhost, metadata hosts, and private IP ranges.</summary>
-    public static VoidResult<string> ValidateUrl(string url)
+    public static VoidResult<string> ValidateUrl(string url) =>
+        ValidateUrlCore(url, allowLocal: false);
+
+    /// <summary>
+    /// Like <see cref="ValidateUrl"/> but allows localhost / loopback / private LAN
+    /// (for local HTTP MCP servers). Still blocks cloud metadata hosts.
+    /// </summary>
+    public static VoidResult<string> ValidateUrlAllowingLocal(string url) =>
+        ValidateUrlCore(url, allowLocal: true);
+
+    private static VoidResult<string> ValidateUrlCore(string url, bool allowLocal)
     {
         if (string.IsNullOrWhiteSpace(url))
             return new VoidResult<string>("Invalid URL");
@@ -58,7 +68,10 @@ public static class SearchHttp
         if (hostname.StartsWith('[') && hostname.EndsWith(']'))
             hostname = hostname[1..^1];
 
-        if (BlockedHosts.Contains(hostname))
+        if (IsMetadataHost(hostname))
+            return new VoidResult<string>("Blocked host");
+
+        if (!allowLocal && BlockedHosts.Contains(hostname))
             return new VoidResult<string>("Blocked host");
 
         if (hostname.StartsWith("::ffff:", StringComparison.OrdinalIgnoreCase))
@@ -66,19 +79,27 @@ public static class SearchHttp
             var mapped = DecodeMappedV4(hostname["::ffff:".Length..]);
             if (mapped is not null)
             {
-                if (BlockedHosts.Contains(mapped) || IsBlockedIpv4(mapped))
+                if (IsMetadataHost(mapped))
+                    return new VoidResult<string>("Blocked IPv4-mapped IPv6 host");
+                if (!allowLocal && (BlockedHosts.Contains(mapped) || IsBlockedIpv4(mapped)))
                     return new VoidResult<string>("Blocked IPv4-mapped IPv6 host");
             }
         }
 
-        if (IsBlockedIpv4(hostname))
+        if (!allowLocal && IsBlockedIpv4(hostname))
             return new VoidResult<string>("Blocked IP range");
 
-        if (IPAddress.TryParse(hostname, out var ip) && IsPrivateOrLoopback(ip))
+        if (!allowLocal && IPAddress.TryParse(hostname, out var ip) && IsPrivateOrLoopback(ip))
             return new VoidResult<string>("Blocked IP range");
 
         return VoidResult<string>.Success;
     }
+
+    private static bool IsMetadataHost(string hostname) =>
+        hostname.Equals("169.254.169.254", StringComparison.OrdinalIgnoreCase)
+        || hostname.Equals("metadata.google.internal", StringComparison.OrdinalIgnoreCase)
+        || hostname.Equals("100.100.100.200", StringComparison.OrdinalIgnoreCase)
+        || hostname.Equals("kubernetes.default.svc", StringComparison.OrdinalIgnoreCase);
 
     private static string? DecodeMappedV4(string suffix)
     {

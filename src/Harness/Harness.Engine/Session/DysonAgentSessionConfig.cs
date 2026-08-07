@@ -40,6 +40,12 @@ public class DysonAgentSessionConfig
     public IDysonBrowserControl? BrowserControl { get; set; }
 
     /// <summary>
+    /// Optional workdir-scoped custom MCP host (<c>.dyson/mcp</c>).
+    /// When set and <see cref="DysonCustomMcpHost.McpActive"/>, namespaced tools are merged into the catalog.
+    /// </summary>
+    public DysonCustomMcpHost? CustomMcpHost { get; set; }
+
+    /// <summary>
     /// Pre-resolved tool denylist for this session's current mode.
     /// Used when <see cref="ToolPolicy"/> is null (tests / hosts that resolve once).
     /// </summary>
