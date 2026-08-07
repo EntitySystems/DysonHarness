@@ -10,7 +10,7 @@
     <div class="confirm-dialog-backdrop"
          role="presentation"
          @onclick="OnBackdropClick">
-        <div class="confirm-dialog"
+        <div class="confirm-dialog confirm-dialog--update"
              role="dialog"
              aria-modal="true"
              aria-labelledby="update-dialog-title"
@@ -20,10 +20,24 @@
                 <h3 id="update-dialog-title">Update available</h3>
             </div>
             <div class="confirm-dialog__body">
-                <p class="confirm-dialog__message">
-                    DysonHarness @Updates.AvailableVersion is available (you have @Updates.LocalVersion).
-                    @(Locked ? "Downloading the installer — the app will restart to finish." : "Download and install it now?")
-                </p>
+                <div class="update-dialog__copy">
+                    <p class="update-dialog__lead">A newer build of DysonHarness is ready.</p>
+                    <ul class="update-dialog__versions" aria-label="Versions">
+                        <li>
+                            <span class="update-dialog__label">Available</span>
+                            <span class="update-dialog__version">@Updates.AvailableVersion</span>
+                        </li>
+                        <li>
+                            <span class="update-dialog__label">Installed</span>
+                            <span class="update-dialog__version">@Updates.LocalVersion</span>
+                        </li>
+                    </ul>
+                    <p class="update-dialog__prompt">
+                        @(Locked
+                            ? "Downloading the installer — the app will restart to finish."
+                            : "Download and install it now?")
+                    </p>
+                </div>
                 @if (Updates.Phase is DysonAppUpdatePhase.Downloading)
                 {
                     <div class="confirm-dialog__progress">
@@ -35,20 +49,23 @@
                 }
                 @if (Updates.Error is { Length: > 0 } error)
                 {
-                    <p class="confirm-dialog__progress-text">@error</p>
+                    <p class="confirm-dialog__progress-text update-dialog__error">@error</p>
                 }
             </div>
-            <div class="confirm-dialog__actions">
-                @if (Updates.Phase is DysonAppUpdatePhase.Failed)
-                {
-                    <button type="button" class="btn btn-ghost" @onclick="Close">Close</button>
-                }
-                else if (!Locked)
-                {
-                    <button type="button" class="btn btn-ghost" @onclick="SkipAsync">Not now</button>
-                    <button type="button" class="btn btn-primary" @onclick="InstallAsync">Update</button>
-                }
-            </div>
+            @if (Updates.Phase is DysonAppUpdatePhase.Failed || !Locked)
+            {
+                <div class="confirm-dialog__actions">
+                    @if (Updates.Phase is DysonAppUpdatePhase.Failed)
+                    {
+                        <button type="button" class="btn btn-ghost" @onclick="Close">Close</button>
+                    }
+                    else
+                    {
+                        <button type="button" class="btn btn-ghost" @onclick="SkipAsync">Not now</button>
+                        <button type="button" class="btn btn-primary" @onclick="InstallAsync">Update</button>
+                    }
+                </div>
+            }
         </div>
     </div>
 }
