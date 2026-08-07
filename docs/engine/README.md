@@ -115,7 +115,11 @@ On parent resume the host hydrates direct DB children into `SubSessions` / `Suba
 - **FullAccess** — tools run with full access; no allowlist.
 - **AutoReview** — calls route through in-process `DysonMcpAutoReviewProxy`; no allowlist.
 
-`DysonMcpPipeline` holds the per-session tool catalog (`FormatToolsForPrompt`) and optional auto-review proxy. OpenAI-compatible sessions also expose the same tools as native function schemas (with required `stage`). Live remote MCP servers remain out of scope; workspace file tools, `ShellExecute`, web search/fetch, and browser tools run locally via `DysonWorkspaceToolExecutor`.
+`DysonMcpPipeline` holds the per-session tool catalog (`FormatToolsForPrompt`) and optional auto-review proxy. OpenAI-compatible sessions also expose the same tools as native function schemas (with required `stage`).
+
+**Custom MCP (live):** workdir-scoped clients under `{workRoot}/.dyson/mcp/{serverId}.json` (stdio + HTTP SSE / streamable / auto-detect). Master switch `mcpActive` lives in `work_directory_configurations` (default on). `DysonCustomMcpHost` + `DysonCustomMcpPromptUpdater` (FileSystemWatcher + ~300ms debounce) connect servers, merge namespaced tools `{serverId}__{toolName}` into the catalog, and bump `SystemPromptGeneration`. `DysonWorkspaceToolExecutor` dispatches those names via `CallToolAsync` before the built-in switch. See [work-directories](../storage/work-directories.md).
+
+Workspace file tools, `ShellExecute`, web search/fetch, and browser tools still run locally via `DysonWorkspaceToolExecutor`.
 
 **Toolset builder / mode policy:** `DysonSessionToolsetBuilder` builds the catalog (`CreateDefault` → shell/Plan + inter-agent + subagent omit → mode denylist). `DysonAgentSessionConfig.ToolPolicy` / `DisabledTools` come from `app_settings` (`agent_mode_tool_policy`) via the UI host; `ApplyAgentMode` **rebuilds** the pipeline so re-enabled tools return. Structural gates (no shells, browser null, inter-agent depth, subagent completion omit) still win for availability. Per-model overlays exist on the document and resolver signature but are not applied yet. Executor rejects calls whose tool name is absent from the current catalog.
 

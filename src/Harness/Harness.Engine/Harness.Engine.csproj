@@ -22,6 +22,7 @@
     <PackageReference Include="Magick.NET-Q8-AnyCPU" Version="14.15.0" />
     <PackageReference Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
     <PackageReference Include="Microsoft.ML.Tokenizers.Data.Cl100kBase" Version="2.0.0" />
+    <PackageReference Include="ModelContextProtocol.Core" Version="1.4.1" />
   </ItemGroup>
 
   <!-- Prebuild: git branch → DysonAppMode → obj/.../DysonBuildInfo.g.cs -->

@@ -33,6 +33,7 @@ public static class DysonSessionToolsetBuilder
         // ponytail: denylist last so EnsureInterAgentToolsPresent cannot resurrect disabled names;
         // structural removals still win (name already absent).
         ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
+        config.CustomMcpHost?.ApplyToPipeline(pipeline);
         return pipeline;
     }
 
@@ -56,6 +57,7 @@ public static class DysonSessionToolsetBuilder
         pipeline.ConfigureShellExecuteForMode(
             string.Equals(agentMode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase));
         ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
+        config.CustomMcpHost?.ApplyToPipeline(pipeline);
         return pipeline;
     }
 
@@ -86,6 +88,8 @@ public static class DysonSessionToolsetBuilder
         ArgumentNullException.ThrowIfNull(pipeline);
         ArgumentNullException.ThrowIfNull(config);
         ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
+        // Re-merge after Ensure*/denylist so custom tools survive structural catalog churn.
+        config.CustomMcpHost?.ApplyToPipeline(pipeline);
     }
 
     /// <summary>

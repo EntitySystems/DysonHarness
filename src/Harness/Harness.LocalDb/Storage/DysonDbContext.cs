@@ -18,6 +18,8 @@ public sealed class DysonDbContext : DbContext
     public DbSet<DysonModelSlugEntity> ModelSlugs => Set<DysonModelSlugEntity>();
     public DbSet<DysonModelFavoriteEntity> ModelFavorites => Set<DysonModelFavoriteEntity>();
     public DbSet<DysonWorkDirectoryEntity> WorkDirectories => Set<DysonWorkDirectoryEntity>();
+    public DbSet<DysonWorkDirectoryConfigurationEntity> WorkDirectoryConfigurations =>
+        Set<DysonWorkDirectoryConfigurationEntity>();
     public DbSet<DysonSessionEntity> Sessions => Set<DysonSessionEntity>();
     public DbSet<DysonTurnEntity> Turns => Set<DysonTurnEntity>();
     public DbSet<DysonSessionLogEntry> SessionLogs => Set<DysonSessionLogEntry>();
@@ -94,6 +96,19 @@ public sealed class DysonDbContext : DbContext
             e.HasIndex(x => new { x.SubjectId, x.AbsolutePath }).IsUnique();
             e.HasIndex(x => x.LastOpenedUtc);
             e.HasIndex(x => x.SubjectId);
+        });
+
+        modelBuilder.Entity<DysonWorkDirectoryConfigurationEntity>(e =>
+        {
+            e.ToTable("work_directory_configurations");
+            e.HasKey(x => x.WorkDirectoryId);
+            e.Property(x => x.SubjectId).IsRequired();
+            e.Property(x => x.ConfigJson).IsRequired();
+            e.HasIndex(x => x.SubjectId);
+            e.HasOne(x => x.WorkDirectory)
+                .WithOne()
+                .HasForeignKey<DysonWorkDirectoryConfigurationEntity>(x => x.WorkDirectoryId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<DysonSessionEntity>(e =>

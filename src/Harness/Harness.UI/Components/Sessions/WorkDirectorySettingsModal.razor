@@ -1,0 +1,401 @@
+@namespace Harness.UI.Components.Sessions
+@using DysonHarness
+@using Harness.UI.Services
+@using Microsoft.AspNetCore.Components.Web
+@implements IAsyncDisposable
+@inject IDysonWorkDirectoryConfigurationRepository WorkDirConfigs
+@inject ConfirmDialogService Confirm
+
+@if (_open && WorkDirectory is not null)
+{
+    <div class="workdir-modal-backdrop"
+         @onclick="CloseAsync"
+         @onkeydown="OnBackdropKeyDown">
+        <div class="workdir-settings-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="workdir-settings-title"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnModalKeyDown">
+            <div class="workdir-modal__header">
+                <h3 id="workdir-settings-title">Work directory settings</h3>
+                <button type="button" class="btn btn-ghost workdir-modal__close" @onclick="CloseAsync" aria-label="Close">×</button>
+            </div>
+
+            <div class="workdir-settings-modal__meta">
+                <div class="workdir-settings-modal__name">@WorkDirectory.Name</div>
+                <div class="workdir-settings-modal__path mono" title="@WorkDirectory.AbsolutePath">@WorkDirectory.AbsolutePath</div>
+            </div>
+
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <div class="error-banner" style="margin:0;border-radius:0;">@_error</div>
+            }
+
+            <div class="workdir-settings-modal__body">
+                <section class="workdir-settings-section">
+                    <h4 class="workdir-settings-section__title">MCP</h4>
+                    <label class="workdir-settings-toggle">
+                        <input type="checkbox"
+                               checked="@_mcpActive"
+                               disabled="@Busy"
+                               @onchange="OnMcpActiveChangedAsync" />
+                        <span>Custom MCP active</span>
+                    </label>
+                    <p class="workdir-settings-section__hint">
+                        When off, no custom MCP connections and no custom tools in session catalogs.
+                    </p>
+                </section>
+
+                <section class="workdir-settings-section">
+                    <div class="workdir-settings-section__row">
+                        <h4 class="workdir-settings-section__title">MCP servers</h4>
+                        <button type="button"
+                                class="btn btn-ghost btn-sm"
+                                disabled="@(Busy || !_mcpActive)"
+                                @onclick="BeginAdd">
+                            Add
+                        </button>
+                    </div>
+
+                    @if (_statuses.Count == 0 && !_adding)
+                    {
+                        <div class="workdir-modal__empty">No servers in <span class="mono">.dyson/mcp</span>.</div>
+                    }
+                    else
+                    {
+                        <div class="workdir-settings-servers">
+                            @foreach (var status in _statuses)
+                            {
+                                <div class="workdir-settings-server">
+                                    <div class="workdir-settings-server__main">
+                                        <span class="workdir-settings-server__id mono">@status.ServerId</span>
+                                        <span class="workdir-settings-server__badge">@TransportLabel(status.Transport)</span>
+                                        <span class="workdir-settings-server__state @StateClass(status)">@status.State</span>
+                                        <span class="workdir-settings-server__tools">@status.ToolCount tools</span>
+                                    </div>
+                                    @if (!string.IsNullOrEmpty(status.LastError))
+                                    {
+                                        <div class="workdir-settings-server__error">@status.LastError</div>
+                                    }
+                                    <div class="workdir-settings-server__actions btn-row">
+                                        <label class="workdir-settings-toggle workdir-settings-toggle--compact">
+                                            <input type="checkbox"
+                                                   checked="@(!status.Disabled)"
+                                                   disabled="@(Busy || !_mcpActive)"
+                                                   @onchange="e => OnServerEnabledChangedAsync(status.ServerId, e)" />
+                                            <span>On</span>
+                                        </label>
+                                        <button type="button"
+                                                class="btn btn-ghost btn-sm"
+                                                disabled="@(Busy || !_mcpActive || status.Disabled)"
+                                                @onclick="() => RestartAsync(status.ServerId)">
+                                            Restart
+                                        </button>
+                                        <button type="button"
+                                                class="btn btn-ghost btn-sm"
+                                                disabled="@Busy"
+                                                @onclick="() => BeginEdit(status.ServerId)">
+                                            Edit
+                                        </button>
+                                        <button type="button"
+                                                class="btn btn-ghost btn-sm"
+                                                disabled="@Busy"
+                                                @onclick="() => DeleteAsync(status.ServerId)">
+                                            Delete
+                                        </button>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (_adding || _editingServerId is not null)
+                    {
+                        <div class="workdir-settings-editor">
+                            <div class="workdir-settings-editor__title">
+                                @(_editingServerId is null ? "Add MCP server" : $"Edit {_editingServerId}")
+                            </div>
+                            @if (_editingServerId is null)
+                            {
+                                <label class="workdir-settings-field">
+                                    <span>Server id</span>
+                                    <input type="text"
+                                           class="mono"
+                                           value="@_editServerId"
+                                           disabled="@Busy"
+                                           @oninput="OnEditServerIdInput" />
+                                </label>
+                            }
+                            <label class="workdir-settings-field">
+                                <span>JSON</span>
+                                <textarea class="mono workdir-settings-editor__json"
+                                          rows="12"
+                                          disabled="@Busy"
+                                          @bind="_editJson"
+                                          @bind:event="oninput"></textarea>
+                            </label>
+                            <div class="btn-row">
+                                <button type="button" class="btn btn-primary btn-sm" disabled="@Busy" @onclick="SaveEditorAsync">Save</button>
+                                <button type="button" class="btn btn-ghost btn-sm" disabled="@Busy" @onclick="CancelEditor">Cancel</button>
+                            </div>
+                        </div>
+                    }
+                </section>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _open;
+    private bool _mcpActive = true;
+    private string? _error;
+    private DysonCustomMcpHost? _host;
+    private Guid? _retainedWorkDirectoryId;
+    private readonly List<DysonCustomMcpServerStatus> _statuses = [];
+    private bool _adding;
+    private string? _editingServerId;
+    private string _editServerId = "";
+    private string _editJson = DefaultStubJson;
+
+    private const string DefaultStubJson =
+        """
+        {
+          "type": "stdio",
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-everything"],
+          "env": {}
+        }
+        """;
+
+    [Parameter] public DysonWorkDirectoryEntity? WorkDirectory { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    public async Task OpenAsync(DysonWorkDirectoryEntity workDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(workDirectory);
+        WorkDirectory = workDirectory;
+        _open = true;
+        _error = null;
+        CancelEditor();
+        await RetainAndLoadAsync();
+        StateHasChanged();
+    }
+
+    private async Task RetainAndLoadAsync()
+    {
+        if (WorkDirectory is null)
+            return;
+
+        await ReleaseHostAsync();
+
+        var cfg = await WorkDirConfigs.GetAsync(WorkDirectory.Id);
+        if (cfg.IsError)
+        {
+            _error = cfg.Error;
+            _mcpActive = true;
+        }
+        else
+        {
+            _mcpActive = DysonWorkDirectoryConfig.TryGetMcpActive(cfg.Value);
+        }
+
+        _host = DysonCustomMcpHostRegistry.Retain(WorkDirectory.Id, WorkDirectory.AbsolutePath, _mcpActive);
+        _retainedWorkDirectoryId = WorkDirectory.Id;
+        _host.Changed += OnHostChanged;
+        _host.PromptUpdater.StartWatcher();
+        _host.PromptUpdater.EnqueueRefresh();
+        RefreshStatuses();
+    }
+
+    private void OnHostChanged()
+    {
+        RefreshStatuses();
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void RefreshStatuses()
+    {
+        _statuses.Clear();
+        if (_host is not null)
+            _statuses.AddRange(_host.GetStatuses());
+    }
+
+    private async Task OnMcpActiveChangedAsync(ChangeEventArgs args)
+    {
+        if (WorkDirectory is null || _host is null)
+            return;
+
+        _error = null;
+        var next = args.Value is bool b
+            ? b
+            : string.Equals(args.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+
+        var doc = await WorkDirConfigs.GetAsync(WorkDirectory.Id);
+        var baseNode = doc.IsError ? DysonWorkDirectoryConfig.CreateDefault() : doc.Value;
+        var updated = DysonWorkDirectoryConfig.WithMcpActive(baseNode, next);
+        var upsert = await WorkDirConfigs.UpsertAsync(WorkDirectory.Id, updated);
+        if (upsert.IsError)
+        {
+            _error = upsert.Error;
+            return;
+        }
+
+        _mcpActive = next;
+        _host.SetMcpActive(next);
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task OnServerEnabledChangedAsync(string serverId, ChangeEventArgs args)
+    {
+        if (WorkDirectory is null)
+            return;
+
+        _error = null;
+        var enabled = args.Value is bool b
+            ? b
+            : string.Equals(args.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+
+        var result = DysonCustomMcpConfigLoader.SetDisabled(
+            WorkDirectory.AbsolutePath, serverId, disabled: !enabled);
+        if (result.IsError)
+            _error = result.Error;
+        // Watcher drives refresh.
+    }
+
+    private void RestartAsync(string serverId)
+    {
+        _host?.RequestRestart(serverId);
+    }
+
+    private void BeginAdd()
+    {
+        _adding = true;
+        _editingServerId = null;
+        _editServerId = "";
+        _editJson = DefaultStubJson;
+    }
+
+    private void BeginEdit(string serverId)
+    {
+        if (WorkDirectory is null)
+            return;
+
+        _adding = false;
+        _editingServerId = serverId;
+        _editServerId = serverId;
+        var path = DysonCustomMcpConfigLoader.GetServerPath(WorkDirectory.AbsolutePath, serverId);
+        try
+        {
+            _editJson = File.Exists(path) ? File.ReadAllText(path) : DefaultStubJson;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _editJson = DefaultStubJson;
+        }
+    }
+
+    private void OnEditServerIdInput(ChangeEventArgs e) =>
+        _editServerId = e.Value?.ToString() ?? "";
+
+    private void CancelEditor()
+    {
+        _adding = false;
+        _editingServerId = null;
+        _editServerId = "";
+        _editJson = DefaultStubJson;
+    }
+
+    private async Task SaveEditorAsync()
+    {
+        if (WorkDirectory is null)
+            return;
+
+        _error = null;
+        var id = _editingServerId ?? _editServerId.Trim();
+        var write = DysonCustomMcpConfigLoader.Write(WorkDirectory.AbsolutePath, id, _editJson);
+        if (write.IsError)
+        {
+            _error = write.Error;
+            return;
+        }
+
+        CancelEditor();
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task DeleteAsync(string serverId)
+    {
+        if (WorkDirectory is null)
+            return;
+
+        var confirmed = await Confirm.ConfirmAsync(
+            "Delete MCP server",
+            $"Delete '{serverId}.json' from .dyson/mcp? This cannot be undone.",
+            confirmLabel: "Delete",
+            danger: true);
+        if (!confirmed)
+            return;
+
+        _error = null;
+        var del = DysonCustomMcpConfigLoader.Delete(WorkDirectory.AbsolutePath, serverId);
+        if (del.IsError)
+            _error = del.Error;
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task CloseAsync()
+    {
+        _open = false;
+        CancelEditor();
+        await ReleaseHostAsync();
+    }
+
+    private async Task ReleaseHostAsync()
+    {
+        if (_host is not null)
+        {
+            _host.Changed -= OnHostChanged;
+            _host = null;
+        }
+
+        if (_retainedWorkDirectoryId is Guid id)
+        {
+            await DysonCustomMcpHostRegistry.ReleaseAsync(id);
+            _retainedWorkDirectoryId = null;
+        }
+    }
+
+    private void OnBackdropKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            _ = CloseAsync();
+    }
+
+    private void OnModalKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            _ = CloseAsync();
+    }
+
+    private static string TransportLabel(DysonCustomMcpTransportKind kind) => kind switch
+    {
+        DysonCustomMcpTransportKind.Stdio => "stdio",
+        DysonCustomMcpTransportKind.HttpSse => "sse",
+        DysonCustomMcpTransportKind.HttpStreamable => "http",
+        _ => "auto",
+    };
+
+    private static string StateClass(DysonCustomMcpServerStatus status) => status.State switch
+    {
+        DysonCustomMcpServerConnectionState.Connected => "is-ok",
+        DysonCustomMcpServerConnectionState.Error => "is-error",
+        DysonCustomMcpServerConnectionState.Disabled => "is-muted",
+        _ => "is-muted",
+    };
+
+    public async ValueTask DisposeAsync() => await ReleaseHostAsync();
+}

@@ -20,6 +20,39 @@ Contracts: `IDysonWorkDirectoryRepository` in `Harness.Abstractions`. Implementa
 
 `sessions.WorkDirectoryId` → `work_directories.Id` (`OnDelete(SetNull)`). Existing rows may be null; **new sessions require** a selected work directory. Both session and workdir must belong to the same subject.
 
+### `work_directory_configurations`
+
+Per-workdir JSON config document (extensible `JsonNode`), cascade-deleted with the work directory.
+
+| Property | Notes |
+| -------- | ----- |
+| `WorkDirectoryId` | Guid PK / FK → `work_directories.Id` (`OnDelete(Cascade)`) |
+| `SubjectId` | Owning subject (same as workdir); indexed |
+| `ConfigJson` | TEXT — serialized `JsonNode` |
+| `UpdatedUtc` | `DateTime` UTC |
+
+v1 keys:
+
+```json
+{ "mcpActive": true }
+```
+
+Missing row ⇒ treat as `{ "mcpActive": true }` (opt-out via settings). Helpers: `DysonWorkDirectoryConfig.TryGetMcpActive` / `WithMcpActive`.
+
+### `IDysonWorkDirectoryConfigurationRepository`
+
+- `GetAsync(workDirectoryId)` — stored doc or default (does not materialize)
+- `UpsertAsync(workDirectoryId, JsonNode config)` — insert/replace
+
+## Custom MCP (`.dyson/mcp`)
+
+One JSON file per server: `{workRoot}/.dyson/mcp/{serverId}.json` (Cursor/Claude-shaped: `type`/`command`/`args`/`env`/`cwd` or `url`/`headers`; optional `disabled`, `envFile`; `${env:VAR}` expansion).
+
+- **Master switch:** workdir `mcpActive` (DB)
+- **Per-server:** `disabled` in the JSON file
+- Engine: `DysonCustomMcpHost` (workdir refcount) + `DysonCustomMcpPromptUpdater` (FileSystemWatcher + debounce) merge `{serverId}__{toolName}` into session catalogs when active
+- UI: cog on each workdir row → `WorkDirectorySettingsModal` (toggle, add/edit/restart/delete servers)
+
 ## `IDysonWorkDirectoryRepository`
 
 Result-pattern functional repository (current subject only; cross-subject get-by-id → error):

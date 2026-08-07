@@ -20,6 +20,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly IDysonSessionRepository _sessions;
     private readonly IDysonModelRepository _models;
     private readonly IDysonWorkDirectoryRepository _workDirectories;
+    private readonly IDysonWorkDirectoryConfigurationRepository _workDirectoryConfigurations;
     private readonly IDysonSubjectSettingsRepository _appSettings;
     private readonly IDysonConfiguredShellRepository _configuredShells;
     private readonly DysonCliProxyHost _cliProxy;
@@ -29,6 +30,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly SemaphoreSlim _persistGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, DysonAgentSession> _sessionsById = new();
     private readonly ConcurrentDictionary<DysonAgentSession, byte> _hookedSessions = new();
+    private readonly ConcurrentDictionary<DysonAgentSession, Guid> _customMcpRetainBySession = new();
     private readonly ConcurrentDictionary<Guid, byte> _busySessions = new();
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _promptGates = new();
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _promptCtsBySession = new();
@@ -80,6 +82,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         IDysonSessionRepository sessions,
         IDysonModelRepository models,
         IDysonWorkDirectoryRepository workDirectories,
+        IDysonWorkDirectoryConfigurationRepository workDirectoryConfigurations,
         IDysonSubjectSettingsRepository appSettings,
         IDysonConfiguredShellRepository configuredShells,
         HttpClient http,
@@ -90,6 +93,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
         _workDirectories = workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
+        _workDirectoryConfigurations = workDirectoryConfigurations
+            ?? throw new ArgumentNullException(nameof(workDirectoryConfigurations));
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         _configuredShells = configuredShells ?? throw new ArgumentNullException(nameof(configuredShells));
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -1594,7 +1599,11 @@ public sealed class DysonUiHost : IAsyncDisposable
         var kind = providerResult.Value.Kind;
         if (string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
         {
-            var config = await BuildSessionConfigAsync(agentMode, cancellationToken: cancellationToken)
+            var config = await BuildSessionConfigAsync(
+                    agentMode,
+                    workDirectoryId: workDirectoryId.Value,
+                    workRoot: workDir.Value.AbsolutePath,
+                    cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
             var created = await OpenAiCompatibleAgentSession.CreateAsync(
@@ -1610,32 +1619,44 @@ public sealed class DysonUiHost : IAsyncDisposable
 
             if (created.IsError)
             {
+                await ReleaseCustomMcpForConfigAsync(config).ConfigureAwait(false);
                 LastError = created.Error;
                 Notify();
                 return new VoidResult<string>(created.Error);
             }
 
+            RememberCustomMcpRetain(created.Value, workDirectoryId.Value);
             ApplyPendingMaxTargetToSession(created.Value);
             FocusSession(created.Value, parentSessionId: null);
         }
         else
         {
+            var config = await BuildSessionConfigAsync(
+                    agentMode,
+                    workDirectoryId: workDirectoryId.Value,
+                    workRoot: workDir.Value.AbsolutePath,
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+
             var created = await DemoDysonAgentSession.CreateAsync(
                 _sessions,
                 providerResult.Value.Demo!,
                 workDirectoryId.Value,
                 agentMode,
+                config: config,
                 models: _models,
                 workDirectoryAbsolutePath: workDir.Value.AbsolutePath,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (created.IsError)
             {
+                await ReleaseCustomMcpForConfigAsync(config).ConfigureAwait(false);
                 LastError = created.Error;
                 Notify();
                 return new VoidResult<string>(created.Error);
             }
 
+            RememberCustomMcpRetain(created.Value, workDirectoryId.Value);
             ApplyPendingMaxTargetToSession(created.Value);
             FocusSession(created.Value, parentSessionId: null);
         }
@@ -2739,6 +2760,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 await BuildSessionConfigAsync(
                         full.Value.Session.AgentMode,
                         full.Value.Session.McpAccessMode,
+                        workDirectoryId: full.Value.Session.WorkDirectoryId,
+                        workRoot: workPath,
                         cancellationToken)
                     .ConfigureAwait(false),
                 models: _models,
@@ -2748,19 +2771,25 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (loaded.IsError)
                 return Result<LoadedSession, string>.AsError(loaded.Error);
 
+            if (full.Value.Session.WorkDirectoryId is Guid loadedWd)
+                RememberCustomMcpRetain(loaded.Value, loadedWd);
             session = loaded.Value;
         }
         else
         {
+            var demoConfig = await BuildSessionConfigAsync(
+                    full.Value.Session.AgentMode,
+                    full.Value.Session.McpAccessMode,
+                    workDirectoryId: full.Value.Session.WorkDirectoryId,
+                    workRoot: workPath,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
             var demoLoaded = await DemoDysonAgentSession.LoadAsync(
                 _sessions,
                 sessionId,
                 providerResult.Value.Demo!,
-                await BuildSessionConfigAsync(
-                        full.Value.Session.AgentMode,
-                        full.Value.Session.McpAccessMode,
-                        cancellationToken)
-                    .ConfigureAwait(false),
+                demoConfig,
                 models: _models,
                 appendResumeLog: appendResumeLog,
                 workDirectoryAbsolutePath: workPath,
@@ -2769,6 +2798,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (demoLoaded.IsError)
                 return Result<LoadedSession, string>.AsError(demoLoaded.Error);
 
+            if (full.Value.Session.WorkDirectoryId is Guid demoWd)
+                RememberCustomMcpRetain(demoLoaded.Value, demoWd);
             session = demoLoaded.Value;
         }
 
@@ -2843,6 +2874,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     private async Task<DysonAgentSessionConfig> BuildSessionConfigAsync(
         string? agentMode = null,
         DysonMcpAccessMode? mcpAccessMode = null,
+        Guid? workDirectoryId = null,
+        string? workRoot = null,
         CancellationToken cancellationToken = default)
     {
         var config = new DysonAgentSessionConfig
@@ -2872,6 +2905,22 @@ public sealed class DysonUiHost : IAsyncDisposable
             }
         }
 
+        if (workDirectoryId is Guid wd && wd != Guid.Empty && !string.IsNullOrWhiteSpace(workRoot))
+        {
+            var mcpActive = true;
+            var cfg = await _workDirectoryConfigurations.GetAsync(wd, cancellationToken)
+                .ConfigureAwait(false);
+            if (!cfg.IsError)
+                mcpActive = DysonWorkDirectoryConfig.TryGetMcpActive(cfg.Value);
+
+            var host = DysonCustomMcpHostRegistry.Retain(wd, workRoot, mcpActive);
+            if (host.McpActive != mcpActive)
+                host.SetMcpActive(mcpActive);
+            host.PromptUpdater.StartWatcher();
+            host.PromptUpdater.EnqueueRefresh();
+            config.CustomMcpHost = host;
+        }
+
         var setting = await _appSettings
             .GetSettingAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId, cancellationToken)
             .ConfigureAwait(false);
@@ -2896,6 +2945,28 @@ public sealed class DysonUiHost : IAsyncDisposable
             config.SummarizerProvider = new OpenAiCompatibleAgentProvider(slugResult.Value);
 
         return config;
+    }
+
+    private void RememberCustomMcpRetain(DysonAgentSession session, Guid workDirectoryId)
+    {
+        if (session.Config.CustomMcpHost is null || workDirectoryId == Guid.Empty)
+            return;
+        _customMcpRetainBySession[session] = workDirectoryId;
+    }
+
+    private static async Task ReleaseCustomMcpForConfigAsync(DysonAgentSessionConfig config)
+    {
+        if (config.CustomMcpHost is not { } host)
+            return;
+        await DysonCustomMcpHostRegistry.ReleaseAsync(host.WorkDirectoryId).ConfigureAwait(false);
+        config.CustomMcpHost = null;
+    }
+
+    private async Task ReleaseCustomMcpRetainAsync(DysonAgentSession session)
+    {
+        session.Config.CustomMcpHost?.DetachSession(session);
+        if (_customMcpRetainBySession.TryRemove(session, out var workDirectoryId))
+            await DysonCustomMcpHostRegistry.ReleaseAsync(workDirectoryId).ConfigureAwait(false);
     }
 
     private async Task<Result<ResolvedProvider, string>> ResolveProviderAsync(
@@ -3012,6 +3083,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         session.TodosChanged += OnTodosChanged;
         session.ParentEventsChanged += OnParentEventsChanged;
 
+        session.Config.CustomMcpHost?.AttachSession(session);
+
         foreach (var turn in session.Turns)
             HookTurn(turn);
 
@@ -3090,6 +3163,9 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         foreach (var turn in session.Turns)
             UnhookTurn(turn);
+
+        // Fire-and-forget release; host dispose is async.
+        _ = ReleaseCustomMcpRetainAsync(session);
     }
 
     private void UnhookAllSessions()
