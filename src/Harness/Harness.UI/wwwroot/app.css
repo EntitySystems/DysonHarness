@@ -4166,10 +4166,10 @@ code, .mono {
 .workdir-settings-field input,
 .workdir-settings-editor__json {
   width: 100%;
-  background: var(--bg);
+  background: var(--bg-2);
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
   padding: 8px;
   font-size: 12px;
 }
