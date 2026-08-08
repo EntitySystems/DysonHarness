@@ -50,8 +50,9 @@ artifacts/
 .ui-*.out.log
 
 
-## Workspace plan artifacts (local; see docs/storage/work-directories.md)
+## Workspace-local artifacts
 .dyson/plans/
+.dyson/composer-uploads/
 
 # Cursor IDE rules (migrated to openrules.json; files live in rules/)
 /.cursor/
