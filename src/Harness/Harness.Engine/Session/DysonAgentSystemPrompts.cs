@@ -248,12 +248,12 @@ public static class DysonAgentSystemPrompts
         if (basePrompt.IsError)
             return basePrompt;
 
-        var block = await BuildAvailableModelsBlockAsync(models, providerKind, cancellationToken)
+        var modelsBlock = await BuildAvailableModelsBlockAsync(models, providerKind, cancellationToken)
             .ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(block))
-            return basePrompt;
-
-        return Result<string, string>.AsValue(basePrompt.Value + "\n\n" + block);
+        return Result<string, string>.AsValue(JoinSystemPromptSuffix(
+            basePrompt.Value,
+            modelsBlock,
+            BuildPluginInstructionBlock(config))!);
     }
 
     /// <summary>
@@ -276,7 +276,20 @@ public static class DysonAgentSystemPrompts
     }
 
     /// <summary>
-    /// Joins non-empty system-prompt suffix parts with blank lines (models block + openrules block).
+    /// Formats the bounded always-apply plugin rule block for a session snapshot. Manual rules,
+    /// glob rules, agents, and commands intentionally remain inert here.
+    /// </summary>
+    public static string? BuildPluginInstructionBlock(DysonAgentSessionConfig config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        var block = new DysonPluginContributionResolver()
+            .BuildAlwaysApplyInstructionBlock(config.PluginContributions);
+        return block.IsSuccess && !string.IsNullOrWhiteSpace(block.Value) ? block.Value : null;
+    }
+
+    /// <summary>
+    /// Joins non-empty system-prompt suffix parts with blank lines (models block + openrules block + plugin rules).
     /// </summary>
     public static string? JoinSystemPromptSuffix(params string?[] parts)
     {
@@ -292,6 +305,7 @@ public static class DysonAgentSystemPrompts
 
     /// <summary>
     /// Builds session system-prompt suffix: available-models catalog + openrules AutoInclude block.
+    /// The session appends its immutable plugin always-apply snapshot after this suffix.
     /// </summary>
     public static async Task<string?> BuildSessionSystemPromptSuffixAsync(
         IDysonModelRepository? models,

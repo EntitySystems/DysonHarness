@@ -26,6 +26,11 @@ public sealed class DysonDbContext : DbContext
     public DbSet<DysonSessionTodoEntity> SessionTodos => Set<DysonSessionTodoEntity>();
     public DbSet<DysonAppSettingEntity> AppSettings => Set<DysonAppSettingEntity>();
     public DbSet<DysonConfiguredShellEntity> ConfiguredShells => Set<DysonConfiguredShellEntity>();
+    public DbSet<DysonPluginInstallationEntity> PluginInstallations => Set<DysonPluginInstallationEntity>();
+    public DbSet<DysonPluginVariableValueEntity> PluginVariableValues => Set<DysonPluginVariableValueEntity>();
+    public DbSet<DysonPluginMcpGrantEntity> PluginMcpGrants => Set<DysonPluginMcpGrantEntity>();
+    public DbSet<DysonPluginHookReviewEntity> PluginHookReviews => Set<DysonPluginHookReviewEntity>();
+    public DbSet<DysonPluginHookAuditEntity> PluginHookAudits => Set<DysonPluginHookAuditEntity>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -108,6 +113,101 @@ public sealed class DysonDbContext : DbContext
             e.HasOne(x => x.WorkDirectory)
                 .WithOne()
                 .HasForeignKey<DysonWorkDirectoryConfigurationEntity>(x => x.WorkDirectoryId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DysonPluginInstallationEntity>(e =>
+        {
+            e.ToTable("plugin_installations");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.SubjectId).IsRequired();
+            e.Property(x => x.NormalizedPluginId).IsRequired().UseCollation("NOCASE");
+            e.Property(x => x.DisplayName).IsRequired();
+            e.Property(x => x.SourceKind).IsRequired();
+            e.Property(x => x.SourceLocation).IsRequired();
+            e.Property(x => x.PackageFormat).IsRequired();
+            e.Property(x => x.InstallScope).IsRequired();
+            e.Property(x => x.Status).IsRequired();
+            e.Property(x => x.PackageRoot).IsRequired();
+            e.Property(x => x.ComponentInventoryJson).IsRequired().HasColumnType("TEXT");
+            e.Property(x => x.ConfigurationSchemaJson).HasColumnType("TEXT");
+            e.Property(x => x.DiagnosticsJson).IsRequired().HasColumnType("TEXT");
+            e.HasIndex(x => x.SubjectId);
+            e.HasIndex(x => x.WorkDirectoryId);
+            e.HasIndex(x => new { x.SubjectId, x.PackageRoot }).IsUnique();
+            e.HasIndex(x => new { x.SubjectId, x.NormalizedPluginId })
+                .IsUnique()
+                .HasFilter("\"InstallScope\" = 'Global'");
+            e.HasIndex(x => new { x.SubjectId, x.NormalizedPluginId, x.WorkDirectoryId })
+                .IsUnique()
+                .HasFilter("\"InstallScope\" = 'Project'");
+            e.HasOne(x => x.WorkDirectory)
+                .WithMany()
+                .HasForeignKey(x => x.WorkDirectoryId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DysonPluginVariableValueEntity>(e =>
+        {
+            e.ToTable("plugin_variable_values");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.SubjectId).IsRequired();
+            e.Property(x => x.VariableName).IsRequired();
+            e.Property(x => x.ProtectedValue).IsRequired().HasColumnType("BLOB");
+            e.HasIndex(x => x.SubjectId);
+            e.HasIndex(x => new { x.SubjectId, x.InstallationId, x.VariableName }).IsUnique();
+            e.HasOne(x => x.Installation)
+                .WithMany()
+                .HasForeignKey(x => x.InstallationId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DysonPluginMcpGrantEntity>(e =>
+        {
+            e.ToTable("plugin_mcp_grants");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.SubjectId).IsRequired();
+            e.Property(x => x.ServerId).IsRequired();
+            e.Property(x => x.PackageChecksum).IsRequired();
+            e.HasIndex(x => x.SubjectId);
+            e.HasIndex(x => new { x.SubjectId, x.InstallationId, x.ServerId }).IsUnique();
+            e.HasOne(x => x.Installation)
+                .WithMany()
+                .HasForeignKey(x => x.InstallationId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DysonPluginHookReviewEntity>(e =>
+        {
+            e.ToTable("plugin_hook_reviews");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.SubjectId).IsRequired();
+            e.Property(x => x.HookComponentId).IsRequired();
+            e.Property(x => x.EventName).IsRequired();
+            e.Property(x => x.PermissionsJson).IsRequired().HasColumnType("TEXT");
+            e.Property(x => x.FailureMode).IsRequired();
+            e.HasIndex(x => x.SubjectId);
+            e.HasIndex(x => new { x.SubjectId, x.InstallationId, x.HookComponentId, x.EventName }).IsUnique();
+            e.HasOne(x => x.Installation)
+                .WithMany()
+                .HasForeignKey(x => x.InstallationId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DysonPluginHookAuditEntity>(e =>
+        {
+            e.ToTable("plugin_hook_audits");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.SubjectId).IsRequired();
+            e.Property(x => x.HookComponentId).IsRequired();
+            e.Property(x => x.EventName).IsRequired();
+            e.Property(x => x.Outcome).IsRequired();
+            e.Property(x => x.DetailCode).IsRequired();
+            e.HasIndex(x => x.SubjectId);
+            e.HasIndex(x => new { x.SubjectId, x.InstallationId, x.OccurredUtc });
+            e.HasOne(x => x.Installation)
+                .WithMany()
+                .HasForeignKey(x => x.InstallationId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

@@ -1,0 +1,120 @@
+@namespace Harness.UI.Components.Plugins
+@using DysonHarness
+@using Microsoft.AspNetCore.Components.Forms
+
+@if (_open)
+{
+    <div class="plugin-modal-backdrop" @onclick="Close" @onkeydown="OnKeyDown">
+        <div class="plugin-modal" role="dialog" aria-modal="true" aria-labelledby="plugin-modal-title" @onclick:stopPropagation="true" @onkeydown="OnKeyDown">
+            <div class="plugin-modal__header">
+                <div>
+                    <h3 id="plugin-modal-title">Manage plugins</h3>
+                    <p>Preview package contents before selecting an explicit installation scope.</p>
+                </div>
+                <button type="button" class="btn btn-ghost plugin-modal__close" @onclick="Close" disabled="@_busy" aria-label="Close">×</button>
+            </div>
+            <div class="plugin-modal__tabs" role="tablist" aria-label="Plugin actions">
+                <button type="button" class="plugin-modal__tab is-active" role="tab" aria-selected="true" aria-controls="plugin-modal-import">Import</button>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(_error)) { <div class="error-banner plugin-modal__error">@_error</div> }
+            @if (!string.IsNullOrWhiteSpace(_status)) { <div class="plugin-modal__status" role="status">@_status</div> }
+            <div id="plugin-modal-import" class="plugin-modal__body" role="tabpanel">
+                @if (_flow.Phase != PluginImportPhase.Success)
+                {
+                    <section class="plugin-modal__source" aria-labelledby="plugin-modal-source-title">
+                        <div>
+                            <h4 id="plugin-modal-source-title">1. Select source</h4>
+                            <p>Choose exactly one: a ZIP, a local folder, or a GitHub repository. ZIP files are capped at @FormatBytes(PackageLimits.MaxArchiveBytes).</p>
+                        </div>
+                        <div class="plugin-modal__source-actions">
+                            <label class="btn btn-ghost plugin-modal__upload"><span>Choose ZIP</span><InputFile OnChange="OnZipSelectedAsync" accept=".zip,application/zip,application/x-zip-compressed" disabled="@_busy" /></label>
+                            <button type="button" class="btn btn-ghost" disabled="@_busy" @onclick="ChooseFolderAsync">@(_busy ? "Opening folder picker…" : "Choose folder")</button>
+                        </div>
+                        @if (_flow.SourceKind == DysonPluginSourceKind.LocalZip) { <div class="plugin-modal__selection">ZIP selected: <span class="mono">@_flow.ZipFileName</span> (@FormatBytes(_flow.ZipBytes?.LongLength ?? 0))</div> }
+                        @if (_flow.SourceKind == DysonPluginSourceKind.LocalFolder) { <div class="plugin-modal__selection">Folder selected: <span class="mono">@_flow.FolderPath</span></div> }
+                    </section>
+                    <section class="plugin-modal__source" aria-labelledby="plugin-modal-github-title">
+                        <div><h4 id="plugin-modal-github-title">Or pull from GitHub</h4><p>Enter <span class="mono">owner/repo</span>, a repository URL, or a tree/subdirectory URL. Ref and plugin path are optional.</p></div>
+                        <div class="plugin-modal__fields">
+                            <label>Repository<input type="text" value="@_flow.Repository" @oninput="OnRepositoryInput" placeholder="owner/repo or https://github.com/owner/repo" disabled="@_busy" /></label>
+                            <label>Ref <span class="plugin-modal__optional">optional</span><input type="text" value="@_flow.RequestedRef" @oninput="OnRefInput" placeholder="main, tag, or commit" disabled="@_busy" /></label>
+                            <label>Plugin subdirectory <span class="plugin-modal__optional">optional</span><input type="text" value="@_flow.PluginSubdirectory" @oninput="OnSubdirectoryInput" placeholder="packages/example-plugin" disabled="@_busy" /></label>
+                        </div>
+                        @if (_flow.SourceKind == DysonPluginSourceKind.GitHub) { <div class="plugin-modal__selection">GitHub source selected. The resolved commit will be shown in the preview.</div> }
+                    </section>
+                    @if (_flow.Phase == PluginImportPhase.Source)
+                    {
+                        <section class="plugin-modal__phase" aria-labelledby="plugin-modal-preview-title">
+                            <div><h4 id="plugin-modal-preview-title">2. Preview package</h4><p>Preview stages and validates the package without installing or executing package content.</p></div>
+                            <button type="button" class="btn btn-primary" disabled="@_busy" @onclick="PreviewAsync">@(_busy ? "Previewing…" : "Preview import")</button>
+                            @if (_ambiguousPackagePaths.Count > 0)
+                            {
+                                <div class="plugin-modal__ambiguity" role="group" aria-label="Choose plugin subdirectory">
+                                    <strong>Multiple Cursor packages were found. Select one package path to preview:</strong>
+                                    @foreach (var path in _ambiguousPackagePaths)
+                                    {
+                                        var selectedPath = path;
+                                        <button type="button" class="btn btn-ghost" disabled="@_busy" @onclick="() => PreviewAmbiguousPathAsync(selectedPath)">@selectedPath</button>
+                                    }
+                                </div>
+                            }
+                        </section>
+                    }
+                    @if (_flow.Preview is not null)
+                    {
+                        <section class="plugin-modal__preview" aria-labelledby="plugin-modal-preview-result-title">
+                            <div><h4 id="plugin-modal-preview-result-title">Preview: @_flow.Preview.Plugin.Manifest.DisplayName</h4><p class="mono">@_flow.Preview.Plugin.Manifest.NormalizedId · @(_flow.Preview.Plugin.Manifest.Version ?? "unversioned") · @FormatName(_flow.Preview.Plugin.Format)</p></div>
+                            <dl class="plugin-modal__details">
+                                <dt>Schema</dt><dd>@(_flow.Preview.Plugin.Manifest.SchemaVersion ?? "Not declared")</dd>
+                                <dt>Source</dt><dd class="mono">@_flow.Preview.Plugin.Source.Location</dd>
+                                @if (!string.IsNullOrWhiteSpace(_flow.Preview.Plugin.Source.ResolvedCommit)) { <dt>Resolved commit</dt><dd class="mono">@_flow.Preview.Plugin.Source.ResolvedCommit</dd> }
+                                @if (!string.IsNullOrWhiteSpace(_flow.Preview.Plugin.Source.ContentChecksum)) { <dt>Immutable checksum</dt><dd class="mono">@_flow.Preview.Plugin.Source.ContentChecksum</dd> }
+                            </dl>
+                            @if (!string.IsNullOrWhiteSpace(_flow.Preview.Plugin.Manifest.Description)) { <p>@_flow.Preview.Plugin.Manifest.Description</p> }
+                            <div class="plugin-modal__inventory">
+                                <strong>Component inventory</strong>
+                                @foreach (var group in _flow.Preview.Plugin.Components.GroupBy(component => component.Kind).OrderBy(group => group.Key))
+                                {
+                                    <div class="plugin-modal__inventory-group"><span>@FormatName(group.Key) (@group.Count())</span><ul>@foreach (var component in group) { <li><span class="mono">@component.Id</span> — @component.RelativePath @if (!component.IsSupported) { <em>unsupported</em> }</li> }</ul></div>
+                                }
+                            </div>
+                            <div class="plugin-modal__capabilities"><strong>Capabilities</strong><span>@FormatCapabilities(_flow.Preview.Plugin.Capabilities)</span></div>
+                            @if (_flow.Preview.Plugin.Components.Any(component => !component.IsSupported || component.Kind == DysonPluginComponentKind.Unsupported)) { <div class="plugin-modal__unsupported"><strong>Unsupported components</strong><ul>@foreach (var component in _flow.Preview.Plugin.Components.Where(component => !component.IsSupported || component.Kind == DysonPluginComponentKind.Unsupported)) { <li><span class="mono">@component.Id</span> — @component.RelativePath</li> }</ul></div> }
+                            @if (_flow.Preview.Plugin.Diagnostics.Count > 0) { <div class="plugin-modal__diagnostics"><strong>Diagnostics</strong><ul>@foreach (var diagnostic in _flow.Preview.Plugin.Diagnostics) { <li class="plugin-modal__diagnostic--@diagnostic.Severity.ToString().ToLowerInvariant()">[@diagnostic.Code] @diagnostic.Message</li> }</ul></div> }
+                        </section>
+                    }
+                    @if (_flow.Phase == PluginImportPhase.Scope)
+                    {
+                        <section class="plugin-modal__phase" aria-labelledby="plugin-modal-scope-title">
+                            <div><h4 id="plugin-modal-scope-title">3. Choose install scope</h4><p>Select one scope to continue. Neither option is selected by default.</p></div>
+                            <div class="plugin-modal__scope-options" role="group" aria-label="Required install scope">
+                                <button type="button" class="plugin-modal__scope" disabled="@(_busy || _projectTarget is null)" aria-disabled="@(_projectTarget is null)" title="@(_projectUnavailableReason ?? "")" @onclick="SelectProjectScope"><strong>Install for this project</strong>@if (_projectTarget is null) { <span>@(_projectUnavailableReason ?? "No active work directory.")</span> } else { <span>@_projectName</span><span class="mono">@_projectPluginsRoot</span> }</button>
+                                <button type="button" class="plugin-modal__scope" disabled="@_busy" @onclick="SelectGlobalScope"><strong>Install globally</strong><span>Available to every project in this @Host.CurrentAppMode mode.</span><span class="mono">@_globalPluginsRoot</span></button>
+                            </div>
+                        </section>
+                    }
+                    @if (_flow.Phase is PluginImportPhase.Confirmation or PluginImportPhase.Installing)
+                    {
+                        <section class="plugin-modal__phase plugin-modal__confirmation" aria-labelledby="plugin-modal-install-title">
+                            <div><h4 id="plugin-modal-install-title">4. Confirm installation</h4><p>The selected scope is <strong>@_flow.SelectedTarget!.Scope</strong>. The package is installed only after this confirmation.</p></div>
+                            <dl class="plugin-modal__details"><dt>Package destination</dt><dd class="mono">@_selectedPackageRoot</dd><dt>Plugin data destination</dt><dd class="mono">@_selectedDataRoot</dd></dl>
+                            @if (_flow.GetCapabilityWarnings().Count > 0) { <div class="plugin-modal__warnings"><strong>Review required</strong><ul>@foreach (var warning in _flow.GetCapabilityWarnings()) { <li>@warning</li> }</ul></div> }
+                            <label class="plugin-modal__acknowledgement"><input type="checkbox" checked="@_flow.ConfirmationAccepted" disabled="@_busy" @onchange="OnConfirmationChanged" /> I reviewed the package, destination, and capability warnings.</label>
+                            <div class="plugin-modal__source-actions"><button type="button" class="btn btn-ghost" disabled="@_busy" @onclick="BackToPreview">Back to preview</button><button type="button" class="btn btn-primary" disabled="@(!_flow.CanInstall || _busy)" @onclick="InstallAsync">@(_busy ? "Installing…" : "Install plugin")</button></div>
+                        </section>
+                    }
+                }
+                else
+                {
+                    <section class="plugin-modal__phase plugin-modal__success" aria-labelledby="plugin-modal-success-title">
+                        <div><h4 id="plugin-modal-success-title">Plugin installed</h4><p><strong>@_flow.InstallResult!.Plugin.Manifest.DisplayName</strong> was installed for @_flow.InstallResult.Scope.</p></div>
+                        <dl class="plugin-modal__details"><dt>Package destination</dt><dd class="mono">@_flow.InstallResult.PackageRoot</dd><dt>Plugin data destination</dt><dd class="mono">@_flow.InstallResult.PluginDataRoot</dd></dl>
+                        <p><a href="/settings/plugins">Manage installed plugins</a></p>
+                        @if (!string.IsNullOrWhiteSpace(_flow.RefreshWarning)) { <div class="plugin-modal__warnings">The plugin was committed, but catalog refresh notification needs attention: @_flow.RefreshWarning</div> }
+                        <button type="button" class="btn btn-primary" @onclick="AcknowledgeSuccess">Done</button>
+                    </section>
+                }
+            </div>
+        </div>
+    </div>
+}

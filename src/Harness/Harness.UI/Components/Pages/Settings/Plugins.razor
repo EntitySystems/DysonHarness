@@ -1,0 +1,422 @@
+@page "/settings/plugins"
+@layout SettingsLayout
+@using Harness.UI.Components.Plugins
+@inject DysonPluginCatalogService PluginCatalog
+@inject DysonPluginLifecycleService PluginLifecycle
+@inject DysonPluginVariableService PluginVariables
+@inject DysonPluginHookSecurityService HookSecurity
+@inject Harness.UI.Demo.DysonUiHost Host
+
+<PageTitle>Plugins — Settings</PageTitle>
+
+<div class="settings-page settings-page--plugins">
+    <h1 class="settings-page__title">Plugins</h1>
+    <p class="settings-page__copy">
+        Inspect and manage installed packages. The current work directory overrides a global package with the same id;
+        shadowed global packages remain visible below. Use <span class="mono">/plugins</span> in the composer to import a package.
+    </p>
+
+    @if (!string.IsNullOrWhiteSpace(_error)) { <div class="error-banner">@_error</div> }
+    @if (!string.IsNullOrWhiteSpace(_status)) { <p class="settings-page__copy plugin-settings__status">@_status</p> }
+
+    <div class="settings-page__panel panel plugin-settings__filter">
+        <strong>Catalog scope</strong>
+        @if (_activeWorkDirectoryId is Guid)
+        {
+            <span>Global installations and the active work directory's project installations.</span>
+        }
+        else
+        {
+            <span>Global installations only. <a href="/">Choose a work directory</a> to include project installations.</span>
+        }
+        <button type="button" class="btn btn-ghost btn-sm" disabled="@_busy" @onclick="LoadAsync">Refresh</button>
+    </div>
+
+    <div class="settings-page__panel panel plugin-settings__list">
+        @if (_items.Count == 0)
+        {
+            <div class="empty-state">No installed plugins are visible in this catalog.</div>
+        }
+        else
+        {
+            @foreach (var item in _items)
+            {
+                var installation = item.Installation.Installation;
+                <article class="plugin-settings__item @(item.IsEffective ? "plugin-settings__item--effective" : "")">
+                    <div class="plugin-settings__item-heading">
+                        <div>
+                            <strong>@installation.DisplayName</strong>
+                            <span class="mono plugin-settings__id">@item.NormalizedPluginId</span>
+                        </div>
+                        <div class="plugin-settings__badges">
+                            <span class="badge">@installation.InstallScope</span>
+                            <span class="badge">@item.Installation.Status</span>
+                            @if (!installation.IsEnabled) { <span class="badge">disabled</span> }
+                            @if (item.IsShadowedGlobal) { <span class="badge">shadowed by project</span> }
+                            @if (item.IsEffective) { <span class="badge">effective</span> }
+                        </div>
+                    </div>
+                    <div class="plugin-settings__meta mono">
+                        @installation.PackageFormat · @(installation.Version ?? "unversioned") · @installation.SourceKind · @installation.SourceLocation
+                    </div>
+                    <div class="btn-row plugin-settings__actions">
+                        <button type="button" class="btn btn-ghost btn-sm" disabled="@_busy" @onclick="() => InspectAsync(installation.Id)">Inspect</button>
+                        <button type="button" class="btn btn-ghost btn-sm" disabled="@_busy" @onclick="() => ToggleEnabledAsync(item)">@(installation.IsEnabled ? "Disable" : "Enable")</button>
+                        <button type="button" class="btn btn-ghost btn-sm" disabled="@_busy" @onclick="() => BeginUninstall(item)">Uninstall</button>
+                    </div>
+                </article>
+            }
+        }
+    </div>
+
+    @if (_selected is not null)
+    {
+        var installation = _selected.Installation;
+        <section class="settings-page__panel panel plugin-settings__detail">
+            <div class="plugin-settings__item-heading">
+                <div>
+                    <h2 class="settings-page__title plugin-settings__detail-title">@installation.DisplayName</h2>
+                    <div class="mono plugin-settings__id">@installation.NormalizedPluginId · @installation.Id</div>
+                </div>
+                <button type="button" class="btn btn-ghost btn-sm" @onclick="CloseInspect">Close</button>
+            </div>
+
+            <dl class="plugin-settings__details">
+                <dt>Scope</dt><dd>@installation.InstallScope @(installation.WorkDirectoryId is Guid workDirectoryId ? $"({workDirectoryId})" : "")</dd>
+                <dt>State</dt><dd>@_selected.Status · @(installation.IsEnabled ? "enabled" : "disabled")</dd>
+                <dt>Capabilities</dt><dd>@DescribeCapabilities(_selected.Components)</dd>
+                <dt>Source</dt><dd class="mono">@installation.SourceKind · @installation.SourceLocation</dd>
+                @if (!string.IsNullOrWhiteSpace(installation.RequestedRef)) { <dt>Requested ref</dt><dd class="mono">@installation.RequestedRef</dd> }
+                @if (!string.IsNullOrWhiteSpace(installation.ResolvedCommit)) { <dt>Resolved commit</dt><dd class="mono">@installation.ResolvedCommit</dd> }
+                @if (!string.IsNullOrWhiteSpace(installation.ContentChecksum)) { <dt>Checksum</dt><dd class="mono">@installation.ContentChecksum</dd> }
+                <dt>Package root</dt><dd class="mono">@installation.PackageRoot</dd>
+            </dl>
+
+            <h3>Components</h3>
+            @if (_selected.Components.Count == 0) { <p class="settings-page__copy">No package components were recorded.</p> }
+            else
+            {
+                <div class="plugin-settings__components">
+                    @foreach (var component in _selected.Components)
+                    {
+                        <div class="plugin-settings__component">
+                            <strong>@component.Kind</strong> <span class="mono">@component.Id</span>
+                            <span class="mono">@component.RelativePath</span>
+                            @if (!component.IsSupported) { <em>unsupported</em> }
+                            @if (component.Metadata.Count > 0)
+                            {
+                                <span class="plugin-settings__metadata">@string.Join(" · ", component.Metadata.OrderBy(pair => pair.Key).Select(pair => $"{pair.Key}: {pair.Value}"))</span>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+
+            <h3>Diagnostics</h3>
+            @if (_selected.Diagnostics.Count == 0) { <p class="settings-page__copy">No diagnostics were recorded.</p> }
+            else { <ul class="plugin-settings__diagnostics">@foreach (var diagnostic in _selected.Diagnostics) { <li><strong>@diagnostic.Severity</strong> <span class="mono">[@diagnostic.Code]</span> @diagnostic.Message</li> }</ul> }
+
+            <h3>Updates</h3>
+            <p class="settings-page__copy">Update checks and updates are unavailable because the installed-plugin lifecycle currently exposes no safe update API. Re-import and review a package to install a new version.</p>
+
+            <h3>Configuration variables</h3>
+            <p class="settings-page__copy">Values are protected per subject and are never displayed after storage. A blank field means “replace with this value”; it does not reveal an existing value.</p>
+            @if (_variables.Count == 0)
+            {
+                <p class="settings-page__copy">This package declares no configurable variables.</p>
+            }
+            else
+            {
+                @foreach (var variable in _variables)
+                {
+                    <div class="plugin-settings__variable">
+                        <div><strong class="mono">@variable.Name</strong> <span class="badge">@variable.Type</span> @if (variable.IsRequired) { <span class="badge">required</span> } @if (variable.IsSecret) { <span class="badge">secret</span> } <span class="badge">@variable.DisplayValue</span></div>
+                        @if (!string.IsNullOrWhiteSpace(variable.Description)) { <div class="plugin-settings__hint">@variable.Description</div> }
+                        @if (variable.Uses.Count > 0) { <div class="plugin-settings__hint">Used by: @string.Join(", ", variable.Uses)</div> }
+                        <div class="btn-row">
+                            <input type="@GetVariableInputType(variable)" value="@GetVariableDraft(variable.Name)" @oninput="args => UpdateVariableDraft(args, variable.Name)" placeholder="Set replacement value" autocomplete="new-password" />
+                            <button type="button" class="btn btn-ghost btn-sm" disabled="@_busy" @onclick="() => SetVariableAsync(variable.Name)">Save</button>
+                            @if (variable.HasValue) { <button type="button" class="btn btn-ghost btn-sm" disabled="@_busy" @onclick="() => DeleteVariableAsync(variable.Name)">Delete value</button> }
+                        </div>
+                    </div>
+                }
+            }
+
+            <h3>Hook review</h3>
+            <div class="plugin-settings__dormant">
+                <strong>Runtime dormant.</strong> Reviews are saved only; no package hook is executed here or at runtime until a constrained executor exists.
+            </div>
+            @if (_hooks.Count == 0)
+            {
+                <p class="settings-page__copy">This package declares no supported hook components.</p>
+            }
+            else
+            {
+                <div class="plugin-settings__hook-fields">
+                    <label>Hook <select @bind="_hookComponentId" @bind:after="LoadHookReviewAsync">@foreach (var hook in _hooks) { <option value="@hook.Id">@hook.Id (@hook.RelativePath)</option> }</select></label>
+                    <label>Event <select @bind="_hookEvent" @bind:after="LoadHookReviewAsync">@foreach (var eventName in DysonPluginHookEvents.Supported.OrderBy(value => value, StringComparer.Ordinal)) { <option value="@eventName">@eventName</option> }</select></label>
+                    <label>Failure mode <select @bind="_hookFailureMode"><option value="@DysonPluginHookFailureMode.FailOpen">Fail open</option><option value="@DysonPluginHookFailureMode.FailClosed">Fail closed</option></select></label>
+                    <label>Timeout (ms) <input type="number" min="@DysonPluginHookSecurityService.MinTimeoutMilliseconds" max="@DysonPluginHookSecurityService.MaxTimeoutMilliseconds" @bind="_hookTimeoutMilliseconds" /></label>
+                    <label>Output limit (bytes) <input type="number" min="@DysonPluginHookSecurityService.MinOutputBytes" max="@DysonPluginHookSecurityService.MaxOutputBytes" @bind="_hookMaxOutputBytes" /></label>
+                </div>
+                <div class="plugin-settings__permissions">
+                    <strong>Permissions</strong>
+                    @foreach (var permission in DysonPluginHookPermissions.Supported.OrderBy(value => value, StringComparer.Ordinal))
+                    {
+                        <label><input type="checkbox" checked="@_hookPermissions.Contains(permission)" @onchange="args => SetHookPermission(permission, args.Value is bool selected && selected)" /> @permission</label>
+                    }
+                </div>
+                @if (_hookReview is not null) { <p class="plugin-settings__hint">Current selection: @(_hookReview.IsGranted ? $"reviewed {_hookReview.Grant!.ReviewedUtc:u}" : _hookReview.DenialReason)</p> }
+                <label class="checkbox-row"><input type="checkbox" @bind="_hookAcknowledged" /> I reviewed this supported event, permissions, failure mode, timeout, and output limit.</label>
+                <div class="btn-row"><button type="button" class="btn btn-primary btn-sm" disabled="@(_busy || !_hookAcknowledged)" @onclick="GrantHookAsync">Save review</button>@if (_hookReview?.IsGranted == true) { <button type="button" class="btn btn-ghost btn-sm" disabled="@_busy" @onclick="RevokeHookAsync">Revoke review</button> }</div>
+            }
+        </section>
+    }
+
+    @if (_uninstalling is not null)
+    {
+        <section class="settings-page__panel panel plugin-settings__uninstall">
+            <h2 class="settings-page__title plugin-settings__detail-title">Uninstall @_uninstalling.Installation.Installation.DisplayName</h2>
+            <p class="settings-page__copy">This removes the immutable package directory and its installation record. Choose whether to retain the same-scope <span class="mono">PLUGIN_DATA</span> directory.</p>
+            <label class="checkbox-row"><input type="checkbox" @bind="_deletePluginData" /> Delete PLUGIN_DATA too</label>
+            <label class="checkbox-row"><input type="checkbox" @bind="_uninstallAcknowledged" /> I understand this cannot be undone.</label>
+            <div class="btn-row"><button type="button" class="btn btn-primary btn-sm" disabled="@(_busy || !_uninstallAcknowledged)" @onclick="UninstallAsync">Confirm uninstall</button><button type="button" class="btn btn-ghost btn-sm" disabled="@_busy" @onclick="CancelUninstall">Cancel</button></div>
+        </section>
+    }
+</div>
+
+@code {
+    private readonly List<PluginManagementInstallationItem> _items = [];
+    private readonly List<DysonPluginVariableInfo> _variables = [];
+    private readonly List<DysonResolvedPluginComponent> _hooks = [];
+    private readonly Dictionary<string, string> _variableDrafts = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _hookPermissions = new(StringComparer.Ordinal) { DysonPluginHookPermissions.ReadToolMetadata };
+    private Guid? _activeWorkDirectoryId;
+    private DysonPluginCatalogInstallation? _selected;
+    private PluginManagementInstallationItem? _uninstalling;
+    private DysonPluginHookReviewStatus? _hookReview;
+    private string _hookComponentId = "";
+    private string _hookEvent = DysonPluginHookEvents.ToolBefore;
+    private DysonPluginHookFailureMode _hookFailureMode = DysonPluginHookFailureMode.FailOpen;
+    private int _hookTimeoutMilliseconds = 1_000;
+    private int _hookMaxOutputBytes = 4_096;
+    private bool _hookAcknowledged;
+    private bool _deletePluginData;
+    private bool _uninstallAcknowledged;
+    private bool _busy;
+    private string? _error;
+    private string? _status;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            _activeWorkDirectoryId = Host.CatalogWorkDirectoryId;
+            var catalog = await PluginCatalog.GetEffectiveCatalogAsync(new DysonPluginCatalogRequest { ActiveWorkDirectoryId = _activeWorkDirectoryId });
+            if (catalog.IsError) { _error = catalog.Error; return; }
+            _items.Clear();
+            _items.AddRange(PluginManagementController.Flatten(catalog.Value));
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task InspectAsync(Guid installationId)
+    {
+        _error = null;
+        _status = null;
+        _busy = true;
+        try
+        {
+            var inspection = await PluginCatalog.InspectAsync(installationId);
+            if (inspection.IsError) { _error = inspection.Error; return; }
+            _selected = inspection.Value.Installation;
+            _variables.Clear();
+            _hooks.Clear();
+            _variableDrafts.Clear();
+            var variables = await PluginVariables.ListAsync(installationId);
+            if (variables.IsError) { _error = variables.Error; return; }
+            _variables.AddRange(variables.Value);
+            _hooks.AddRange(_selected.Components.Where(component => component.Kind == DysonPluginComponentKind.Hook && component.IsSupported));
+            _hookComponentId = _hooks.FirstOrDefault()?.Id ?? "";
+            _hookReview = null;
+            _hookAcknowledged = false;
+            await LoadHookReviewAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private void CloseInspect()
+    {
+        _selected = null;
+        _variables.Clear();
+        _hooks.Clear();
+        _variableDrafts.Clear();
+        _hookReview = null;
+    }
+
+    private async Task ToggleEnabledAsync(PluginManagementInstallationItem item)
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            var changed = await PluginLifecycle.SetEnabledAsync(item.Installation.Installation.Id, !item.Installation.Installation.IsEnabled);
+            if (changed.IsError) { _error = changed.Error; return; }
+            Host.NotifyPluginCatalogChanged();
+            _status = item.Installation.Installation.IsEnabled ? "Plugin disabled." : "Plugin enabled.";
+            await LoadAsync();
+            if (_selected?.Installation.Id == item.Installation.Installation.Id) await InspectAsync(item.Installation.Installation.Id);
+        }
+        finally { _busy = false; }
+    }
+
+    private static string DescribeCapabilities(IReadOnlyList<DysonResolvedPluginComponent> components) => components.Count == 0
+        ? "None"
+        : string.Join(", ", components
+            .GroupBy(component => component.Kind)
+            .OrderBy(group => group.Key)
+            .Select(group => $"{group.Key} ({group.Count()})"));
+
+    private string GetVariableDraft(string name) => _variableDrafts.TryGetValue(name, out var value) ? value : "";
+    private static string GetVariableInputType(DysonPluginVariableInfo variable) => variable.IsSecret ? "password" : "text";
+    private void UpdateVariableDraft(ChangeEventArgs args, string name) =>
+        _variableDrafts[name] = args.Value?.ToString() ?? string.Empty;
+
+    private async Task SetVariableAsync(string variableName)
+    {
+        if (_selected is null) return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            var saved = await PluginVariables.SetAsync(_selected.Installation.Id, variableName, GetVariableDraft(variableName));
+            if (saved.IsError) { _error = saved.Error; return; }
+            _variableDrafts.Remove(variableName);
+            _status = $"Saved {variableName}.";
+            await ReloadVariablesAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task DeleteVariableAsync(string variableName)
+    {
+        if (_selected is null) return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            var deleted = await PluginVariables.DeleteAsync(_selected.Installation.Id, variableName);
+            if (deleted.IsError) { _error = deleted.Error; return; }
+            _variableDrafts.Remove(variableName);
+            _status = $"Deleted {variableName}.";
+            await ReloadVariablesAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ReloadVariablesAsync()
+    {
+        if (_selected is null) return;
+        var variables = await PluginVariables.ListAsync(_selected.Installation.Id);
+        if (variables.IsError) { _error = variables.Error; return; }
+        _variables.Clear();
+        _variables.AddRange(variables.Value);
+    }
+
+    private void SetHookPermission(string permission, bool selected)
+    {
+        if (selected) _hookPermissions.Add(permission);
+        else _hookPermissions.Remove(permission);
+    }
+
+    private async Task LoadHookReviewAsync()
+    {
+        if (_selected is null || string.IsNullOrWhiteSpace(_hookComponentId)) return;
+        var review = await HookSecurity.GetStatusAsync(_selected.Installation.Id, _hookComponentId, _hookEvent);
+        if (review.IsError) { _error = review.Error; return; }
+        _hookReview = review.Value;
+    }
+
+    private async Task GrantHookAsync()
+    {
+        if (_selected is null) return;
+        _error = null;
+        var grant = PluginManagementController.BuildHookGrant(_selected.Installation.Id, _hookComponentId, _hookEvent, _hookPermissions, _hookFailureMode, _hookTimeoutMilliseconds, _hookMaxOutputBytes);
+        if (grant.IsError) { _error = grant.Error; return; }
+        _busy = true;
+        try
+        {
+            var saved = await HookSecurity.GrantAsync(grant.Value);
+            if (saved.IsError) { _error = saved.Error; return; }
+            _status = "Hook review saved. The hook remains runtime dormant.";
+            _hookAcknowledged = false;
+            await LoadHookReviewAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task RevokeHookAsync()
+    {
+        if (_selected is null || string.IsNullOrWhiteSpace(_hookComponentId)) return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            var revoked = await HookSecurity.RevokeAsync(_selected.Installation.Id, _hookComponentId, _hookEvent);
+            if (revoked.IsError) { _error = revoked.Error; return; }
+            _status = "Hook review revoked.";
+            await LoadHookReviewAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private void BeginUninstall(PluginManagementInstallationItem item)
+    {
+        _uninstalling = item;
+        _deletePluginData = false;
+        _uninstallAcknowledged = false;
+        _error = null;
+    }
+
+    private void CancelUninstall() => _uninstalling = null;
+
+    private async Task UninstallAsync()
+    {
+        if (_uninstalling is null) return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            var installation = _uninstalling.Installation.Installation;
+            var target = await GetUninstallTargetAsync(installation);
+            if (target.IsError) { _error = target.Error; return; }
+            var removed = await PluginLifecycle.UninstallAsync(new DysonPluginUninstallRequest
+            {
+                InstallationId = installation.Id,
+                Target = target.Value,
+                PluginDataDisposition = _deletePluginData ? DysonPluginDataDisposition.Delete : DysonPluginDataDisposition.Retain,
+            });
+            if (removed.IsError) { _error = removed.Error; return; }
+            Host.NotifyPluginCatalogChanged();
+            _status = removed.Value.PluginDataDeleted ? "Plugin and PLUGIN_DATA removed." : "Plugin removed; PLUGIN_DATA retained.";
+            if (_selected?.Installation.Id == installation.Id) CloseInspect();
+            _uninstalling = null;
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task<Result<DysonPluginInstallTarget, string>> GetUninstallTargetAsync(DysonPluginInstallationEntity installation)
+    {
+        if (string.Equals(installation.InstallScope, DysonPluginStorageValues.GlobalScope, StringComparison.Ordinal))
+            return DysonPluginInstallTarget.ForGlobal(Host.CurrentAppMode);
+
+        var project = await Host.TryGetActivePluginProjectContextAsync();
+        if (project.IsError) return Result<DysonPluginInstallTarget, string>.AsError(project.Error);
+        return DysonPluginInstallTarget.ForProject(project.Value.WorkDirectoryId, project.Value.FileSystem);
+    }
+}

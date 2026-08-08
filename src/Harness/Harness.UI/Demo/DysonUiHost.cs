@@ -27,10 +27,16 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly HttpClient _http;
     private readonly IDysonBrowserControl? _browserControl;
     private readonly DysonFilePreviewStore _filePreviews;
+    private readonly DysonPluginCatalogService _pluginCatalog;
+    private readonly DysonPluginContributionResolver _pluginContributions;
+    private readonly DysonPluginMcpGrantService _pluginMcpGrants;
+    private readonly DysonPluginMcpResolver _pluginMcpResolver;
+    private readonly DysonPluginLifecycleService _pluginLifecycle;
     private readonly SemaphoreSlim _persistGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, DysonAgentSession> _sessionsById = new();
     private readonly ConcurrentDictionary<DysonAgentSession, byte> _hookedSessions = new();
     private readonly ConcurrentDictionary<DysonAgentSession, Guid> _customMcpRetainBySession = new();
+    private readonly ConcurrentDictionary<DysonAgentSession, DysonPluginMcpHost> _pluginMcpHostBySession = new();
     private readonly ConcurrentDictionary<Guid, byte> _busySessions = new();
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _promptGates = new();
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _promptCtsBySession = new();
@@ -88,6 +94,11 @@ public sealed class DysonUiHost : IAsyncDisposable
         HttpClient http,
         DysonCliProxyHost cliProxy,
         DysonFilePreviewStore filePreviews,
+        DysonPluginCatalogService pluginCatalog,
+        DysonPluginContributionResolver pluginContributions,
+        DysonPluginMcpGrantService pluginMcpGrants,
+        DysonPluginMcpResolver pluginMcpResolver,
+        DysonPluginLifecycleService pluginLifecycle,
         IDysonBrowserControl? browserControl = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
@@ -100,6 +111,13 @@ public sealed class DysonUiHost : IAsyncDisposable
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _cliProxy = cliProxy ?? throw new ArgumentNullException(nameof(cliProxy));
         _filePreviews = filePreviews ?? throw new ArgumentNullException(nameof(filePreviews));
+        _pluginCatalog = pluginCatalog ?? throw new ArgumentNullException(nameof(pluginCatalog));
+        _pluginContributions = pluginContributions ?? throw new ArgumentNullException(nameof(pluginContributions));
+        _pluginMcpGrants = pluginMcpGrants ?? throw new ArgumentNullException(nameof(pluginMcpGrants));
+        _pluginMcpResolver = pluginMcpResolver ?? throw new ArgumentNullException(nameof(pluginMcpResolver));
+        _pluginLifecycle = pluginLifecycle ?? throw new ArgumentNullException(nameof(pluginLifecycle));
+        _pluginLifecycle.Changed += OnPluginCatalogChanged;
+        _pluginMcpGrants.Changed += OnPluginMcpGrantChanged;
         _browserControl = browserControl;
         if (_browserControl is not null)
             _browserControl.SnipCaptured += OnBrowserSnipCaptured;
@@ -107,6 +125,75 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     private void OnLongRunningShellRegistryChanged() => Notify();
+
+    private void OnPluginCatalogChanged(object? sender, DysonPluginCatalogChangedEventArgs args) =>
+        _ = RefreshPluginMcpHostsAsync(args.Scope, args.WorkDirectoryId);
+
+    private void OnPluginMcpGrantChanged(object? sender, DysonPluginMcpGrantChangedEventArgs args) =>
+        _ = RefreshPluginMcpHostsAsync(args.Scope, args.WorkDirectoryId);
+
+    private async Task RefreshPluginMcpHostsAsync(
+        DysonPluginInstallScope scope,
+        Guid? affectedWorkDirectoryId)
+    {
+        try
+        {
+            var configs = _hookedSessions.Keys
+                .Select(session => session.Config)
+                .Where(config => config.PluginMcpHost is not null)
+                .Distinct<DysonAgentSessionConfig>(ReferenceEqualityComparer.Instance)
+                .Where(config => scope == DysonPluginInstallScope.Global ||
+                    config.PluginMcpWorkDirectoryId == affectedWorkDirectoryId)
+                .ToArray();
+
+            foreach (var config in configs)
+            {
+                var catalog = await _pluginCatalog.GetEffectiveCatalogAsync(new DysonPluginCatalogRequest
+                {
+                    ActiveWorkDirectoryId = config.PluginMcpWorkDirectoryId,
+                }).ConfigureAwait(false);
+                if (catalog.IsError)
+                {
+                    LastError = $"Plugin MCP refresh failed: {catalog.Error}";
+                    continue;
+                }
+
+                var activation = await _pluginMcpGrants.BuildActivationAsync(catalog.Value)
+                    .ConfigureAwait(false);
+                var effectiveActivation = activation.IsError
+                    ? DysonPluginMcpRuntimeActivation.DenyAll
+                    : activation.Value;
+                if (activation.IsError)
+                    LastError = $"Plugin MCP grants were unavailable: {activation.Error}";
+
+                var refreshed = await config.PluginMcpHost!.RefreshAsync(
+                    catalog.Value,
+                    effectiveActivation,
+                    BuildPluginMcpReservedNames(config)).ConfigureAwait(false);
+                if (refreshed.IsError)
+                    LastError = $"Plugin MCP refresh failed: {refreshed.Error}";
+            }
+        }
+        catch (Exception ex)
+        {
+            LastError = $"Plugin MCP refresh failed: {ex.Message}";
+        }
+
+        Notify();
+    }
+
+    private static IReadOnlySet<string> BuildPluginMcpReservedNames(DysonAgentSessionConfig config)
+    {
+        var names = new HashSet<string>(
+            DysonSessionToolsetBuilder.AllCatalogToolNames(),
+            StringComparer.Ordinal);
+        if (config.CustomMcpHost is { } custom)
+        {
+            foreach (var name in custom.ToolMap.ByCatalog.Keys)
+                names.Add(name);
+        }
+        return names;
+    }
 
     private void OnBrowserSnipCaptured(DysonBrowserSnipPayload payload)
     {
@@ -238,6 +325,12 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// so Composer can reload <c>/skill-</c> suggestions via <see cref="Changed"/>.
     /// </summary>
     public void NotifySkillCatalogChanged() => Notify();
+
+    /// <summary>Signals a committed plugin lifecycle change to catalog-aware UI.</summary>
+    public void NotifyPluginCatalogChanged() => Notify();
+
+    /// <summary>The app-data mode used for global plugin installation paths.</summary>
+    public DysonAppMode CurrentAppMode => DysonBuildInfo.Current;
 
     /// <summary>Skill names queued to attach on the next non-empty <see cref="PromptAsync"/>.</summary>
     public IReadOnlyList<string> PendingSkillNames
@@ -695,16 +788,31 @@ public sealed class DysonUiHost : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         var root = await TryResolveCatalogWorkRootAsync(cancellationToken).ConfigureAwait(false);
+        var contributions = await ResolvePluginContributionsAsync(
+                ActiveWorkDirectoryId ?? _composerWorkDirectoryId,
+                cancellationToken)
+            .ConfigureAwait(false);
         if (root is null)
-            return DysonSkillLoader.ListCatalog(fs: null);
+            return DysonSkillLoader.ListCatalog(fs: null, pluginContributions: contributions);
 
         var fsResult = await DysonWorkspaceFileSystems
             .CreateLocalAsync(root, cancellationToken)
             .ConfigureAwait(false);
         if (fsResult.IsError)
-            return DysonSkillLoader.ListCatalog(fs: null);
+            return DysonSkillLoader.ListCatalog(fs: null, pluginContributions: contributions);
 
-        return DysonSkillLoader.ListCatalog(fsResult.Value);
+        return DysonSkillLoader.ListCatalog(fsResult.Value, pluginContributions: contributions);
+    }
+
+    /// <summary>Explicit plugin command catalog for the focused session or pre-session composer work directory.</summary>
+    public async Task<IReadOnlyList<DysonPluginCommandContribution>> ListPluginCommandCatalogAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var contributions = await ResolvePluginContributionsAsync(
+                ActiveWorkDirectoryId ?? _composerWorkDirectoryId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return contributions.ToCommandCatalog();
     }
 
     /// <summary>
@@ -730,6 +838,38 @@ public sealed class DysonUiHost : IAsyncDisposable
         return Result<IDysonWorkspaceFileSystem, string>.AsValue(fsResult.Value);
     }
 
+    /// <summary>
+    /// Resolves the active project from trusted host state for a plugin install. Browser-selected
+    /// source paths never participate in forming this target or its final package destination.
+    /// </summary>
+    public async Task<Result<DysonPluginProjectContext, string>> TryGetActivePluginProjectContextAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var workDirectoryId = ActiveWorkDirectoryId ?? _composerWorkDirectoryId;
+        if (workDirectoryId is not Guid id || id == Guid.Empty)
+        {
+            return Result<DysonPluginProjectContext, string>.AsError(
+                "No active work directory. Select a work directory before installing a project plugin.");
+        }
+
+        var workDirectory = await _workDirectories.GetAsync(id, cancellationToken).ConfigureAwait(false);
+        if (workDirectory.IsError)
+            return Result<DysonPluginProjectContext, string>.AsError(workDirectory.Error);
+
+        var fileSystem = await DysonWorkspaceFileSystems
+            .CreateLocalAsync(workDirectory.Value.AbsolutePath, cancellationToken)
+            .ConfigureAwait(false);
+        if (fileSystem.IsError)
+            return Result<DysonPluginProjectContext, string>.AsError(fileSystem.Error);
+
+        return Result<DysonPluginProjectContext, string>.AsValue(new DysonPluginProjectContext
+        {
+            WorkDirectoryId = id,
+            WorkDirectoryName = workDirectory.Value.Name,
+            FileSystem = fileSystem.Value,
+        });
+    }
+
     /// <summary>Work directory of the focused session, if any.</summary>
     public Guid? ActiveWorkDirectoryId => _session switch
     {
@@ -737,6 +877,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         OpenAiCompatibleAgentSession openAi => openAi.WorkDirectoryId == Guid.Empty ? null : openAi.WorkDirectoryId,
         _ => null,
     };
+
+    /// <summary>Work directory used for catalog views, including a pre-session composer selection.</summary>
+    public Guid? CatalogWorkDirectoryId => ActiveWorkDirectoryId ?? _composerWorkDirectoryId;
 
     /// <summary>True when a process-wide browser control is registered (Windows CefSharp).</summary>
     public bool IsBrowserControlAvailable => _browserControl is not null;
@@ -1619,7 +1762,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
             if (created.IsError)
             {
-                await ReleaseCustomMcpForConfigAsync(config).ConfigureAwait(false);
+                await ReleaseMcpForConfigAsync(config).ConfigureAwait(false);
                 LastError = created.Error;
                 Notify();
                 return new VoidResult<string>(created.Error);
@@ -1650,7 +1793,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
             if (created.IsError)
             {
-                await ReleaseCustomMcpForConfigAsync(config).ConfigureAwait(false);
+                await ReleaseMcpForConfigAsync(config).ConfigureAwait(false);
                 LastError = created.Error;
                 Notify();
                 return new VoidResult<string>(created.Error);
@@ -2580,7 +2723,11 @@ public sealed class DysonUiHost : IAsyncDisposable
         foreach (var name in pendingSkills)
         {
             // Slash picks always load index-only; agent can LoadSkill(false) for full dir later.
-            var loaded = DysonSkillLoader.ResolveAndLoad(name, loadIndexOnly: true, fs);
+            var loaded = DysonSkillLoader.ResolveAndLoad(
+                name,
+                loadIndexOnly: true,
+                fs,
+                pluginContributions: _session?.Config.PluginContributions);
             if (loaded.IsError)
                 return Result<BuiltUserTurn, string>.AsError(loaded.Error);
             turn.AttachLoadedSkill(loaded.Value);
@@ -2751,25 +2898,29 @@ public sealed class DysonUiHost : IAsyncDisposable
                     "Session has no work directory; cannot resume OpenAI-compatible session.");
             }
 
+            var openAiConfig = await BuildSessionConfigAsync(
+                    full.Value.Session.AgentMode,
+                    full.Value.Session.McpAccessMode,
+                    workDirectoryId: full.Value.Session.WorkDirectoryId,
+                    workRoot: workPath,
+                    cancellationToken)
+                .ConfigureAwait(false);
             var loaded = await OpenAiCompatibleAgentSession.LoadAsync(
                 _sessions,
                 sessionId,
                 providerResult.Value.OpenAi!,
                 _http,
                 workPath,
-                await BuildSessionConfigAsync(
-                        full.Value.Session.AgentMode,
-                        full.Value.Session.McpAccessMode,
-                        workDirectoryId: full.Value.Session.WorkDirectoryId,
-                        workRoot: workPath,
-                        cancellationToken)
-                    .ConfigureAwait(false),
+                openAiConfig,
                 models: _models,
                 appendResumeLog: appendResumeLog,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (loaded.IsError)
+            {
+                await ReleaseMcpForConfigAsync(openAiConfig).ConfigureAwait(false);
                 return Result<LoadedSession, string>.AsError(loaded.Error);
+            }
 
             if (full.Value.Session.WorkDirectoryId is Guid loadedWd)
                 RememberCustomMcpRetain(loaded.Value, loadedWd);
@@ -2796,7 +2947,10 @@ public sealed class DysonUiHost : IAsyncDisposable
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (demoLoaded.IsError)
+            {
+                await ReleaseMcpForConfigAsync(demoConfig).ConfigureAwait(false);
                 return Result<LoadedSession, string>.AsError(demoLoaded.Error);
+            }
 
             if (full.Value.Session.WorkDirectoryId is Guid demoWd)
                 RememberCustomMcpRetain(demoLoaded.Value, demoWd);
@@ -2871,6 +3025,87 @@ public sealed class DysonUiHost : IAsyncDisposable
         DemoDysonAgentProvider? Demo,
         OpenAiCompatibleAgentProvider? OpenAi);
 
+    /// <summary>
+    /// Resolves a session-local plugin snapshot. Plugin catalog failures are non-fatal for ordinary
+    /// session composition: the built-in/OpenRules experience remains available and the host
+    /// surfaces the diagnostic instead of silently dropping it.
+    /// </summary>
+    private async Task<DysonPluginContributionSet> ResolvePluginContributionsAsync(
+        Guid? workDirectoryId,
+        CancellationToken cancellationToken)
+    {
+        var catalog = await _pluginCatalog.GetEffectiveCatalogAsync(new DysonPluginCatalogRequest
+        {
+            ActiveWorkDirectoryId = workDirectoryId,
+        }, cancellationToken).ConfigureAwait(false);
+        if (catalog.IsError)
+        {
+            LastError = $"Plugin contributions were unavailable: {catalog.Error}";
+            return new DysonPluginContributionSet
+            {
+                Diagnostics =
+                [
+                    new DysonPluginDiagnostic
+                    {
+                        Severity = DysonPluginDiagnosticSeverity.Error,
+                        Code = "plugin-catalog-unavailable",
+                        Message = catalog.Error,
+                    },
+                ],
+            };
+        }
+
+        var resolved = _pluginContributions.Resolve(catalog.Value);
+        if (resolved.IsError)
+        {
+            LastError = $"Plugin contributions were unavailable: {resolved.Error}";
+            return new DysonPluginContributionSet
+            {
+                Diagnostics =
+                [
+                    new DysonPluginDiagnostic
+                    {
+                        Severity = DysonPluginDiagnosticSeverity.Error,
+                        Code = "plugin-contribution-resolution-failed",
+                        Message = resolved.Error,
+                    },
+                ],
+            };
+        }
+
+        var contributionError = resolved.Value.Diagnostics.FirstOrDefault(diagnostic =>
+            diagnostic.Severity == DysonPluginDiagnosticSeverity.Error);
+        if (contributionError is not null)
+            LastError = $"Plugin contribution diagnostic: {contributionError.Message}";
+
+        return resolved.Value;
+    }
+
+    /// <summary>
+    /// Adds plugin custom agents without allowing plugin assets to replace built-in modes or each
+    /// other. The resolver's stable ordering makes the surviving first agent deterministic.
+    /// </summary>
+    private static void MergePluginCustomAgents(
+        DysonAgentSessionConfig config,
+        DysonPluginContributionSet contributions)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(contributions);
+
+        foreach (var agent in contributions.ToCustomAgentPrompts()
+                     .OrderBy(item => item.Key, StringComparer.Ordinal))
+        {
+            if (DysonAgentModes.BuiltIns.Contains(agent.Key, StringComparer.OrdinalIgnoreCase)
+                || config.CustomAgents.ContainsKey(agent.Key)
+                || string.IsNullOrWhiteSpace(agent.Value))
+            {
+                continue;
+            }
+
+            config.CustomAgents.Add(agent.Key, agent.Value);
+        }
+    }
+
     private async Task<DysonAgentSessionConfig> BuildSessionConfigAsync(
         string? agentMode = null,
         DysonMcpAccessMode? mcpAccessMode = null,
@@ -2878,10 +3113,14 @@ public sealed class DysonUiHost : IAsyncDisposable
         string? workRoot = null,
         CancellationToken cancellationToken = default)
     {
+        var contributions = await ResolvePluginContributionsAsync(workDirectoryId, cancellationToken)
+            .ConfigureAwait(false);
         var config = new DysonAgentSessionConfig
         {
             BrowserControl = _browserControl,
+            PluginContributions = contributions,
         };
+        MergePluginCustomAgents(config, contributions);
         if (mcpAccessMode is { } mode)
             config.McpAccessMode = mode;
 
@@ -2921,6 +3160,42 @@ public sealed class DysonUiHost : IAsyncDisposable
             config.CustomMcpHost = host;
         }
 
+        config.PluginMcpWorkDirectoryId = workDirectoryId;
+        var pluginCatalog = await _pluginCatalog.GetEffectiveCatalogAsync(new DysonPluginCatalogRequest
+        {
+            ActiveWorkDirectoryId = workDirectoryId,
+        }, cancellationToken).ConfigureAwait(false);
+        if (pluginCatalog.IsError)
+        {
+            LastError = $"Plugin MCP catalog was unavailable: {pluginCatalog.Error}";
+        }
+        else
+        {
+            var activation = await _pluginMcpGrants.BuildActivationAsync(pluginCatalog.Value, cancellationToken)
+                .ConfigureAwait(false);
+            var effectiveActivation = activation.IsError
+                ? DysonPluginMcpRuntimeActivation.DenyAll
+                : activation.Value;
+            if (activation.IsError)
+                LastError = $"Plugin MCP grants were unavailable: {activation.Error}";
+
+            var pluginHost = new DysonPluginMcpHost(_pluginMcpResolver);
+            var refreshed = await pluginHost.RefreshAsync(
+                pluginCatalog.Value,
+                effectiveActivation,
+                BuildPluginMcpReservedNames(config),
+                cancellationToken).ConfigureAwait(false);
+            if (refreshed.IsError)
+            {
+                LastError = $"Plugin MCP runtime was unavailable: {refreshed.Error}";
+                await pluginHost.DisposeAsync().ConfigureAwait(false);
+            }
+            else
+            {
+                config.PluginMcpHost = pluginHost;
+            }
+        }
+
         var setting = await _appSettings
             .GetSettingAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId, cancellationToken)
             .ConfigureAwait(false);
@@ -2954,12 +3229,18 @@ public sealed class DysonUiHost : IAsyncDisposable
         _customMcpRetainBySession[session] = workDirectoryId;
     }
 
-    private static async Task ReleaseCustomMcpForConfigAsync(DysonAgentSessionConfig config)
+    private static async Task ReleaseMcpForConfigAsync(DysonAgentSessionConfig config)
     {
-        if (config.CustomMcpHost is not { } host)
-            return;
-        await DysonCustomMcpHostRegistry.ReleaseAsync(host.WorkDirectoryId).ConfigureAwait(false);
-        config.CustomMcpHost = null;
+        if (config.CustomMcpHost is { } customHost)
+        {
+            await DysonCustomMcpHostRegistry.ReleaseAsync(customHost.WorkDirectoryId).ConfigureAwait(false);
+            config.CustomMcpHost = null;
+        }
+        if (config.PluginMcpHost is { } pluginHost)
+        {
+            await pluginHost.DisposeAsync().ConfigureAwait(false);
+            config.PluginMcpHost = null;
+        }
     }
 
     private async Task ReleaseCustomMcpRetainAsync(DysonAgentSession session)
@@ -2967,6 +3248,13 @@ public sealed class DysonUiHost : IAsyncDisposable
         session.Config.CustomMcpHost?.DetachSession(session);
         if (_customMcpRetainBySession.TryRemove(session, out var workDirectoryId))
             await DysonCustomMcpHostRegistry.ReleaseAsync(workDirectoryId).ConfigureAwait(false);
+
+        if (_pluginMcpHostBySession.TryRemove(session, out var pluginHost))
+        {
+            pluginHost.DetachSession(session);
+            if (!_pluginMcpHostBySession.Values.Any(host => ReferenceEquals(host, pluginHost)))
+                await pluginHost.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     private async Task<Result<ResolvedProvider, string>> ResolveProviderAsync(
@@ -3084,6 +3372,11 @@ public sealed class DysonUiHost : IAsyncDisposable
         session.ParentEventsChanged += OnParentEventsChanged;
 
         session.Config.CustomMcpHost?.AttachSession(session);
+        if (session.Config.PluginMcpHost is { } pluginHost)
+        {
+            pluginHost.AttachSession(session);
+            _pluginMcpHostBySession[session] = pluginHost;
+        }
 
         foreach (var turn in session.Turns)
             HookTurn(turn);
@@ -4414,11 +4707,15 @@ public sealed class DysonUiHost : IAsyncDisposable
             return ValueTask.CompletedTask;
 
         _disposed = true;
+        _pluginLifecycle.Changed -= OnPluginCatalogChanged;
+        _pluginMcpGrants.Changed -= OnPluginMcpGrantChanged;
         CancelToolPanelWidthSaveTimer();
         ClearFocus();
         if (_browserControl is not null)
             _browserControl.SnipCaptured -= OnBrowserSnipCaptured;
         DysonLongRunningShellRegistry.Changed -= OnLongRunningShellRegistryChanged;
+        _pluginLifecycle.Changed -= OnPluginCatalogChanged;
+        _pluginMcpGrants.Changed -= OnPluginMcpGrantChanged;
         UnhookAllSessions();
         lock (_promptQueueGate)
             _promptQueues.Clear();

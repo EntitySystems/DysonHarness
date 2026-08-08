@@ -104,6 +104,17 @@ public static class DysonUiWebHost
         builder.Services.AddDysonLocalDb(databasePath);
 
         builder.Services.AddScoped<DysonToolPolicyStore>();
+        builder.Services.AddScoped<DysonPluginCatalogService>();
+        builder.Services.AddSingleton<DysonPluginContributionResolver>();
+        builder.Services.AddSingleton<DysonPluginPackageLimits>();
+        builder.Services.AddSingleton<IDysonPluginPackageParser, DysonPluginPackageParser>();
+        builder.Services.AddScoped<IDysonPluginPackageService, DysonPluginPackageService>();
+        builder.Services.AddScoped<DysonPluginLifecycleService>();
+        builder.Services.AddScoped(sp => DysonPluginVariableProtector.ForMode(DysonBuildInfo.Current));
+        builder.Services.AddScoped<DysonPluginVariableService>();
+        builder.Services.AddScoped<DysonPluginHookSecurityService>();
+        builder.Services.AddSingleton<DysonPluginMcpResolver>();
+        builder.Services.AddScoped<DysonPluginMcpGrantService>();
         builder.Services.AddSingleton(sp =>
         {
             var factory = sp.GetRequiredService<IHttpClientFactory>();

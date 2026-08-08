@@ -37,11 +37,39 @@ public static class DysonAppPaths
     public static string GetDatabasePath(DysonAppMode mode) =>
         Path.Combine(GetRoot(mode), "dyson.db");
 
+    public static string GetPluginsDirectory(DysonAppMode mode) =>
+        Path.Combine(GetRoot(mode), "plugins");
+
+    public static string GetPluginDataDirectory(DysonAppMode mode) =>
+        Path.Combine(GetRoot(mode), "plugin-data");
+
+    public static string GetPluginSecurityDirectory(DysonAppMode mode) =>
+        Path.Combine(GetRoot(mode), "plugin-security");
+
+    public static string GetPluginVariableProtectionKeyPath(DysonAppMode mode) =>
+        Path.Combine(GetPluginSecurityDirectory(mode), "variable-protection.key");
+
     /// <summary>Creates the mode root directory if missing; returns the root path.</summary>
     public static string EnsureRoot(DysonAppMode mode)
     {
         var root = GetRoot(mode);
         Directory.CreateDirectory(root);
         return root;
+    }
+
+    /// <summary>Creates the mode-scoped global plugin package root if missing.</summary>
+    public static string EnsurePluginsDirectory(DysonAppMode mode)
+    {
+        var path = GetPluginsDirectory(mode);
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    /// <summary>Creates the mode-scoped global persistent plugin-data root if missing.</summary>
+    public static string EnsurePluginDataDirectory(DysonAppMode mode)
+    {
+        var path = GetPluginDataDirectory(mode);
+        Directory.CreateDirectory(path);
+        return path;
     }
 }

@@ -38,9 +38,13 @@ Prebuild scripts (`scripts/resolve-app-mode.sh` / `.ps1`) and MSBuild `GenerateA
 
 - `GetRoot(mode)` → `{base}/{DysonDev|DysonTest|DysonProd}`
 - `GetDatabasePath(mode)` → `{root}/dyson.db`
-- Ensure the directory exists on first open
+- `GetPluginsDirectory(mode)` / `EnsurePluginsDirectory(mode)` → `{root}/plugins`
+- `GetPluginDataDirectory(mode)` / `EnsurePluginDataDirectory(mode)` → `{root}/plugin-data`
+- `GetPluginSecurityDirectory(mode)` → `{root}/plugin-security`
+- `GetPluginVariableProtectionKeyPath(mode)` → `{root}/plugin-security/variable-protection.key`
+- The mode root/database directory is ensured at startup; plugin package/data roots and the protection-key directory are created only when their feature first writes them
 
-Single SQLite file holds providers, slugs, sessions, and app settings for that mode.
+Single SQLite file holds providers, slugs, sessions, app settings, and plugin installation metadata for that mode. Plugin package/data payloads remain outside the database in their explicit project or global roots.
 
 ## Database
 
@@ -64,6 +68,28 @@ Shipped SQLite lives in **`Harness.LocalDb`** (not Engine). External hosts may i
 | `Id` | string PK |
 | `CreatedUtc` | `DateTime` UTC |
 | `UserId` | string? — reserved for future user binding; unused now |
+
+## Plugin installations (`plugin_installations`)
+
+`DysonPluginInstallationEntity` / `IDysonPluginInstallationRepository` persist normalized installation state and provenance; package payloads and `PLUGIN_DATA` are filesystem-owned. Every row is subject-owned.
+
+- `InstallScope = "Project"` requires a non-null `WorkDirectoryId` owned by the current subject and `PackageRoot` beneath that work directory's `.dyson/plugins/` tree.
+- `InstallScope = "Global"` requires `WorkDirectoryId = null`.
+- `ListAsync(null)` returns global records only. `ListAsync(workDirectoryId)` validates work-directory ownership and returns globals plus that project's records so later catalog code can apply project-over-global precedence.
+- Component inventory, configuration schema, and diagnostics are JSON TEXT. Expected validation failures return `Result` / `VoidResult`; writes stamp UTC `InstalledUtc` / `UpdatedUtc`.
+- Unique indexes prevent duplicate normalized ids in the same global or project scope and duplicate subject/package roots. Project rows cascade-delete when their work-directory registration is removed; filesystem package/data deletion remains an explicit lifecycle operation.
+
+Migration `AddPluginInstallations` creates the table and filtered scope indexes. `AddDysonLocalDb` registers `IDysonPluginInstallationRepository`.
+
+## Plugin protected variables and reviewed hooks
+
+Plugin variable declarations remain package metadata in `plugin_installations.ConfigurationSchemaJson`; subject-owned values are separate rows in `plugin_variable_values`, keyed by installation and declared variable name. Values are AES-256-GCM envelopes, authenticated against subject id + installation id + variable name, and use a durable app-mode key at `DysonAppPaths.GetPluginVariableProtectionKeyPath(mode)` under `{root}/plugin-security/`. Ordinary APIs return declaration/presence metadata and redacted display text only. `ResolveAsync` returns a narrow redacted `DysonPluginSecretValue` wrapper for future trusted launch paths. No ambient environment fallback is used.
+
+`plugin_hook_reviews` stores explicit subject-owned grants by installation + hook component + supported event, including permission strings, fail-open/fail-closed choice, timeout/output bounds, package checksum, reviewer timestamp, and revocation. Absence, revocation, disabled installations, undeclared hooks, and stale package checksums all deny activation. `plugin_hook_audits` is append-only through its repository API and contains bounded codes/counts/timing only—never variable values or raw hook output. This foundation does not execute hooks or intercept runtime events.
+
+`AddPluginSecurityFoundations` creates all three tables. `AddDysonLocalDb` registers `IDysonPluginVariableValueRepository` and `IDysonPluginHookSecurityRepository`. A host that enables the Engine services must additionally create one mode-scoped `DysonPluginVariableProtector`, then register `DysonPluginVariableService` and `DysonPluginHookSecurityService` as scoped services. Future MCP/hook resolvers should call only `DysonPluginVariableService.ResolveAsync` at the final trusted launch boundary; they must not place plaintext in catalog models, diagnostics, events, logs, or persisted JSON.
+
+Threat boundary: the app-mode key is deliberately shallow local-app protection, not a hardware/keychain or per-tenant cloud KMS. File permissions are restricted to the current Unix user where supported; compromise of the same OS account or app-data root can expose both key and ciphertext. Cloud hosts must replace this local key strategy with deployment-managed key protection before claiming tenant-grade secret isolation.
 
 ## App settings (`app_settings`)
 

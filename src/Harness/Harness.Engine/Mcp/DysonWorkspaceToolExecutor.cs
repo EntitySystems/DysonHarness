@@ -14,7 +14,8 @@ namespace DysonHarness;
 /// ExpandThoughtProcess / StartNewTurn / DropTurnContext / RestoreTurnContext, in-process web search/fetch tools,
 /// <c>JsonDynamicStructuredLanguageToolchain</c>, browser control tools
 /// (when <see cref="DysonAgentSessionConfig.BrowserControl"/> is set), and custom MCP tools
-/// (when <see cref="DysonAgentSessionConfig.CustomMcpHost"/> is set and active).
+/// (when <see cref="DysonAgentSessionConfig.CustomMcpHost"/> is set and active), and explicitly
+/// granted managed plugin MCP tools (when <see cref="DysonAgentSessionConfig.PluginMcpHost"/> is set).
 /// Other catalog tools return a not-implemented stub result.
 /// </summary>
 public sealed partial class DysonWorkspaceToolExecutor
@@ -59,6 +60,10 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         try
         {
+            var pluginHost = _session.Config.PluginMcpHost;
+            if (pluginHost is not null && pluginHost.IsPluginTool(call.ToolName))
+                return await ExecutePluginMcpToolAsync(call, pluginHost, cancellationToken).ConfigureAwait(false);
+
             var customHost = _session.Config.CustomMcpHost;
             if (customHost is not null && customHost.IsCustomTool(call.ToolName))
                 return await ExecuteCustomMcpToolAsync(call, customHost, cancellationToken).ConfigureAwait(false);
@@ -153,6 +158,19 @@ public sealed partial class DysonWorkspaceToolExecutor
             .CallToolAsync(call.ToolName, call.ArgumentsJson, cancellationToken)
             .ConfigureAwait(false);
 
+        return result.IsError
+            ? Error(call, result.Error)
+            : Ok(call, result.Value);
+    }
+
+    private static async Task<DysonToolCallResult> ExecutePluginMcpToolAsync(
+        DysonToolCall call,
+        DysonPluginMcpHost host,
+        CancellationToken cancellationToken)
+    {
+        var result = await host
+            .InvokeToolAsync(call.ToolName, call.ArgumentsJson, cancellationToken)
+            .ConfigureAwait(false);
         return result.IsError
             ? Error(call, result.Error)
             : Ok(call, result.Value);
@@ -1537,7 +1555,12 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Error(call, loadIndexOnly.Error);
 
         var loaded = await DysonSkillLoader
-            .ResolveAndLoadAsync(name.Value, loadIndexOnly.Value, _fs, cancellationToken)
+            .ResolveAndLoadAsync(
+                name.Value,
+                loadIndexOnly.Value,
+                _fs,
+                cancellationToken,
+                _session.Config.PluginContributions)
             .ConfigureAwait(false);
         if (loaded.IsError)
             return Error(call, loaded.Error);

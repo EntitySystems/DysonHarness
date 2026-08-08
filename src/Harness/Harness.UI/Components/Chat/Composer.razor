@@ -2,6 +2,7 @@
 @using DysonHarness
 @using Harness.UI.Components.Models
 @using Harness.UI.Components.Skills
+@using Harness.UI.Components.Plugins
 @using Harness.UI.Demo
 @using Microsoft.AspNetCore.Components.Forms
 @implements IAsyncDisposable
@@ -13,7 +14,8 @@
     <AskQuestionPopover Ask="Ask" OnSubmit="OnAskSubmit" />
     <PlanReadyPopover Pending="Host.PendingPlanReady" />
     <SkillSearchModal @ref="_skillSearch" />
-    <ComposerHelpModal @ref="_helpModal" OnInsert="OnHelpInsert" />
+    <PluginModal @ref="_pluginModal" />
+    <ComposerHelpModal @ref="_helpModal" OnInsert="OnHelpInsert" PluginCommands="_pluginCommands" />
     <div @ref="_shell"
          class="composer-shell @(_dragOver ? "is-drop-target" : null)">
         <div class="composer__prompt">
@@ -216,6 +218,7 @@
     private ElementReference _shell;
     private ModelSlugPicker? _modelPicker;
     private SkillSearchModal? _skillSearch;
+    private PluginModal? _pluginModal;
     private ComposerHelpModal? _helpModal;
     private bool _textareaBound;
     private bool _imageCaptureBound;
@@ -224,6 +227,7 @@
     private int _fileInputKey;
     private readonly List<ComposerSlashCommands.ModelOption> _models = [];
     private readonly List<ComposerSlashCommands.SkillOption> _skills = [];
+    private readonly List<ComposerSlashCommands.PluginCommandOption> _pluginCommands = [];
     private IReadOnlyList<ComposerSlashCommands.Suggestion> _suggestions = [];
     private bool _slashOpen;
     private int _highlight;
@@ -319,6 +323,7 @@
     {
         await RefreshModelsAsync();
         await RefreshSkillsAsync();
+        await RefreshPluginCommandsAsync();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -358,6 +363,7 @@
     private void OnHostChanged() => _ = InvokeAsync(async () =>
     {
         await RefreshSkillsAsync();
+        await RefreshPluginCommandsAsync();
         StateHasChanged();
     });
 
@@ -393,6 +399,13 @@
         var catalog = await Host.ListSkillCatalogAsync();
         foreach (var entry in catalog)
             _skills.Add(ComposerSlashCommands.ToSkillOption(entry));
+    }
+
+    private async Task RefreshPluginCommandsAsync()
+    {
+        _pluginCommands.Clear();
+        var catalog = await Host.ListPluginCommandCatalogAsync();
+        _pluginCommands.AddRange(ComposerSlashCommands.ToPluginCommandOptions(catalog, _models));
     }
 
     private string ResolveSkillDisplay(string skillName)
@@ -446,10 +459,17 @@
             }
         }
 
+        if (token.StartsWith("/plugin", StringComparison.OrdinalIgnoreCase))
+        {
+            await RefreshPluginCommandsAsync();
+            if (generation != _slashRefreshGeneration)
+                return;
+        }
+
         if (generation != _slashRefreshGeneration)
             return;
 
-        _suggestions = ComposerSlashCommands.Filter(token, _models, _skills);
+        _suggestions = ComposerSlashCommands.Filter(token, _models, _skills, _pluginCommands);
         _slashOpen = _suggestions.Count > 0;
         _highlight = 0;
     }
@@ -493,7 +513,11 @@
     {
         await ApplyKindAsync(suggestion);
 
-        if (ComposerSlashCommands.TryGetLeadingToken(_text, out _, out var remainder))
+        if (suggestion.Kind == ComposerSlashCommands.Kind.Plugins)
+            _text = "";
+        else if (suggestion.Kind == ComposerSlashCommands.Kind.PluginCommand)
+            _text = suggestion.PluginCommandInstructions ?? "";
+        else if (ComposerSlashCommands.TryGetLeadingToken(_text, out _, out var remainder))
             _text = remainder;
         else
             _text = "";
@@ -521,6 +545,13 @@
                 break;
             case ComposerSlashCommands.Kind.SkillSearch:
                 OpenSkillSearch();
+                break;
+            case ComposerSlashCommands.Kind.Plugins:
+                OpenPlugins();
+                break;
+            // Plugin command instructions are deliberately inserted by ApplySuggestionAsync / SubmitAsync.
+            // They remain editable composer text and never become an implicit inference request.
+            case ComposerSlashCommands.Kind.PluginCommand:
                 break;
             case ComposerSlashCommands.Kind.Help:
                 OpenHelp();
@@ -612,16 +643,31 @@
 
         var raw = _text;
 
-        if (ComposerSlashCommands.TryResolve(raw, _models, out var parsed, _skills) && parsed is not null)
+        if (ComposerSlashCommands.TryResolve(raw, _models, out var parsed, _skills, _pluginCommands) && parsed is not null)
         {
+            if (parsed.Suggestion.Kind == ComposerSlashCommands.Kind.PluginCommand)
+            {
+                _text = parsed.Suggestion.PluginCommandInstructions ?? "";
+                _slashOpen = false;
+                _suggestions = [];
+                _highlight = 0;
+                return;
+            }
+
             await ApplyKindAsync(parsed.Suggestion);
-            raw = parsed.Remainder;
+            raw = parsed.Suggestion.Kind == ComposerSlashCommands.Kind.Plugins
+                ? ""
+                : parsed.Remainder;
         }
 
         _text = "";
         _slashOpen = false;
         _suggestions = [];
         _highlight = 0;
+
+        // /plugins is always UI-only, including when ordinary composer attachments are pending.
+        if (parsed?.Suggestion.Kind == ComposerSlashCommands.Kind.Plugins)
+            return;
 
         // Empty after strip: apply-only (mode/model/new/skill) unless images/files are pending.
         if (string.IsNullOrWhiteSpace(raw)
@@ -637,6 +683,9 @@
 
     /// <summary>Opens the skill search modal (<c>/skill-search</c>).</summary>
     public void OpenSkillSearch() => _skillSearch?.Open();
+
+    /// <summary>Opens the plugin import modal (<c>/plugins</c>).</summary>
+    public void OpenPlugins() => _pluginModal?.Open();
 
     /// <summary>Opens the composer command help modal (<c>/help</c>).</summary>
     public void OpenHelp() => _helpModal?.Open();

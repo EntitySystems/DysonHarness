@@ -10,6 +10,7 @@ public enum DysonSkillSource
     DysonSkills = 1,
     Literal = 2,
     OpenRules = 3,
+    Plugin = 4,
 }
 
 /// <summary>Loaded skill payload for model injection + UI modal.</summary>
@@ -21,13 +22,19 @@ public sealed class DysonLoadedSkill
     public required string Markdown { get; init; }
     public required DysonSkillSource Source { get; init; }
     public required bool LoadIndexOnly { get; init; }
+    /// <summary>Normalized plugin id when this skill came from a plugin package.</summary>
+    public string? PluginId { get; init; }
+    /// <summary>Package-relative entry path when this skill came from a plugin package.</summary>
+    public string? PluginPackageRelativePath { get; init; }
 }
 
 /// <summary>Catalog row for slash search (no body until selected).</summary>
 public sealed record DysonSkillCatalogEntry(
     string Name,
     string DisplayName,
-    DysonSkillSource Source);
+    DysonSkillSource Source,
+    string? PluginId = null,
+    string? PluginPackageRelativePath = null);
 
 /// <summary>
 /// Resolves and loads agent skills: included embedded → <c>.dyson/skills</c> → literal
@@ -49,7 +56,8 @@ public static class DysonSkillLoader
         string name,
         bool loadIndexOnly,
         IDysonWorkspaceFileSystem? fs,
-        string? providerId = null)
+        string? providerId = null,
+        DysonPluginContributionSet? pluginContributions = null)
     {
         if (string.IsNullOrWhiteSpace(name))
             return Result<DysonLoadedSkill, string>.AsError("Skill name is required.");
@@ -61,20 +69,23 @@ public static class DysonSkillLoader
         if (early.Value is not null)
             return Result<DysonLoadedSkill, string>.AsValue(early.Value);
 
-        if (fs is null || !fs.IsInitialized)
+        if (fs is not null && fs.IsInitialized)
         {
-            return Result<DysonLoadedSkill, string>.AsError(
-                $"Skill '{trimmed}' not found in included skills (workspace filesystem unavailable for .dyson/skills, literal, or openrules paths).");
+            var openRules = TryLoadOpenRulesAgentOptionalSync(trimmed, loadIndexOnly, fs, providerId);
+            if (openRules.IsError)
+                return Result<DysonLoadedSkill, string>.AsError(openRules.Error);
+            if (openRules.Value is not null)
+                return Result<DysonLoadedSkill, string>.AsValue(openRules.Value);
         }
 
-        var openRules = TryLoadOpenRulesAgentOptionalSync(trimmed, loadIndexOnly, fs, providerId);
-        if (openRules.IsError)
-            return Result<DysonLoadedSkill, string>.AsError(openRules.Error);
-        if (openRules.Value is not null)
-            return Result<DysonLoadedSkill, string>.AsValue(openRules.Value);
+        var plugin = TryLoadPluginSkill(trimmed, loadIndexOnly, pluginContributions);
+        if (plugin.IsError)
+            return Result<DysonLoadedSkill, string>.AsError(plugin.Error);
+        if (plugin.Value is not null)
+            return Result<DysonLoadedSkill, string>.AsValue(plugin.Value);
 
         return Result<DysonLoadedSkill, string>.AsError(
-            $"Skill '{trimmed}' not found (included → .dyson/skills → literal → openrules AgentOptional).");
+            $"Skill '{trimmed}' not found (included → .dyson/skills → literal → openrules AgentOptional → plugin).");
     }
 
     /// <summary>
@@ -84,8 +95,9 @@ public static class DysonSkillLoader
         string name,
         bool loadIndexOnly,
         IDysonWorkspaceFileSystem? fs,
-        CancellationToken cancellationToken = default) =>
-        ResolveAndLoadAsync(name, loadIndexOnly, fs, providerId: null, cancellationToken);
+        CancellationToken cancellationToken = default,
+        DysonPluginContributionSet? pluginContributions = null) =>
+        ResolveAndLoadAsync(name, loadIndexOnly, fs, providerId: null, cancellationToken, pluginContributions);
 
     /// <summary>
     /// Async resolve/load filtered by <paramref name="providerId"/> (default dyson).
@@ -95,7 +107,8 @@ public static class DysonSkillLoader
         bool loadIndexOnly,
         IDysonWorkspaceFileSystem? fs,
         string? providerId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        DysonPluginContributionSet? pluginContributions = null)
     {
         if (string.IsNullOrWhiteSpace(name))
             return Result<DysonLoadedSkill, string>.AsError("Skill name is required.");
@@ -107,22 +120,25 @@ public static class DysonSkillLoader
         if (early.Value is not null)
             return Result<DysonLoadedSkill, string>.AsValue(early.Value);
 
-        if (fs is null || !fs.IsInitialized)
+        if (fs is not null && fs.IsInitialized)
         {
-            return Result<DysonLoadedSkill, string>.AsError(
-                $"Skill '{trimmed}' not found in included skills (workspace filesystem unavailable for .dyson/skills, literal, or openrules paths).");
+            var openRules = await TryLoadOpenRulesAgentOptionalAsync(
+                    trimmed, loadIndexOnly, fs, providerId, cancellationToken)
+                .ConfigureAwait(false);
+            if (openRules.IsError)
+                return Result<DysonLoadedSkill, string>.AsError(openRules.Error);
+            if (openRules.Value is not null)
+                return Result<DysonLoadedSkill, string>.AsValue(openRules.Value);
         }
 
-        var openRules = await TryLoadOpenRulesAgentOptionalAsync(
-                trimmed, loadIndexOnly, fs, providerId, cancellationToken)
-            .ConfigureAwait(false);
-        if (openRules.IsError)
-            return Result<DysonLoadedSkill, string>.AsError(openRules.Error);
-        if (openRules.Value is not null)
-            return Result<DysonLoadedSkill, string>.AsValue(openRules.Value);
+        var plugin = TryLoadPluginSkill(trimmed, loadIndexOnly, pluginContributions);
+        if (plugin.IsError)
+            return Result<DysonLoadedSkill, string>.AsError(plugin.Error);
+        if (plugin.Value is not null)
+            return Result<DysonLoadedSkill, string>.AsValue(plugin.Value);
 
         return Result<DysonLoadedSkill, string>.AsError(
-            $"Skill '{trimmed}' not found (included → .dyson/skills → literal → openrules AgentOptional).");
+            $"Skill '{trimmed}' not found (included → .dyson/skills → literal → openrules AgentOptional → plugin).");
     }
 
     /// <summary>
@@ -161,7 +177,8 @@ public static class DysonSkillLoader
     /// </summary>
     public static IReadOnlyList<DysonSkillCatalogEntry> ListCatalog(
         IDysonWorkspaceFileSystem? fs,
-        string? providerId = null)
+        string? providerId = null,
+        DysonPluginContributionSet? pluginContributions = null)
     {
         var list = new List<DysonSkillCatalogEntry>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -174,7 +191,10 @@ public static class DysonSkillLoader
         }
 
         if (fs is null || !fs.IsInitialized)
+        {
+            AddPluginCatalogEntries(list, seen, pluginContributions);
             return list;
+        }
 
         var entries = fs.EnumerateEntries(DysonSkillsRelativeDir);
         if (!entries.IsError)
@@ -209,7 +229,48 @@ public static class DysonSkillLoader
                 DysonSkillSource.OpenRules));
         }
 
+        AddPluginCatalogEntries(list, seen, pluginContributions);
         return list;
+    }
+
+    private static Result<DysonLoadedSkill?, string> TryLoadPluginSkill(
+        string name,
+        bool loadIndexOnly,
+        DysonPluginContributionSet? pluginContributions)
+    {
+        if (pluginContributions is null)
+            return Result<DysonLoadedSkill?, string>.AsValue(null);
+
+        var match = pluginContributions.Skills.FirstOrDefault(skill =>
+            string.Equals(skill.StableId, name, StringComparison.OrdinalIgnoreCase));
+        if (match is null)
+            return Result<DysonLoadedSkill?, string>.AsValue(null);
+
+        var loaded = new DysonPluginContributionResolver().LoadSkill(pluginContributions, match.StableId, loadIndexOnly);
+        return loaded.IsError
+            ? Result<DysonLoadedSkill?, string>.AsError(loaded.Error)
+            : Result<DysonLoadedSkill?, string>.AsValue(loaded.Value);
+    }
+
+    private static void AddPluginCatalogEntries(
+        List<DysonSkillCatalogEntry> list,
+        HashSet<string> seen,
+        DysonPluginContributionSet? pluginContributions)
+    {
+        if (pluginContributions is null)
+            return;
+
+        foreach (var skill in pluginContributions.Skills.OrderBy(item => item.StableId, StringComparer.Ordinal))
+        {
+            if (!seen.Add(skill.StableId))
+                continue;
+            list.Add(new DysonSkillCatalogEntry(
+                skill.StableId,
+                skill.DisplayName,
+                DysonSkillSource.Plugin,
+                skill.Provenance.PluginId,
+                skill.Provenance.PackageRelativePath));
+        }
     }
 
     private static Result<DysonLoadedSkill?, string> TryLoadOpenRulesAgentOptionalSync(

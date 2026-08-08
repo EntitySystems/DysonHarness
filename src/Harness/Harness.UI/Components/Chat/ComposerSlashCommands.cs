@@ -7,7 +7,7 @@ namespace Harness.UI.Components.Chat;
 /// </summary>
 public static class ComposerSlashCommands
 {
-    public const int MaxSuggestions = 5;
+    public const int MaxSuggestions = 6;
 
     public enum Kind
     {
@@ -16,6 +16,8 @@ public static class ComposerSlashCommands
         Model,
         Skill,
         SkillSearch,
+        Plugins,
+        PluginCommand,
         Help,
     }
 
@@ -38,13 +40,22 @@ public static class ComposerSlashCommands
         string Token,
         string Label);
 
+    /// <summary>An explicit plugin command whose instructions are inserted for review, never sent automatically.</summary>
+    public sealed record PluginCommandOption(
+        string StableId,
+        string DisplayName,
+        string Token,
+        string Label,
+        string Instructions);
+
     public sealed record Suggestion(
         string Token,
         string Label,
         Kind Kind,
         string? Mode = null,
         Guid? ModelSlugId = null,
-        string? SkillName = null);
+        string? SkillName = null,
+        string? PluginCommandInstructions = null);
 
     public sealed record ParseResult(
         Suggestion Suggestion,
@@ -59,6 +70,9 @@ public static class ComposerSlashCommands
     private static readonly Suggestion SkillSearchSuggestion =
         new("/skill-search", "Search skills", Kind.SkillSearch);
 
+    private static readonly Suggestion PluginsSuggestion =
+        new("/plugins", "Manage plugins", Kind.Plugins);
+
     private static readonly Suggestion HelpSuggestion =
         new("/help", "Command help", Kind.Help);
 
@@ -68,6 +82,7 @@ public static class ComposerSlashCommands
         new("/plan", "Plan mode", Kind.Mode, Mode: DysonAgentModes.Plan),
         new("/work", "Work mode", Kind.Mode, Mode: DysonAgentModes.Work),
         new("/new", "New session", Kind.NewSession),
+        PluginsSuggestion,
         SkillSearchSuggestion,
         HelpSuggestion,
     ];
@@ -81,6 +96,7 @@ public static class ComposerSlashCommands
         new("/plan ", "Plan mode", HelpSection.BuiltIn),
         new("/work ", "Work mode", HelpSection.BuiltIn),
         new("/new", "New session", HelpSection.BuiltIn),
+        new("/plugins", "Manage plugins", HelpSection.BuiltIn),
         new("/skill-search", "Search skills", HelpSection.BuiltIn),
         new("/help", "Command help", HelpSection.BuiltIn),
         new("/{model-alias}", "Switch model (registered slug aliases)", HelpSection.Pattern),
@@ -128,7 +144,8 @@ public static class ComposerSlashCommands
     public static IReadOnlyList<Suggestion> Filter(
         string typedToken,
         IReadOnlyList<ModelOption> models,
-        IReadOnlyList<SkillOption>? skills = null)
+        IReadOnlyList<SkillOption>? skills = null,
+        IReadOnlyList<PluginCommandOption>? pluginCommands = null)
     {
         var filter = typedToken.StartsWith('/') ? typedToken[1..] : typedToken;
         filter = filter.Trim();
@@ -139,6 +156,9 @@ public static class ComposerSlashCommands
 
         if (IsSkillFilter(filter))
             return FilterSkills(filter, skills ?? []);
+
+        if (IsPluginCommandFilter(filter))
+            return FilterPluginCommands(filter, pluginCommands ?? []);
 
         var results = new List<Suggestion>(MaxSuggestions);
 
@@ -175,7 +195,8 @@ public static class ComposerSlashCommands
         string? text,
         IReadOnlyList<ModelOption> models,
         out ParseResult? result,
-        IReadOnlyList<SkillOption>? skills = null)
+        IReadOnlyList<SkillOption>? skills = null,
+        IReadOnlyList<PluginCommandOption>? pluginCommands = null)
     {
         result = null;
         if (!TryGetLeadingToken(text, out var token, out var remainder))
@@ -183,6 +204,7 @@ public static class ComposerSlashCommands
 
         var name = token.StartsWith('/') ? token[1..] : token;
         skills ??= [];
+        pluginCommands ??= [];
 
         // Exact /skill-search before IsSkillFilter (token starts with "skill").
         if (string.Equals(name, "skill-search", StringComparison.OrdinalIgnoreCase))
@@ -223,6 +245,18 @@ public static class ComposerSlashCommands
             return true;
         }
 
+        var pluginCommand = pluginCommands.FirstOrDefault(command =>
+            string.Equals(command.Token, token, StringComparison.OrdinalIgnoreCase));
+        if (pluginCommand is not null)
+        {
+            result = new ParseResult(new Suggestion(
+                pluginCommand.Token,
+                pluginCommand.Label,
+                Kind.PluginCommand,
+                PluginCommandInstructions: pluginCommand.Instructions), remainder);
+            return true;
+        }
+
         // Exact skill token /skill-{name} even when filter prefix is not "skill"
         var skillExact = skills.FirstOrDefault(s =>
             string.Equals(s.Token, token, StringComparison.OrdinalIgnoreCase)
@@ -240,7 +274,7 @@ public static class ComposerSlashCommands
         }
 
         // ponytail: ceiling = first filtered hit; upgrade if send should require an exact token.
-        var suggestions = Filter(token, models, skills);
+        var suggestions = Filter(token, models, skills, pluginCommands);
         if (suggestions.Count == 0)
             return false;
 
@@ -257,6 +291,44 @@ public static class ComposerSlashCommands
             entry.DisplayName,
             token,
             $"{entry.DisplayName} · skill");
+    }
+
+    /// <summary>
+    /// Builds command options with stable namespaced tokens. Options colliding with a built-in token,
+    /// a model alias, or an earlier plugin token are omitted rather than letting a plugin shadow UI.
+    /// </summary>
+    public static IReadOnlyList<PluginCommandOption> ToPluginCommandOptions(
+        IReadOnlyList<DysonPluginCommandContribution> commands,
+        IReadOnlyList<ModelOption> models)
+    {
+        ArgumentNullException.ThrowIfNull(commands);
+        ArgumentNullException.ThrowIfNull(models);
+
+        var reserved = new HashSet<string>(BuiltIns.Select(item => item.Token), StringComparer.OrdinalIgnoreCase);
+        reserved.Add("/skill-");
+        foreach (var model in models)
+            reserved.Add("/" + model.DisplayAlias.Trim());
+
+        var options = new List<PluginCommandOption>();
+        foreach (var command in commands.OrderBy(item => item.StableId, StringComparer.Ordinal))
+        {
+            if (string.IsNullOrWhiteSpace(command.Instructions))
+                continue;
+
+            var token = "/plugin-" + SanitizePluginToken(command.Provenance.PluginId) + "-" +
+                        SanitizePluginToken(command.CommandId);
+            if (!reserved.Add(token))
+                continue;
+
+            options.Add(new PluginCommandOption(
+                command.StableId,
+                command.DisplayName,
+                token,
+                $"{command.DisplayName} · plugin {command.Provenance.PluginDisplayName}",
+                command.Instructions));
+        }
+
+        return options;
     }
 
     /// <summary>
@@ -281,6 +353,21 @@ public static class ComposerSlashCommands
 
     private static bool IsSkillFilter(string filter) =>
         filter.StartsWith("skill", StringComparison.OrdinalIgnoreCase);
+
+    private static IReadOnlyList<Suggestion> FilterPluginCommands(
+        string filter,
+        IReadOnlyList<PluginCommandOption> commands) => commands
+        .Where(command => command.Token[1..].StartsWith(filter, StringComparison.OrdinalIgnoreCase))
+        .Take(MaxSuggestions)
+        .Select(command => new Suggestion(
+            command.Token,
+            command.Label,
+            Kind.PluginCommand,
+            PluginCommandInstructions: command.Instructions))
+        .ToArray();
+
+    private static bool IsPluginCommandFilter(string filter) =>
+        filter.StartsWith("plugin", StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyList<Suggestion> FilterSkills(
         string filter,
@@ -338,7 +425,9 @@ public static class ComposerSlashCommands
         return 0;
     }
 
-    private static string SanitizeSkillToken(string name)
+    private static string SanitizeSkillToken(string name) => SanitizePluginToken(name, "skill");
+
+    private static string SanitizePluginToken(string name, string fallback = "command")
     {
         var sb = new System.Text.StringBuilder(name.Length);
         foreach (var ch in name.Trim())
@@ -350,7 +439,7 @@ public static class ComposerSlashCommands
         }
 
         var token = sb.ToString().Trim('-');
-        return string.IsNullOrEmpty(token) ? "skill" : token;
+        return string.IsNullOrEmpty(token) ? fallback : token;
     }
 
     private static bool MatchesBuiltIn(string commandToken, string filter)

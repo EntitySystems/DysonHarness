@@ -102,6 +102,19 @@ Agent skills may live under `{workRoot}/.dyson/skills/{name}/` (entry `SKILL.md`
 
 Composer **`/skill-search`** (Skills Directory and other explorer providers) installs registry packages into the same `.dyson/skills/{slug}/` tree — see [docs/ui](../ui/README.md)#skill-search.
 
+### Project plugins
+
+Composer **`/plugins`** can explicitly install a validated package for the active work directory:
+
+- immutable package payload: `{workRoot}/.dyson/plugins/{normalized-plugin-id}/{version-or-content-id}/`
+- client-managed persistent data: `{workRoot}/.dyson/plugin-data/{normalized-plugin-id}/`
+
+A project install requires the active registered work-directory id plus its initialized `IDysonWorkspaceFileSystem`; the host never falls back to a global root or another work directory. The persisted installation row records that owning work-directory id, and repository/catalog reads expose project rows only for the requested subject-owned active work directory. For a duplicate normalized id, the project record shadows the global record for that workspace; components from the two scopes are never merged.
+
+Preview is scope-independent and inert. The modal shows the exact project destination only after validation, leaves both project/global actions unselected, and disables project installation when there is no active work directory. Local folders are copied into staging rather than used in place. Package import does not mutate `.dyson/skills`, `.dyson/mcp`, or `openrules.json`, and does not execute package content.
+
+Current limitation: project package inspection/enablement/uninstall APIs exist in the engine, but the UI currently exposes only the import flow; there is no installed-plugin work-directory settings panel yet.
+
 ## UI
 
 Sidebar `WorkDirectorySwitcher` lists registered dirs, persists active id in `localStorage` (`dyson-workdir`), filters `SessionList` by that id. Right-rail **Files** tree: right-click a **folder** for Rename (inline; calls workspace `Move`) or Open in Explorer / Finder / file manager (`DysonUiHost.OpenFolderInFileManager`). See [docs/ui/README.md](../ui/README.md).

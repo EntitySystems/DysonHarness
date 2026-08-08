@@ -30,10 +30,11 @@ public static class DysonSessionToolsetBuilder
         if (omitRootTaskCompletionTools)
             OmitRootTaskCompletionTools(pipeline);
 
-        // ponytail: denylist last so EnsureInterAgentToolsPresent cannot resurrect disabled names;
-        // structural removals still win (name already absent).
-        ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
+        // Dynamic sources merge after structural gates. User custom MCP wins any collision; managed
+        // plugin tools may never replace built-ins or custom tools. Denylist remains authoritative.
         config.CustomMcpHost?.ApplyToPipeline(pipeline);
+        config.PluginMcpHost?.ApplyToPipeline(pipeline);
+        ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
         return pipeline;
     }
 
@@ -56,8 +57,9 @@ public static class DysonSessionToolsetBuilder
 
         pipeline.ConfigureShellExecuteForMode(
             string.Equals(agentMode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase));
-        ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
         config.CustomMcpHost?.ApplyToPipeline(pipeline);
+        config.PluginMcpHost?.ApplyToPipeline(pipeline);
+        ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
         return pipeline;
     }
 
@@ -87,9 +89,11 @@ public static class DysonSessionToolsetBuilder
     {
         ArgumentNullException.ThrowIfNull(pipeline);
         ArgumentNullException.ThrowIfNull(config);
-        ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
-        // Re-merge after Ensure*/denylist so custom tools survive structural catalog churn.
+        // Structural gates run before dynamic merge; mode policy is applied last so it can disable
+        // built-in, custom MCP, and managed plugin MCP names uniformly.
         config.CustomMcpHost?.ApplyToPipeline(pipeline);
+        config.PluginMcpHost?.ApplyToPipeline(pipeline);
+        ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
     }
 
     /// <summary>

@@ -13,6 +13,10 @@ public sealed class DysonSkillUsedEntry
     public required string MarkdownContent { get; init; }
     public string? ResolvedPath { get; init; }
     public bool LoadIndexOnly { get; init; }
+    /// <summary>Normalized originating plugin id, when the skill came from a plugin package.</summary>
+    public string? PluginId { get; init; }
+    /// <summary>Package-relative source path, when the skill came from a plugin package.</summary>
+    public string? PluginPackageRelativePath { get; init; }
     /// <summary>UTC.</summary>
     public DateTime UsedUtc { get; init; }
 }
