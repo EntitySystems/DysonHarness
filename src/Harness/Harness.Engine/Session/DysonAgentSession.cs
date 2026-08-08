@@ -20,6 +20,7 @@ public abstract class DysonAgentSession
     private readonly HashSet<int> _waitingOnSubagentIds = [];
     private readonly object _waitingOnGate = new();
     private readonly ConcurrentQueue<DysonAgentTurn> _pendingTurns = new();
+    private readonly Stack<DysonAgentTurn> _inFlightPromptStack = new();
     private TaskCompletionSource<Result<string, string>>? _parentEventWaitTcs;
     private TaskCompletionSource<Result<string, string>>? _askQuestionTcs;
     private TaskCompletionSource<Result<string, string>>? _promptUserDialogTcs;
@@ -956,70 +957,75 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
+    /// Turn currently inside <c>PromptWithTurnAsync</c> (nested via stack). Prefer over
+    /// <see cref="TurnHistory"/>[^1] for phase guards — mid-prompt history appends (e.g.
+    /// PlanResult) can displace the last history entry without ending the prompt.
+    /// </summary>
+    public DysonAgentTurn? InFlightPromptTurn =>
+        _inFlightPromptStack.Count > 0 ? _inFlightPromptStack.Peek() : null;
+
+    /// <summary>
+    /// Marks <paramref name="turn"/> as the in-flight prompt turn until disposed.
+    /// Nestable (DropContext inject inside another prompt). Call after <see cref="AddTurn"/>.
+    /// </summary>
+    public IDisposable BeginInFlightPrompt(DysonAgentTurn turn)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+        _inFlightPromptStack.Push(turn);
+        return new InFlightPromptScope(this);
+    }
+
+    /// <summary>
     /// True while the in-flight turn is <see cref="DysonAgentTurnKind.TaskCompletionConfirm"/>
     /// (ConfirmTaskComplete / ContinueWork phase guard).
     /// </summary>
-    public bool IsInTaskCompletionConfirmPhase
-    {
-        get
-        {
-            if (TurnHistory.Count == 0)
-                return false;
-
-            var current = TurnHistory[^1];
-            return current.Kind == DysonAgentTurnKind.TaskCompletionConfirm
-                   && current.CompletedUtc is null;
-        }
-    }
+    public bool IsInTaskCompletionConfirmPhase =>
+        IsInPhase(DysonAgentTurnKind.TaskCompletionConfirm);
 
     /// <summary>
     /// True while the in-flight turn is <see cref="DysonAgentTurnKind.RethinkToolUsage"/>
     /// (ResumeCurrentTask phase guard).
     /// </summary>
-    public bool IsInRethinkToolUsagePhase
-    {
-        get
-        {
-            if (TurnHistory.Count == 0)
-                return false;
-
-            var current = TurnHistory[^1];
-            return current.Kind == DysonAgentTurnKind.RethinkToolUsage
-                   && current.CompletedUtc is null;
-        }
-    }
+    public bool IsInRethinkToolUsagePhase =>
+        IsInPhase(DysonAgentTurnKind.RethinkToolUsage);
 
     /// <summary>
     /// True while the in-flight turn is <see cref="DysonAgentTurnKind.ExpandThoughtProcess"/>
     /// (blocks nested ExpandThoughtProcess).
     /// </summary>
-    public bool IsInExpandThoughtProcessPhase
-    {
-        get
-        {
-            if (TurnHistory.Count == 0)
-                return false;
-
-            var current = TurnHistory[^1];
-            return current.Kind == DysonAgentTurnKind.ExpandThoughtProcess
-                   && current.CompletedUtc is null;
-        }
-    }
+    public bool IsInExpandThoughtProcessPhase =>
+        IsInPhase(DysonAgentTurnKind.ExpandThoughtProcess);
 
     /// <summary>
     /// True while the in-flight turn is <see cref="DysonAgentTurnKind.DropContext"/>
     /// (blocks nested DropContext inject).
     /// </summary>
-    public bool IsInDropContextPhase
+    public bool IsInDropContextPhase =>
+        IsInPhase(DysonAgentTurnKind.DropContext);
+
+    private bool IsInPhase(DysonAgentTurnKind kind)
     {
-        get
+        var current = InFlightPromptTurn;
+        if (current is null)
         {
             if (TurnHistory.Count == 0)
                 return false;
+            current = TurnHistory[^1];
+        }
 
-            var current = TurnHistory[^1];
-            return current.Kind == DysonAgentTurnKind.DropContext
-                   && current.CompletedUtc is null;
+        return current.Kind == kind && current.CompletedUtc is null;
+    }
+
+    private sealed class InFlightPromptScope(DysonAgentSession session) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            session._inFlightPromptStack.Pop();
         }
     }
 
@@ -1104,18 +1110,24 @@ public abstract class DysonAgentSession
         var trimmed = summary.Trim();
         var status = failed ? DysonSessionStatus.Failed : DysonSessionStatus.Completed;
 
-        // Post-success retries: already Completed → tool COMPLETED, no re-notify.
-        if (Status == DysonSessionStatus.Completed)
-            return Task.FromResult(Result<string, string>.AsValue(IdempotentReportJson()));
+        // Terminal handoff already accepted: reject retries (Failed→Completed supersede still allowed).
+        if (Status == DysonSessionStatus.Completed
+            || (Status == DysonSessionStatus.Failed && failed)
+            || Status == DysonSessionStatus.Stopped)
+        {
+            return Task.FromResult(Result<string, string>.AsError(
+                Status == DysonSessionStatus.Stopped
+                    ? $"SubmitSubagentReport: session already {Status}."
+                    : "SubmitSubagentReport: already submitted."));
+        }
 
         if (!TryAcceptSubagentReport(status, trimmed))
         {
-            // Race: another thread completed between the check and TryAccept.
-            if (Status == DysonSessionStatus.Completed)
-                return Task.FromResult(Result<string, string>.AsValue(IdempotentReportJson()));
-
+            // Race: another thread accepted between the check and TryAccept.
             return Task.FromResult(Result<string, string>.AsError(
-                $"SubmitSubagentReport: session already {Status}."));
+                Status is DysonSessionStatus.Completed or DysonSessionStatus.Failed
+                    ? "SubmitSubagentReport: already submitted."
+                    : $"SubmitSubagentReport: session already {Status}."));
         }
 
         if (Parent is not null)
@@ -1133,15 +1145,6 @@ public abstract class DysonAgentSession
             status = Status.ToString(),
             summary = trimmed,
         })));
-
-        string IdempotentReportJson() => JsonSerializer.Serialize(new
-        {
-            subagentId = Id,
-            persistenceId = PersistenceId,
-            status = DysonSessionStatus.Completed.ToString(),
-            summary = LastReportSummary,
-            idempotent = true,
-        });
     }
 
     public Task<(DysonSessionStatus Status, string? Summary)> WaitForTerminalAsync(
@@ -1175,8 +1178,9 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
-    /// Accepts a child <c>SubmitSubagentReport</c>: first terminal mark, or supersede harness
-    /// <see cref="DysonSessionStatus.Failed"/> only (premature kickoff failure). Completed/Stopped stay locked.
+    /// Accepts a child <c>SubmitSubagentReport</c>: first terminal mark, or supersede
+    /// <see cref="DysonSessionStatus.Failed"/> with <see cref="DysonSessionStatus.Completed"/> only.
+    /// Completed/Stopped stay locked; Failed→Failed is rejected.
     /// </summary>
     public bool TryAcceptSubagentReport(DysonSessionStatus status, string? summary)
     {
@@ -1186,6 +1190,10 @@ public abstract class DysonAgentSession
         lock (_terminalGate)
         {
             if (Status is DysonSessionStatus.Completed or DysonSessionStatus.Stopped)
+                return false;
+
+            // Failed may only be superseded by Completed (harness premature fail → agent handoff).
+            if (Status == DysonSessionStatus.Failed && status == DysonSessionStatus.Failed)
                 return false;
 
             Status = status;

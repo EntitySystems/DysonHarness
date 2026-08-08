@@ -3483,6 +3483,7 @@ code, .mono {
 }
 
 .composer {
+  --composer-textarea-min-height: 120px;
   border-top: 1px solid var(--border);
   padding: 10px 14px 12px;
   background: var(--bg-1);
@@ -3688,7 +3689,7 @@ code, .mono {
 }
 
 .composer textarea {
-  min-height: 72px;
+  min-height: var(--composer-textarea-min-height);
   resize: vertical;
   width: 100%;
   background: transparent;
@@ -5172,6 +5173,11 @@ code, .mono {
 .tool-chip--ok {
   color: var(--success);
   border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+}
+
+.tool-chip--warn {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 40%, var(--border));
 }
 
 .tool-chip--danger {

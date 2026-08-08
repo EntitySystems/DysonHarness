@@ -777,18 +777,14 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (submitted.IsError)
             return Error(call, submitted.Error);
 
-        var idempotent = ReportResultIsIdempotent(submitted.Value);
-
         await PersistSessionStatusAsync(
                 _session,
                 _session.Status,
-                idempotent ? _session.LastReportSummary : summary,
+                summary,
                 cancellationToken)
             .ConfigureAwait(false);
 
-        // Idempotent retries must not re-notify / re-append parent interrupt.
-        if (!idempotent
-            && _session.Parent is not null
+        if (_session.Parent is not null
             && _store is not null
             && _session.Parent.PersistenceId != Guid.Empty)
         {
@@ -806,21 +802,8 @@ public sealed partial class DysonWorkspaceToolExecutor
             await _store.AppendLogAsync(interruptLog, cancellationToken).ConfigureAwait(false);
         }
 
-        return Ok(call, submitted.Value);
-    }
-
-    private static bool ReportResultIsIdempotent(string json)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            return doc.RootElement.TryGetProperty("idempotent", out var prop)
-                   && prop.ValueKind == JsonValueKind.True;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
+        // First accepted handoff soft-closes the tool loop so the model cannot re-Submit this turn.
+        return Ok(call, submitted.Value, endsCurrentTurn: true);
     }
 
     private async Task<DysonToolCallResult> AskQuestionAsync(
@@ -1089,8 +1072,13 @@ public sealed partial class DysonWorkspaceToolExecutor
     {
         if (!_session.IsInRethinkToolUsagePhase)
         {
+            var actual = _session.InFlightPromptTurn?.Kind
+                ?? (_session.Turns.Count > 0
+                    ? _session.Turns[^1].Kind
+                    : (DysonAgentTurnKind?)null);
+            var actualText = actual?.ToString() ?? "none";
             return Error(call,
-                "ResumeCurrentTask: only valid during a RethinkToolUsage turn after a tool-round soft-pause.");
+                $"ResumeCurrentTask: only valid during a RethinkToolUsage turn after a tool-round soft-pause (current: {actualText}).");
         }
 
         string? rationale = null;

@@ -126,10 +126,17 @@ else if (ToolName == "SubmitSubagentReport")
 {
     var summary = DysonToolCallUi.GetString(ArgumentsJson, "summary");
     var status = DysonToolCallUi.GetString(ArgumentsJson, "status") ?? "completed";
+    var taskFailed = string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase);
+    // Outcome chip: warn for task-failed handoff; danger only when the tool itself IsError.
+    var outcomeChipClass = IsError
+        ? "tool-chip--danger"
+        : taskFailed
+            ? "tool-chip--warn"
+            : "tool-chip--ok";
     <div class="tool-section">
         <div class="tool-section__label">
-            Report
-            <span class="tool-chip @(string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase) ? "tool-chip--danger" : "tool-chip--ok")">@status</span>
+            Outcome
+            <span class="tool-chip @outcomeChipClass">@status</span>
         </div>
         <pre class="tool-scroll tool-scroll--tall mono">@(summary ?? "")</pre>
     </div>

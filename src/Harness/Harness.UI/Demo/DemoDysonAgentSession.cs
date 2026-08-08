@@ -504,6 +504,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
 
         AppendLog($"prompt: {Truncate(turn.Instruction ?? turn.Kind.ToString(), 120)}");
         AddTurn(turn);
+        using var inFlightPrompt = BeginInFlightPrompt(turn);
 
         try
         {
@@ -793,7 +794,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                 return ToolError(call, submitted.Error);
 
             await PersistChildStatusAsync(this, Status, summary, cancellationToken).ConfigureAwait(false);
-            return ToolOk(call, submitted.Value);
+            return ToolOk(call, submitted.Value, endsCurrentTurn: true);
         }
         catch (JsonException)
         {
@@ -840,7 +841,10 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         return false;
     }
 
-    private static DysonToolCallResult ToolOk(DysonToolCall call, string content) =>
+    private static DysonToolCallResult ToolOk(
+        DysonToolCall call,
+        string content,
+        bool endsCurrentTurn = false) =>
         new()
         {
             CallId = call.CallId,
@@ -848,6 +852,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             Stage = call.Stage,
             IsError = false,
             Content = content,
+            EndsCurrentTurn = endsCurrentTurn,
         };
 
     private static DysonToolCallResult ToolError(DysonToolCall call, string content) =>

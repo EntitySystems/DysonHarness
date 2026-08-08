@@ -1263,7 +1263,8 @@ public sealed class DysonMcpPipeline
                 "Notifies the parent with the summary so the host can queue a parent turn. " +
                 "All session todos must be Complete before a successful (completed) report; " +
                 "failed reports may leave todos incomplete. " +
-                "After a successful completed report, further calls are accepted as no-ops (idempotent). " +
+                "A successful submit ends the current turn; further SubmitSubagentReport calls fail " +
+                "(except a completed handoff may supersede a prior harness Failed). " +
                 "Do not use from a root Work session unless debugging.",
             InputSchemaJson = """
                 {

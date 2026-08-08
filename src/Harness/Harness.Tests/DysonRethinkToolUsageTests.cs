@@ -18,6 +18,7 @@ public class DysonRethinkToolUsageTests
         AssertSoftPauseOnRethinkDoesNotReenqueue();
         AssertSoftPauseOnExploreDoesNotEnqueue();
         AssertResumePhaseGuardAndEnqueue();
+        AssertResumeSurvivesPlanResultAppend();
         AssertWaitForSecondsRange();
     }
 
@@ -233,6 +234,55 @@ public class DysonRethinkToolUsageTests
 
         if (!result.Content.Contains("Normal", StringComparison.Ordinal))
             throw new InvalidOperationException("ResumeCurrentTask success JSON should note nextTurnKind.");
+    }
+
+    /// <summary>
+    /// Mid-prompt <see cref="DysonAgentSession.AppendPlanResultTurn"/> displaces
+    /// <c>TurnHistory[^1]</c>; Resume must still succeed via <see cref="DysonAgentSession.InFlightPromptTurn"/>.
+    /// </summary>
+    private static void AssertResumeSurvivesPlanResultAppend()
+    {
+        var session = new StubSession(DysonAgentModes.Work);
+        session.ConfigureRootForTest();
+        using var http = new HttpClient();
+        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+
+        var rethink = DysonRethinkToolUsageFlow.CreateTurn();
+        session.AddTurnForTest(rethink);
+        using (session.BeginInFlightPrompt(rethink))
+        {
+            session.AppendPlanResultTurn("plans/demo.md", "Demo plan");
+            if (session.Turns[^1].Kind != DysonAgentTurnKind.PlanResult)
+                throw new InvalidOperationException("Expected PlanResult as last history turn.");
+
+            if (!session.IsInRethinkToolUsagePhase)
+            {
+                throw new InvalidOperationException(
+                    "IsInRethinkToolUsagePhase must prefer InFlightPromptTurn over displaced TurnHistory[^1].");
+            }
+
+            var result = executor.ExecuteAsync(new DysonToolCall
+            {
+                CallId = "r-plan",
+                ToolName = "ResumeCurrentTask",
+                Stage = 0,
+                ArgumentsJson = """{"rationale":"continue after plan"}""",
+            }).GetAwaiter().GetResult();
+
+            if (result.IsError)
+            {
+                throw new InvalidOperationException(
+                    "ResumeCurrentTask must succeed while rethink is in-flight despite PlanResult append: "
+                    + result.Content);
+            }
+        }
+
+        if (!session.TryDequeuePendingTurn(out var pending)
+            || pending.Kind != DysonAgentTurnKind.Normal)
+        {
+            throw new InvalidOperationException(
+                "Resume after PlanResult append must still enqueue a Normal turn.");
+        }
     }
 
     private static void AssertWaitForSecondsRange()

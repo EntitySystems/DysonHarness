@@ -552,6 +552,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         AppendLog($"prompt: {Truncate(turn.Instruction ?? turn.Kind.ToString(), 120)}");
         AddTurn(turn);
+        using var inFlightPrompt = BeginInFlightPrompt(turn);
 
         var fsResult = await DysonWorkspaceFileSystems
             .CreateLocalAsync(_workDirectoryPath, cancellationToken)

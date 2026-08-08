@@ -78,5 +78,31 @@ public class DysonToolCallUiTests
         {
             throw new InvalidOperationException("CountLines failed.");
         }
+
+        // SubmitSubagentReport task-failed handoff is not a tool error — collapsed copy must not say "report failed".
+        var failedHandoff = DysonToolCallUi.GetCollapsedSummary(
+            "SubmitSubagentReport",
+            """{"summary":"blocked: missing schema","status":"failed"}""",
+            resultContent: null,
+            hasResult: false);
+        if (failedHandoff.Text is null
+            || failedHandoff.Text.Contains("report failed", StringComparison.OrdinalIgnoreCase)
+            || !failedHandoff.Text.Contains("failed", StringComparison.OrdinalIgnoreCase)
+            || !failedHandoff.Text.Contains("handoff", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"SubmitSubagentReport failed-status summary must read as handoff outcome, got: {failedHandoff.Text}");
+        }
+
+        var completedHandoff = DysonToolCallUi.GetCollapsedSummary(
+            "SubmitSubagentReport",
+            """{"summary":"done","status":"completed"}""",
+            resultContent: null,
+            hasResult: false);
+        if (completedHandoff.Text != "report submitted")
+        {
+            throw new InvalidOperationException(
+                $"SubmitSubagentReport completed summary mismatch: {completedHandoff.Text}");
+        }
     }
 }

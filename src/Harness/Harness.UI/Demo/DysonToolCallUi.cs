@@ -811,7 +811,8 @@ public static class DysonToolCallUi
     private static CollapsedSummary SummarizeSubmitReport(string? argumentsJson)
     {
         var failed = string.Equals(GetString(argumentsJson, "status"), "failed", StringComparison.OrdinalIgnoreCase);
-        return TextSummary(failed ? "report failed" : "report submitted");
+        // Task outcome handoff — not a tool IsError; avoid "report failed" which reads as tool failure.
+        return TextSummary(failed ? "handoff · failed" : "report submitted");
     }
 
     private static CollapsedSummary SummarizeAskQuestion(string? argumentsJson, bool viaParent)
