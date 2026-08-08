@@ -16,20 +16,21 @@ public static class DysonDropContextFlow
     public const int MinUserTurnsBetweenInject = 5;
 
     public const string Instruction = """
-        Context is over the session max target. Review turns older than the last 4 and drop
-        only true noise vs the current topic.
+        Context is over the session max target. Review turns older than the last 4 and compress
+        or drop only when it helps vs the current topic.
 
         Rules:
         - Each prior turn in history is labeled with its turn id (see turn header in the transcript).
-          Use those ids with DropTurnContext (requires reason).
-        - Only consider turns older than the last 4 (do not drop the most recent four turns).
+          Use those ids with SummarizeTurns or DropTurnContext (both require reason).
+        - Only consider turns older than the last 4 (do not summarize or drop the most recent four turns).
+        - Prefer SummarizeTurns when a turn still has useful facts, decisions, paths, or constraints
+          but is verbose — the harness worker writes a compact stub (≤2K tokens) for later prompts.
         - Call DropTurnContext only for turns that are entirely irrelevant to the current problem
           and would cause major confusion if kept (wrong rabbit hole, obsolete exploration,
           superseded dead end).
-        - If a turn still contains any useful facts, decisions, paths, or constraints — do not drop it.
-        - When in doubt, keep the turn. Prefer keeping context over aggressive pruning.
+        - When in doubt, keep the turn. Prefer summarize over drop; prefer keep over aggressive pruning.
         - RestoreTurnContext can undo a drop if you need those turns back.
-        - After dropping (if any), briefly note what you dropped (or that nothing qualified) and stop;
+        - After summarizing/dropping (if any), briefly note what you did (or that nothing qualified) and stop;
           the harness will resume the original user prompt next.
         """;
 

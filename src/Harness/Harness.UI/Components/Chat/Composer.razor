@@ -556,7 +556,48 @@
             case ComposerSlashCommands.Kind.Help:
                 OpenHelp();
                 break;
+            case ComposerSlashCommands.Kind.Summarize:
+                // Fire-and-forget so ApplySuggestionAsync / SubmitAsync can close the slash
+                // overlay immediately (same as other apply-only kinds).
+                ApplySummarize();
+                break;
         }
+    }
+
+    private void ApplySummarize()
+    {
+        var session = Host.Session;
+        if (session is null)
+            return;
+
+        const int keepLast = 2;
+        var turns = session.Turns;
+        if (turns.Count <= keepLast)
+            return;
+
+        var cutoff = turns.Count - keepLast;
+        var ids = new List<Guid>();
+        for (var i = 0; i < cutoff; i++)
+        {
+            var turn = turns[i];
+            if (turn.IsExcludedFromContext)
+                continue;
+            if (turn.Kind == DysonAgentTurnKind.DisplayInfo)
+                continue;
+            if (DysonTurnSummarizer.HasSummary(turn))
+                continue;
+            if (Host.IsSummarizingTurn(turn.Id))
+                continue;
+            ids.Add(turn.Id);
+        }
+
+        if (ids.Count == 0)
+            return;
+
+        _ = Host.SummarizeTurnsAsync(
+            session.PersistenceId,
+            ids,
+            "Summarized via /summarize");
     }
 
     private void OnHelpInsert(string template)

@@ -40,6 +40,12 @@ public class DysonAgentSessionConfig
     public DysonAgentProvider? SummarizerProvider { get; set; }
 
     /// <summary>
+    /// Optional provider for turn context summarization (<c>SummarizeTurns</c>).
+    /// Null ⇒ use the session <see cref="DysonAgentSession.Provider"/>.
+    /// </summary>
+    public DysonAgentProvider? TurnSummarizerProvider { get; set; }
+
+    /// <summary>
     /// Optional process-wide browser control (Windows CefSharp host).
     /// Null ⇒ browser MCP tools are omitted from the catalog.
     /// </summary>

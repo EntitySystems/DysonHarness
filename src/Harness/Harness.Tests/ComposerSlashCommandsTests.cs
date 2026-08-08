@@ -43,6 +43,18 @@ public class ComposerSlashCommandsTests
             || parsed.Remainder != "do stuff")
             throw new InvalidOperationException("TryResolve(/new) failed.");
 
+        if (!ComposerSlashCommands.TryResolve("/summarize", models, out var summarizeParsed)
+            || summarizeParsed!.Suggestion.Kind != ComposerSlashCommands.Kind.Summarize)
+            throw new InvalidOperationException("TryResolve(/summarize) failed.");
+
+        var summarizeFilter = ComposerSlashCommands.Filter("/sum", models);
+        if (summarizeFilter.Count == 0
+            || summarizeFilter.All(s => s.Token != "/summarize"))
+            throw new InvalidOperationException("Filter(/sum) should include /summarize.");
+
+        if (ComposerSlashCommands.HelpCatalog.All(e => e.Template != "/summarize"))
+            throw new InvalidOperationException("HelpCatalog must include /summarize.");
+
         if (!ComposerSlashCommands.TryResolve("/GPT Fast", models, out var modelParsed)
             || modelParsed!.Suggestion.ModelSlugId != models[0].Id)
             throw new InvalidOperationException("TryResolve display alias failed.");

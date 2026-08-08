@@ -73,7 +73,7 @@ else if (ToolName == "StartNewTurn")
         <pre class="tool-scroll mono">@display</pre>
     </div>
 }
-else if (ToolName == "DropTurnContext" || ToolName == "RestoreTurnContext")
+else if (ToolName == "DropTurnContext" || ToolName == "RestoreTurnContext" || ToolName == "SummarizeTurns")
 {
     var ids = DysonToolCallUi.GetStringArray(ArgumentsJson, "turnIds");
     var reason = DysonToolCallUi.GetString(ArgumentsJson, "reason");

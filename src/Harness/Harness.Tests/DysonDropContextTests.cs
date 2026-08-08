@@ -48,10 +48,11 @@ public class DysonDropContextTests
         if (turn.Kind != DysonAgentTurnKind.DropContext
             || string.IsNullOrWhiteSpace(turn.Instruction)
             || !turn.Instruction.Contains("DropTurnContext", StringComparison.Ordinal)
+            || !turn.Instruction.Contains("SummarizeTurns", StringComparison.Ordinal)
             || !turn.Instruction.Contains("last 4", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
-                "CreateTurn must set DropContext kind and mention DropTurnContext / last 4.");
+                "CreateTurn must set DropContext kind and mention SummarizeTurns / DropTurnContext / last 4.");
         }
 
         var session = new StubSession(DysonAgentModes.Work);

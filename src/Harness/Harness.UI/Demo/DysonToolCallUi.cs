@@ -104,6 +104,7 @@ public static class DysonToolCallUi
                 SummaryMaxLength)),
             "DropTurnContext" => TextSummary(SummarizeDropTurnContext(argumentsJson)),
             "RestoreTurnContext" => TextSummary(SummarizeRestoreTurnContext(argumentsJson)),
+            "SummarizeTurns" => TextSummary(SummarizeSummarizeTurns(argumentsJson)),
             "FreeSearch" or "FreeSearchAdvanced" or "SearchWithSynthesis"
                 => TextSummary(Truncate(GetString(argumentsJson, "query"), SummaryMaxLength)),
             "FreeExtract" => TextSummary(Truncate(UrlHost(GetString(argumentsJson, "url")), SummaryMaxLength)),
@@ -920,6 +921,20 @@ public static class DysonToolCallUi
             : ids.Count == 1
                 ? Truncate($"drop {ids[0]}", 40)
                 : $"drop {ids.Count} turns";
+        if (string.IsNullOrEmpty(reason))
+            return Truncate(countPart, SummaryMaxLength);
+        return Truncate($"{countPart} · {reason}", SummaryMaxLength);
+    }
+
+    private static string SummarizeSummarizeTurns(string? argumentsJson)
+    {
+        var ids = GetStringArray(argumentsJson, "turnIds");
+        var reason = Truncate(GetString(argumentsJson, "reason"), 24);
+        var countPart = ids.Count == 0
+            ? "summarize turns"
+            : ids.Count == 1
+                ? Truncate($"summarize {ids[0]}", 40)
+                : $"summarize {ids.Count} turns";
         if (string.IsNullOrEmpty(reason))
             return Truncate(countPart, SummaryMaxLength);
         return Truncate($"{countPart} · {reason}", SummaryMaxLength);

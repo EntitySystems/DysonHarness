@@ -41,6 +41,11 @@ public sealed class DysonTurnEntity
     /// <summary>When true, omitted from provider transcripts (UI may still show + restore).</summary>
     public bool IsExcludedFromContext { get; set; }
 
+    /// <summary>
+    /// Compact turn summary for provider transcripts (replaces full body when non-empty).
+    /// </summary>
+    public string? ContextSummary { get; set; }
+
     /// <summary>UTC.</summary>
     public DateTime CreatedUtc { get; set; }
 

@@ -2906,7 +2906,9 @@ code, .mono {
   opacity: 0.55;
 }
 
-.turn-block__dropped-badge {
+.turn-block__dropped-badge,
+.turn-block__summarized-badge,
+.turn-block__summarizing-badge {
   flex: 0 0 auto;
   font-size: 0.72rem;
   font-weight: 600;
@@ -2916,6 +2918,12 @@ code, .mono {
   border: 1px solid var(--border);
   border-radius: 3px;
   padding: 1px 6px;
+}
+
+.turn-block__summarizing-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .turn-block__restore {

@@ -7,7 +7,7 @@ namespace Harness.UI.Components.Chat;
 /// </summary>
 public static class ComposerSlashCommands
 {
-    public const int MaxSuggestions = 6;
+    public const int MaxSuggestions = 8;
 
     public enum Kind
     {
@@ -19,6 +19,7 @@ public static class ComposerSlashCommands
         Plugins,
         PluginCommand,
         Help,
+        Summarize,
     }
 
     public enum HelpSection
@@ -76,12 +77,16 @@ public static class ComposerSlashCommands
     private static readonly Suggestion HelpSuggestion =
         new("/help", "Command help", Kind.Help);
 
+    private static readonly Suggestion SummarizeSuggestion =
+        new("/summarize", "Summarize older turns", Kind.Summarize);
+
     private static readonly Suggestion[] BuiltIns =
     [
         new("/ask", "Ask mode", Kind.Mode, Mode: DysonAgentModes.Ask),
         new("/plan", "Plan mode", Kind.Mode, Mode: DysonAgentModes.Plan),
         new("/work", "Work mode", Kind.Mode, Mode: DysonAgentModes.Work),
         new("/new", "New session", Kind.NewSession),
+        SummarizeSuggestion,
         PluginsSuggestion,
         SkillSearchSuggestion,
         HelpSuggestion,
@@ -96,6 +101,7 @@ public static class ComposerSlashCommands
         new("/plan ", "Plan mode", HelpSection.BuiltIn),
         new("/work ", "Work mode", HelpSection.BuiltIn),
         new("/new", "New session", HelpSection.BuiltIn),
+        new("/summarize", "Summarize all turns before the last 2", HelpSection.BuiltIn),
         new("/plugins", "Manage plugins", HelpSection.BuiltIn),
         new("/skill-search", "Search skills", HelpSection.BuiltIn),
         new("/help", "Command help", HelpSection.BuiltIn),

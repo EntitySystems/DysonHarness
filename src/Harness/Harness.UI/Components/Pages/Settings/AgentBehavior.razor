@@ -1,6 +1,7 @@
 @page "/settings/agent-behavior"
 @layout SettingsLayout
 @using DysonHarness
+@using Harness.UI.Components.Models
 @inject IDysonSubjectSettingsRepository AppSettings
 
 <PageTitle>Agent behavior — Settings</PageTitle>
@@ -41,6 +42,18 @@
             How thoroughly the agent reviews its own work before finishing (persist only for now — not wired to the engine yet).
         </p>
 
+        <div class="field" style="margin-top:16px;">
+            <label>Turn summarizer model</label>
+            <ModelSlugPicker SelectedSlugId="_turnSummarizerSlugId"
+                             SelectedSlugIdChanged="OnTurnSummarizerSlugChangedAsync"
+                             AllowEmpty="true"
+                             EmptyLabel="Use session model" />
+        </div>
+        <p class="settings-page__copy" style="margin:0;">
+            Model used by SummarizeTurns / the turn context menu to compress older turns into transcript stubs.
+            Leave as “Use session model” to reuse the chat model.
+        </p>
+
         @if (_saved)
         {
             <p class="settings-page__copy" style="margin:8px 0 0;">Saved.</p>
@@ -53,6 +66,7 @@
 
     private bool _endOfTaskAutoReview;
     private string _selfReviewIntensity = DefaultSelfReviewIntensity;
+    private Guid? _turnSummarizerSlugId;
     private string? _error;
     private bool _saved;
 
@@ -75,6 +89,16 @@
         }
 
         _selfReviewIntensity = NormalizeSelfReviewIntensity(intensity.Value);
+
+        var summarizer = await AppSettings.GetSettingAsync(DysonAppSettingKeys.TurnSummarizerModelSlugId);
+        if (summarizer.IsError)
+        {
+            _error = summarizer.Error;
+            return;
+        }
+
+        if (Guid.TryParse(summarizer.Value, out var id) && id != Guid.Empty)
+            _turnSummarizerSlugId = id;
     }
 
     private async Task OnEndOfTaskAutoReviewChangedAsync(ChangeEventArgs e)
@@ -115,6 +139,23 @@
         var set = await AppSettings.SetSettingAsync(
             DysonAppSettingKeys.SelfReviewIntensity,
             _selfReviewIntensity);
+        if (set.IsError)
+        {
+            _error = set.Error;
+            return;
+        }
+
+        _saved = true;
+    }
+
+    private async Task OnTurnSummarizerSlugChangedAsync(Guid? id)
+    {
+        _error = null;
+        _saved = false;
+        _turnSummarizerSlugId = id;
+
+        var value = id is Guid g && g != Guid.Empty ? g.ToString("D") : null;
+        var set = await AppSettings.SetSettingAsync(DysonAppSettingKeys.TurnSummarizerModelSlugId, value);
         if (set.IsError)
         {
             _error = set.Error;

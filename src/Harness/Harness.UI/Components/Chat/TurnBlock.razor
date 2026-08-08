@@ -46,6 +46,17 @@
                         Restore
                     </button>
                 }
+                else if (IsSummarizing)
+                {
+                    <span class="turn-block__summarizing-badge">
+                        <span class="turn-block__spinner" aria-hidden="true"></span>
+                        Summarizing…
+                    </span>
+                }
+                else if (DysonTurnSummarizer.HasSummary(Turn))
+                {
+                    <span class="turn-block__summarized-badge">Summarized</span>
+                }
             </div>
             <div class="turn-block__kind mono">@DysonAgentTurnKindDisplay.GetDisplayName(Turn.Kind) · @ShortId(Turn.Id)</div>
         </div>
@@ -317,6 +328,14 @@
         <button type="button"
                 class="turn-block__context-menu-item"
                 role="menuitem"
+                disabled="@(!CanSummarizeTurn)"
+                title="@SummarizeTurnTitle"
+                @onclick="HandleSummarizeTurnAsync">
+            Summarize turn
+        </button>
+        <button type="button"
+                class="turn-block__context-menu-item"
+                role="menuitem"
                 disabled="@(!CanDropTurn)"
                 title="@DropTurnTitle"
                 @onclick="HandleDropTurnAsync">
@@ -563,12 +582,31 @@
     private bool CanDropTurn =>
         !Turn.IsExcludedFromContext && !(SessionBusy && IsLatestTurn);
 
+    private bool IsSummarizing => Host.IsSummarizingTurn(Turn.Id);
+
+    private bool CanSummarizeTurn =>
+        !Turn.IsExcludedFromContext
+        && Turn.Kind != DysonAgentTurnKind.DisplayInfo
+        && !IsSummarizing
+        && !(SessionBusy && IsLatestTurn);
+
     private string DropTurnTitle =>
         Turn.IsExcludedFromContext
             ? "Turn is already dropped from model context"
             : SessionBusy && IsLatestTurn
                 ? "Cannot drop the in-flight turn"
                 : "Exclude this turn from model context";
+
+    private string SummarizeTurnTitle =>
+        Turn.IsExcludedFromContext
+            ? "Turn is dropped from model context"
+            : IsSummarizing
+                ? "Summarizing…"
+                : SessionBusy && IsLatestTurn
+                    ? "Cannot summarize the in-flight turn"
+                    : DysonTurnSummarizer.HasSummary(Turn)
+                        ? "Re-summarize this turn for model context"
+                        : "Compress this turn into a context stub";
 
     private void OnContextMenu(MouseEventArgs e)
     {
@@ -596,6 +634,24 @@
             return;
 
         await Host.DropTurnContextAsync(session.PersistenceId, Turn.Id);
+    }
+
+    private Task HandleSummarizeTurnAsync()
+    {
+        CloseContextMenu();
+        if (!CanSummarizeTurn)
+            return Task.CompletedTask;
+
+        var session = Host.Session;
+        if (session is null)
+            return Task.CompletedTask;
+
+        // Fire-and-forget so the context menu closes without waiting on the summarizer.
+        _ = Host.SummarizeTurnsAsync(
+            session.PersistenceId,
+            [Turn.Id],
+            "Summarized from UI");
+        return Task.CompletedTask;
     }
 
     private async Task HandleHeaderKeyDown(KeyboardEventArgs e)

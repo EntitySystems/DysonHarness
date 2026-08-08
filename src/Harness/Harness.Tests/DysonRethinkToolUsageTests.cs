@@ -19,6 +19,7 @@ public class DysonRethinkToolUsageTests
         AssertSoftPauseOnExploreDoesNotEnqueue();
         AssertResumePhaseGuardAndEnqueue();
         AssertResumeSurvivesPlanResultAppend();
+        AssertResumeSurvivesPrematureCompletedUtc();
         AssertWaitForSecondsRange();
     }
 
@@ -282,6 +283,53 @@ public class DysonRethinkToolUsageTests
         {
             throw new InvalidOperationException(
                 "Resume after PlanResult append must still enqueue a Normal turn.");
+        }
+    }
+
+    /// <summary>
+    /// Host may stamp <see cref="DysonAgentTurn.CompletedUtc"/> mid-tool-loop on child sessions
+    /// (no <c>_busySessions</c>). Phase guard must still trust <see cref="DysonAgentSession.InFlightPromptTurn"/>.
+    /// </summary>
+    private static void AssertResumeSurvivesPrematureCompletedUtc()
+    {
+        var session = new StubSession(DysonAgentModes.Work);
+        session.ConfigureRootForTest();
+        using var http = new HttpClient();
+        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+
+        var rethink = DysonRethinkToolUsageFlow.CreateTurn();
+        session.AddTurnForTest(rethink);
+        using (session.BeginInFlightPrompt(rethink))
+        {
+            rethink.CompletedUtc = DateTime.UtcNow;
+
+            if (!session.IsInRethinkToolUsagePhase)
+            {
+                throw new InvalidOperationException(
+                    "IsInRethinkToolUsagePhase must ignore CompletedUtc while InFlightPromptTurn is set.");
+            }
+
+            var result = executor.ExecuteAsync(new DysonToolCall
+            {
+                CallId = "r-completed",
+                ToolName = "ResumeCurrentTask",
+                Stage = 0,
+                ArgumentsJson = """{"rationale":"continue despite stamped CompletedUtc"}""",
+            }).GetAwaiter().GetResult();
+
+            if (result.IsError)
+            {
+                throw new InvalidOperationException(
+                    "ResumeCurrentTask must succeed with CompletedUtc set while BeginInFlightPrompt active: "
+                    + result.Content);
+            }
+        }
+
+        if (!session.TryDequeuePendingTurn(out var pending)
+            || pending.Kind != DysonAgentTurnKind.Normal)
+        {
+            throw new InvalidOperationException(
+                "Resume with premature CompletedUtc must still enqueue a Normal turn.");
         }
     }
 

@@ -48,6 +48,7 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `CompactToolHistory` | string? |
 | `CreatedUtc`, `CompletedUtc`? | `DateTime` UTC |
 | `IsExcludedFromContext` | bool — when true, omitted from provider transcripts; UI still shows Dropped + Restore |
+| `ContextSummary` | string? — when set, provider transcripts emit a compact summary stub instead of the full turn body; UI shows Summarized badge |
 
 ### `session_todos`
 

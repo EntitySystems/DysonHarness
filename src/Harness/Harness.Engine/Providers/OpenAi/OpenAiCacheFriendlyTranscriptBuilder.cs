@@ -283,6 +283,17 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 continue;
             }
 
+            // Summarized turns: compact stub only (same omission pattern as drop for body/tools).
+            if (DysonTurnSummarizer.HasSummary(turn))
+            {
+                messages.Add(new JsonObject
+                {
+                    ["role"] = "user",
+                    ["content"] = DysonTurnSummarizer.FormatSummaryStub(turn),
+                });
+                continue;
+            }
+
             // In-progress current turn: user content may get ephemeral rename / Plan mandates;
             // tool rounds come from inFlightRounds. PlanResult may append after the live turn.
             var incompleteCurrent = i == incompleteIndex;
@@ -371,6 +382,16 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 {
                     ["role"] = "user",
                     ["content"] = FormatModeSwitchHarnessUserMessage(turn),
+                });
+                continue;
+            }
+
+            if (DysonTurnSummarizer.HasSummary(turn))
+            {
+                input.Add(new JsonObject
+                {
+                    ["role"] = "user",
+                    ["content"] = DysonTurnSummarizer.FormatSummaryStub(turn),
                 });
                 continue;
             }

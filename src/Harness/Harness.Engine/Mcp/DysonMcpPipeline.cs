@@ -1427,7 +1427,7 @@ public sealed class DysonMcpPipeline
             Description =
                 "Queue an ExpandThoughtProcess reformulation turn, hard-end the current turn, then auto-continue with a Normal turn. " +
                 "Use when context is noisy or the plan is unclear. Optional focus clarifies what to reformulate. " +
-                "DropTurnContext is optional hygiene anytime (not phase-gated); use for true noise only.",
+                "Prefer SummarizeTurns for verbose-but-useful older turns; DropTurnContext for true noise only.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1464,10 +1464,37 @@ public sealed class DysonMcpPipeline
 
         yield return new DysonMcpTool
         {
+            Name = "SummarizeTurns",
+            Description =
+                "Compress listed turn ids (from [turnId=…] history headers) into compact context stubs via a harness worker. " +
+                "Callable anytime. Requires reason. Prefer over DropTurnContext when useful facts remain. " +
+                "Re-summarize overwrites an existing stub. Does not delete turns.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "turnIds": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "Turn Guids from [turnId=…] transcript headers to summarize for future model context."
+                    },
+                    "reason": {
+                      "type": "string",
+                      "description": "Why these turns should be summarized for future model context."
+                    }
+                  },
+                  "required": ["turnIds", "reason"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
             Name = "DropTurnContext",
             Description =
                 "Exclude listed turn ids (from [turnId=…] history headers) from future provider transcripts. " +
-                "Callable anytime. Requires reason. Does not delete turns; RestoreTurnContext or UI can restore. Prefer keep when unsure.",
+                "Callable anytime. Requires reason. Prefer SummarizeTurns when useful facts remain; use Drop for true noise only. " +
+                "Does not delete turns; RestoreTurnContext or UI can restore. Prefer keep when unsure.",
             InputSchemaJson = """
                 {
                   "type": "object",

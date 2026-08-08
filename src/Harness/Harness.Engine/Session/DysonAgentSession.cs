@@ -25,6 +25,9 @@ public abstract class DysonAgentSession
     private TaskCompletionSource<Result<string, string>>? _askQuestionTcs;
     private TaskCompletionSource<Result<string, string>>? _promptUserDialogTcs;
     private readonly object _askQuestionGate = new();
+    // ponytail: shared UI+MCP claim set; upgrade to per-turn CancellationToken if hang recovery is needed
+    private readonly ConcurrentDictionary<Guid, byte> _summarizingTurnIds = new();
+    private readonly SemaphoreSlim _summarizeGate = new(1, 1);
 
     protected DysonAgentSession(
         string agentMode,
@@ -127,6 +130,30 @@ public abstract class DysonAgentSession
 
     public bool IsTerminal =>
         Status is DysonSessionStatus.Completed or DysonSessionStatus.Stopped or DysonSessionStatus.Failed;
+
+    /// <summary>True while any turn is mid <c>SummarizeTurns</c> (host or MCP).</summary>
+    public bool HasAnySummarizingTurn => !_summarizingTurnIds.IsEmpty;
+
+    /// <summary>True while this turn id is claimed for summarization.</summary>
+    public bool IsSummarizingTurn(Guid turnId) =>
+        turnId != Guid.Empty && _summarizingTurnIds.ContainsKey(turnId);
+
+    /// <summary>
+    /// Claims <paramref name="turnId"/> for summarization. False if empty or already claimed.
+    /// </summary>
+    public bool TryBeginSummarizeTurn(Guid turnId) =>
+        turnId != Guid.Empty && _summarizingTurnIds.TryAdd(turnId, 0);
+
+    /// <summary>Releases a summarization claim (no-op if not claimed).</summary>
+    public void EndSummarizeTurn(Guid turnId) =>
+        _summarizingTurnIds.TryRemove(turnId, out _);
+
+    /// <summary>Single-flight gate for host/MCP summarize pipelines on this session.</summary>
+    public Task EnterSummarizeGateAsync(CancellationToken cancellationToken = default) =>
+        _summarizeGate.WaitAsync(cancellationToken);
+
+    /// <summary>Releases <see cref="EnterSummarizeGateAsync"/>.</summary>
+    public void ExitSummarizeGate() => _summarizeGate.Release();
 
     public DysonAgentSessionConfig Config { get; }
 
@@ -1005,14 +1032,14 @@ public abstract class DysonAgentSession
 
     private bool IsInPhase(DysonAgentTurnKind kind)
     {
-        var current = InFlightPromptTurn;
-        if (current is null)
-        {
-            if (TurnHistory.Count == 0)
-                return false;
-            current = TurnHistory[^1];
-        }
+        var inFlight = InFlightPromptTurn;
+        if (inFlight is not null)
+            return inFlight.Kind == kind;
 
+        // History fallback: CompletedUtc must still be null (turn finished = not in phase).
+        if (TurnHistory.Count == 0)
+            return false;
+        var current = TurnHistory[^1];
         return current.Kind == kind && current.CompletedUtc is null;
     }
 
@@ -1525,6 +1552,7 @@ public abstract class DysonAgentSession
                 ToolHistoryOptimized = row.ToolHistoryOptimized,
                 CompactToolHistory = row.CompactToolHistory,
                 IsExcludedFromContext = row.IsExcludedFromContext,
+                ContextSummary = row.ContextSummary,
                 StartedUtc = row.CreatedUtc,
                 CompletedUtc = row.CompletedUtc,
             };

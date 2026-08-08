@@ -10,6 +10,12 @@ public static class DysonAppSettingKeys
     public const string WebSearchSummarizerModelSlugId = "web_search_summarizer_model_slug_id";
 
     /// <summary>
+    /// Guid string of the model slug used for turn context summarization (<c>SummarizeTurns</c>).
+    /// Empty / missing ⇒ use the session model.
+    /// </summary>
+    public const string TurnSummarizerModelSlugId = "turn_summarizer_model_slug_id";
+
+    /// <summary>
     /// Chat tools column width as a percent of the turn content row (e.g. "30").
     /// Empty / missing ⇒ default 30%.
     /// </summary>

@@ -24,10 +24,11 @@ public class DysonExpandThoughtProcessTests
     private static void AssertInstructionAndContinuation()
     {
         if (!DysonExpandThoughtProcess.Instruction.Contains("DropTurnContext", StringComparison.Ordinal)
+            || !DysonExpandThoughtProcess.Instruction.Contains("SummarizeTurns", StringComparison.Ordinal)
             || !DysonExpandThoughtProcess.Instruction.Contains("turn id", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
-                "ExpandThoughtProcess Instruction must mention DropTurnContext and turn ids.");
+                "ExpandThoughtProcess Instruction must mention SummarizeTurns / DropTurnContext and turn ids.");
         }
 
         var turn = DysonExpandThoughtProcess.CreateTurn("clarify auth");
@@ -51,10 +52,11 @@ public class DysonExpandThoughtProcessTests
 
         var preamble = DysonAgentSystemPrompts.SharedPreamble;
         if (preamble.IndexOf("ends the current turn", StringComparison.OrdinalIgnoreCase) < 0
-            || preamble.IndexOf("DropTurnContext", StringComparison.Ordinal) < 0)
+            || preamble.IndexOf("DropTurnContext", StringComparison.Ordinal) < 0
+            || preamble.IndexOf("SummarizeTurns", StringComparison.Ordinal) < 0)
         {
             throw new InvalidOperationException(
-                "SharedPreamble must note ExpandThoughtProcess ends the turn and DropTurnContext.");
+                "SharedPreamble must note ExpandThoughtProcess ends the turn, SummarizeTurns, and DropTurnContext.");
         }
     }
 

@@ -144,6 +144,12 @@ public sealed class DysonAgentTurn
     /// </summary>
     public bool IsExcludedFromContext { get; set; }
 
+    /// <summary>
+    /// When set, provider transcripts emit this compact stub instead of full instruction/tools/assistant
+    /// (UI still shows the original turn). Clear to restore full emission.
+    /// </summary>
+    public string? ContextSummary { get; set; }
+
     public string FormatResponseLog()
     {
         var sb = new StringBuilder();

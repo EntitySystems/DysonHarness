@@ -2412,6 +2412,147 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
+    /// Summarizes listed turns via the harness turn summarizer (same path as SummarizeTurns MCP).
+    /// Claims one turn at a time on the session (spinner = active turn only); single-flight per session.
+    /// </summary>
+    public async Task<VoidResult<string>> SummarizeTurnsAsync(
+        Guid sessionId,
+        IReadOnlyList<Guid> turnIds,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+
+        if (turnIds is null || turnIds.Count == 0)
+        {
+            LastError = "turnIds required.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            LastError = "reason required.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        DysonAgentSession? session = null;
+        if (sessionId != Guid.Empty && _sessionsById.TryGetValue(sessionId, out var byId))
+            session = byId;
+        else if (_session is not null
+                 && (sessionId == Guid.Empty || _session.PersistenceId == sessionId))
+            session = _session;
+
+        if (session is null)
+        {
+            LastError = "Session not found.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        var provider = session.Config.TurnSummarizerProvider as OpenAiCompatibleAgentProvider
+            ?? session.Provider as OpenAiCompatibleAgentProvider;
+        if (provider is null)
+        {
+            LastError = "No OpenAI-compatible provider available for turn summarization.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        await session.EnterSummarizeGateAsync(cancellationToken);
+        try
+        {
+            var currentId = session.Turns.Count > 0 ? session.Turns[^1].Id : Guid.Empty;
+
+            // Stay on the Blazor sync context so Notify() clears spinners / shows Summarized.
+            // Claim one turn at a time so only the active turn shows Summarizing….
+            foreach (var turnId in turnIds)
+            {
+                if (turnId == Guid.Empty)
+                    continue;
+
+                if (turnId == currentId
+                    && _busySessions.ContainsKey(session.PersistenceId))
+                {
+                    LastError = "Cannot summarize the in-flight turn.";
+                    Notify();
+                    return new VoidResult<string>(LastError);
+                }
+
+                var turn = session.Turns.FirstOrDefault(t => t.Id == turnId);
+                if (turn is null)
+                {
+                    LastError = $"Turn not found: {turnId:D}";
+                    Notify();
+                    return new VoidResult<string>(LastError);
+                }
+
+                if (turn.IsExcludedFromContext)
+                    continue;
+
+                if (turn.Kind == DysonAgentTurnKind.DisplayInfo)
+                    continue;
+
+                if (DysonTurnSummarizer.HasSummary(turn))
+                    continue;
+
+                if (!session.TryBeginSummarizeTurn(turnId))
+                    continue;
+
+                Notify();
+                try
+                {
+                    // Re-check after claim: another pipeline may have finished while we waited.
+                    if (DysonTurnSummarizer.HasSummary(turn))
+                        continue;
+
+                    var summary = await DysonTurnSummarizer
+                        .SummarizeAsync(provider, _http, turn, reason, cancellationToken: cancellationToken);
+
+                    turn.ContextSummary = summary;
+                    session.AppendLog($"Turn {turnId:D} summarized, reason: {reason}");
+
+                    if (session.PersistenceId != Guid.Empty)
+                    {
+                        var sequence = IndexOfTurn(session, turn);
+                        var entity = DysonTurnPersistence.ToEntity(turn, session.PersistenceId, sequence);
+                        var upserted = await PersistAsync(
+                                () => _sessions.UpsertTurnAsync(entity, cancellationToken),
+                                cancellationToken);
+                        if (upserted.IsError)
+                        {
+                            LastError = upserted.Error;
+                            Notify();
+                            return upserted;
+                        }
+                    }
+
+                    Notify();
+                }
+                finally
+                {
+                    session.EndSummarizeTurn(turnId);
+                    Notify();
+                }
+            }
+
+            return VoidResult<string>.Success;
+        }
+        finally
+        {
+            session.ExitSummarizeGate();
+            if (!session.HasAnySummarizingTurn && session.PersistenceId != Guid.Empty)
+                _ = DrainQueuedPromptsAsync(session.PersistenceId);
+            Notify();
+        }
+    }
+
+    /// <summary>True while the active session's turn summarizer is working on this turn id.</summary>
+    public bool IsSummarizingTurn(Guid turnId) =>
+        _session?.IsSummarizingTurn(turnId) == true;
+
+    /// <summary>
     /// Clears <see cref="DysonAgentTurn.IsExcludedFromContext"/> on a dropped turn and persists.
     /// </summary>
     public async Task<VoidResult<string>> RestoreTurnContextAsync(
@@ -2639,7 +2780,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         var built = turnBuild.Value;
         var sessionId = session.PersistenceId;
-        if (_busySessions.ContainsKey(sessionId))
+        // Enqueue while busy or mid-summarize (do not set _busySessions for summarize — Send stays enabled).
+        if (_busySessions.ContainsKey(sessionId) || session.HasAnySummarizingTurn)
         {
             EnqueuePrompt(sessionId, built.Turn, built.FilePaths);
             LastError = null;
@@ -3200,26 +3342,49 @@ public sealed class DysonUiHost : IAsyncDisposable
             .GetSettingAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId, cancellationToken)
             .ConfigureAwait(false);
 
-        if (setting.IsError || string.IsNullOrWhiteSpace(setting.Value))
-            return config;
+        if (!setting.IsError
+            && !string.IsNullOrWhiteSpace(setting.Value)
+            && Guid.TryParse(setting.Value, out var slugId)
+            && slugId != Guid.Empty)
+        {
+            var slugResult = await _models.GetSlugAsync(slugId, cancellationToken).ConfigureAwait(false);
+            if (!slugResult.IsError
+                && slugResult.Value is not null
+                && IsOpenAiCompatibleSlug(slugResult.Value))
+            {
+                config.SummarizerProvider = new OpenAiCompatibleAgentProvider(slugResult.Value);
+            }
+        }
 
-        if (!Guid.TryParse(setting.Value, out var slugId) || slugId == Guid.Empty)
-            return config;
+        var turnSummarizerSetting = await _appSettings
+            .GetSettingAsync(DysonAppSettingKeys.TurnSummarizerModelSlugId, cancellationToken)
+            .ConfigureAwait(false);
 
-        var slugResult = await _models.GetSlugAsync(slugId, cancellationToken).ConfigureAwait(false);
-        if (slugResult.IsError || slugResult.Value is null)
-            return config;
+        if (!turnSummarizerSetting.IsError
+            && !string.IsNullOrWhiteSpace(turnSummarizerSetting.Value)
+            && Guid.TryParse(turnSummarizerSetting.Value, out var turnSlugId)
+            && turnSlugId != Guid.Empty)
+        {
+            var turnSlugResult = await _models.GetSlugAsync(turnSlugId, cancellationToken).ConfigureAwait(false);
+            if (!turnSlugResult.IsError
+                && turnSlugResult.Value is not null
+                && IsOpenAiCompatibleSlug(turnSlugResult.Value))
+            {
+                config.TurnSummarizerProvider = new OpenAiCompatibleAgentProvider(turnSlugResult.Value);
+            }
+        }
 
-        var provider = slugResult.Value.Provider;
+        return config;
+    }
+
+    private static bool IsOpenAiCompatibleSlug(DysonModelSlugEntity slug)
+    {
+        var provider = slug.Provider;
         var kind = DysonProviderKinds.EffectiveKind(
             provider?.ProviderKind ?? DysonProviderKinds.Demo,
             provider?.BaseUrl,
             provider?.ApiKey);
-
-        if (string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
-            config.SummarizerProvider = new OpenAiCompatibleAgentProvider(slugResult.Value);
-
-        return config;
+        return string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal);
     }
 
     private void RememberCustomMcpRetain(DysonAgentSession session, Guid workDirectoryId)
@@ -4401,10 +4566,13 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (_disposed || _busySessions.ContainsKey(sessionId))
             return;
 
-        if (!TryDequeuePrompt(sessionId, out var next))
+        if (!_sessionsById.TryGetValue(sessionId, out var session))
             return;
 
-        if (!_sessionsById.TryGetValue(sessionId, out var session))
+        if (session.HasAnySummarizingTurn)
+            return;
+
+        if (!TryDequeuePrompt(sessionId, out var next))
             return;
 
         Notify();
@@ -4509,6 +4677,11 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         // Host-owned PromptOnSessionAsync persists after PromptAsync returns.
         if (_busySessions.ContainsKey(session.PersistenceId))
+            return;
+
+        // Child/Drone prompts never enter _busySessions; still skip while the turn is mid-prompt
+        // (e.g. CommitReasoningRound → AssistantTextChanged before tools run).
+        if (session.InFlightPromptTurn is { } inFlight && inFlight.Id == turn.Id)
             return;
 
         await PersistTurnCompletedAsync(session, turn, CancellationToken.None).ConfigureAwait(false);
