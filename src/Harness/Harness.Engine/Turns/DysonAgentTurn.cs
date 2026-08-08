@@ -340,6 +340,8 @@ public sealed class DysonAgentTurn
             MarkdownContent = loaded.Markdown,
             ResolvedPath = loaded.ResolvedPath,
             LoadIndexOnly = loaded.LoadIndexOnly,
+            PluginId = loaded.PluginId,
+            PluginPackageRelativePath = loaded.PluginPackageRelativePath,
             UsedUtc = DateTime.UtcNow,
         };
         AddSkillUsed(entry);

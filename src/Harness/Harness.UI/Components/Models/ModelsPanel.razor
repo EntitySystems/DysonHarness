@@ -25,6 +25,9 @@
         <button type="button" class="btn btn-ghost btn--sm" @onclick="RepairMisTaggedProvidersAsync">
             Repair mis-tagged providers
         </button>
+        <button type="button" class="btn btn-ghost btn--sm" disabled="@_busy" @onclick="ResetCliProxyAsync">
+            Reset CLI proxy
+        </button>
     </div>
 
     <div class="models-panel__managed" style="margin:10px 0 12px;padding:8px 0;border-bottom:1px solid var(--border, #333);">
@@ -826,6 +829,41 @@
             : "Default context updated.";
         await RefreshAsync();
         await OnChanged.InvokeAsync();
+    }
+
+    private async Task ResetCliProxyAsync()
+    {
+        var confirmed = await ConfirmDialog.ConfirmAsync(
+            title: "Reset CLI proxy",
+            message: "Restart the local CLIProxyAPI process and rewrite its config? In-flight requests will fail; signed-in OAuth sessions are kept.",
+            confirmLabel: "Reset",
+            cancelLabel: "Cancel",
+            danger: false);
+        if (!confirmed)
+            return;
+
+        _error = null;
+        _status = null;
+        _busy = true;
+        try
+        {
+            var reset = await CliProxy.RestartAsync(CreateDownloadProgress());
+            if (reset.IsError)
+            {
+                _error = reset.Error;
+                return;
+            }
+
+            _status = "CLI proxy restarted with fresh config. Use Connect / Verify to re-sync managed providers.";
+            _cliProxyInstalled = CliProxy.IsInstalled;
+            await RefreshAsync();
+            await OnChanged.InvokeAsync();
+        }
+        finally
+        {
+            _busy = false;
+            _downloadProgress = null;
+        }
     }
 
     private async Task RepairMisTaggedProvidersAsync()

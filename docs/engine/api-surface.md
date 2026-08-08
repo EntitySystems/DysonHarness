@@ -26,10 +26,21 @@ Conceptual overview: [README.md](README.md).
 | `DysonShell` / `DysonWindowsShell` | Shell runners; path-based execute + basename fixed-arg heuristics; legacy `DysonShellType` map kept for tests |
 | `DysonConfiguredShellSpec` / `DysonShellType` / `DysonShellRunResult` | Session shell name+path+optional FixedArgs; legacy enum; process result |
 | `DysonConfiguredShellEntity` / `IDysonConfiguredShellRepository` | Persisted shells (`configured_shells`, optional `FixedArgsJson`, `SubjectId`); seed defaults; list enabled specs |
+| `DysonPluginInstallScope` / `DysonPluginSourceKind` / `DysonPluginPackageFormat` / resolved plugin DTOs | Normalized plugin identity, provenance, format (`AgentPlugin`, `Codex`, `Cursor`), capabilities, components, diagnostics, preview, and install result models |
+| `IDysonPluginPackageParser` / `DysonPluginPackageParser` / format adapters | Detect and parse Agent Plugin v1 root `plugin.json`, Codex `.codex-plugin/plugin.json`, or Cursor `.cursor-plugin/plugin.json`; containment + local schema/skill/component validation; Cursor marketplace child selection |
+| `IDysonPluginPackageService` / `DysonPluginPackageService` / `DysonPluginPackageSecurity` | Result-pattern, scope-independent ZIP/folder/GitHub preview; quotas/checksum/immutable commit provenance; install-time revalidation and explicit-target atomic promotion. Preview/install never execute package content |
+| `DysonPluginInstallTarget` / `DysonPluginPaths` | Validated `Project` target (work-directory id + initialized workspace FS) or `Global` target (app mode); forms `.dyson/plugins`, `.dyson/plugin-data`, and mode-scoped global paths |
+| `DysonPluginVariableService` / `DysonPluginVariableProtector` / `DysonPluginSecretValue` | Declaration-aware subject/installation-scoped set/has/delete/list; AES-GCM protected-at-rest values; narrow disposable resolution object with redacted `ToString` |
+| `DysonPluginHookSecurityService` / `DysonPluginHookEvents` / `DysonPluginHookPermissions` | Dormant-by-default reviewed-hook grant/revoke/status and bounded metadata-only audit foundation; no interception, process launch, or hook execution |
+| `DysonPluginCatalogService` / `DysonPluginLifecycleService` | Effective global + active-project catalog (project shadows global, no merge), inspection/status/diagnostics, enable/disable, ownership-checked uninstall with retain/delete `PLUGIN_DATA`, lifecycle change event |
+| `DysonPluginContributionResolver` / contribution DTOs | Revalidates installed assets; metadata-first skills, preserved rule activation, explicit custom agents/commands, bounded always-apply instruction block |
+| `DysonPluginMcpResolver` / `DysonPluginMcpHost` / plugin MCP DTOs | Default-deny managed MCP seam for declared stdio/streamable HTTP/SSE; collision-safe `plugin__…` tools and status/restart/invoke APIs. Current UI host does not attach it to session pipelines |
+| `DysonPluginVariableService` / `DysonPluginVariableProtector` / `DysonPluginSecretValue` | Declared-variable validation and AES-GCM protected subject/installation/name-bound values; redacted public display. No current UI/runtime substitution wiring |
+| `DysonPluginHookSecurityService` / hook grant/status/audit DTOs | Checksum-bound review/revoke and bounded metadata-only audit foundation for supported Dyson hook events/permissions; no hook executor is shipped |
 | `DysonLongRunningShellRegistry` / `DysonLongRunningShell` | Workdir-keyed in-memory background shells (rings, Abort/Cancel/Interact/List/Subscribe); identity via `ShellName`; not persisted across UI restart |
 | `DysonLongRunningShellStatus` / `DysonLongRunningShellInfo` / `DysonLongRunningShellTail` | Status enum + list/tail DTOs (`ShellName` on info) |
 | `DysonOpenAiApiModes` | `Completions` / `Responses` constants |
-| `DysonAgentSessionConfig` | `CustomAgents`, `McpAccessMode`, `AvailableShells`, optional `BraveApiKey`, optional `SummarizerProvider`, optional `BrowserControl` (`IDysonBrowserControl`), optional `CustomMcpHost` (`DysonCustomMcpHost`), optional `DisabledTools` / `ToolPolicy` (mode denylist; see MCP) |
+| `DysonAgentSessionConfig` | `CustomAgents`, immutable session `PluginContributions`, `McpAccessMode`, `AvailableShells`, optional `BraveApiKey`, optional `SummarizerProvider`, optional `BrowserControl` (`IDysonBrowserControl`), optional user-authored `CustomMcpHost` (`DysonCustomMcpHost`), optional `DisabledTools` / `ToolPolicy` (mode denylist; see MCP) |
 | `DysonAgentSessionEvent` | Abstract notify payload for `WaitForNotifyAsync` |
 
 ### Managed / CLIProxy
@@ -117,7 +128,8 @@ Conceptual overview: [README.md](README.md).
 | `DysonMcpAccessMode` | `FullAccess`, `AutoReview` |
 | `DysonMcpPipeline` | Tool catalog + optional auto-review proxy; `ConfigureShellExecuteForMode` / `CreateLongRunningShellTools` / `PlanShellExecuteWarning` for Plan soft shell gates; `CreateBrowserTools` when `browserControlAvailable` |
 | `DysonSessionToolsetBuilder` | Builds catalog: CreateDefault → gates → denylist → optional custom MCP merge |
-| `DysonCustomMcpHost` / `DysonCustomMcpHostRegistry` | Workdir-scoped live MCP clients (refcount retain/release); gated by `mcpActive` |
+| `DysonCustomMcpHost` / `DysonCustomMcpHostRegistry` | Workdir-scoped live user-authored MCP clients (refcount retain/release); gated by `mcpActive` |
+| `DysonPluginMcpResolver` / `DysonPluginMcpHost` | Separate package-owned MCP resolver/host; explicit per-server executable/network grants, fixed transport policy, collision-safe names. Host API exists but current session config/toolset/executor do not merge or dispatch plugin MCP tools |
 | `DysonCustomMcpPromptUpdater` | Idle→Debouncing→Refreshing state machine; watches `.dyson/mcp`; bumps `SystemPromptGeneration` |
 | `DysonCustomMcpConfigLoader` / `DysonCustomMcpEnv` | Load/write `.dyson/mcp/{serverId}.json`; `${env:}` + `envFile`; transport inference |
 | `DysonCustomMcpClientFactory` | Thin `ModelContextProtocol.Core` wrappers (Stdio + HttpClientTransport) |
@@ -220,7 +232,11 @@ Contracts in `Harness.Abstractions` (`Storage/`); SQLite impl in `Harness.LocalD
 - `DysonAppMode`, `DysonAppPaths`, `DysonBuildInfo`
 - `DysonSubjects` (`Local` = `"local"`, `Shared` = `"shared"`), `IDysonSubjectContext`, `DysonSubjectEntity`
 - `IDysonAccessEvaluator` / `DysonPermissiveAccessEvaluator` / `DysonRole` / `DysonPermission` (`ManageOwnSubjectData`, `ManageSharedProviders`)
-- `IDysonSessionRepository`, `IDysonWorkDirectoryRepository`, `IDysonWorkDirectoryConfigurationRepository`, `IDysonModelRepository`, `IDysonConfiguredShellRepository`, `IDysonSubjectSettingsRepository`
+- `IDysonSessionRepository`, `IDysonWorkDirectoryRepository`, `IDysonWorkDirectoryConfigurationRepository`, `IDysonPluginInstallationRepository`, `IDysonPluginVariableValueRepository`, `IDysonPluginHookSecurityRepository`, `IDysonModelRepository`, `IDysonConfiguredShellRepository`, `IDysonSubjectSettingsRepository`
+- `DysonPluginInstallationEntity` (subject-owned provenance, normalized id/version/format/scope, nullable owning work-directory id, package root, enabled/status, component/config/diagnostic JSON, UTC timestamps)
+- `DysonPluginVariableValueEntity`, `DysonPluginHookReviewEntity`, `DysonPluginHookAuditEntity` (protected ciphertext only; explicit reviewed permissions and revocation; append-only bounded audit metadata)
+- `DysonPluginVariableValueEntity` / `IDysonPluginVariableValueRepository` (subject-owned encrypted variable envelope; unique installation/name)
+- `DysonPluginHookReviewEntity` / `DysonPluginHookAuditEntity` / `IDysonPluginHookSecurityRepository` (checksum-bound review grants + bounded metadata-only audits)
 - `DysonDbContext`, `DysonDbAccessor`, `DysonSqliteConfigurator`, `AddDysonLocalDb` (LocalDb)
 - `DysonModelProviderEntity` (`SubjectId` + providers own `ApiKey` / `BaseUrl` / `ProviderKind` / optional `ManagedSource` / `OpenAiApiMode`)
 - `DysonModelSlugEntity` (slugs own `Slug` + `DisplayAlias` + `IsEnabled` + optional `DefaultReasoningEffort` + optional `DefaultMaxTargetContextTokens` + `ReasoningModes`; parent-scoped)

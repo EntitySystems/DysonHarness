@@ -108,6 +108,43 @@ Soft spawn / restore / inter-agent event coverage: `Harness.Tests` (`DysonSubage
 
 On parent resume the host hydrates direct DB children into `SubSessions` / `SubagentsById` via `RestoreRegisteredSubagent` (bumps next runtime id; does not raise `SubagentSpawned`).
 
+## Plugin subsystem
+
+The native plugin subsystem under `Harness.Engine/Plugins/` keeps package ownership separate from user-authored `.dyson/skills`, `.dyson/mcp`, and `openrules.json` content.
+
+### Package formats and acquisition
+
+| Format | Detection and supported discovery |
+| ------ | --------------------------------- |
+| Agent Plugins v1 | Root `plugin.json` with the exact local `https://agent-plugins.org/schemas/1.0.0/plugin.schema.json` schema; immediate `skills/*/SKILL.md`; root `mcp.json`. Unknown manifest fields are diagnosed and ignored; schemas are never downloaded. |
+| OpenAI / Codex | `.codex-plugin/plugin.json`; declared paths replace defaults for `skills`, `mcpServers`, and `hooks`. `.app.json` / `apps` are recorded as unsupported OpenAI-hosted connectors. |
+| Cursor | `.cursor-plugin/plugin.json`; declared `contributes` paths replace defaults for skills, rules, agents, commands, hooks, MCP, and variables. A repository `.cursor-plugin/marketplace.json` can identify child packages, but an ambiguous repository requires an explicit child subdirectory. |
+
+`IDysonPluginPackageService` accepts a local ZIP, a copied local folder, or an explicit GitHub repository/ref/subdirectory. GitHub refs are resolved to an immutable commit before download. Acquisition applies compressed/uncompressed byte, entry-count, depth, collision, traversal, and link/reparse checks; declared component paths are revalidated beneath the staged/package root. Preview computes a content checksum and retains a service-owned staged snapshot. Install reparses and rechecks the checksum, then promotes only after the caller supplies an explicit `Project` or `Global` target.
+
+Preview and install do **not** execute hooks, scripts, commands, skill resources, or stdio MCP processes. They only read package metadata/assets and copy validated content. The UI also requires a separate capability acknowledgement before installation.
+
+### Scope, catalog, and contributions
+
+- Project packages: `{workRoot}/.dyson/plugins/{plugin-id}/{version-or-content-id}/`; persistent package data: `{workRoot}/.dyson/plugin-data/{plugin-id}/`.
+- Global packages: `{DysonAppPaths.GetRoot(mode)}/plugins/{plugin-id}/{version-or-content-id}/`; persistent data: `{root}/plugin-data/{plugin-id}/`.
+- Effective catalogs contain global installs plus only the active work directory's project installs. A project record shadows the same normalized global id even when the project record is disabled, preventing cross-scope component merging.
+- `DysonPluginContributionResolver` revalidates installed paths. Plugin skills stay metadata-first and load through the existing `LoadSkill` / composer skill catalog without copying into `.dyson/skills`; provenance is persisted on `DysonSkillUsedEntry`.
+- Only enabled `alwaysApply` plugin rules enter the bounded session prompt snapshot. Manual/glob rules remain distinct and are not auto-injected. Plugin agents are explicit custom-agent choices. Plugin commands appear as collision-safe `/plugin-{plugin}-{command}` composer entries and insert editable instructions; selection does not send inference automatically.
+- Backend catalog inspection, enable/disable, and ownership-checked uninstall (retain/delete `PLUGIN_DATA`) exist. The current UI ships import only; installed-plugin settings, update/cross-scope-copy flows, variable configuration, and runtime-permission management are not yet exposed.
+
+### Managed MCP and security foundations
+
+`DysonPluginMcpResolver` and `DysonPluginMcpHost` provide a package-owned MCP runtime seam, but it is default-deny and is **not attached to session tool pipelines by the current UI host**. Installation enablement alone never starts a server. A caller must supply an explicit per-installation/server executable or network grant. Tools use `plugin__{pluginId}__{serverId}__{toolName}` names and reject deterministic namespace collisions.
+
+The resolver supports declared `stdio`, `streamable-http`/`http`, and optional `sse`. Agent Plugins require an explicit transport; vendor formats may infer only from exactly one of `command` or `url`. Stdio commands are one executable token, plugin-relative `./` commands must resolve inside the package, cwd stays under `PLUGIN_ROOT` or same-scope `PLUGIN_DATA`, and only those two reserved variables receive single-pass expansion in args/env/cwd. Remote URLs must be absolute HTTP(S), use HTTPS outside loopback, contain no userinfo/fragment, and use literal non-injected headers.
+
+Security persistence and services are foundations, not an active hook runtime:
+
+- Cursor variables are declarations. `DysonPluginVariableService` validates declared names/types and stores encrypted, subject-bound, tamper-evident values; list/status output is redacted. The current UI does not configure them and the MCP resolver deliberately leaves non-reserved variables unavailable rather than reading ambient environment variables.
+- Hooks are parsed with `EnabledByDefault = false`. `DysonPluginHookSecurityService` stores/revokes checksum-bound review grants for a narrow event/permission vocabulary and writes bounded metadata-only audits. No hook executor is wired, so importing/enabling a plugin cannot run hook content.
+- OpenAI `.app.json`, arbitrary Cursor IDE/cloud integrations, lifecycle scripts, and automatic marketplace/catalog scraping are unsupported.
+
 ## MCP access
 
 `DysonMcpAccessMode` on `DysonAgentSessionConfig`:

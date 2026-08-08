@@ -380,10 +380,16 @@ public sealed class DysonCustomMcpHost : IAsyncDisposable
     {
         foreach (var session in _sessions.Keys.ToArray())
         {
+            // Rebuild dynamic precedence deterministically: custom MCP before managed plugin MCP.
+            session.Config.PluginMcpHost?.StripOwnTools(session.McpPipeline);
             if (stripOnly)
                 StripOwnTools(session.McpPipeline);
             else
                 ApplyToPipeline(session.McpPipeline);
+            session.Config.PluginMcpHost?.ApplyToPipeline(session.McpPipeline);
+            DysonSessionToolsetBuilder.ApplyDisabledTools(
+                session.McpPipeline,
+                DysonSessionToolsetBuilder.ResolveDisabledTools(session.Config, session.Mode));
 
             session.BumpSystemPromptGeneration();
         }

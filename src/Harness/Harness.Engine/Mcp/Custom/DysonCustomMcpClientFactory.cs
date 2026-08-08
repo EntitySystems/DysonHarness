@@ -11,57 +11,93 @@ public static class DysonCustomMcpClientFactory
     /// Caller owns disposal. Stdio uses curated OS env + expanded config env
     /// (<see cref="StdioClientTransportOptions.InheritEnvironmentVariables"/> = false).
     /// </summary>
-    public static async Task<Result<McpClient, string>> ConnectAsync(
+    public static Task<Result<McpClient, string>> ConnectAsync(
         DysonCustomMcpServerConfig config,
         string workRoot,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(config);
 
+        return ConnectAsync(new DysonMcpClientConnectionOptions
+        {
+            ServerId = config.ServerId,
+            Transport = config.Transport,
+            Command = config.Command,
+            Args = config.Args,
+            Env = config.Env,
+            Cwd = ResolveCwd(workRoot, config.Cwd),
+            Url = config.Url,
+            Headers = config.Headers,
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Connects source-validated runtime options. Stdio receives the existing curated process
+    /// environment plus explicit overlays and never inherits the ambient environment wholesale.
+    /// </summary>
+    public static async Task<Result<McpClient, string>> ConnectAsync(
+        DysonMcpClientConnectionOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
         try
         {
             IClientTransport transport;
-            if (config.Transport == DysonCustomMcpTransportKind.Stdio)
+            if (options.Transport == DysonCustomMcpTransportKind.Stdio)
             {
-                var cwd = ResolveCwd(workRoot, config.Cwd);
                 var env = StdioClientTransportOptions.GetDefaultEnvironmentVariables();
-                foreach (var (key, value) in config.Env)
+                foreach (var (key, value) in options.Env)
                     env[key] = value;
 
                 transport = new StdioClientTransport(new StdioClientTransportOptions
                 {
-                    Name = config.ServerId,
-                    Command = config.Command!,
-                    Arguments = config.Args.ToList(),
-                    WorkingDirectory = cwd,
+                    Name = options.ServerId,
+                    Command = options.Command!,
+                    Arguments = options.Args.ToList(),
+                    WorkingDirectory = options.Cwd,
                     InheritEnvironmentVariables = false,
                     EnvironmentVariables = env,
                 });
             }
             else
             {
-                var urlCheck = SearchHttp.ValidateUrlAllowingLocal(config.Url!);
+                var urlCheck = SearchHttp.ValidateUrlAllowingLocal(options.Url!);
                 if (urlCheck.IsError)
                     return Result<McpClient, string>.AsError(urlCheck.Error);
 
-                var mode = config.Transport switch
+                var mode = options.Transport switch
                 {
                     DysonCustomMcpTransportKind.HttpSse => HttpTransportMode.Sse,
                     DysonCustomMcpTransportKind.HttpStreamable => HttpTransportMode.StreamableHttp,
                     _ => HttpTransportMode.AutoDetect,
                 };
 
-                var headers = config.Headers.Count == 0
+                var headers = options.Headers.Count == 0
                     ? null
-                    : new Dictionary<string, string>(config.Headers, StringComparer.OrdinalIgnoreCase);
+                    : new Dictionary<string, string>(options.Headers, StringComparer.OrdinalIgnoreCase);
 
-                transport = new HttpClientTransport(new HttpClientTransportOptions
+                var transportOptions = new HttpClientTransportOptions
                 {
-                    Endpoint = new Uri(config.Url!, UriKind.Absolute),
+                    Endpoint = new Uri(options.Url!, UriKind.Absolute),
                     TransportMode = mode,
                     AdditionalHeaders = headers,
-                    Name = config.ServerId,
-                });
+                    Name = options.ServerId,
+                };
+                if (options.DisableAutoRedirect)
+                {
+                    var handler = new HttpClientHandler { AllowAutoRedirect = false };
+                    var httpClient = new HttpClient(handler, disposeHandler: true);
+                    transport = new HttpClientTransport(
+                        transportOptions,
+                        httpClient,
+                        loggerFactory: null,
+                        ownsHttpClient: true);
+                }
+                else
+                {
+                    transport = new HttpClientTransport(transportOptions);
+                }
             }
 
             var client = await McpClient.CreateAsync(transport, cancellationToken: cancellationToken)
@@ -74,7 +110,7 @@ public static class DysonCustomMcpClientFactory
         }
         catch (Exception ex)
         {
-            return Result<McpClient, string>.AsError($"Failed to connect MCP server '{config.ServerId}': {ex.Message}");
+            return Result<McpClient, string>.AsError($"Failed to connect MCP server '{options.ServerId}': {ex.Message}");
         }
     }
 

@@ -43,6 +43,27 @@
                     }
                 </div>
 
+                @if (PluginCommands.Count > 0)
+                {
+                    <h4 class="composer-help-modal__section">Plugin commands</h4>
+                    <div class="composer-help-modal__list" role="list">
+                        @foreach (var command in PluginCommands)
+                        {
+                            <div class="composer-help-modal__row" role="listitem">
+                                <div class="composer-help-modal__meta">
+                                    <span class="composer-help-modal__token mono">@command.Token</span>
+                                    <span class="composer-help-modal__desc">@command.Label</span>
+                                </div>
+                                <button type="button"
+                                        class="btn btn-ghost composer-help-modal__insert"
+                                        @onclick="() => InsertAsync(command.Token)">
+                                    Insert
+                                </button>
+                            </div>
+                        }
+                    </div>
+                }
+
                 <h4 class="composer-help-modal__section">Patterns</h4>
                 <div class="composer-help-modal__list" role="list">
                     @foreach (var entry in Patterns)
@@ -69,6 +90,8 @@
     private bool _open;
 
     [Parameter] public EventCallback<string> OnInsert { get; set; }
+
+    [Parameter] public IReadOnlyList<ComposerSlashCommands.PluginCommandOption> PluginCommands { get; set; } = [];
 
     private static IEnumerable<ComposerSlashCommands.HelpEntry> BuiltIns =>
         ComposerSlashCommands.HelpCatalog

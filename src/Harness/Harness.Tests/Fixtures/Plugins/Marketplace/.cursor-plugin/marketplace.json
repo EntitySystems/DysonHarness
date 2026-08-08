@@ -1,0 +1,1 @@
+{"version":"1.0.0","plugins":[{"name":"one","source":"./plugins/one"},{"name":"two","source":"./plugins/two"}]}

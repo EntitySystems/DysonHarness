@@ -9,6 +9,12 @@ public class DysonAgentSessionConfig
     public Dictionary<string, string> CustomAgents { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// Resolved enabled plugin assets for this session. The host supplies this immutable snapshot
+    /// when creating or restoring a session; consumers must not use process-wide plugin state.
+    /// </summary>
+    public DysonPluginContributionSet PluginContributions { get; init; } = new();
+
+    /// <summary>
     /// FullAccess runs tools directly. AutoReview routes calls through the in-process MCP proxy.
     /// No allowlist either way.
     /// </summary>
@@ -44,6 +50,15 @@ public class DysonAgentSessionConfig
     /// When set and <see cref="DysonCustomMcpHost.McpActive"/>, namespaced tools are merged into the catalog.
     /// </summary>
     public DysonCustomMcpHost? CustomMcpHost { get; set; }
+
+    /// <summary>
+    /// Optional managed plugin MCP host. Installation and enablement do not activate servers;
+    /// the host exposes only checksum-bound explicitly granted tools.
+    /// </summary>
+    public DysonPluginMcpHost? PluginMcpHost { get; set; }
+
+    /// <summary>Work-directory scope used to rebuild this session's effective plugin MCP catalog.</summary>
+    public Guid? PluginMcpWorkDirectoryId { get; set; }
 
     /// <summary>
     /// Pre-resolved tool denylist for this session's current mode.

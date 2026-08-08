@@ -91,6 +91,21 @@ internal static class DysonTempDb
         IDysonSubjectContext? subject = null) =>
         new(accessor, subject ?? DysonFixedLocalSubjectContext.Instance);
 
+    public static DysonPluginInstallationRepository Plugins(
+        DysonDbAccessor accessor,
+        IDysonSubjectContext? subject = null) =>
+        new(accessor, subject ?? DysonFixedLocalSubjectContext.Instance);
+
+    public static DysonPluginVariableValueRepository PluginVariables(
+        DysonDbAccessor accessor,
+        IDysonSubjectContext? subject = null) =>
+        new(accessor, subject ?? DysonFixedLocalSubjectContext.Instance);
+
+    public static DysonPluginHookSecurityRepository PluginHookSecurity(
+        DysonDbAccessor accessor,
+        IDysonSubjectContext? subject = null) =>
+        new(accessor, subject ?? DysonFixedLocalSubjectContext.Instance);
+
     private sealed class DelegateDbContextFactory(DbContextOptions<DysonDbContext> options)
         : IDbContextFactory<DysonDbContext>
     {

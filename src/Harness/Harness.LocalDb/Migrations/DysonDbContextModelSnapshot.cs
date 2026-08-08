@@ -204,6 +204,299 @@ namespace Harness.LocalDb.Migrations
                     b.ToTable("model_slugs", (string)null);
                 });
 
+            modelBuilder.Entity("DysonHarness.DysonPluginHookAuditEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DetailCode")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("DurationMilliseconds")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("EventName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("HookComponentId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("InputBytes")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("InstallationId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("OccurredUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Outcome")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("OutputBytes")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("SubjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InstallationId");
+
+                    b.HasIndex("SubjectId");
+
+                    b.HasIndex("SubjectId", "InstallationId", "OccurredUtc");
+
+                    b.ToTable("plugin_hook_audits", (string)null);
+                });
+
+            modelBuilder.Entity("DysonHarness.DysonPluginHookReviewEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EventName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FailureMode")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("HookComponentId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("InstallationId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("MaxOutputBytes")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("PackageChecksum")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PermissionsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ReviewedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("RevokedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SubjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TimeoutMilliseconds")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InstallationId");
+
+                    b.HasIndex("SubjectId");
+
+                    b.HasIndex("SubjectId", "InstallationId", "HookComponentId", "EventName")
+                        .IsUnique();
+
+                    b.ToTable("plugin_hook_reviews", (string)null);
+                });
+
+            modelBuilder.Entity("DysonHarness.DysonPluginInstallationEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ComponentInventoryJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ConfigurationSchemaJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ContentChecksum")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DiagnosticsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("InstallScope")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("InstalledUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("NormalizedPluginId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .UseCollation("NOCASE");
+
+                    b.Property<string>("PackageFormat")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PackageRoot")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RequestedRef")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ResolvedCommit")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SchemaVersion")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceKind")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceLocation")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceSubdirectory")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SubjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Version")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("WorkDirectoryId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SubjectId");
+
+                    b.HasIndex("WorkDirectoryId");
+
+                    b.HasIndex("SubjectId", "NormalizedPluginId")
+                        .IsUnique()
+                        .HasFilter("\"InstallScope\" = 'Global'");
+
+                    b.HasIndex("SubjectId", "PackageRoot")
+                        .IsUnique();
+
+                    b.HasIndex("SubjectId", "NormalizedPluginId", "WorkDirectoryId")
+                        .IsUnique()
+                        .HasFilter("\"InstallScope\" = 'Project'");
+
+                    b.ToTable("plugin_installations", (string)null);
+                });
+
+            modelBuilder.Entity("DysonHarness.DysonPluginMcpGrantEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Capabilities")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("GrantedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("InstallationId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PackageChecksum")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("RevokedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ServerId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SubjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InstallationId");
+
+                    b.HasIndex("SubjectId");
+
+                    b.HasIndex("SubjectId", "InstallationId", "ServerId")
+                        .IsUnique();
+
+                    b.ToTable("plugin_mcp_grants", (string)null);
+                });
+
+            modelBuilder.Entity("DysonHarness.DysonPluginVariableValueEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("InstallationId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<byte[]>("ProtectedValue")
+                        .IsRequired()
+                        .HasColumnType("BLOB");
+
+                    b.Property<string>("SubjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("VariableName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InstallationId");
+
+                    b.HasIndex("SubjectId");
+
+                    b.HasIndex("SubjectId", "InstallationId", "VariableName")
+                        .IsUnique();
+
+                    b.ToTable("plugin_variable_values", (string)null);
+                });
+
             modelBuilder.Entity("DysonHarness.DysonSessionEntity", b =>
                 {
                     b.Property<Guid>("Id")
@@ -515,6 +808,60 @@ namespace Harness.LocalDb.Migrations
                         .IsRequired();
 
                     b.Navigation("Provider");
+                });
+
+            modelBuilder.Entity("DysonHarness.DysonPluginHookAuditEntity", b =>
+                {
+                    b.HasOne("DysonHarness.DysonPluginInstallationEntity", "Installation")
+                        .WithMany()
+                        .HasForeignKey("InstallationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Installation");
+                });
+
+            modelBuilder.Entity("DysonHarness.DysonPluginHookReviewEntity", b =>
+                {
+                    b.HasOne("DysonHarness.DysonPluginInstallationEntity", "Installation")
+                        .WithMany()
+                        .HasForeignKey("InstallationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Installation");
+                });
+
+            modelBuilder.Entity("DysonHarness.DysonPluginInstallationEntity", b =>
+                {
+                    b.HasOne("DysonHarness.DysonWorkDirectoryEntity", "WorkDirectory")
+                        .WithMany()
+                        .HasForeignKey("WorkDirectoryId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.Navigation("WorkDirectory");
+                });
+
+            modelBuilder.Entity("DysonHarness.DysonPluginMcpGrantEntity", b =>
+                {
+                    b.HasOne("DysonHarness.DysonPluginInstallationEntity", "Installation")
+                        .WithMany()
+                        .HasForeignKey("InstallationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Installation");
+                });
+
+            modelBuilder.Entity("DysonHarness.DysonPluginVariableValueEntity", b =>
+                {
+                    b.HasOne("DysonHarness.DysonPluginInstallationEntity", "Installation")
+                        .WithMany()
+                        .HasForeignKey("InstallationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Installation");
                 });
 
             modelBuilder.Entity("DysonHarness.DysonSessionEntity", b =>

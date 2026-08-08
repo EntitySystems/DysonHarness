@@ -1,0 +1,1 @@
+{"name":"cursor-sample","displayName":"Cursor Sample","version":"3.0.0","contributes":{"skills":["skills"],"rules":"rules","variables":{"API_TOKEN":{"type":"string","secret":true}},"mcpServers":"mcp.json"}}

@@ -17,6 +17,7 @@ Website: [dysonharness.com](https://dysonharness.com/)
 - Per-mode tool limits in Settings (see Usage guidance)
 - Drop noisy turns from model context when conversations get heavy
 - Sessions persist and resume; works with OpenAI-compatible providers
+- Safely previews and imports Agent Plugin v1, Codex, and Cursor plugin packages through `/plugins`
 
 ## Tested models
 

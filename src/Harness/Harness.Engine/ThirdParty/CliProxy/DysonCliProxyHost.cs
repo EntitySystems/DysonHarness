@@ -103,6 +103,50 @@ public sealed class DysonCliProxyHost : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Force a clean restart: kill our process and any orphan cli-proxy-api instances,
+    /// rewrite config.yaml with plaintext keys, start fresh, and wait for health.
+    /// Clears CLIProxyAPI's in-memory management-key IP ban as a side effect.
+    /// </summary>
+    public async Task<VoidResult<string>> RestartAsync(
+        IProgress<CliProxyDownloadProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!IsInstalled)
+            {
+                var install = await _downloader.EnsureInstalledAsync(progress, cancellationToken)
+                    .ConfigureAwait(false);
+                if (install.IsError)
+                    return install;
+            }
+
+            var keys = LoadOrCreateKeys();
+            _keys = keys;
+
+            KillProcess();
+            KillOrphanProcesses();
+
+            var writeConfig = WriteConfigYaml(keys);
+            if (writeConfig.IsError)
+                return writeConfig;
+
+            var start = StartProcess();
+            if (start.IsError)
+                return start;
+
+            return await WaitForHealthyAsync(keys.ApiKey, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public Result<string, string> GetApiKey()
     {
         try
@@ -320,6 +364,29 @@ public sealed class DysonCliProxyHost : IAsyncDisposable
         {
             _process?.Dispose();
             _process = null;
+        }
+    }
+
+    private void KillOrphanProcesses()
+    {
+        var selfId = _process?.Id; // null after KillProcess(); kept for clarity
+        foreach (var p in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(DysonCliProxyPaths.ExecutableFileName)))
+        {
+            try
+            {
+                if (p.Id == selfId) continue;
+                // Best-effort path check: only kill instances under our install root.
+                // MainModule can throw (access denied); on failure fall back to name match
+                // since cli-proxy-api is a niche binary we install ourselves.
+                var modulePath = p.MainModule?.FileName;
+                if (modulePath is not null
+                    && !modulePath.StartsWith(DysonCliProxyPaths.InstallRoot, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                p.Kill(entireProcessTree: true);
+                p.WaitForExit(5_000);
+            }
+            catch { /* best effort */ }
+            finally { p.Dispose(); }
         }
     }
 

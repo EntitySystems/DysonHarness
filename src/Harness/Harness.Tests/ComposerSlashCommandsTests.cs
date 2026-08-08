@@ -154,6 +154,33 @@ public class ComposerSlashCommandsTests
             throw new InvalidOperationException("Filter(/) should include /skill-search among built-ins.");
         }
 
+        if (atRoot.All(s => s.Kind != ComposerSlashCommands.Kind.Plugins))
+        {
+            throw new InvalidOperationException("Filter(/) should include /plugins among built-ins.");
+        }
+
+        var pluginsFilter = ComposerSlashCommands.Filter("/PLUG", models, skills);
+        if (pluginsFilter.Count != 1
+            || pluginsFilter[0].Kind != ComposerSlashCommands.Kind.Plugins
+            || pluginsFilter[0].Token != "/plugins")
+        {
+            throw new InvalidOperationException("Filter(/PLUG) should match /plugins case-insensitively.");
+        }
+
+        if (!ComposerSlashCommands.TryResolve("/PlUgInS ignored remainder", models, out var pluginsParsed, skills)
+            || pluginsParsed!.Suggestion.Kind != ComposerSlashCommands.Kind.Plugins
+            || pluginsParsed.Remainder != "ignored remainder")
+        {
+            throw new InvalidOperationException("TryResolve(/plugins) should be case-insensitive and preserve its remainder.");
+        }
+
+        if (ComposerSlashCommands.HelpCatalog.All(e => e.Template != "/plugins"
+            || e.Description != "Manage plugins"
+            || e.Section != ComposerSlashCommands.HelpSection.BuiltIn))
+        {
+            throw new InvalidOperationException("HelpCatalog must include /plugins.");
+        }
+
         var stillSkills = ComposerSlashCommands.Filter("/skill", models, skills);
         if (stillSkills.Count == 0
             || stillSkills.Any(s => s.Kind != ComposerSlashCommands.Kind.Skill))
@@ -196,6 +223,69 @@ public class ComposerSlashCommandsTests
         {
             throw new InvalidOperationException("HelpCatalog must include /help and pattern rows.");
         }
+
+        var pluginCommands = ComposerSlashCommands.ToPluginCommandOptions(
+        [
+            new DysonPluginCommandContribution
+            {
+                StableId = "acme:check",
+                CommandId = "check",
+                DisplayName = "Check",
+                Instructions = "Run the plugin check.",
+                Provenance = new DysonPluginAssetProvenance
+                {
+                    PluginId = "acme",
+                    PluginDisplayName = "Acme Tools",
+                    PackageRoot = "C:\\plugins\\acme",
+                    PackageRelativePath = "commands/check.md",
+                    ComponentId = "check",
+                },
+            },
+        ], models);
+        if (pluginCommands.Count != 1
+            || pluginCommands[0].Token != "/plugin-acme-check"
+            || !pluginCommands[0].Label.Contains("Acme Tools", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Plugin command token/label must be stable and identify its plugin.");
+        }
+
+        var pluginSuggestions = ComposerSlashCommands.Filter("/plugin-acme", models, skills, pluginCommands);
+        if (pluginSuggestions.Count != 1
+            || pluginSuggestions[0].Kind != ComposerSlashCommands.Kind.PluginCommand
+            || pluginSuggestions[0].PluginCommandInstructions != "Run the plugin check.")
+        {
+            throw new InvalidOperationException("Plugin command suggestions must preserve reviewable instructions.");
+        }
+
+        if (!ComposerSlashCommands.TryResolve("/PLUGIN-ACME-CHECK user remainder", models, out var pluginParsed, skills, pluginCommands)
+            || pluginParsed!.Suggestion.Kind != ComposerSlashCommands.Kind.PluginCommand
+            || pluginParsed.Suggestion.PluginCommandInstructions != "Run the plugin check."
+            || pluginParsed.Remainder != "user remainder")
+        {
+            throw new InvalidOperationException("Plugin command exact selection must be case-insensitive and inert until the composer handles it.");
+        }
+
+        var builtInCollision = ComposerSlashCommands.ToPluginCommandOptions(
+        [
+            new DysonPluginCommandContribution
+            {
+                StableId = "bad:help",
+                CommandId = "help",
+                DisplayName = "Bad",
+                Instructions = "bad",
+                Provenance = new DysonPluginAssetProvenance
+                {
+                    PluginId = "",
+                    PluginDisplayName = "Bad",
+                    PackageRoot = "C:\\plugins\\bad",
+                    PackageRelativePath = "commands/help.md",
+                    ComponentId = "help",
+                },
+            },
+        ], models);
+        // Plugin namespace prevents a command component named help from occupying /help.
+        if (builtInCollision.Any(command => command.Token == "/help"))
+            throw new InvalidOperationException("Plugin commands must not shadow built-ins.");
 
         if (!ComposerSlashCommands.IsSkillCatalogToken("/skill")
             || !ComposerSlashCommands.IsSkillCatalogToken("/skill-")

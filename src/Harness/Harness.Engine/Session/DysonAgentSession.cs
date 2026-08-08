@@ -40,9 +40,10 @@ public abstract class DysonAgentSession
             throw new ArgumentOutOfRangeException(nameof(agentMode), agentMode, prompt.Error);
 
         Mode = agentMode;
-        SystemPrompt = string.IsNullOrWhiteSpace(systemPromptSuffix)
-            ? prompt.Value
-            : prompt.Value + "\n\n" + systemPromptSuffix.Trim();
+        SystemPrompt = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+            prompt.Value,
+            systemPromptSuffix,
+            DysonAgentSystemPrompts.BuildPluginInstructionBlock(config))!;
         // Do not gate as root here: Parent is always null in the ctor. Roots call
         // ConfigureRootInterAgentTools from Create/Load; children get gated in Register/Restore.
         McpPipeline = DysonSessionToolsetBuilder.BuildInitial(config, agentMode, ResolveModelSlugId());
@@ -164,9 +165,10 @@ public abstract class DysonAgentSession
             return new VoidResult<string>(prompt.Error);
 
         Mode = trimmed;
-        SystemPrompt = string.IsNullOrWhiteSpace(systemPromptSuffix)
-            ? prompt.Value
-            : prompt.Value + "\n\n" + systemPromptSuffix.Trim();
+        SystemPrompt = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+            prompt.Value,
+            systemPromptSuffix,
+            DysonAgentSystemPrompts.BuildPluginInstructionBlock(Config))!;
 
         if (Config.ToolPolicy is not null)
         {
@@ -180,7 +182,6 @@ public abstract class DysonAgentSession
             interAgentDepth: ComputeDepth(),
             omitRootTaskCompletionTools: Parent is not null,
             modelSlugId: ResolveModelSlugId());
-        Config.CustomMcpHost?.ApplyToPipeline(McpPipeline);
         SystemPromptGeneration++;
         AppendLog($"mode → {Mode} (system prompt + toolset rebuilt)");
         return VoidResult<string>.Success;
@@ -284,6 +285,7 @@ public abstract class DysonAgentSession
         DysonSessionToolsetBuilder.ReapplyDisabledTools(
             child.McpPipeline, child.Config, child.Mode, child.ResolveModelSlugId());
         child.Config.CustomMcpHost?.AttachSession(child);
+        child.Config.PluginMcpHost?.AttachSession(child);
     }
 
     public bool TryGetSubagent(int subagentId, out DysonAgentSession child) =>
