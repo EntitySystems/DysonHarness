@@ -34,7 +34,8 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
     private readonly Button _snipButton;
     private readonly Grid _contentHost;
     private string? _activeTabId;
-    private Canvas? _snipOverlay;
+    private Grid? _snipOverlay;
+    private Canvas? _snipRubberBand;
     private Rectangle? _snipSelection;
     private Point? _snipOrigin;
     private bool _snipCapturing;
@@ -99,7 +100,7 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
         nav.Children.Add(navButtons);
 
         _snipButton = MakeIconButton("✂", "Snip page region into agent prompt");
-        _snipButton.Click += (_, _) => EnterSnipMode();
+        _snipButton.Click += (_, _) => _ = EnterSnipModeAsync();
         DockPanel.SetDock(_snipButton, Dock.Right);
         nav.Children.Add(_snipButton);
 
@@ -267,39 +268,84 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
         RefreshTabChipStyles();
     }
 
-    private void EnterSnipMode()
+    private async Task EnterSnipModeAsync()
     {
         if (_snipOverlay is not null || _snipCapturing)
             return;
-        if (ActiveTab() is null)
+
+        var tab = ActiveTab();
+        if (tab is null)
             return;
 
-        var overlay = new Canvas
+        _snipCapturing = true;
+        try
         {
-            Background = SnipOverlayFill,
-            Cursor = Cursors.Cross,
-            Focusable = true,
-        };
-        Panel.SetZIndex(overlay, 100);
-        overlay.MouseLeftButtonDown += OnSnipMouseDown;
-        overlay.MouseMove += OnSnipMouseMove;
-        overlay.MouseLeftButtonUp += OnSnipMouseUp;
+            var shot = await tab.TakeScreenshotAsync().ConfigureAwait(true);
+            if (shot.IsError)
+                return;
 
-        var selection = new Rectangle
+            // Hide HwndHost so the WPF overlay can receive mouse (HWND airspace).
+            tab.BrowserControl.Visibility = Visibility.Collapsed;
+
+            BitmapSource bitmap;
+            using (var input = new MemoryStream(shot.Value))
+            {
+                var decoder = BitmapDecoder.Create(
+                    input,
+                    BitmapCreateOptions.PreservePixelFormat,
+                    BitmapCacheOption.OnLoad);
+                bitmap = decoder.Frames[0];
+                bitmap.Freeze();
+            }
+
+            var overlay = new Grid
+            {
+                Cursor = Cursors.Cross,
+                Focusable = true,
+                Background = Bg0,
+            };
+            Panel.SetZIndex(overlay, 100);
+            overlay.Children.Add(new Image
+            {
+                Source = bitmap,
+                Stretch = Stretch.Fill,
+                IsHitTestVisible = false,
+            });
+
+            var rubberBand = new Canvas
+            {
+                Background = SnipOverlayFill,
+            };
+            rubberBand.MouseLeftButtonDown += OnSnipMouseDown;
+            rubberBand.MouseMove += OnSnipMouseMove;
+            rubberBand.MouseLeftButtonUp += OnSnipMouseUp;
+
+            var selection = new Rectangle
+            {
+                Stroke = SnipSelectionStroke,
+                StrokeThickness = 1.5,
+                Fill = SnipSelectionFill,
+                Visibility = Visibility.Collapsed,
+                IsHitTestVisible = false,
+            };
+            rubberBand.Children.Add(selection);
+            overlay.Children.Add(rubberBand);
+
+            _snipOverlay = overlay;
+            _snipRubberBand = rubberBand;
+            _snipSelection = selection;
+            _snipOrigin = null;
+            _contentHost.Children.Add(overlay);
+            overlay.Focus();
+        }
+        catch
         {
-            Stroke = SnipSelectionStroke,
-            StrokeThickness = 1.5,
-            Fill = SnipSelectionFill,
-            Visibility = Visibility.Collapsed,
-            IsHitTestVisible = false,
-        };
-        overlay.Children.Add(selection);
-
-        _snipOverlay = overlay;
-        _snipSelection = selection;
-        _snipOrigin = null;
-        _contentHost.Children.Add(overlay);
-        overlay.Focus();
+            RestoreActiveBrowserVisibility();
+        }
+        finally
+        {
+            _snipCapturing = false;
+        }
     }
 
     private void ExitSnipMode()
@@ -309,8 +355,16 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
 
         _contentHost.Children.Remove(_snipOverlay);
         _snipOverlay = null;
+        _snipRubberBand = null;
         _snipSelection = null;
         _snipOrigin = null;
+        RestoreActiveBrowserVisibility();
+    }
+
+    private void RestoreActiveBrowserVisibility()
+    {
+        if (ActiveTab() is { } tab)
+            tab.BrowserControl.Visibility = Visibility.Visible;
     }
 
     private void OnWindowPreviewKeyDown(object sender, KeyEventArgs e)
@@ -323,27 +377,27 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
 
     private void OnSnipMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (_snipOverlay is null || _snipSelection is null)
+        if (_snipRubberBand is null || _snipSelection is null)
             return;
 
-        _snipOrigin = e.GetPosition(_snipOverlay);
+        _snipOrigin = e.GetPosition(_snipRubberBand);
         _snipSelection.Visibility = Visibility.Visible;
         Canvas.SetLeft(_snipSelection, _snipOrigin.Value.X);
         Canvas.SetTop(_snipSelection, _snipOrigin.Value.Y);
         _snipSelection.Width = 0;
         _snipSelection.Height = 0;
-        _snipOverlay.CaptureMouse();
+        _snipRubberBand.CaptureMouse();
         e.Handled = true;
     }
 
     private void OnSnipMouseMove(object sender, MouseEventArgs e)
     {
-        if (_snipOrigin is null || _snipOverlay is null || _snipSelection is null)
+        if (_snipOrigin is null || _snipRubberBand is null || _snipSelection is null)
             return;
         if (e.LeftButton != MouseButtonState.Pressed)
             return;
 
-        var pos = e.GetPosition(_snipOverlay);
+        var pos = e.GetPosition(_snipRubberBand);
         var origin = _snipOrigin.Value;
         var x = Math.Min(origin.X, pos.X);
         var y = Math.Min(origin.Y, pos.Y);
@@ -358,10 +412,10 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
 
     private void OnSnipMouseUp(object sender, MouseButtonEventArgs e)
     {
-        if (_snipOverlay is null || _snipSelection is null || _snipOrigin is null)
+        if (_snipRubberBand is null || _snipSelection is null || _snipOrigin is null)
             return;
 
-        _snipOverlay.ReleaseMouseCapture();
+        _snipRubberBand.ReleaseMouseCapture();
         e.Handled = true;
 
         var x = Canvas.GetLeft(_snipSelection);
@@ -397,7 +451,16 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
         {
             var contentWidth = _contentHost.ActualWidth;
             var contentHeight = _contentHost.ActualHeight;
-            ExitSnipMode();
+
+            // Drop the overlay; keep HwndHost collapsed until after CDP capture + crop.
+            if (_snipOverlay is not null)
+            {
+                _contentHost.Children.Remove(_snipOverlay);
+                _snipOverlay = null;
+                _snipRubberBand = null;
+                _snipSelection = null;
+                _snipOrigin = null;
+            }
 
             var shot = await tab.TakeScreenshotAsync().ConfigureAwait(true);
             if (shot.IsError)
@@ -443,6 +506,7 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
         }
         finally
         {
+            RestoreActiveBrowserVisibility();
             _snipCapturing = false;
         }
     }

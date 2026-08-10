@@ -1,0 +1,64 @@
+@namespace Harness.UI.Components.Chat
+@using Microsoft.AspNetCore.Components.Web
+
+@if (IsOpen)
+{
+    <div class="confirm-dialog-backdrop"
+         role="presentation"
+         @onclick="CloseAsync"
+         @onkeydown="OnKeyDown">
+        <div class="confirm-dialog session-subagents-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="session-subagents-modal-title"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnKeyDown">
+            <div class="confirm-dialog__header">
+                <div class="session-subagents-modal__title-row">
+                    <h3 id="session-subagents-modal-title">Subagents</h3>
+                    <span class="session-subagents-modal__counts">
+                        @ChildIds.Count total · @ActiveCount active
+                    </span>
+                </div>
+                <button type="button"
+                        class="btn btn-ghost session-subagents-modal__close"
+                        @onclick="CloseAsync"
+                        aria-label="Close">×</button>
+            </div>
+
+            <div class="confirm-dialog__body session-subagents-modal__body">
+                @if (ChildIds.Count == 0)
+                {
+                    <p class="session-subagents-modal__empty">No subagents for this session.</p>
+                }
+                else
+                {
+                    <div class="session-subagents-modal__list">
+                        @foreach (var id in ChildIds)
+                        {
+                            <SubagentCard PersistenceId="id" AfterNavigate="CloseAsync" />
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+
+    [Parameter] public IReadOnlyList<Guid> ChildIds { get; set; } = [];
+
+    [Parameter] public int ActiveCount { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private void OnKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            _ = CloseAsync();
+    }
+}

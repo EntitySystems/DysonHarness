@@ -18,7 +18,15 @@ public partial class MainWindow : Window
         SourceInitialized += (_, _) => WindowChromeTheme.Apply(this, _chromeTheme);
 
         // Set LegacyBindingEnabled before the control initializes (before Address / visual tree).
-        var browser = new ChromiumWebBrowser();
+        // OSR default paint rate is 30fps; raise to 60 for smoother GPU/canvas content.
+        var browser = new ChromiumWebBrowser
+        {
+            BrowserSettings = new BrowserSettings
+            {
+                WindowlessFrameRate = 60,
+                WebGl = CefState.Enabled,
+            },
+        };
         browser.JavascriptObjectRepository.Settings.LegacyBindingEnabled = true;
         browser.JavascriptObjectRepository.Register(
             "dysonShell",

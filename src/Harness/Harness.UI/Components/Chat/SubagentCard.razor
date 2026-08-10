@@ -41,6 +41,9 @@
 @code {
     [Parameter, EditorRequired] public Guid PersistenceId { get; set; }
 
+    /// <summary>Invoked after a successful navigate (e.g. close a parent modal).</summary>
+    [Parameter] public EventCallback AfterNavigate { get; set; }
+
     private DysonSubagentCardState? _state;
 
     protected override void OnInitialized()
@@ -68,6 +71,7 @@
             return;
 
         await Host.NavigateToSessionAsync(PersistenceId);
+        await AfterNavigate.InvokeAsync();
     }
 
     public void Dispose() => Host.Changed -= OnHostChanged;

@@ -1,0 +1,77 @@
+@namespace Harness.UI.Components.Chat
+@using Harness.UI.Demo
+@inject DysonUiHost Host
+
+<div class="composer-stop" @onkeydown="HandleKeyDown">
+    <button type="button"
+            class="btn btn--xs btn-ghost composer-stop__trigger"
+            disabled="@(!CanOpen)"
+            title="Stop in-flight work"
+            aria-haspopup="true"
+            aria-expanded="@_open"
+            @onclick="Toggle">
+        Stop
+        <span class="composer-stop__caret" aria-hidden="true">▴</span>
+    </button>
+
+    @if (_open)
+    {
+        <div class="composer-stop__backdrop" @onclick="Close"></div>
+        <div class="composer-stop__panel" tabindex="0" role="menu" aria-label="Stop options">
+            <button type="button"
+                    class="composer-stop__option"
+                    role="menuitem"
+                    disabled="@(!Host.IsBusy)"
+                    title="Cancel only this session's in-flight prompt"
+                    @onclick="StopOrchestrator">
+                Stop orchestrator
+            </button>
+            <button type="button"
+                    class="composer-stop__option"
+                    role="menuitem"
+                    disabled="@(!CanStopAll)"
+                    title="Cancel prompt, clear queue, and stop all subagents"
+                    @onclick="StopAll">
+                Stop all
+            </button>
+        </div>
+    }
+</div>
+
+@code {
+    private bool _open;
+
+    private bool CanOpen => Host.IsBusy || Host.HasActiveSubagents;
+    private bool CanStopAll => Host.IsBusy || Host.HasActiveSubagents;
+
+    private void Toggle()
+    {
+        if (!CanOpen)
+            return;
+        _open = !_open;
+    }
+
+    private void Close() => _open = false;
+
+    private void StopOrchestrator()
+    {
+        if (!Host.IsBusy)
+            return;
+        Host.CancelPrompt();
+        _open = false;
+    }
+
+    private void StopAll()
+    {
+        if (!CanStopAll)
+            return;
+        Host.StopAllExecution();
+        _open = false;
+    }
+
+    private void HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            _open = false;
+    }
+}

@@ -277,6 +277,12 @@ public sealed class DysonUiHost : IAsyncDisposable
     public bool IsBusy =>
         ActiveSessionId is Guid id && _busySessions.ContainsKey(id);
 
+    /// <summary>
+    /// True when any descendant of the focused session is still <see cref="DysonSessionStatus.Active"/>.
+    /// </summary>
+    public bool HasActiveSubagents =>
+        _session is not null && DysonSubagentHostLogic.HasActiveDescendant(_session);
+
     /// <summary>Queued prompts for the focused session (FIFO; first-line previews).</summary>
     public IReadOnlyList<QueuedPrompt> QueuedPrompts
     {
@@ -2694,6 +2700,25 @@ public sealed class DysonUiHost : IAsyncDisposable
             cts.Cancel();
     }
 
+    /// <summary>
+    /// Cancels the focused session's in-flight prompt, clears its prompt queue, and recursively
+    /// stops active subagents (plus any host prompt CTS held for descendant persistence ids).
+    /// </summary>
+    public void StopAllExecution()
+    {
+        if (ActiveSessionId is not Guid id)
+            return;
+
+        // Clear queue before cancel so PromptOnSession finally → DrainQueuedPrompts finds nothing.
+        ClearPromptQueue(id);
+        CancelPrompt();
+
+        if (_session is not null)
+            StopAllDescendants(_session);
+
+        Notify();
+    }
+
     /// <summary>Removes one queued prompt by id for the focused session (no-op if missing).</summary>
     public void RemoveQueuedPrompt(Guid queuedId)
     {
@@ -2714,6 +2739,30 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         Notify();
+    }
+
+    private void ClearPromptQueue(Guid sessionId)
+    {
+        lock (_promptQueueGate)
+            _promptQueues.Remove(sessionId);
+    }
+
+    private void StopAllDescendants(DysonAgentSession parent)
+    {
+        // Snapshot: StopSubagentAsync may mutate parent maps / terminal state.
+        foreach (var child in parent.SubSessions.ToArray())
+        {
+            StopAllDescendants(child);
+
+            if (child.PersistenceId != Guid.Empty
+                && _promptCtsBySession.TryGetValue(child.PersistenceId, out var cts))
+            {
+                cts.Cancel();
+            }
+
+            if (child.Id > 0)
+                _ = parent.StopSubagentAsync(child.Id, reason: "Stopped by user.");
+        }
     }
 
     public async Task<VoidResult<string>> PromptAsync(

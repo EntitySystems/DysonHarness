@@ -9,20 +9,15 @@
     <div class="session-subagents">
         <button type="button"
                 class="session-subagents__toggle"
-                aria-expanded="@_expanded"
+                aria-haspopup="dialog"
+                aria-expanded="@_open"
                 @onclick="Toggle">
-            <span class="session-subagents__chevron" aria-hidden="true">@(_expanded ? "▾" : "▸")</span>
             <span>@_children.Count subagents (@_activeCount active)</span>
         </button>
-        @if (_expanded)
-        {
-            <div class="session-subagents__list">
-                @foreach (var id in _children)
-                {
-                    <SubagentCard PersistenceId="id" />
-                }
-            </div>
-        }
+        <SessionSubagentsModal IsOpen="_open"
+                               ChildIds="_children"
+                               ActiveCount="_activeCount"
+                               OnClose="Close" />
     </div>
 }
 
@@ -30,7 +25,7 @@
     [Parameter] public DysonAgentSession? Session { get; set; }
 
     private Guid? _boundSessionId;
-    private bool _expanded;
+    private bool _open;
     private List<Guid> _children = [];
     private int _activeCount;
 
@@ -42,7 +37,7 @@
         if (sessionId != _boundSessionId)
         {
             _boundSessionId = sessionId;
-            _expanded = false;
+            _open = false;
         }
 
         RefreshChildren();
@@ -72,7 +67,9 @@
         }
     }
 
-    private void Toggle() => _expanded = !_expanded;
+    private void Toggle() => _open = !_open;
+
+    private void Close() => _open = false;
 
     public void Dispose() => Host.Changed -= OnHostChanged;
 }

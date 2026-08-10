@@ -176,12 +176,15 @@
                     <AgentModePicker SelectedMode="@SelectedAgentMode"
                                      SelectedModeChanged="SelectedAgentModeChanged" />
                 </div>
-                <button type="button"
-                        class="btn btn-primary composer__send"
-                        disabled="@(Disabled || !CanSubmit)"
-                        @onclick="SubmitAsync">
-                    Send
-                </button>
+                <div class="composer__actions">
+                    <ComposerStopMenu />
+                    <button type="button"
+                            class="btn btn-primary composer__send"
+                            disabled="@(Disabled || !CanSubmit)"
+                            @onclick="SubmitAsync">
+                        Send
+                    </button>
+                </div>
             </div>
             <div class="composer__footer-secondary">
                 <div class="composer-context-limit" title="Max target context (0 = Off). DropContext injects when estimated outgoing tokens exceed this.">

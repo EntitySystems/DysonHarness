@@ -2318,7 +2318,7 @@ code, .mono {
   line-height: 1.4;
 }
 
-/* Session subagent overview (between todos and chat) */
+/* Session subagent overview (between todos and chat) — opens modal */
 .session-subagents {
   border-bottom: 1px solid var(--border);
   background: var(--bg-1);
@@ -2327,7 +2327,6 @@ code, .mono {
 .session-subagents__toggle {
   display: flex;
   align-items: center;
-  gap: 8px;
   width: 100%;
   padding: 6px 14px;
   border: 0;
@@ -2344,18 +2343,47 @@ code, .mono {
   color: var(--text);
 }
 
-.session-subagents__chevron {
-  width: 1em;
-  color: var(--text-dim);
+/* Session subagents modal — confirm-dialog shell, wider for card titles */
+.session-subagents-modal {
+  width: min(560px, 100%);
+  max-height: min(80vh, 640px);
 }
 
-.session-subagents__list {
+.session-subagents-modal__title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.session-subagents-modal__counts {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.session-subagents-modal__close {
+  min-width: 28px;
+  padding: 2px 8px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.session-subagents-modal__body {
+  padding: 12px 14px 14px;
+}
+
+.session-subagents-modal__list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 0 14px 8px;
-  max-height: 220px;
-  overflow-y: auto;
+  gap: 8px;
+}
+
+.session-subagents-modal__empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
 }
 
 /* Parent ? child subagent cards (inside TurnBlock) */
@@ -3950,9 +3978,18 @@ code, .mono {
   flex: 1 1 auto;
 }
 
-.composer__send {
+.composer__actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
   flex: 0 0 auto;
   margin-left: auto;
+  align-self: flex-start;
+}
+
+.composer__send {
+  flex: 0 0 auto;
   align-self: flex-start;
 }
 
@@ -6236,4 +6273,70 @@ code, .mono {
 
 .composer-effort__trigger {
   align-self: center;
+}
+
+/* Composer Stop menu — panel opens upward over the footer */
+.composer-stop {
+  position: relative;
+  display: inline-flex;
+}
+
+.composer-stop__trigger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.composer-stop__trigger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 12%, var(--bg-3));
+  border-color: var(--danger);
+}
+
+.composer-stop__caret {
+  font-size: 9px;
+  line-height: 1;
+  opacity: 0.8;
+}
+
+.composer-stop__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: transparent;
+}
+
+.composer-stop__panel {
+  position: absolute;
+  top: auto;
+  bottom: calc(100% + 4px);
+  right: 0;
+  z-index: 1200;
+  min-width: 168px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+.composer-stop__option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.composer-stop__option:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.composer-stop__option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

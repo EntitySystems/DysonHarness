@@ -208,6 +208,13 @@ public static class DysonCefStaHost
 
         settings.BrowserSubprocessPath = subprocess;
 
+        // Prefer GPU / WebGPU for in-page graphics (Chromium 149+; needs D3D12 + dxil/dxcompiler).
+        // use-angle=d3d12 avoids the ANGLE D3D11 device-removed path seen in cef-debug.log;
+        // enable-gpu-rasterization is omitted (correlated with Renderer11 crashes on some GPUs).
+        settings.CefCommandLineArgs.Add("enable-unsafe-webgpu");
+        settings.CefCommandLineArgs.Add("ignore-gpu-blocklist");
+        settings.CefCommandLineArgs.Add("use-angle", "d3d12");
+
         if (!Cef.IsInitialized.GetValueOrDefault())
         {
             if (!Cef.Initialize(settings, performDependencyCheck: true, browserProcessHandler: new DysonCefBrowserProcessHandler()))

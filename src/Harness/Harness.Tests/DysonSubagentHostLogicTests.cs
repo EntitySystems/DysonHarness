@@ -34,6 +34,8 @@ public class DysonSubagentHostLogicTests
         if (DysonSubagentHostLogic.IsRunning(DysonSessionStatus.Stopped, latestTurn: null))
             throw new InvalidOperationException("Stopped status should not be running.");
 
+        AssertHasActiveDescendant();
+
         var prompt = DysonSubagentHostLogic.BuildSubagentReportContinuationPrompt(
             new DysonAgentInterrupt
             {
@@ -194,5 +196,94 @@ public class DysonSubagentHostLogicTests
         list.RemoveAt(0);
         if (drained.Text != "one" || list[0].Text != "three")
             throw new InvalidOperationException("Drain should pop front in enqueue order.");
+    }
+
+    private static void AssertHasActiveDescendant()
+    {
+        var root = new StubSession();
+        if (DysonSubagentHostLogic.HasActiveDescendant(root))
+            throw new InvalidOperationException("Empty SubSessions should not report active descendants.");
+
+        var child = new StubSession();
+        var grandchild = new StubSession();
+        root.RegisterForTest(child);
+        child.RegisterForTest(grandchild);
+
+        if (!DysonSubagentHostLogic.HasActiveDescendant(root))
+            throw new InvalidOperationException("Active grandchild should make HasActiveDescendant true.");
+
+        if (!grandchild.TryMarkTerminal(DysonSessionStatus.Stopped, "done"))
+            throw new InvalidOperationException("Expected grandchild TryMarkTerminal to succeed.");
+        if (!child.TryMarkTerminal(DysonSessionStatus.Completed, "done"))
+            throw new InvalidOperationException("Expected child TryMarkTerminal to succeed.");
+
+        if (DysonSubagentHostLogic.HasActiveDescendant(root))
+            throw new InvalidOperationException("Terminal descendants should not report as active.");
+    }
+
+    private sealed class StubProvider : DysonAgentProvider;
+
+    private sealed class StubSession() : DysonAgentSession(
+        DysonAgentModes.Work,
+        new DysonAgentSessionConfig(),
+        new StubProvider())
+    {
+        public void RegisterForTest(DysonAgentSession child) => RegisterSubagent(child);
+
+        public override Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
+            string agentMode,
+            string task,
+            string? context = null,
+            IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
+            string? modelSlug = null,
+            string? reasoningEffort = null,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public override Task<VoidResult<string>> LoadFunctionalContextAsync(
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public override Task<VoidResult<string>> PromptAsync(
+            string prompt,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public override Task<VoidResult<string>> PromptAsync(
+            string prompt,
+            IReadOnlyList<string> filePaths,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public override Task<VoidResult<string>> PromptHarnessTurnAsync(
+            DysonAgentTurn turn,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public override Task<VoidResult<string>> PromptBeginBuildPlanAsync(
+            string planRelativePath,
+            IReadOnlyList<string>? reportBlocks = null,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public override Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
+            DysonAgentInterrupt interrupt,
+            string? title = null,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public override Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
+            string instruction,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public override Task<VoidResult<string>> PromptShellExitedAsync(
+            DysonAgentInterrupt interrupt,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public override Task<Result<DysonAgentSessionEvent, string>> WaitForNotifyAsync(
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
     }
 }

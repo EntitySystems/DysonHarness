@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <PackageReference Include="CefSharp.Wpf.NETCore" Version="149.0.40" />
+    <PackageReference Include="CefSharp.Wpf.HwndHost" Version="149.0.40" />
   </ItemGroup>
 
 </Project>

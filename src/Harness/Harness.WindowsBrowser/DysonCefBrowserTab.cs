@@ -1,8 +1,9 @@
 using System.Collections.Concurrent;
+using System.ComponentModel;
 using System.Text.Json;
 using System.Windows;
 using CefSharp;
-using CefSharp.Wpf;
+using CefSharp.Wpf.HwndHost;
 
 namespace DysonHarness;
 
@@ -20,17 +21,30 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
         Id = Guid.NewGuid().ToString("N");
         WindowId = window.Id;
 
+        // Windowed HwndHost so WebGPU/WebGL present into a real HWND (OSR bitmap path stays black).
+        // Snip uses a CDP screenshot overlay because HWND airspace blocks live WPF rubber-bands.
         BrowserControl = new ChromiumWebBrowser(string.IsNullOrWhiteSpace(initialUrl) ? "about:blank" : initialUrl)
         {
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch,
+            ActivateBrowserOnCreation = true,
+            BrowserSettings = new BrowserSettings
+            {
+                WebGl = CefState.Enabled,
+            },
         };
 
-        BrowserControl.AddressChanged += (_, e) =>
-        {
-            CurrentAddress = e.NewValue as string ?? BrowserControl.Address;
-            _window.SyncAddress(Id, CurrentAddress, CurrentTitle);
-        };
+        BrowserControl.IsBrowserInitializedChanged += (_, _) => NudgeHwndLayoutIfNeeded();
+        BrowserControl.Loaded += (_, _) => NudgeHwndLayoutIfNeeded();
+
+        // HwndHost exposes Address as a DP but no AddressChanged event (unlike OSR Wpf).
+        DependencyPropertyDescriptor
+            .FromProperty(ChromiumWebBrowser.AddressProperty, typeof(ChromiumWebBrowser))
+            ?.AddValueChanged(BrowserControl, (_, _) =>
+            {
+                CurrentAddress = BrowserControl.Address;
+                _window.SyncAddress(Id, CurrentAddress, CurrentTitle);
+            });
         BrowserControl.TitleChanged += (_, e) =>
         {
             CurrentTitle = e.NewValue as string ?? BrowserControl.Title;
@@ -78,6 +92,21 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
     public ChromiumWebBrowser BrowserControl { get; }
     public string? CurrentAddress { get; private set; }
     public string? CurrentTitle { get; private set; }
+
+    /// <summary>
+    /// Force a layout pass when the HwndHost is still ~0×0 so WebGPU swapchains are not created against an empty HWND.
+    /// </summary>
+    private void NudgeHwndLayoutIfNeeded()
+    {
+        if (BrowserControl.ActualWidth >= 1 && BrowserControl.ActualHeight >= 1)
+            return;
+
+        BrowserControl.InvalidateMeasure();
+        BrowserControl.InvalidateArrange();
+        BrowserControl.UpdateLayout();
+        _window.InvalidateMeasure();
+        _window.UpdateLayout();
+    }
 
     public void DisposeBrowser()
     {

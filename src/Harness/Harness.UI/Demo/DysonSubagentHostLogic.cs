@@ -9,6 +9,20 @@ public static class DysonSubagentHostLogic
     public static bool IsRunning(DysonSessionStatus status, DysonAgentTurn? latestTurn = null) =>
         status == DysonSessionStatus.Active;
 
+    /// <summary>True when any descendant (any depth) has <see cref="DysonSessionStatus.Active"/>.</summary>
+    public static bool HasActiveDescendant(DysonAgentSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        foreach (var child in session.SubSessions)
+        {
+            if (IsRunning(child.Status) || HasActiveDescendant(child))
+                return true;
+        }
+
+        return false;
+    }
+
     public static string BuildSubagentReportContinuationPrompt(DysonAgentInterrupt interrupt, string? title) =>
         DysonSubagentReportPrompt.BuildContinuationPrompt(interrupt, title);
 
