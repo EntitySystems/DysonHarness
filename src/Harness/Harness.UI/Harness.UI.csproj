@@ -1,6 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Harness.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Harness.Engine\Harness.Engine.csproj" />
     <ProjectReference Include="..\Harness.LocalDb\Harness.LocalDb.csproj" />
     <ProjectReference Include="..\Harness.WindowsBrowser\Harness.WindowsBrowser.csproj"

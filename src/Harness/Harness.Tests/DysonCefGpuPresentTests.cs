@@ -9,48 +9,97 @@ namespace Harness.Tests;
 /// <summary>
 /// Windows CEF integration gate: HwndHost agent browser must obtain WebGPU + WebGL and present non-black pixels.
 /// Requires a fresh Cef.Initialize (kill Harness.UI / DysonHarness / CefSharp.BrowserSubprocess first).
+/// WebGPU path must create a canvas context, configure, and present — adapter/device alone is insufficient
+/// (SharedImageBackingFactory / WebGPUSwapBufferProvider can still fail after requestDevice).
 /// </summary>
 public class DysonCefGpuPresentTests
 {
     private static readonly string ProbeHtml = """
         <!DOCTYPE html>
         <html><head><meta charset="utf-8"><title>dyson-gpu-probe</title></head>
-        <body style="margin:0;background:#000">
-        <canvas id="c" width="256" height="256"></canvas>
+        <body style="margin:0;background:#111">
+        <canvas id="gl" width="128" height="128" style="position:fixed;left:0;top:0;width:128px;height:128px"></canvas>
+        <canvas id="gpu" width="256" height="256" style="position:fixed;left:128px;top:0;width:256px;height:256px"></canvas>
         <script>
         window.__dysonGpuProbe = {
-          boot: true, ready: false, webgpu: false, webgl: false, present: false, error: null, stage: 'start'
+          boot: true, ready: false, webgpu: false, webgpuPresent: false, webgl: false, present: false,
+          deviceLost: null, error: null, stage: 'start', frames: 0
         };
         (async () => {
           const out = window.__dysonGpuProbe;
           try {
             out.stage = 'webgl';
-            const canvas = document.getElementById('c');
-            const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+            const glCanvas = document.getElementById('gl');
+            const gl = glCanvas.getContext('webgl2') || glCanvas.getContext('webgl');
             out.webgl = !!gl;
             if (gl) {
-              gl.viewport(0, 0, canvas.width, canvas.height);
+              gl.viewport(0, 0, glCanvas.width, glCanvas.height);
               gl.clearColor(1, 0, 0, 1);
               gl.clear(gl.COLOR_BUFFER_BIT);
               out.present = true;
             }
-            out.stage = 'webgpu';
-            if (navigator.gpu) {
-              const adapterPromise = navigator.gpu.requestAdapter();
-              const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 15000));
-              const adapter = await Promise.race([adapterPromise, timeoutPromise]);
-              if (adapter) {
+
+            out.stage = 'webgpu-adapter';
+            if (!navigator.gpu) {
+              out.error = (out.error || '') + 'navigator.gpu missing;';
+            } else {
+              const adapter = await Promise.race([
+                navigator.gpu.requestAdapter(),
+                new Promise((resolve) => setTimeout(() => resolve(null), 15000))
+              ]);
+              if (!adapter) {
+                out.error = (out.error || '') + 'requestAdapter null/timeout;';
+              } else {
+                out.stage = 'webgpu-device';
                 const device = await Promise.race([
                   adapter.requestDevice(),
                   new Promise((resolve) => setTimeout(() => resolve(null), 15000))
                 ]);
-                out.webgpu = !!device;
-                if (!device) out.error = (out.error || '') + 'requestDevice timed out;';
-              } else {
-                out.error = (out.error || '') + 'requestAdapter null/timeout;';
+                if (!device) {
+                  out.error = (out.error || '') + 'requestDevice timed out;';
+                } else {
+                  out.webgpu = true;
+                  device.lost.then((info) => {
+                    out.deviceLost = String(info && info.message ? info.message : info);
+                  });
+                  out.stage = 'webgpu-canvas';
+                  const gpuCanvas = document.getElementById('gpu');
+                  const ctx = gpuCanvas.getContext('webgpu');
+                  if (!ctx) {
+                    out.error = (out.error || '') + 'getContext(webgpu) returned null;';
+                  } else {
+                    const format = navigator.gpu.getPreferredCanvasFormat();
+                    ctx.configure({ device, format, alphaMode: 'opaque' });
+                    out.stage = 'webgpu-present';
+                    const presentOnce = () => {
+                      const encoder = device.createCommandEncoder();
+                      const pass = encoder.beginRenderPass({
+                        colorAttachments: [{
+                          view: ctx.getCurrentTexture().createView(),
+                          clearValue: { r: 0, g: 1, b: 0, a: 1 },
+                          loadOp: 'clear',
+                          storeOp: 'store'
+                        }]
+                      });
+                      pass.end();
+                      device.queue.submit([encoder.finish()]);
+                      out.frames++;
+                    };
+                    // Continuous presents so the compositor has a painted swapchain frame.
+                    for (let i = 0; i < 8; i++) {
+                      presentOnce();
+                      await new Promise((r) => requestAnimationFrame(r));
+                    }
+                    await device.queue.onSubmittedWorkDone();
+                    if (out.deviceLost) {
+                      out.error = (out.error || '') + 'device lost: ' + out.deviceLost + ';';
+                    } else {
+                      out.webgpuPresent = true;
+                      out.present = true;
+                    }
+                  }
+                }
               }
-            } else {
-              out.error = (out.error || '') + 'navigator.gpu missing;';
             }
           } catch (e) {
             out.error = String(e && e.message ? e.message : e);
@@ -100,6 +149,7 @@ public class DysonCefGpuPresentTests
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(probeJson.Value) ? "{}" : probeJson.Value);
             var root = doc.RootElement;
             var webgpu = root.TryGetProperty("webgpu", out var wg) && wg.ValueKind == JsonValueKind.True;
+            var webgpuPresent = root.TryGetProperty("webgpuPresent", out var wgp) && wgp.ValueKind == JsonValueKind.True;
             var webgl = root.TryGetProperty("webgl", out var wl) && wl.ValueKind == JsonValueKind.True;
             var present = root.TryGetProperty("present", out var pr) && pr.ValueKind == JsonValueKind.True;
             var error = root.TryGetProperty("error", out var err) && err.ValueKind == JsonValueKind.String
@@ -107,6 +157,9 @@ public class DysonCefGpuPresentTests
                 : null;
             var stage = root.TryGetProperty("stage", out var st) && st.ValueKind == JsonValueKind.String
                 ? st.GetString()
+                : null;
+            var deviceLost = root.TryGetProperty("deviceLost", out var dl) && dl.ValueKind == JsonValueKind.String
+                ? dl.GetString()
                 : null;
 
             if (!webgpu)
@@ -118,6 +171,23 @@ public class DysonCefGpuPresentTests
                     + " Check chrome://gpu and %LocalAppData%\\DysonHarness\\cef-debug.log after a fresh CEF restart.");
             }
 
+            if (!webgpuPresent)
+            {
+                throw new InvalidOperationException(
+                    "WebGPU canvas configure/present failed (swapchain / SharedImage). Probe=" + probeJson.Value
+                    + (string.IsNullOrEmpty(error) ? "" : " error=" + error)
+                    + (string.IsNullOrEmpty(deviceLost) ? "" : " deviceLost=" + deviceLost)
+                    + (string.IsNullOrEmpty(stage) ? "" : " stage=" + stage)
+                    + " Check cef-debug.log for WebGPUSwapBufferProvider / SharedImageBackingFactory.");
+            }
+
+            if (!string.IsNullOrEmpty(deviceLost))
+            {
+                throw new InvalidOperationException(
+                    "WebGPU device lost after present. Probe=" + probeJson.Value
+                    + " deviceLost=" + deviceLost);
+            }
+
             if (!webgl)
             {
                 throw new InvalidOperationException(
@@ -126,16 +196,18 @@ public class DysonCefGpuPresentTests
             }
 
             if (!present)
-                throw new InvalidOperationException("WebGL clear did not run. Probe=" + probeJson.Value);
+                throw new InvalidOperationException("GPU clear did not run. Probe=" + probeJson.Value);
 
-            // Let the compositor paint the red clear before CDP capture.
-            await Task.Delay(750);
+            // Let the compositor paint WebGPU/WebGL frames before CDP capture.
+            await Task.Delay(1500);
 
             var shot = await tab.TakeScreenshotAsync(timeoutMs: 30_000);
             if (shot.IsError)
                 throw new InvalidOperationException("TakeScreenshot failed: " + shot.Error);
 
-            AssertPngNotUniformlyBlack(shot.Value);
+            // Probe layout: WebGL red at x=0..128, WebGPU green at x=128..384.
+            // Require saturated green in the WebGPU rect so WebGL alone cannot pass.
+            AssertPngHasWebGpuGreen(shot.Value);
         }
         finally
         {
@@ -227,55 +299,55 @@ public class DysonCefGpuPresentTests
             "Timed out waiting for __dysonGpuProbe.ready. Last=" + (last ?? "(null)"));
     }
 
-    private static void AssertPngNotUniformlyBlack(byte[] png)
+    /// <summary>
+    /// Probe HTML places WebGL red at left and WebGPU green at right (x≥128 CSS px).
+    /// Require saturated green in that rect so a WebGL-only present cannot pass the gate.
+    /// </summary>
+    private static void AssertPngHasWebGpuGreen(byte[] png)
     {
         using var image = new MagickImage(png);
-        if (image.Width < 8 || image.Height < 8)
-            throw new InvalidOperationException($"Screenshot too small: {image.Width}x{image.Height}");
+        if (image.Width < 200 || image.Height < 8)
+            throw new InvalidOperationException($"Screenshot too small for WebGPU rect: {image.Width}x{image.Height}");
 
-        // Sample a grid; require some non-near-black pixels (WebGL clear is saturated red).
-        var stepX = Math.Max(1, (int)image.Width / 8);
+        // Device pixels: canvas is 256 CSS px starting at x=128; allow DPI scale.
+        var scale = image.Width / 640.0;
+        var x0 = (int)(128 * scale);
+        var x1 = Math.Min((int)image.Width, (int)(384 * scale));
+        var stepX = Math.Max(1, (x1 - x0) / 8);
         var stepY = Math.Max(1, (int)image.Height / 8);
         var samples = 0;
-        var bright = 0;
-        double sumLuma = 0;
-        double sumR = 0;
+        var green = 0;
+        double sumG = 0;
 
         using var pixels = image.GetPixels();
         for (var y = stepY / 2; y < image.Height; y += stepY)
         {
-            for (var x = stepX / 2; x < image.Width; x += stepX)
+            for (var x = x0 + stepX / 2; x < x1; x += stepX)
             {
-                var pixel = pixels.GetPixel(x, y);
-                var color = pixel.ToColor()
+                var color = pixels.GetPixel(x, y).ToColor()
                     ?? throw new InvalidOperationException("Pixel ToColor returned null.");
-                // Magick.NET Quantum uses 0..Quantum.Max; normalize to 0..1.
                 var r = (double)color.R / MagickColors.White.R;
                 var g = (double)color.G / MagickColors.White.G;
                 var b = (double)color.B / MagickColors.White.B;
-                var luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-                sumLuma += luma;
-                sumR += r;
+                sumG += g;
                 samples++;
-                if (luma > 0.08 || r > 0.2)
-                    bright++;
+                if (g > 0.7 && g > r * 2 && g > b * 2)
+                    green++;
             }
         }
 
         if (samples == 0)
-            throw new InvalidOperationException("No screenshot samples.");
+            throw new InvalidOperationException("No WebGPU-rect samples.");
 
-        var meanLuma = sumLuma / samples;
-        var meanR = sumR / samples;
-        if (bright == 0 || meanLuma < 0.05)
+        var meanG = sumG / samples;
+        if (green < 3 || meanG < 0.5)
         {
             throw new InvalidOperationException(
-                "CDP screenshot is uniformly black / empty (GPU present failed). "
+                "CDP screenshot missing WebGPU green clear (compositor/swapchain present failed). "
                 + $"samples={samples.ToString(CultureInfo.InvariantCulture)} "
-                + $"bright={bright.ToString(CultureInfo.InvariantCulture)} "
-                + $"meanLuma={meanLuma.ToString("F3", CultureInfo.InvariantCulture)} "
-                + $"meanR={meanR.ToString("F3", CultureInfo.InvariantCulture)} "
-                + $"size={image.Width}x{image.Height}");
+                + $"green={green.ToString(CultureInfo.InvariantCulture)} "
+                + $"meanG={meanG.ToString("F3", CultureInfo.InvariantCulture)} "
+                + $"rect=[{x0},{x1}) size={image.Width}x{image.Height}");
         }
     }
 }

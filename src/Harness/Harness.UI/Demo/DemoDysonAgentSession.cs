@@ -186,7 +186,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         if (_workDirectoryId == Guid.Empty)
             return Result<DysonStartSubagentResult, string>.AsError("Work directory is required to spawn subagents.");
 
-        var resolved = await ResolveChildProviderAsync(modelSlug, reasoningEffort, cancellationToken)
+        var resolved = await ResolveChildProviderAsync(agentMode, modelSlug, reasoningEffort, cancellationToken)
             .ConfigureAwait(false);
         if (resolved.IsError)
             return Result<DysonStartSubagentResult, string>.AsError(resolved.Error);
@@ -281,10 +281,21 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
     }
 
     private async Task<Result<DysonAgentProvider, string>> ResolveChildProviderAsync(
+        string agentMode,
         string? modelSlug,
         string? reasoningEffort,
         CancellationToken cancellationToken)
     {
+        if (Config.TryGetSubagentDefaultWhenSlugOmitted(modelSlug, agentMode)
+            is DemoDysonAgentProvider modeDefault)
+        {
+            if (reasoningEffort is null)
+                return Result<DysonAgentProvider, string>.AsValue(modeDefault);
+
+            return Result<DysonAgentProvider, string>.AsValue(
+                modeDefault.WithReasoningEffort(reasoningEffort));
+        }
+
         if (string.IsNullOrWhiteSpace(modelSlug))
         {
             if (reasoningEffort is null)

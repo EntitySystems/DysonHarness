@@ -38,6 +38,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly ConcurrentDictionary<DysonAgentSession, Guid> _customMcpRetainBySession = new();
     private readonly ConcurrentDictionary<DysonAgentSession, DysonPluginMcpHost> _pluginMcpHostBySession = new();
     private readonly ConcurrentDictionary<Guid, byte> _busySessions = new();
+    /// <summary>Model slug to apply after the in-flight prompt finishes (keyed by PersistenceId).</summary>
+    private readonly ConcurrentDictionary<Guid, Guid?> _pendingSessionModelSlugIds = new();
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _promptGates = new();
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _promptCtsBySession = new();
     private readonly Dictionary<Guid, List<QueuedPromptEntry>> _promptQueues = new();
@@ -2084,6 +2086,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// <summary>
     /// Apply a model slug to the focused session (same provider kind only).
     /// Resets session reasoning effort to the slug's default.
+    /// While busy, validates and stashes the slug for apply after the turn finishes.
     /// With no session, preference is caller-owned (<c>_selectedSlugId</c>); updates pending effort to slug default.
     /// </summary>
     public async Task<VoidResult<string>> SetSessionModelSlugAsync(
@@ -2132,10 +2135,43 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (IsBusy)
         {
-            LastError = "Cannot switch model while a prompt is in flight.";
+            var deferred = await ResolveProviderAsync(modelSlugId, reasoningEffort: null, cancellationToken)
+                .ConfigureAwait(false);
+            if (deferred.IsError)
+            {
+                LastError = deferred.Error;
+                Notify();
+                return new VoidResult<string>(deferred.Error);
+            }
+
+            var busyCurrentKind = SessionProviderKind(_session.Provider);
+            var busyNextKind = deferred.Value.Kind;
+            if (!string.Equals(busyCurrentKind, busyNextKind, StringComparison.Ordinal))
+            {
+                LastError = "Start a new session to switch provider kind";
+                Notify();
+                return new VoidResult<string>(LastError);
+            }
+
+            _pendingSessionModelSlugIds[_session.PersistenceId] = modelSlugId;
             Notify();
-            return new VoidResult<string>(LastError);
+            return VoidResult<string>.Success;
         }
+
+        return await ApplySessionModelSlugCoreAsync(_session, modelSlugId, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Resolve + same-kind check + swap <see cref="DysonAgentSession.Provider"/> + persist.
+    /// Does not mutate Provider mid-turn; callers must only invoke when the session is idle.
+    /// </summary>
+    private async Task<VoidResult<string>> ApplySessionModelSlugCoreAsync(
+        DysonAgentSession session,
+        Guid? modelSlugId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(session);
 
         // null effort → constructor uses slug DefaultReasoningEffort
         var providerResult = await ResolveProviderAsync(modelSlugId, reasoningEffort: null, cancellationToken)
@@ -2147,7 +2183,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(providerResult.Error);
         }
 
-        var currentKind = SessionProviderKind(_session.Provider);
+        var currentKind = SessionProviderKind(session.Provider);
         var nextKind = providerResult.Value.Kind;
         if (!string.Equals(currentKind, nextKind, StringComparison.Ordinal))
         {
@@ -2161,7 +2197,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 ? providerResult.Value.OpenAi!
                 : providerResult.Value.Demo!;
 
-        _session.Provider = nextProvider;
+        session.Provider = nextProvider;
 
         Guid? slugId = nextProvider switch
         {
@@ -2177,19 +2213,19 @@ public sealed class DysonUiHost : IAsyncDisposable
             _ => null,
         };
 
-        _session.SlugDefaultMaxTargetContextTokens = nextProvider switch
+        session.SlugDefaultMaxTargetContextTokens = nextProvider switch
         {
             OpenAiCompatibleAgentProvider oai => oai.DefaultMaxTargetContextTokens,
             DemoDysonAgentProvider demo => demo.DefaultMaxTargetContextTokens,
             _ => null,
         };
 
-        if (_session.PersistenceId != Guid.Empty)
+        if (session.PersistenceId != Guid.Empty)
         {
             var persist = await _sessions.UpdateSessionMetaAsync(
                 new DysonSessionMetaUpdate
                 {
-                    SessionId = _session.PersistenceId,
+                    SessionId = session.PersistenceId,
                     ModelSlugId = slugId,
                     ClearModelSlug = slugId is null,
                     UpdateReasoningEffort = true,
@@ -2208,6 +2244,42 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pendingReasoningEffort = effort;
         Notify();
         return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Apply a stashed model slug for <paramref name="sessionId"/> (if any) onto the finished
+    /// session before queued prompts drain.
+    /// </summary>
+    private async Task FlushPendingSessionModelSlugAsync(
+        Guid sessionId,
+        DysonAgentSession finishedSession,
+        CancellationToken cancellationToken)
+    {
+        if (!_pendingSessionModelSlugIds.TryRemove(sessionId, out var pendingSlugId))
+            return;
+
+        if (!_sessionsById.TryGetValue(sessionId, out var session))
+            session = finishedSession;
+
+        var result = await ApplySessionModelSlugCoreAsync(session, pendingSlugId, cancellationToken)
+            .ConfigureAwait(false);
+        if (result.IsError && ActiveSessionId == sessionId)
+            LastError = result.Error;
+    }
+
+    // ponytail: test hooks — busy stash + flush without running a full prompt turn.
+    internal void MarkSessionBusyForTests(Guid sessionId) => _busySessions[sessionId] = 0;
+
+    internal void ClearSessionBusyForTests(Guid sessionId) => _busySessions.TryRemove(sessionId, out _);
+
+    internal Task FlushPendingSessionModelSlugForTestsAsync(
+        Guid sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        if (_session is null || _session.PersistenceId != sessionId)
+            return Task.CompletedTask;
+
+        return FlushPendingSessionModelSlugAsync(sessionId, _session, cancellationToken);
     }
 
     /// <summary>
@@ -3423,7 +3495,51 @@ public sealed class DysonUiHost : IAsyncDisposable
             }
         }
 
+        await TryHydrateOpenAiProviderSettingAsync(
+                DysonAppSettingKeys.ExploreModelSlugId,
+                p => config.ExploreDefaultProvider = p,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await TryHydrateOpenAiProviderSettingAsync(
+                DysonAppSettingKeys.SecurityReviewModelSlugId,
+                p => config.SecurityReviewDefaultProvider = p,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await TryHydrateOpenAiProviderSettingAsync(
+                DysonAppSettingKeys.BugReviewModelSlugId,
+                p => config.BugReviewDefaultProvider = p,
+                cancellationToken)
+            .ConfigureAwait(false);
+
         return config;
+    }
+
+    private async Task TryHydrateOpenAiProviderSettingAsync(
+        string settingKey,
+        Action<OpenAiCompatibleAgentProvider> assign,
+        CancellationToken cancellationToken)
+    {
+        var setting = await _appSettings
+            .GetSettingAsync(settingKey, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (setting.IsError
+            || string.IsNullOrWhiteSpace(setting.Value)
+            || !Guid.TryParse(setting.Value, out var slugId)
+            || slugId == Guid.Empty)
+        {
+            return;
+        }
+
+        var slugResult = await _models.GetSlugAsync(slugId, cancellationToken).ConfigureAwait(false);
+        if (slugResult.IsError
+            || slugResult.Value is null
+            || !IsOpenAiCompatibleSlug(slugResult.Value))
+        {
+            return;
+        }
+
+        assign(new OpenAiCompatibleAgentProvider(slugResult.Value));
     }
 
     private static bool IsOpenAiCompatibleSlug(DysonModelSlugEntity slug)
@@ -3635,6 +3751,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         _pendingReportsByParent.TryRemove(persistenceId, out _);
         _busySessions.TryRemove(persistenceId, out _);
+        _pendingSessionModelSlugIds.TryRemove(persistenceId, out _);
         _parentSessionIdByChild.TryRemove(persistenceId, out _);
 
         if (_autoTurnGates.TryRemove(persistenceId, out var gate))
@@ -3684,6 +3801,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _parentSessionIdByChild.Clear();
         _pendingReportsByParent.Clear();
         _busySessions.Clear();
+        _pendingSessionModelSlugIds.Clear();
         lock (_promptQueueGate)
             _promptQueues.Clear();
         lock (_subagentEventUiGate)
@@ -4563,6 +4681,11 @@ public sealed class DysonUiHost : IAsyncDisposable
                 cts.Dispose();
 
             linked.Dispose();
+
+            // Apply deferred model switch before draining so the next (queued) prompt sees it.
+            await FlushPendingSessionModelSlugAsync(sessionId, session, CancellationToken.None)
+                .ConfigureAwait(false);
+
             _ = DrainAutoTurnsAsync(sessionId);
             _ = DrainQueuedPromptsAsync(sessionId);
         }

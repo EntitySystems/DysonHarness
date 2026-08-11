@@ -46,6 +46,55 @@ public class DysonAgentSessionConfig
     public DysonAgentProvider? TurnSummarizerProvider { get; set; }
 
     /// <summary>
+    /// Optional default provider for Explore subagents when <c>StartSubagent.modelSlug</c> is omitted.
+    /// Null ⇒ inherit the parent session provider.
+    /// </summary>
+    public DysonAgentProvider? ExploreDefaultProvider { get; set; }
+
+    /// <summary>
+    /// Optional default provider for Security Review subagents when <c>StartSubagent.modelSlug</c> is omitted.
+    /// Null ⇒ inherit the parent session provider.
+    /// </summary>
+    public DysonAgentProvider? SecurityReviewDefaultProvider { get; set; }
+
+    /// <summary>
+    /// Optional default provider for Bug Review subagents when <c>StartSubagent.modelSlug</c> is omitted.
+    /// Null ⇒ inherit the parent session provider.
+    /// </summary>
+    public DysonAgentProvider? BugReviewDefaultProvider { get; set; }
+
+    /// <summary>
+    /// Settings default provider for Explore / Security Review / Bug Review; other modes ⇒ null (inherit).
+    /// </summary>
+    public DysonAgentProvider? TryGetSubagentDefaultProvider(string? agentMode)
+    {
+        if (string.IsNullOrWhiteSpace(agentMode))
+            return null;
+
+        if (string.Equals(agentMode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase))
+            return ExploreDefaultProvider;
+        if (string.Equals(agentMode, DysonAgentModes.SecurityReview, StringComparison.OrdinalIgnoreCase))
+            return SecurityReviewDefaultProvider;
+        if (string.Equals(agentMode, DysonAgentModes.BugReview, StringComparison.OrdinalIgnoreCase))
+            return BugReviewDefaultProvider;
+
+        return null;
+    }
+
+    /// <summary>
+    /// Resolve-order helper when spawning a child: explicit <paramref name="modelSlug"/> wins (returns null —
+    /// caller looks up the slug); otherwise returns the settings default for that mode when configured;
+    /// otherwise null (caller inherits the parent provider).
+    /// </summary>
+    public DysonAgentProvider? TryGetSubagentDefaultWhenSlugOmitted(string? modelSlug, string? agentMode)
+    {
+        if (!string.IsNullOrWhiteSpace(modelSlug))
+            return null;
+
+        return TryGetSubagentDefaultProvider(agentMode);
+    }
+
+    /// <summary>
     /// Optional process-wide browser control (Windows CefSharp host).
     /// Null ⇒ browser MCP tools are omitted from the catalog.
     /// </summary>

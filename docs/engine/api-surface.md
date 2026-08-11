@@ -40,7 +40,7 @@ Conceptual overview: [README.md](README.md).
 | `DysonLongRunningShellRegistry` / `DysonLongRunningShell` | Workdir-keyed in-memory background shells (rings, Abort/Cancel/Interact/List/Subscribe); identity via `ShellName`; not persisted across UI restart |
 | `DysonLongRunningShellStatus` / `DysonLongRunningShellInfo` / `DysonLongRunningShellTail` | Status enum + list/tail DTOs (`ShellName` on info) |
 | `DysonOpenAiApiModes` | `Completions` / `Responses` constants |
-| `DysonAgentSessionConfig` | `CustomAgents`, immutable session `PluginContributions`, `McpAccessMode`, `AvailableShells`, optional `BraveApiKey`, optional `SummarizerProvider`, optional `BrowserControl` (`IDysonBrowserControl`), optional user-authored `CustomMcpHost` (`DysonCustomMcpHost`), optional `DisabledTools` / `ToolPolicy` (mode denylist; see MCP) |
+| `DysonAgentSessionConfig` | `CustomAgents`, immutable session `PluginContributions`, `McpAccessMode`, `AvailableShells`, optional `BraveApiKey`, optional `SummarizerProvider` / `TurnSummarizerProvider`, optional Explore / Security Review / Bug Review `*DefaultProvider` (+ `TryGetSubagentDefaultProvider` / `TryGetSubagentDefaultWhenSlugOmitted`), optional `BrowserControl` (`IDysonBrowserControl`), optional user-authored `CustomMcpHost` (`DysonCustomMcpHost`), optional `DisabledTools` / `ToolPolicy` (mode denylist; see MCP) |
 | `DysonAgentSessionEvent` | Abstract notify payload for `WaitForNotifyAsync` |
 
 ### Managed / CLIProxy

@@ -54,6 +54,42 @@
             Leave as “Use session model” to reuse the chat model.
         </p>
 
+        <div class="field" style="margin-top:16px;">
+            <label>Explore default model</label>
+            <ModelSlugPicker SelectedSlugId="_exploreSlugId"
+                             SelectedSlugIdChanged="OnExploreSlugChangedAsync"
+                             AllowEmpty="true"
+                             EmptyLabel="Use session model" />
+        </div>
+        <p class="settings-page__copy" style="margin:0;">
+            Default model for Explore subagents when StartSubagent omits modelSlug.
+            Leave as “Use session model” to inherit the parent chat model.
+        </p>
+
+        <div class="field" style="margin-top:16px;">
+            <label>Security Review default model</label>
+            <ModelSlugPicker SelectedSlugId="_securityReviewSlugId"
+                             SelectedSlugIdChanged="OnSecurityReviewSlugChangedAsync"
+                             AllowEmpty="true"
+                             EmptyLabel="Use session model" />
+        </div>
+        <p class="settings-page__copy" style="margin:0;">
+            Default model for Security Review subagents when StartSubagent omits modelSlug.
+            Leave as “Use session model” to inherit the parent chat model.
+        </p>
+
+        <div class="field" style="margin-top:16px;">
+            <label>Bug Review default model</label>
+            <ModelSlugPicker SelectedSlugId="_bugReviewSlugId"
+                             SelectedSlugIdChanged="OnBugReviewSlugChangedAsync"
+                             AllowEmpty="true"
+                             EmptyLabel="Use session model" />
+        </div>
+        <p class="settings-page__copy" style="margin:0;">
+            Default model for Bug Review subagents when StartSubagent omits modelSlug.
+            Leave as “Use session model” to inherit the parent chat model.
+        </p>
+
         @if (_saved)
         {
             <p class="settings-page__copy" style="margin:8px 0 0;">Saved.</p>
@@ -67,6 +103,9 @@
     private bool _endOfTaskAutoReview;
     private string _selfReviewIntensity = DefaultSelfReviewIntensity;
     private Guid? _turnSummarizerSlugId;
+    private Guid? _exploreSlugId;
+    private Guid? _securityReviewSlugId;
+    private Guid? _bugReviewSlugId;
     private string? _error;
     private bool _saved;
 
@@ -99,6 +138,29 @@
 
         if (Guid.TryParse(summarizer.Value, out var id) && id != Guid.Empty)
             _turnSummarizerSlugId = id;
+
+        if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.ExploreModelSlugId, v => _exploreSlugId = v))
+            return;
+        if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.SecurityReviewModelSlugId, v => _securityReviewSlugId = v))
+            return;
+        if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.BugReviewModelSlugId, v => _bugReviewSlugId = v))
+            return;
+    }
+
+    private async Task<bool> TryLoadSlugSettingAsync(string key, Action<Guid?> assign)
+    {
+        var setting = await AppSettings.GetSettingAsync(key);
+        if (setting.IsError)
+        {
+            _error = setting.Error;
+            return false;
+        }
+
+        if (Guid.TryParse(setting.Value, out var id) && id != Guid.Empty)
+            assign(id);
+        else
+            assign(null);
+        return true;
     }
 
     private async Task OnEndOfTaskAutoReviewChangedAsync(ChangeEventArgs e)
@@ -148,14 +210,38 @@
         _saved = true;
     }
 
-    private async Task OnTurnSummarizerSlugChangedAsync(Guid? id)
+    private Task OnTurnSummarizerSlugChangedAsync(Guid? id) =>
+        SaveSlugSettingAsync(
+            id,
+            v => _turnSummarizerSlugId = v,
+            DysonAppSettingKeys.TurnSummarizerModelSlugId);
+
+    private Task OnExploreSlugChangedAsync(Guid? id) =>
+        SaveSlugSettingAsync(
+            id,
+            v => _exploreSlugId = v,
+            DysonAppSettingKeys.ExploreModelSlugId);
+
+    private Task OnSecurityReviewSlugChangedAsync(Guid? id) =>
+        SaveSlugSettingAsync(
+            id,
+            v => _securityReviewSlugId = v,
+            DysonAppSettingKeys.SecurityReviewModelSlugId);
+
+    private Task OnBugReviewSlugChangedAsync(Guid? id) =>
+        SaveSlugSettingAsync(
+            id,
+            v => _bugReviewSlugId = v,
+            DysonAppSettingKeys.BugReviewModelSlugId);
+
+    private async Task SaveSlugSettingAsync(Guid? id, Action<Guid?> assign, string key)
     {
         _error = null;
         _saved = false;
-        _turnSummarizerSlugId = id;
+        assign(id);
 
         var value = id is Guid g && g != Guid.Empty ? g.ToString("D") : null;
-        var set = await AppSettings.SetSettingAsync(DysonAppSettingKeys.TurnSummarizerModelSlugId, value);
+        var set = await AppSettings.SetSettingAsync(key, value);
         if (set.IsError)
         {
             _error = set.Error;

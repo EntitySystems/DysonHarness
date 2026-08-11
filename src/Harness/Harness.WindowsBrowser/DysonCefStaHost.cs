@@ -208,12 +208,34 @@ public static class DysonCefStaHost
 
         settings.BrowserSubprocessPath = subprocess;
 
-        // Prefer GPU / WebGPU for in-page graphics (Chromium 149+; needs D3D12 + dxil/dxcompiler).
-        // use-angle=d3d12 avoids the ANGLE D3D11 device-removed path seen in cef-debug.log;
+        // CefSharp discussion #4662 / CEF #3646: Dawn WebGPU on win-x64 needs DXC next to the exe.
+        // Without these, navigator.gpu finds no adapters. CefSharp 149 NuGet ships them; fail fast
+        // if a custom publish drops them.
+        foreach (var dawnDll in new[] { "dxil.dll", "dxcompiler.dll" })
+        {
+            var dawnPath = System.IO.Path.Combine(AppContext.BaseDirectory, dawnDll);
+            if (!System.IO.File.Exists(dawnPath))
+            {
+                throw new InvalidOperationException(
+                    $"Missing {dawnDll} next to the executable (BaseDirectory={AppContext.BaseDirectory}). " +
+                    "Required for WebGPU (CefSharp discussion #4662 / CEF #3646).");
+            }
+        }
+
+        // Prefer GPU / WebGPU for in-page graphics (Chromium 149+; needs dxil/dxcompiler for Dawn).
+        // Explicit ANGLE D3D11 registers the D3D SharedImageBackingFactory required for
+        // WebGPUSwapBufferProvider canvas present; use-angle=d3d12 leaves no factory for
+        // WebgpuSwapChainTexture and destroys the device after adapter init.
         // enable-gpu-rasterization is omitted (correlated with Renderer11 crashes on some GPUs).
+        //
+        // CefSharp.Wpf.CefSettings ctor adds disable-gpu-compositing for OSR resize (#4953).
+        // That forces software compositing process-wide and leaves HwndHost WebGPU canvases
+        // black (adapter/device/HUD still work; canvas layers never present). Agent tabs need
+        // GPU compositing; accept possible OSR shell resize glitches on the Blazor view.
+        settings.CefCommandLineArgs.Remove("disable-gpu-compositing");
         settings.CefCommandLineArgs.Add("enable-unsafe-webgpu");
         settings.CefCommandLineArgs.Add("ignore-gpu-blocklist");
-        settings.CefCommandLineArgs.Add("use-angle", "d3d12");
+        settings.CefCommandLineArgs.Add("use-angle", "d3d11");
 
         if (!Cef.IsInitialized.GetValueOrDefault())
         {

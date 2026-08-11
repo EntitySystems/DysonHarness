@@ -16,6 +16,24 @@ public static class DysonAppSettingKeys
     public const string TurnSummarizerModelSlugId = "turn_summarizer_model_slug_id";
 
     /// <summary>
+    /// Guid string of the default model slug for Explore subagents when <c>StartSubagent.modelSlug</c> is omitted.
+    /// Empty / missing ⇒ inherit the parent session model.
+    /// </summary>
+    public const string ExploreModelSlugId = "explore_model_slug_id";
+
+    /// <summary>
+    /// Guid string of the default model slug for Security Review subagents when <c>StartSubagent.modelSlug</c> is omitted.
+    /// Empty / missing ⇒ inherit the parent session model.
+    /// </summary>
+    public const string SecurityReviewModelSlugId = "security_review_model_slug_id";
+
+    /// <summary>
+    /// Guid string of the default model slug for Bug Review subagents when <c>StartSubagent.modelSlug</c> is omitted.
+    /// Empty / missing ⇒ inherit the parent session model.
+    /// </summary>
+    public const string BugReviewModelSlugId = "bug_review_model_slug_id";
+
+    /// <summary>
     /// Chat tools column width as a percent of the turn content row (e.g. "30").
     /// Empty / missing ⇒ default 30%.
     /// </summary>

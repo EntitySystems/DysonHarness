@@ -103,6 +103,8 @@ Subject-scoped key/value (`DysonAppSettingEntity`). Callers use `IDysonSubjectSe
 
 Known keys (`DysonAppSettingKeys`):
 - `web_search_summarizer_model_slug_id` — Guid string of the model slug for web-search/fetch summarization; empty / missing ⇒ session model.
+- `turn_summarizer_model_slug_id` — Guid string of the model slug for turn context summarization (`SummarizeTurns`); empty / missing ⇒ session model. Edited via Settings → Agent behavior.
+- `explore_model_slug_id` / `security_review_model_slug_id` / `bug_review_model_slug_id` — Guid strings of default model slugs for Explore / Security Review / Bug Review subagents when `StartSubagent.modelSlug` is omitted; empty / missing ⇒ inherit parent session model. Edited via Settings → Agent behavior; hydrated onto `DysonAgentSessionConfig` at session create/resume.
 - `tool_panel_width_percent` — chat tools column width as a percent of the turn content row (clamped 12–50, default 30); empty / missing ⇒ 30.
 - `ui_rail_open` — `"true"` / `"false"`; right rail (files/git) open preference. Restored on desktop AppShell hydrate; narrow viewports still start with the rail closed (drawer UX) and re-apply this preference when returning to desktop. Intentional toggles (header button / backdrop close) persist. Missing ⇒ `"true"`.
 - `ui_sidebar_open` — `"true"` / `"false"`; left sidebar open vs collapsed. Restored on AppShell hydrate; toggles persist. Missing ⇒ `"true"`.
