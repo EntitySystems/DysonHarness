@@ -56,3 +56,6 @@ artifacts/
 
 # Cursor IDE rules (migrated to openrules.json; files live in rules/)
 /.cursor/
+
+## Local scratch artifacts
+/.tmp/
