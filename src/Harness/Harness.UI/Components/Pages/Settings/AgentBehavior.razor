@@ -55,6 +55,18 @@
         </p>
 
         <div class="field" style="margin-top:16px;">
+            <label>Web search summarizer</label>
+            <ModelSlugPicker SelectedSlugId="_webSearchSummarizerSlugId"
+                             SelectedSlugIdChanged="OnWebSearchSummarizerSlugChangedAsync"
+                             AllowEmpty="true"
+                             EmptyLabel="Use session model" />
+        </div>
+        <p class="settings-page__copy" style="margin:0;">
+            Model used to compress FreeSearch / WebFetch / extract tool results before they enter the agent transcript.
+            Leave as “Use session model” to reuse the chat model.
+        </p>
+
+        <div class="field" style="margin-top:16px;">
             <label>Explore default model</label>
             <ModelSlugPicker SelectedSlugId="_exploreSlugId"
                              SelectedSlugIdChanged="OnExploreSlugChangedAsync"
@@ -103,6 +115,7 @@
     private bool _endOfTaskAutoReview;
     private string _selfReviewIntensity = DefaultSelfReviewIntensity;
     private Guid? _turnSummarizerSlugId;
+    private Guid? _webSearchSummarizerSlugId;
     private Guid? _exploreSlugId;
     private Guid? _securityReviewSlugId;
     private Guid? _bugReviewSlugId;
@@ -139,6 +152,8 @@
         if (Guid.TryParse(summarizer.Value, out var id) && id != Guid.Empty)
             _turnSummarizerSlugId = id;
 
+        if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId, v => _webSearchSummarizerSlugId = v))
+            return;
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.ExploreModelSlugId, v => _exploreSlugId = v))
             return;
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.SecurityReviewModelSlugId, v => _securityReviewSlugId = v))
@@ -215,6 +230,12 @@
             id,
             v => _turnSummarizerSlugId = v,
             DysonAppSettingKeys.TurnSummarizerModelSlugId);
+
+    private Task OnWebSearchSummarizerSlugChangedAsync(Guid? id) =>
+        SaveSlugSettingAsync(
+            id,
+            v => _webSearchSummarizerSlugId = v,
+            DysonAppSettingKeys.WebSearchSummarizerModelSlugId);
 
     private Task OnExploreSlugChangedAsync(Guid? id) =>
         SaveSlugSettingAsync(

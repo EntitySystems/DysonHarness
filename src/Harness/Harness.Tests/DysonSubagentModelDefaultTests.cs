@@ -11,6 +11,8 @@ public class DysonSubagentModelDefaultTests
     [Fact]
     public void Run()
     {
+        AssertBuiltInPromptsContainModelSlugOmissionGuidance();
+
         var explore = new OpenAiCompatibleAgentProvider(
             new DysonModelSlugEntity { Slug = "explore-default", DisplayAlias = "Explore" });
         var security = new OpenAiCompatibleAgentProvider(
@@ -70,5 +72,29 @@ public class DysonSubagentModelDefaultTests
         var empty = new DysonAgentSessionConfig();
         if (empty.TryGetSubagentDefaultWhenSlugOmitted(null, DysonAgentModes.Explore) is not null)
             throw new InvalidOperationException("Unset Explore default must inherit parent.");
+    }
+
+    private static void AssertBuiltInPromptsContainModelSlugOmissionGuidance()
+    {
+        AssertModelSlugOmissionGuidance(DysonAgentSystemPrompts.SharedPreamble, "Shared preamble");
+
+        foreach (var mode in DysonAgentModes.BuiltIns)
+        {
+            var prompt = DysonAgentSystemPrompts.ForMode(mode);
+            if (prompt.IsError)
+                throw new InvalidOperationException($"Built-in mode '{mode}' should resolve: {prompt.Error}");
+
+            AssertModelSlugOmissionGuidance(prompt.Value, $"Built-in mode '{mode}' prompt");
+        }
+    }
+
+    private static void AssertModelSlugOmissionGuidance(string prompt, string subject)
+    {
+        if (!prompt.Contains("StartSubagent.modelSlug", StringComparison.Ordinal)
+            || !prompt.Contains("omit", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"{subject} should instruct agents to omit StartSubagent.modelSlug unless explicitly requested.");
+        }
     }
 }

@@ -19,6 +19,7 @@ public static class DysonAgentSystemPrompts
         - Work-root openrules.json (or implicit AGENTS.md) injects Root + AutoInclude rules/skills into this system prompt once per session create/load/mode change (provider-filtered; Dyson id is dyson). Call GetOpenRulesConfig for a no-body summary of all rows. Call InitializeOpenRules to create a default openrules.json when missing. Prefer LoadSkill for AgentOptional openrules entries (including http(s) Paths), included Resources/Skills, and work-root .dyson/skills (loadIndexOnly true for the entry file, false for the full skill directory). Skills may also be a work-relative literal path or composer /skill-.
         - Never claim work is done that you did not actually perform.
         - Prefer evidence (files, commands, build/test output) over assumptions.
+        - StartSubagent.modelSlug must be omitted unless the user explicitly requests a particular subagent model slug, so configured system defaults or parent-model inheritance apply.
 
         Tool calls:
         - Each turn you may and are encouraged to issue multiple tool calls in a single turn when that advances the task.
