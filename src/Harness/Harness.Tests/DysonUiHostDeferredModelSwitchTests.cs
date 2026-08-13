@@ -1,6 +1,9 @@
+using System.Text.Json;
 using DysonHarness;
 using Harness.UI.Demo;
+using Harness.UI.Theme;
 using Microsoft.Data.Sqlite;
+using Microsoft.JSInterop;
 
 namespace Harness.Tests;
 
@@ -46,7 +49,8 @@ public class DysonUiHostDeferredModelSwitchTests
             contributions,
             grantService,
             mcpResolver,
-            lifecycle);
+            lifecycle,
+            new ThemeService(new ThemeJsRuntime("light", "#ABC")));
 
         var workRoot = Path.Combine(Path.GetTempPath(), $"dyson-defer-model-{Guid.NewGuid():N}");
         Directory.CreateDirectory(workRoot);
@@ -84,6 +88,8 @@ public class DysonUiHostDeferredModelSwitchTests
             var sessionId = session.PersistenceId;
             if (sessionId == Guid.Empty)
                 throw new InvalidOperationException("Expected persisted session.");
+            Assert.Equal("light", session.Config.UiTheme.Theme);
+            Assert.Equal("#aabbcc", session.Config.UiTheme.AccentHex);
 
             if (session.Provider is not DemoDysonAgentProvider before
                 || before.SlugId != slugA.Value)
@@ -119,6 +125,33 @@ public class DysonUiHostDeferredModelSwitchTests
         finally
         {
             try { Directory.Delete(workRoot, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    private sealed class ThemeJsRuntime(string theme, string accent) : IJSRuntime
+    {
+        public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) =>
+            InvokeAsync<TValue>(identifier, CancellationToken.None, args);
+
+        public ValueTask<TValue> InvokeAsync<TValue>(
+            string identifier,
+            CancellationToken cancellationToken,
+            object?[]? args)
+        {
+            object? value = identifier switch
+            {
+                "dysonTheme.get" => null,
+                "dysonTheme.getResolved" => new { theme, accentHex = accent },
+                "dysonTheme.apply" => null,
+                _ => throw new InvalidOperationException($"Unexpected JS call: {identifier}"),
+            };
+
+            if (value is null)
+                return ValueTask.FromResult(default(TValue)!);
+
+            var json = JsonSerializer.Serialize(value);
+            return ValueTask.FromResult(JsonSerializer.Deserialize<TValue>(json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!);
         }
     }
 }

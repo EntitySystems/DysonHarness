@@ -152,7 +152,7 @@
 
         @if (Turn.Kind != DysonAgentTurnKind.DisplayInfo
              && Turn.Kind != DysonAgentTurnKind.ModeSwitch
-             && (HasAssistantBody || HasReasoning || HasTools || ShowThinkingIdleDots))
+             && (HasAssistantBody || HasReasoning || HasTools || HasVisualizations || ShowThinkingIdleDots))
         {
             <div @ref="_contentEl" class="turn-block__content">
                 <div class="turn-block__main">
@@ -274,6 +274,11 @@
                     else if (!string.IsNullOrWhiteSpace(Turn.AssistantText))
                     {
                         <div class="turn-block__body">@MarkdownRenderer.ToHtml(Turn.AssistantText)</div>
+                    }
+
+                    @if (HasVisualizations)
+                    {
+                        <TurnVisualizations Turn="Turn" />
                     }
 
                     @if (ShowThinkingIdleDots)
@@ -456,6 +461,9 @@
 
     private bool HasTools =>
         Turn.TrackedToolCalls.Count > 0 || Turn.ToolCalls.Count > 0;
+
+    private bool HasVisualizations => Turn.TrackedToolCalls.Any(call =>
+        call.Status == DysonToolCallStatus.Completed && call.Result?.HtmlVisualization is not null);
 
     private bool HasPendingTools =>
         Turn.TrackedToolCalls.Any(t =>

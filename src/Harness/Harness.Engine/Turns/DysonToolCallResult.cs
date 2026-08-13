@@ -51,6 +51,12 @@ public sealed class DysonToolCallResult
     /// </summary>
     public DysonBinaryAttachment? BinaryAttachment { get; init; }
 
+    /// <summary>
+    /// Structured visualization payload for UI rendering. Kept out of provider tool transcripts;
+    /// <see cref="Content"/> remains the small model-facing acknowledgement.
+    /// </summary>
+    public DysonHtmlVisualization? HtmlVisualization { get; init; }
+
     /// <summary>Copy without <see cref="BinaryAttachment"/> (ack <see cref="Content"/> kept).</summary>
     public DysonToolCallResult WithoutBinaryAttachment() =>
         BinaryAttachment is null
@@ -62,6 +68,7 @@ public sealed class DysonToolCallResult
                 Stage = Stage,
                 IsError = IsError,
                 Content = Content,
+                HtmlVisualization = HtmlVisualization,
                 EndsCurrentTurn = EndsCurrentTurn,
                 CompletedAt = CompletedAt,
             };

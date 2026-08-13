@@ -21,7 +21,8 @@ public static class DysonSessionToolsetBuilder
         var pipeline = DysonMcpPipeline.CreateDefault(
             config.McpAccessMode,
             config.AvailableShells.Select(s => s.Name).ToArray(),
-            browserControlAvailable: config.BrowserControl is not null);
+            browserControlAvailable: config.BrowserControl is not null,
+            uiTheme: config.UiTheme);
 
         pipeline.ConfigureShellExecuteForMode(
             string.Equals(agentMode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase));
@@ -53,7 +54,8 @@ public static class DysonSessionToolsetBuilder
         var pipeline = DysonMcpPipeline.CreateDefault(
             config.McpAccessMode,
             config.AvailableShells.Select(s => s.Name).ToArray(),
-            browserControlAvailable: config.BrowserControl is not null);
+            browserControlAvailable: config.BrowserControl is not null,
+            uiTheme: config.UiTheme);
 
         pipeline.ConfigureShellExecuteForMode(
             string.Equals(agentMode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase));

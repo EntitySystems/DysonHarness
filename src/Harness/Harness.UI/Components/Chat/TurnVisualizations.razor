@@ -1,0 +1,32 @@
+@namespace Harness.UI.Components.Chat
+@using DysonHarness
+@using Harness.UI.Demo
+
+@foreach (var visualization in Visualizations)
+{
+    <section @key="visualization.Id" class="turn-visualization" aria-label="Visualization: @visualization.Title">
+        <h3 class="turn-visualization__title">@visualization.Title</h3>
+        <iframe class="turn-visualization__frame"
+                title="@visualization.Title"
+                sandbox="allow-scripts"
+                referrerpolicy="no-referrer"
+                srcdoc="@GetDocument(visualization)"></iframe>
+    </section>
+}
+
+@code {
+    private readonly Dictionary<Guid, string> _documents = [];
+
+    [Parameter, EditorRequired] public DysonAgentTurn Turn { get; set; } = default!;
+
+    private IEnumerable<DysonHtmlVisualization> Visualizations => Turn.TrackedToolCalls
+        .Where(call => call.Status == DysonToolCallStatus.Completed && call.Result?.HtmlVisualization is not null)
+        .Select(call => call.Result!.HtmlVisualization!);
+
+    // A fresh CSP nonce changes srcdoc and causes the browser to reload the iframe.
+    // Keep the immutable tool result's document stable across parent UI renders.
+    private string GetDocument(DysonHtmlVisualization visualization) =>
+        _documents.TryGetValue(visualization.Id, out var document)
+            ? document
+            : _documents[visualization.Id] = DysonHtmlVisualizationDocument.Create(visualization);
+}

@@ -49,7 +49,8 @@ public static class DysonToolCallUi
         return toolName switch
         {
             "WriteFile" => SummarizeWriteFile(argumentsJson),
-            "CreateFile" => SummarizeCreateFile(argumentsJson),
+            "CreateFile" => SummarizeCreateFile(argumentsJson, resultContent, hasResult),
+            "RenderHtmlVisualization" => SummarizeHtmlVisualization(argumentsJson),
             "ReadFile" => SummarizeReadFile(argumentsJson),
             "Grep" => SummarizeGrep(argumentsJson, resultContent, hasResult),
             "ListDirectory" => SummarizeListDirectory(argumentsJson, resultContent, hasResult),
@@ -121,6 +122,28 @@ public static class DysonToolCallUi
         public int? ByteLength { get; init; }
         public int? Width { get; init; }
         public int? Height { get; init; }
+    }
+
+    public sealed class HtmlVisualizationParsed
+    {
+        public string? Title { get; init; }
+        public string HtmlSource { get; init; } = "unknown";
+        public string CssSource { get; init; } = "unknown";
+        public string JavaScriptSource { get; init; } = "unknown";
+    }
+
+    public static HtmlVisualizationParsed? TryParseHtmlVisualization(string? argumentsJson)
+    {
+        if (!TryParseObject(argumentsJson, out var root))
+            return null;
+
+        return new HtmlVisualizationParsed
+        {
+            Title = GetPropString(root, "title"),
+            HtmlSource = GetAssetSource(root, "html"),
+            CssSource = GetAssetSource(root, "css"),
+            JavaScriptSource = GetAssetSource(root, "js"),
+        };
     }
 
     public static ScreenshotAckParsed? TryParseScreenshotAck(string? resultContent)
@@ -505,16 +528,26 @@ public static class DysonToolCallUi
         };
     }
 
-    private static CollapsedSummary SummarizeCreateFile(string? argumentsJson)
+    private static CollapsedSummary SummarizeCreateFile(string? argumentsJson, string? resultContent, bool hasResult)
     {
         var path = GetString(argumentsJson, "path");
         var content = GetString(argumentsJson, "content") ?? "";
-        var name = Basename(path);
+        var isTempFile = GetBool(argumentsJson, "isTempFile");
+        var generatedPath = hasResult ? GetJsonProperty(resultContent, "path") : null;
+        var name = Basename(isTempFile ? generatedPath ?? path : path);
         var lines = CountLines(content);
         var summary = string.IsNullOrEmpty(name)
             ? $"{content.Length} chars"
-            : $"{name} · {lines} lines · {content.Length} chars";
+            : isTempFile
+                ? $"temp {name} · {lines} lines"
+                : $"{name} · {lines} lines · {content.Length} chars";
         return TextSummary(Truncate(summary, SummaryMaxLength));
+    }
+
+    private static CollapsedSummary SummarizeHtmlVisualization(string? argumentsJson)
+    {
+        var title = TryParseHtmlVisualization(argumentsJson)?.Title;
+        return TextSummary(Truncate(title ?? "visualization", SummaryMaxLength));
     }
 
     private static CollapsedSummary SummarizeReadFile(string? argumentsJson)
@@ -1021,6 +1054,17 @@ public static class DysonToolCallUi
         {
             return false;
         }
+    }
+
+    private static string GetAssetSource(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var asset) || asset.ValueKind != JsonValueKind.Object)
+            return "unknown";
+        if (asset.TryGetProperty("tempFile", out var tempFile) && tempFile.ValueKind == JsonValueKind.String)
+            return $"temp file: {Truncate(tempFile.GetString(), PreviewMaxLength)}";
+        return asset.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String
+            ? "raw content"
+            : "unknown";
     }
 
     private static string? GetPropString(JsonElement root, string name)

@@ -106,6 +106,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "ReadFile" => await ReadFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "LoadSkill" => await LoadSkillAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateFile" => await CreateFileAsync(call, cancellationToken).ConfigureAwait(false),
+                "RenderHtmlVisualization" => await RenderHtmlVisualizationAsync(call, cancellationToken).ConfigureAwait(false),
                 "WriteFile" => await WriteFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "Grep" => await GrepAsync(call, cancellationToken).ConfigureAwait(false),
                 "LoadBinary" => await LoadBinaryAsync(call, cancellationToken).ConfigureAwait(false),
@@ -191,7 +192,8 @@ public sealed partial class DysonWorkspaceToolExecutor
         DysonToolCall call,
         string content,
         DysonBinaryAttachment? binaryAttachment = null,
-        bool endsCurrentTurn = false) =>
+        bool endsCurrentTurn = false,
+        DysonHtmlVisualization? htmlVisualization = null) =>
         new()
         {
             CallId = call.CallId,
@@ -200,6 +202,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             IsError = false,
             Content = content,
             BinaryAttachment = binaryAttachment,
+            HtmlVisualization = htmlVisualization,
             EndsCurrentTurn = endsCurrentTurn,
         };
 
@@ -1714,26 +1717,123 @@ public sealed partial class DysonWorkspaceToolExecutor
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
-        var path = RequireString(doc.RootElement, "path");
-        if (path.IsError)
-            return Task.FromResult(Error(call, path.Error));
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var path = RequireString(doc.RootElement, "path");
+            if (path.IsError)
+                return Task.FromResult(Error(call, path.Error));
 
-        var content = doc.RootElement.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "";
-        var overwrite = doc.RootElement.TryGetProperty("overwrite", out var o)
-            && o.ValueKind == JsonValueKind.True;
+            var hasStringContent = doc.RootElement.TryGetProperty("content", out var contentProperty)
+                && contentProperty.ValueKind == JsonValueKind.String;
+            var content = hasStringContent ? contentProperty.GetString() ?? "" : "";
+            var overwrite = GetBool(doc.RootElement, "overwrite");
+            if (GetBool(doc.RootElement, "isTempFile"))
+            {
+                if (!hasStringContent)
+                    return Task.FromResult(Error(call, "Missing required string field 'content'."));
+                if (doc.RootElement.TryGetProperty("overwrite", out var overwriteProperty)
+                    && overwriteProperty.ValueKind != JsonValueKind.False)
+                {
+                    return Task.FromResult(Error(
+                        call,
+                        "CreateFile: overwrite must be omitted or false when isTempFile is true."));
+                }
 
-        var exists = _fs.FileExists(path.Value);
-        if (exists.IsError)
-            return Task.FromResult(Error(call, exists.Error));
-        if (exists.Value && !overwrite)
-            return Task.FromResult(Error(call, $"File already exists: {path.Value}"));
+                return Task.FromResult(CreateTemporaryFile(call, path.Value, content, overwrite));
+            }
 
-        var written = _fs.WriteAllText(path.Value, content);
-        if (written.IsError)
-            return Task.FromResult(Error(call, written.Error));
+            var exists = _fs.FileExists(path.Value);
+            if (exists.IsError)
+                return Task.FromResult(Error(call, exists.Error));
+            if (exists.Value && !overwrite)
+                return Task.FromResult(Error(call, $"File already exists: {path.Value}"));
 
-        return Task.FromResult(Ok(call, $"Created {path.Value} ({content.Length} chars)."));
+            var written = _fs.WriteAllText(path.Value, content);
+            if (written.IsError)
+                return Task.FromResult(Error(call, written.Error));
+
+            return Task.FromResult(Ok(call, $"Created {path.Value} ({content.Length} chars)."));
+        }
+        catch (JsonException)
+        {
+            return Task.FromResult(Error(call, "CreateFile: invalid JSON arguments."));
+        }
+    }
+
+    private DysonToolCallResult CreateTemporaryFile(
+        DysonToolCall call,
+        string requestedName,
+        string content,
+        bool overwrite)
+    {
+        const int maxTempBytes = 512 * 1024;
+        if (overwrite)
+            return Error(call, "CreateFile: overwrite must be omitted or false when isTempFile is true.");
+        if (Encoding.UTF8.GetByteCount(content) > maxTempBytes)
+            return Error(call, "CreateFile: temporary content exceeds the 512 KiB UTF-8 limit.");
+
+        var sanitizedName = SanitizeTemporaryLeafName(requestedName);
+        if (sanitizedName.IsError)
+            return Error(call, sanitizedName.Error);
+
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var candidate = ".dyson/temp/" + AddRandomSuffix(sanitizedName.Value);
+            var exists = _fs.FileExists(candidate);
+            if (exists.IsError)
+                return Error(call, exists.Error);
+            if (exists.Value)
+                continue;
+
+            var written = _fs.WriteAllText(candidate, content);
+            if (written.IsError)
+                return Error(call, written.Error);
+
+            var acknowledgement = JsonSerializer.Serialize(new
+            {
+                path = candidate,
+                fileName = Path.GetFileName(candidate),
+                isTempFile = true,
+                byteLength = Encoding.UTF8.GetByteCount(content),
+            });
+            return Ok(call, acknowledgement);
+        }
+
+        return Error(call, "CreateFile: could not allocate a unique temporary file name.");
+    }
+
+    private static Result<string, string> SanitizeTemporaryLeafName(string requestedName)
+    {
+        if (string.IsNullOrWhiteSpace(requestedName)
+            || Path.IsPathRooted(requestedName)
+            || requestedName.IndexOfAny(['/', '\\']) >= 0
+            || requestedName is "." or "..")
+        {
+            return Result<string, string>.AsError(
+                "CreateFile: temporary path must be a non-empty leaf file name.");
+        }
+
+        var extension = Path.GetExtension(requestedName);
+        var stem = Path.GetFileNameWithoutExtension(requestedName);
+        if (string.IsNullOrWhiteSpace(stem) || string.IsNullOrWhiteSpace(extension) || extension == ".")
+            return Result<string, string>.AsError("CreateFile: temporary file name must include an extension.");
+
+        var invalid = Path.GetInvalidFileNameChars();
+        var sanitizedStem = new string(stem.Select(c => invalid.Contains(c) ? '-' : c).ToArray()).Trim();
+        var sanitizedExtension = new string(extension.Skip(1).Select(c => invalid.Contains(c) ? '-' : c).ToArray()).Trim();
+        if (string.IsNullOrWhiteSpace(sanitizedStem) || string.IsNullOrWhiteSpace(sanitizedExtension))
+            return Result<string, string>.AsError("CreateFile: temporary file name is invalid.");
+
+        return Result<string, string>.AsValue(
+            $"{sanitizedStem[..Math.Min(sanitizedStem.Length, 96)]}.{sanitizedExtension[..Math.Min(sanitizedExtension.Length, 16)]}");
+    }
+
+    private static string AddRandomSuffix(string fileName)
+    {
+        var extension = Path.GetExtension(fileName);
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        return $"{stem}-{Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(12)).ToLowerInvariant()}{extension}";
     }
 
     private Task<DysonToolCallResult> WriteFileAsync(

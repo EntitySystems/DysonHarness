@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using DysonHarness;
+using Harness.UI.Theme;
 using Microsoft.JSInterop;
 
 namespace Harness.UI.Demo;
@@ -32,6 +33,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly DysonPluginMcpGrantService _pluginMcpGrants;
     private readonly DysonPluginMcpResolver _pluginMcpResolver;
     private readonly DysonPluginLifecycleService _pluginLifecycle;
+    private readonly ThemeService _theme;
     private readonly SemaphoreSlim _persistGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, DysonAgentSession> _sessionsById = new();
     private readonly ConcurrentDictionary<DysonAgentSession, byte> _hookedSessions = new();
@@ -101,6 +103,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonPluginMcpGrantService pluginMcpGrants,
         DysonPluginMcpResolver pluginMcpResolver,
         DysonPluginLifecycleService pluginLifecycle,
+        ThemeService theme,
         IDysonBrowserControl? browserControl = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
@@ -118,6 +121,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pluginMcpGrants = pluginMcpGrants ?? throw new ArgumentNullException(nameof(pluginMcpGrants));
         _pluginMcpResolver = pluginMcpResolver ?? throw new ArgumentNullException(nameof(pluginMcpResolver));
         _pluginLifecycle = pluginLifecycle ?? throw new ArgumentNullException(nameof(pluginLifecycle));
+        _theme = theme ?? throw new ArgumentNullException(nameof(theme));
         _pluginLifecycle.Changed += OnPluginCatalogChanged;
         _pluginMcpGrants.Changed += OnPluginMcpGrantChanged;
         _browserControl = browserControl;
@@ -3151,6 +3155,17 @@ public sealed class DysonUiHost : IAsyncDisposable
             workPath = wd.Value.AbsolutePath;
         }
 
+        DysonUiThemeSnapshot? inheritedUiTheme = null;
+        if (full.Value.Session.ParentSessionId is Guid parentSessionId && parentSessionId != Guid.Empty)
+        {
+            var parent = await EnsureSessionLoadedLinkedAsync(parentSessionId, cancellationToken)
+                .ConfigureAwait(false);
+            if (parent.IsError)
+                return Result<LoadedSession, string>.AsError(parent.Error);
+
+            inheritedUiTheme = parent.Value.Config.UiTheme;
+        }
+
         var kind = providerResult.Value.Kind;
         DysonAgentSession session;
         if (string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
@@ -3166,6 +3181,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     full.Value.Session.McpAccessMode,
                     workDirectoryId: full.Value.Session.WorkDirectoryId,
                     workRoot: workPath,
+                    uiTheme: inheritedUiTheme,
                     cancellationToken)
                 .ConfigureAwait(false);
             var loaded = await OpenAiCompatibleAgentSession.LoadAsync(
@@ -3196,6 +3212,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     full.Value.Session.McpAccessMode,
                     workDirectoryId: full.Value.Session.WorkDirectoryId,
                     workRoot: workPath,
+                    uiTheme: inheritedUiTheme,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -3374,14 +3391,18 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonMcpAccessMode? mcpAccessMode = null,
         Guid? workDirectoryId = null,
         string? workRoot = null,
+        DysonUiThemeSnapshot? uiTheme = null,
         CancellationToken cancellationToken = default)
     {
+        var resolvedUiTheme = uiTheme ?? await _theme.CaptureSnapshotAsync(cancellationToken)
+            .ConfigureAwait(false);
         var contributions = await ResolvePluginContributionsAsync(workDirectoryId, cancellationToken)
             .ConfigureAwait(false);
         var config = new DysonAgentSessionConfig
         {
             BrowserControl = _browserControl,
             PluginContributions = contributions,
+            UiTheme = resolvedUiTheme,
         };
         MergePluginCustomAgents(config, contributions);
         if (mcpAccessMode is { } mode)

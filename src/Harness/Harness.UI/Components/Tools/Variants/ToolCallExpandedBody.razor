@@ -9,6 +9,9 @@
     case "CreateFile":
         <CreateFileToolCallBody ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
         break;
+    case "RenderHtmlVisualization":
+        <HtmlVisualizationToolCallBody ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
+        break;
     case "ReadFile":
         <ReadFileToolCallBody ArgumentsJson="@ArgumentsJson" ResultContent="@ResultContent" IsError="@IsError" ArgsOnly="@ArgsOnly" />
         break;

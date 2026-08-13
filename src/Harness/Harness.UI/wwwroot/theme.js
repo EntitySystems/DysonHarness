@@ -43,6 +43,13 @@ window.dysonTheme = {
     document.documentElement.setAttribute("data-accent", accent);
     if (window.dysonShell && window.dysonShell.notifyTheme)
       window.dysonShell.notifyTheme(theme);
+  },
+  getResolved: function () {
+    var root = document.documentElement;
+    return {
+      theme: root.getAttribute("data-theme"),
+      accentHex: window.getComputedStyle(root).getPropertyValue("--accent").trim()
+    };
   }
 };
 
