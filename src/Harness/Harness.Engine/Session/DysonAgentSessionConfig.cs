@@ -15,6 +15,12 @@ public class DysonAgentSessionConfig
     public DysonPluginContributionSet PluginContributions { get; init; } = new();
 
     /// <summary>
+    /// Immutable light/dark and accent-color snapshot captured when the root session starts.
+    /// Child sessions reuse the same instance rather than observing live UI state.
+    /// </summary>
+    public DysonUiThemeSnapshot UiTheme { get; init; } = DysonUiThemeSnapshot.Default;
+
+    /// <summary>
     /// FullAccess runs tools directly. AutoReview routes calls through the in-process MCP proxy.
     /// No allowlist either way.
     /// </summary>

@@ -1,0 +1,41 @@
+@namespace Harness.UI.Components.Chat
+@using DysonHarness
+
+@if (_count > 0)
+{
+    <div class="session-visualizations">
+        <button type="button"
+                class="session-visualizations__toggle"
+                aria-haspopup="dialog"
+                aria-expanded="@_open"
+                @onclick="Toggle">
+            <span>Visualizations (@_count)</span>
+        </button>
+        <SessionVisualizationsModal IsOpen="_open" Session="Session" OnClose="Close" />
+    </div>
+}
+
+@code {
+    [Parameter] public DysonAgentSession? Session { get; set; }
+
+    private Guid? _boundSessionId;
+    private bool _open;
+    private int _count;
+
+    protected override void OnParametersSet()
+    {
+        var sessionId = Session?.PersistenceId;
+        if (sessionId != _boundSessionId)
+        {
+            _boundSessionId = sessionId;
+            _open = false;
+        }
+
+        _count = Session?.Turns.Sum(turn => turn.TrackedToolCalls.Count(call =>
+            call.Status == DysonToolCallStatus.Completed && call.Result?.HtmlVisualization is not null)) ?? 0;
+    }
+
+    private void Toggle() => _open = !_open;
+
+    private void Close() => _open = false;
+}

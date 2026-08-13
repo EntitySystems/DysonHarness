@@ -1,0 +1,106 @@
+@namespace Harness.UI.Components.Chat
+@using Microsoft.AspNetCore.Components.Web
+@using DysonHarness
+@using Harness.UI.Demo
+
+@if (IsOpen)
+{
+    <div class="confirm-dialog-backdrop"
+         role="presentation"
+         @onclick="CloseAsync"
+         @onkeydown="OnKeyDown">
+        <div class="confirm-dialog session-visualizations-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="session-visualizations-modal-title"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnKeyDown">
+            <div class="confirm-dialog__header">
+                <div class="session-visualizations-modal__title-row">
+                    <h3 id="session-visualizations-modal-title">Visualizations</h3>
+                    <span class="session-visualizations-modal__count">@_entries.Count total</span>
+                </div>
+                <button type="button"
+                        class="btn btn-ghost session-visualizations-modal__close"
+                        @onclick="CloseAsync"
+                        aria-label="Close">×</button>
+            </div>
+            <div class="confirm-dialog__body session-visualizations-modal__body">
+                <div class="session-visualizations-modal__layout">
+                    <div class="session-visualizations-modal__list" role="listbox" aria-label="Visualizations">
+                        @foreach (var entry in _entries)
+                        {
+                            <button type="button"
+                                    class="session-visualizations-modal__item @(entry.Visualization.Id == _selectedId ? "is-selected" : null)"
+                                    role="option"
+                                    aria-selected="@(entry.Visualization.Id == _selectedId)"
+                                    @onclick="() => _selectedId = entry.Visualization.Id">
+                                <span class="session-visualizations-modal__item-title">@entry.Visualization.Title</span>
+                                <span class="session-visualizations-modal__item-meta mono">@entry.StartedUtc.ToLocalTime().ToString("g") · @ShortId(entry.Visualization.Id)</span>
+                            </button>
+                        }
+                    </div>
+                    @if (Selected is { } selected)
+                    {
+                        <section class="session-visualizations-modal__preview" aria-label="Selected visualization: @selected.Visualization.Title">
+                            <h4>@selected.Visualization.Title</h4>
+                            <iframe class="session-visualizations-modal__frame"
+                                    title="@selected.Visualization.Title"
+                                    sandbox="allow-scripts"
+                                    referrerpolicy="no-referrer"
+                                    srcdoc="@DysonHtmlVisualizationDocument.Create(selected.Visualization)"></iframe>
+                        </section>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public DysonAgentSession? Session { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private Guid? _boundSessionId;
+    private Guid? _selectedId;
+    private bool _wasOpen;
+    private List<VisualizationEntry> _entries = [];
+
+    private VisualizationEntry? Selected => _entries.FirstOrDefault(entry => entry.Visualization.Id == _selectedId);
+
+    protected override void OnParametersSet()
+    {
+        var sessionId = Session?.PersistenceId;
+        if (sessionId != _boundSessionId)
+        {
+            _boundSessionId = sessionId;
+            _selectedId = null;
+        }
+
+        _entries = Session?.Turns
+            .SelectMany(turn => turn.TrackedToolCalls
+                .Where(call => call.Status == DysonToolCallStatus.Completed && call.Result?.HtmlVisualization is not null)
+                .Select(call => new VisualizationEntry(call.Result!.HtmlVisualization!, turn.Id, turn.StartedUtc)))
+            .ToList() ?? [];
+
+        if (IsOpen && !_wasOpen)
+            _selectedId = _entries.LastOrDefault()?.Visualization.Id;
+        else if (_selectedId is null || !_entries.Any(entry => entry.Visualization.Id == _selectedId))
+            _selectedId = _entries.LastOrDefault()?.Visualization.Id;
+
+        _wasOpen = IsOpen;
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private void OnKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            _ = CloseAsync();
+    }
+
+    private static string ShortId(Guid id) => id.ToString("N")[..8];
+
+    private sealed record VisualizationEntry(DysonHtmlVisualization Visualization, Guid TurnId, DateTime StartedUtc);
+}

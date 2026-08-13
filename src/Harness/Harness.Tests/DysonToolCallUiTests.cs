@@ -79,6 +79,29 @@ public class DysonToolCallUiTests
             throw new InvalidOperationException("CountLines failed.");
         }
 
+        var tempFileSummary = DysonToolCallUi.GetCollapsedSummary(
+            "CreateFile",
+            """{"path":"chart.css","content":"body {}","isTempFile":true}""",
+            """{"path":".dyson/temp/chart-123.css","isTempFile":true}""",
+            hasResult: true);
+        if (tempFileSummary.Text is null || !tempFileSummary.Text.Contains("temp chart-123.css", StringComparison.Ordinal))
+            throw new InvalidOperationException($"Temp CreateFile summary mismatch: {tempFileSummary.Text}");
+
+        var renderArgs = """{"title":"Quarterly revenue","html":{"tempFile":".dyson/temp/chart.html"},"css":{"content":""},"js":{"content":""}}""";
+        var render = DysonToolCallUi.TryParseHtmlVisualization(renderArgs)
+            ?? throw new InvalidOperationException("RenderHtmlVisualization arguments must parse.");
+        if (render.Title != "Quarterly revenue"
+            || render.HtmlSource != "temp file: .dyson/temp/chart.html"
+            || render.CssSource != "raw content"
+            || render.JavaScriptSource != "raw content")
+        {
+            throw new InvalidOperationException("RenderHtmlVisualization parsed source mismatch.");
+        }
+
+        var renderSummary = DysonToolCallUi.GetCollapsedSummary("RenderHtmlVisualization", renderArgs, null, hasResult: false);
+        if (renderSummary.Text != "Quarterly revenue")
+            throw new InvalidOperationException($"RenderHtmlVisualization summary mismatch: {renderSummary.Text}");
+
         // SubmitSubagentReport task-failed handoff is not a tool error — collapsed copy must not say "report failed".
         var failedHandoff = DysonToolCallUi.GetCollapsedSummary(
             "SubmitSubagentReport",

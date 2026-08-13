@@ -41,11 +41,12 @@ public sealed class DysonMcpPipeline
     public static DysonMcpPipeline CreateDefault(
         DysonMcpAccessMode accessMode,
         IReadOnlyList<string>? availableShellNames = null,
-        bool browserControlAvailable = false)
+        bool browserControlAvailable = false,
+        DysonUiThemeSnapshot? uiTheme = null)
     {
         availableShellNames ??= DysonShell.DefaultShellNamesForCurrentPlatform();
         var pipeline = new DysonMcpPipeline(accessMode, availableShellNames, browserControlAvailable);
-        foreach (var tool in DefaultTools(availableShellNames, browserControlAvailable))
+        foreach (var tool in DefaultTools(availableShellNames, browserControlAvailable, uiTheme ?? DysonUiThemeSnapshot.Default))
             pipeline.Tools[tool.Name] = tool;
         return pipeline;
     }
@@ -1003,9 +1004,68 @@ public sealed class DysonMcpPipeline
         };
     }
 
+    private static DysonMcpTool CreateRenderHtmlVisualizationTool(DysonUiThemeSnapshot uiTheme) =>
+        new()
+        {
+            Name = "RenderHtmlVisualization",
+            Description =
+                "Render a self-contained HTML + CSS + JavaScript mini-component as a visualization in a sandboxed iframe in the current turn, and add it to the session’s Visualizations picker. " +
+                "This tool is highly encouraged whenever the user asks to see a visual preview or result, graph, chart, diagram, dashboard, animation, UI mock-up, or other visual output. " +
+                DysonAgentSystemPrompts.FormatVisualizationThemeGuidance(uiTheme) + " " +
+                "title, html, css, and js are required. For each of the three asset arguments, provide exactly one source: raw content, or tempFile. " +
+                "A tempFile must be the exact workspace-relative path returned by CreateFile with isTempFile: true, must remain under .dyson/temp/, and must use the matching extension; never pass an arbitrary workspace file or invent a temp path. " +
+                "Use CreateFile(isTempFile: true) first for large or multiline assets and place the render call in a later harness stage. " +
+                "The component must be self-contained: network requests, external scripts/styles/fonts, parent-page access, filesystem access, popups, forms, downloads, and top-level navigation are blocked. " +
+                "Use native browser APIs, inline SVG, Canvas, and data/blob images instead of external dependencies.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string",
+                      "description": "Required user-facing visualization title shown inline and in the Visualizations modal. Maximum 120 characters."
+                    },
+                    "html": {
+                      "type": "object",
+                      "description": "HTML body markup. Provide exactly one of content or tempFile.",
+                      "properties": {
+                        "content": { "type": "string", "description": "Raw HTML body markup. Keep CSS and JavaScript in their separate arguments." },
+                        "tempFile": { "type": "string", "description": "Exact .dyson/temp/*.html or *.htm path returned by CreateFile with isTempFile true." }
+                      },
+                      "oneOf": [{ "required": ["content"] }, { "required": ["tempFile"] }],
+                      "additionalProperties": false
+                    },
+                    "css": {
+                      "type": "object",
+                      "description": "Stylesheet source. Provide exactly one of content or tempFile; raw content may be an empty string.",
+                      "properties": {
+                        "content": { "type": "string", "description": "Raw CSS stylesheet content." },
+                        "tempFile": { "type": "string", "description": "Exact .dyson/temp/*.css path returned by CreateFile with isTempFile true." }
+                      },
+                      "oneOf": [{ "required": ["content"] }, { "required": ["tempFile"] }],
+                      "additionalProperties": false
+                    },
+                    "js": {
+                      "type": "object",
+                      "description": "JavaScript source executed after the HTML and CSS are installed. Provide exactly one of content or tempFile; raw content may be an empty string.",
+                      "properties": {
+                        "content": { "type": "string", "description": "Raw JavaScript content." },
+                        "tempFile": { "type": "string", "description": "Exact .dyson/temp/*.js or *.mjs path returned by CreateFile with isTempFile true." }
+                      },
+                      "oneOf": [{ "required": ["content"] }, { "required": ["tempFile"] }],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["title", "html", "css", "js"],
+                  "additionalProperties": false
+                }
+                """,
+        };
+
     private static IEnumerable<DysonMcpTool> DefaultTools(
         IReadOnlyList<string> availableShellNames,
-        bool browserControlAvailable)
+        bool browserControlAvailable,
+        DysonUiThemeSnapshot uiTheme)
     {
         foreach (var tool in InterAgentTools())
             yield return tool;
@@ -1691,19 +1751,40 @@ public sealed class DysonMcpPipeline
         yield return new DysonMcpTool
         {
             Name = "CreateFile",
-            Description = "Create a new file with content. Fails if the path already exists unless overwrite is true.",
+            Description =
+                "Create a new file with content. By default, path is the requested workspace-relative or absolute destination and the call fails if it already exists unless overwrite is true. " +
+                "For a generated temporary visualization asset, set isTempFile to true and pass path as a leaf file name with extension, such as chart.html, chart.css, or chart.js. " +
+                "In temp mode, the harness requires a leaf name, sanitizes it, inserts a random suffix before the extension, writes the file under .dyson/temp/, and returns the exact generated workspace-relative path; overwrite must be omitted or false. " +
+                "Use that returned path verbatim as a tempFile in RenderHtmlVisualization—never invent a .dyson/temp/ path. Put a dependent render call in a later harness stage so file creation finishes first. " +
+                "Temporary content is limited to 512 KiB UTF-8, is ignored by git, and is not automatically deleted.",
             InputSchemaJson = """
                 {
                   "type": "object",
                   "properties": {
-                    "path": { "type": "string", "description": "Path of the file to create." },
-                    "content": { "type": "string", "description": "Full file contents." },
-                    "overwrite": { "type": "boolean", "description": "If true, replace an existing file." }
+                    "path": {
+                      "type": "string",
+                      "description": "Normal destination path, or a leaf file name with extension when isTempFile is true."
+                    },
+                    "content": {
+                      "type": "string",
+                      "description": "Full file contents. Temporary files are limited to 512 KiB UTF-8."
+                    },
+                    "overwrite": {
+                      "type": "boolean",
+                      "description": "If true, replace an existing normal file. Must be omitted or false when isTempFile is true."
+                    },
+                    "isTempFile": {
+                      "type": "boolean",
+                      "description": "When true, treat path as a leaf name, add a random suffix, and create the file under .dyson/temp/. Default false."
+                    }
                   },
-                  "required": ["path", "content"]
+                  "required": ["path", "content"],
+                  "additionalProperties": false
                 }
                 """,
         };
+
+        yield return CreateRenderHtmlVisualizationTool(uiTheme);
 
         yield return new DysonMcpTool
         {

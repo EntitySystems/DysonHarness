@@ -39,6 +39,7 @@
                        OnBackToParent="NavigateToParentAsync" />
         <SessionTodoOverview Session="Host.Session" />
         <SessionSubagentOverview Session="Host.Session" />
+        <SessionVisualizationOverview Session="Host.Session" />
         @if (!string.IsNullOrEmpty(Host.LastError))
         {
             <ErrorToast @key="Host.LastError" Message="@Host.LastError" />
