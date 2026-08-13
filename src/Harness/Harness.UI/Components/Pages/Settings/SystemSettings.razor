@@ -1,0 +1,92 @@
+@page "/settings/system"
+@layout SettingsLayout
+@using DysonHarness
+@using Harness.UI.Services
+@inject DysonAppUpdateService Updates
+
+<PageTitle>System — Settings</PageTitle>
+
+<div class="settings-page">
+    <h1 class="settings-page__title">System</h1>
+    <p class="settings-page__copy">
+        Check the configured GitHub release channel for a newer DysonHarness build.
+    </p>
+
+    @if (!string.IsNullOrWhiteSpace(_error))
+    {
+        <div class="error-banner" role="alert">@_error</div>
+    }
+
+    <div class="settings-page__panel panel">
+        <dl>
+            <dt>Installed version</dt>
+            <dd class="mono">@Updates.LocalVersion</dd>
+            <dt>Update channel</dt>
+            <dd class="mono">@DysonAppVersionInfo.Local.EffectiveChannel</dd>
+        </dl>
+
+        <div class="btn-row" style="margin-top:1rem;">
+            <button type="button"
+                    class="btn btn-primary"
+                    @onclick="CheckForUpdatesAsync"
+                    disabled="@_checking"
+                    aria-busy="@_checking">
+                @(_checking ? "Checking for updates…" : "Check for updates")
+            </button>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(_status))
+        {
+            <p class="settings-page__copy" role="status" aria-live="polite" style="margin:8px 0 0;">@_status</p>
+        }
+
+        @if (_result?.NewestRelease is { } release)
+        {
+            <p class="settings-page__copy" style="margin:8px 0 0;">
+                Latest release: <span class="mono">@release.TagName</span>
+                · <a href="@release.ReleasePageUrl" target="_blank" rel="noopener noreferrer">View on GitHub</a>
+            </p>
+        }
+    </div>
+</div>
+
+@code {
+    private DysonManualUpdateCheckResult? _result;
+    private string? _error;
+    private string? _status;
+    private bool _checking;
+
+    private async Task CheckForUpdatesAsync()
+    {
+        _checking = true;
+        _error = null;
+        _status = "Checking for updates…";
+
+        var check = await Updates.CheckManuallyAsync(CancellationToken.None);
+        _checking = false;
+        if (check.IsError)
+        {
+            _result = null;
+            _status = null;
+            _error = check.Error;
+            return;
+        }
+
+        _result = check.Value;
+        _status = GetStatus(check.Value);
+    }
+
+    private static string GetStatus(DysonManualUpdateCheckResult result)
+    {
+        if (result.NewestRelease is null)
+            return $"No published release was found for the {result.LocalChannel} channel.";
+
+        if (result.IsInAppInstallEligible)
+            return "A newer release is available. The standard update prompt is available.";
+
+        if (!OperatingSystem.IsWindows() || !DysonAppVersionInfo.Local.IsStampedRelease)
+            return "The remote release is available, but in-app installation is unavailable on this development or non-Windows build.";
+
+        return "You’re up to date.";
+    }
+}

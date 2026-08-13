@@ -18,6 +18,15 @@ Pull requests to `master` / `release-preview` and pushes to other branches run t
 
 > **Note:** This repo has [immutable releases](https://docs.github.com/en/repositories/releasing-projects-on-github/immutable-releases) enabled, so a fixed rolling tag like `continuous` cannot be reused after the first publish. Each build gets a unique CalVer tag instead. Stable and preview share the same CalVer scheme (no separate numbering per track).
 
+## Retention
+
+Each **successful** continuous publish runs retention for its own channel after the release and its assets are published and verified:
+
+- **Stable (`master`):** retain the four newest non-prerelease GitHub Releases.
+- **Preview (`release-preview`):** retain the four newest prerelease GitHub Releases.
+
+The channels are retained independently. For each older selected release, cleanup uses `gh release delete --cleanup-tag`: it deletes the GitHub Release, its downloadable assets, and the corresponding CalVer tag. It does **not** delete the tagged commit, GitHub Actions workflow runs, or GitHub Actions artifacts.
+
 ## Download
 
 - Releases: https://github.com/EntitySystems/DysonHarness/releases
@@ -70,6 +79,12 @@ The Windows shell checks for a newer build on the **same channel** once per proc
 4. **Update** streams the MSI to `%TEMP%` with a byte progress bar (modal locks — no dismiss), then runs `cmd /c ping -n 4 127.0.0.1 >nul & msiexec /i "<msi>"` and calls `Environment.Exit(0)`. The short delay plus process exit releases CEF/WPF file locks before the WiX major upgrade replaces `%LocalAppData%\Programs\DysonHarness`. (`ping` rather than `timeout`: a `WinExe` host has no console and `timeout` aborts without one.)
 
 Download or hand-off failures unlock the modal with the message and a **Close** button — the install is never forced. Types live in [`Harness.UI/Services`](../../src/Harness/Harness.UI/Services); parsing Facts are in `DysonAppUpdateTests`.
+
+### Manual check
+
+**Settings → System** provides a user-invoked **Check for updates** action. It queries the effective repository and channel, then shows the newest matching GitHub Release with a link to that release page. The lookup also works on development and non-Windows hosts, so those builds can inspect the applicable release even though they cannot install it in-app.
+
+In-app MSI installation remains available only when a newer release is found for a stamped Windows build. In that case the existing update prompt supplies the normal download and install flow; the manual check does not introduce a separate installer experience.
 
 Stable and preview share the same MSI ProductCode / major-upgrade path — operators on one track update within that track; side-by-side stable+preview installs are not supported.
 

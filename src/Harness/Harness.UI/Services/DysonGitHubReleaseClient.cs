@@ -10,7 +10,8 @@ public sealed record DysonGitHubMsiRelease(
     System.Version Version,
     string AssetName,
     string DownloadUrl,
-    long SizeBytes);
+    long SizeBytes,
+    Uri ReleasePageUrl);
 
 /// <summary>
 /// Lists GitHub releases for the app repo and picks the newest one on the local
@@ -92,8 +93,10 @@ public sealed class DysonGitHubReleaseClient(HttpClient http)
                 if (version is null || (best is not null && version <= best.Version))
                     continue;
 
-                if (FindMsiAsset(release) is { } asset)
-                    best = new DysonGitHubMsiRelease(tag!, version, asset.Name, asset.Url, asset.SizeBytes);
+                if (FindMsiAsset(release) is not { } asset || FindReleasePageUrl(release, tag!) is not { } releasePageUrl)
+                    continue;
+
+                best = new DysonGitHubMsiRelease(tag!, version, asset.Name, asset.Url, asset.SizeBytes, releasePageUrl);
             }
 
             return best;
@@ -102,6 +105,25 @@ public sealed class DysonGitHubReleaseClient(HttpClient http)
         {
             return null;
         }
+    }
+
+    private static Uri? FindReleasePageUrl(JsonElement release, string tag)
+    {
+        var htmlUrl = release.TryGetProperty("html_url", out var htmlUrlElement) ? htmlUrlElement.GetString() : null;
+        if (!Uri.TryCreate(htmlUrl, UriKind.Absolute, out var uri)
+            || uri.Scheme != Uri.UriSchemeHttps
+            || !string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrEmpty(uri.Query)
+            || !string.IsNullOrEmpty(uri.Fragment))
+        {
+            return null;
+        }
+
+        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments is [_, _, "releases", "tag", var pageTag]
+               && string.Equals(Uri.UnescapeDataString(pageTag), tag, StringComparison.Ordinal)
+            ? uri
+            : null;
     }
 
     private static (string Name, string Url, long SizeBytes)? FindMsiAsset(JsonElement release)

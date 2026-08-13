@@ -100,6 +100,7 @@ public class DysonAppUpdateTests
         Assert.Equal("DysonHarness-2026.8.142-win-x64.msi", release.AssetName);
         Assert.Equal("https://example.invalid/2026.8.142/DysonHarness-2026.8.142-win-x64.msi", release.DownloadUrl);
         Assert.Equal(52_428_800, release.SizeBytes);
+        Assert.Equal(new Uri("https://github.com/EntitySystems/DysonHarness/releases/tag/2026.8.142"), release.ReleasePageUrl);
     }
 
     [Fact]
@@ -120,6 +121,7 @@ public class DysonAppUpdateTests
             [
               {
                 "tag_name": "2026.8.200",
+                "html_url": "https://github.com/EntitySystems/DysonHarness/releases/tag/2026.8.200",
                 "draft": false,
                 "prerelease": false,
                 "assets": [
@@ -129,6 +131,7 @@ public class DysonAppUpdateTests
               },
               {
                 "tag_name": "2026.8.150",
+                "html_url": "https://github.com/EntitySystems/DysonHarness/releases/tag/2026.8.150",
                 "draft": false,
                 "prerelease": true,
                 "assets": [
@@ -146,6 +149,62 @@ public class DysonAppUpdateTests
         var stable = DysonGitHubReleaseClient.SelectNewestMsiRelease(json, "stable");
         Assert.NotNull(stable);
         Assert.Equal("2026.8.200", stable.TagName);
+    }
+
+    [Fact]
+    public void SelectNewestMsiRelease_SkipsMissingOrMalformedReleasePageUrls()
+    {
+        const string missingUrlJson = """
+            [{ "tag_name": "2026.8.150", "draft": false, "prerelease": true,
+               "assets": [{ "name": "DysonHarness-2026.8.150-win-x64.msi",
+                            "browser_download_url": "https://example.invalid/a.msi", "size": 1 }] }]
+            """;
+        const string malformedUrlJson = """
+            [
+              { "tag_name": "2026.8.151", "draft": false, "prerelease": true,
+                "html_url": "https://github.com/EntitySystems/DysonHarness/releases/tag/another-tag",
+                "assets": [{ "name": "DysonHarness-2026.8.151-win-x64.msi",
+                             "browser_download_url": "https://example.invalid/mismatched.msi", "size": 3 }] },
+              { "tag_name": "2026.8.150", "draft": false, "prerelease": true,
+                "html_url": "https://example.invalid/not-github",
+                "assets": [{ "name": "DysonHarness-2026.8.150-win-x64.msi",
+                             "browser_download_url": "https://example.invalid/new.msi", "size": 2 }] },
+              { "tag_name": "2026.8.149", "draft": false, "prerelease": true,
+                "html_url": "https://github.com/EntitySystems/DysonHarness/releases/tag/2026.8.149",
+                "assets": [{ "name": "DysonHarness-2026.8.149-win-x64.msi",
+                             "browser_download_url": "https://example.invalid/old.msi", "size": 1 }] }
+            ]
+            """;
+
+        Assert.Null(DysonGitHubReleaseClient.SelectNewestMsiRelease(missingUrlJson));
+
+        var release = DysonGitHubReleaseClient.SelectNewestMsiRelease(malformedUrlJson);
+        Assert.NotNull(release);
+        Assert.Equal("2026.8.149", release.TagName);
+        Assert.Equal(new Uri("https://github.com/EntitySystems/DysonHarness/releases/tag/2026.8.149"), release.ReleasePageUrl);
+    }
+
+    [Fact]
+    public async Task CheckManuallyAsync_ReturnsReleaseForUnstampedBuildWithoutChangingUpdateState()
+    {
+        var handler = new StubHttpHandler(_ => Json(SampleReleasesJson));
+        using var http = new HttpClient(handler);
+        var service = new DysonAppUpdateService(http);
+
+        var first = await service.CheckManuallyAsync();
+        var second = await service.CheckManuallyAsync();
+
+        Assert.False(first.IsError);
+        Assert.False(second.IsError);
+        Assert.NotNull(first.Value.NewestRelease);
+        Assert.Equal("2026.8.142", first.Value.NewestRelease.TagName);
+        Assert.Equal(DysonAppVersionInfo.Local.Version, first.Value.LocalVersion);
+        Assert.Equal(DysonAppVersionInfo.Local.EffectiveChannel, first.Value.LocalChannel);
+        Assert.False(first.Value.IsNewerStampedRelease);
+        Assert.False(first.Value.IsInAppInstallEligible);
+        Assert.Equal(DysonAppUpdatePhase.Idle, service.Phase);
+        Assert.Null(service.AvailableVersion);
+        Assert.Equal(2, handler.Requests.Count);
     }
 
     [Fact]
@@ -167,6 +226,7 @@ public class DysonAppUpdateTests
         [
           {
             "tag_name": "2026.8.150",
+            "html_url": "https://github.com/EntitySystems/DysonHarness/releases/tag/2026.8.150",
             "draft": true,
             "prerelease": true,
             "assets": [
@@ -176,6 +236,7 @@ public class DysonAppUpdateTests
           },
           {
             "tag_name": "2026.8.149",
+            "html_url": "https://github.com/EntitySystems/DysonHarness/releases/tag/2026.8.149",
             "draft": false,
             "prerelease": true,
             "assets": [
@@ -185,6 +246,7 @@ public class DysonAppUpdateTests
           },
           {
             "tag_name": "2026.8.99",
+            "html_url": "https://github.com/EntitySystems/DysonHarness/releases/tag/2026.8.99",
             "draft": false,
             "prerelease": true,
             "assets": [
@@ -194,6 +256,7 @@ public class DysonAppUpdateTests
           },
           {
             "tag_name": "2026.8.142",
+            "html_url": "https://github.com/EntitySystems/DysonHarness/releases/tag/2026.8.142",
             "draft": false,
             "prerelease": true,
             "assets": [
@@ -206,6 +269,7 @@ public class DysonAppUpdateTests
           },
           {
             "tag_name": "2026.8.100",
+            "html_url": "https://github.com/EntitySystems/DysonHarness/releases/tag/2026.8.100",
             "draft": false,
             "prerelease": false,
             "assets": [
@@ -216,4 +280,18 @@ public class DysonAppUpdateTests
           }
         ]
         """;
+
+    private static HttpResponseMessage Json(string json) =>
+        new(System.Net.HttpStatusCode.OK) { Content = new StringContent(json) };
+
+    private sealed class StubHttpHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
+    {
+        public List<Uri> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request.RequestUri!);
+            return Task.FromResult(responder(request));
+        }
+    }
 }
