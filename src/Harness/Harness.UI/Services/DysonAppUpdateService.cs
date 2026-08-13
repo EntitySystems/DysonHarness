@@ -19,6 +19,14 @@ public enum DysonAppUpdatePhase
     Failed,
 }
 
+/// <summary>The outcome of a user-requested GitHub release lookup.</summary>
+public sealed record DysonManualUpdateCheckResult(
+    string LocalVersion,
+    string LocalChannel,
+    DysonGitHubMsiRelease? NewestRelease,
+    bool IsNewerStampedRelease,
+    bool IsInAppInstallEligible);
+
 /// <summary>
 /// Windows-only in-app updater: compares the build-stamped CalVer against GitHub
 /// releases on the same track (<c>stable</c> / <c>preview</c>), then downloads the MSI
@@ -79,12 +87,39 @@ public sealed class DysonAppUpdateService(HttpClient http)
         if (found.Value is not { } release || !DysonAppVersionInfo.IsNewer(release.TagName, local.Version))
             return VoidResult<string>.Success;
 
-        _release = release;
-        TotalBytes = release.SizeBytes;
-        ReceivedBytes = 0;
-        Error = null;
-        SetPhase(DysonAppUpdatePhase.Available);
+        SetAvailableRelease(release);
         return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Queries GitHub for the newest matching MSI release, including on non-Windows and unstamped builds.
+    /// Eligible newer stamped Windows releases are handed to the existing update modal.
+    /// </summary>
+    public async Task<Result<DysonManualUpdateCheckResult, string>> CheckManuallyAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var local = DysonAppVersionInfo.Local;
+        var found = await _releases
+            .FindNewestMsiReleaseAsync(local.EffectiveRepo, local.EffectiveChannel, cancellationToken)
+            .ConfigureAwait(false);
+        if (found.IsError)
+            return Result<DysonManualUpdateCheckResult, string>.AsError(found.Error);
+
+        var isNewerStampedRelease = local.IsStampedRelease
+            && found.Value is { } release
+            && DysonAppVersionInfo.IsNewer(release.TagName, local.Version);
+        var isInAppInstallEligible = OperatingSystem.IsWindows() && isNewerStampedRelease;
+        var result = new DysonManualUpdateCheckResult(
+            local.Version,
+            local.EffectiveChannel,
+            found.Value,
+            isNewerStampedRelease,
+            isInAppInstallEligible);
+
+        if (isInAppInstallEligible)
+            SetAvailableRelease(found.Value!);
+
+        return Result<DysonManualUpdateCheckResult, string>.AsValue(result);
     }
 
     /// <summary>Clears the pending update so the modal hides (caller persists the skipped version).</summary>
@@ -201,6 +236,15 @@ public sealed class DysonAppUpdateService(HttpClient http)
         {
             return VoidResult<string>.AsError($"Could not start the installer: {ex.Message}", ex);
         }
+    }
+
+    private void SetAvailableRelease(DysonGitHubMsiRelease release)
+    {
+        _release = release;
+        TotalBytes = release.SizeBytes;
+        ReceivedBytes = 0;
+        Error = null;
+        SetPhase(DysonAppUpdatePhase.Available);
     }
 
     private VoidResult<string> Fail(string message)
