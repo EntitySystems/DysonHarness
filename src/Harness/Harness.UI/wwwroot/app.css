@@ -2,11 +2,11 @@
 
 :root,
 [data-theme="dark"] {
-  --bg-0: #0f1115;
-  --bg-1: #161a20;
-  --bg-2: #1c2129;
-  --bg-3: #242b35;
-  --bg-hover: #2a323e;
+  --bg-0: #0c0e11;
+  --bg-1: #12151a;
+  --bg-2: #161a21;
+  --bg-3: #1d222a;
+  --bg-hover: #222832;
   --border: #2e3642;
   --border-strong: #3d4756;
   --text: #d7dde7;
@@ -81,7 +81,8 @@ html, body {
   background: var(--bg-0);
   color: var(--text);
   font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 450;
   line-height: 1.45;
 }
 
@@ -1041,7 +1042,7 @@ code, .mono {
 
 .plugin-modal__optional {
   color: var(--text-muted);
-  font-weight: normal;
+  font-weight: 450;
 }
 
 .plugin-modal__scope {
@@ -2358,7 +2359,7 @@ code, .mono {
 
 .session-subagents-modal__counts {
   font-size: 12px;
-  font-weight: 400;
+  font-weight: 450;
   color: var(--text-muted);
   white-space: nowrap;
 }

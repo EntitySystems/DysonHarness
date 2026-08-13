@@ -11,10 +11,10 @@ namespace DysonHarness;
 
 internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
 {
-    private static readonly Brush Bg0 = Brush("#0f1115");
-    private static readonly Brush Bg1 = Brush("#161a20");
-    private static readonly Brush Bg2 = Brush("#1c2129");
-    private static readonly Brush Bg3 = Brush("#242b35");
+    private static readonly Brush Bg0 = Brush("#0c0e11");
+    private static readonly Brush Bg1 = Brush("#12151a");
+    private static readonly Brush Bg2 = Brush("#161a21");
+    private static readonly Brush Bg3 = Brush("#1d222a");
     private static readonly Brush BorderBrushColor = Brush("#2e3642");
     private static readonly Brush TextPrimary = Brush("#d7dde7");
     private static readonly Brush TextMuted = Brush("#8b95a5");
@@ -51,7 +51,8 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
         Background = Bg0;
         Foreground = TextPrimary;
         FontFamily = new FontFamily("IBM Plex Sans, Segoe UI, sans-serif");
-        FontSize = 13;
+        FontSize = 14;
+        FontWeight = FontWeight.FromOpenTypeWeight(450);
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
         var root = new DockPanel { LastChildFill = true, Background = Bg0 };
