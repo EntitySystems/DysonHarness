@@ -2387,6 +2387,165 @@ code, .mono {
   color: var(--text-muted);
 }
 
+/* HTML visualizations */
+.turn-visualization {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--bg-2);
+}
+
+.turn-visualization__title {
+  margin: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.turn-visualization__frame,
+.session-visualizations-modal__frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.turn-visualization__frame {
+  height: clamp(360px, 42vw, 480px);
+}
+
+.session-visualizations {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+}
+
+.session-visualizations__toggle {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 6px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.session-visualizations__toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.session-visualizations-modal {
+  width: min(980px, 100%);
+  max-height: min(84vh, 760px);
+}
+
+.session-visualizations-modal__title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.session-visualizations-modal__count,
+.session-visualizations-modal__item-meta {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.session-visualizations-modal__close {
+  min-width: 28px;
+  padding: 2px 8px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.session-visualizations-modal__body {
+  padding: 0;
+}
+
+.session-visualizations-modal__layout {
+  display: grid;
+  grid-template-columns: minmax(190px, 260px) minmax(0, 1fr);
+  min-height: min(64vh, 560px);
+}
+
+.session-visualizations-modal__list {
+  overflow: auto;
+  padding: 8px;
+  border-right: 1px solid var(--border);
+}
+
+.session-visualizations-modal__item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.session-visualizations-modal__item:hover,
+.session-visualizations-modal__item.is-selected {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.session-visualizations-modal__item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.session-visualizations-modal__item-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.session-visualizations-modal__preview {
+  min-width: 0;
+  padding: 12px;
+}
+
+.session-visualizations-modal__preview h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.session-visualizations-modal__frame {
+  height: min(58vh, 520px);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+@media (max-width: 680px) {
+  .session-visualizations-modal__layout {
+    grid-template-columns: 1fr;
+  }
+
+  .session-visualizations-modal__list {
+    max-height: 180px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .session-visualizations-modal__frame {
+    height: 45vh;
+  }
+}
+
 /* Parent ? child subagent cards (inside TurnBlock) */
 .turn-block__subagents {
   display: flex;

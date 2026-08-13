@@ -208,6 +208,15 @@ public static class DysonAgentSystemPrompts
         - When used as a subagent: finish with SubmitSubagentReport (`completed` with findings, or `failed` with a concrete failure reason if blocked).
         """;
 
+    /// <summary>Formats the session-captured presentation guidance for the visualization tool.</summary>
+    public static string FormatVisualizationThemeGuidance(DysonUiThemeSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return $"Current DysonHarness UI appearance for this session: {snapshot.Theme} theme with accent color {snapshot.AccentHex}. " +
+               "Style the visualization to fit that theme by default, keep text/background contrast accessible, " +
+               "and use the accent color for primary emphasis unless the user requests another visual direction.";
+    }
+
     /// <summary>
     /// Resolves a system prompt for <paramref name="agentMode"/>.
     /// Built-ins compose SharedPreamble + mode directive. Custom keys use dictionary text as-is (no preamble).

@@ -57,7 +57,7 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `Components/Layout/SettingsLayout.razor` | Settings side-nav shell |
 | `Components/Shell/` | `AppShell`, `Sidebar`, `SessionHeader`, `RailSidePanel`, `ErrorToast` |
 | `Components/Sessions/` | `WorkDirectorySwitcher`, `WorkDirectorySettingsModal`, `SessionList` |
-| `Components/Chat/` | `ChatPanel`, `SessionTodoOverview`, `SessionSubagentOverview`, `SessionSubagentsModal`, `TurnBlock`, `PlanResultBlock`, `PlanReadyPopover`, `SubagentCard`, `SubagentEventBlock`, `AskQuestionPopover`, `PromptUserDialogModal`, `Composer`, `ComposerStopMenu`, `ComposerHelpModal` (`/help`), `AgentModePicker` |
+| `Components/Chat/` | `ChatPanel`, `SessionTodoOverview`, `SessionSubagentOverview`, `SessionSubagentsModal`, `SessionVisualizationOverview`, `SessionVisualizationsModal`, `TurnBlock`, `TurnVisualizations`, `PlanResultBlock`, `PlanReadyPopover`, `SubagentCard`, `SubagentEventBlock`, `AskQuestionPopover`, `PromptUserDialogModal`, `Composer`, `ComposerStopMenu`, `ComposerHelpModal` (`/help`), `AgentModePicker` |
 | `Components/Skills/` | `SkillSearchModal` (composer `/skill-search`; provider tabs + View/Download) |
 | `Components/Plugins/` | `PluginModal` + `PluginImportController` (composer `/plugins`; inert preview → explicit scope → capability acknowledgement → install) |
 | `Components/Files/` | `FileTreePanel` / `FileTreeNodeView` (rail tree; folder context menu incl. Clear composer uploads on `.dyson/composer-uploads`), `FileViewerOverlay` |
@@ -168,7 +168,13 @@ Engine types: `IDysonSkillExplorer`, `SkillsHubSkillExplorerProvider`, `SkillsSh
 - Persist preference via JS interop (`theme.js`) + `localStorage`
 - Visual direction: Cursor/Factory charcoal IDE look — dense, functional, not marketing
 
-`ThemeService` + `ThemeSwitcher` own the applied attributes (General settings page).
+`ThemeService` + `ThemeSwitcher` own the applied attributes (General settings page). When a root session is created or cold-resumed, `ThemeService` captures the applied document theme and computed `--accent` value into an engine `DysonUiThemeSnapshot` (`light`/`dark` plus normalized lowercase `#rrggbb`; invalid or unavailable JS data falls back to dark / `#4c8bf5`). That snapshot is used as render-tool styling guidance and is immutable for the live session: child sessions inherit it and agent-mode changes retain it. A theme/accent change takes effect when a new root session starts or a root session is cold-resumed; it does not silently rewrite a currently live session's system prompt or tool catalog.
+
+## HTML visualizations
+
+Successful built-in `RenderHtmlVisualization` calls attach a typed payload to their calling tool result. `TurnVisualizations` renders each successful payload inline in the calling turn, independently of the tool diagnostic row. The active session also shows a **Visualizations** bar when it has results; opening it displays a modal list of all visualizations, selects the newest by default, and renders only the selected item at large size. Duplicate titles are distinguished by turn time and a short visualization id.
+
+The source is never injected into the parent Blazor DOM or enabled in chat Markdown. Every preview uses an iframe with `sandbox="allow-scripts"` and `referrerpolicy="no-referrer"`. Its `srcdoc` wrapper HTML-encodes the title, base64-wraps CSS and JavaScript before installing them, and applies a restrictive CSP: `default-src 'none'`, no network connections or external assets, no forms, objects, nested frames, base URI, popups, downloads, top navigation, filesystem access, browser storage, or parent-page access. Only self-contained browser APIs, inline SVG/Canvas, and data/blob media are suitable. This UI support is limited to Dyson's built-in visualization tool; custom/external MCP servers do not have a custom rich-result rendering protocol.
 
 ## Demo host (`DysonUiHost`)
 
