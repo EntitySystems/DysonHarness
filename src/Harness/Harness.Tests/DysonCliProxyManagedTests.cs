@@ -298,3 +298,54 @@ public class ManagedClaudeOAuthPreflightTests
         Assert.False(result.IsError);
     }
 }
+
+public class DysonCliProxySharedSecretsTests
+{
+    [Fact]
+    public async Task GetApiKey_and_GetManagementKey_return_hardcoded_constants()
+    {
+        using var http = new HttpClient();
+        await using var host = new DysonCliProxyHost(http);
+
+        Assert.Equal("dyson-cliproxy-local-api-key-v1", DysonCliProxyHost.DefaultApiKey);
+        Assert.Equal("dyson-cliproxy-local-mgmt-key-v1", DysonCliProxyHost.DefaultManagementKey);
+
+        var apiKey = host.GetApiKey();
+        Assert.False(apiKey.IsError);
+        Assert.Equal(DysonCliProxyHost.DefaultApiKey, apiKey.Value);
+
+        var managementKey = host.GetManagementKey();
+        Assert.False(managementKey.IsError);
+        Assert.Equal(DysonCliProxyHost.DefaultManagementKey, managementKey.Value);
+    }
+
+    [Fact]
+    public void OpenAiCompatibleAgentProvider_managed_source_forces_cliproxy_constants()
+    {
+        const string staleKey = "old-random-key";
+        const string staleUrl = "http://127.0.0.1:9999/v1";
+
+        var managed = new DysonModelProviderEntity
+        {
+            DisplayName = "Managed Codex",
+            ProviderKind = DysonProviderKinds.OpenAICompatible,
+            ManagedSource = "cliproxy-codex",
+            ApiKey = staleKey,
+            BaseUrl = staleUrl,
+        };
+        var managedProvider = new OpenAiCompatibleAgentProvider(managed, slug: null);
+        Assert.Equal(DysonCliProxyHost.DefaultApiKey, managedProvider.ApiKey);
+        Assert.Equal(DysonCliProxyHost.DefaultLocalBaseUrl, managedProvider.BaseUrl);
+
+        var userOwned = new DysonModelProviderEntity
+        {
+            DisplayName = "User OpenAI",
+            ProviderKind = DysonProviderKinds.OpenAICompatible,
+            ApiKey = staleKey,
+            BaseUrl = staleUrl,
+        };
+        var userProvider = new OpenAiCompatibleAgentProvider(userOwned, slug: null);
+        Assert.Equal(staleKey, userProvider.ApiKey);
+        Assert.Equal(staleUrl, userProvider.BaseUrl);
+    }
+}

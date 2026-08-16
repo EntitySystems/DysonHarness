@@ -58,7 +58,7 @@ Conceptual overview: [README.md](README.md).
 | `ManagedClaudeInferenceProvider` | Claude Code managed path (`ManagedSource=cliproxy-claude`, `anthropic-auth-url?is_webui=true`, OAuth port 54545 preflight; OpenAI/Responses via proxy) |
 | `ManagedInferenceProviderCatalog` | DI catalog of managed providers; `FindBySource` |
 | `ManagedConnectionBegin` / `Complete` / `Verify` | Connection-flow DTOs |
-| `DysonCliProxyHost` | Local CLIProxy process host (`IsInstalled`, `EnsureInstalledAsync`, `EnsureRunningAsync`, `LocalBaseUrl`) |
+| `DysonCliProxyHost` | Local CLIProxy process host (`IsInstalled`, `EnsureInstalledAsync`, `EnsureRunningAsync`, `LocalBaseUrl`; shared loopback secrets `DefaultApiKey` / `DefaultManagementKey`) |
 | `DysonCliProxyDownloader` / `DysonCliProxyPaths` / `DysonCliProxyAssetResolver` | Download, unpack paths, asset URL resolution |
 | `DysonThirdPartyResources` | Pinned third-party release URLs (`CliProxyApi.ReleaseTagUrl` / `Version`) |
 | `OpenAiCompatibleHttp.SupportsExplicitPromptCache` | True for direct GPT-5.6+ slugs when `ManagedSource` is unset |

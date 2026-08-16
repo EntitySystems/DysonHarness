@@ -114,7 +114,7 @@ Known keys (`DysonAppSettingKeys`):
 - `automatic_code_review_action` — Automatic review follow-up: `"report_only"` (default) or `"automatically_fix"`; missing values are persisted as `"report_only"` without a schema migration.
 - `end_of_task_auto_review` — **legacy** `"true"` / `"false"` (obsolete once `automatic_code_review` is written). Kept readable so first settings-page load can map false/missing → `none` and true + `self_review_intensity` → `low`/`medium`. Missing / other ⇒ off.
 - `self_review_intensity` — **legacy** `"low"` / `"medium"` / `"high"` (obsolete once `automatic_code_review` is written). Missing / other ⇒ `"medium"`. Used only for the one-shot compatibility map.
-- `cliproxy_api_key` / `cliproxy_management_key` / `cliproxy_port` — mirrored from `external/cliproxy/keys.json` when a managed provider connects (canonical secret store is the sidecar next to `config.yaml`).
+- `cliproxy_api_key` / `cliproxy_management_key` / `cliproxy_port` — mirrors of the hard-coded `DysonCliProxyHost` constants (`DefaultApiKey` / `DefaultManagementKey` / `DefaultPort`) when a managed provider connects. Sidecar `keys.json` and these DB rows are not the authority.
 
 `DysonToolPolicyStore` depends on `IDysonSubjectSettingsRepository` for the tool-policy document.
 
