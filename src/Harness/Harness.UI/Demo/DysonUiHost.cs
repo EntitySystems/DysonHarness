@@ -48,6 +48,9 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly object _promptQueueGate = new();
     private readonly ConcurrentDictionary<Guid, ConcurrentQueue<DysonAgentInterrupt>> _pendingReportsByParent = new();
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _autoTurnGates = new();
+    /// <summary>Serializes root task-lifecycle actions while a turn completion triggers its event.</summary>
+    private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _taskLifecycleGates = new();
+    private readonly ConcurrentDictionary<Guid, DysonTaskLifecycleKind> _lastTaskLifecycleActionBySession = new();
     private readonly ConcurrentDictionary<Guid, EventHandler<DysonToolCallStatusChangedEventArgs>> _toolHandlers = new();
     private readonly ConcurrentDictionary<Guid, EventHandler> _textHandlers = new();
     private readonly ConcurrentDictionary<Guid, StreamingNotifyState> _streamingNotify = new();
@@ -3726,6 +3729,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         session.InterruptEnqueued += OnInterruptEnqueued;
         session.TodosChanged += OnTodosChanged;
         session.ParentEventsChanged += OnParentEventsChanged;
+        session.TaskLifecycle += OnTaskLifecycle;
 
         session.Config.CustomMcpHost?.AttachSession(session);
         if (session.Config.PluginMcpHost is { } pluginHost)
@@ -3738,6 +3742,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             HookTurn(turn);
 
         RegisterSubSessions(session);
+        EvaluateTaskLifecycle(session);
     }
 
     private void RegisterSubSessions(DysonAgentSession session)
@@ -3783,6 +3788,10 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (_autoTurnGates.TryRemove(persistenceId, out var gate))
             gate.Dispose();
 
+        if (_taskLifecycleGates.TryRemove(persistenceId, out var lifecycleGate))
+            lifecycleGate.Dispose();
+        _lastTaskLifecycleActionBySession.TryRemove(persistenceId, out _);
+
         if (_promptGates.TryRemove(persistenceId, out var promptGate))
             promptGate.Dispose();
 
@@ -3810,6 +3819,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         session.InterruptEnqueued -= OnInterruptEnqueued;
         session.TodosChanged -= OnTodosChanged;
         session.ParentEventsChanged -= OnParentEventsChanged;
+        session.TaskLifecycle -= OnTaskLifecycle;
 
         foreach (var turn in session.Turns)
             UnhookTurn(turn);
@@ -3828,6 +3838,10 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pendingReportsByParent.Clear();
         _busySessions.Clear();
         _pendingSessionModelSlugIds.Clear();
+        _lastTaskLifecycleActionBySession.Clear();
+        foreach (var gate in _taskLifecycleGates.Values)
+            gate.Dispose();
+        _taskLifecycleGates.Clear();
         lock (_promptQueueGate)
             _promptQueues.Clear();
         lock (_subagentEventUiGate)
@@ -4044,6 +4058,14 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (!DysonSubagentReportPrompt.IsCompletionInterrupt(interrupt.Kind))
             return;
 
+        // The BugReview turn waits for and incorporates this one review child's result.
+        // Do not enqueue a second generic SubagentReportProcessing turn for that same handoff.
+        if (DysonSubagentHostLogic.ShouldSuppressAutomaticReviewCompletion(parent, interrupt))
+        {
+            Notify();
+            return;
+        }
+
         if (parent.PersistenceId == Guid.Empty)
             return;
 
@@ -4067,6 +4089,186 @@ public sealed class DysonUiHost : IAsyncDisposable
         SyncUserDialogUiFromSession(session);
         SyncSubagentEventUiFromSession(session);
         Notify();
+    }
+
+    private void OnTaskLifecycle(object? sender, DysonTaskLifecycleEventArgs e)
+    {
+        if (sender is not DysonAgentSession session)
+            return;
+
+        _ = HandleTaskLifecycleAsync(session, e.Kind);
+    }
+
+    private void EvaluateTaskLifecycle(DysonAgentSession session)
+    {
+        if (session.Parent is not null || session.PersistenceId == Guid.Empty || session.IsTerminal)
+            return;
+
+        // The queue marker prevents duplicate reflection before its queued turn begins.
+        // Once that turn finishes, later substantive work may legitimately need another reflection.
+        var last = session.Turns.Count > 0 ? session.Turns[^1] : null;
+        if (last?.Kind == DysonAgentTurnKind.TaskEndReflect
+            && last.CompletedUtc is not null
+            && _lastTaskLifecycleActionBySession.TryGetValue(session.PersistenceId, out var action)
+            && action == DysonTaskLifecycleKind.TaskEndReflectionRequired)
+        {
+            _lastTaskLifecycleActionBySession.TryRemove(session.PersistenceId, out _);
+        }
+
+        session.EvaluateTaskLifecycle(DysonSubagentHostLogic.HasActiveDescendant(session));
+    }
+
+    private async Task HandleTaskLifecycleAsync(
+        DysonAgentSession session,
+        DysonTaskLifecycleKind kind)
+    {
+        if (session.Parent is not null || session.PersistenceId == Guid.Empty || session.IsTerminal)
+            return;
+
+        var sessionId = session.PersistenceId;
+        var gate = _taskLifecycleGates.GetOrAdd(sessionId, _ => new SemaphoreSlim(1, 1));
+        if (!await gate.WaitAsync(0).ConfigureAwait(false))
+            return;
+
+        try
+        {
+            if (_lastTaskLifecycleActionBySession.TryGetValue(sessionId, out var previous)
+                && previous == kind)
+            {
+                return;
+            }
+
+            switch (kind)
+            {
+                case DysonTaskLifecycleKind.TaskEndReflectionRequired:
+                    _lastTaskLifecycleActionBySession[sessionId] = kind;
+                    EnqueuePrompt(sessionId, session.CreateTaskEndReflectTurn());
+                    break;
+
+                case DysonTaskLifecycleKind.CodeReviewReady:
+                {
+                    var setting = await DysonAutomaticCodeReviewSetting
+                        .ResolveAsync(_appSettings)
+                        .ConfigureAwait(false);
+                    if (setting.IsError)
+                    {
+                        LastError = $"Automatic code review setting could not be resolved: {setting.Error}";
+                        Notify();
+                        return;
+                    }
+
+                    var level = DysonTaskLifecycleFlow.NormalizeReviewLevel(setting.Value);
+                    if (!DysonTaskLifecycleFlow.IsReviewRunnable(level))
+                    {
+                        _lastTaskLifecycleActionBySession[sessionId] = kind;
+                        if (level == DysonAutomaticCodeReviewLevel.High)
+                        {
+                            session.AppendDisplayInfoTurn(
+                                "Automatic code review level High is not implemented; review skipped.");
+                        }
+
+                        var finalized = await FinalizeTaskLifecycleAsync(session).ConfigureAwait(false);
+                        if (finalized.IsError)
+                            LastError = finalized.Error;
+                        Notify();
+                        return;
+                    }
+
+                    var actionSetting = await DysonAutomaticCodeReviewSetting
+                        .ResolveActionAsync(_appSettings)
+                        .ConfigureAwait(false);
+                    if (actionSetting.IsError)
+                    {
+                        LastError = $"Automatic code review action could not be resolved: {actionSetting.Error}";
+                        Notify();
+                        return;
+                    }
+
+                    var action = DysonTaskLifecycleFlow.NormalizeReviewAction(actionSetting.Value);
+                    var worktreeScope = await BuildAutomaticReviewWorktreeScopeAsync(session)
+                        .ConfigureAwait(false);
+                    _lastTaskLifecycleActionBySession[sessionId] = kind;
+                    EnqueuePrompt(sessionId, session.CreateBugReviewTurn(level, action, worktreeScope));
+                    break;
+                }
+
+                case DysonTaskLifecycleKind.ReadyToFinalize:
+                    _lastTaskLifecycleActionBySession[sessionId] = kind;
+                    var finalization = await FinalizeTaskLifecycleAsync(session).ConfigureAwait(false);
+                    if (finalization.IsError)
+                        LastError = finalization.Error;
+                    Notify();
+                    return;
+
+                default:
+                    return;
+            }
+        }
+        catch (Exception ex)
+        {
+            LastError = $"Task lifecycle processing failed: {ex.Message}";
+            Notify();
+            return;
+        }
+        finally
+        {
+            gate.Release();
+        }
+
+        Notify();
+        _ = DrainQueuedPromptsAsync(sessionId);
+    }
+
+    private async Task<string> BuildAutomaticReviewWorktreeScopeAsync(DysonAgentSession session)
+    {
+        var workDirectoryId = session switch
+        {
+            DemoDysonAgentSession demo when demo.WorkDirectoryId != Guid.Empty => demo.WorkDirectoryId,
+            OpenAiCompatibleAgentSession openAi when openAi.WorkDirectoryId != Guid.Empty => openAi.WorkDirectoryId,
+            _ => (Guid?)null,
+        };
+        if (workDirectoryId is not Guid id)
+            return "Diagnostic: worktree scope could not be determined because this session has no work directory.";
+
+        var workDirectory = await _workDirectories.GetAsync(id).ConfigureAwait(false);
+        if (workDirectory.IsError)
+            return $"Diagnostic: worktree scope could not be determined: {workDirectory.Error}";
+
+        var root = DysonGitInfo.TryFindRootMostRepo(workDirectory.Value.AbsolutePath);
+        if (root.IsError)
+            return $"Diagnostic: worktree scope could not be determined: {root.Error}";
+
+        var status = DysonGitInfo.TryGetStatusPorcelain(root.Value);
+        if (status.IsError)
+            return $"Diagnostic: git status failed; determine review scope directly: {status.Error}";
+
+        if (status.Value.Count == 0)
+            return "No changed paths were reported by git status at review start.";
+
+        var paths = status.Value
+            .Take(100)
+            .Select(entry => $"- {entry.Kind}: {entry.Path}")
+            .ToList();
+        if (status.Value.Count > paths.Count)
+            paths.Add($"- …and {status.Value.Count - paths.Count} more path(s).");
+
+        return string.Join("\n", paths);
+    }
+
+    private async Task<VoidResult<string>> FinalizeTaskLifecycleAsync(DysonAgentSession session)
+    {
+        if (session.IsTerminal)
+            return VoidResult<string>.Success;
+
+        var last = session.Turns.LastOrDefault(turn => turn.Kind != DysonAgentTurnKind.DisplayInfo);
+        var summary = string.IsNullOrWhiteSpace(last?.AssistantText)
+            ? "Task completed."
+            : last.AssistantText.Trim();
+        if (!session.TryMarkTerminal(DysonSessionStatus.Completed, summary))
+            return VoidResult<string>.Success;
+
+        return await PersistRootTerminalAsync(session, summary, CancellationToken.None)
+            .ConfigureAwait(false);
     }
 
     private void UpsertSubagentEventUi(DysonAgentSession parent, DysonAgentInterrupt interrupt)
@@ -4676,20 +4878,9 @@ public sealed class DysonUiHost : IAsyncDisposable
                     while (session.TryDequeuePendingTurn(out var pending))
                         EnqueuePrompt(sessionId, pending);
 
-                    if (DysonTaskCompletionFlow.ShouldMarkTerminalAfterTurn(last.Kind)
-                        && !session.IsTerminal)
-                    {
-                        var summary = string.IsNullOrWhiteSpace(last.AssistantText)
-                            ? "Task completed."
-                            : last.AssistantText.Trim();
-                        if (session.TryMarkTerminal(DysonSessionStatus.Completed, summary))
-                        {
-                            var marked = await PersistRootTerminalAsync(session, summary, token)
-                                .ConfigureAwait(false);
-                            if (marked.IsError)
-                                return marked;
-                        }
-                    }
+                    // Root terminal state now follows the task lifecycle: incomplete todos
+                    // receive one reflection turn; completed work may receive BugReview before finalization.
+                    EvaluateTaskLifecycle(session);
                 }
 
                 return VoidResult<string>.Success;

@@ -291,9 +291,25 @@ After the model calls `CompleteTask`:
 
 1. **Confirm** — enqueue **`TaskCompletionConfirm`** (`DysonTaskCompletionFlow.CreateCompletionConfirmTurn`); on that turn only, `ConfirmTaskComplete` or `ContinueWork` are valid
 2. **Continue** — `ContinueWork` enqueues a **`Continuation`** turn if work remains
-3. **Report** — `ConfirmTaskComplete` enqueues a **`ReportSummary`** turn (final handoff); after that reply the host calls `TryMarkTerminal(Completed)` + persists
+3. **Report** — `ConfirmTaskComplete` enqueues a **`ReportSummary`** turn (final handoff)
 
-Factories: `DysonTaskCompletionFlow` and session helpers `CreateCompletionConfirmTurn` / `CreateContinuationTurn` / `CreateReportSummaryTurn`. Covered by `DysonTaskCompletionTests` in `Harness.Tests`.
+`DysonTaskCompletionFlow.ShouldMarkTerminalAfterTurn` is true only for **`ReportSummary`**. That is the completion-boundary signal, not an unconditional host `TryMarkTerminal`. Factories: `DysonTaskCompletionFlow` and session helpers `CreateCompletionConfirmTurn` / `CreateContinuationTurn` / `CreateReportSummaryTurn`. Covered by `DysonTaskCompletionTests` in `Harness.Tests`.
+
+### Automatic code review
+
+After **`ReportSummary`**, a root session with a **non-empty todo list** is evaluated by **`DysonTaskLifecycleFlow`** (host handles the event; subagents never recurse into this path):
+
+| Setting (`automatic_code_review`) | After `ReportSummary` |
+| --------------------------------- | --------------------- |
+| `none` | Mark/persist the root completed immediately |
+| unsupported `high` | Append `Automatic code review level High is not implemented; review skipped.`, then complete normally |
+| `low` / `medium` | Snapshot `git status --porcelain` paths (or include a scope diagnostic), enqueue one **`BugReview`** orchestration turn (UI label **Code review**), wait for exactly one Bug Review child without `StartSubagent.modelSlug`, then mark completed only when no pending/ongoing todo was introduced |
+
+`automatic_code_review_action` controls the orchestration follow-up: `report_only` (the default; root and reviewer report confirmed bugs, risks, or no findings without changing files) or `automatically_fix` (the reviewer stays review-only; the root validates and fixes confirmed findings once, verifies them, and reports unresolved items without a review/fix loop).
+
+If any todo is still `Pending`/`Ongoing` after an eligible substantive turn, a **`TaskEndReflect`** turn (UI label **Task end reflection**) includes a compact incomplete-todo snapshot so the agent updates todos instead of declaring success. Root reflection is lifecycle-event driven; children get one reflection immediately before their ordinary missing-`SubmitSubagentReport` failure path. Reflection must not retrigger from lifecycle/finalization kinds.
+
+Turn kinds (append-only after `DropContext=13`): **`TaskEndReflect=14`**, **`BugReview=15`**. Dedup is derived from turn history (no new DB column). Tests: `DysonTaskLifecycleTests` / `DysonAgentTurnKindDisplayTests`. The settings UI persists `automatic_code_review` plus `automatic_code_review_action`; legacy `end_of_task_auto_review` / `self_review_intensity` values are migrated on first resolve.
 
 ## Rethink tool usage
 

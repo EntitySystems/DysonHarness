@@ -975,6 +975,9 @@ public abstract class DysonAgentSession
     public bool TryDequeuePendingTurn(out DysonAgentTurn turn) =>
         _pendingTurns.TryDequeue(out turn!);
 
+    /// <summary>True when at least one harness follow-up turn is still queued on the session.</summary>
+    public bool HasPendingTurn => !_pendingTurns.IsEmpty;
+
     /// <summary>Drops all queued harness turns (e.g. on interrupt).</summary>
     public void ClearPendingTurns()
     {
@@ -1323,6 +1326,17 @@ public abstract class DysonAgentSession
                 if (TryDrainPendingTurn(child))
                     return;
 
+                // A child with unfinished todos gets one harness reflection before its
+                // ordinary missing-SubmitSubagentReport failure gate. If that reflection
+                // itself does not report, this same path retains the existing failure behavior.
+                if (DysonTaskEndReflectFlow.TryCreateForChild(child, out var reflection)
+                    && reflection is not null)
+                {
+                    child.EnqueuePendingTurn(reflection);
+                    if (TryDrainPendingTurn(child))
+                        return;
+                }
+
                 var failSummary = ResolveKickOffFailureSummary(child, result);
                 if (child.TryMarkTerminal(DysonSessionStatus.Failed, failSummary))
                 {
@@ -1469,6 +1483,12 @@ public abstract class DysonAgentSession
 
     /// <summary>Raised after a successful <see cref="RenameAsync"/> (hosts should persist Title).</summary>
     public event EventHandler<DysonSessionRenamedEventArgs>? SessionRenamed;
+
+    /// <summary>
+    /// Raised by <see cref="EvaluateTaskLifecycle"/> when a root session is at a stable
+    /// task-lifecycle boundary. Host should enqueue the matching harness turn or persist terminal.
+    /// </summary>
+    public event EventHandler<DysonTaskLifecycleEventArgs>? TaskLifecycle;
 
     /// <summary>Snapshot of append-only log lines. When <paramref name="maxLines"/> is set, returns the most recent lines.</summary>
     public IReadOnlyList<string> SnapshotLog(int? maxLines = null)
@@ -1962,6 +1982,41 @@ public abstract class DysonAgentSession
     /// </summary>
     public DysonAgentTurn CreateReportSummaryTurn(string? confirmRationale = null) =>
         DysonTaskCompletionFlow.CreateReportSummaryTurn(confirmRationale);
+
+    /// <summary>
+    /// Creates a TaskEndReflect turn (incomplete todos after a substantive root turn).
+    /// Does not append to <see cref="TurnHistory"/>.
+    /// </summary>
+    public DysonAgentTurn CreateTaskEndReflectTurn() =>
+        DysonTaskEndReflectFlow.CreateTurn(Todos);
+
+    /// <summary>
+    /// Creates a BugReview orchestration turn for a runnable review level (Low/Medium).
+    /// Does not append to <see cref="TurnHistory"/>. Host must call
+    /// <see cref="DysonTaskLifecycleFlow.IsReviewRunnable"/> first.
+    /// </summary>
+    public DysonAgentTurn CreateBugReviewTurn(DysonAutomaticCodeReviewLevel level) =>
+        DysonTaskLifecycleFlow.CreateBugReviewTurn(level);
+
+    /// <summary>Creates action-aware automatic review orchestration with its initial worktree scope.</summary>
+    public DysonAgentTurn CreateBugReviewTurn(
+        DysonAutomaticCodeReviewLevel level,
+        DysonAutomaticCodeReviewAction action,
+        string? worktreeScope) =>
+        DysonTaskLifecycleFlow.CreateBugReviewTurn(level, action, worktreeScope);
+
+    /// <summary>
+    /// Evaluates root task-lifecycle after a completed turn (or on restore / last-child-done).
+    /// Pass host-side <c>DysonSubagentHostLogic.HasActiveDescendant(session)</c> for the
+    /// active-descendant gate. Raises <see cref="TaskLifecycle"/> when an action is required.
+    /// </summary>
+    public DysonTaskLifecycleDecision EvaluateTaskLifecycle(bool hasActiveDescendant)
+    {
+        var decision = DysonTaskLifecycleFlow.Evaluate(this, hasActiveDescendant);
+        if (decision.Kind is { } kind)
+            TaskLifecycle?.Invoke(this, new DysonTaskLifecycleEventArgs { Kind = kind });
+        return decision;
+    }
 
     /// <summary>
     /// Creates a PlanResult turn after SubmitPlan (no auto LLM).

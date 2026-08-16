@@ -110,8 +110,10 @@ Known keys (`DysonAppSettingKeys`):
 - `ui_sidebar_open` — `"true"` / `"false"`; left sidebar open vs collapsed. Restored on AppShell hydrate; toggles persist. Missing ⇒ `"true"`.
 
 - `agent_mode_tool_policy` — JSON `DysonToolPolicyDocument`: `modes.{Mode}.disabledTools` string arrays (denylist); optional `models.{slugGuid}.modes.{Mode}.disabledTools` plumbing for future per-model overlays (resolver ignores `models` in v1). Missing document / mode ⇒ all tools enabled. Edited via Settings → Agent modes (`DysonToolPolicyStore`).
-- `end_of_task_auto_review` — `"true"` / `"false"`; when true, a reviewer agent should auto-run after task completion (persist only for now — no reviewer spawn yet). Missing / other ⇒ off. Edited via Settings → Agent behavior.
-- `self_review_intensity` — `"low"` / `"medium"` / `"high"`; how thoroughly the agent reviews its own work (persist only for now — engine does not read this yet). Missing / other ⇒ `"medium"`. Settings UI currently disables selecting `"high"`. Edited via Settings → Agent behavior.
+- `automatic_code_review` — Automatic code review select: `"none"` / `"low"` / `"medium"` / `"high"` (`high` is display-only / unsupported and must not start a review). Edited via Settings → Agent behavior; host normalizes through `DysonTaskLifecycleFlow`.
+- `automatic_code_review_action` — Automatic review follow-up: `"report_only"` (default) or `"automatically_fix"`; missing values are persisted as `"report_only"` without a schema migration.
+- `end_of_task_auto_review` — **legacy** `"true"` / `"false"` (obsolete once `automatic_code_review` is written). Kept readable so first settings-page load can map false/missing → `none` and true + `self_review_intensity` → `low`/`medium`. Missing / other ⇒ off.
+- `self_review_intensity` — **legacy** `"low"` / `"medium"` / `"high"` (obsolete once `automatic_code_review` is written). Missing / other ⇒ `"medium"`. Used only for the one-shot compatibility map.
 - `cliproxy_api_key` / `cliproxy_management_key` / `cliproxy_port` — mirrored from `external/cliproxy/keys.json` when a managed provider connects (canonical secret store is the sidecar next to `config.yaml`).
 
 `DysonToolPolicyStore` depends on `IDysonSubjectSettingsRepository` for the tool-policy document.

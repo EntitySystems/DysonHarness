@@ -85,15 +85,31 @@ public static class DysonAppSettingKeys
     public const string CliProxyPort = "cliproxy_port";
 
     /// <summary>
-    /// When <c>"true"</c>, after an agent marks a task completed a reviewer agent should
-    /// auto-run (persist only for now — no reviewer spawn yet). Missing / other ⇒ off.
+    /// Automatic code review after a root session finishes ReportSummary:
+    /// <c>none</c> / <c>low</c> / <c>medium</c>. Persisted <c>high</c> is stale and
+    /// non-actionable (UI shows it disabled). Missing ⇒ migrate from the obsolete
+    /// <see cref="EndOfTaskAutoReview"/> / <see cref="SelfReviewIntensity"/> keys on
+    /// first settings load or host resolve — see <see cref="DysonAutomaticCodeReviewSetting"/>.
+    /// </summary>
+    public const string AutomaticCodeReview = "automatic_code_review";
+
+    /// <summary>
+    /// Automatic code-review follow-up: <c>report_only</c> (default) or
+    /// <c>automatically_fix</c>. Missing values migrate to <c>report_only</c>.
+    /// </summary>
+    public const string AutomaticCodeReviewAction = "automatic_code_review_action";
+
+    /// <summary>
+    /// Obsolete Boolean toggle (<c>"true"</c> / <c>"false"</c>). Readable for
+    /// compatibility only — not the active engine behavior. Prefer
+    /// <see cref="AutomaticCodeReview"/>.
     /// </summary>
     public const string EndOfTaskAutoReview = "end_of_task_auto_review";
 
     /// <summary>
-    /// Self-review intensity: <c>low</c> / <c>medium</c> / <c>high</c>.
-    /// Persist only for now — engine does not read this yet. Missing / other ⇒ <c>medium</c>.
-    /// UI currently disables selecting <c>high</c>.
+    /// Obsolete intensity (<c>low</c> / <c>medium</c> / <c>high</c>). Readable for
+    /// compatibility only — not the active engine behavior. Prefer
+    /// <see cref="AutomaticCodeReview"/>.
     /// </summary>
     public const string SelfReviewIntensity = "self_review_intensity";
 }

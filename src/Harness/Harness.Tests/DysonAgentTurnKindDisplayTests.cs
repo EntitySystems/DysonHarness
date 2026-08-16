@@ -8,6 +8,22 @@ public class DysonAgentTurnKindDisplayTests
     [Fact]
     public void GetDisplayName_MatchesExpectedLabels()
     {
+        // Persisted ints are append-only. New kinds must continue after DropContext=13.
+        AssertNumeric(DysonAgentTurnKind.Normal, 0);
+        AssertNumeric(DysonAgentTurnKind.ExpandThoughtProcess, 1);
+        AssertNumeric(DysonAgentTurnKind.TaskCompletionConfirm, 2);
+        AssertNumeric(DysonAgentTurnKind.Continuation, 3);
+        AssertNumeric(DysonAgentTurnKind.ReportSummary, 4);
+        AssertNumeric(DysonAgentTurnKind.InitializeSession, 5);
+        AssertNumeric(DysonAgentTurnKind.PlanResult, 6);
+        AssertNumeric(DysonAgentTurnKind.BeginBuildPlan, 7);
+        AssertNumeric(DysonAgentTurnKind.SubagentReportProcessing, 8);
+        AssertNumeric(DysonAgentTurnKind.ShellExited, 9);
+        AssertNumeric(DysonAgentTurnKind.RethinkToolUsage, 10);
+        AssertNumeric(DysonAgentTurnKind.DisplayInfo, 11);
+        AssertNumeric(DysonAgentTurnKind.ModeSwitch, 12);
+        AssertNumeric(DysonAgentTurnKind.DropContext, 13);
+
         AssertLabel(DysonAgentTurnKind.Normal, "Turn");
         AssertLabel(DysonAgentTurnKind.ExpandThoughtProcess, "Expand thought");
         AssertLabel(DysonAgentTurnKind.TaskCompletionConfirm, "Completion confirmed");
@@ -22,11 +38,31 @@ public class DysonAgentTurnKindDisplayTests
         AssertLabel(DysonAgentTurnKind.DisplayInfo, "Info");
         AssertLabel(DysonAgentTurnKind.ModeSwitch, "Mode switch");
         AssertLabel(DysonAgentTurnKind.DropContext, "Drop context");
+        AssertLabel(DysonAgentTurnKind.TaskEndReflect, "Task end reflection");
+        AssertLabel(DysonAgentTurnKind.BugReview, "Code review");
+
+        if ((int)DysonAgentTurnKind.DropContext != 13)
+            throw new InvalidOperationException("DysonAgentTurnKind.DropContext must stay 13 (append-only).");
+
+        // Planned append (do not renumber): TaskEndReflect=14, BugReview=15.
+        if (Enum.TryParse("TaskEndReflect", out DysonAgentTurnKind reflect))
+            AssertLabel(reflect, "Task end reflection");
+        if (Enum.TryParse("BugReview", out DysonAgentTurnKind bugReview))
+            AssertLabel(bugReview, "Code review");
 
         foreach (var kind in Enum.GetValues<DysonAgentTurnKind>())
         {
             if (string.IsNullOrWhiteSpace(DysonAgentTurnKindDisplay.GetDisplayName(kind)))
                 throw new InvalidOperationException($"Missing display name for {kind}.");
+        }
+    }
+
+    private static void AssertNumeric(DysonAgentTurnKind kind, int expected)
+    {
+        if ((int)kind != expected)
+        {
+            throw new InvalidOperationException(
+                $"{kind} must remain persisted value {expected}; got {(int)kind}.");
         }
     }
 
