@@ -49,7 +49,8 @@ public class DysonTaskCompletionTests
             || DysonTaskCompletionFlow.ShouldMarkTerminalAfterTurn(DysonAgentTurnKind.Normal))
         {
             throw new InvalidOperationException(
-                "ShouldMarkTerminalAfterTurn must be true only for ReportSummary.");
+                "ShouldMarkTerminalAfterTurn must be true only for ReportSummary "
+                + "(completion-boundary signal — host lifecycle decides actual PersistRootTerminal).");
         }
     }
 
@@ -149,6 +150,13 @@ public class DysonTaskCompletionTests
         {
             throw new InvalidOperationException(
                 "ConfirmTaskComplete must enqueue a ReportSummary turn.");
+        }
+
+        if (session.IsTerminal)
+        {
+            throw new InvalidOperationException(
+                "ConfirmTaskComplete / ReportSummary enqueue is the lifecycle decision boundary, "
+                + "not an immediate terminal mark.");
         }
     }
 

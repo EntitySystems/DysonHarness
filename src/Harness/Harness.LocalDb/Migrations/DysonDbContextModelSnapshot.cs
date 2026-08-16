@@ -690,6 +690,9 @@ namespace Harness.LocalDb.Migrations
                     b.Property<string>("Instruction")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("InterruptionReason")
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("IsExcludedFromContext")
                         .HasColumnType("INTEGER");
 

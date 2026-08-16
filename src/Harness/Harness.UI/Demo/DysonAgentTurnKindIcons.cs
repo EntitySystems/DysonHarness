@@ -21,6 +21,8 @@ public static class DysonAgentTurnKindIcons
         DysonAgentTurnKind.DisplayInfo => "icons/turns/info.svg",
         DysonAgentTurnKind.ModeSwitch => "icons/turns/mode-switch.svg",
         DysonAgentTurnKind.DropContext => "icons/turns/drop-context.svg",
+        DysonAgentTurnKind.TaskEndReflect => "icons/turns/expand.svg",
+        DysonAgentTurnKind.BugReview => "icons/agent-modes/bug-review.svg",
         _ => "icons/turns/normal.svg",
     };
 }

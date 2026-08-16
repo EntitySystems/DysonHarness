@@ -41,6 +41,12 @@ public sealed record DysonSessionLogCompletionFlow(string Phase, string? Detail 
 public sealed record DysonSessionLogSessionRenamed(string Title);
 
 /// <summary>
+/// Durable turn interruption / process-restart recovery marker.
+/// Distinct from <see cref="DysonSessionLogInterrupt"/> (live subagent interrupts).
+/// </summary>
+public sealed record DysonSessionLogTurnInterrupted(Guid TurnId, string Reason);
+
+/// <summary>
 /// Kind-column discriminator + JSON payload helper (no deep abstraction).
 /// </summary>
 public static class DysonSessionLogPayload

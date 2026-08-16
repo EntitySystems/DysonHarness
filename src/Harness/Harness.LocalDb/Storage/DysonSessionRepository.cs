@@ -97,6 +97,24 @@ public sealed class DysonSessionRepository(
         return _accessor.RunAsync((db, ct) => GetFullSessionCoreAsync(db, subjectId, sessionId, ct), cancellationToken);
     }
 
+    public Task<Result<IReadOnlyList<DysonSessionUnfinishedWorkSummary>, string>>
+        ListActiveSessionsWithUnfinishedTurnsAsync(CancellationToken cancellationToken = default)
+    {
+        var subjectId = _subjectContext.SubjectId;
+        return _accessor.RunAsync(
+            (db, ct) => ListActiveSessionsWithUnfinishedTurnsCoreAsync(db, subjectId, ct),
+            cancellationToken);
+    }
+
+    public Task<Result<IReadOnlyList<DysonSessionSummary>, string>>
+        ListActiveDescendantSessionsAsync(CancellationToken cancellationToken = default)
+    {
+        var subjectId = _subjectContext.SubjectId;
+        return _accessor.RunAsync(
+            (db, ct) => ListActiveDescendantSessionsCoreAsync(db, subjectId, ct),
+            cancellationToken);
+    }
+
     public Task<VoidResult<string>> DeleteSessionAsync(
         Guid sessionId,
         CancellationToken cancellationToken = default)
@@ -324,6 +342,7 @@ public sealed class DysonSessionRepository(
                 existing.ToolHistoryOptimized = turn.ToolHistoryOptimized;
                 existing.CompactToolHistory = turn.CompactToolHistory;
                 existing.IsExcludedFromContext = turn.IsExcludedFromContext;
+                existing.InterruptionReason = turn.InterruptionReason;
                 existing.CompletedUtc = turn.CompletedUtc;
             }
 
@@ -509,6 +528,120 @@ public sealed class DysonSessionRepository(
         {
             return Result<DysonPersistedSession, string>.AsError(
                 $"Failed to load full session: {ex.Message}");
+        }
+    }
+
+    private static async Task<Result<IReadOnlyList<DysonSessionUnfinishedWorkSummary>, string>>
+        ListActiveSessionsWithUnfinishedTurnsCoreAsync(
+            DysonDbContext db,
+            string subjectId,
+            CancellationToken cancellationToken)
+    {
+        try
+        {
+            var rows = await (
+                    from session in db.Sessions.AsNoTracking()
+                    join turn in db.Turns.AsNoTracking() on session.Id equals turn.SessionId
+                    where session.SubjectId == subjectId
+                        && session.Status == DysonSessionStatus.Active
+                        && turn.CompletedUtc == null
+                    orderby session.LastActivityUtc, turn.Sequence
+                    select new
+                    {
+                        session.Id,
+                        session.ParentSessionId,
+                        session.RuntimeId,
+                        session.Status,
+                        session.AgentMode,
+                        session.Title,
+                        session.WorkDirectoryId,
+                        session.LastActivityUtc,
+                        TurnId = turn.Id,
+                        turn.Sequence,
+                        turn.Kind,
+                        turn.CreatedUtc,
+                        turn.InterruptionReason,
+                    })
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            var list = rows
+                .GroupBy(row => row.Id)
+                .Select(group =>
+                {
+                    var first = group.First();
+                    return new DysonSessionUnfinishedWorkSummary
+                    {
+                        SessionId = first.Id,
+                        ParentSessionId = first.ParentSessionId,
+                        RuntimeId = first.RuntimeId,
+                        Status = first.Status,
+                        AgentMode = first.AgentMode,
+                        Title = first.Title,
+                        WorkDirectoryId = first.WorkDirectoryId,
+                        LastActivityUtc = first.LastActivityUtc,
+                        UnfinishedTurns = group
+                            .OrderBy(row => row.Sequence)
+                            .Select(row => new DysonUnfinishedTurnSummary
+                            {
+                                TurnId = row.TurnId,
+                                Sequence = row.Sequence,
+                                Kind = row.Kind,
+                                CreatedUtc = row.CreatedUtc,
+                                InterruptionReason = row.InterruptionReason,
+                            })
+                            .ToList(),
+                    };
+                })
+                .OrderBy(summary => summary.LastActivityUtc)
+                .ToList();
+
+            return Result<IReadOnlyList<DysonSessionUnfinishedWorkSummary>, string>.AsValue(list);
+        }
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return Result<IReadOnlyList<DysonSessionUnfinishedWorkSummary>, string>.AsError(
+                $"Failed to list sessions with unfinished turns: {ex.Message}");
+        }
+    }
+
+    private static async Task<Result<IReadOnlyList<DysonSessionSummary>, string>>
+        ListActiveDescendantSessionsCoreAsync(
+            DysonDbContext db,
+            string subjectId,
+            CancellationToken cancellationToken)
+    {
+        try
+        {
+            var list = await db.Sessions
+                .AsNoTracking()
+                .Where(s => s.SubjectId == subjectId
+                    && s.Status == DysonSessionStatus.Active
+                    && s.ParentSessionId != null)
+                .OrderBy(s => s.LastActivityUtc)
+                .ThenBy(s => s.RuntimeId)
+                .Select(s => new DysonSessionSummary
+                {
+                    Id = s.Id,
+                    RuntimeId = s.RuntimeId,
+                    ParentSessionId = s.ParentSessionId,
+                    AgentMode = s.AgentMode,
+                    Status = s.Status,
+                    Title = s.Title,
+                    ModelSlugId = s.ModelSlugId,
+                    WorkDirectoryId = s.WorkDirectoryId,
+                    CreatedUtc = s.CreatedUtc,
+                    LastActivityUtc = s.LastActivityUtc,
+                })
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            return Result<IReadOnlyList<DysonSessionSummary>, string>.AsValue(list);
+        }
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return Result<IReadOnlyList<DysonSessionSummary>, string>.AsError(
+                $"Failed to list active descendant sessions: {ex.Message}");
         }
     }
 

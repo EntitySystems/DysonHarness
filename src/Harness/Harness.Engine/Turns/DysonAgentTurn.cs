@@ -150,6 +150,12 @@ public sealed class DysonAgentTurn
     /// </summary>
     public string? ContextSummary { get; set; }
 
+    /// <summary>
+    /// When set, this turn was finalized by interruption/recovery rather than a normal completion.
+    /// Presentation-only; omitted from provider transcripts.
+    /// </summary>
+    public string? InterruptionReason { get; set; }
+
     public string FormatResponseLog()
     {
         var sb = new StringBuilder();

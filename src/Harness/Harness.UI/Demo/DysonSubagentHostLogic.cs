@@ -23,6 +23,28 @@ public static class DysonSubagentHostLogic
         return false;
     }
 
+    /// <summary>
+    /// The BugReview orchestration turn consumes its single review child's terminal result
+    /// through WaitForSubagent. Suppress only that duplicate generic completion auto-turn;
+    /// all ordinary waited-child report processing remains unchanged.
+    /// </summary>
+    public static bool ShouldSuppressAutomaticReviewCompletion(
+        DysonAgentSession parent,
+        DysonAgentInterrupt interrupt)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        ArgumentNullException.ThrowIfNull(interrupt);
+
+        if (!DysonSubagentReportPrompt.IsCompletionInterrupt(interrupt.Kind)
+            || parent.InFlightPromptTurn?.Kind != DysonAgentTurnKind.BugReview
+            || !parent.TryGetSubagent(interrupt.SubagentId, out var child))
+        {
+            return false;
+        }
+
+        return string.Equals(child.Mode, DysonAgentModes.BugReview, StringComparison.OrdinalIgnoreCase);
+    }
+
     public static string BuildSubagentReportContinuationPrompt(DysonAgentInterrupt interrupt, string? title) =>
         DysonSubagentReportPrompt.BuildContinuationPrompt(interrupt, title);
 

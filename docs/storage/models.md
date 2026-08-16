@@ -104,15 +104,17 @@ Subject-scoped key/value (`DysonAppSettingEntity`). Callers use `IDysonSubjectSe
 Known keys (`DysonAppSettingKeys`):
 - `web_search_summarizer_model_slug_id` — Guid string of the model slug for web-search/fetch summarization; empty / missing ⇒ session model.
 - `turn_summarizer_model_slug_id` — Guid string of the model slug for turn context summarization (`SummarizeTurns`); empty / missing ⇒ session model. Edited via Settings → Agent behavior.
-- `explore_model_slug_id` / `security_review_model_slug_id` / `bug_review_model_slug_id` — Guid strings of default model slugs for Explore / Security Review / Bug Review subagents when `StartSubagent.modelSlug` is omitted; empty / missing ⇒ inherit parent session model. Edited via Settings → Agent behavior; hydrated onto `DysonAgentSessionConfig` at session create/resume.
+- `explore_model_slug_id` / `drone_model_slug_id` / `security_review_model_slug_id` / `bug_review_model_slug_id` — Guid strings of default model slugs for Explore / Drone / Security Review / Bug Review subagents when `StartSubagent.modelSlug` is omitted; empty / missing ⇒ inherit parent session model. Edited via Settings → Agent behavior; hydrated onto `DysonAgentSessionConfig` at session create/resume.
 - `tool_panel_width_percent` — chat tools column width as a percent of the turn content row (clamped 12–50, default 30); empty / missing ⇒ 30.
 - `ui_rail_open` — `"true"` / `"false"`; right rail (files/git) open preference. Restored on desktop AppShell hydrate; narrow viewports still start with the rail closed (drawer UX) and re-apply this preference when returning to desktop. Intentional toggles (header button / backdrop close) persist. Missing ⇒ `"true"`.
 - `ui_sidebar_open` — `"true"` / `"false"`; left sidebar open vs collapsed. Restored on AppShell hydrate; toggles persist. Missing ⇒ `"true"`.
 
 - `agent_mode_tool_policy` — JSON `DysonToolPolicyDocument`: `modes.{Mode}.disabledTools` string arrays (denylist); optional `models.{slugGuid}.modes.{Mode}.disabledTools` plumbing for future per-model overlays (resolver ignores `models` in v1). Missing document / mode ⇒ all tools enabled. Edited via Settings → Agent modes (`DysonToolPolicyStore`).
-- `end_of_task_auto_review` — `"true"` / `"false"`; when true, a reviewer agent should auto-run after task completion (persist only for now — no reviewer spawn yet). Missing / other ⇒ off. Edited via Settings → Agent behavior.
-- `self_review_intensity` — `"low"` / `"medium"` / `"high"`; how thoroughly the agent reviews its own work (persist only for now — engine does not read this yet). Missing / other ⇒ `"medium"`. Settings UI currently disables selecting `"high"`. Edited via Settings → Agent behavior.
-- `cliproxy_api_key` / `cliproxy_management_key` / `cliproxy_port` — mirrored from `external/cliproxy/keys.json` when a managed provider connects (canonical secret store is the sidecar next to `config.yaml`).
+- `automatic_code_review` — Automatic code review select: `"none"` / `"low"` / `"medium"` / `"high"` (`high` is display-only / unsupported and must not start a review). Edited via Settings → Agent behavior; host normalizes through `DysonTaskLifecycleFlow`.
+- `automatic_code_review_action` — Automatic review follow-up: `"report_only"` (default) or `"automatically_fix"`; missing values are persisted as `"report_only"` without a schema migration.
+- `end_of_task_auto_review` — **legacy** `"true"` / `"false"` (obsolete once `automatic_code_review` is written). Kept readable so first settings-page load can map false/missing → `none` and true + `self_review_intensity` → `low`/`medium`. Missing / other ⇒ off.
+- `self_review_intensity` — **legacy** `"low"` / `"medium"` / `"high"` (obsolete once `automatic_code_review` is written). Missing / other ⇒ `"medium"`. Used only for the one-shot compatibility map.
+- `cliproxy_api_key` / `cliproxy_management_key` / `cliproxy_port` — mirrors of the hard-coded `DysonCliProxyHost` constants (`DefaultApiKey` / `DefaultManagementKey` / `DefaultPort`) when a managed provider connects. Sidecar `keys.json` and these DB rows are not the authority.
 
 `DysonToolPolicyStore` depends on `IDysonSubjectSettingsRepository` for the tool-policy document.
 

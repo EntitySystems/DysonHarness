@@ -26,6 +26,12 @@ public sealed class OpenAiCompatibleAgentProvider : DysonAgentProvider
         ReasoningEffort = NormalizeReasoningEffort(
             reasoningEffort ?? slug?.DefaultReasoningEffort);
         DefaultMaxTargetContextTokens = slug?.DefaultMaxTargetContextTokens;
+
+        if (!string.IsNullOrWhiteSpace(ManagedSource))
+        {
+            BaseUrl = DysonCliProxyHost.DefaultLocalBaseUrl;
+            ApiKey = DysonCliProxyHost.DefaultApiKey;
+        }
     }
 
     /// <summary>Convenience: slug must include <see cref="DysonModelSlugEntity.Provider"/>.</summary>

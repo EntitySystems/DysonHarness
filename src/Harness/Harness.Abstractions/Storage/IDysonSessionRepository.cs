@@ -41,6 +41,23 @@ public interface IDysonSessionRepository
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Current-subject sessions with <see cref="DysonSessionStatus.Active"/> that still have
+    /// at least one turn whose <see cref="DysonTurnEntity.CompletedUtc"/> is null.
+    /// Cross-subject rows are never returned.
+    /// </summary>
+    Task<Result<IReadOnlyList<DysonSessionUnfinishedWorkSummary>, string>>
+        ListActiveSessionsWithUnfinishedTurnsAsync(
+            CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Current-subject sessions with <see cref="DysonSessionStatus.Active"/> and a non-null
+    /// <see cref="DysonSessionEntity.ParentSessionId"/>. Cross-subject rows are never returned.
+    /// </summary>
+    Task<Result<IReadOnlyList<DysonSessionSummary>, string>>
+        ListActiveDescendantSessionsAsync(
+            CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Deletes a session and its descendant subagent sessions. Turns, logs, and todos cascade.
     /// </summary>
     Task<VoidResult<string>> DeleteSessionAsync(

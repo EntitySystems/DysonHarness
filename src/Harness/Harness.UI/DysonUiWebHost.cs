@@ -130,6 +130,12 @@ public static class DysonUiWebHost
 #if WINDOWS
         builder.Services.AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>();
 #endif
+        builder.Services.AddSingleton<IDysonSessionRuntimeScopeFactory, DysonUiSessionRuntimeScopeFactory>();
+        builder.Services.AddSingleton<DysonSessionRuntimeRegistry>();
+        builder.Services.AddScoped<DysonUiRuntimeAttachment>();
+        builder.Services.AddScoped<IDysonAgentSessionRuntimeFactory, DysonUiAgentSessionRuntimeFactory>();
+        builder.Services.AddScoped<DysonUiAgentSessionRuntimeConfigBuilder>();
+        builder.Services.AddScoped<DysonSessionRuntime>();
         builder.Services.AddScoped<DysonUiHost>();
         builder.Services.AddSingleton<DysonFilePreviewStore>();
         builder.Services.AddScoped<ThemeService>();
@@ -162,6 +168,16 @@ public static class DysonUiWebHost
 
         app.Lifetime.ApplicationStopping.Register(() =>
         {
+            try
+            {
+                var registry = app.Services.GetService<DysonSessionRuntimeRegistry>();
+                registry?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+            catch
+            {
+                // ignore shutdown races
+            }
+
             try
             {
                 var host = app.Services.GetService<DysonCliProxyHost>();

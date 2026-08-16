@@ -58,6 +58,12 @@ public class DysonAgentSessionConfig
     public DysonAgentProvider? ExploreDefaultProvider { get; set; }
 
     /// <summary>
+    /// Optional default provider for Drone subagents when <c>StartSubagent.modelSlug</c> is omitted.
+    /// Null ⇒ inherit the parent session provider.
+    /// </summary>
+    public DysonAgentProvider? DroneDefaultProvider { get; set; }
+
+    /// <summary>
     /// Optional default provider for Security Review subagents when <c>StartSubagent.modelSlug</c> is omitted.
     /// Null ⇒ inherit the parent session provider.
     /// </summary>
@@ -70,7 +76,7 @@ public class DysonAgentSessionConfig
     public DysonAgentProvider? BugReviewDefaultProvider { get; set; }
 
     /// <summary>
-    /// Settings default provider for Explore / Security Review / Bug Review; other modes ⇒ null (inherit).
+    /// Settings default provider for Explore / Drone / Security Review / Bug Review; other modes ⇒ null (inherit).
     /// </summary>
     public DysonAgentProvider? TryGetSubagentDefaultProvider(string? agentMode)
     {
@@ -79,6 +85,8 @@ public class DysonAgentSessionConfig
 
         if (string.Equals(agentMode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase))
             return ExploreDefaultProvider;
+        if (string.Equals(agentMode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase))
+            return DroneDefaultProvider;
         if (string.Equals(agentMode, DysonAgentModes.SecurityReview, StringComparison.OrdinalIgnoreCase))
             return SecurityReviewDefaultProvider;
         if (string.Equals(agentMode, DysonAgentModes.BugReview, StringComparison.OrdinalIgnoreCase))

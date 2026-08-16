@@ -18,28 +18,37 @@
     }
 
     <div class="settings-page__panel panel">
-        <label class="checkbox-row">
-            <input type="checkbox"
-                   checked="@_endOfTaskAutoReview"
-                   @onchange="OnEndOfTaskAutoReviewChangedAsync" />
-            <span>End of task auto review</span>
-        </label>
-        <p class="settings-page__copy" style="margin:0;">
-            After an agent marks a task as completed, a new reviewer agent will automatically run to check the code (uses more tokens).
-        </p>
-
-        <div class="field" style="margin-top:16px;">
-            <label for="self-review-intensity">Self review intensity</label>
-            <select id="self-review-intensity"
-                    value="@_selfReviewIntensity"
-                    @onchange="OnSelfReviewIntensityChangedAsync">
-                <option value="low">low</option>
-                <option value="medium">medium</option>
-                <option value="high" disabled>high</option>
+        <div class="field">
+            <label for="automatic-code-review">Automatic code review</label>
+            <select id="automatic-code-review"
+                    value="@_automaticCodeReview"
+                    @onchange="OnAutomaticCodeReviewChangedAsync">
+                <option value="@DysonAutomaticCodeReviewSetting.None">None</option>
+                <option value="@DysonAutomaticCodeReviewSetting.Low">Low</option>
+                <option value="@DysonAutomaticCodeReviewSetting.Medium">Medium</option>
+                <option value="@DysonAutomaticCodeReviewSetting.High" disabled>High</option>
             </select>
         </div>
         <p class="settings-page__copy" style="margin:0;">
-            How thoroughly the agent reviews its own work before finishing (persist only for now — not wired to the engine yet).
+            After the root task passes completion confirmation and the report-summary turn,
+            a Bug Review subagent runs and reports findings (uses more tokens).
+            Low reviews modified files and their behavior.
+            Medium also reviews related APIs and external interactions.
+            High is not available.
+        </p>
+
+        <div class="field" style="margin-top:16px;">
+            <label for="automatic-code-review-action">Automatic code review action</label>
+            <select id="automatic-code-review-action"
+                    value="@_automaticCodeReviewAction"
+                    @onchange="OnAutomaticCodeReviewActionChangedAsync">
+                <option value="@DysonAutomaticCodeReviewSetting.ReportOnly">Report only</option>
+                <option value="@DysonAutomaticCodeReviewSetting.AutomaticallyFix">Automatically fix confirmed bugs</option>
+            </select>
+        </div>
+        <p class="settings-page__copy" style="margin:0;">
+            Report only leaves the worktree untouched. Automatically fix validates review findings,
+            fixes confirmed bugs once, verifies them, and reports anything unresolved.
         </p>
 
         <div class="field" style="margin-top:16px;">
@@ -79,6 +88,18 @@
         </p>
 
         <div class="field" style="margin-top:16px;">
+            <label>Drone default model</label>
+            <ModelSlugPicker SelectedSlugId="_droneSlugId"
+                             SelectedSlugIdChanged="OnDroneSlugChangedAsync"
+                             AllowEmpty="true"
+                             EmptyLabel="Use session model" />
+        </div>
+        <p class="settings-page__copy" style="margin:0;">
+            Default model for Drone subagents when StartSubagent omits modelSlug.
+            Leave as “Use session model” to inherit the parent chat model.
+        </p>
+
+        <div class="field" style="margin-top:16px;">
             <label>Security Review default model</label>
             <ModelSlugPicker SelectedSlugId="_securityReviewSlugId"
                              SelectedSlugIdChanged="OnSecurityReviewSlugChangedAsync"
@@ -110,13 +131,12 @@
 </div>
 
 @code {
-    private const string DefaultSelfReviewIntensity = "medium";
-
-    private bool _endOfTaskAutoReview;
-    private string _selfReviewIntensity = DefaultSelfReviewIntensity;
+    private string _automaticCodeReview = DysonAutomaticCodeReviewSetting.None;
+    private string _automaticCodeReviewAction = DysonAutomaticCodeReviewSetting.ReportOnly;
     private Guid? _turnSummarizerSlugId;
     private Guid? _webSearchSummarizerSlugId;
     private Guid? _exploreSlugId;
+    private Guid? _droneSlugId;
     private Guid? _securityReviewSlugId;
     private Guid? _bugReviewSlugId;
     private string? _error;
@@ -124,23 +144,23 @@
 
     protected override async Task OnInitializedAsync()
     {
-        var autoReview = await AppSettings.GetSettingAsync(DysonAppSettingKeys.EndOfTaskAutoReview);
-        if (autoReview.IsError)
+        var review = await DysonAutomaticCodeReviewSetting.ResolveAsync(AppSettings);
+        if (review.IsError)
         {
-            _error = autoReview.Error;
+            _error = review.Error;
             return;
         }
 
-        _endOfTaskAutoReview = string.Equals(autoReview.Value, "true", StringComparison.OrdinalIgnoreCase);
+        _automaticCodeReview = review.Value;
 
-        var intensity = await AppSettings.GetSettingAsync(DysonAppSettingKeys.SelfReviewIntensity);
-        if (intensity.IsError)
+        var action = await DysonAutomaticCodeReviewSetting.ResolveActionAsync(AppSettings);
+        if (action.IsError)
         {
-            _error = intensity.Error;
+            _error = action.Error;
             return;
         }
 
-        _selfReviewIntensity = NormalizeSelfReviewIntensity(intensity.Value);
+        _automaticCodeReviewAction = action.Value;
 
         var summarizer = await AppSettings.GetSettingAsync(DysonAppSettingKeys.TurnSummarizerModelSlugId);
         if (summarizer.IsError)
@@ -155,6 +175,8 @@
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId, v => _webSearchSummarizerSlugId = v))
             return;
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.ExploreModelSlugId, v => _exploreSlugId = v))
+            return;
+        if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.DroneModelSlugId, v => _droneSlugId = v))
             return;
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.SecurityReviewModelSlugId, v => _securityReviewSlugId = v))
             return;
@@ -178,17 +200,20 @@
         return true;
     }
 
-    private async Task OnEndOfTaskAutoReviewChangedAsync(ChangeEventArgs e)
+    private async Task OnAutomaticCodeReviewChangedAsync(ChangeEventArgs e)
     {
         _error = null;
         _saved = false;
-        _endOfTaskAutoReview = e.Value is bool b
-            ? b
-            : bool.TryParse(e.Value?.ToString(), out var parsed) && parsed;
+
+        // high is display-only — refuse to persist it.
+        if (!DysonAutomaticCodeReviewSetting.TrySelect(e.Value?.ToString(), out var next))
+            return;
+
+        _automaticCodeReview = next;
 
         var set = await AppSettings.SetSettingAsync(
-            DysonAppSettingKeys.EndOfTaskAutoReview,
-            _endOfTaskAutoReview ? "true" : "false");
+            DysonAppSettingKeys.AutomaticCodeReview,
+            _automaticCodeReview);
         if (set.IsError)
         {
             _error = set.Error;
@@ -198,24 +223,18 @@
         _saved = true;
     }
 
-    private async Task OnSelfReviewIntensityChangedAsync(ChangeEventArgs e)
+    private async Task OnAutomaticCodeReviewActionChangedAsync(ChangeEventArgs e)
     {
         _error = null;
         _saved = false;
 
-        var next = NormalizeSelfReviewIntensity(e.Value?.ToString());
-        // high is display-only in the UI for now — refuse to persist it.
-        if (string.Equals(next, "high", StringComparison.Ordinal))
-        {
-            _selfReviewIntensity = DefaultSelfReviewIntensity;
+        if (!DysonAutomaticCodeReviewSetting.TrySelectAction(e.Value?.ToString(), out var next))
             return;
-        }
 
-        _selfReviewIntensity = next;
-
+        _automaticCodeReviewAction = next;
         var set = await AppSettings.SetSettingAsync(
-            DysonAppSettingKeys.SelfReviewIntensity,
-            _selfReviewIntensity);
+            DysonAppSettingKeys.AutomaticCodeReviewAction,
+            _automaticCodeReviewAction);
         if (set.IsError)
         {
             _error = set.Error;
@@ -242,6 +261,12 @@
             id,
             v => _exploreSlugId = v,
             DysonAppSettingKeys.ExploreModelSlugId);
+
+    private Task OnDroneSlugChangedAsync(Guid? id) =>
+        SaveSlugSettingAsync(
+            id,
+            v => _droneSlugId = v,
+            DysonAppSettingKeys.DroneModelSlugId);
 
     private Task OnSecurityReviewSlugChangedAsync(Guid? id) =>
         SaveSlugSettingAsync(
@@ -271,13 +296,4 @@
 
         _saved = true;
     }
-
-    private static string NormalizeSelfReviewIntensity(string? value) =>
-        value switch
-        {
-            "low" => "low",
-            "medium" => "medium",
-            "high" => "high",
-            _ => DefaultSelfReviewIntensity,
-        };
 }

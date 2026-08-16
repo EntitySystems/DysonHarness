@@ -46,6 +46,13 @@ public sealed class DysonTurnEntity
     /// </summary>
     public string? ContextSummary { get; set; }
 
+    /// <summary>
+    /// Nullable interruption/recovery reason (stable code such as
+    /// <see cref="DysonTurnInterruptionReasons.ApplicationRestart"/>).
+    /// Presentation-only; omitted from provider transcripts.
+    /// </summary>
+    public string? InterruptionReason { get; set; }
+
     /// <summary>UTC.</summary>
     public DateTime CreatedUtc { get; set; }
 

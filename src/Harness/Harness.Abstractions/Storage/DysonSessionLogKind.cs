@@ -18,4 +18,11 @@ public enum DysonSessionLogKind
     LogLine = 13,
     CompletionFlow = 14,
     SessionRenamed = 15,
+
+    /// <summary>
+    /// Durable turn interruption / process-restart recovery marker.
+    /// Distinct from <see cref="Interrupt"/> (live subagent interrupts).
+    /// Appended after existing values; do not renumber.
+    /// </summary>
+    TurnInterrupted = 16,
 }

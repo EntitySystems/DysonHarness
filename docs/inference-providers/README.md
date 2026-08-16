@@ -25,6 +25,7 @@ Dyson can import **ChatGPT Codex**, **Grok Build**, **Antigravity**, **Kimi**, a
 
 - Binary pin: `DysonThirdPartyResources.CliProxyApi.ReleaseTagUrl` (currently `v7.2.102`); unpacked under `{AppContext.BaseDirectory}/external/cliproxy/{version}/`
 - Host: `DysonCliProxyHost` — `IsInstalled`, lazy `EnsureInstalledAsync` (streamed download progress), `EnsureRunningAsync` (writes `config.yaml` + `keys.json`, supervises process)
+- Secrets: client + management keys are stable shared plaintext constants on `DysonCliProxyHost` (`DefaultApiKey` / `DefaultManagementKey`), not per-install random `keys.json`. Loopback-only (`127.0.0.1`); every Dyson build can attach to one local CLIProxy. Sidecar `keys.json` is a mirror.
 - Auth: Management API OAuth (`BeginConnection` / `CompleteConnection` / `VerifyConnection` on the `Managed*InferenceProvider` subclasses in the catalog)
 - Inference: unchanged OpenAI-compatible session path — `BaseUrl=http://127.0.0.1:8317/v1`, `OpenAiApiMode=Responses` (including Claude — proxy exposes OpenAI `/v1/responses`, not Anthropic Messages). Explicit `prompt_cache_options` are omitted (CLIProxy rejects them); `prompt_cache_key` + stable transcript ordering still apply.
 - UI: Settings → Models **Third-party managed providers** section (Import / Connect / Verify); session resolve calls `EnsureRunningAsync` when the selected slug’s provider has `ManagedSource`
