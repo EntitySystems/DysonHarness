@@ -20,7 +20,7 @@ Contracts: `IDysonSessionRepository` in `Harness.Abstractions`. Implementation: 
 | `MaxTargetContextTokens` | Session max target context; null = inherit slug `DefaultMaxTargetContextTokens` / harness 100K; `0` = Off (no DropContext inject) |
 | `WorkDirectoryId` | Guid? FK to `work_directories` (`SetNull` on delete; required for new sessions) |
 | `McpAccessMode` | enum |
-| `Status` | `Active` / `Completed` / `Stopped` / `Failed` |
+| `Status` | `Active`=0 / `Completed`=1 / `Stopped`=2 / `Failed`=3 / `Interrupted`=4 (append-only; child terminal after process-restart recovery; roots stay `Active`) |
 | `Title` | Optional UI title (agent `RenameSession` / first prompt); mirrored live as `DysonAgentSession.DisplayTitle` |
 | `SystemPromptSnapshot` | Prompt at create time; updated on mid-session `ApplyAgentMode` |
 | `CreatedUtc`, `UpdatedUtc`, `LastActivityUtc` | `DateTime` UTC |
@@ -49,6 +49,7 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `CreatedUtc`, `CompletedUtc`? | `DateTime` UTC |
 | `IsExcludedFromContext` | bool — when true, omitted from provider transcripts; UI still shows Dropped + Restore |
 | `ContextSummary` | string? — when set, provider transcripts emit a compact summary stub instead of the full turn body; UI shows Summarized badge |
+| `InterruptionReason` | string? — nullable process-restart / recovery marker (stable code, e.g. `application-restart`). Presentation-only; not assistant text and not replayed into provider transcripts |
 
 ### `session_todos`
 
@@ -87,13 +88,14 @@ Append-only. Filter by `Kind`; payload fields live in `PayloadJson`.
 | ---- | ---------------------- |
 | `SessionCreated` | session meta snapshot |
 | `SessionResumed` | `{ "sessionId" }` |
-| `SessionStatusChanged` | `{ "status", … }` |
+| `SessionStatusChanged` | `{ "status", "reason"? }` (`reason` is optional; process-restart descendant interrupt uses `application-restart`) |
 | `SessionRenamed` | `{ "title" }` (from `RenameSession` / `RenameAsync`) |
 | `UserPrompt` | `{ "prompt", "filePaths"? }` |
 | `TurnStarted` / `TurnCompleted` | `{ "turnId", "kind", "agentTitle"? }` |
 | `AgentReply` | `{ "turnId", "title", "body" }` |
 | `ToolCallQueued` / `ToolCallWorking` / `ToolCallCompleted` / `ToolCallFailed` | `{ "turnId", "callId", "toolName", "stage", "argumentsJson"?, "resultContent"?, "isError"? }` |
 | `Interrupt` | `{ "interruptKind", "subagentId", "summary"? }` |
+| `TurnInterrupted` | `{ "turnId", "reason" }` (durable recovery marker; distinct from live `Interrupt`) |
 | `ContextOptimized` | `{ "turnsCompacted", "tokenEstimate"? }` |
 | `LogLine` | `{ "line" }` (from `AppendLog`) |
 | `CompletionFlow` | `{ "phase": "CompleteTask"\|"Confirm"\|"Continue"\|"ReportSummary", … }` |
@@ -112,6 +114,8 @@ Task<VoidResult<string>> AppendLogAsync(DysonSessionLogEntry entry, Cancellation
 Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListSessionsAsync(Guid? workDirectoryId = null, bool rootsOnly = true, CancellationToken ct = default);
 Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListChildSessionsAsync(Guid parentSessionId, CancellationToken ct = default);
 Task<Result<DysonPersistedSession, string>> GetFullSessionAsync(Guid sessionId, CancellationToken ct = default);
+Task<Result<IReadOnlyList<DysonSessionUnfinishedWorkSummary>, string>> ListActiveSessionsWithUnfinishedTurnsAsync(CancellationToken ct = default);
+Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListActiveDescendantSessionsAsync(CancellationToken ct = default);
 Task<VoidResult<string>> DeleteSessionAsync(Guid sessionId, CancellationToken ct = default);
 Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ListTodosAsync(Guid sessionId, CancellationToken ct = default);
 Task<Result<DysonSessionTodo, string>> CreateTodoAsync(DysonSessionTodoCreateRequest request, CancellationToken ct = default);
@@ -123,6 +127,10 @@ Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ReplaceTodosAsync(Guid ses
 `ListSessionsAsync` optionally filters by `WorkDirectoryId` (within the current subject). `ListChildSessionsAsync` returns direct children of a parent ordered by `RuntimeId`. `DysonSessionCreateRequest` / summaries include `WorkDirectoryId`. `DysonSessionMetaUpdate` can patch status/title/model/effort and, on mid-session mode switch, `AgentMode` + `SystemPromptSnapshot`.
 
 `GetFullSessionAsync` returns session row + all turns (ordered) + all log entries (ordered by `Sequence`) + todos (ordered by `Sequence`).
+
+`ListActiveSessionsWithUnfinishedTurnsAsync` is the subject-filtered recovery scan: current-subject sessions with `Status == Active` that still have at least one turn whose `CompletedUtc` is null. Each row includes unfinished-turn summaries (`TurnId`, `Sequence`, `Kind`, `CreatedUtc`, `InterruptionReason`). Cross-subject rows are never returned. This is not a distributed lease.
+
+`ListActiveDescendantSessionsAsync` is the complementary subject-filtered recovery scan: current-subject sessions with `Status == Active` and a non-null `ParentSessionId` (any depth). Roots are never returned. After a process restart these descendants cannot resume their in-process runtime even when every turn is already complete; recovery marks them `Interrupted`. Cross-subject rows are never returned. Circuit disconnect in a still-running process does not use these scans.
 
 `DeleteSessionAsync` removes the session and descendant subagent sessions (`ParentSessionId` is Restrict, so children are deleted deepest-first). Turns, session logs, and todos cascade.
 
@@ -141,10 +149,23 @@ Aggregate DTO: session entity + `IReadOnlyList` turns + `IReadOnlyList` log entr
 5. Host (`LoadAndFocusSessionAsync`) lists direct children via `ListChildSessionsAsync(parentId)`, loads each missing child (`appendResumeLog: false`), and calls `RestoreRegisteredSubagent` so `SubagentsById` / `SubSessions` are session-owned again (Wait / Inspect / Stop / ListSubagents work across turns and after cold resume)
 6. Session is ready for further `PromptAsync`
 
-Demo path: `DemoDysonAgentSession.LoadAsync(sessionRepository, sessionId, provider)`.
-OpenAI-compatible path: `OpenAiCompatibleAgentSession.LoadAsync(sessionRepository, sessionId, provider, http, workDirectoryAbsolutePath)`.
+Demo path: `DemoDysonAgentSession.LoadAsync(sessionRepository, sessionId, provider)` (also used by the retained-scope runtime factory).
+OpenAI-compatible path: `OpenAiCompatibleAgentSession.LoadAsync(sessionRepository, sessionId, provider, http, workDirectoryAbsolutePath)` (still host-owned; the runtime factory returns an explicit Result error for OpenAI create/load).
 
-### Subagents
+Same-process circuit reconnect is not this cold path: `DysonUiRuntimeAttachment` reattaches the retained `DysonSessionRuntime` and does not rerun recovery or rebuild the live graph from SQLite.
+
+## Process-restart recovery
+
+On the first `DysonSessionRuntimeRegistry.GetOrCreateAsync` for a subject after process start, `DysonSessionRuntime.EnsureRecoveredAsync` runs `DysonSessionRecoveryService` once. Circuit disconnect / host dispose does **not** run this sweep — the same-process runtime is retained.
+
+1. Scan `ListActiveSessionsWithUnfinishedTurnsAsync`.
+2. For each turn with null `CompletedUtc`: rehydrate tool state, `FinalizeIncompleteTools` (Queued/Working → failed with `DysonSessionRecoveryService.IncompleteToolReason`), set `InterruptionReason = application-restart`, stamp `CompletedUtc`, upsert the turn, and append a `TurnInterrupted` log when one is not already present. Existing `AssistantText` / `Instruction` are kept. No model or tool call is replayed, no new turn is added, and no `AgentReply` is written.
+3. Scan `ListActiveDescendantSessionsAsync` and mark each still-`Active` child/grandchild `Interrupted` (`SessionStatusChanged` with reason `application-restart` + `UpdateSessionMetaAsync`). Already-terminal descendants are left alone. Roots stay `Active`.
+4. Do not synthesize a parent `SubmitSubagentReport` or live `Interrupt`.
+
+The sweep is idempotent. Counts land on `DysonSessionRecoveryReport` (`UnfinishedSessions`, `TurnsRepaired`, `DescendantsInterrupted`).
+
+## Subagents
 
 Parent FK (`ParentSessionId`) links the graph. `CreateChildAsync` persists the child with `ParentSessionId = parent.PersistenceId`, allocates runtime id ≥ 1, optionally seeds the child todo list (`ReplaceTodosAsync` / in-memory hydrate from optional `initialTodos`), and starts a background prompt. Child status updates via `UpdateSessionMetaAsync` on `SubmitSubagentReport` / stop / fail.
 

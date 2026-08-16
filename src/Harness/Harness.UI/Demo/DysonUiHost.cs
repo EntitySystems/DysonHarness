@@ -34,12 +34,15 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly DysonPluginMcpResolver _pluginMcpResolver;
     private readonly DysonPluginLifecycleService _pluginLifecycle;
     private readonly ThemeService _theme;
+    private readonly DysonUiRuntimeAttachment? _runtimeAttachment;
     private readonly SemaphoreSlim _persistGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, DysonAgentSession> _sessionsById = new();
     private readonly ConcurrentDictionary<DysonAgentSession, byte> _hookedSessions = new();
     private readonly ConcurrentDictionary<DysonAgentSession, Guid> _customMcpRetainBySession = new();
     private readonly ConcurrentDictionary<DysonAgentSession, DysonPluginMcpHost> _pluginMcpHostBySession = new();
     private readonly ConcurrentDictionary<Guid, byte> _busySessions = new();
+    private readonly ConcurrentDictionary<Guid, byte> _runtimeOwnedSessionIds = new();
+    private readonly ConcurrentDictionary<DysonAgentSession, byte> _runtimeOwnedSessions = new();
     /// <summary>Model slug to apply after the in-flight prompt finishes (keyed by PersistenceId).</summary>
     private readonly ConcurrentDictionary<Guid, Guid?> _pendingSessionModelSlugIds = new();
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _promptGates = new();
@@ -107,7 +110,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonPluginMcpResolver pluginMcpResolver,
         DysonPluginLifecycleService pluginLifecycle,
         ThemeService theme,
-        IDysonBrowserControl? browserControl = null)
+        IDysonBrowserControl? browserControl = null,
+        DysonUiRuntimeAttachment? runtimeAttachment = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -125,6 +129,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pluginMcpResolver = pluginMcpResolver ?? throw new ArgumentNullException(nameof(pluginMcpResolver));
         _pluginLifecycle = pluginLifecycle ?? throw new ArgumentNullException(nameof(pluginLifecycle));
         _theme = theme ?? throw new ArgumentNullException(nameof(theme));
+        _runtimeAttachment = runtimeAttachment;
+        if (_runtimeAttachment is not null)
+            _runtimeAttachment.Changed += OnRuntimeChanged;
         _pluginLifecycle.Changed += OnPluginCatalogChanged;
         _pluginMcpGrants.Changed += OnPluginMcpGrantChanged;
         _browserControl = browserControl;
@@ -237,6 +244,102 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     public string? LastError { get; private set; }
 
+    /// <summary>
+    /// Attaches this circuit facade to its subject's retained runtime. Demo create/resume/load
+    /// and prompt execution then delegate to that runtime. Disposing the facade detaches
+    /// without cancelling or disposing the runtime.
+    /// </summary>
+    public async Task<VoidResult<string>> EnsureRuntimeAttachedAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (_runtimeAttachment is null)
+            return VoidResult<string>.Success;
+
+        var attached = await _runtimeAttachment.AttachAsync(cancellationToken).ConfigureAwait(false);
+        if (attached.IsSuccess)
+            return VoidResult<string>.Success;
+
+        LastError = attached.Error;
+        Notify();
+        return new VoidResult<string>(attached.Error);
+    }
+
+    private void OnRuntimeChanged(object? sender, DysonRuntimeChange change)
+    {
+        _ = sender;
+        if (_disposed)
+            return;
+
+        // Only adopt work the disposed circuit left on the session. A live host already
+        // drained follow-ups from ExecuteRuntimePromptOnSessionAsync.
+        if (change.Kind == DysonRuntimeChangeKind.Busy
+            && change.SessionId is Guid sessionId
+            && sessionId != Guid.Empty
+            && IsRuntimeOwned(sessionId)
+            && TryGetAttachedRuntime(out var runtime)
+            && !runtime.IsBusy(sessionId)
+            && _sessionsById.TryGetValue(sessionId, out var session)
+            && (session.HasPendingTurn || runtime.GetQueuedPromptCount(sessionId) > 0))
+        {
+            AdoptRuntimeOwnedFollowUp(session);
+        }
+
+        Notify();
+    }
+
+    private bool TryGetAttachedRuntime(out DysonSessionRuntime runtime)
+    {
+        if (_runtimeAttachment is not null && _runtimeAttachment.TryGetRuntime(out var attached))
+        {
+            runtime = attached;
+            return true;
+        }
+
+        runtime = null!;
+        return false;
+    }
+
+    private async Task<DysonSessionRuntime?> TryAttachRuntimeForDemoAsync(
+        CancellationToken cancellationToken)
+    {
+        if (_runtimeAttachment is null)
+            return null;
+
+        if (_runtimeAttachment.TryGetRuntime(out var existing))
+            return existing;
+
+        var attached = await _runtimeAttachment.AttachAsync(cancellationToken).ConfigureAwait(false);
+        return attached.IsSuccess ? attached.Value : null;
+    }
+
+    private bool IsRuntimeOwned(Guid sessionId) =>
+        sessionId != Guid.Empty && _runtimeOwnedSessionIds.ContainsKey(sessionId);
+
+    private bool IsRuntimeOwned(DysonAgentSession session) =>
+        _runtimeOwnedSessions.ContainsKey(session) || IsRuntimeOwned(session.PersistenceId);
+
+    private void MarkRuntimeOwned(DysonAgentSession session)
+    {
+        _runtimeOwnedSessions[session] = 0;
+        if (session.PersistenceId != Guid.Empty)
+            _runtimeOwnedSessionIds[session.PersistenceId] = 0;
+    }
+
+    private bool IsSessionBusy(Guid sessionId)
+    {
+        if (sessionId == Guid.Empty)
+            return false;
+
+        if (IsRuntimeOwned(sessionId)
+            && TryGetAttachedRuntime(out var runtime)
+            && runtime.IsBusy(sessionId))
+        {
+            return true;
+        }
+
+        return _busySessions.ContainsKey(sessionId);
+    }
+
     /// <summary>Clears <see cref="LastError"/> and notifies listeners (Home toast dismiss / expiry).</summary>
     public void ClearLastError()
     {
@@ -282,9 +385,9 @@ public sealed class DysonUiHost : IAsyncDisposable
     public int? SessionLastReportedPromptTokens =>
         _session?.LastReportedPromptTokens;
 
-    /// <summary>True when the focused session has an in-flight host <see cref="PromptAsync"/>.</summary>
+    /// <summary>True when the focused session has an in-flight host or runtime prompt.</summary>
     public bool IsBusy =>
-        ActiveSessionId is Guid id && _busySessions.ContainsKey(id);
+        ActiveSessionId is Guid id && IsSessionBusy(id);
 
     /// <summary>
     /// True when any descendant of the focused session is still <see cref="DysonSessionStatus.Active"/>.
@@ -299,6 +402,32 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             if (ActiveSessionId is not Guid id)
                 return [];
+
+            if (IsRuntimeOwned(id) && TryGetAttachedRuntime(out var runtime))
+            {
+                var count = runtime.GetQueuedPromptCount(id);
+                if (count <= 0)
+                    return [];
+
+                // Circuit-local projection only — runtime FIFO is the authority.
+                lock (_promptQueueGate)
+                {
+                    if (_promptQueues.TryGetValue(id, out var projected) && projected.Count == count)
+                    {
+                        return projected
+                            .Select(e => new QueuedPrompt(e.Id, e.FirstLine))
+                            .ToArray();
+                    }
+                }
+
+                if (runtime.TryPeekPrompt(id, out var peeked))
+                {
+                    var instruction = peeked.Turn.Instruction ?? peeked.Turn.Kind.ToString();
+                    return [new QueuedPrompt(peeked.Id, DysonSubagentHostLogic.PromptFirstLine(instruction))];
+                }
+
+                return [];
+            }
 
             lock (_promptQueueGate)
             {
@@ -1688,6 +1817,24 @@ public sealed class DysonUiHost : IAsyncDisposable
             ClearFocus();
         }
 
+        var runtime = await TryAttachRuntimeForDemoAsync(cancellationToken).ConfigureAwait(false);
+        if (runtime is not null
+            && (IsRuntimeOwned(sessionId) || runtime.TryGetSession(sessionId, out _)))
+        {
+            UnregisterSessionTree(sessionId);
+            var runtimeDeleted = await runtime.DeleteSessionAsync(sessionId, cancellationToken)
+                .ConfigureAwait(false);
+            if (runtimeDeleted.IsError)
+            {
+                LastError = runtimeDeleted.Error;
+                Notify();
+                return runtimeDeleted;
+            }
+
+            Notify();
+            return VoidResult<string>.Success;
+        }
+
         UnregisterSessionTree(sessionId);
 
         var deleted = await _sessions.DeleteSessionAsync(sessionId, cancellationToken)
@@ -1752,6 +1899,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(providerResult.Error);
         }
 
+        var pendingEffort = _pendingReasoningEffort;
         _pendingReasoningEffort = null;
 
         var kind = providerResult.Value.Kind;
@@ -1789,39 +1937,69 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
         else
         {
-            var config = await BuildSessionConfigAsync(
-                    agentMode,
-                    workDirectoryId: workDirectoryId.Value,
-                    workRoot: workDir.Value.AbsolutePath,
-                    cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
-
-            var created = await DemoDysonAgentSession.CreateAsync(
-                _sessions,
-                providerResult.Value.Demo!,
-                workDirectoryId.Value,
-                agentMode,
-                config: config,
-                models: _models,
-                workDirectoryAbsolutePath: workDir.Value.AbsolutePath,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            if (created.IsError)
+            var runtime = await TryAttachRuntimeForDemoAsync(cancellationToken).ConfigureAwait(false);
+            if (runtime is not null)
             {
-                await ReleaseMcpForConfigAsync(config).ConfigureAwait(false);
-                LastError = created.Error;
-                Notify();
-                return new VoidResult<string>(created.Error);
-            }
+                var theme = await _theme.CaptureSnapshotAsync(cancellationToken).ConfigureAwait(false);
+                var created = await runtime.CreateRootAsync(
+                        new DysonAgentSessionRuntimeCreateRequest
+                        {
+                            AgentMode = agentMode,
+                            WorkDirectoryId = workDirectoryId.Value,
+                            ModelSlugId = modelSlugId,
+                            Theme = theme,
+                            ReasoningEffort = pendingEffort,
+                            MaxTargetContextTokens = _pendingMaxTargetContextTokens,
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (created.IsError)
+                {
+                    LastError = created.Error;
+                    Notify();
+                    return new VoidResult<string>(created.Error);
+                }
 
-            RememberCustomMcpRetain(created.Value, workDirectoryId.Value);
-            ApplyPendingMaxTargetToSession(created.Value);
-            FocusSession(created.Value, parentSessionId: null);
+                MarkRuntimeOwned(created.Value);
+                FocusSession(created.Value, parentSessionId: null);
+            }
+            else
+            {
+                var config = await BuildSessionConfigAsync(
+                        agentMode,
+                        workDirectoryId: workDirectoryId.Value,
+                        workRoot: workDir.Value.AbsolutePath,
+                        cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+
+                var created = await DemoDysonAgentSession.CreateAsync(
+                    _sessions,
+                    providerResult.Value.Demo!,
+                    workDirectoryId.Value,
+                    agentMode,
+                    config: config,
+                    models: _models,
+                    workDirectoryAbsolutePath: workDir.Value.AbsolutePath,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                if (created.IsError)
+                {
+                    await ReleaseMcpForConfigAsync(config).ConfigureAwait(false);
+                    LastError = created.Error;
+                    Notify();
+                    return new VoidResult<string>(created.Error);
+                }
+
+                RememberCustomMcpRetain(created.Value, workDirectoryId.Value);
+                ApplyPendingMaxTargetToSession(created.Value);
+                FocusSession(created.Value, parentSessionId: null);
+            }
         }
 
         if (_pendingMaxTargetContextTokens is not null
             && _session is not null
-            && _session.PersistenceId != Guid.Empty)
+            && _session.PersistenceId != Guid.Empty
+            && !IsRuntimeOwned(_session))
         {
             await _sessions.UpdateSessionMetaAsync(
                 new DysonSessionMetaUpdate
@@ -2421,6 +2599,18 @@ public sealed class DysonUiHost : IAsyncDisposable
             return VoidResult<string>.Success;
         }
 
+        var runtime = await TryAttachRuntimeForDemoAsync(cancellationToken).ConfigureAwait(false);
+        if (runtime is not null && runtime.TryGetSession(sessionId, out var retained))
+        {
+            MarkRuntimeOwned(retained);
+            Guid? parent = ResolveStoredParentId(retained);
+            if (parent is null && runtime.TryGetParentSessionId(sessionId, out var runtimeParent))
+                parent = runtimeParent;
+            FocusSession(retained, parent);
+            Notify();
+            return VoidResult<string>.Success;
+        }
+
         return await LoadAndFocusSessionAsync(sessionId, cancellationToken).ConfigureAwait(false);
     }
 
@@ -2457,7 +2647,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(LastError);
         }
 
-        if (_busySessions.ContainsKey(session.PersistenceId)
+        if (IsSessionBusy(session.PersistenceId)
             && session.Turns.Count > 0
             && session.Turns[^1].Id == turnId)
         {
@@ -2558,7 +2748,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     continue;
 
                 if (turnId == currentId
-                    && _busySessions.ContainsKey(session.PersistenceId))
+                    && IsSessionBusy(session.PersistenceId))
                 {
                     LastError = "Cannot summarize the in-flight turn.";
                     Notify();
@@ -2775,6 +2965,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (ActiveSessionId is not Guid id)
             return;
 
+        if (IsRuntimeOwned(id) && TryGetAttachedRuntime(out var runtime))
+        {
+            runtime.CancelPrompt(id);
+            return;
+        }
+
         if (_promptCtsBySession.TryGetValue(id, out var cts))
             cts.Cancel();
     }
@@ -2789,6 +2985,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
 
         // Clear queue before cancel so PromptOnSession finally → DrainQueuedPrompts finds nothing.
+        // Stop-all is user discard (runtime DiscardQueuedPrompts); host dispose must not do this.
         ClearPromptQueue(id);
         CancelPrompt();
 
@@ -2803,6 +3000,19 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         if (ActiveSessionId is not Guid sessionId || queuedId == Guid.Empty)
             return;
+
+        if (IsRuntimeOwned(sessionId) && TryGetAttachedRuntime(out var runtime))
+        {
+            // Runtime has no remove-by-id; only the FIFO head can be dropped.
+            if (!runtime.TryPeekPrompt(sessionId, out var peeked) || peeked.Id != queuedId)
+                return;
+            if (!runtime.TryDequeuePrompt(sessionId, out _))
+                return;
+
+            RemoveHostQueuedPrompt(sessionId, queuedId);
+            Notify();
+            return;
+        }
 
         lock (_promptQueueGate)
         {
@@ -2822,6 +3032,13 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private void ClearPromptQueue(Guid sessionId)
     {
+        if (IsRuntimeOwned(sessionId) && TryGetAttachedRuntime(out var runtime))
+        {
+            var discarded = runtime.DiscardQueuedPrompts(sessionId);
+            if (discarded.IsError)
+                LastError = discarded.Error;
+        }
+
         lock (_promptQueueGate)
             _promptQueues.Remove(sessionId);
     }
@@ -2833,10 +3050,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             StopAllDescendants(child);
 
-            if (child.PersistenceId != Guid.Empty
-                && _promptCtsBySession.TryGetValue(child.PersistenceId, out var cts))
+            if (child.PersistenceId != Guid.Empty)
             {
-                cts.Cancel();
+                if (IsRuntimeOwned(child.PersistenceId) && TryGetAttachedRuntime(out var runtime))
+                    runtime.CancelPrompt(child.PersistenceId);
+                else if (_promptCtsBySession.TryGetValue(child.PersistenceId, out var cts))
+                    cts.Cancel();
             }
 
             if (child.Id > 0)
@@ -2909,9 +3128,15 @@ public sealed class DysonUiHost : IAsyncDisposable
         var built = turnBuild.Value;
         var sessionId = session.PersistenceId;
         // Enqueue while busy or mid-summarize (do not set _busySessions for summarize — Send stays enabled).
-        if (_busySessions.ContainsKey(sessionId) || session.HasAnySummarizingTurn)
+        if (IsSessionBusy(sessionId) || session.HasAnySummarizingTurn)
         {
-            EnqueuePrompt(sessionId, built.Turn, built.FilePaths);
+            var queued = EnqueuePrompt(sessionId, built.Turn, built.FilePaths);
+            if (queued.IsError)
+            {
+                Notify();
+                return queued;
+            }
+
             LastError = null;
             Notify();
             return VoidResult<string>.Success;
@@ -3210,6 +3435,19 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
         else
         {
+            var runtime = await TryAttachRuntimeForDemoAsync(cancellationToken).ConfigureAwait(false);
+            if (runtime is not null)
+            {
+                var runtimeLoaded = await runtime.LoadSessionAsync(sessionId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (runtimeLoaded.IsError)
+                    return Result<LoadedSession, string>.AsError(runtimeLoaded.Error);
+
+                MarkRuntimeOwned(runtimeLoaded.Value);
+                return Result<LoadedSession, string>.AsValue(
+                    new LoadedSession(runtimeLoaded.Value, full.Value.Session.ParentSessionId));
+            }
+
             var demoConfig = await BuildSessionConfigAsync(
                     full.Value.Session.AgentMode,
                     full.Value.Session.McpAccessMode,
@@ -3605,12 +3843,15 @@ public sealed class DysonUiHost : IAsyncDisposable
     private async Task ReleaseCustomMcpRetainAsync(DysonAgentSession session)
     {
         session.Config.CustomMcpHost?.DetachSession(session);
+        session.Config.PluginMcpHost?.DetachSession(session);
+        if (IsRuntimeOwned(session))
+            return;
+
         if (_customMcpRetainBySession.TryRemove(session, out var workDirectoryId))
             await DysonCustomMcpHostRegistry.ReleaseAsync(workDirectoryId).ConfigureAwait(false);
 
         if (_pluginMcpHostBySession.TryRemove(session, out var pluginHost))
         {
-            pluginHost.DetachSession(session);
             if (!_pluginMcpHostBySession.Values.Any(host => ReferenceEquals(host, pluginHost)))
                 await pluginHost.DisposeAsync().ConfigureAwait(false);
         }
@@ -3675,6 +3916,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         SyncAskUiFromSession(session);
         SyncUserDialogUiFromSession(session);
         SyncSubagentEventUiFromSession(session);
+        if (IsRuntimeOwned(session))
+            AdoptRuntimeOwnedFollowUp(session);
     }
 
     private void ClearFocus()
@@ -3735,7 +3978,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (session.Config.PluginMcpHost is { } pluginHost)
         {
             pluginHost.AttachSession(session);
-            _pluginMcpHostBySession[session] = pluginHost;
+            if (!IsRuntimeOwned(session))
+                _pluginMcpHostBySession[session] = pluginHost;
         }
 
         foreach (var turn in session.Turns)
@@ -3750,6 +3994,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         foreach (var child in session.SubSessions)
         {
             RememberParentId(child, session.PersistenceId == Guid.Empty ? null : session.PersistenceId);
+            if (IsRuntimeOwned(session))
+                MarkRuntimeOwned(child);
             EnsureRegistered(child);
         }
     }
@@ -3766,16 +4012,80 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private void UnregisterSessionTree(Guid rootPersistenceId)
     {
-        var toRemove = _sessionsById
-            .Where(kv =>
-                kv.Key == rootPersistenceId
-                || kv.Value.Parent?.PersistenceId == rootPersistenceId
-                || (_parentSessionIdByChild.TryGetValue(kv.Key, out var p) && p == rootPersistenceId))
-            .Select(kv => kv.Key)
-            .ToList();
+        if (_sessionsById.TryGetValue(rootPersistenceId, out var root))
+            UnhookUnmappedDescendants(root);
 
+        foreach (var hooked in _hookedSessions.Keys)
+        {
+            if (hooked.PersistenceId != Guid.Empty)
+                continue;
+            if (IsLiveDescendantOf(hooked, rootPersistenceId))
+            {
+                _runtimeOwnedSessions.TryRemove(hooked, out _);
+                UnhookSession(hooked);
+            }
+        }
+
+        var toRemove = CollectMappedDescendantIds(rootPersistenceId);
         foreach (var id in toRemove)
             UnregisterSession(id);
+    }
+
+    private HashSet<Guid> CollectMappedDescendantIds(Guid rootPersistenceId)
+    {
+        var ids = new HashSet<Guid> { rootPersistenceId };
+        var grew = true;
+        while (grew)
+        {
+            grew = false;
+            foreach (var kv in _sessionsById)
+            {
+                if (ids.Contains(kv.Key))
+                    continue;
+
+                var parentId = kv.Value.Parent?.PersistenceId ?? Guid.Empty;
+                if (parentId != Guid.Empty && ids.Contains(parentId))
+                {
+                    ids.Add(kv.Key);
+                    grew = true;
+                    continue;
+                }
+
+                if (_parentSessionIdByChild.TryGetValue(kv.Key, out var mapped)
+                    && mapped is Guid mappedId
+                    && ids.Contains(mappedId))
+                {
+                    ids.Add(kv.Key);
+                    grew = true;
+                }
+            }
+        }
+
+        return ids;
+    }
+
+    private static bool IsLiveDescendantOf(DysonAgentSession session, Guid rootPersistenceId)
+    {
+        for (var current = session; current is not null; current = current.Parent)
+        {
+            if (current.PersistenceId == rootPersistenceId)
+                return true;
+        }
+
+        return false;
+    }
+
+    private void UnhookUnmappedDescendants(DysonAgentSession session)
+    {
+        foreach (var child in session.SubSessions)
+        {
+            UnhookUnmappedDescendants(child);
+            if (child.PersistenceId == Guid.Empty)
+            {
+                _runtimeOwnedSessions.TryRemove(child, out _);
+                UnhookSession(child);
+            }
+        }
     }
 
     private void UnregisterSession(Guid persistenceId)
@@ -3801,9 +4111,12 @@ public sealed class DysonUiHost : IAsyncDisposable
             cts.Dispose();
         }
 
+        _runtimeOwnedSessionIds.TryRemove(persistenceId, out _);
+
         if (!_sessionsById.TryRemove(persistenceId, out var session))
             return;
 
+        _runtimeOwnedSessions.TryRemove(session, out _);
         UnhookSession(session);
     }
 
@@ -3812,6 +4125,18 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (!_hookedSessions.TryRemove(session, out _))
             return;
 
+        DetachSessionUiHandlers(session);
+
+        // Fire-and-forget release; host dispose is async.
+        _ = ReleaseCustomMcpRetainAsync(session);
+    }
+
+    /// <summary>
+    /// Drops this circuit's session/turn UI handlers. Does not cancel runtime prompts
+    /// or detach/release runtime-owned MCP leases.
+    /// </summary>
+    private void DetachSessionUiHandlers(DysonAgentSession session)
+    {
         session.TurnAdded -= OnTurnAdded;
         session.LogAppended -= OnLogAppended;
         session.SessionRenamed -= OnSessionRenamed;
@@ -3823,15 +4148,21 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         foreach (var turn in session.Turns)
             UnhookTurn(turn);
-
-        // Fire-and-forget release; host dispose is async.
-        _ = ReleaseCustomMcpRetainAsync(session);
     }
 
     private void UnhookAllSessions()
     {
         foreach (var session in _hookedSessions.Keys.ToArray())
+        {
+            if (IsRuntimeOwned(session))
+            {
+                if (_hookedSessions.TryRemove(session, out _))
+                    DetachSessionUiHandlers(session);
+                continue;
+            }
+
             UnhookSession(session);
+        }
 
         _sessionsById.Clear();
         _parentSessionIdByChild.Clear();
@@ -3856,10 +4187,13 @@ public sealed class DysonUiHost : IAsyncDisposable
         lock (_pendingFilesGate)
             _pendingFilePaths.Clear();
 
-        foreach (var cts in _promptCtsBySession.Values)
+        foreach (var kv in _promptCtsBySession)
         {
-            cts.Cancel();
-            cts.Dispose();
+            if (IsRuntimeOwned(kv.Key))
+                continue;
+
+            kv.Value.Cancel();
+            kv.Value.Dispose();
         }
 
         _promptCtsBySession.Clear();
@@ -3981,7 +4315,11 @@ public sealed class DysonUiHost : IAsyncDisposable
     private void OnSubagentSpawned(object? sender, DysonAgentSession child)
     {
         if (sender is DysonAgentSession parent)
+        {
             RememberParentId(child, parent.PersistenceId == Guid.Empty ? null : parent.PersistenceId);
+            if (IsRuntimeOwned(parent))
+                MarkRuntimeOwned(child);
+        }
 
         EnsureRegistered(child);
         // PersistenceId is assigned after SubagentSpawned in CreateChildAsync — refresh on a short poll.
@@ -3993,9 +4331,18 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         for (var i = 0; i < 40; i++)
         {
+            if (_disposed || !_hookedSessions.ContainsKey(child))
+                return;
+
             RefreshRegistryKey(child);
             if (child.PersistenceId != Guid.Empty)
             {
+                if (_runtimeOwnedSessions.ContainsKey(child)
+                    || (child.Parent is { } parent && IsRuntimeOwned(parent)))
+                {
+                    MarkRuntimeOwned(child);
+                }
+
                 Notify();
                 return;
             }
@@ -4813,6 +5160,9 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>("Session is not persisted.");
 
         var sessionId = session.PersistenceId;
+        if (IsRuntimeOwned(session) && TryGetAttachedRuntime(out var runtime))
+            return await ExecuteRuntimePromptOnSessionAsync(runtime, session, run).ConfigureAwait(false);
+
         var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _promptCtsBySession[sessionId] = linked;
         var token = linked.Token;
@@ -4857,30 +5207,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                             return complete;
                     }
 
-                    // BeginBuildPlan → queue Normal continuation; finally drains after busy gate.
-                    if (DysonBeginBuildPlanFlow.ShouldEnqueueBuildContinuation(last.Kind))
-                    {
-                        EnqueuePrompt(
-                            sessionId,
-                            DysonAgentSession.CreateNormalTurn(DysonBeginBuildPlanFlow.ContinuationPrompt));
-                    }
-
-                    // ExpandThoughtProcess → queue Normal continuation after reformulation.
-                    if (DysonExpandThoughtProcess.ShouldEnqueueContinuation(last.Kind))
-                    {
-                        EnqueuePrompt(
-                            sessionId,
-                            DysonAgentSession.CreateNormalTurn(DysonExpandThoughtProcess.ContinuationPrompt));
-                    }
-
-                    // CompleteTask / Confirm / Continue enqueue onto session pending turns;
-                    // move them onto the host queue so DrainQueuedPrompts preserves Kind.
-                    while (session.TryDequeuePendingTurn(out var pending))
-                        EnqueuePrompt(sessionId, pending);
-
-                    // Root terminal state now follows the task lifecycle: incomplete todos
-                    // receive one reflection turn; completed work may receive BugReview before finalization.
-                    EvaluateTaskLifecycle(session);
+                    EnqueueHostFollowUpWork(session);
                 }
 
                 return VoidResult<string>.Success;
@@ -4908,32 +5235,189 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
     }
 
-    private void EnqueuePrompt(
+    private async Task<VoidResult<string>> ExecuteRuntimePromptOnSessionAsync(
+        DysonSessionRuntime runtime,
+        DysonAgentSession session,
+        Func<DysonAgentSession, CancellationToken, Task<VoidResult<string>>> run)
+    {
+        var sessionId = session.PersistenceId;
+        Notify();
+        try
+        {
+            // Circuit/disposal tokens must not cancel a retained runtime prompt.
+            var result = await runtime.ExecutePromptAsync(session, run, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (result.IsError)
+                return result;
+
+            var last = session.Turns.Count > 0 ? session.Turns[^1] : null;
+            if (last is not null)
+            {
+                if (last.Kind == DysonAgentTurnKind.ShellExited)
+                    DysonLongRunningShellExitedFlow.TrimInstructionAfterCompletion(last);
+
+                if (!_disposed)
+                    EnqueueHostFollowUpWork(session);
+            }
+
+            return VoidResult<string>.Success;
+        }
+        finally
+        {
+            if (!_disposed)
+            {
+                await FlushPendingSessionModelSlugAsync(sessionId, session, CancellationToken.None)
+                    .ConfigureAwait(false);
+
+                _ = DrainAutoTurnsAsync(sessionId);
+                _ = DrainQueuedPromptsAsync(sessionId);
+            }
+
+            if (!_disposed)
+                Notify();
+        }
+    }
+
+    private void AdoptRuntimeOwnedFollowUp(DysonAgentSession session)
+    {
+        if (_disposed || !IsRuntimeOwned(session) || session.PersistenceId == Guid.Empty)
+            return;
+
+        EnqueueHostFollowUpWork(session);
+        _ = DrainAutoTurnsAsync(session.PersistenceId);
+        _ = DrainQueuedPromptsAsync(session.PersistenceId);
+    }
+
+    private void EnqueueHostFollowUpWork(DysonAgentSession session)
+    {
+        if (_disposed)
+            return;
+
+        var sessionId = session.PersistenceId;
+        if (sessionId == Guid.Empty)
+            return;
+
+        while (session.TryDequeuePendingTurn(out var pending))
+            EnqueuePrompt(sessionId, pending);
+
+        var last = session.Turns.Count > 0 ? session.Turns[^1] : null;
+        if (last is not null)
+        {
+            if (DysonBeginBuildPlanFlow.ShouldEnqueueBuildContinuation(last.Kind)
+                && !HostQueueHasInstruction(sessionId, DysonBeginBuildPlanFlow.ContinuationPrompt))
+            {
+                EnqueuePrompt(
+                    sessionId,
+                    DysonAgentSession.CreateNormalTurn(DysonBeginBuildPlanFlow.ContinuationPrompt));
+            }
+
+            if (DysonExpandThoughtProcess.ShouldEnqueueContinuation(last.Kind)
+                && !HostQueueHasInstruction(sessionId, DysonExpandThoughtProcess.ContinuationPrompt))
+            {
+                EnqueuePrompt(
+                    sessionId,
+                    DysonAgentSession.CreateNormalTurn(DysonExpandThoughtProcess.ContinuationPrompt));
+            }
+        }
+
+        EvaluateTaskLifecycle(session);
+    }
+
+    private bool HostQueueHasInstruction(Guid sessionId, string instruction)
+    {
+        if (IsRuntimeOwned(sessionId) && TryGetAttachedRuntime(out var runtime))
+        {
+            var count = runtime.GetQueuedPromptCount(sessionId);
+            if (count <= 0)
+                return false;
+
+            lock (_promptQueueGate)
+            {
+                if (_promptQueues.TryGetValue(sessionId, out var projected) && projected.Count == count)
+                {
+                    foreach (var entry in projected)
+                    {
+                        if (string.Equals(entry.Turn.Instruction, instruction, StringComparison.Ordinal))
+                            return true;
+                    }
+
+                    return false;
+                }
+            }
+
+            return runtime.TryPeekPrompt(sessionId, out var peeked)
+                && string.Equals(peeked.Turn.Instruction, instruction, StringComparison.Ordinal);
+        }
+
+        lock (_promptQueueGate)
+        {
+            if (!_promptQueues.TryGetValue(sessionId, out var list))
+                return false;
+
+            foreach (var entry in list)
+            {
+                if (string.Equals(entry.Turn.Instruction, instruction, StringComparison.Ordinal))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private VoidResult<string> EnqueuePrompt(
         Guid sessionId,
         DysonAgentTurn turn,
         IReadOnlyList<string>? filePaths = null)
     {
         ArgumentNullException.ThrowIfNull(turn);
-        var instruction = turn.Instruction ?? turn.Kind.ToString();
-        var entry = new QueuedPromptEntry(
-            Guid.NewGuid(),
-            turn,
-            DysonSubagentHostLogic.PromptFirstLine(instruction),
-            filePaths is { Count: > 0 } ? [.. filePaths] : []);
-        lock (_promptQueueGate)
+
+        if (IsRuntimeOwned(sessionId))
         {
-            if (!_promptQueues.TryGetValue(sessionId, out var list))
+            if (!TryGetAttachedRuntime(out var runtime))
             {
-                list = [];
-                _promptQueues[sessionId] = list;
+                const string error = "Session runtime is not attached.";
+                LastError = error;
+                return VoidResult<string>.AsError(error);
             }
 
-            list.Add(entry);
+            var enqueued = runtime.EnqueuePrompt(sessionId, turn, filePaths);
+            if (enqueued.IsError)
+            {
+                LastError = enqueued.Error;
+                return VoidResult<string>.AsError(enqueued.Error);
+            }
+
+            // Display projection for this circuit only; drain/remove always use the runtime FIFO.
+            AddHostQueuedPrompt(sessionId, ToHostQueuedEntry(enqueued.Value));
+            return VoidResult<string>.Success;
         }
+
+        var instruction = turn.Instruction ?? turn.Kind.ToString();
+        AddHostQueuedPrompt(
+            sessionId,
+            new QueuedPromptEntry(
+                Guid.NewGuid(),
+                turn,
+                DysonSubagentHostLogic.PromptFirstLine(instruction),
+                filePaths is { Count: > 0 } ? [.. filePaths] : []));
+        return VoidResult<string>.Success;
     }
 
     private bool TryDequeuePrompt(Guid sessionId, out QueuedPromptEntry entry)
     {
+        if (IsRuntimeOwned(sessionId) && TryGetAttachedRuntime(out var runtime))
+        {
+            if (!runtime.TryDequeuePrompt(sessionId, out var prompt) || prompt is null)
+            {
+                entry = default!;
+                return false;
+            }
+
+            RemoveHostQueuedPrompt(sessionId, prompt.Id);
+            entry = ToHostQueuedEntry(prompt);
+            return true;
+        }
+
         lock (_promptQueueGate)
         {
             if (!_promptQueues.TryGetValue(sessionId, out var list) || list.Count == 0)
@@ -4950,9 +5434,47 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
     }
 
+    private static QueuedPromptEntry ToHostQueuedEntry(DysonQueuedPrompt prompt)
+    {
+        var instruction = prompt.Turn.Instruction ?? prompt.Turn.Kind.ToString();
+        return new QueuedPromptEntry(
+            prompt.Id,
+            prompt.Turn,
+            DysonSubagentHostLogic.PromptFirstLine(instruction),
+            prompt.FilePaths);
+    }
+
+    private void AddHostQueuedPrompt(Guid sessionId, QueuedPromptEntry entry)
+    {
+        lock (_promptQueueGate)
+        {
+            if (!_promptQueues.TryGetValue(sessionId, out var list))
+            {
+                list = [];
+                _promptQueues[sessionId] = list;
+            }
+
+            list.Add(entry);
+        }
+    }
+
+    private void RemoveHostQueuedPrompt(Guid sessionId, Guid queuedId)
+    {
+        lock (_promptQueueGate)
+        {
+            if (!_promptQueues.TryGetValue(sessionId, out var list))
+                return;
+
+            list.RemoveAll(e => e.Id == queuedId);
+            if (list.Count == 0)
+                _promptQueues.Remove(sessionId);
+        }
+    }
+
     private async Task DrainQueuedPromptsAsync(Guid sessionId)
     {
-        if (_disposed || _busySessions.ContainsKey(sessionId))
+        // Runtime-owned sessions dequeue via TryDequeuePrompt → runtime.TryDequeuePrompt.
+        if (_disposed || IsSessionBusy(sessionId))
             return;
 
         if (!_sessionsById.TryGetValue(sessionId, out var session))
@@ -5064,6 +5586,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (session is null || session.PersistenceId == Guid.Empty)
             return;
 
+        if (IsRuntimeOwned(session))
+            return;
+
         // Host-owned PromptOnSessionAsync persists after PromptAsync returns.
         if (_busySessions.ContainsKey(session.PersistenceId))
             return;
@@ -5083,7 +5608,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         RefreshRegistryKey(session);
         HookTurn(turn);
-        _ = PersistTurnStartedAsync(session, turn);
+        if (!IsRuntimeOwned(session))
+            _ = PersistTurnStartedAsync(session, turn);
         Notify();
     }
 
@@ -5094,12 +5620,16 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         RefreshRegistryKey(session);
 
-        var entry = DysonSessionLogPayload.CreateEntry(
-            session.PersistenceId,
-            DysonSessionLogKind.LogLine,
-            new DysonSessionLogLogLine(line));
+        if (!IsRuntimeOwned(session))
+        {
+            var entry = DysonSessionLogPayload.CreateEntry(
+                session.PersistenceId,
+                DysonSessionLogKind.LogLine,
+                new DysonSessionLogLogLine(line));
 
-        _ = PersistAsync(() => _sessions.AppendLogAsync(entry), CancellationToken.None);
+            _ = PersistAsync(() => _sessions.AppendLogAsync(entry), CancellationToken.None);
+        }
+
         Notify();
     }
 
@@ -5121,7 +5651,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private async Task PersistTurnStartedAsync(DysonAgentSession session, DysonAgentTurn turn)
     {
-        if (session.PersistenceId == Guid.Empty)
+        if (session.PersistenceId == Guid.Empty || IsRuntimeOwned(session))
             return;
 
         var sessionId = session.PersistenceId;
@@ -5147,6 +5677,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         var session = FindSessionOwningTurn(turn);
         if (session is null || session.PersistenceId == Guid.Empty)
             return;
+
+        if (IsRuntimeOwned(session))
+        {
+            Notify();
+            return;
+        }
 
         var sessionId = session.PersistenceId;
         var kind = DysonTurnPersistence.LogKindForToolStatus(args.NewStatus);
@@ -5194,7 +5730,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonAgentTurn turn,
         CancellationToken cancellationToken)
     {
-        if (session.PersistenceId == Guid.Empty)
+        if (session.PersistenceId == Guid.Empty || IsRuntimeOwned(session))
             return VoidResult<string>.Success;
 
         var sessionId = session.PersistenceId;
@@ -5263,14 +5799,19 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private void Notify() => Changed?.Invoke();
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         if (_disposed)
-            return ValueTask.CompletedTask;
+            return;
 
         _disposed = true;
         _pluginLifecycle.Changed -= OnPluginCatalogChanged;
         _pluginMcpGrants.Changed -= OnPluginMcpGrantChanged;
+        if (_runtimeAttachment is not null)
+        {
+            _runtimeAttachment.Changed -= OnRuntimeChanged;
+            await _runtimeAttachment.DisposeAsync().ConfigureAwait(false);
+        }
         CancelToolPanelWidthSaveTimer();
         ClearFocus();
         if (_browserControl is not null)
@@ -5279,10 +5820,10 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pluginLifecycle.Changed -= OnPluginCatalogChanged;
         _pluginMcpGrants.Changed -= OnPluginMcpGrantChanged;
         UnhookAllSessions();
+        // Circuit-local shadow/legacy queues only. Runtime FIFO stays with the retained runtime.
         lock (_promptQueueGate)
             _promptQueues.Clear();
         _persistGate.Dispose();
-        return ValueTask.CompletedTask;
     }
 }
 

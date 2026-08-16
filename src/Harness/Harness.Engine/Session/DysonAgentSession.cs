@@ -122,14 +122,17 @@ public abstract class DysonAgentSession
     /// <summary>Live parent when this session was spawned via <see cref="RegisterSubagent"/>.</summary>
     public DysonAgentSession? Parent { get; private set; }
 
-    /// <summary>Mirrored from persisted session status (Active until report/stop/fail).</summary>
+    /// <summary>Mirrored from persisted session status (Active until report/stop/fail/interrupt).</summary>
     public DysonSessionStatus Status { get; private set; } = DysonSessionStatus.Active;
 
     /// <summary>Last SubmitSubagentReport / stop / fail summary when terminal.</summary>
     public string? LastReportSummary { get; private set; }
 
     public bool IsTerminal =>
-        Status is DysonSessionStatus.Completed or DysonSessionStatus.Stopped or DysonSessionStatus.Failed;
+        Status is DysonSessionStatus.Completed
+            or DysonSessionStatus.Stopped
+            or DysonSessionStatus.Failed
+            or DysonSessionStatus.Interrupted;
 
     /// <summary>True while any turn is mid <c>SummarizeTurns</c> (host or MCP).</summary>
     public bool HasAnySummarizingTurn => !_summarizingTurnIds.IsEmpty;
@@ -1192,7 +1195,10 @@ public abstract class DysonAgentSession
     /// <summary>Marks terminal status once; returns false if already terminal.</summary>
     public bool TryMarkTerminal(DysonSessionStatus status, string? summary)
     {
-        if (status is not (DysonSessionStatus.Completed or DysonSessionStatus.Stopped or DysonSessionStatus.Failed))
+        if (status is not (DysonSessionStatus.Completed
+            or DysonSessionStatus.Stopped
+            or DysonSessionStatus.Failed
+            or DysonSessionStatus.Interrupted))
             throw new ArgumentOutOfRangeException(nameof(status), status, "Must be a terminal status.");
 
         lock (_terminalGate)
@@ -1219,7 +1225,9 @@ public abstract class DysonAgentSession
 
         lock (_terminalGate)
         {
-            if (Status is DysonSessionStatus.Completed or DysonSessionStatus.Stopped)
+            if (Status is DysonSessionStatus.Completed
+                or DysonSessionStatus.Stopped
+                or DysonSessionStatus.Interrupted)
                 return false;
 
             // Failed may only be superseded by Completed (harness premature fail → agent handoff).
@@ -1573,6 +1581,7 @@ public abstract class DysonAgentSession
                 CompactToolHistory = row.CompactToolHistory,
                 IsExcludedFromContext = row.IsExcludedFromContext,
                 ContextSummary = row.ContextSummary,
+                InterruptionReason = row.InterruptionReason,
                 StartedUtc = row.CreatedUtc,
                 CompletedUtc = row.CompletedUtc,
             };

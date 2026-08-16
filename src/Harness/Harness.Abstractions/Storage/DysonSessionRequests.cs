@@ -74,6 +74,38 @@ public sealed class DysonPersistedSession
     public required IReadOnlyList<DysonSessionTodo> Todos { get; init; }
 }
 
+/// <summary>
+/// Subject-scoped active session that still has at least one unfinished turn
+/// (<see cref="DysonTurnEntity.CompletedUtc"/> is null).
+/// </summary>
+public sealed class DysonSessionUnfinishedWorkSummary
+{
+    public Guid SessionId { get; init; }
+    public Guid? ParentSessionId { get; init; }
+    public int RuntimeId { get; init; }
+    public DysonSessionStatus Status { get; init; }
+    public string AgentMode { get; init; } = "";
+    public string? Title { get; init; }
+    public Guid? WorkDirectoryId { get; init; }
+
+    /// <summary>UTC.</summary>
+    public DateTime LastActivityUtc { get; init; }
+
+    public IReadOnlyList<DysonUnfinishedTurnSummary> UnfinishedTurns { get; init; } = [];
+}
+
+public sealed class DysonUnfinishedTurnSummary
+{
+    public Guid TurnId { get; init; }
+    public int Sequence { get; init; }
+    public DysonAgentTurnKind Kind { get; init; }
+
+    /// <summary>UTC.</summary>
+    public DateTime CreatedUtc { get; init; }
+
+    public string? InterruptionReason { get; init; }
+}
+
 public sealed class DysonSessionTodoCreateRequest
 {
     public Guid SessionId { get; init; }

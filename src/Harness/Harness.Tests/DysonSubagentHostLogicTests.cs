@@ -34,6 +34,9 @@ public class DysonSubagentHostLogicTests
         if (DysonSubagentHostLogic.IsRunning(DysonSessionStatus.Stopped, latestTurn: null))
             throw new InvalidOperationException("Stopped status should not be running.");
 
+        if (DysonSubagentHostLogic.IsRunning(DysonSessionStatus.Interrupted, latestTurn: null))
+            throw new InvalidOperationException("Interrupted status should not be running.");
+
         AssertHasActiveDescendant();
 
         var prompt = DysonSubagentHostLogic.BuildSubagentReportContinuationPrompt(
@@ -219,6 +222,13 @@ public class DysonSubagentHostLogicTests
 
         if (DysonSubagentHostLogic.HasActiveDescendant(root))
             throw new InvalidOperationException("Terminal descendants should not report as active.");
+
+        var interrupted = new StubSession();
+        root.RegisterForTest(interrupted);
+        if (!interrupted.TryMarkTerminal(DysonSessionStatus.Interrupted, "process restart"))
+            throw new InvalidOperationException("Expected Interrupted TryMarkTerminal to succeed.");
+        if (DysonSubagentHostLogic.HasActiveDescendant(root))
+            throw new InvalidOperationException("Interrupted descendants should not report as active.");
     }
 
     private sealed class StubProvider : DysonAgentProvider;

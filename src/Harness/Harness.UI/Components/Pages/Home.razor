@@ -117,6 +117,10 @@
         Host.Changed += OnHostChanged;
         Theme.Changed += OnThemeChanged;
 
+        var attached = await Host.EnsureRuntimeAttachedAsync();
+        if (attached.IsError)
+            _listError = attached.Error;
+
         await Host.EnsureDefaultModelAsync();
         await RefreshSessionsAsync();
     }
