@@ -79,6 +79,18 @@
         </p>
 
         <div class="field" style="margin-top:16px;">
+            <label>Drone default model</label>
+            <ModelSlugPicker SelectedSlugId="_droneSlugId"
+                             SelectedSlugIdChanged="OnDroneSlugChangedAsync"
+                             AllowEmpty="true"
+                             EmptyLabel="Use session model" />
+        </div>
+        <p class="settings-page__copy" style="margin:0;">
+            Default model for Drone subagents when StartSubagent omits modelSlug.
+            Leave as “Use session model” to inherit the parent chat model.
+        </p>
+
+        <div class="field" style="margin-top:16px;">
             <label>Security Review default model</label>
             <ModelSlugPicker SelectedSlugId="_securityReviewSlugId"
                              SelectedSlugIdChanged="OnSecurityReviewSlugChangedAsync"
@@ -117,6 +129,7 @@
     private Guid? _turnSummarizerSlugId;
     private Guid? _webSearchSummarizerSlugId;
     private Guid? _exploreSlugId;
+    private Guid? _droneSlugId;
     private Guid? _securityReviewSlugId;
     private Guid? _bugReviewSlugId;
     private string? _error;
@@ -155,6 +168,8 @@
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId, v => _webSearchSummarizerSlugId = v))
             return;
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.ExploreModelSlugId, v => _exploreSlugId = v))
+            return;
+        if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.DroneModelSlugId, v => _droneSlugId = v))
             return;
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.SecurityReviewModelSlugId, v => _securityReviewSlugId = v))
             return;
@@ -242,6 +257,12 @@
             id,
             v => _exploreSlugId = v,
             DysonAppSettingKeys.ExploreModelSlugId);
+
+    private Task OnDroneSlugChangedAsync(Guid? id) =>
+        SaveSlugSettingAsync(
+            id,
+            v => _droneSlugId = v,
+            DysonAppSettingKeys.DroneModelSlugId);
 
     private Task OnSecurityReviewSlugChangedAsync(Guid? id) =>
         SaveSlugSettingAsync(

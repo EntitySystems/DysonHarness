@@ -22,6 +22,12 @@ public static class DysonAppSettingKeys
     public const string ExploreModelSlugId = "explore_model_slug_id";
 
     /// <summary>
+    /// Guid string of the default model slug for Drone subagents when <c>StartSubagent.modelSlug</c> is omitted.
+    /// Empty / missing ⇒ inherit the parent session model.
+    /// </summary>
+    public const string DroneModelSlugId = "drone_model_slug_id";
+
+    /// <summary>
     /// Guid string of the default model slug for Security Review subagents when <c>StartSubagent.modelSlug</c> is omitted.
     /// Empty / missing ⇒ inherit the parent session model.
     /// </summary>

@@ -3522,6 +3522,11 @@ public sealed class DysonUiHost : IAsyncDisposable
                 cancellationToken)
             .ConfigureAwait(false);
         await TryHydrateOpenAiProviderSettingAsync(
+                DysonAppSettingKeys.DroneModelSlugId,
+                p => config.DroneDefaultProvider = p,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await TryHydrateOpenAiProviderSettingAsync(
                 DysonAppSettingKeys.SecurityReviewModelSlugId,
                 p => config.SecurityReviewDefaultProvider = p,
                 cancellationToken)

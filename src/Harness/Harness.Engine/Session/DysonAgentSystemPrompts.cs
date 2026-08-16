@@ -92,7 +92,7 @@ public static class DysonAgentSystemPrompts
         - When starting a Drone, pass a clear task brief and as much relevant context as practical.
         - After spawning a Drone: never WaitForSubagent; continue other work until the notification turn.
         - When spawning a child that should track a checklist, seed StartSubagent with optional todos (displayName + taskCode).
-        - Optional modelSlug on StartSubagent when the child should use a different model (slug or display alias; omit → settings default for Explore / Security Review / Bug Review when configured, else inherit yours).
+        - Optional modelSlug on StartSubagent when the child should use a different model (slug or display alias; omit → settings default for Explore / Drone / Security Review / Bug Review when configured, else inherit yours).
         - Optional reasoningEffort on StartSubagent (omit → slug defaultEffort; when inheriting, omit keeps your current effort).
         - Do the work yourself only when it is short, single-turn, and obvious (no exploration needed).
         - After spawn, prefer continuing other work; completion arrives as a harness turn with SubmitSubagentReport content — incorporate and proceed.
