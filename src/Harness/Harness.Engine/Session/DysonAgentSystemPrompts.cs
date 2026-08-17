@@ -208,7 +208,7 @@ public static class DysonAgentSystemPrompts
         - When used as a subagent: finish with SubmitSubagentReport (`completed` with findings, or `failed` with a concrete failure reason if blocked).
         """;
 
-    /// <summary>Formats the session-captured presentation guidance for the visualization tool.</summary>
+    /// <summary>Formats current presentation guidance for the visualization tool description.</summary>
     public static string FormatVisualizationThemeGuidance(DysonUiThemeSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);

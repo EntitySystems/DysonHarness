@@ -18,14 +18,44 @@
     }
 
     <div class="settings-page__panel panel">
-        <dl>
-            <dt>Installed version</dt>
-            <dd class="mono">@Updates.LocalVersion</dd>
-            <dt>Update channel</dt>
-            <dd class="mono">@DysonAppVersionInfo.Local.EffectiveChannel</dd>
-        </dl>
+        <ul class="settings-facts">
+            <li class="settings-facts__row">
+                <span class="settings-facts__label">Installed version</span>
+                <span class="settings-facts__value mono">@Updates.LocalVersion</span>
+            </li>
+            <li class="settings-facts__row">
+                <span class="settings-facts__label">Update channel</span>
+                <span class="settings-facts__value">
+                    @if (Local.IsStampedRelease)
+                    {
+                        <span class="badge">@Local.EffectiveChannel</span>
+                    }
+                    else
+                    {
+                        <span class="mono">@Local.EffectiveChannel</span>
+                        <span class="settings-facts__note">local / unstamped</span>
+                    }
+                </span>
+            </li>
+            <li class="settings-facts__row">
+                <span class="settings-facts__label">Repository</span>
+                <span class="settings-facts__value mono">@Local.EffectiveRepo</span>
+            </li>
+            <li class="settings-facts__row">
+                <span class="settings-facts__label">Runtime</span>
+                <span class="settings-facts__value mono">@(string.IsNullOrWhiteSpace(Local.Rid) ? "local build" : Local.Rid)</span>
+            </li>
+            <li class="settings-facts__row">
+                <span class="settings-facts__label">In-app install</span>
+                <span class="settings-facts__value">
+                    @(OperatingSystem.IsWindows() && Local.IsStampedRelease
+                        ? "Available on this Windows build"
+                        : "Unavailable (development or non-Windows)")
+                </span>
+            </li>
+        </ul>
 
-        <div class="btn-row" style="margin-top:1rem;">
+        <div class="btn-row">
             <button type="button"
                     class="btn btn-primary"
                     @onclick="CheckForUpdatesAsync"
@@ -37,20 +67,23 @@
 
         @if (!string.IsNullOrWhiteSpace(_status))
         {
-            <p class="settings-page__copy" role="status" aria-live="polite" style="margin:8px 0 0;">@_status</p>
-        }
-
-        @if (_result?.NewestRelease is { } release)
-        {
-            <p class="settings-page__copy" style="margin:8px 0 0;">
-                Latest release: <span class="mono">@release.TagName</span>
-                · <a href="@release.ReleasePageUrl" target="_blank" rel="noopener noreferrer">View on GitHub</a>
-            </p>
+            <div class="settings-facts__result" role="status" aria-live="polite">
+                <p>@_status</p>
+                @if (_result?.NewestRelease is { } release)
+                {
+                    <p>
+                        Latest release: <span class="mono">@release.TagName</span>
+                        · <a href="@release.ReleasePageUrl" target="_blank" rel="noopener noreferrer">View on GitHub</a>
+                    </p>
+                }
+            </div>
         }
     </div>
 </div>
 
 @code {
+    private static DysonAppVersionInfo Local => DysonAppVersionInfo.Local;
+
     private DysonManualUpdateCheckResult? _result;
     private string? _error;
     private string? _status;

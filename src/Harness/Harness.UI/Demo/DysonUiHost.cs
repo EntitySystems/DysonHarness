@@ -131,6 +131,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pluginMcpResolver = pluginMcpResolver ?? throw new ArgumentNullException(nameof(pluginMcpResolver));
         _pluginLifecycle = pluginLifecycle ?? throw new ArgumentNullException(nameof(pluginLifecycle));
         _theme = theme ?? throw new ArgumentNullException(nameof(theme));
+        _theme.Changed += OnThemeChanged;
         _runtimeAttachment = runtimeAttachment;
         if (_runtimeAttachment is not null)
             _runtimeAttachment.Changed += OnRuntimeChanged;
@@ -149,6 +150,9 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private void OnPluginMcpGrantChanged(object? sender, DysonPluginMcpGrantChangedEventArgs args) =>
         _ = RefreshPluginMcpHostsAsync(args.Scope, args.WorkDirectoryId);
+
+    private void OnThemeChanged() =>
+        _ = ApplyCurrentUiThemeToLiveSessionsAsync();
 
     private async Task RefreshPluginMcpHostsAsync(
         DysonPluginInstallScope scope,
@@ -351,7 +355,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             _runtimeOwnedSessionIds[session.PersistenceId] = 0;
     }
 
-    private bool IsSessionBusy(Guid sessionId)
+    /// <summary>True when that session (not necessarily focused) has an in-flight host or runtime prompt.</summary>
+    public bool IsSessionBusy(Guid sessionId)
     {
         if (sessionId == Guid.Empty)
             return false;
@@ -2040,6 +2045,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pendingMaxTargetContextTokens = null;
         _pendingSlugDefaultMaxTargetContextTokens = null;
 
+        await ApplyCurrentUiThemeToLiveSessionsAsync(cancellationToken).ConfigureAwait(false);
         Notify();
         return VoidResult<string>.Success;
     }
@@ -2190,6 +2196,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         if (_session is null)
             return new VoidResult<string>("No active session.");
+
+        await ApplyCurrentUiThemeToLiveSessionsAsync(cancellationToken).ConfigureAwait(false);
 
         if (string.Equals(_session.Mode, agentMode, StringComparison.OrdinalIgnoreCase))
             return VoidResult<string>.Success;
@@ -3140,6 +3148,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return modeResult;
         }
 
+        await ApplyCurrentUiThemeToLiveSessionsAsync(cancellationToken).ConfigureAwait(false);
+
         var turnBuild = await BuildUserTurnWithPendingContextAsync(
                 prompt?.Trim() ?? "",
                 cancellationToken)
@@ -3470,6 +3480,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                     return Result<LoadedSession, string>.AsError(runtimeLoaded.Error);
 
                 MarkRuntimeOwned(runtimeLoaded.Value);
+                await ApplyCurrentUiThemeToLiveSessionsAsync(runtimeLoaded.Value, cancellationToken)
+                    .ConfigureAwait(false);
                 return Result<LoadedSession, string>.AsValue(
                     new LoadedSession(runtimeLoaded.Value, full.Value.Session.ParentSessionId));
             }
@@ -3504,6 +3516,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             session = demoLoaded.Value;
         }
 
+        await ApplyCurrentUiThemeToLiveSessionsAsync(session, cancellationToken).ConfigureAwait(false);
         return Result<LoadedSession, string>.AsValue(
             new LoadedSession(session, full.Value.Session.ParentSessionId));
     }
@@ -3650,6 +3663,37 @@ public sealed class DysonUiHost : IAsyncDisposable
             }
 
             config.CustomAgents.Add(agent.Key, agent.Value);
+        }
+    }
+
+    private Task ApplyCurrentUiThemeToLiveSessionsAsync(CancellationToken cancellationToken = default) =>
+        ApplyCurrentUiThemeToLiveSessionsAsync(extra: null, cancellationToken);
+
+    private async Task ApplyCurrentUiThemeToLiveSessionsAsync(
+        DysonAgentSession? extra,
+        CancellationToken cancellationToken)
+    {
+        if (_disposed)
+            return;
+
+        var snapshot = await _theme.CaptureSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        if (_disposed)
+            return;
+
+        var seen = new HashSet<DysonAgentSession>(ReferenceEqualityComparer.Instance);
+        if (extra is not null && seen.Add(extra))
+            extra.ApplyUiTheme(snapshot);
+
+        foreach (var session in _sessionsById.Values)
+        {
+            if (seen.Add(session))
+                session.ApplyUiTheme(snapshot);
+        }
+
+        foreach (var session in _hookedSessions.Keys)
+        {
+            if (seen.Add(session))
+                session.ApplyUiTheme(snapshot);
         }
     }
 
@@ -4458,6 +4502,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (sender is not DysonAgentSession session)
             return;
 
+        if (session.PersistenceId != ActiveSessionId)
+        {
+            Notify();
+            return;
+        }
+
         SyncAskUiFromSession(session);
         SyncUserDialogUiFromSession(session);
         SyncSubagentEventUiFromSession(session);
@@ -4726,6 +4776,9 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private void SyncAskUiFromSession(DysonAgentSession session)
     {
+        if (session.PersistenceId != ActiveSessionId)
+            return;
+
         // Root AskQuestion
         if (session.Parent is null && session.PendingAskQuestions is { Count: > 0 } questions)
         {
@@ -4757,17 +4810,14 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
         }
 
-        // Clear if this focused session no longer has pending ask
-        if (_pendingAskUi is not null
-            && _pendingAskUi.SessionPersistenceId == session.PersistenceId
-            && session.PendingAskQuestions is null)
-        {
-            _pendingAskUi = null;
-        }
+        _pendingAskUi = null;
     }
 
     private void SyncUserDialogUiFromSession(DysonAgentSession session)
     {
+        if (session.PersistenceId != ActiveSessionId)
+            return;
+
         if (session.Parent is null && session.PendingUserDialog is { } rootDialog)
         {
             _pendingUserDialogUi = new DysonUserDialogUiState
@@ -4797,16 +4847,13 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
         }
 
-        if (_pendingUserDialogUi is not null
-            && _pendingUserDialogUi.SessionPersistenceId == session.PersistenceId
-            && session.PendingUserDialog is null)
-        {
-            _pendingUserDialogUi = null;
-        }
+        _pendingUserDialogUi = null;
     }
 
     private void MaybeOpenAskUiForEvent(DysonAgentSession parent, DysonAgentInterrupt interrupt)
     {
+        if (parent.PersistenceId != ActiveSessionId)
+            return;
         if (!DysonSubagentHostLogic.TryBuildAskUi(interrupt.EventKind, interrupt.Payload, out var questions))
             return;
 
@@ -4822,6 +4869,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private void MaybeOpenUserDialogUiForEvent(DysonAgentSession parent, DysonAgentInterrupt interrupt)
     {
+        if (parent.PersistenceId != ActiveSessionId)
+            return;
         if (!DysonSubagentHostLogic.TryBuildUserDialogUi(interrupt.EventKind, interrupt.Payload, out var dialog))
             return;
 
@@ -5831,6 +5880,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
 
         _disposed = true;
+        _theme.Changed -= OnThemeChanged;
         _pluginLifecycle.Changed -= OnPluginCatalogChanged;
         _pluginMcpGrants.Changed -= OnPluginMcpGrantChanged;
         if (_runtimeAttachment is not null)

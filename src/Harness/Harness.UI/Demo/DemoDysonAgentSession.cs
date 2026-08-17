@@ -496,6 +496,8 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
     {
         ArgumentNullException.ThrowIfNull(turn);
 
+        ApplyUiTheme(Config.UiTheme);
+
         OptimizeContextIfNeeded();
 
         if (allowDropContextInject

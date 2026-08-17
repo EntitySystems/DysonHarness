@@ -193,6 +193,7 @@ code, .mono {
 
 /* Shell */
 .app-shell {
+  --shell-header-height: 53px;
   display: grid;
   grid-template-columns: 260px 1fr 300px;
   height: 100vh;
@@ -238,6 +239,7 @@ code, .mono {
 }
 
 .sidebar__brand {
+  min-height: var(--shell-header-height);
   padding: 14px 14px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--surface-glass);
@@ -443,6 +445,65 @@ code, .mono {
   margin: 0 0 18px;
   color: var(--text-muted);
   max-width: 52ch;
+}
+
+.settings-facts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-facts__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-facts__label {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.settings-facts__value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  text-align: right;
+}
+
+.settings-facts__note {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.settings-facts + .btn-row {
+  margin-top: 14px;
+}
+
+.settings-facts__result {
+  margin: 12px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-facts__result p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
 }
 
 .settings-page__panel {
@@ -1709,6 +1770,8 @@ code, .mono {
   text-overflow: ellipsis;
 }
 
+.session-list .list-item__title .turn-block__spinner { display: inline-block; vertical-align: middle; margin-right: 6px; }
+
 .list-item__meta {
   color: var(--text-dim);
   font-size: 11px;
@@ -2007,6 +2070,7 @@ code, .mono {
 
 /* Session header */
 .session-header {
+  min-height: var(--shell-header-height);
   display: flex;
   align-items: center;
   gap: 12px;
@@ -4937,23 +5001,28 @@ code, .mono {
   /* Basis 0 + min-height 0 so tall file/git lists shrink and scroll inside. */
   flex: 1 1 0;
   min-height: 0;
+  padding: 0;
+  gap: 0;
   overflow: hidden;
 }
 
 .rail-tabs__tabs {
-  flex: 0 0 auto;
+  box-sizing: border-box;
+  flex: 0 0 var(--shell-header-height);
+  height: var(--shell-header-height);
   display: flex;
-  gap: 2px;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--border);
-  margin: -2px 0 0;
 }
 
 .rail-tabs__tab {
   flex: 1 1 0;
   margin: 0;
-  padding: 6px 4px 7px;
-  border: 0;
-  border-bottom: 2px solid transparent;
+  padding: 5px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--text-dim);
   font-size: 11px;
@@ -4962,17 +5031,18 @@ code, .mono {
   letter-spacing: 0.06em;
   cursor: pointer;
   text-align: center;
+  transition: background var(--motion) var(--ease), border-color var(--motion) var(--ease), color var(--motion) var(--ease);
 }
 
-.rail-tabs__tab:hover {
+.rail-tabs__tab:hover:not(.rail-tabs__tab--active) {
   color: var(--text);
   background: var(--bg-hover);
 }
 
 .rail-tabs__tab--active {
   color: var(--accent-text);
-  border-bottom-color: var(--accent);
-  background: var(--bg-2);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
 }
 
 .rail-tabs__body {
