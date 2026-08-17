@@ -227,12 +227,12 @@ Keep `TError` / user-facing messages clean — do not stringify exceptions into 
 
 | Type | Notes |
 | ---- | ----- |
-| `IDysonBrowserControl` | Process-wide singleton: `OpenBrowserAsync` / `ListWindowsAsync` / `GetWindowAsync` / `ClearBrowserCacheAsync` (`DysonBrowserCacheClearResult`); `SnipCaptured` (`DysonBrowserSnipPayload`) for chrome snips → UI host pending images |
+| `IDysonBrowserControl` | Process-wide singleton: `OpenBrowserAsync` / `ListWindowsAsync` / `GetWindowAsync` / `ClearBrowserCacheAsync` (`DysonBrowserCacheClearResult`); `SnipCaptured` (`DysonBrowserSnipPayload`) for chrome snips → UI host pending images + composer URL/scroll line |
 | `IDysonBrowserWindow` | Tabs + close/resize/bring-to-front |
 | `IDysonBrowserTab` | Navigate, interact, JS, screenshot (`TakeScreenshotAsync` optional `timeoutMs`, default 30s when omitted/invalid; races CDP vs linked prompt CT), console/network logs |
 | `DysonBrowserClickRequest` / `DysonBrowserTypeRequest` / `DysonBrowserKeyRequest` | Interaction DTOs |
 | `DysonBrowserConsoleEntry` / `DysonBrowserNetworkEntry` | Log DTOs |
-| `DysonBrowserSnipPayload` / `DysonBrowserSnipCrop` | Snip event payload + DIP→pixel crop math |
+| `DysonBrowserSnipPayload` / `DysonBrowserSnipCrop` | Snip event payload (`ImageBytes`, empty `HtmlRef`, `FileName`, `Url`, `ScrollY`, `ScrollHeight`, `ViewportHeight`, `PercentDown`) + DIP→pixel crop math (`MapDipSelectionToPixelRect`) + composer line (`FormatPromptLine`, `PercentDownThePage`). Chrome crops the overlay bitmap (no second CDP capture). Host queues the JPEG and appends `Snip: {url} · {n}% down the page` in the composer |
 | `DysonNullBrowserControl` | All methods → `"browser control unavailable"` |
 | `DysonCefBrowserControl` | Windows CefSharp impl in `Harness.WindowsBrowser` (not referenced by Engine) |
 
