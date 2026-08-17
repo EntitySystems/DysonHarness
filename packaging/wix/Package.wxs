@@ -41,5 +41,17 @@
         Value="1"
         KeyPath="yes" />
     </Component>
+
+    <!-- NOT Installed also covers major upgrade: ProductCode is new each MSI build. -->
+    <CustomAction
+      Id="LaunchApplication"
+      Directory="INSTALLFOLDER"
+      ExeCommand="&quot;[INSTALLFOLDER]DysonHarness.exe&quot;"
+      Impersonate="yes"
+      Return="asyncNoWait" />
+
+    <InstallExecuteSequence>
+      <Custom Action="LaunchApplication" After="InstallFinalize" Condition="NOT Installed" />
+    </InstallExecuteSequence>
   </Package>
 </Wix>
