@@ -6,6 +6,12 @@ public enum DysonSessionStatus
     Completed = 1,
     Stopped = 2,
     Failed = 3,
+
+    /// <summary>
+    /// Terminal child/descendant state after durable process-restart recovery.
+    /// Appended after existing values; do not renumber.
+    /// </summary>
+    Interrupted = 4,
 }
 
 public sealed class DysonSessionEntity

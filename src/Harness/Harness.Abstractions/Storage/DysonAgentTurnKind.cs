@@ -26,4 +26,14 @@ public enum DysonAgentTurnKind
     /// when estimated outgoing tokens exceed the session max target.
     /// </summary>
     DropContext = 13,
+    /// <summary>
+    /// Root-only: incomplete todos remain after a substantive turn. Review pending work
+    /// and update todo status accurately rather than declaring success.
+    /// </summary>
+    TaskEndReflect = 14,
+    /// <summary>
+    /// Root-only automatic code-review orchestration after ReportSummary. Starts exactly
+    /// one Bug Review subagent (no modelSlug) and reports findings; does not auto-fix.
+    /// </summary>
+    BugReview = 15,
 }

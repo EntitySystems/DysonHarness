@@ -41,11 +41,11 @@ dotnet run --project src/Harness/Harness.UI --urls http://localhost:5180
 
 Agent browser chrome has a **Snip** button to the right of the address bar. Agent tabs are **HwndHost** (windowed CEF), so a live WPF rubber-band cannot sit on top of the HWND (airspace). Snip therefore uses a **CDP screenshot-backed overlay**:
 
-1. Click Snip → CDP full-viewport screenshot → show as a WPF `Image` over the content host; **collapse** the HwndHost browser so the overlay is interactive (Esc cancels and restores the browser)
+1. Click Snip → capture page URL (`CurrentAddress`) and a best-effort JS probe (`scrollY`, `scrollHeight`, `innerHeight`) → CDP full-viewport screenshot → show as a WPF `Image` over the content host; **collapse** the HwndHost browser so the overlay is interactive (Esc cancels and restores the browser)
 2. Rubber-band select on that image layer
-3. On a valid drag: fresh CDP screenshot → map selection (DIP) to pixel bounds → crop to JPEG in WPF
-4. `IDysonBrowserControl.SnipCaptured` raises `DysonBrowserSnipPayload` (`ImageBytes`, empty `HtmlRef`, `FileName` = `browser-snip.jpg`); HwndHost is shown again
-5. `DysonUiHost` compresses via `DysonUserImageFactory` and `QueuePendingImage` — the thumbnail appears in the composer; the user still types/sends (no auto-send)
+3. On a valid drag: crop the **overlay** `BitmapSource` (map DIP selection to that bitmap’s pixels). Do **not** take a second CDP screenshot — collapsed HwndHost lays out at 0×0 and `Page.CaptureScreenshot` returns a tiny/empty frame
+4. `IDysonBrowserControl.SnipCaptured` raises `DysonBrowserSnipPayload` (`ImageBytes`, empty `HtmlRef`, `FileName` = `browser-snip.jpg`, plus `Url`, raw scroll metrics, and `PercentDown` for the rubber-band top); HwndHost is shown again
+5. `DysonUiHost` compresses via `DysonUserImageFactory` and `QueuePendingImage` — the thumbnail appears in the composer. It also enqueues a consume-once prompt line (`DysonBrowserSnipCrop.FormatPromptLine`) that `Composer` appends: `Snip: {url} · {n}% down the page` (drops URL or percent when missing; omits the line if both are missing). The user still types/sends (no auto-send)
 
 `TakeScreenshotAsync` uses DevTools `Page.CaptureScreenshot` (optional `timeoutMs`, default **30s**, linked to the prompt cancellation token so cancel/timeout cannot hang forever). Under HwndHost this capture includes WebGPU/WebGL pixels.
 

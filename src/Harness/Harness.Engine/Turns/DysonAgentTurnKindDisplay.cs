@@ -19,6 +19,8 @@ public static class DysonAgentTurnKindDisplay
         DysonAgentTurnKind.DisplayInfo => "Info",
         DysonAgentTurnKind.ModeSwitch => "Mode switch",
         DysonAgentTurnKind.DropContext => "Drop context",
+        DysonAgentTurnKind.TaskEndReflect => "Task end reflection",
+        DysonAgentTurnKind.BugReview => "Code review",
         _ => kind.ToString(),
     };
 }

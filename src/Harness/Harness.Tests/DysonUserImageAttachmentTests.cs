@@ -21,6 +21,69 @@ public class DysonUserImageAttachmentTests
         AssertResponsesTranscriptIncludesInputImage();
     }
 
+    [Fact]
+    public void MapDipSelectionToPixelRect_OneByOneShot_ClampsToOnePixel()
+    {
+        var mapped = DysonBrowserSnipCrop.MapDipSelectionToPixelRect(
+            selectionX: 10,
+            selectionY: 20,
+            selectionWidth: 400,
+            selectionHeight: 300,
+            contentWidthDip: 800,
+            contentHeightDip: 600,
+            shotWidthPx: 1,
+            shotHeightPx: 1);
+        if (mapped is not { } rect
+            || rect.X != 0
+            || rect.Y != 0
+            || rect.Width != 1
+            || rect.Height != 1)
+        {
+            throw new InvalidOperationException(
+                $"Collapsed-HWND 1×1 shot must clamp a large DIP selection to 1×1, got {mapped}.");
+        }
+    }
+
+    [Fact]
+    public void FormatPromptLine_UrlAndPercentCases()
+    {
+        var both = DysonBrowserSnipCrop.FormatPromptLine("https://example.com/page", 25);
+        if (both != "Snip: https://example.com/page · 25% down the page")
+            throw new InvalidOperationException($"url+percent mismatch: {both}");
+
+        var urlOnly = DysonBrowserSnipCrop.FormatPromptLine("https://example.com/page", null);
+        if (urlOnly != "Snip: https://example.com/page")
+            throw new InvalidOperationException($"url-only mismatch: {urlOnly}");
+
+        var percentOnly = DysonBrowserSnipCrop.FormatPromptLine("  ", 40);
+        if (percentOnly != "Snip: 40% down the page")
+            throw new InvalidOperationException($"percent-only mismatch: {percentOnly}");
+
+        if (DysonBrowserSnipCrop.FormatPromptLine(null, null) is not null)
+            throw new InvalidOperationException("empty url+percent must return null.");
+        if (DysonBrowserSnipCrop.FormatPromptLine("", null) is not null)
+            throw new InvalidOperationException("blank url without percent must return null.");
+
+        if (DysonBrowserSnipCrop.PercentDownThePage(250, 1000) != 25)
+            throw new InvalidOperationException("250/1000 must be 25%.");
+        if (DysonBrowserSnipCrop.PercentDownThePage(-10, 100) != 0)
+            throw new InvalidOperationException("negative documentY must clamp to 0.");
+        if (DysonBrowserSnipCrop.PercentDownThePage(200, 100) != 100)
+            throw new InvalidOperationException("past end must clamp to 100.");
+        if (DysonBrowserSnipCrop.PercentDownThePage(0, 0) != 0)
+            throw new InvalidOperationException("zero scrollHeight must floor at 1 (0%).");
+
+        var documentY = DysonBrowserSnipCrop.DocumentY(
+            scrollY: 200,
+            selectionY: 50,
+            contentHeightDip: 400,
+            viewportHeight: 400);
+        if (Math.Abs(documentY - 250) > 0.001)
+            throw new InvalidOperationException($"documentY expected 250, got {documentY}.");
+        if (DysonBrowserSnipCrop.PercentDownThePage(documentY, 1000) != 25)
+            throw new InvalidOperationException("documentY 250 / scrollHeight 1000 must be 25%.");
+    }
+
     private static byte[] TinyPng()
     {
         using var image = new MagickImage(MagickColors.Red, 32, 24);

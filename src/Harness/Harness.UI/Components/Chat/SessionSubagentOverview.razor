@@ -56,7 +56,7 @@
         if (Session is null)
             return;
 
-        foreach (var child in Session.SubSessions.OrderBy(c => c.Id))
+        foreach (var child in Session.SubSessions.OrderByDescending(c => c.Id))
         {
             if (child.PersistenceId == Guid.Empty)
                 continue;

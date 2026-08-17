@@ -14,7 +14,7 @@
     <button type="button"
             class="workdir-switcher__trigger"
             aria-label="Active work directory"
-            disabled="@Busy"
+            disabled="@ControlsLocked"
             @onclick="OpenModal">
         <span class="workdir-switcher__trigger-label">@CurrentLabel</span>
         <span class="workdir-switcher__trigger-caret" aria-hidden="true">▾</span>
@@ -30,11 +30,12 @@
              role="dialog"
              aria-modal="true"
              aria-labelledby="workdir-modal-title"
+             aria-busy="@(_selectingId is not null)"
              @onclick:stopPropagation="true"
              @onkeydown="OnModalKeyDown">
             <div class="workdir-modal__header">
                 <h3 id="workdir-modal-title">Select work directory</h3>
-                <button type="button" class="btn btn-ghost workdir-modal__close" @onclick="CloseModal" aria-label="Close">×</button>
+                <button type="button" class="btn btn-ghost workdir-modal__close" disabled="@ControlsLocked" @onclick="CloseModal" aria-label="Close">×</button>
             </div>
 
             @if (!string.IsNullOrEmpty(_error))
@@ -47,7 +48,7 @@
                        type="search"
                        placeholder="Search name or path…"
                        value="@_search"
-                       disabled="@Busy"
+                       disabled="@ControlsLocked"
                        @oninput="OnSearchInput"
                        @onkeydown="OnModalKeyDown"
                        autofocus />
@@ -69,21 +70,28 @@
                     @foreach (var item in FilteredItems)
                     {
                         var selected = ActiveWorkDirectoryId == item.Id;
-                        <div class="workdir-modal__row @(selected ? "is-selected" : null)"
+                        var loading = _selectingId == item.Id;
+                        <div class="workdir-modal__row @(selected ? "is-selected" : null) @(loading ? "is-loading" : null)"
                              role="option"
                              aria-selected="@selected">
                             <button type="button"
                                     class="workdir-modal__option"
-                                    disabled="@Busy"
+                                    disabled="@ControlsLocked"
                                     @onclick="() => SelectAsync(item.Id)">
-                                <span class="workdir-modal__option-name">@item.Name</span>
-                                <span class="workdir-modal__option-path mono" title="@item.AbsolutePath">
-                                    @TruncatePath(item.AbsolutePath)
+                                <span class="workdir-modal__option-text">
+                                    <span class="workdir-modal__option-name">@item.Name</span>
+                                    <span class="workdir-modal__option-path mono" title="@item.AbsolutePath">
+                                        @TruncatePath(item.AbsolutePath)
+                                    </span>
                                 </span>
+                                @if (loading)
+                                {
+                                    <span class="turn-block__spinner" aria-hidden="true"></span>
+                                }
                             </button>
                             <button type="button"
                                     class="btn btn-ghost btn-icon workdir-modal__settings"
-                                    disabled="@Busy"
+                                    disabled="@ControlsLocked"
                                     title="Work directory settings"
                                     aria-label="Settings for @item.Name"
                                     @onclick="() => OpenSettingsAsync(item)"
@@ -92,7 +100,7 @@
                             </button>
                             <button type="button"
                                     class="btn btn-ghost btn-icon workdir-modal__remove"
-                                    disabled="@Busy"
+                                    disabled="@ControlsLocked"
                                     title="Remove from list (does not delete disk folder)"
                                     aria-label="Remove @item.Name"
                                     @onclick="() => RemoveAsync(item.Id)"
@@ -107,7 +115,7 @@
             <div class="workdir-modal__footer btn-row">
                 <button type="button"
                         class="btn btn-primary btn-icon"
-                        disabled="@Busy"
+                        disabled="@ControlsLocked"
                         title="Add work directory"
                         aria-label="Add work directory"
                         @onclick="AddAsync">
@@ -123,6 +131,7 @@
 @code {
     private readonly List<DysonWorkDirectoryEntity> _items = [];
     private string? _error;
+    private Guid? _selectingId;
     private bool _modalOpen;
     private bool _focusSearch;
     private string _search = "";
@@ -133,6 +142,8 @@
     [Parameter] public EventCallback<Guid?> ActiveWorkDirectoryIdChanged { get; set; }
     [Parameter] public bool Busy { get; set; }
     [Parameter] public EventCallback OnChanged { get; set; }
+
+    private bool ControlsLocked => Busy || _selectingId is not null;
 
     private string CurrentLabel => Active?.Name ?? "Select work directory…";
 
@@ -212,6 +223,9 @@
 
     private void CloseModal()
     {
+        if (ControlsLocked)
+            return;
+
         _modalOpen = false;
         _search = "";
     }
@@ -240,19 +254,49 @@
 
     private async Task SelectAsync(Guid id)
     {
+        if (ControlsLocked)
+            return;
+        if (ActiveWorkDirectoryId == id)
+        {
+            CloseModal();
+            return;
+        }
+
         _error = null;
+        _selectingId = id;
+        StateHasChanged();
+        try
+        {
+            var touch = await WorkDirs.TouchOpenedAsync(id);
+            if (touch.IsError)
+                _error = touch.Error;
 
-        var touch = await WorkDirs.TouchOpenedAsync(id);
-        if (touch.IsError)
-            _error = touch.Error;
+            await ActiveWorkDirectoryIdChanged.InvokeAsync(id);
+            if (ActiveWorkDirectoryId != id)
+            {
+                _error ??= "Could not switch work directory.";
+                return;
+            }
 
-        await ActiveWorkDirectoryIdChanged.InvokeAsync(id);
-        await OnChanged.InvokeAsync();
-        CloseModal();
+            await OnChanged.InvokeAsync();
+            _selectingId = null;
+            CloseModal();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _selectingId = null;
+        }
     }
 
     private async Task AddAsync()
     {
+        if (ControlsLocked)
+            return;
+
         _error = null;
         var pick = await DysonNativeFolderPicker.PickFolderAsync();
         if (pick.IsError)
@@ -269,11 +313,31 @@
             return;
         }
 
-        await RefreshAsync();
-        await WorkDirs.TouchOpenedAsync(create.Value);
-        await ActiveWorkDirectoryIdChanged.InvokeAsync(create.Value);
-        await OnChanged.InvokeAsync();
-        CloseModal();
+        _selectingId = create.Value;
+        StateHasChanged();
+        try
+        {
+            await RefreshAsync();
+            await WorkDirs.TouchOpenedAsync(create.Value);
+            await ActiveWorkDirectoryIdChanged.InvokeAsync(create.Value);
+            if (ActiveWorkDirectoryId != create.Value)
+            {
+                _error ??= "Could not switch work directory.";
+                return;
+            }
+
+            await OnChanged.InvokeAsync();
+            _selectingId = null;
+            CloseModal();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _selectingId = null;
+        }
     }
 
     private async Task RemoveAsync(Guid id)

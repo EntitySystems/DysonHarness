@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Net.Http.Headers;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -13,6 +12,13 @@ namespace DysonHarness;
 public sealed class DysonCliProxyHost : IAsyncDisposable
 {
     public const int DefaultPort = 8317;
+
+    // ponytail: loopback-only shared secrets so every Dyson build can attach to one local CLIProxy.
+    // Upgrade path: user-configurable secrets or install-scoped keys if we ever bind beyond 127.0.0.1.
+    public const string DefaultApiKey = "dyson-cliproxy-local-api-key-v1";
+    public const string DefaultManagementKey = "dyson-cliproxy-local-mgmt-key-v1";
+
+    public static string DefaultLocalBaseUrl => $"http://127.0.0.1:{DefaultPort}/v1";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -149,28 +155,14 @@ public sealed class DysonCliProxyHost : IAsyncDisposable
 
     public Result<string, string> GetApiKey()
     {
-        try
-        {
-            _keys ??= LoadOrCreateKeys();
-            return Result<string, string>.AsValue(_keys.ApiKey);
-        }
-        catch (Exception ex)
-        {
-            return Result<string, string>.AsError($"Failed to load CLIProxy API key: {ex.Message}", ex);
-        }
+        _keys ??= LoadOrCreateKeys();
+        return Result<string, string>.AsValue(_keys.ApiKey);
     }
 
     public Result<string, string> GetManagementKey()
     {
-        try
-        {
-            _keys ??= LoadOrCreateKeys();
-            return Result<string, string>.AsValue(_keys.ManagementKey);
-        }
-        catch (Exception ex)
-        {
-            return Result<string, string>.AsError($"Failed to load CLIProxy management key: {ex.Message}", ex);
-        }
+        _keys ??= LoadOrCreateKeys();
+        return Result<string, string>.AsValue(_keys.ManagementKey);
     }
 
     public async Task<Result<JsonHttpResult, string>> ManagementGetAsync(
@@ -206,33 +198,8 @@ public sealed class DysonCliProxyHost : IAsyncDisposable
 
     private static string KeysSidecarPath => Path.Combine(DysonCliProxyPaths.InstallRoot, "keys.json");
 
-    private ProxyKeys LoadOrCreateKeys()
-    {
-        Directory.CreateDirectory(DysonCliProxyPaths.InstallRoot);
-        var path = KeysSidecarPath;
-        if (File.Exists(path))
-        {
-            try
-            {
-                var loaded = JsonSerializer.Deserialize<ProxyKeys>(File.ReadAllText(path), JsonOptions);
-                if (loaded is not null
-                    && !string.IsNullOrWhiteSpace(loaded.ApiKey)
-                    && !string.IsNullOrWhiteSpace(loaded.ManagementKey)
-                    && loaded.Port is > 0 and < 65536)
-                {
-                    return loaded;
-                }
-            }
-            catch (JsonException)
-            {
-                // recreate below
-            }
-        }
-
-        var created = new ProxyKeys(CreateSecret(), CreateSecret(), DefaultPort);
-        File.WriteAllText(path, JsonSerializer.Serialize(created, JsonOptions), Encoding.UTF8);
-        return created;
-    }
+    private ProxyKeys LoadOrCreateKeys() =>
+        new(DefaultApiKey, DefaultManagementKey, DefaultPort);
 
     private VoidResult<string> WriteConfigYaml(ProxyKeys keys)
     {
@@ -240,6 +207,10 @@ public sealed class DysonCliProxyHost : IAsyncDisposable
         {
             Directory.CreateDirectory(DysonCliProxyPaths.InstallRoot);
             Directory.CreateDirectory(DysonCliProxyPaths.AuthsDirectory);
+            File.WriteAllText(
+                KeysSidecarPath,
+                JsonSerializer.Serialize(keys, JsonOptions),
+                Encoding.UTF8);
 
             var authDir = DysonCliProxyPaths.AuthsDirectory.Replace('\\', '/');
             var yaml = new StringBuilder();
@@ -335,8 +306,10 @@ public sealed class DysonCliProxyHost : IAsyncDisposable
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey.Trim());
 
             using var response = await _http.SendAsync(request, cts.Token).ConfigureAwait(false);
-            // 401 still proves the listener is up.
-            return response.IsSuccessStatusCode || (int)response.StatusCode is >= 400 and < 500;
+            if (string.IsNullOrWhiteSpace(apiKey))
+                return response.IsSuccessStatusCode || (int)response.StatusCode is >= 400 and < 500;
+
+            return response.IsSuccessStatusCode;
         }
         catch
         {
@@ -431,9 +404,6 @@ public sealed class DysonCliProxyHost : IAsyncDisposable
         var rel = relativePath.TrimStart('/');
         return root + "/" + rel;
     }
-
-    private static string CreateSecret() =>
-        Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
 
     private static string EscapeYamlDoubleQuoted(string value) =>
         value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);

@@ -73,8 +73,11 @@
 
         _boundWorkDirectoryId = ActiveWorkDirectoryId;
         // Always keep the workdir watcher + git status alive regardless of active tab.
-        await FileTree.SetActiveAsync(ActiveWorkDirectoryId, Subject.SubjectId);
-        await GitChanges.SetActiveAsync(ActiveWorkDirectoryId, Subject.SubjectId);
+        // Home.SetActiveWorkDirectoryAsync already activates both; skip the duplicate refresh.
+        if (FileTree.Active?.WorkDirectoryId != ActiveWorkDirectoryId)
+            await FileTree.SetActiveAsync(ActiveWorkDirectoryId, Subject.SubjectId);
+        if (GitChanges.Active?.WorkDirectoryId != ActiveWorkDirectoryId)
+            await GitChanges.SetActiveAsync(ActiveWorkDirectoryId, Subject.SubjectId);
     }
 
     private void Select(RailTab tab) => _activeTab = tab;

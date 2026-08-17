@@ -31,9 +31,30 @@ public static class DysonTurnPersistence
             CompactToolHistory = turn.CompactToolHistory,
             IsExcludedFromContext = turn.IsExcludedFromContext,
             ContextSummary = turn.ContextSummary,
+            InterruptionReason = turn.InterruptionReason,
             CreatedUtc = createdUtc ?? (turn.StartedUtc != default ? turn.StartedUtc : DateTime.UtcNow),
             CompletedUtc = completedUtc ?? turn.CompletedUtc,
         };
+    }
+
+    /// <summary>
+    /// Append-only interruption/recovery log. Requires a non-empty
+    /// <paramref name="reason"/> or <see cref="DysonAgentTurn.InterruptionReason"/>.
+    /// </summary>
+    public static DysonSessionLogEntry CreateTurnInterruptedLog(
+        Guid sessionId,
+        DysonAgentTurn turn,
+        string? reason = null)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+        var resolved = string.IsNullOrWhiteSpace(reason) ? turn.InterruptionReason : reason;
+        ArgumentException.ThrowIfNullOrWhiteSpace(resolved);
+
+        return DysonSessionLogPayload.CreateEntry(
+            sessionId,
+            DysonSessionLogKind.TurnInterrupted,
+            new DysonSessionLogTurnInterrupted(turn.Id, resolved),
+            turnId: turn.Id);
     }
 
     public static DysonSessionLogEntry CreateTurnStartedLog(Guid sessionId, DysonAgentTurn turn) =>

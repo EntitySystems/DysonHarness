@@ -365,10 +365,24 @@
 
     private void OnHostChanged() => _ = InvokeAsync(async () =>
     {
+        DrainPendingSnipPromptLines();
         await RefreshSkillsAsync();
         await RefreshPluginCommandsAsync();
         StateHasChanged();
     });
+
+    private void DrainPendingSnipPromptLines()
+    {
+        var lines = Host.TakePendingSnipPromptLines();
+        if (lines.Count == 0)
+            return;
+
+        foreach (var line in lines)
+        {
+            var trimmed = _text.TrimEnd();
+            _text = trimmed.Length == 0 ? line : trimmed + "\n" + line;
+        }
+    }
 
     private async Task RefreshModelsAsync()
     {

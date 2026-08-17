@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -38,6 +39,11 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
     private Canvas? _snipRubberBand;
     private Rectangle? _snipSelection;
     private Point? _snipOrigin;
+    private BitmapSource? _snipOverlayBitmap;
+    private string? _snipPageUrl;
+    private double? _snipScrollY;
+    private double? _snipScrollHeight;
+    private double? _snipViewportHeight;
     private bool _snipCapturing;
 
     public DysonCefBrowserWindow(DysonCefBrowserControl owner, string? initialUrl, int width, int height)
@@ -281,12 +287,14 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
         _snipCapturing = true;
         try
         {
+            var pageUrl = string.IsNullOrWhiteSpace(tab.CurrentAddress)
+                ? null
+                : tab.CurrentAddress.Trim();
+            var scroll = await TryReadScrollMetricsAsync(tab).ConfigureAwait(true);
+
             var shot = await tab.TakeScreenshotAsync().ConfigureAwait(true);
             if (shot.IsError)
                 return;
-
-            // Hide HwndHost so the WPF overlay can receive mouse (HWND airspace).
-            tab.BrowserControl.Visibility = Visibility.Collapsed;
 
             BitmapSource bitmap;
             using (var input = new MemoryStream(shot.Value))
@@ -298,6 +306,9 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
                 bitmap = decoder.Frames[0];
                 bitmap.Freeze();
             }
+
+            // Hide HwndHost so the WPF overlay can receive mouse (HWND airspace).
+            tab.BrowserControl.Visibility = Visibility.Collapsed;
 
             var overlay = new Grid
             {
@@ -336,12 +347,17 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
             _snipRubberBand = rubberBand;
             _snipSelection = selection;
             _snipOrigin = null;
+            _snipOverlayBitmap = bitmap;
+            _snipPageUrl = pageUrl;
+            _snipScrollY = scroll?.ScrollY;
+            _snipScrollHeight = scroll?.ScrollHeight;
+            _snipViewportHeight = scroll?.ViewportHeight;
             _contentHost.Children.Add(overlay);
             overlay.Focus();
         }
         catch
         {
-            RestoreActiveBrowserVisibility();
+            ExitSnipMode();
         }
         finally
         {
@@ -351,14 +367,20 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
 
     private void ExitSnipMode()
     {
-        if (_snipOverlay is null)
-            return;
+        if (_snipOverlay is not null)
+        {
+            _contentHost.Children.Remove(_snipOverlay);
+            _snipOverlay = null;
+        }
 
-        _contentHost.Children.Remove(_snipOverlay);
-        _snipOverlay = null;
         _snipRubberBand = null;
         _snipSelection = null;
         _snipOrigin = null;
+        _snipOverlayBitmap = null;
+        _snipPageUrl = null;
+        _snipScrollY = null;
+        _snipScrollHeight = null;
+        _snipViewportHeight = null;
         RestoreActiveBrowserVisibility();
     }
 
@@ -432,16 +454,16 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
             return;
         }
 
-        _ = CompleteSnipAsync(x, y, w, h);
+        CompleteSnip(x, y, w, h);
     }
 
-    private async Task CompleteSnipAsync(double selectionX, double selectionY, double selectionWidth, double selectionHeight)
+    private void CompleteSnip(double selectionX, double selectionY, double selectionWidth, double selectionHeight)
     {
         if (_snipCapturing)
             return;
 
-        var tab = ActiveTab();
-        if (tab is null)
+        var bitmap = _snipOverlayBitmap;
+        if (bitmap is null)
         {
             ExitSnipMode();
             return;
@@ -453,28 +475,6 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
             var contentWidth = _contentHost.ActualWidth;
             var contentHeight = _contentHost.ActualHeight;
 
-            // Drop the overlay; keep HwndHost collapsed until after CDP capture + crop.
-            if (_snipOverlay is not null)
-            {
-                _contentHost.Children.Remove(_snipOverlay);
-                _snipOverlay = null;
-                _snipRubberBand = null;
-                _snipSelection = null;
-                _snipOrigin = null;
-            }
-
-            var shot = await tab.TakeScreenshotAsync().ConfigureAwait(true);
-            if (shot.IsError)
-                return;
-
-            var bytes = shot.Value;
-            using var input = new MemoryStream(bytes);
-            var decoder = BitmapDecoder.Create(
-                input,
-                BitmapCreateOptions.PreservePixelFormat,
-                BitmapCacheOption.OnLoad);
-            var frame = decoder.Frames[0];
-
             var mapped = DysonBrowserSnipCrop.MapDipSelectionToPixelRect(
                 selectionX,
                 selectionY,
@@ -482,23 +482,41 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
                 selectionHeight,
                 contentWidth,
                 contentHeight,
-                frame.PixelWidth,
-                frame.PixelHeight);
+                bitmap.PixelWidth,
+                bitmap.PixelHeight);
             if (mapped is null)
                 return;
 
             var (px, py, pw, ph) = mapped.Value;
-            var cropped = new CroppedBitmap(frame, new Int32Rect(px, py, pw, ph));
+            var cropped = new CroppedBitmap(bitmap, new Int32Rect(px, py, pw, ph));
             var encoder = new JpegBitmapEncoder { QualityLevel = 90 };
             encoder.Frames.Add(BitmapFrame.Create(cropped));
             using var output = new MemoryStream();
             encoder.Save(output);
+
+            int? percentDown = null;
+            if (_snipScrollY is double scrollY
+                && _snipScrollHeight is double scrollHeight
+                && _snipViewportHeight is double viewportHeight)
+            {
+                var documentY = DysonBrowserSnipCrop.DocumentY(
+                    scrollY,
+                    selectionY,
+                    contentHeight,
+                    viewportHeight);
+                percentDown = DysonBrowserSnipCrop.PercentDownThePage(documentY, scrollHeight);
+            }
 
             _owner.RaiseSnipCaptured(new DysonBrowserSnipPayload
             {
                 ImageBytes = output.ToArray(),
                 HtmlRef = "",
                 FileName = "browser-snip.jpg",
+                Url = _snipPageUrl,
+                ScrollY = _snipScrollY,
+                ScrollHeight = _snipScrollHeight,
+                ViewportHeight = _snipViewportHeight,
+                PercentDown = percentDown,
             });
         }
         catch
@@ -507,8 +525,37 @@ internal sealed class DysonCefBrowserWindow : Window, IDysonBrowserWindow
         }
         finally
         {
-            RestoreActiveBrowserVisibility();
+            ExitSnipMode();
             _snipCapturing = false;
+        }
+    }
+
+    private static async Task<(double ScrollY, double ScrollHeight, double ViewportHeight)?> TryReadScrollMetricsAsync(
+        DysonCefBrowserTab tab)
+    {
+        try
+        {
+            var result = await tab.ExecuteJavaScriptAsync(
+                "(function(){return (window.scrollY||0)+','+(document.documentElement.scrollHeight||0)+','+(window.innerHeight||0);})()")
+                .ConfigureAwait(true);
+            if (result.IsError || string.IsNullOrWhiteSpace(result.Value))
+                return null;
+
+            var parts = result.Value.Split(',');
+            if (parts.Length != 3)
+                return null;
+            if (!double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var scrollY)
+                || !double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var scrollHeight)
+                || !double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var viewportHeight))
+            {
+                return null;
+            }
+
+            return (scrollY, scrollHeight, viewportHeight);
+        }
+        catch
+        {
+            return null;
         }
     }
 

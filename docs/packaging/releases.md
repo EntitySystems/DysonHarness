@@ -76,7 +76,7 @@ The Windows shell checks for a newer build on the **same channel** once per proc
 1. `DysonAppVersionInfo` reads `version.json` from `AppContext.BaseDirectory` (assembly `InformationalVersion` as fallback). The updater only runs on Windows and only when the CalVer year is ≥ 2026 — dev builds (`1.0.0`) never check. Missing/unknown `channel` defaults to `preview`.
 2. `DysonGitHubReleaseClient` calls `GET /repos/{repo}/releases?per_page=15` and picks the highest-CalVer non-draft release whose `prerelease` flag matches the local channel (`preview` → prerelease only; `stable` → non-prerelease only) and that carries a `*-win-x64.msi` asset. (`/latest` is not used — it only surfaces non-prereleases, so preview builds would never see updates.)
 3. If that tag is strictly newer, `UpdateAvailableModal` prompts with local vs remote version. **Not now** / Escape / backdrop persist the tag in `app_settings` under `ui_update_skipped_version`, so the prompt only returns for a newer release.
-4. **Update** streams the MSI to `%TEMP%` with a byte progress bar (modal locks — no dismiss), then runs `cmd /c ping -n 4 127.0.0.1 >nul & msiexec /i "<msi>"` and calls `Environment.Exit(0)`. The short delay plus process exit releases CEF/WPF file locks before the WiX major upgrade replaces `%LocalAppData%\Programs\DysonHarness`. (`ping` rather than `timeout`: a `WinExe` host has no console and `timeout` aborts without one.)
+4. **Update** streams the MSI to `%TEMP%` with a byte progress bar (modal locks — no dismiss), then runs `cmd /c ping -n 4 127.0.0.1 >nul & msiexec /i "<msi>"` and calls `Environment.Exit(0)`. The short delay plus process exit releases CEF/WPF file locks before the WiX major upgrade replaces `%LocalAppData%\Programs\DysonHarness`. (`ping` rather than `timeout`: a `WinExe` host has no console and `timeout` aborts without one.) The updater only hands off to msiexec; it does not start the new exe. After a successful install, the MSI launches `DysonHarness.exe`.
 
 Download or hand-off failures unlock the modal with the message and a **Close** button — the install is never forced. Types live in [`Harness.UI/Services`](../../src/Harness/Harness.UI/Services); parsing Facts are in `DysonAppUpdateTests`.
 
@@ -100,7 +100,7 @@ Patch instructions for [dysonharness.com](https://dysonharness.com) (Website rep
 
 ## Run
 
-1. **Windows (recommended):** download `DysonHarness-{version}-win-x64.msi` and install (default is per-user; no elevation). Launch from the Start Menu shortcut **Dyson Harness**, or run `%LocalAppData%\Programs\DysonHarness\DysonHarness.exe`.
+1. **Windows (recommended):** download `DysonHarness-{version}-win-x64.msi` and install (default is per-user; no elevation). A successful install also starts the app automatically. You can launch again from the Start Menu shortcut **Dyson Harness**, or run `%LocalAppData%\Programs\DysonHarness\DysonHarness.exe`.
 2. **Windows (portable):** download the `win-x64` zip, unzip, and run `DysonHarness.exe` (desktop CEF shell; no separate browser URL needed).
 3. **Linux / macOS:** download the zip for your RID, unzip, run `Harness.UI`, and open the agent shell URL printed in the console (default http://localhost:5180) if the browser does not open automatically.
 
@@ -108,7 +108,7 @@ Builds on `master` and `release-preview` resolve app mode to **Prod** (`DysonPro
 
 ## Windows notes
 
-- **MSI:** WiX dual-scope package (`perUserOrMachine`); default is current-user install into `%LocalAppData%\Programs\DysonHarness`. Appears in Apps & Features as **Dyson Harness** under manufacturer **Entity Systems**. Start Menu shortcut **Dyson Harness** uses the app icon. Uninstall removes the install directory and shortcut; app data under `%LocalAppData%\DysonHarness\` is left alone. Zip remains available for portable use. Asset filename keeps CalVer (`DysonHarness-{version}-win-x64.msi`); MSI `ProductVersion` maps `YYYY.M.N` → `(YYYY%100).M.N` because Windows Installer requires major &lt; 256.
+- **MSI:** WiX dual-scope package (`perUserOrMachine`); default is current-user install into `%LocalAppData%\Programs\DysonHarness`. Appears in Apps & Features as **Dyson Harness** under manufacturer **Entity Systems**. Start Menu shortcut **Dyson Harness** uses the app icon. A successful first install or major upgrade starts `DysonHarness.exe` when msiexec finishes; uninstall, repair, and modify do not. Uninstall removes the install directory and shortcut; app data under `%LocalAppData%\DysonHarness\` is left alone. Zip remains available for portable use. Asset filename keeps CalVer (`DysonHarness-{version}-win-x64.msi`); MSI `ProductVersion` maps `YYYY.M.N` → `(YYYY%100).M.N` because Windows Installer requires major &lt; 256.
 - **VC++ redistributable:** CefSharp needs the [Visual C++ 2022 x64 redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) on machines that do not already have it (required for both MSI and zip).
 - Keep the install/unzip folder intact (`CefSharp.BrowserSubprocess.exe`, `libcef.dll`, `locales\`, etc. must stay next to `DysonHarness.exe`).
 - **Single instance:** CEF uses a process singleton on `%LocalAppData%\DysonHarness\`. A second double-click focuses the running window and exits; that is not a packaging failure.
