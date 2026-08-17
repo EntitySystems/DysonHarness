@@ -4646,7 +4646,8 @@ code, .mono {
   border-radius: var(--radius-sm);
 }
 
-.workdir-modal__row.is-selected {
+.workdir-modal__row.is-selected,
+.workdir-modal__row.is-loading {
   background: var(--accent-soft);
 }
 
@@ -4654,12 +4655,24 @@ code, .mono {
   background: var(--bg-hover);
 }
 
+.workdir-modal__row.is-selected:hover,
+.workdir-modal__row.is-loading:hover {
+  background: var(--accent-soft);
+}
+
+.workdir-modal[aria-busy="true"] .workdir-modal__list,
+.workdir-modal[aria-busy="true"] .workdir-modal__search,
+.workdir-modal[aria-busy="true"] .workdir-modal__footer,
+.workdir-modal[aria-busy="true"] .workdir-modal__close {
+  pointer-events: none;
+}
+
 .workdir-modal__option {
   flex: 1;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
   text-align: left;
   padding: 8px 10px;
@@ -4667,6 +4680,23 @@ code, .mono {
   background: transparent;
   color: var(--text);
   border-radius: var(--radius-sm);
+}
+
+.workdir-modal__option:disabled {
+  cursor: default;
+}
+
+.workdir-modal__option-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.workdir-modal__option .turn-block__spinner {
+  flex-shrink: 0;
 }
 
 .workdir-modal__option-name {
