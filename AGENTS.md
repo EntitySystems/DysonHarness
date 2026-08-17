@@ -23,6 +23,7 @@ AI model harness.
 
 - Feature work must be performed on the `dev-bleeding-edge` branch. Before editing, agents must verify the current branch and switch to `dev-bleeding-edge` if necessary. If feature changes are already uncommitted on another branch, commit them there before switching so no work is lost, then move or cherry-pick the commit onto `dev-bleeding-edge` as appropriate.
 - C#: [rules/rules_csharp.md](rules/rules_csharp.md)
+- Engine/UI boundary: [rules/rules_engine_ui.md](rules/rules_engine_ui.md)
 - Skills: [rules/rules_skills.md](rules/rules_skills.md)
 - Docs: [rules/rules_docs.md](rules/rules_docs.md)
 - UI restart: [rules/rules_ui_restart.md](rules/rules_ui_restart.md)

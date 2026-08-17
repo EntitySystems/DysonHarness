@@ -1770,6 +1770,8 @@ code, .mono {
   text-overflow: ellipsis;
 }
 
+.session-list .list-item__title .turn-block__spinner { display: inline-block; vertical-align: middle; margin-right: 6px; }
+
 .list-item__meta {
   color: var(--text-dim);
   font-size: 11px;

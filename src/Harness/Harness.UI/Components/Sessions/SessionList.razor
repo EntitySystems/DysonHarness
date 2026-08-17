@@ -1,14 +1,15 @@
 @namespace Harness.UI.Components.Sessions
 @using DysonHarness
+@using Harness.UI.Demo
 @using Harness.UI.Services
 @inject ConfirmDialogService ConfirmDialog
+@inject DysonUiHost Host
 
 <div class="session-list">
     <div class="sidebar__section-label">Sessions</div>
     <div class="btn-row" style="margin-bottom:8px;">
         <button type="button"
                 class="btn btn-primary btn-icon"
-                disabled="@Busy"
                 title="New session"
                 aria-label="New session"
                 @onclick="OnNewAsync">
@@ -16,7 +17,6 @@
         </button>
         <button type="button"
                 class="btn btn-ghost btn-icon"
-                disabled="@Busy"
                 title="Refresh"
                 aria-label="Refresh"
                 @onclick="OnRefreshAsync">
@@ -43,16 +43,20 @@
                 <div class="list-item @(active ? "is-active" : null)">
                     <button type="button"
                             class="list-item__main"
-                            disabled="@Busy"
                             @onclick="() => OnResumeAsync(session.Id)">
-                        <span class="list-item__title">@title</span>
+                        <span class="list-item__title">
+                            @if (Host.IsSessionBusy(session.Id))
+                            {
+                                <span class="turn-block__spinner" aria-hidden="true"></span>
+                            }
+                            @title
+                        </span>
                         <span class="list-item__meta mono">
                             @session.AgentMode · @session.Status · @session.LastActivityUtc.ToLocalTime().ToString("g")
                         </span>
                     </button>
                     <button type="button"
                             class="btn btn-ghost btn-icon list-item__delete"
-                            disabled="@Busy"
                             title="Delete session"
                             aria-label="Delete @title"
                             @onclick="() => OnDeleteClickAsync(session.Id, title)"
@@ -68,7 +72,6 @@
 @code {
     [Parameter] public IReadOnlyList<DysonSessionSummary> Sessions { get; set; } = [];
     [Parameter] public Guid? ActiveSessionId { get; set; }
-    [Parameter] public bool Busy { get; set; }
     [Parameter] public string? Error { get; set; }
     [Parameter] public EventCallback OnNew { get; set; }
     [Parameter] public EventCallback<Guid> OnResume { get; set; }

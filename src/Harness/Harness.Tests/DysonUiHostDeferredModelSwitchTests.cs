@@ -121,6 +121,18 @@ public class DysonUiHostDeferredModelSwitchTests
             {
                 throw new InvalidOperationException("Flush must apply pending slug before next prompt.");
             }
+
+            var plan = await host.SetSessionAgentModeAsync(DysonAgentModes.Plan);
+            if (plan.IsError)
+                throw new InvalidOperationException(plan.Error);
+            if (!string.Equals(session.Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Expected Plan after SetSessionAgentModeAsync.");
+
+            var idleSwitch = await host.SetSessionModelSlugAsync(slugA.Value);
+            if (idleSwitch.IsError)
+                throw new InvalidOperationException(idleSwitch.Error);
+            if (!string.Equals(session.Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Switching model must not change agent mode.");
         }
         finally
         {

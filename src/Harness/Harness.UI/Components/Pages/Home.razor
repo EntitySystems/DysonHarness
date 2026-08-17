@@ -20,13 +20,11 @@
                 <WorkDirectorySwitcher @ref="_workdirSwitcher"
                                        ActiveWorkDirectoryId="_activeWorkDirectoryId"
                                        ActiveWorkDirectoryIdChanged="OnWorkDirectoryChangedAsync"
-                                       Busy="Host.IsBusy"
                                        OnChanged="OnWorkDirectoryListChangedAsync" />
             </WorkDirectory>
             <SessionList>
                 <SessionList Sessions="_sessions"
                              ActiveSessionId="Host.ActiveSessionId"
-                             Busy="Host.IsBusy"
                              Error="@_listError"
                              OnNew="StartNewAsync"
                              OnResume="ResumeAsync"
@@ -110,6 +108,7 @@
     private int _outgoingContextTokens;
     private int? _lastReportedPromptTokens;
     private string _selectedAgentMode = DysonAgentModes.Work;
+    private string? _lastSyncedSessionMode;
     private Guid? _activeWorkDirectoryId;
     private string? _gitBranch;
     private bool _workdirHydrated;
@@ -206,7 +205,8 @@
         SyncSelectedSlugFromSession();
         SyncReasoningEffortFromHost();
         SyncContextTokensFromHost();
-        SyncSelectedAgentModeFromSession();
+        // Model/effort/token Notify must not clobber a composer mode that is not yet applied.
+        SyncSelectedAgentModeIfSessionModeChanged();
         UpdateActiveTitle();
         try
         {
@@ -274,10 +274,20 @@
         _lastReportedPromptTokens = Host.SessionLastReportedPromptTokens;
     }
 
+    private void SyncSelectedAgentModeIfSessionModeChanged()
+    {
+        if (Host.Session is { } session
+            && !string.Equals(_lastSyncedSessionMode, session.Mode, StringComparison.OrdinalIgnoreCase))
+            SyncSelectedAgentModeFromSession();
+    }
+
     private void SyncSelectedAgentModeFromSession()
     {
         if (Host.Session is { } session)
+        {
             _selectedAgentMode = session.Mode;
+            _lastSyncedSessionMode = session.Mode;
+        }
     }
 
     private Task OnAgentModeChanged(string mode)

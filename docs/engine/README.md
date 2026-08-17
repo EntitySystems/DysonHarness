@@ -4,7 +4,7 @@ Library: [`src/Harness/Harness.Engine`](../../src/Harness/Harness.Engine) (`net1
 
 Source is organized by concern under folders (namespace stays `DysonHarness`): `App/`, `Session/`, `Turns/`, `Mcp/`, `Shell/`, `Providers/OpenAi/`, `Storage/`, `Context/`, `Search/`, plus `Migrations/` unchanged. Generated `DysonBuildInfo` stays in the build intermediate output. `Result/` types moved to `Harness.Abstractions`.
 
-The engine is an abstract agent harness: `DysonEngine` exposes a root `DysonAgentSession`; sessions talk to an ephemeral `DysonAgentProvider` and run staged MCP-shaped tool calls. There is no concrete host in the engine itself — UI and demo hosts live elsewhere.
+The engine is an abstract agent harness: `DysonEngine` exposes a root `DysonAgentSession`; sessions talk to an ephemeral `DysonAgentProvider` and run staged MCP-shaped tool calls. There is no concrete host in the engine itself — UI and demo hosts live elsewhere. Functional code belongs in Engine/Abstractions; UI hosts only attach — see [rules/rules_engine_ui.md](../../rules/rules_engine_ui.md).
 
 For bindable public types, see [api-surface.md](api-surface.md). Persistence is covered under [docs/storage](../storage/models.md). JSON dynamic toolchain: [json-dynamic-toolchain.md](json-dynamic-toolchain.md).
 

@@ -355,7 +355,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             _runtimeOwnedSessionIds[session.PersistenceId] = 0;
     }
 
-    private bool IsSessionBusy(Guid sessionId)
+    /// <summary>True when that session (not necessarily focused) has an in-flight host or runtime prompt.</summary>
+    public bool IsSessionBusy(Guid sessionId)
     {
         if (sessionId == Guid.Empty)
             return false;
@@ -4501,6 +4502,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (sender is not DysonAgentSession session)
             return;
 
+        if (session.PersistenceId != ActiveSessionId)
+        {
+            Notify();
+            return;
+        }
+
         SyncAskUiFromSession(session);
         SyncUserDialogUiFromSession(session);
         SyncSubagentEventUiFromSession(session);
@@ -4769,6 +4776,9 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private void SyncAskUiFromSession(DysonAgentSession session)
     {
+        if (session.PersistenceId != ActiveSessionId)
+            return;
+
         // Root AskQuestion
         if (session.Parent is null && session.PendingAskQuestions is { Count: > 0 } questions)
         {
@@ -4800,17 +4810,14 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
         }
 
-        // Clear if this focused session no longer has pending ask
-        if (_pendingAskUi is not null
-            && _pendingAskUi.SessionPersistenceId == session.PersistenceId
-            && session.PendingAskQuestions is null)
-        {
-            _pendingAskUi = null;
-        }
+        _pendingAskUi = null;
     }
 
     private void SyncUserDialogUiFromSession(DysonAgentSession session)
     {
+        if (session.PersistenceId != ActiveSessionId)
+            return;
+
         if (session.Parent is null && session.PendingUserDialog is { } rootDialog)
         {
             _pendingUserDialogUi = new DysonUserDialogUiState
@@ -4840,16 +4847,13 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
         }
 
-        if (_pendingUserDialogUi is not null
-            && _pendingUserDialogUi.SessionPersistenceId == session.PersistenceId
-            && session.PendingUserDialog is null)
-        {
-            _pendingUserDialogUi = null;
-        }
+        _pendingUserDialogUi = null;
     }
 
     private void MaybeOpenAskUiForEvent(DysonAgentSession parent, DysonAgentInterrupt interrupt)
     {
+        if (parent.PersistenceId != ActiveSessionId)
+            return;
         if (!DysonSubagentHostLogic.TryBuildAskUi(interrupt.EventKind, interrupt.Payload, out var questions))
             return;
 
@@ -4865,6 +4869,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private void MaybeOpenUserDialogUiForEvent(DysonAgentSession parent, DysonAgentInterrupt interrupt)
     {
+        if (parent.PersistenceId != ActiveSessionId)
+            return;
         if (!DysonSubagentHostLogic.TryBuildUserDialogUi(interrupt.EventKind, interrupt.Payload, out var dialog))
             return;
 
