@@ -52,6 +52,18 @@ public sealed class DysonMcpPipeline
     }
 
     /// <summary>
+    /// Replaces <c>RenderHtmlVisualization</c> from the current presentation snapshot.
+    /// Description is <c>init</c>-only on <see cref="DysonMcpTool"/>, so replace the catalog entry.
+    /// No-op when the tool is omitted (policy / catalog).
+    /// </summary>
+    public void ApplyVisualizationTheme(DysonUiThemeSnapshot uiTheme)
+    {
+        if (!Tools.ContainsKey("RenderHtmlVisualization"))
+            return;
+        Tools["RenderHtmlVisualization"] = CreateRenderHtmlVisualizationTool(uiTheme);
+    }
+
+    /// <summary>
     /// Rebuilds <c>ShellExecute</c> and long-running shell tools for the current agent mode.
     /// Description is <c>init</c>-only on <see cref="DysonMcpTool"/>, so replace catalog entries.
     /// </summary>

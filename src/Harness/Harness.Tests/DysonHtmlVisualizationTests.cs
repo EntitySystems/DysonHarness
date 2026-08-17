@@ -10,6 +10,7 @@ public class DysonHtmlVisualizationTests
     public void Run()
     {
         AssertCatalogAndThemeGuidance();
+        AssertLiveThemeInterpolation();
         AssertCreateFileAndRenderExecutor();
         AssertVisualizationPersistence();
     }
@@ -35,6 +36,52 @@ public class DysonHtmlVisualizationTests
         var formatted = DysonAgentSystemPrompts.FormatVisualizationThemeGuidance(snapshot);
         if (!formatted.Contains("light theme with accent color #a1b2c3", StringComparison.Ordinal))
             throw new InvalidOperationException("Theme guidance formatter mismatch.");
+    }
+
+    private static void AssertLiveThemeInterpolation()
+    {
+        var initial = new DysonUiThemeSnapshot("light", "#a1b2c3");
+        var session = new StubSession(new DysonAgentSessionConfig { UiTheme = initial });
+        if (!session.McpPipeline.Tools.TryGetValue("RenderHtmlVisualization", out var first)
+            || !first.Description.Contains("light theme with accent color #a1b2c3", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Initial visualization theme guidance mismatch.");
+        }
+
+        var updated = new DysonUiThemeSnapshot("dark", "#3dbf7a");
+        session.ApplyUiTheme(updated);
+        if (!session.McpPipeline.Tools.TryGetValue("RenderHtmlVisualization", out var second)
+            || !second.Description.Contains("dark theme with accent color #3dbf7a", StringComparison.Ordinal)
+            || second.Description.Contains("#a1b2c3", StringComparison.Ordinal)
+            || second.Description.Contains("{theme}", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("ApplyUiTheme did not replace visualization theme guidance.");
+        }
+
+        var before = second.Description;
+        session.ApplyUiTheme(updated);
+        if (!session.McpPipeline.Tools.TryGetValue("RenderHtmlVisualization", out var again)
+            || !string.Equals(before, again.Description, StringComparison.Ordinal)
+            || session.SystemPromptGeneration != 0)
+        {
+            throw new InvalidOperationException(
+                "Identical ApplyUiTheme must keep description bytes and SystemPromptGeneration.");
+        }
+
+        var applied = session.ApplyAgentMode(DysonAgentModes.Plan);
+        if (applied.IsError)
+            throw new InvalidOperationException("ApplyAgentMode(Plan) failed: " + applied.Error);
+        if (!session.McpPipeline.Tools.TryGetValue("RenderHtmlVisualization", out var afterPlan)
+            || !afterPlan.Description.Contains("#3dbf7a", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Mode rebuild must keep the live theme snapshot.");
+        }
+
+        var pipeline = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess);
+        pipeline.Tools.Remove("RenderHtmlVisualization");
+        pipeline.ApplyVisualizationTheme(updated);
+        if (pipeline.Tools.ContainsKey("RenderHtmlVisualization"))
+            throw new InvalidOperationException("ApplyVisualizationTheme must no-op when the tool is omitted.");
     }
 
     private static void AssertCreateFileAndRenderExecutor()

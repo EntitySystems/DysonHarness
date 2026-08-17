@@ -39,6 +39,7 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `/` | `MainLayout` → `AppShell` | Agent shell: workdirs + sessions + chat |
 | `/settings` | `SettingsLayout` | Redirects to `/settings/general` |
 | `/settings/general` | `SettingsLayout` | Theme / accent (`ThemeSwitcher`) |
+| `/settings/system` | `SettingsLayout` | Installed version, channel, repo, runtime, in-app install availability; **Check for updates** (`SystemSettings`) |
 | `/settings/agent-behavior` | `SettingsLayout` | End of task auto review toggle + Self review intensity select + **Turn summarizer** / **Web search summarizer** models + Explore / Drone / Security Review / Bug Review default model pickers (`ModelSlugPicker`, optional; empty = session model) |
 | `/settings/models` | `SettingsLayout` | Provider/slug CRUD (`ModelsPanel`) |
 | `/settings/shells` | `SettingsLayout` | Configured shells CRUD (name, path, enable/disable; native file Browse) |
@@ -46,14 +47,14 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `/settings/agent-modes` | `SettingsLayout` | List of `DysonAgentModes.BuiltIns`; link to per-mode tool toggles |
 | `/settings/agent-modes/{Mode}` | `SettingsLayout` | Enable/disable MCP tools for one mode (`Uri.EscapeDataString` for spaces); persists denylist |
 
-`SettingsLayout` nests under `MainLayout` (side nav: General, Agent behavior, Models, Shells, Agent modes, Back to agent).
+`SettingsLayout` nests under `MainLayout` (side nav: General, System, Agent behavior, Models, Shells, Agent modes, Back to agent).
 
 ## Layout
 
 | Path | Role |
 | ---- | ---- |
 | `Components/Pages/Home.razor` | Agent IDE shell; `Host.LastError` shows as a 20s auto-expiring toast (border countdown + dismiss X) via `ErrorToast` |
-| `Components/Pages/Settings/` | Settings pages (`Index`, `General`, `AgentBehavior`, `Models`, `Shells`, `AgentModes`, `AgentModeDetail`) |
+| `Components/Pages/Settings/` | Settings pages (`Index`, `General`, `SystemSettings`, `AgentBehavior`, `Models`, `Shells`, `AgentModes`, `AgentModeDetail`) |
 | `Components/Layout/SettingsLayout.razor` | Settings side-nav shell |
 | `Components/Shell/` | `AppShell`, `Sidebar`, `SessionHeader`, `RailSidePanel`, `ErrorToast` |
 | `Components/Sessions/` | `WorkDirectorySwitcher`, `WorkDirectorySettingsModal`, `SessionList` |
@@ -169,7 +170,7 @@ Engine types: `IDysonSkillExplorer`, `SkillsHubSkillExplorerProvider`, `SkillsSh
 - Visual direction: dense IDE geometry (unchanged padding, gaps, grid) with softer product materials — accent-tinted chrome (`--surface-chrome`), glass panels (`--surface-glass` + `backdrop-filter` when supported), theme-aware elevation (`--shadow-1..3` / `--overlay`), and 6–12px radii. Motion is color/opacity/shadow only (`--motion` / `--ease`); `prefers-reduced-motion` disables it.
 - Shared tokens also include `--accent-border`, `--accent-glow`, `--focus-ring`, `--text-on-accent`, and aliases `--muted` → `--text-muted`, `--ok` → `--success`. Semantic git colors (`--git-modified`, `--success`, `--danger`) stay independent of the selected accent. Default blue accent remains `#4c8bf5` so `DysonUiThemeSnapshot` stays stable.
 
-`ThemeService` + `ThemeSwitcher` own the applied attributes (General settings page). When a root session is created or cold-resumed, `ThemeService` captures the applied document theme and computed `--accent` value into an engine `DysonUiThemeSnapshot` (`light`/`dark` plus normalized lowercase `#rrggbb`; invalid or unavailable JS data falls back to dark / `#4c8bf5`). That snapshot is used as render-tool styling guidance and is immutable for the live session: child sessions inherit it and agent-mode changes retain it. A theme/accent change takes effect when a new root session starts or a root session is cold-resumed; it does not silently rewrite a currently live session's system prompt or tool catalog.
+`ThemeService` + `ThemeSwitcher` own the applied attributes (General settings page). `ThemeService` captures live DOM (`dysonTheme.getResolved`) into an engine `DysonUiThemeSnapshot` (`light`/`dark` plus normalized lowercase `#rrggbb`; invalid or unavailable JS data falls back to dark / `#4c8bf5`) at create/resume, on theme/accent change, and at each host `PromptAsync`. Each turn rewrites only the `RenderHtmlVisualization` description from `Config.UiTheme`. Same values ⇒ identical tools JSON ⇒ the prompt-cache prefix survives (`SystemPromptGeneration` is not bumped). Children share config and interpolate their own pipeline at turn start. Already-rendered visualization iframes are not restyled.
 
 ## HTML visualizations
 

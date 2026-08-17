@@ -544,6 +544,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         ArgumentNullException.ThrowIfNull(turn);
         ArgumentNullException.ThrowIfNull(filePaths);
 
+        ApplyUiTheme(Config.UiTheme);
+
         // Compaction before the next provider request so the new prefix stays byte-stable.
         OptimizeContextIfNeeded();
 

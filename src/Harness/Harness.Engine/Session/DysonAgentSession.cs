@@ -218,6 +218,17 @@ public abstract class DysonAgentSession
         return VoidResult<string>.Success;
     }
 
+    /// <summary>
+    /// Stores the current presentation snapshot and rewrites <c>RenderHtmlVisualization</c>
+    /// when that tool is in the catalog. Does not bump <see cref="SystemPromptGeneration"/>.
+    /// </summary>
+    public void ApplyUiTheme(DysonUiThemeSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        Config.UiTheme = snapshot;
+        McpPipeline.ApplyVisualizationTheme(snapshot);
+    }
+
     public DysonAgentProvider Provider
     {
         get => field;

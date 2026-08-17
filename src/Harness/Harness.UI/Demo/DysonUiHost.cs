@@ -131,6 +131,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pluginMcpResolver = pluginMcpResolver ?? throw new ArgumentNullException(nameof(pluginMcpResolver));
         _pluginLifecycle = pluginLifecycle ?? throw new ArgumentNullException(nameof(pluginLifecycle));
         _theme = theme ?? throw new ArgumentNullException(nameof(theme));
+        _theme.Changed += OnThemeChanged;
         _runtimeAttachment = runtimeAttachment;
         if (_runtimeAttachment is not null)
             _runtimeAttachment.Changed += OnRuntimeChanged;
@@ -149,6 +150,9 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private void OnPluginMcpGrantChanged(object? sender, DysonPluginMcpGrantChangedEventArgs args) =>
         _ = RefreshPluginMcpHostsAsync(args.Scope, args.WorkDirectoryId);
+
+    private void OnThemeChanged() =>
+        _ = ApplyCurrentUiThemeToLiveSessionsAsync();
 
     private async Task RefreshPluginMcpHostsAsync(
         DysonPluginInstallScope scope,
@@ -2040,6 +2044,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pendingMaxTargetContextTokens = null;
         _pendingSlugDefaultMaxTargetContextTokens = null;
 
+        await ApplyCurrentUiThemeToLiveSessionsAsync(cancellationToken).ConfigureAwait(false);
         Notify();
         return VoidResult<string>.Success;
     }
@@ -2190,6 +2195,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         if (_session is null)
             return new VoidResult<string>("No active session.");
+
+        await ApplyCurrentUiThemeToLiveSessionsAsync(cancellationToken).ConfigureAwait(false);
 
         if (string.Equals(_session.Mode, agentMode, StringComparison.OrdinalIgnoreCase))
             return VoidResult<string>.Success;
@@ -3140,6 +3147,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return modeResult;
         }
 
+        await ApplyCurrentUiThemeToLiveSessionsAsync(cancellationToken).ConfigureAwait(false);
+
         var turnBuild = await BuildUserTurnWithPendingContextAsync(
                 prompt?.Trim() ?? "",
                 cancellationToken)
@@ -3470,6 +3479,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                     return Result<LoadedSession, string>.AsError(runtimeLoaded.Error);
 
                 MarkRuntimeOwned(runtimeLoaded.Value);
+                await ApplyCurrentUiThemeToLiveSessionsAsync(runtimeLoaded.Value, cancellationToken)
+                    .ConfigureAwait(false);
                 return Result<LoadedSession, string>.AsValue(
                     new LoadedSession(runtimeLoaded.Value, full.Value.Session.ParentSessionId));
             }
@@ -3504,6 +3515,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             session = demoLoaded.Value;
         }
 
+        await ApplyCurrentUiThemeToLiveSessionsAsync(session, cancellationToken).ConfigureAwait(false);
         return Result<LoadedSession, string>.AsValue(
             new LoadedSession(session, full.Value.Session.ParentSessionId));
     }
@@ -3650,6 +3662,37 @@ public sealed class DysonUiHost : IAsyncDisposable
             }
 
             config.CustomAgents.Add(agent.Key, agent.Value);
+        }
+    }
+
+    private Task ApplyCurrentUiThemeToLiveSessionsAsync(CancellationToken cancellationToken = default) =>
+        ApplyCurrentUiThemeToLiveSessionsAsync(extra: null, cancellationToken);
+
+    private async Task ApplyCurrentUiThemeToLiveSessionsAsync(
+        DysonAgentSession? extra,
+        CancellationToken cancellationToken)
+    {
+        if (_disposed)
+            return;
+
+        var snapshot = await _theme.CaptureSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        if (_disposed)
+            return;
+
+        var seen = new HashSet<DysonAgentSession>(ReferenceEqualityComparer.Instance);
+        if (extra is not null && seen.Add(extra))
+            extra.ApplyUiTheme(snapshot);
+
+        foreach (var session in _sessionsById.Values)
+        {
+            if (seen.Add(session))
+                session.ApplyUiTheme(snapshot);
+        }
+
+        foreach (var session in _hookedSessions.Keys)
+        {
+            if (seen.Add(session))
+                session.ApplyUiTheme(snapshot);
         }
     }
 
@@ -5831,6 +5874,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
 
         _disposed = true;
+        _theme.Changed -= OnThemeChanged;
         _pluginLifecycle.Changed -= OnPluginCatalogChanged;
         _pluginMcpGrants.Changed -= OnPluginMcpGrantChanged;
         if (_runtimeAttachment is not null)
