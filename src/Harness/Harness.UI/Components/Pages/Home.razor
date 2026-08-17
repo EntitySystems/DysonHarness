@@ -3,9 +3,13 @@
 @using Harness.UI.Components.Chat
 @using Harness.UI.Components.Files
 @using Harness.UI.Demo
+@using Harness.UI.Files
 @implements IAsyncDisposable
 @inject DysonUiHost Host
 @inject IDysonWorkDirectoryRepository WorkDirs
+@inject DysonFileTreeService FileTree
+@inject DysonGitChangesService GitChanges
+@inject IDysonSubjectContext Subject
 @inject ThemeService Theme
 @inject IJSRuntime Js
 
@@ -317,9 +321,21 @@
     {
         _activeWorkDirectoryId = id;
         Host.SetComposerWorkDirectoryId(id);
+
+        var tree = await FileTree.SetActiveAsync(id, Subject.SubjectId);
+        var git = await GitChanges.SetActiveAsync(id, Subject.SubjectId);
+
         await RefreshGitBranchAsync(absolutePath);
         await PersistWorkDirectoryAsync(id);
         await RefreshSessionsAsync();
+
+        if (string.IsNullOrEmpty(_listError))
+        {
+            if (tree.IsError)
+                _listError = tree.Error;
+            else if (git.IsError)
+                _listError = git.Error;
+        }
     }
 
     private async Task RefreshGitBranchAsync(string? absolutePath)
