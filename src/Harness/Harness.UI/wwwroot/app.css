@@ -6627,11 +6627,10 @@ code, .mono {
 }
 
 
-/* Glass fallback: solid surface-glass is already set; blur when supported. */
+/* Glass fallback: solid surface-glass is already set; blur when supported.
+   Do not blur .composer-shell or .panel — they wrap position:fixed modal backdrops. */
 @supports (backdrop-filter: blur(1px)) {
   .sidebar__brand,
-  .panel,
-  .composer-shell,
   .composer-slash,
   .composer-queue,
   .ask-popover,

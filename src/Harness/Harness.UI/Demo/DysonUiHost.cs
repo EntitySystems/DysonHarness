@@ -70,6 +70,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly object _pendingImagesGate = new();
     private readonly List<string> _pendingFilePaths = [];
     private readonly object _pendingFilesGate = new();
+    private readonly List<string> _pendingSnipPromptLines = [];
+    private readonly object _pendingSnipPromptLinesGate = new();
     private Guid? _composerWorkDirectoryId;
 
     private DemoDysonEngine? _engine;
@@ -216,6 +218,30 @@ public sealed class DysonUiHost : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(payload);
         var htmlRef = string.IsNullOrWhiteSpace(payload.HtmlRef) ? null : payload.HtmlRef.Trim();
         _ = QueuePendingImageFromBytesAsync(payload.FileName, payload.ImageBytes, htmlRef);
+
+        var line = DysonBrowserSnipCrop.FormatPromptLine(payload.Url, payload.PercentDown);
+        if (line is null)
+            return;
+
+        lock (_pendingSnipPromptLinesGate)
+            _pendingSnipPromptLines.Add(line);
+        Notify();
+    }
+
+    /// <summary>
+    /// Consume-once snip prompt lines for the composer. Host.Changed fires often, so callers drain.
+    /// </summary>
+    public IReadOnlyList<string> TakePendingSnipPromptLines()
+    {
+        lock (_pendingSnipPromptLinesGate)
+        {
+            if (_pendingSnipPromptLines.Count == 0)
+                return [];
+
+            IReadOnlyList<string> lines = [.. _pendingSnipPromptLines];
+            _pendingSnipPromptLines.Clear();
+            return lines;
+        }
     }
 
     public DemoDysonEngine? Engine => _engine;

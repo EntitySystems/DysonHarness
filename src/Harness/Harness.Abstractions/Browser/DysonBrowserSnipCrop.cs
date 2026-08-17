@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace DysonHarness;
 
 /// <summary>
@@ -5,6 +7,51 @@ namespace DysonHarness;
 /// </summary>
 public static class DysonBrowserSnipCrop
 {
+    /// <summary>
+    /// Document Y of the snip (CSS px): scrollY plus the rubber-band top mapped into the viewport.
+    /// </summary>
+    public static double DocumentY(
+        double scrollY,
+        double selectionY,
+        double contentHeightDip,
+        double viewportHeight)
+    {
+        if (contentHeightDip <= 0)
+            return scrollY;
+        return scrollY + (selectionY / contentHeightDip) * viewportHeight;
+    }
+
+    /// <summary>
+    /// Percent of page height for a document Y (0–100). <paramref name="scrollHeight"/> is floored at 1.
+    /// </summary>
+    public static int PercentDownThePage(double documentY, double scrollHeight)
+    {
+        var percent = (int)Math.Round(
+            100.0 * documentY / Math.Max(scrollHeight, 1.0),
+            MidpointRounding.AwayFromZero);
+        return Math.Clamp(percent, 0, 100);
+    }
+
+    /// <summary>
+    /// One composer line: <c>Snip: {url} · {n}% down the page</c>, dropping missing parts.
+    /// Returns null when both URL and percent are absent.
+    /// </summary>
+    public static string? FormatPromptLine(string? url, int? percentDown)
+    {
+        var trimmed = string.IsNullOrWhiteSpace(url) ? null : url.Trim();
+        var percent = percentDown is int n
+            ? n.ToString(CultureInfo.InvariantCulture)
+            : null;
+
+        if (trimmed is not null && percent is not null)
+            return $"Snip: {trimmed} · {percent}% down the page";
+        if (trimmed is not null)
+            return $"Snip: {trimmed}";
+        if (percent is not null)
+            return $"Snip: {percent}% down the page";
+        return null;
+    }
+
     /// <summary>
     /// Converts DIP selection bounds (relative to content host) into a clamped pixel crop rect.
     /// Returns null when the mapped size is empty or inputs are invalid.
