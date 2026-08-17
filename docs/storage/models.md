@@ -108,6 +108,8 @@ Known keys (`DysonAppSettingKeys`):
 - `tool_panel_width_percent` — chat tools column width as a percent of the turn content row (clamped 12–50, default 30); empty / missing ⇒ 30.
 - `ui_rail_open` — `"true"` / `"false"`; right rail (files/git) open preference. Restored on desktop AppShell hydrate; narrow viewports still start with the rail closed (drawer UX) and re-apply this preference when returning to desktop. Intentional toggles (header button / backdrop close) persist. Missing ⇒ `"true"`.
 - `ui_sidebar_open` — `"true"` / `"false"`; left sidebar open vs collapsed. Restored on AppShell hydrate; toggles persist. Missing ⇒ `"true"`.
+- `ui_theme` — `"dark"` / `"light"`; Settings → General theme. Source of truth in `app_settings`; `theme.js` / `localStorage` (`dyson-theme`) is same-session cache + DOM apply. Missing ⇒ one-shot migrate from `localStorage`, then dark.
+- `ui_accent` — `"blue"` / `"green"` / `"red"` / `"purple"`; Settings → General accent. Same persistence as `ui_theme`. Missing ⇒ one-shot migrate from `localStorage`, then blue.
 
 - `agent_mode_tool_policy` — JSON `DysonToolPolicyDocument`: `modes.{Mode}.disabledTools` string arrays (denylist); optional `models.{slugGuid}.modes.{Mode}.disabledTools` plumbing for future per-model overlays (resolver ignores `models` in v1). Missing document / mode ⇒ all tools enabled. Edited via Settings → Agent modes (`DysonToolPolicyStore`).
 - `automatic_code_review` — Automatic code review select: `"none"` / `"low"` / `"medium"` / `"high"` (`high` is display-only / unsupported and must not start a review). Edited via Settings → Agent behavior; host normalizes through `DysonTaskLifecycleFlow`.

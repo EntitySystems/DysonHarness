@@ -69,7 +69,7 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `wwwroot/app.css` | Charcoal IDE theme (CSS variables); markdown styles under `.turn-block__body` |
 | `Markdown/MarkdownRenderer.cs` | Markdig pipeline for agent turn bodies (`DisableHtml` for XSS safety); links get `rel="noopener noreferrer"` (hardening only — do not rely on `target="_blank"` in WebView) |
 | `wwwroot/chat-external-links.js` | Capture-phase click intercept on chat/markdown containers; absolute `http(s)` → `DysonUiHost.OpenExternalChatUrlAsync` → OS default browser |
-| `wwwroot/theme.js` | `localStorage` theme + active workdir (`dyson-workdir`); `dysonChat` stick-to-bottom scroll for the transcript; `dysonStickyHeader` IntersectionObserver stuck class on turn headers |
+| `wwwroot/theme.js` | DOM apply + `localStorage` cache for theme (`dyson-theme`) and active workdir (`dyson-workdir`); `dysonChat` stick-to-bottom scroll for the transcript; `dysonStickyHeader` IntersectionObserver stuck class on turn headers |
 
 ## Chat markdown links
 
@@ -165,7 +165,7 @@ Engine types: `IDysonSkillExplorer`, `SkillsHubSkillExplorerProvider`, `SkillsSh
 ## Theming
 
 - CSS variables with `data-theme` (light/dark) and `data-accent` (Blue / Green / Red / Purple)
-- Persist preference via JS interop (`theme.js`) + `localStorage`
+- Persist preference in subject `app_settings` (`ui_theme` / `ui_accent`). `theme.js` + `localStorage` (`dyson-theme`) remain same-session cache / DOM apply (Windows CEF chrome still reads `dysonTheme.get()`). `ThemeService.InitializeAsync` restores DB first, falls back to `dysonTheme.get`, and write-through-migrates valid localStorage values when the DB keys are empty.
 - Visual direction: Cursor/Factory charcoal IDE look — dense, functional, not marketing
 
 `ThemeService` + `ThemeSwitcher` own the applied attributes (General settings page). When a root session is created or cold-resumed, `ThemeService` captures the applied document theme and computed `--accent` value into an engine `DysonUiThemeSnapshot` (`light`/`dark` plus normalized lowercase `#rrggbb`; invalid or unavailable JS data falls back to dark / `#4c8bf5`). That snapshot is used as render-tool styling guidance and is immutable for the live session: child sessions inherit it and agent-mode changes retain it. A theme/accent change takes effect when a new root session starts or a root session is cold-resumed; it does not silently rewrite a currently live session's system prompt or tool catalog.
