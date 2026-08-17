@@ -66,7 +66,7 @@ On first open, a default **Demo Mock** provider + slug is seeded if none exists.
 | `Components/Theme/` | `ThemeSwitcher` |
 | `Theme/ThemeService.cs` | Theme/accent state + JS interop |
 | `Demo/` | `DemoDysonEngine`, `DemoDysonAgentSession`, `DemoDysonAgentProvider`, `DysonUiHost`, `DysonToolCallUi` (tool-row parse/summary helpers; Facts in `Harness.Tests`), `DysonSessionLogDisplay` (rail Session log info/warn/error classifier from line text; Facts in `Harness.Tests`) |
-| `wwwroot/app.css` | Charcoal IDE theme (CSS variables); markdown styles under `.turn-block__body` |
+| `wwwroot/app.css` | Theme tokens (light/dark + accents), glass/elevation, markdown styles under `.turn-block__body` |
 | `Markdown/MarkdownRenderer.cs` | Markdig pipeline for agent turn bodies (`DisableHtml` for XSS safety); links get `rel="noopener noreferrer"` (hardening only — do not rely on `target="_blank"` in WebView) |
 | `wwwroot/chat-external-links.js` | Capture-phase click intercept on chat/markdown containers; absolute `http(s)` → `DysonUiHost.OpenExternalChatUrlAsync` → OS default browser |
 | `wwwroot/theme.js` | DOM apply + `localStorage` cache for theme (`dyson-theme`) and active workdir (`dyson-workdir`); `dysonChat` stick-to-bottom scroll for the transcript; `dysonStickyHeader` IntersectionObserver stuck class on turn headers |
@@ -166,7 +166,8 @@ Engine types: `IDysonSkillExplorer`, `SkillsHubSkillExplorerProvider`, `SkillsSh
 
 - CSS variables with `data-theme` (light/dark) and `data-accent` (Blue / Green / Red / Purple)
 - Persist preference in subject `app_settings` (`ui_theme` / `ui_accent`). `theme.js` + `localStorage` (`dyson-theme`) remain same-session cache / DOM apply (Windows CEF chrome still reads `dysonTheme.get()`). `ThemeService.InitializeAsync` restores DB first, falls back to `dysonTheme.get`, and write-through-migrates valid localStorage values when the DB keys are empty.
-- Visual direction: Cursor/Factory charcoal IDE look — dense, functional, not marketing
+- Visual direction: dense IDE geometry (unchanged padding, gaps, grid) with softer product materials — accent-tinted chrome (`--surface-chrome`), glass panels (`--surface-glass` + `backdrop-filter` when supported), theme-aware elevation (`--shadow-1..3` / `--overlay`), and 6–12px radii. Motion is color/opacity/shadow only (`--motion` / `--ease`); `prefers-reduced-motion` disables it.
+- Shared tokens also include `--accent-border`, `--accent-glow`, `--focus-ring`, `--text-on-accent`, and aliases `--muted` → `--text-muted`, `--ok` → `--success`. Semantic git colors (`--git-modified`, `--success`, `--danger`) stay independent of the selected accent. Default blue accent remains `#4c8bf5` so `DysonUiThemeSnapshot` stays stable.
 
 `ThemeService` + `ThemeSwitcher` own the applied attributes (General settings page). When a root session is created or cold-resumed, `ThemeService` captures the applied document theme and computed `--accent` value into an engine `DysonUiThemeSnapshot` (`light`/`dark` plus normalized lowercase `#rrggbb`; invalid or unavailable JS data falls back to dark / `#4c8bf5`). That snapshot is used as render-tool styling guidance and is immutable for the live session: child sessions inherit it and agent-mode changes retain it. A theme/accent change takes effect when a new root session starts or a root session is cold-resumed; it does not silently rewrite a currently live session's system prompt or tool catalog.
 
