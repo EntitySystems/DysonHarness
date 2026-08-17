@@ -4,13 +4,14 @@ using Microsoft.JSInterop;
 
 namespace Harness.UI.Theme;
 
-public sealed class ThemeService(IJSRuntime js)
+public sealed class ThemeService(IJSRuntime js, IDysonSubjectSettingsRepository? settings = null)
 {
     public const string DefaultTheme = "dark";
     public const string DefaultAccent = "blue";
     public const string DefaultAccentHex = "#4c8bf5";
 
     private readonly IJSRuntime _js = js ?? throw new ArgumentNullException(nameof(js));
+    private readonly IDysonSubjectSettingsRepository? _settings = settings;
     private bool _initialized;
 
     public string Theme { get; private set; } = DefaultTheme;
@@ -28,25 +29,86 @@ public sealed class ThemeService(IJSRuntime js)
 
         try
         {
-            var stored = await _js.InvokeAsync<ThemePreference?>("dysonTheme.get", cancellationToken)
-                .ConfigureAwait(false);
-            if (stored is not null)
+            var themeFromDb = false;
+            var accentFromDb = false;
+            var dbThemeMissing = true;
+            var dbAccentMissing = true;
+
+            if (_settings is not null)
             {
-                if (IsValidTheme(stored.Theme))
-                    Theme = stored.Theme;
-                if (IsValidAccent(stored.Accent))
-                    Accent = stored.Accent;
+                var themeSetting = await _settings
+                    .GetSettingAsync(DysonAppSettingKeys.UiTheme, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!themeSetting.IsError && !string.IsNullOrWhiteSpace(themeSetting.Value))
+                {
+                    dbThemeMissing = false;
+                    if (TryNormalizeName(themeSetting.Value, Themes, out var theme))
+                    {
+                        Theme = theme;
+                        themeFromDb = true;
+                    }
+                }
+
+                var accentSetting = await _settings
+                    .GetSettingAsync(DysonAppSettingKeys.UiAccent, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!accentSetting.IsError && !string.IsNullOrWhiteSpace(accentSetting.Value))
+                {
+                    dbAccentMissing = false;
+                    if (TryNormalizeName(accentSetting.Value, Accents, out var accent))
+                    {
+                        Accent = accent;
+                        accentFromDb = true;
+                    }
+                }
             }
 
-            await ApplyAsync(cancellationToken).ConfigureAwait(false);
+            ThemePreference? stored = null;
+            if (!themeFromDb || !accentFromDb)
+            {
+                try
+                {
+                    stored = await _js.InvokeAsync<ThemePreference?>("dysonTheme.get", cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (JSException)
+                {
+                    // Prerender / JS not ready — keep defaults (or DB values) until interactive.
+                }
+                catch (InvalidOperationException)
+                {
+                    // JS interop unavailable during static render.
+                }
+
+                if (stored is not null)
+                {
+                    if (!themeFromDb && TryNormalizeName(stored.Theme, Themes, out var theme))
+                        Theme = theme;
+                    if (!accentFromDb && TryNormalizeName(stored.Accent, Accents, out var accent))
+                        Accent = accent;
+                }
+            }
+
+            if (_settings is not null && stored is not null)
+            {
+                if (dbThemeMissing && IsValidTheme(stored.Theme))
+                    await TryPersistSettingAsync(DysonAppSettingKeys.UiTheme, Theme, cancellationToken)
+                        .ConfigureAwait(false);
+                if (dbAccentMissing && IsValidAccent(stored.Accent))
+                    await TryPersistSettingAsync(DysonAppSettingKeys.UiAccent, Accent, cancellationToken)
+                        .ConfigureAwait(false);
+            }
+
+            // set (not apply) so localStorage + Windows dysonShell.notifyTheme match DB restore.
+            await PersistDomAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (JSException)
         {
-            // Prerender / JS not ready — keep defaults until interactive.
+            // Apply interop unavailable — in-memory (and DB) values still win.
         }
         catch (InvalidOperationException)
         {
-            // JS interop unavailable during static render.
+            // Apply interop unavailable during static render.
         }
 
         _initialized = true;
@@ -107,6 +169,15 @@ public sealed class ThemeService(IJSRuntime js)
 
     private async Task PersistAndApplyAsync(CancellationToken cancellationToken)
     {
+        await TryPersistSettingAsync(DysonAppSettingKeys.UiTheme, Theme, cancellationToken)
+            .ConfigureAwait(false);
+        await TryPersistSettingAsync(DysonAppSettingKeys.UiAccent, Accent, cancellationToken)
+            .ConfigureAwait(false);
+        await PersistDomAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task PersistDomAsync(CancellationToken cancellationToken)
+    {
         try
         {
             await _js.InvokeVoidAsync("dysonTheme.set", cancellationToken, Theme, Accent)
@@ -137,11 +208,43 @@ public sealed class ThemeService(IJSRuntime js)
         }
     }
 
+    private async Task TryPersistSettingAsync(
+        string key,
+        string value,
+        CancellationToken cancellationToken)
+    {
+        if (_settings is null)
+            return;
+
+        _ = await _settings.SetSettingAsync(key, value, cancellationToken).ConfigureAwait(false);
+    }
+
     private static bool IsValidTheme(string? theme) =>
-        theme is not null && Themes.Contains(theme, StringComparer.OrdinalIgnoreCase);
+        TryNormalizeName(theme, Themes, out _);
 
     private static bool IsValidAccent(string? accent) =>
-        accent is not null && Accents.Contains(accent, StringComparer.OrdinalIgnoreCase);
+        TryNormalizeName(accent, Accents, out _);
+
+    private static bool TryNormalizeName(
+        string? value,
+        IReadOnlyList<string> allowed,
+        out string normalized)
+    {
+        normalized = "";
+        if (value is null)
+            return false;
+
+        foreach (var item in allowed)
+        {
+            if (string.Equals(item, value, StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = item;
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static bool TryNormalizeTheme(string? value, out string theme)
     {
