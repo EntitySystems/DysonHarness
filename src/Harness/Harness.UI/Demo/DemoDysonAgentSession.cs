@@ -502,6 +502,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
 
         if (allowDropContextInject
             && turn.Kind != DysonAgentTurnKind.DropContext
+            && turn.Kind != DysonAgentTurnKind.FullSummarize
             && DysonDropContextFlow.TryBeginInject(this))
         {
             var dropTurn = CreateDropContextTurn();

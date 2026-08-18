@@ -53,6 +53,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _autoTurnGates = new();
     /// <summary>Serializes root task-lifecycle actions while a turn completion triggers its event.</summary>
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _taskLifecycleGates = new();
+    private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _taskLifecycleEvaluateCts = new();
+    private const int TaskLifecycleEvaluateDelayMs = 300;
     private readonly ConcurrentDictionary<Guid, DysonTaskLifecycleKind> _lastTaskLifecycleActionBySession = new();
     private readonly ConcurrentDictionary<Guid, EventHandler<DysonToolCallStatusChangedEventArgs>> _toolHandlers = new();
     private readonly ConcurrentDictionary<Guid, EventHandler> _textHandlers = new();
@@ -1881,6 +1883,45 @@ public sealed class DysonUiHost : IAsyncDisposable
         return VoidResult<string>.Success;
     }
 
+    public async Task<Result<int, string>> DeleteInactiveSessionsAsync(
+        Guid workDirectoryId,
+        CancellationToken cancellationToken = default)
+    {
+        if (workDirectoryId == Guid.Empty)
+            return Result<int, string>.AsError("Select a work directory…");
+
+        var list = await _sessions.ListSessionsAsync(
+            workDirectoryId: workDirectoryId,
+            rootsOnly: false,
+            cancellationToken).ConfigureAwait(false);
+        if (list.IsError)
+            return Result<int, string>.AsError(list.Error);
+
+        var liveActiveIds = new HashSet<Guid>();
+        if (ActiveSessionId is Guid current)
+            liveActiveIds.Add(current);
+
+        TryGetAttachedRuntime(out var runtime);
+        foreach (var summary in list.Value)
+        {
+            var id = summary.Id;
+            if (IsSessionBusy(id) || runtime is not null && runtime.IsBusy(id))
+                liveActiveIds.Add(id);
+        }
+
+        var ids = DysonSessionInactiveDelete.SelectDeletableRootIds(list.Value, liveActiveIds);
+        var deleted = 0;
+        foreach (var id in ids)
+        {
+            var r = await DeleteSessionAsync(id, cancellationToken).ConfigureAwait(false);
+            if (r.IsError)
+                return Result<int, string>.AsError(r.Error);
+            deleted++;
+        }
+
+        return Result<int, string>.AsValue(deleted);
+    }
+
     public Task<Result<IReadOnlyList<DysonWorkDirectoryEntity>, string>> ListWorkDirectoriesAsync(
         CancellationToken cancellationToken = default) =>
         _workDirectories.ListAsync(cancellationToken);
@@ -2855,6 +2896,73 @@ public sealed class DysonUiHost : IAsyncDisposable
                 _ = DrainQueuedPromptsAsync(session.PersistenceId);
             Notify();
         }
+    }
+
+    /// <summary>
+    /// Queues a FullSummarize turn: one agent-authored session summary, then drop earlier turns.
+    /// Enqueues when the session is busy or mid-<c>/summarize</c> worker.
+    /// </summary>
+    public async Task<VoidResult<string>> PromptFullSummarizeAsync(
+        Guid sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+
+        DysonAgentSession? session = null;
+        if (sessionId != Guid.Empty && _sessionsById.TryGetValue(sessionId, out var byId))
+            session = byId;
+        else if (_session is not null
+                 && (sessionId == Guid.Empty || _session.PersistenceId == sessionId))
+            session = _session;
+
+        if (session is null)
+        {
+            LastError = "Session not found.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        if (session.PersistenceId == Guid.Empty)
+        {
+            LastError = "Session is not persisted.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        if (session.Turns.Count == 0)
+        {
+            LastError = "Session has no turns to summarize.";
+            Notify();
+            return new VoidResult<string>(LastError);
+        }
+
+        var turn = session.CreateFullSummarizeTurn();
+        var persistId = session.PersistenceId;
+        if (IsSessionBusy(persistId) || session.HasAnySummarizingTurn)
+        {
+            var queued = EnqueuePrompt(persistId, turn);
+            if (queued.IsError)
+            {
+                Notify();
+                return queued;
+            }
+
+            LastError = null;
+            Notify();
+            return VoidResult<string>.Success;
+        }
+
+        var result = await PromptHarnessTurnOnSessionAsync(
+                session,
+                turn,
+                [],
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (result.IsError)
+            LastError = result.Error;
+
+        Notify();
+        return result;
     }
 
     /// <summary>True while the active session's turn summarizer is working on this turn id.</summary>
@@ -4170,6 +4278,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (_taskLifecycleGates.TryRemove(persistenceId, out var lifecycleGate))
             lifecycleGate.Dispose();
+        CancelTaskLifecycleEvaluate(persistenceId);
         _lastTaskLifecycleActionBySession.TryRemove(persistenceId, out _);
 
         if (_promptGates.TryRemove(persistenceId, out var promptGate))
@@ -4243,6 +4352,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         foreach (var gate in _taskLifecycleGates.Values)
             gate.Dispose();
         _taskLifecycleGates.Clear();
+        foreach (var sessionId in _taskLifecycleEvaluateCts.Keys.ToArray())
+            CancelTaskLifecycleEvaluate(sessionId);
         lock (_promptQueueGate)
             _promptQueues.Clear();
         lock (_subagentEventUiGate)
@@ -4527,18 +4638,62 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (session.Parent is not null || session.PersistenceId == Guid.Empty || session.IsTerminal)
             return;
 
-        // The queue marker prevents duplicate reflection before its queued turn begins.
-        // Once that turn finishes, later substantive work may legitimately need another reflection.
-        var last = session.Turns.Count > 0 ? session.Turns[^1] : null;
-        if (last?.Kind == DysonAgentTurnKind.TaskEndReflect
-            && last.CompletedUtc is not null
-            && _lastTaskLifecycleActionBySession.TryGetValue(session.PersistenceId, out var action)
-            && action == DysonTaskLifecycleKind.TaskEndReflectionRequired)
+        CancelTaskLifecycleEvaluate(session.PersistenceId);
+        var cts = new CancellationTokenSource();
+        _taskLifecycleEvaluateCts[session.PersistenceId] = cts;
+        _ = EvaluateTaskLifecycleAfterDelayAsync(session, cts);
+    }
+
+    private void CancelTaskLifecycleEvaluate(Guid sessionId)
+    {
+        if (!_taskLifecycleEvaluateCts.TryRemove(sessionId, out var previous))
+            return;
+
+        try
         {
-            _lastTaskLifecycleActionBySession.TryRemove(session.PersistenceId, out _);
+            previous.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
         }
 
-        session.EvaluateTaskLifecycle(DysonSubagentHostLogic.HasActiveDescendant(session));
+        previous.Dispose();
+    }
+
+    private async Task EvaluateTaskLifecycleAfterDelayAsync(
+        DysonAgentSession session,
+        CancellationTokenSource cts)
+    {
+        try
+        {
+            await Task.Delay(TaskLifecycleEvaluateDelayMs, cts.Token).ConfigureAwait(false);
+            if (_disposed || cts.IsCancellationRequested)
+                return;
+            if (!_sessionsById.TryGetValue(session.PersistenceId, out var live)
+                || live.Parent is not null
+                || live.IsTerminal)
+            {
+                return;
+            }
+
+            // Once a completed TaskEndReflect is the last turn, later substantive work
+            // may legitimately need another reflection.
+            var last = live.Turns.Count > 0 ? live.Turns[^1] : null;
+            if (last?.Kind == DysonAgentTurnKind.TaskEndReflect
+                && last.CompletedUtc is not null
+                && _lastTaskLifecycleActionBySession.TryGetValue(live.PersistenceId, out var action)
+                && action == DysonTaskLifecycleKind.TaskEndReflectionRequired)
+            {
+                _lastTaskLifecycleActionBySession.TryRemove(live.PersistenceId, out _);
+            }
+
+            live.EvaluateTaskLifecycle(
+                DysonSubagentHostLogic.HasActiveDescendant(live),
+                hasQueuedFollowUp: HostHasQueuedPrompt(live.PersistenceId));
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     private async Task HandleTaskLifecycleAsync(
@@ -4564,8 +4719,30 @@ public sealed class DysonUiHost : IAsyncDisposable
             switch (kind)
             {
                 case DysonTaskLifecycleKind.TaskEndReflectionRequired:
+                    // Wait until the session is idle: do not park a pending TaskEndReflect
+                    // behind an in-flight turn or already-queued follow-up (BeginBuildPlan).
+                    if (IsSessionBusy(sessionId)
+                        || HostHasQueuedPrompt(sessionId)
+                        || DysonSubagentHostLogic.HasActiveDescendant(session))
+                    {
+                        return;
+                    }
+
                     _lastTaskLifecycleActionBySession[sessionId] = kind;
-                    EnqueuePrompt(sessionId, session.CreateTaskEndReflectTurn());
+                    var started = await PromptHarnessTurnOnSessionAsync(
+                            session,
+                            session.CreateTaskEndReflectTurn(),
+                            [],
+                            CancellationToken.None)
+                        .ConfigureAwait(false);
+                    if (started.IsError)
+                    {
+                        _lastTaskLifecycleActionBySession.TryRemove(sessionId, out _);
+                        if (ActiveSessionId == sessionId)
+                            LastError = started.Error;
+                        Notify();
+                    }
+
                     break;
 
                 case DysonTaskLifecycleKind.CodeReviewReady:
@@ -5270,6 +5447,10 @@ public sealed class DysonUiHost : IAsyncDisposable
                     if (last.Kind == DysonAgentTurnKind.ShellExited)
                         DysonLongRunningShellExitedFlow.TrimInstructionAfterCompletion(last);
 
+                    IReadOnlyList<DysonAgentTurn> dropped = [];
+                    if (DysonFullSummarizeFlow.ShouldApplyAfterCompletion(last.Kind))
+                        dropped = DysonFullSummarizeFlow.ApplyAfterCompletion(session, last);
+
                     // Persist every unfinished turn (PlanResult may append after the prompt turn).
                     foreach (var turn in session.Turns)
                     {
@@ -5282,6 +5463,11 @@ public sealed class DysonUiHost : IAsyncDisposable
                             return complete;
                     }
 
+                    var persistDropped = await PersistDroppedTurnsAsync(session, dropped, token)
+                        .ConfigureAwait(false);
+                    if (persistDropped.IsError)
+                        return persistDropped;
+
                     EnqueueHostFollowUpWork(session);
                 }
 
@@ -5291,6 +5477,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             {
                 _busySessions.TryRemove(sessionId, out _);
                 promptGate.Release();
+                if (!_disposed)
+                    EvaluateTaskLifecycle(session);
                 Notify();
             }
         }
@@ -5373,7 +5561,11 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
 
         while (session.TryDequeuePendingTurn(out var pending))
+        {
+            if (!pending.AllowEnqueue)
+                continue;
             EnqueuePrompt(sessionId, pending);
+        }
 
         var last = session.Turns.Count > 0 ? session.Turns[^1] : null;
         if (last is not null)
@@ -5396,6 +5588,15 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         EvaluateTaskLifecycle(session);
+    }
+
+    private bool HostHasQueuedPrompt(Guid sessionId)
+    {
+        if (IsRuntimeOwned(sessionId) && TryGetAttachedRuntime(out var runtime))
+            return runtime.GetQueuedPromptCount(sessionId) > 0;
+
+        lock (_promptQueueGate)
+            return _promptQueues.TryGetValue(sessionId, out var list) && list.Count > 0;
     }
 
     private bool HostQueueHasInstruction(Guid sessionId, string instruction)
@@ -5445,6 +5646,10 @@ public sealed class DysonUiHost : IAsyncDisposable
         IReadOnlyList<string>? filePaths = null)
     {
         ArgumentNullException.ThrowIfNull(turn);
+
+        DropQueuedTaskEndReflect(sessionId);
+        if (!turn.AllowEnqueue)
+            return VoidResult<string>.AsError("TaskEndReflect cannot be enqueued.");
 
         if (IsRuntimeOwned(sessionId))
         {
@@ -5546,6 +5751,38 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
     }
 
+    private void DropQueuedTaskEndReflect(Guid sessionId)
+    {
+        if (IsRuntimeOwned(sessionId) && TryGetAttachedRuntime(out var runtime))
+        {
+            while (runtime.TryPeekPrompt(sessionId, out var peeked)
+                   && peeked.Turn.Kind == DysonAgentTurnKind.TaskEndReflect)
+            {
+                if (!runtime.TryDequeuePrompt(sessionId, out var dropped) || dropped is null)
+                    break;
+
+                RemoveHostQueuedPrompt(sessionId, dropped.Id);
+                _lastTaskLifecycleActionBySession.TryRemove(sessionId, out _);
+            }
+
+            return;
+        }
+
+        lock (_promptQueueGate)
+        {
+            if (!_promptQueues.TryGetValue(sessionId, out var list))
+                return;
+
+            var removed = list.RemoveAll(e => e.Turn.Kind == DysonAgentTurnKind.TaskEndReflect);
+            if (removed == 0)
+                return;
+
+            _lastTaskLifecycleActionBySession.TryRemove(sessionId, out _);
+            if (list.Count == 0)
+                _promptQueues.Remove(sessionId);
+        }
+    }
+
     private async Task DrainQueuedPromptsAsync(Guid sessionId)
     {
         // Runtime-owned sessions dequeue via TryDequeuePrompt → runtime.TryDequeuePrompt.
@@ -5560,6 +5797,17 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (!TryDequeuePrompt(sessionId, out var next))
             return;
+
+        if (!next.Turn.AllowEnqueue)
+        {
+            _lastTaskLifecycleActionBySession.TryRemove(sessionId, out _);
+            Notify();
+            await DrainQueuedPromptsAsync(sessionId).ConfigureAwait(false);
+            return;
+        }
+
+        if (next.Turn.Kind != DysonAgentTurnKind.TaskEndReflect)
+            DropQueuedTaskEndReflect(sessionId);
 
         Notify();
         var result = await PromptHarnessTurnOnSessionAsync(
@@ -5844,6 +6092,29 @@ public sealed class DysonUiHost : IAsyncDisposable
         return await PersistAsync(
             () => _sessions.AppendLogAsync(completed, cancellationToken),
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<VoidResult<string>> PersistDroppedTurnsAsync(
+        DysonAgentSession session,
+        IReadOnlyList<DysonAgentTurn> dropped,
+        CancellationToken cancellationToken)
+    {
+        if (session.PersistenceId == Guid.Empty || IsRuntimeOwned(session) || dropped.Count == 0)
+            return VoidResult<string>.Success;
+
+        var sessionId = session.PersistenceId;
+        foreach (var turn in dropped)
+        {
+            var sequence = IndexOfTurn(session, turn);
+            var entity = DysonTurnPersistence.ToEntity(turn, sessionId, sequence);
+            var upsert = await PersistAsync(
+                () => _sessions.UpsertTurnAsync(entity, cancellationToken),
+                cancellationToken).ConfigureAwait(false);
+            if (upsert.IsError)
+                return upsert;
+        }
+
+        return VoidResult<string>.Success;
     }
 
     private static int IndexOfTurn(DysonAgentSession session, DysonAgentTurn turn)

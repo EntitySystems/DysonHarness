@@ -48,8 +48,10 @@ namespace Harness.Tests;
 /// </item>
 /// <item>
 /// <b>Evaluate gates</b> (session, after a completed root turn): root only;
-/// non-empty todos; no pending session follow-ups; no in-flight prompt; no
-/// active descendant (<c>DysonSubagentHostLogic.HasActiveDescendant</c>);
+/// non-empty todos; no pending session follow-ups; no host-queued follow-up
+/// (<c>hasQueuedFollowUp</c>); no in-flight prompt; no
+/// active descendant (host flag or engine walk of <c>SubSessions</c>;
+/// the host flag is not the only descendant source);
 /// relevant turns finalized. Empty todos never auto-review chat.
 /// </item>
 /// <item>
@@ -100,6 +102,7 @@ public class DysonTaskLifecycleTests
     private const int LastPreLifecycleKindValue = 13; // DropContext
     private const int TaskEndReflectValue = 14;
     private const int BugReviewValue = 15;
+    private const int FullSummarizeValue = 16;
 
     [Fact]
     public void Run()
@@ -139,16 +142,16 @@ public class DysonTaskLifecycleTests
             || (int)DysonAgentTurnKind.DropContext != LastPreLifecycleKindValue)
         {
             throw new InvalidOperationException(
-                "DysonAgentTurnKind values 0–13 must stay stable; append TaskEndReflect=14 and BugReview=15.");
+                "DysonAgentTurnKind values 0–13 must stay stable; append TaskEndReflect=14, BugReview=15, FullSummarize=16.");
         }
 
         var max = Enum.GetValues<DysonAgentTurnKind>().Select(k => (int)k).Max();
         if (max < LastPreLifecycleKindValue)
             throw new InvalidOperationException("DysonAgentTurnKind lost DropContext=13.");
-        if (max > BugReviewValue)
+        if (max > FullSummarizeValue)
         {
             throw new InvalidOperationException(
-                $"Unexpected DysonAgentTurnKind value {max}; expected append-only through BugReview=15.");
+                $"Unexpected DysonAgentTurnKind value {max}; expected append-only through FullSummarize=16.");
         }
     }
 
@@ -399,6 +402,23 @@ public class DysonTaskLifecycleTests
         ExpectNoLifecycle(isolated.EvaluateTaskLifecycle(hasActiveDescendant: false), "pending follow-up");
         if (!isolated.HasPendingTurn || !isolated.TryDequeuePendingTurn(out _))
             throw new InvalidOperationException("Expected HasPendingTurn then a successful dequeue.");
+
+        var queued = new StubSession();
+        if (queued.CreateTodoAsync("queued-follow-up", "Still open").GetAwaiter().GetResult().IsError)
+            throw new InvalidOperationException("Failed to seed queued-follow-up todo.");
+        queued.AddTurnForTest(Completed(DysonAgentSession.CreateNormalTurn("work")));
+        ExpectNoLifecycle(
+            queued.EvaluateTaskLifecycle(hasActiveDescendant: false, hasQueuedFollowUp: true),
+            "host-queued follow-up");
+
+        var withChild = new StubSession();
+        if (withChild.CreateTodoAsync("with-child", "Still open").GetAwaiter().GetResult().IsError)
+            throw new InvalidOperationException("Failed to seed with-child todo.");
+        withChild.AddTurnForTest(Completed(DysonAgentSession.CreateNormalTurn("work")));
+        withChild.RegisterForTest(new StubSession());
+        ExpectNoLifecycle(
+            withChild.EvaluateTaskLifecycle(hasActiveDescendant: false),
+            "engine walk of Active child");
 
         var inFlightTurn = Completed(DysonTaskCompletionFlow.CreateReportSummaryTurn("ok"));
         isolated.AddTurnForTest(inFlightTurn);

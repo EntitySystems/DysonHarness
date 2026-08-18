@@ -98,6 +98,8 @@ public sealed class DysonDbContext : DbContext
             e.Property(x => x.SubjectId).IsRequired();
             e.Property(x => x.Name).IsRequired();
             e.Property(x => x.AbsolutePath).IsRequired();
+            e.Property(x => x.GitOrigin);
+            e.Property(x => x.GitProvider);
             e.HasIndex(x => new { x.SubjectId, x.AbsolutePath }).IsUnique();
             e.HasIndex(x => x.LastOpenedUtc);
             e.HasIndex(x => x.SubjectId);

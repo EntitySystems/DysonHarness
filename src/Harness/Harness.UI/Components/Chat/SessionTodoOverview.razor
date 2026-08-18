@@ -62,7 +62,9 @@
 
     private void RefreshTodos()
     {
-        _todos = Session?.Todos ?? [];
+        _todos = Session?.Todos is { Count: > 0 } todos
+            ? todos.OrderByDescending(t => t.Sequence).ToArray()
+            : [];
         _completeCount = 0;
         foreach (var t in _todos)
         {

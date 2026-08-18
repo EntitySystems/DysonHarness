@@ -102,6 +102,7 @@ public static class DysonUiWebHost
 
         builder.Services.AddDysonHosting(hostingMode);
         builder.Services.AddDysonLocalDb(databasePath);
+        builder.Services.AddScoped<DysonWorkDirectoryService>();
 
         builder.Services.AddScoped<DysonToolPolicyStore>();
         builder.Services.AddScoped<DysonPluginCatalogService>();

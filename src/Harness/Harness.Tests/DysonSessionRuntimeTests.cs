@@ -406,6 +406,53 @@ public class DysonSessionRuntimeTests
     }
 
     [Fact]
+    public async Task ExecutePrompt_full_summarize_drops_and_persists_earlier_turns()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var created = await harness.Runtime.CreateRootAsync(RootRequest());
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+        var session = Assert.IsType<StubSession>(created.Value);
+
+        var earlier = DysonAgentSession.CreateNormalTurn("old work");
+        earlier.AssistantText = "facts";
+        var first = await harness.Runtime.ExecutePromptAsync(
+            session,
+            (live, _) =>
+            {
+                Assert.IsType<StubSession>(live).AddTurnForTest(earlier);
+                return Task.FromResult(VoidResult<string>.Success);
+            });
+        Assert.True(first.IsSuccess, first.IsError ? first.Error : null);
+        Assert.NotNull(earlier.CompletedUtc);
+
+        var summary = DysonFullSummarizeFlow.CreateTurn();
+        summary.AssistantText = new string('x', DysonFullSummarizeFlow.MaxSummaryCharacters + 10);
+        var second = await harness.Runtime.ExecutePromptAsync(
+            session,
+            (live, _) =>
+            {
+                Assert.IsType<StubSession>(live).AddTurnForTest(summary);
+                return Task.FromResult(VoidResult<string>.Success);
+            });
+        Assert.True(second.IsSuccess, second.IsError ? second.Error : null);
+        Assert.True(earlier.IsExcludedFromContext);
+        Assert.False(summary.IsExcludedFromContext);
+        Assert.Equal(DysonFullSummarizeFlow.MaxSummaryCharacters, summary.AssistantText!.Length);
+        Assert.NotNull(summary.CompletedUtc);
+
+        await harness.Runtime.FlushPersistenceAsync();
+
+        var full = await harness.Sessions.GetFullSessionAsync(session.PersistenceId);
+        Assert.True(full.IsSuccess, full.IsError ? full.Error : null);
+        var persistedEarlier = Assert.Single(full.Value.Turns, t => t.Id == earlier.Id);
+        Assert.True(persistedEarlier.IsExcludedFromContext);
+        var persistedSummary = Assert.Single(full.Value.Turns, t => t.Id == summary.Id);
+        Assert.False(persistedSummary.IsExcludedFromContext);
+        Assert.Equal(DysonAgentTurnKind.FullSummarize, persistedSummary.Kind);
+        Assert.Equal(DysonFullSummarizeFlow.MaxSummaryCharacters, persistedSummary.AssistantText!.Length);
+    }
+
+    [Fact]
     public async Task Prompt_queue_is_fifo_and_preserves_turn_identity()
     {
         await using var harness = await Harness.CreateAsync();
@@ -444,6 +491,22 @@ public class DysonSessionRuntimeTests
         Assert.False(harness.Runtime.TryPeekPrompt(sessionId, out _));
         Assert.Equal(4, queueChanges.Count);
         Assert.All(queueChanges, change => Assert.Equal(sessionId, change.SessionId));
+    }
+
+    [Fact]
+    public async Task EnqueuePrompt_rejects_task_end_reflect_and_does_not_queue()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var created = await harness.Runtime.CreateRootAsync(RootRequest());
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+        var sessionId = created.Value.PersistenceId;
+
+        var enqueued = harness.Runtime.EnqueuePrompt(
+            sessionId,
+            DysonTaskLifecycleFlow.CreateTaskEndReflectTurn());
+        Assert.True(enqueued.IsError);
+        Assert.Contains("TaskEndReflect", enqueued.Error, StringComparison.Ordinal);
+        Assert.Equal(0, harness.Runtime.GetQueuedPromptCount(sessionId));
     }
 
     [Fact]

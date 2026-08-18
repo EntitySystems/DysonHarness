@@ -298,6 +298,7 @@ public class DysonUiAgentSessionRuntimeFactoryTests
                 sessions,
                 models,
                 workDirectories,
+                new DysonWorkDirectoryService(workDirectories),
                 configBuilder);
         }
 

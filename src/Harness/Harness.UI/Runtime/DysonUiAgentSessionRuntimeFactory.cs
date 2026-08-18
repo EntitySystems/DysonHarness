@@ -11,6 +11,7 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
     IDysonSessionRepository sessions,
     IDysonModelRepository models,
     IDysonWorkDirectoryRepository workDirectories,
+    DysonWorkDirectoryService workDirectoryService,
     DysonUiAgentSessionRuntimeConfigBuilder configBuilder)
     : IDysonAgentSessionRuntimeFactory
 {
@@ -20,6 +21,8 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
         models ?? throw new ArgumentNullException(nameof(models));
     private readonly IDysonWorkDirectoryRepository _workDirectories =
         workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
+    private readonly DysonWorkDirectoryService _workDirectoryService =
+        workDirectoryService ?? throw new ArgumentNullException(nameof(workDirectoryService));
     private readonly DysonUiAgentSessionRuntimeConfigBuilder _configBuilder =
         configBuilder ?? throw new ArgumentNullException(nameof(configBuilder));
 
@@ -41,6 +44,10 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
             .ConfigureAwait(false);
         if (workDirectory.IsError)
             return Result<DysonAgentSessionRuntimeLease, string>.AsError(workDirectory.Error);
+
+        await _workDirectoryService
+            .RefreshGitOriginAsync(request.WorkDirectoryId, cancellationToken)
+            .ConfigureAwait(false);
 
         var provider = await ResolveDemoProviderAsync(
                 request.ModelSlugId,
@@ -138,6 +145,10 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
                 .ConfigureAwait(false);
             if (workDirectory.IsError)
                 return Result<DysonAgentSessionRuntimeLease, string>.AsError(workDirectory.Error);
+
+            await _workDirectoryService
+                .RefreshGitOriginAsync(workDirectoryId, cancellationToken)
+                .ConfigureAwait(false);
 
             workPath = workDirectory.Value.AbsolutePath;
         }

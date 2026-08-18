@@ -34,7 +34,7 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `Id` | Guid PK — also `DysonAgentTurn.Id` |
 | `SessionId` | Guid FK |
 | `Sequence` | Order within session |
-| `Kind` | `DysonAgentTurnKind` (`PlanResult` = 6, `BeginBuildPlan` = 7, `SubagentReportProcessing` = 8, `ShellExited` = 9, `RethinkToolUsage` = 10, `DisplayInfo` = 11 — UI-only chrome, omitted from provider transcripts; `ModeSwitch` = 12 — mode boundary, completed immediately, included in provider transcripts as a short harness user message; modes in `Instruction` as `From→To`) |
+| `Kind` | `DysonAgentTurnKind` (`PlanResult` = 6, `BeginBuildPlan` = 7, `SubagentReportProcessing` = 8, `ShellExited` = 9, `RethinkToolUsage` = 10, `DisplayInfo` = 11 — UI-only chrome, omitted from provider transcripts; `ModeSwitch` = 12 — mode boundary, completed immediately, included in provider transcripts as a short harness user message; modes in `Instruction` as `From→To`; `DropContext` = 13; `TaskEndReflect` = 14; `BugReview` = 15; `FullSummarize` = 16 — agent-authored session summary; after completion earlier turns are excluded from later transcripts) |
 | `AgentTitle` | Parsed H1 / plan title |
 | `PlanRelativePath` | Workspace-relative plan path for `PlanResult` / `BeginBuildPlan` (e.g. `.dyson/plans/…`); null otherwise |
 | `Instruction` | Harness-injected instruction |
@@ -132,7 +132,7 @@ Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ReplaceTodosAsync(Guid ses
 
 `ListActiveDescendantSessionsAsync` is the complementary subject-filtered recovery scan: current-subject sessions with `Status == Active` and a non-null `ParentSessionId` (any depth). Roots are never returned. After a process restart these descendants cannot resume their in-process runtime even when every turn is already complete; recovery marks them `Interrupted`. Cross-subject rows are never returned. Circuit disconnect in a still-running process does not use these scans.
 
-`DeleteSessionAsync` removes the session and descendant subagent sessions (`ParentSessionId` is Restrict, so children are deleted deepest-first). Turns, session logs, and todos cascade.
+`DeleteSessionAsync` removes the session and descendant subagent sessions (`ParentSessionId` is Restrict, so children are deleted deepest-first). Turns, session logs, and todos cascade. Bulk inactive delete is host-side (`DysonUiHost.DeleteInactiveSessionsAsync` + `DysonSessionInactiveDelete` + existing `DeleteSessionAsync`), not a new repository API. The host overlay protects the current session and busy sessions; idle `Active` leftovers are deletable.
 
 Todo CRUD rejects duplicate `TaskCode` (create) / missing code (update/delete). `UpdateTodoAsync` patches optional `DisplayName` / `Status`; `Comments` replaces the full list; `AppendComment` appends one string after any replace. `ReplaceTodosAsync` clears then inserts the seed set (used by `StartSubagent` child seed); duplicate codes in the set fail.
 
