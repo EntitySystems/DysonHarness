@@ -129,6 +129,107 @@ public class DysonGitInfoTests
         }
     }
 
+    [Theory]
+    [InlineData("https://github.com/acme/repo.git", DysonGitProvider.GitHub)]
+    [InlineData("git@github.com:acme/repo.git", DysonGitProvider.GitHub)]
+    [InlineData("ssh://git@github.com/acme/repo.git", DysonGitProvider.GitHub)]
+    [InlineData("git://github.com/acme/repo.git", DysonGitProvider.GitHub)]
+    [InlineData("https://github.mycompany.com/acme/repo.git", DysonGitProvider.GitHub)]
+    [InlineData("https://gitlab.com/acme/repo.git", DysonGitProvider.GitLab)]
+    [InlineData("git@gitlab.com:acme/repo.git", DysonGitProvider.GitLab)]
+    [InlineData("ssh://git@gitlab.com/acme/repo.git", DysonGitProvider.GitLab)]
+    [InlineData("https://gitlab.mycompany.com/acme/repo.git", DysonGitProvider.GitLab)]
+    [InlineData("https://dev.azure.com/org/project/_git/repo", DysonGitProvider.AzureDevOps)]
+    [InlineData("git@ssh.dev.azure.com:v3/org/project/repo", DysonGitProvider.AzureDevOps)]
+    [InlineData("ssh://git@ssh.dev.azure.com/v3/org/project/repo", DysonGitProvider.AzureDevOps)]
+    [InlineData("https://contoso.visualstudio.com/project/_git/repo", DysonGitProvider.AzureDevOps)]
+    [InlineData("https://cursor.com/origin/repo", DysonGitProvider.CursorOrigin)]
+    [InlineData("git@cursor.com:org/repo.git", DysonGitProvider.CursorOrigin)]
+    [InlineData("ssh://git@cursor.com/org/repo.git", DysonGitProvider.CursorOrigin)]
+    [InlineData("https://example.cursor.com/repo", DysonGitProvider.CursorOrigin)]
+    [InlineData("https://github.com/cursor/origin-sync.git", DysonGitProvider.GitHub)]
+    [InlineData("https://bitbucket.org/acme/repo.git", DysonGitProvider.Other)]
+    [InlineData("git@git.example.com:acme/repo.git", DysonGitProvider.Other)]
+    [InlineData(null, DysonGitProvider.None)]
+    [InlineData("", DysonGitProvider.None)]
+    [InlineData("   ", DysonGitProvider.None)]
+    [InlineData("not a url", DysonGitProvider.None)]
+    [InlineData("https://", DysonGitProvider.None)]
+    public void ClassifyProvider_maps_origin_host(string? origin, DysonGitProvider expected)
+    {
+        Assert.Equal(expected, DysonGitInfo.ClassifyProvider(origin));
+    }
+
+    [Fact]
+    public void ToStoredSlug_maps_enum_values()
+    {
+        Assert.Null(DysonGitInfo.ToStoredSlug(DysonGitProvider.None));
+        Assert.Equal("github", DysonGitInfo.ToStoredSlug(DysonGitProvider.GitHub));
+        Assert.Equal("gitlab", DysonGitInfo.ToStoredSlug(DysonGitProvider.GitLab));
+        Assert.Equal("azure-devops", DysonGitInfo.ToStoredSlug(DysonGitProvider.AzureDevOps));
+        Assert.Equal("cursor-origin", DysonGitInfo.ToStoredSlug(DysonGitProvider.CursorOrigin));
+        Assert.Equal("other", DysonGitInfo.ToStoredSlug(DysonGitProvider.Other));
+        Assert.Equal(DysonGitProvider.None, DysonGitInfo.FromStoredSlug(null));
+        Assert.Equal(DysonGitProvider.GitHub, DysonGitInfo.FromStoredSlug("github"));
+        Assert.Equal(DysonGitProvider.CursorOrigin, DysonGitInfo.FromStoredSlug("cursor-origin"));
+        Assert.Equal(DysonGitProvider.None, DysonGitInfo.FromStoredSlug("unknown"));
+    }
+
+    [Fact]
+    public void TryGetOrigin_reads_outermost_remote()
+    {
+        var outer = Path.Combine(Path.GetTempPath(), "dyson-git-origin-" + Guid.NewGuid().ToString("N"));
+        var inner = Path.Combine(outer, "nested");
+        Directory.CreateDirectory(inner);
+
+        try
+        {
+            RunGitOrThrow(outer, ["init"]);
+            RunGitOrThrow(outer, ["remote", "add", "origin", "https://github.com/acme/repo.git"]);
+
+            var fromInner = DysonGitInfo.TryGetOrigin(inner);
+            Assert.True(fromInner.IsSuccess, fromInner.IsError ? fromInner.Error : null);
+            Assert.Equal("https://github.com/acme/repo.git", fromInner.Value);
+            Assert.Equal(DysonGitProvider.GitHub, DysonGitInfo.ClassifyProvider(fromInner.Value));
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(outer, recursive: true);
+            }
+            catch
+            {
+                // ignore cleanup races
+            }
+        }
+    }
+
+    [Fact]
+    public void TryGetOrigin_errors_when_no_origin()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dyson-git-no-origin-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+
+        try
+        {
+            RunGitOrThrow(root, ["init"]);
+            var origin = DysonGitInfo.TryGetOrigin(root);
+            Assert.True(origin.IsError);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+                // ignore cleanup races
+            }
+        }
+    }
+
     [Fact]
     public void TryGetStatusPorcelain_large_output_succeeds_without_pipe_deadlock()
     {

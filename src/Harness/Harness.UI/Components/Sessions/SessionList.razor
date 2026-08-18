@@ -6,7 +6,17 @@
 @inject DysonUiHost Host
 
 <div class="session-list">
-    <div class="sidebar__section-label">Sessions</div>
+    <div class="session-list__header">
+        <div class="sidebar__section-label">Sessions</div>
+        <button type="button"
+                class="btn btn-ghost btn-icon session-list__clear"
+                title="Delete inactive sessions"
+                aria-label="Delete inactive sessions"
+                disabled="@(!HasDeletableSessions)"
+                @onclick="OnDeleteInactiveClickAsync">
+            <img src="icons/trash.svg" alt="" />
+        </button>
+    </div>
     <div class="btn-row" style="margin-bottom:8px;">
         <button type="button"
                 class="btn btn-primary btn-icon"
@@ -76,7 +86,14 @@
     [Parameter] public EventCallback OnNew { get; set; }
     [Parameter] public EventCallback<Guid> OnResume { get; set; }
     [Parameter] public EventCallback<Guid> OnDelete { get; set; }
+    [Parameter] public EventCallback OnDeleteInactive { get; set; }
     [Parameter] public EventCallback OnRefresh { get; set; }
+
+    private bool HasDeletableSessions =>
+        Sessions.Any(s =>
+            s.ParentSessionId is null
+            && s.Id != ActiveSessionId
+            && (DysonSessionInactiveDelete.IsDead(s.Status) || !Host.IsSessionBusy(s.Id)));
 
     private Task OnNewAsync() => OnNew.InvokeAsync();
 
@@ -94,5 +111,17 @@
             danger: true);
         if (ok)
             await OnDelete.InvokeAsync(id);
+    }
+
+    private async Task OnDeleteInactiveClickAsync()
+    {
+        var ok = await ConfirmDialog.ConfirmAsync(
+            title: "Delete inactive sessions",
+            message: "Delete all sessions in this work directory that are not running? The current session and any session that is still working (including idle parents with running subagents) will be kept. This cannot be undone.",
+            confirmLabel: "Delete",
+            cancelLabel: "Cancel",
+            danger: true);
+        if (ok)
+            await OnDeleteInactive.InvokeAsync();
     }
 }

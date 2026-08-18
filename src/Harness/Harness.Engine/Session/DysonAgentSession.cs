@@ -1983,6 +1983,13 @@ public abstract class DysonAgentSession
         DysonDropContextFlow.CreateTurn();
 
     /// <summary>
+    /// Creates a FullSummarize turn (one session summary that replaces earlier turns).
+    /// Does not append to <see cref="TurnHistory"/>.
+    /// </summary>
+    public DysonAgentTurn CreateFullSummarizeTurn() =>
+        DysonFullSummarizeFlow.CreateTurn();
+
+    /// <summary>
     /// Creates a TaskCompletionConfirm turn after CompleteTask.
     /// Does not append to <see cref="TurnHistory"/>.
     /// </summary>
@@ -2028,11 +2035,15 @@ public abstract class DysonAgentSession
     /// <summary>
     /// Evaluates root task-lifecycle after a completed turn (or on restore / last-child-done).
     /// Pass host-side <c>DysonSubagentHostLogic.HasActiveDescendant(session)</c> for the
-    /// active-descendant gate. Raises <see cref="TaskLifecycle"/> when an action is required.
+    /// active-descendant gate (the engine also walks <see cref="SubSessions"/>).
+    /// Pass <paramref name="hasQueuedFollowUp"/> when the host/runtime already has a
+    /// follow-up prompt queued. Raises <see cref="TaskLifecycle"/> when an action is required.
     /// </summary>
-    public DysonTaskLifecycleDecision EvaluateTaskLifecycle(bool hasActiveDescendant)
+    public DysonTaskLifecycleDecision EvaluateTaskLifecycle(
+        bool hasActiveDescendant,
+        bool hasQueuedFollowUp = false)
     {
-        var decision = DysonTaskLifecycleFlow.Evaluate(this, hasActiveDescendant);
+        var decision = DysonTaskLifecycleFlow.Evaluate(this, hasActiveDescendant, hasQueuedFollowUp);
         if (decision.Kind is { } kind)
             TaskLifecycle?.Invoke(this, new DysonTaskLifecycleEventArgs { Kind = kind });
         return decision;

@@ -50,7 +50,7 @@ public static class DysonTaskEndReflectFlow
             || child.Status != DysonSessionStatus.Active
             || child.HasPendingTurn
             || child.InFlightPromptTurn is not null
-            || HasActiveDescendant(child)
+            || DysonTaskLifecycleFlow.HasActiveDescendant(child)
             || child.Turns.Count == 0)
         {
             return false;
@@ -71,17 +71,6 @@ public static class DysonTaskEndReflectFlow
 
         reflection = CreateTurn(child.Todos);
         return true;
-    }
-
-    private static bool HasActiveDescendant(DysonAgentSession session)
-    {
-        foreach (var child in session.SubSessions)
-        {
-            if (child.Status == DysonSessionStatus.Active || HasActiveDescendant(child))
-                return true;
-        }
-
-        return false;
     }
 
     private static string FormatIncompleteTodoSnapshot(IReadOnlyList<DysonSessionTodo> todos)

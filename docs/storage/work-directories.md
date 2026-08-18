@@ -15,6 +15,8 @@ Contracts: `IDysonWorkDirectoryRepository` in `Harness.Abstractions`. Implementa
 | `Name` | Display name (defaults to folder name) |
 | `AbsolutePath` | Normalized full path; **unique** per `(SubjectId, AbsolutePath)` |
 | `CreatedUtc`, `LastOpenedUtc` | `DateTime` UTC |
+| `GitOrigin` | Raw `git remote get-url origin`, or null if not a git repo / no origin |
+| `GitProvider` | Classified slug (`github` / `gitlab` / `azure-devops` / `cursor-origin` / `other`), or null |
 
 ### Sessions link
 
@@ -60,7 +62,21 @@ Result-pattern functional repository (current subject only; cross-subject get-by
 - `CreateAsync(absolutePath, name?)` — normalize path, require directory exists, unique path within subject
 - `GetAsync` / `ListAsync` (ordered by `LastOpenedUtc` desc)
 - `TouchOpenedAsync` — bump `LastOpenedUtc` when switching active
+- `UpdateGitMetadataAsync(id, gitOrigin, gitProvider)` — persist or clear classified origin (both values may be null)
 - `DeleteAsync` — removes registration only (not disk folder); **blocked** if any sessions still reference the id
+
+## Git origin refresh (`DysonWorkDirectoryService`)
+
+Concrete Engine type (no extra interface). `RefreshGitOriginAsync` runs `DysonGitInfo.TryGetOrigin` on the registered `AbsolutePath`, classifies with `ClassifyProvider` / `ToStoredSlug`, and writes both columns via `UpdateGitMetadataAsync`. Detection failure (no git, timeout, no origin) writes `null`/`null` so a removed remote does not stay `github`. `GetAsync` failure is returned as-is (no invented row).
+
+Refresh is **activation-only**, not every `GetAsync` (file tree, git rail, and settings stay hot reads):
+
+1. `WorkDirectorySwitcher.AddAsync` after successful `CreateAsync`
+2. `WorkDirectorySwitcher.SelectAsync` after successful `TouchOpenedAsync`
+3. `Home.HydrateWorkDirectoryAsync` after successful `TouchOpenedAsync` (stored-id path) and when activating the first `ListAsync` row
+4. `DysonUiAgentSessionRuntimeFactory.CreateRootAsync` / `LoadAsync` after a successful workdir `GetAsync`
+
+`GetGitProvider(entity | stored, origin)` maps the stored slug (`cursor-origin` → `CursorOrigin`); empty stored classifies from origin; else `None`.
 
 ## Native folder pick
 

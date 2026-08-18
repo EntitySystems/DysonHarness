@@ -346,6 +346,21 @@ code, .mono {
   margin: 0 4px 6px;
 }
 
+.session-list__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.session-list__header .sidebar__section-label {
+  margin-bottom: 0;
+}
+
+.session-list__clear {
+  flex-shrink: 0;
+}
+
 .sidebar__footer {
   margin-top: auto;
   border-top: 1px solid var(--border);

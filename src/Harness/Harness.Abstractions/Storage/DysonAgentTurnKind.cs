@@ -36,4 +36,15 @@ public enum DysonAgentTurnKind
     /// one Bug Review subagent (no modelSlug) and reports findings; does not auto-fix.
     /// </summary>
     BugReview = 15,
+    /// <summary>
+    /// Agent-authored full session summary. After completion the harness excludes every
+    /// earlier turn from future provider transcripts and keeps this turn as the remaining context.
+    /// </summary>
+    FullSummarize = 16,
+}
+
+public static class DysonAgentTurnKindRules
+{
+    public static bool AllowsEnqueue(DysonAgentTurnKind kind) =>
+        kind != DysonAgentTurnKind.TaskEndReflect;
 }

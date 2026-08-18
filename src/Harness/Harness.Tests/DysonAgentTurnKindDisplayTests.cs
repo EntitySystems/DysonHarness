@@ -23,6 +23,9 @@ public class DysonAgentTurnKindDisplayTests
         AssertNumeric(DysonAgentTurnKind.DisplayInfo, 11);
         AssertNumeric(DysonAgentTurnKind.ModeSwitch, 12);
         AssertNumeric(DysonAgentTurnKind.DropContext, 13);
+        AssertNumeric(DysonAgentTurnKind.TaskEndReflect, 14);
+        AssertNumeric(DysonAgentTurnKind.BugReview, 15);
+        AssertNumeric(DysonAgentTurnKind.FullSummarize, 16);
 
         AssertLabel(DysonAgentTurnKind.Normal, "Turn");
         AssertLabel(DysonAgentTurnKind.ExpandThoughtProcess, "Expand thought");
@@ -40,21 +43,30 @@ public class DysonAgentTurnKindDisplayTests
         AssertLabel(DysonAgentTurnKind.DropContext, "Drop context");
         AssertLabel(DysonAgentTurnKind.TaskEndReflect, "Task end reflection");
         AssertLabel(DysonAgentTurnKind.BugReview, "Code review");
+        AssertLabel(DysonAgentTurnKind.FullSummarize, "Full summary");
 
         if ((int)DysonAgentTurnKind.DropContext != 13)
             throw new InvalidOperationException("DysonAgentTurnKind.DropContext must stay 13 (append-only).");
 
-        // Planned append (do not renumber): TaskEndReflect=14, BugReview=15.
-        if (Enum.TryParse("TaskEndReflect", out DysonAgentTurnKind reflect))
-            AssertLabel(reflect, "Task end reflection");
-        if (Enum.TryParse("BugReview", out DysonAgentTurnKind bugReview))
-            AssertLabel(bugReview, "Code review");
+        // Append-only after DropContext=13: TaskEndReflect=14, BugReview=15, FullSummarize=16.
 
         foreach (var kind in Enum.GetValues<DysonAgentTurnKind>())
         {
             if (string.IsNullOrWhiteSpace(DysonAgentTurnKindDisplay.GetDisplayName(kind)))
                 throw new InvalidOperationException($"Missing display name for {kind}.");
         }
+    }
+
+    [Fact]
+    public void AllowEnqueue_is_false_only_for_task_end_reflect()
+    {
+        Assert.False(new DysonAgentTurn { Kind = DysonAgentTurnKind.TaskEndReflect }.AllowEnqueue);
+        Assert.True(new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal }.AllowEnqueue);
+        Assert.True(new DysonAgentTurn { Kind = DysonAgentTurnKind.BugReview }.AllowEnqueue);
+
+        Assert.False(DysonAgentTurnKindRules.AllowsEnqueue(DysonAgentTurnKind.TaskEndReflect));
+        Assert.True(DysonAgentTurnKindRules.AllowsEnqueue(DysonAgentTurnKind.Normal));
+        Assert.True(DysonAgentTurnKindRules.AllowsEnqueue(DysonAgentTurnKind.BugReview));
     }
 
     private static void AssertNumeric(DysonAgentTurnKind kind, int expected)

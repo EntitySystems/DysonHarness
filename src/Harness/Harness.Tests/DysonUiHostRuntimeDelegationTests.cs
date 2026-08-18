@@ -665,7 +665,11 @@ public class DysonUiHostRuntimeDelegationTests
                     grantService,
                     mcpResolver);
                 innerFactory = new DysonUiAgentSessionRuntimeFactory(
-                    sessions, models, workDirectories, configBuilder);
+                    sessions,
+                    models,
+                    workDirectories,
+                    new DysonWorkDirectoryService(workDirectories),
+                    configBuilder);
             }
 
             var sessionFactory = new CountingSessionFactory(innerFactory);

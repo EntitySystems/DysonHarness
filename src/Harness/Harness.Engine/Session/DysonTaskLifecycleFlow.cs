@@ -216,18 +216,41 @@ public static class DysonTaskLifecycleFlow
     }
 
     /// <summary>
+    /// True when any nested <see cref="DysonAgentSession.SubSessions"/> entry is
+    /// <see cref="DysonSessionStatus.Active"/> (any depth).
+    /// </summary>
+    public static bool HasActiveDescendant(DysonAgentSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        foreach (var child in session.SubSessions)
+        {
+            if (child.Status == DysonSessionStatus.Active || HasActiveDescendant(child))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Stable-boundary evaluation. No action unless: root, non-empty todos, no pending follow-up,
-    /// no in-flight prompt, no active descendant, all turns finalized, session still Active.
+    /// no host-queued follow-up, no in-flight prompt, no active descendant (host flag or
+    /// session-graph walk), all turns finalized, session still Active.
     /// Dedupes reflection / review from durable turn history (no extra DB column).
     /// </summary>
-    public static DysonTaskLifecycleDecision Evaluate(DysonAgentSession session, bool hasActiveDescendant)
+    public static DysonTaskLifecycleDecision Evaluate(
+        DysonAgentSession session,
+        bool hasActiveDescendant,
+        bool hasQueuedFollowUp = false)
     {
         ArgumentNullException.ThrowIfNull(session);
 
         if (session.Parent is not null
             || session.IsTerminal
             || session.Status != DysonSessionStatus.Active
+            || hasQueuedFollowUp
             || hasActiveDescendant
+            || HasActiveDescendant(session)
             || session.InFlightPromptTurn is not null
             || session.HasPendingTurn)
         {

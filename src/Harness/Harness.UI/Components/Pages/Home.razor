@@ -7,6 +7,7 @@
 @implements IAsyncDisposable
 @inject DysonUiHost Host
 @inject IDysonWorkDirectoryRepository WorkDirs
+@inject DysonWorkDirectoryService WorkDirectoryService
 @inject DysonFileTreeService FileTree
 @inject DysonGitChangesService GitChanges
 @inject IDysonSubjectContext Subject
@@ -29,6 +30,7 @@
                              OnNew="StartNewAsync"
                              OnResume="ResumeAsync"
                              OnDelete="DeleteAsync"
+                             OnDeleteInactive="DeleteInactiveAsync"
                              OnRefresh="RefreshSessionsAsync" />
             </SessionList>
         </Sidebar>
@@ -171,6 +173,7 @@
                     _activeWorkDirectoryId = id;
                     Host.SetComposerWorkDirectoryId(id);
                     await WorkDirs.TouchOpenedAsync(id);
+                    await WorkDirectoryService.RefreshGitOriginAsync(id);
                     await RefreshGitBranchAsync(get.Value.AbsolutePath);
                     await RefreshSessionsAsync();
                     StateHasChanged();
@@ -190,6 +193,7 @@
         {
             var first = list.Value[0];
             await SetActiveWorkDirectoryAsync(first.Id, first.AbsolutePath);
+            await WorkDirectoryService.RefreshGitOriginAsync(first.Id);
         }
         else
         {
@@ -492,6 +496,16 @@
     private async Task DeleteAsync(Guid sessionId)
     {
         var result = await Host.DeleteSessionAsync(sessionId);
+        if (result.IsError)
+            _listError = result.Error;
+        await RefreshSessionsAsync();
+    }
+
+    private async Task DeleteInactiveAsync()
+    {
+        if (_activeWorkDirectoryId is null)
+            return;
+        var result = await Host.DeleteInactiveSessionsAsync(_activeWorkDirectoryId.Value);
         if (result.IsError)
             _listError = result.Error;
         await RefreshSessionsAsync();

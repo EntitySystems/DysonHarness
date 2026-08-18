@@ -20,6 +20,7 @@ public static class ComposerSlashCommands
         PluginCommand,
         Help,
         Summarize,
+        SummarizeFull,
     }
 
     public enum HelpSection
@@ -80,6 +81,9 @@ public static class ComposerSlashCommands
     private static readonly Suggestion SummarizeSuggestion =
         new("/summarize", "Summarize older turns", Kind.Summarize);
 
+    private static readonly Suggestion SummarizeFullSuggestion =
+        new("/summarize-full", "Write a full session summary and drop earlier turns", Kind.SummarizeFull);
+
     private static readonly Suggestion[] BuiltIns =
     [
         new("/ask", "Ask mode", Kind.Mode, Mode: DysonAgentModes.Ask),
@@ -87,6 +91,7 @@ public static class ComposerSlashCommands
         new("/work", "Work mode", Kind.Mode, Mode: DysonAgentModes.Work),
         new("/new", "New session", Kind.NewSession),
         SummarizeSuggestion,
+        SummarizeFullSuggestion,
         PluginsSuggestion,
         SkillSearchSuggestion,
         HelpSuggestion,
@@ -102,6 +107,7 @@ public static class ComposerSlashCommands
         new("/work ", "Work mode", HelpSection.BuiltIn),
         new("/new", "New session", HelpSection.BuiltIn),
         new("/summarize", "Summarize all turns before the last 2", HelpSection.BuiltIn),
+        new("/summarize-full", "Write a full session summary and drop earlier turns", HelpSection.BuiltIn),
         new("/plugins", "Manage plugins", HelpSection.BuiltIn),
         new("/skill-search", "Search skills", HelpSection.BuiltIn),
         new("/help", "Command help", HelpSection.BuiltIn),

@@ -67,6 +67,18 @@ public sealed class DysonWorkDirectoryRepository(
         return _accessor.RunAsync((db, ct) => TouchOpenedCoreAsync(db, subjectId, id, ct), cancellationToken);
     }
 
+    public Task<VoidResult<string>> UpdateGitMetadataAsync(
+        Guid id,
+        string? gitOrigin,
+        string? gitProvider,
+        CancellationToken cancellationToken = default)
+    {
+        var subjectId = _subjectContext.SubjectId;
+        return _accessor.RunAsync(
+            (db, ct) => UpdateGitMetadataCoreAsync(db, subjectId, id, gitOrigin, gitProvider, ct),
+            cancellationToken);
+    }
+
     public Task<VoidResult<string>> DeleteAsync(
         Guid id,
         CancellationToken cancellationToken = default)
@@ -184,6 +196,34 @@ public sealed class DysonWorkDirectoryRepository(
         catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return new VoidResult<string>($"Failed to update work directory: {ex.Message}");
+        }
+    }
+
+    private static async Task<VoidResult<string>> UpdateGitMetadataCoreAsync(
+        DysonDbContext db,
+        string subjectId,
+        Guid id,
+        string? gitOrigin,
+        string? gitProvider,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var entity = await db.WorkDirectories
+                .FirstOrDefaultAsync(w => w.Id == id && w.SubjectId == subjectId, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (entity is null)
+                return new VoidResult<string>($"Work directory '{id}' not found.");
+
+            entity.GitOrigin = gitOrigin;
+            entity.GitProvider = gitProvider;
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return new VoidResult<string>($"Failed to update work directory git metadata: {ex.Message}");
         }
     }
 
