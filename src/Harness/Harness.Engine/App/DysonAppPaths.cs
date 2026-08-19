@@ -37,8 +37,17 @@ public static class DysonAppPaths
     public static string GetDatabasePath(DysonAppMode mode) =>
         Path.Combine(GetRoot(mode), "dyson.db");
 
+    /// <summary>
+    /// Host diagnostic log sibling of <c>dyson.db</c> (<c>{root}/dyson.log</c>). Not SQLite.
+    /// </summary>
+    public static string GetLogFilePath(DysonAppMode mode) =>
+        Path.Combine(GetRoot(mode), "dyson.log");
+
     public static string GetPluginsDirectory(DysonAppMode mode) =>
         Path.Combine(GetRoot(mode), "plugins");
+
+    public static string GetRuntimesDirectory(DysonAppMode mode) =>
+        Path.Combine(GetRoot(mode), "runtimes");
 
     public static string GetPluginDataDirectory(DysonAppMode mode) =>
         Path.Combine(GetRoot(mode), "plugin-data");
@@ -61,6 +70,14 @@ public static class DysonAppPaths
     public static string EnsurePluginsDirectory(DysonAppMode mode)
     {
         var path = GetPluginsDirectory(mode);
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    /// <summary>Creates the mode-scoped embedded-runtimes root if missing. Call on first install, not at startup.</summary>
+    public static string EnsureRuntimesDirectory(DysonAppMode mode)
+    {
+        var path = GetRuntimesDirectory(mode);
         Directory.CreateDirectory(path);
         return path;
     }

@@ -128,6 +128,7 @@ public sealed class DysonMcpPipeline
             "Run a command in the session work directory. " +
             $"Available shells for this session: {listed}. " +
             "You must pass shell as one of these. Prefer dedicated MCP file tools over shell when they fit.";
+        description = AppendPythonNodeSnippetSentence(description, names);
         if (planMode)
             description += " " + PlanShellExecuteWarning;
 
@@ -189,6 +190,7 @@ public sealed class DysonMcpPipeline
             "Use ListLongRunningShells / ReadLongRunningShellTail / LongRunningShellInteract / " +
             "SubscribeToLongRunningShellCompletion / RequestLongRunningShellCancellation / AbortLongRunningShell to manage it. " +
             "Not persisted across UI restart (orphans OS processes). Prefer ShellExecute for one-shot commands.";
+        startDescription = AppendPythonNodeSnippetSentence(startDescription, names);
         if (planMode)
             startDescription += " " + PlanShellExecuteWarning;
 
@@ -360,6 +362,23 @@ public sealed class DysonMcpPipeline
                 }
                 """,
         };
+    }
+
+    /// <summary>
+    /// When the session enum includes Python and/or Node, remind the model those commands are snippets.
+    /// </summary>
+    private static string AppendPythonNodeSnippetSentence(string description, IReadOnlyList<string> names)
+    {
+        var hasPython = names.Any(n => n.Equals("Python", StringComparison.OrdinalIgnoreCase));
+        var hasNode = names.Any(n => n.Equals("Node", StringComparison.OrdinalIgnoreCase));
+        if (!hasPython && !hasNode)
+            return description;
+
+        if (hasPython && hasNode)
+            return description + " Python command is a snippet (`-c`); Node command is a snippet (`-e`).";
+        if (hasPython)
+            return description + " Python command is a snippet (`-c`).";
+        return description + " Node command is a snippet (`-e`).";
     }
 
     /// <summary>Formats the tools dictionary into a prompt-injectable catalog string.</summary>

@@ -38,11 +38,18 @@ Prebuild scripts (`scripts/resolve-app-mode.sh` / `.ps1`) and MSBuild `GenerateA
 
 - `GetRoot(mode)` → `{base}/{DysonDev|DysonTest|DysonProd}`
 - `GetDatabasePath(mode)` → `{root}/dyson.db`
+- `GetLogFilePath(mode)` → `{root}/dyson.log` — host diagnostic file (not SQLite / not `session_logs`): UTF-8, Error+ only, written by the UI MEL `ILoggerProvider`; keeps the newest 5000 **physical** lines (`\n`)
 - `GetPluginsDirectory(mode)` / `EnsurePluginsDirectory(mode)` → `{root}/plugins`
+- `GetRuntimesDirectory(mode)` / `EnsureRuntimesDirectory(mode)` → `{root}/runtimes` (sibling of `dyson.db`; create on first install, not at UI startup)
 - `GetPluginDataDirectory(mode)` / `EnsurePluginDataDirectory(mode)` → `{root}/plugin-data`
 - `GetPluginSecurityDirectory(mode)` → `{root}/plugin-security`
 - `GetPluginVariableProtectionKeyPath(mode)` → `{root}/plugin-security/variable-protection.key`
-- The mode root/database directory is ensured at startup; plugin package/data roots and the protection-key directory are created only when their feature first writes them
+- The mode root/database directory is ensured at startup; plugin package/data roots, the protection-key directory, and `{root}/runtimes` are created only when their feature first writes them
+
+Pinned Node/Python binaries (`DysonEmbeddedRuntimeInstaller.Pins`) unpack under `{root}/runtimes`. No pip/npm. Node download is x64 only (no arm64). Python download is Windows-only.
+
+- Node v24.19.0: `{root}/runtimes/node/v24.19.0/node-v24.19.0-{win|darwin|linux}-x64/…` — Windows `node.exe`; macOS `bin/node`; Linux `bin/node` (official `.tar.gz`, not xz). URLs: `https://nodejs.org/dist/v24.19.0/node-v24.19.0-win-x64.zip`, `…-darwin-x64.tar.gz`, `…-linux-x64.tar.gz`. SHA best-effort: `https://nodejs.org/dist/v24.19.0/SHASUMS256.txt`.
+- Python 3.14.7 Windows embed: `{root}/runtimes/python/3.14.7/python.exe` from `https://www.python.org/ftp/python/3.14.7/python-3.14.7-embed-amd64.zip`. Non-Windows `Probe` searches PATH for `python3` then `python` (not `python.exe` on Windows PATH).
 
 Single SQLite file holds providers, slugs, sessions, app settings, and plugin installation metadata for that mode. Plugin package/data payloads remain outside the database in their explicit project or global roots.
 
@@ -135,7 +142,7 @@ Subject-owned shell catalog for MCP `ShellExecute` / long-running shell tools (`
 | `SortOrder` | Stable UI / enum order (ascending) |
 | `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
 
-Unique: `(SubjectId, Name)`. `EnsureDefaultsAsync` seeds Windows rows when the current subject has no rows: `Pwsh`→`pwsh`, `PowerShell`→`powershell.exe`, `Cmd`→`cmd.exe` (all enabled). Other platforms seed nothing until Bash/Zsh runners exist. Settings → Shells edits the table (optional Fixed args as space-separated tokens → `FixedArgsJson`); new/resume sessions load enabled specs into `DysonAgentSessionConfig.AvailableShells` (`Name`, `ExecutablePath`, optional `FixedArgs`).
+Unique: `(SubjectId, Name)`. `EnsureDefaultsAsync` seeds Windows rows when the current subject has no rows: `Pwsh`→`pwsh`, `PowerShell`→`powershell.exe`, `Cmd`→`cmd.exe` (all enabled). Other platforms seed nothing until Bash/Zsh runners exist. Settings → Shells edits the table (optional Fixed args as space-separated tokens → `FixedArgsJson`); new/resume sessions load enabled specs into `DysonAgentSessionConfig.AvailableShells` (`Name`, `ExecutablePath`, optional `FixedArgs`). Settings → Shells **Embedded runtimes** download/register the pinned Node/Python binaries and upsert enabled subject-owned rows named `Node` (`FixedArgs` `["-e"]`) and `Python` (`["-c"]`) by name `OrdinalIgnoreCase`. Catalog rows are subject-owned; binaries live in host `{root}/runtimes`, not per-subject. No LocalDb/schema/`EnsureDefaults` changes. No `DysonShellType` values added.
 
 ## Model providers (`model_providers`)
 

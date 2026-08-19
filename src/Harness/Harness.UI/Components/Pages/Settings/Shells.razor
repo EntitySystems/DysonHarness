@@ -1,7 +1,9 @@
 @page "/settings/shells"
 @layout SettingsLayout
 @using DysonHarness
+@implements IDisposable
 @inject IDysonConfiguredShellRepository ShellStore
+@inject DysonEmbeddedRuntimeInstaller Runtimes
 
 <PageTitle>Shells — Settings</PageTitle>
 
@@ -10,7 +12,7 @@
     <p class="settings-page__copy">
         Register shells available to agents via ShellExecute and long-running shell tools.
         Only enabled shells appear in the MCP enum. New and resumed sessions pick up changes.
-        Leave Fixed args blank to use basename heuristics (pwsh/powershell/cmd/bash/sh/zsh/git-bash).
+        Leave Fixed args blank to use basename heuristics (pwsh/powershell/cmd/bash/sh/zsh/git-bash; python/python3 → -c, node/nodejs → -e).
     </p>
 
     @if (!string.IsNullOrEmpty(_error))
@@ -84,6 +86,88 @@
         }
 
         <div style="margin-top:1rem;border-top:1px solid var(--border, #333);padding-top:0.75rem;">
+            <div class="tool-panel__title" style="margin-bottom:8px;">Embedded runtimes</div>
+            <p class="settings-page__copy">
+                Downloads land under the app-data <span class="mono">runtimes/</span> folder next to the database; new and resumed sessions pick up enabled shells.
+            </p>
+            <div class="list">
+                @foreach (var runtime in _runtimes)
+                {
+                    var busy = IsRuntimeBusy(runtime.Kind);
+                    var downloading = _runtimeCancels.ContainsKey(runtime.Kind);
+                    <div class="list-item" style="cursor:default;">
+                        <span class="list-item__title">@runtime.DisplayName @runtime.PinnedVersion</span>
+                        @if (runtime.DownloadSupported && runtime.IsInstalled && !string.IsNullOrWhiteSpace(runtime.ExecutablePath))
+                        {
+                            <span class="list-item__meta mono">@runtime.ExecutablePath</span>
+                        }
+                        else if (!runtime.DownloadSupported && !string.IsNullOrWhiteSpace(runtime.Note))
+                        {
+                            <span class="list-item__meta">@runtime.Note</span>
+                        }
+                        <div class="btn-row" style="margin-top:4px;">
+                            @if (runtime.DownloadSupported)
+                            {
+                                @if (runtime.IsInstalled)
+                                {
+                                    <button type="button"
+                                            class="btn"
+                                            style="padding:3px 7px;font-size:11px;"
+                                            disabled="@busy"
+                                            @onclick="() => DownloadRuntimeAsync(runtime.Kind, force: true)">
+                                        Reinstall
+                                    </button>
+                                }
+                                else
+                                {
+                                    <button type="button"
+                                            class="btn btn-primary"
+                                            style="padding:3px 7px;font-size:11px;"
+                                            disabled="@busy"
+                                            @onclick="() => DownloadRuntimeAsync(runtime.Kind, force: false)">
+                                        Download
+                                    </button>
+                                }
+                            }
+                            else if (runtime.Kind == DysonEmbeddedRuntimeKind.Python && runtime.IsInstalled)
+                            {
+                                <button type="button"
+                                        class="btn btn-primary"
+                                        style="padding:3px 7px;font-size:11px;"
+                                        disabled="@busy"
+                                        @onclick="RegisterSystemPythonAsync">
+                                    Register system Python
+                                </button>
+                            }
+                            @if (downloading)
+                            {
+                                <button type="button"
+                                        class="btn btn-ghost"
+                                        style="padding:3px 7px;font-size:11px;"
+                                        @onclick="() => CancelRuntime(runtime.Kind)">
+                                    Cancel
+                                </button>
+                            }
+                        </div>
+                        @if (downloading)
+                        {
+                            <span class="list-item__meta">
+                                @if (_runtimeProgress.TryGetValue(runtime.Kind, out var progress) && progress is not null)
+                                {
+                                    @FormatProgress(progress)
+                                }
+                                else
+                                {
+                                    <text>Downloading…</text>
+                                }
+                            </span>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+
+        <div style="margin-top:1rem;border-top:1px solid var(--border, #333);padding-top:0.75rem;">
             <div class="tool-panel__title" style="margin-bottom:8px;">Add shell</div>
             <div class="field">
                 <label>Name</label>
@@ -109,6 +193,11 @@
 
 @code {
     private List<DysonConfiguredShellEntity> _shells = [];
+    private List<DysonEmbeddedRuntimeStatus> _runtimes = [];
+    private readonly Dictionary<DysonEmbeddedRuntimeKind, CancellationTokenSource> _runtimeCancels = [];
+    private readonly Dictionary<DysonEmbeddedRuntimeKind, DysonDownloadProgress?> _runtimeProgress = [];
+    private readonly HashSet<DysonEmbeddedRuntimeKind> _runtimeBusy = [];
+    private bool _disposed;
     private string? _error;
     private string? _status;
 
@@ -132,6 +221,147 @@
         }
 
         await ReloadAsync();
+        RefreshRuntimes();
+    }
+
+    private void RefreshRuntimes()
+    {
+        _runtimes = Runtimes.ProbeAll(DysonBuildInfo.Current).ToList();
+    }
+
+    private bool IsRuntimeBusy(DysonEmbeddedRuntimeKind kind) => _runtimeBusy.Contains(kind);
+
+    private void CancelRuntime(DysonEmbeddedRuntimeKind kind)
+    {
+        if (_runtimeCancels.TryGetValue(kind, out var cts))
+            cts.Cancel();
+    }
+
+    private async Task DownloadRuntimeAsync(DysonEmbeddedRuntimeKind kind, bool force)
+    {
+        _error = null;
+        _status = null;
+        ReplaceRuntimeCancel(kind);
+        var cts = _runtimeCancels[kind];
+        _runtimeBusy.Add(kind);
+        _runtimeProgress[kind] = null;
+
+        var progress = new Progress<DysonDownloadProgress>(p =>
+        {
+            if (_disposed)
+                return;
+            _runtimeProgress[kind] = p;
+            _ = InvokeAsync(StateHasChanged);
+        });
+
+        try
+        {
+            var installed = await Runtimes.EnsureInstalledAsync(
+                kind,
+                DysonBuildInfo.Current,
+                progress,
+                force,
+                cts.Token);
+            if (installed.IsError)
+            {
+                _error = installed.Error;
+                return;
+            }
+
+            var registered = await Runtimes.RegisterAsShellAsync(kind, ShellStore, cts.Token);
+            if (registered.IsError)
+            {
+                _error = registered.Error;
+                return;
+            }
+
+            _status = $"{DysonEmbeddedRuntimeInstaller.GetShellName(kind)} registered.";
+            await ReloadAsync();
+        }
+        finally
+        {
+            _runtimeBusy.Remove(kind);
+            _runtimeProgress.Remove(kind);
+            RemoveRuntimeCancel(kind, cts);
+            RefreshRuntimes();
+        }
+    }
+
+    private async Task RegisterSystemPythonAsync()
+    {
+        _error = null;
+        _status = null;
+        _runtimeBusy.Add(DysonEmbeddedRuntimeKind.Python);
+        try
+        {
+            var registered = await Runtimes.RegisterAsShellAsync(DysonEmbeddedRuntimeKind.Python, ShellStore);
+            if (registered.IsError)
+            {
+                _error = registered.Error;
+                return;
+            }
+
+            _status = "Python registered.";
+            await ReloadAsync();
+        }
+        finally
+        {
+            _runtimeBusy.Remove(DysonEmbeddedRuntimeKind.Python);
+            RefreshRuntimes();
+        }
+    }
+
+    private void ReplaceRuntimeCancel(DysonEmbeddedRuntimeKind kind)
+    {
+        if (_runtimeCancels.Remove(kind, out var existing))
+        {
+            existing.Cancel();
+            existing.Dispose();
+        }
+
+        _runtimeCancels[kind] = new CancellationTokenSource();
+    }
+
+    private void RemoveRuntimeCancel(DysonEmbeddedRuntimeKind kind, CancellationTokenSource cts)
+    {
+        if (_runtimeCancels.TryGetValue(kind, out var current) && ReferenceEquals(current, cts))
+            _runtimeCancels.Remove(kind);
+        cts.Dispose();
+    }
+
+    private static string FormatProgress(DysonDownloadProgress progress)
+    {
+        var received = FormatBytes(progress.BytesReceived);
+        if (progress.TotalBytes is long total && total > 0)
+        {
+            var percent = progress.Fraction is double fraction
+                ? $" ({fraction * 100:0}%)"
+                : "";
+            return $"{received} / {FormatBytes(total)}{percent}";
+        }
+
+        return received;
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024)
+            return $"{bytes} B";
+        if (bytes < 1024 * 1024)
+            return $"{bytes / 1024.0:0.0} KB";
+        return $"{bytes / (1024.0 * 1024.0):0.0} MB";
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        foreach (var cts in _runtimeCancels.Values)
+        {
+            cts.Cancel();
+            cts.Dispose();
+        }
+
+        _runtimeCancels.Clear();
     }
 
     private async Task ReloadAsync()

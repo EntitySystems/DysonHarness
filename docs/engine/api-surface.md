@@ -24,9 +24,12 @@ Conceptual overview: [README.md](README.md).
 | `IDysonWorkspaceFileSystem` / `DysonWorkspaceSubjects` / `DysonWorkspaceEntry` | Sandboxed workspace IO; `InitializeAsync(subjectId)` (local: `"local_fs"`); `NativeRootPath` for shells/git |
 | `IDysonWorkspaceChangeWatcher` / `DysonWorkspaceChangeKind` / `DysonWorkspaceChangeEventArgs` | Live FS change notifications from an initialized workspace FS |
 | `DysonLocalWorkspaceFileSystem` / `DysonWorkspaceFileSystems` | Local/SMB/UNC path-backed FS + `CreateLocalAsync` factory |
-| `DysonShell` / `DysonWindowsShell` | Shell runners; path-based execute + basename fixed-arg heuristics; legacy `DysonShellType` map kept for tests |
+| `DysonShell` / `DysonWindowsShell` | Shell runners; path-based execute + basename fixed-arg heuristics (`python`/`python3` → `-c`, `node`/`nodejs` → `-e`; Fixed args override still wins); legacy `DysonShellType` map kept for tests (no Python/Node enum values) |
 | `DysonConfiguredShellSpec` / `DysonShellType` / `DysonShellRunResult` | Session shell name+path+optional FixedArgs; legacy enum; process result |
 | `DysonConfiguredShellEntity` / `IDysonConfiguredShellRepository` | Persisted shells (`configured_shells`, optional `FixedArgsJson`, `SubjectId`); seed defaults; list enabled specs |
+| `DysonEmbeddedRuntimeKind` / `DysonEmbeddedRuntimeStatus` | `Node` / `Python`; probe record (`Kind`, `DisplayName`, `PinnedVersion`, `DownloadSupported`, `IsInstalled`, `ExecutablePath?`, `Note?`) |
+| `DysonDownloadProgress` | Streamed install progress (`BytesReceived`, `TotalBytes?`, `Fraction?`) — not `CliProxyDownloadProgress` |
+| `DysonEmbeddedRuntimeInstaller` | `HttpClient` ctor; `Probe` / `ProbeAll` / `EnsureInstalledAsync` / `RegisterAsShellAsync`. Register upserts by name `OrdinalIgnoreCase`: `Node` FixedArgs `["-e"]` enabled; `Python` `["-c"]` enabled (`NodeShellName` / `PythonShellName`, `NodeFixedArgs` / `PythonFixedArgs`). Pins: Node v24.19.0 x64 (win zip / darwin+linux `.tar.gz`; SHA best-effort `SHASUMS256.txt`); Python 3.14.7 Windows embed zip only. No pip/npm; no arm64 downloads. UI DI: named `HttpClient` `"embedded-runtimes"` (20 min timeout, User-Agent `DysonHarness/1.0`) + `AddSingleton` installer. No LocalDb/schema/`EnsureDefaults` changes |
 | `DysonPluginInstallScope` / `DysonPluginSourceKind` / `DysonPluginPackageFormat` / resolved plugin DTOs | Normalized plugin identity, provenance, format (`AgentPlugin`, `Codex`, `Cursor`), capabilities, components, diagnostics, preview, and install result models |
 | `IDysonPluginPackageParser` / `DysonPluginPackageParser` / format adapters | Detect and parse Agent Plugin v1 root `plugin.json`, Codex `.codex-plugin/plugin.json`, or Cursor `.cursor-plugin/plugin.json`; containment + local schema/skill/component validation; Cursor marketplace child selection |
 | `IDysonPluginPackageService` / `DysonPluginPackageService` / `DysonPluginPackageSecurity` | Result-pattern, scope-independent ZIP/folder/GitHub preview; quotas/checksum/immutable commit provenance; install-time revalidation and explicit-target atomic promotion. Preview/install never execute package content |
@@ -145,7 +148,7 @@ Process-lifetime, subject-scoped live graph. Circuit facades attach; they do not
 | Type | Notes |
 | ---- | ----- |
 | `DysonMcpAccessMode` | `FullAccess`, `AutoReview` |
-| `DysonMcpPipeline` | Tool catalog + optional auto-review proxy; `ApplyVisualizationTheme` replaces `RenderHtmlVisualization` from the current snapshot (no-op if omitted); `ConfigureShellExecuteForMode` / `CreateLongRunningShellTools` / `PlanShellExecuteWarning` for Plan soft shell gates; `CreateBrowserTools` when `browserControlAvailable` |
+| `DysonMcpPipeline` | Tool catalog + optional auto-review proxy; `ApplyVisualizationTheme` replaces `RenderHtmlVisualization` from the current snapshot (no-op if omitted); `ConfigureShellExecuteForMode` / `CreateLongRunningShellTools` / `PlanShellExecuteWarning` for Plan soft shell gates; Python/Node snippet sentence on `ShellExecute` / `StartLongRunningShell` when those names are in the enum (Plan warning still appends after); `CreateBrowserTools` when `browserControlAvailable` |
 | `DysonSessionToolsetBuilder` | Builds catalog: CreateDefault → gates → denylist → optional custom MCP merge |
 | `DysonCustomMcpHost` / `DysonCustomMcpHostRegistry` | Workdir-scoped live user-authored MCP clients (refcount retain/release); gated by `mcpActive` |
 | `DysonPluginMcpResolver` / `DysonPluginMcpHost` | Separate package-owned MCP resolver/host; explicit per-server executable/network grants, fixed transport policy, collision-safe names. Host API exists but current session config/toolset/executor do not merge or dispatch plugin MCP tools |
@@ -256,7 +259,7 @@ Cloud hosts implement `IDysonWorkspaceFileSystem` themselves — see [Cloud host
 
 Contracts in `Harness.Abstractions` (`Storage/`); SQLite impl in `Harness.LocalDb`. Overview: [docs/storage](../storage/models.md), [sessions.md](../storage/sessions.md), [work-directories.md](../storage/work-directories.md), [cloud-hosting.md](../storage/cloud-hosting.md).
 
-- `DysonAppMode`, `DysonAppPaths`, `DysonBuildInfo`
+- `DysonAppMode`, `DysonAppPaths` (`GetRoot`, `GetDatabasePath`, `GetLogFilePath` → `{root}/dyson.log`, `GetRuntimesDirectory` / `EnsureRuntimesDirectory` → `{root}/runtimes` on first install, plugin / plugin-data / plugin-security roots), `DysonBuildInfo`
 - `DysonSubjects` (`Local` = `"local"`, `Shared` = `"shared"`), `IDysonSubjectContext`, `DysonSubjectEntity`
 - `IDysonAccessEvaluator` / `DysonPermissiveAccessEvaluator` / `DysonRole` / `DysonPermission` (`ManageOwnSubjectData`, `ManageSharedProviders`)
 - `IDysonSessionRepository`, `IDysonWorkDirectoryRepository`, `IDysonWorkDirectoryConfigurationRepository`, `IDysonPluginInstallationRepository`, `IDysonPluginVariableValueRepository`, `IDysonPluginHookSecurityRepository`, `IDysonModelRepository`, `IDysonConfiguredShellRepository`, `IDysonSubjectSettingsRepository`
