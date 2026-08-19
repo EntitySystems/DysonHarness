@@ -1132,7 +1132,7 @@ public sealed class DysonMcpPipeline
                 "Spawn a nested agent session for delegated work (non-blocking). " +
                 "Returns immediately with subagentId / persistenceId; the child runs in the background. " +
                 "When the child calls SubmitSubagentReport, the parent is notified and the host queues a turn. " +
-                "Do not WaitForSubagent on Drones; Wait only on Explore (or other) children whose output blocks the next planned turn. " +
+                "Do not WaitForSubagent on Drones. In Work (and Drone), any Explore you start is a blocker: WaitForSubagent on a later stage of the same turn before further parent work. In Plan, Wait only when that Explore blocks the next automatic turn. " +
                 "Optional todos seeds the child’s own session todo list. " +
                 "Optional modelSlug picks a different model (slug or display alias; omit to inherit parent). " +
                 "Optional reasoningEffort overrides the child’s reasoning_effort (omit/null → chosen slug’s defaultEffort; when inheriting parent model, omit keeps the parent’s current effort). " +
@@ -1290,10 +1290,9 @@ public sealed class DysonMcpPipeline
             Description =
                 "Block until this subagent finishes (completed / failed / stopped) or timeoutMs. " +
                 "Default timeout is 300000 ms (5 minutes) when timeoutMs is omitted. " +
-                "Wait only when the child’s result is a blocker for your next automatic turn in a multi-step plan " +
-                "(canonical case: one or more Explores must finish before implementation / before starting Drones). " +
-                "After launching a Drone, do not Wait — keep the session free; the harness queues a parent turn when SubmitSubagentReport arrives. " +
-                "Blocking the chat with Wait when you could multitask is incorrect.",
+                "In Work (and Drone), Wait immediately after starting an Explore — do not continue parent work until the report returns. " +
+                "After launching a Drone, do not Wait; the harness queues a parent turn when SubmitSubagentReport arrives. " +
+                "In Plan, Wait only when that Explore blocks the next automatic turn.",
             InputSchemaJson = """
                 {
                   "type": "object",
