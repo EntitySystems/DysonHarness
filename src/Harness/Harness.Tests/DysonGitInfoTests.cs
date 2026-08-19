@@ -3,7 +3,7 @@ using DysonHarness;
 
 namespace Harness.Tests;
 
-/// <summary>Porcelain parse + outermost .git discovery.</summary>
+/// <summary>Porcelain parse, outermost .git discovery, and file-diff annotations.</summary>
 public class DysonGitInfoTests
 {
     [Fact]
@@ -261,6 +261,301 @@ public class DysonGitInfoTests
                 // ignore cleanup races
             }
         }
+    }
+
+    [Fact]
+    public void TryGetFileDiffAnnotations_added_and_modified_hunks()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            GitInit(root);
+            WriteAllLf(Path.Combine(root, "src", "file.txt"), "keep\nold\nkeep2\n");
+            RunGitOrThrow(root, ["add", "-A"]);
+            RunGitOrThrow(root, ["commit", "-m", "init"]);
+            WriteAllLf(Path.Combine(root, "src", "file.txt"), "keep\nnew\nkeep2\ninserted\n");
+
+            var result = DysonGitInfo.TryGetFileDiffAnnotations(
+                DysonWorkspaceTestFs.CreateLocal(root),
+                "src/file.txt");
+
+            Assert.True(result.IsSuccess, result.IsError ? result.Error : null);
+            Assert.Equal(
+                [
+                    new DysonGitDiffAnnotation(DysonGitDiffAnnotationKind.Modified, 2, 1, 2, 1),
+                    new DysonGitDiffAnnotation(DysonGitDiffAnnotationKind.Added, 3, 0, 4, 1),
+                ],
+                result.Value);
+        }
+        finally
+        {
+            DeleteQuiet(root);
+        }
+    }
+
+    [Fact]
+    public void TryGetFileDiffAnnotations_deleted_ranges()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            GitInit(root);
+            WriteAllLf(Path.Combine(root, "file.txt"), "one\ntwo\nthree\nfour\nfive\n");
+            RunGitOrThrow(root, ["add", "-A"]);
+            RunGitOrThrow(root, ["commit", "-m", "init"]);
+            WriteAllLf(Path.Combine(root, "file.txt"), "one\nfour\nfive\n");
+
+            var result = DysonGitInfo.TryGetFileDiffAnnotations(
+                DysonWorkspaceTestFs.CreateLocal(root),
+                "file.txt");
+
+            Assert.True(result.IsSuccess, result.IsError ? result.Error : null);
+            Assert.Equal(
+                [new DysonGitDiffAnnotation(DysonGitDiffAnnotationKind.Deleted, 2, 2, 1, 0)],
+                result.Value);
+        }
+        finally
+        {
+            DeleteQuiet(root);
+        }
+    }
+
+    [Fact]
+    public void TryGetFileDiffAnnotations_untracked_is_full_file_added()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            GitInit(root);
+            WriteAllLf(Path.Combine(root, "tracked.txt"), "ok\n");
+            RunGitOrThrow(root, ["add", "-A"]);
+            RunGitOrThrow(root, ["commit", "-m", "init"]);
+            WriteAllLf(Path.Combine(root, "src", "new.txt"), "alpha\nbravo\ncharlie\n");
+
+            var result = DysonGitInfo.TryGetFileDiffAnnotations(
+                DysonWorkspaceTestFs.CreateLocal(root),
+                "src/new.txt");
+
+            Assert.True(result.IsSuccess, result.IsError ? result.Error : null);
+            Assert.Equal(
+                [new DysonGitDiffAnnotation(DysonGitDiffAnnotationKind.Added, 0, 0, 1, 3)],
+                result.Value);
+        }
+        finally
+        {
+            DeleteQuiet(root);
+        }
+    }
+
+    [Fact]
+    public void TryGetFileDiffAnnotations_staged_plus_unstaged_is_net_vs_head()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            GitInit(root);
+            WriteAllLf(Path.Combine(root, "file.txt"), "alpha\nbravo\ncharlie\n");
+            RunGitOrThrow(root, ["add", "-A"]);
+            RunGitOrThrow(root, ["commit", "-m", "init"]);
+            WriteAllLf(Path.Combine(root, "file.txt"), "alpha\nBRAVO\ncharlie\n");
+            RunGitOrThrow(root, ["add", "file.txt"]);
+            WriteAllLf(Path.Combine(root, "file.txt"), "alpha\nBRAVO\ncharlie\ndelta\n");
+
+            var result = DysonGitInfo.TryGetFileDiffAnnotations(
+                DysonWorkspaceTestFs.CreateLocal(root),
+                "file.txt");
+
+            Assert.True(result.IsSuccess, result.IsError ? result.Error : null);
+            Assert.Equal(
+                [
+                    new DysonGitDiffAnnotation(DysonGitDiffAnnotationKind.Modified, 2, 1, 2, 1),
+                    new DysonGitDiffAnnotation(DysonGitDiffAnnotationKind.Added, 3, 0, 4, 1),
+                ],
+                result.Value);
+        }
+        finally
+        {
+            DeleteQuiet(root);
+        }
+    }
+
+    [Fact]
+    public void TryGetFileDiffAnnotations_unchanged_is_empty()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            GitInit(root);
+            WriteAllLf(Path.Combine(root, "file.txt"), "same\n");
+            RunGitOrThrow(root, ["add", "-A"]);
+            RunGitOrThrow(root, ["commit", "-m", "init"]);
+
+            var result = DysonGitInfo.TryGetFileDiffAnnotations(
+                DysonWorkspaceTestFs.CreateLocal(root),
+                "file.txt");
+
+            Assert.True(result.IsSuccess, result.IsError ? result.Error : null);
+            Assert.Empty(result.Value);
+        }
+        finally
+        {
+            DeleteQuiet(root);
+        }
+    }
+
+    [Fact]
+    public void ParseUnifiedDiffHunks_omitted_counts_are_one()
+    {
+        var stdout = """
+            diff --git a/f b/f
+            --- a/f
+            +++ b/f
+            @@ -5 +7 @@ context
+            -old
+            +new
+            @@ -10,0 +12,2 @@
+            +a
+            +b
+            """;
+
+        var annotations = DysonGitInfo.ParseUnifiedDiffHunks(stdout);
+        Assert.Equal(
+            [
+                new DysonGitDiffAnnotation(DysonGitDiffAnnotationKind.Modified, 5, 1, 7, 1),
+                new DysonGitDiffAnnotation(DysonGitDiffAnnotationKind.Added, 10, 0, 12, 2),
+            ],
+            annotations);
+    }
+
+    [Fact]
+    public void ParseUnifiedDiffHunks_pure_deletion_locations()
+    {
+        var stdout = """
+            @@ -1,2 +0,0 @@
+            @@ -2,2 +1,0 @@
+            @@ -4,2 +3,0 @@
+            """;
+
+        var annotations = DysonGitInfo.ParseUnifiedDiffHunks(stdout);
+        Assert.Equal(
+            [
+                new DysonGitDiffAnnotation(DysonGitDiffAnnotationKind.Deleted, 1, 2, 0, 0),
+                new DysonGitDiffAnnotation(DysonGitDiffAnnotationKind.Deleted, 2, 2, 1, 0),
+                new DysonGitDiffAnnotation(DysonGitDiffAnnotationKind.Deleted, 4, 2, 3, 0),
+            ],
+            annotations);
+    }
+
+    [Fact]
+    public void TryGetFileDiffAnnotations_unborn_repo_new_file_is_added()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            GitInit(root);
+            WriteAllLf(Path.Combine(root, "fresh.txt"), "one\ntwo\n");
+
+            var untracked = DysonGitInfo.TryGetFileDiffAnnotations(
+                DysonWorkspaceTestFs.CreateLocal(root),
+                "fresh.txt");
+            Assert.True(untracked.IsSuccess, untracked.IsError ? untracked.Error : null);
+            Assert.Equal(
+                [new DysonGitDiffAnnotation(DysonGitDiffAnnotationKind.Added, 0, 0, 1, 2)],
+                untracked.Value);
+
+            RunGitOrThrow(root, ["add", "fresh.txt"]);
+            var staged = DysonGitInfo.TryGetFileDiffAnnotations(
+                DysonWorkspaceTestFs.CreateLocal(root),
+                "fresh.txt");
+            Assert.True(staged.IsSuccess, staged.IsError ? staged.Error : null);
+            Assert.Equal(
+                [new DysonGitDiffAnnotation(DysonGitDiffAnnotationKind.Added, 0, 0, 1, 2)],
+                staged.Value);
+        }
+        finally
+        {
+            DeleteQuiet(root);
+        }
+    }
+
+    [Fact]
+    public void TryGetFileDiffAnnotations_non_repo_is_empty()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            WriteAllLf(Path.Combine(root, "file.txt"), "hello\n");
+            var result = DysonGitInfo.TryGetFileDiffAnnotations(
+                DysonWorkspaceTestFs.CreateLocal(root),
+                "file.txt");
+
+            Assert.True(result.IsSuccess, result.IsError ? result.Error : null);
+            Assert.Empty(result.Value);
+        }
+        finally
+        {
+            DeleteQuiet(root);
+        }
+    }
+
+    [Fact]
+    public void TryGetFileDiffAnnotations_invalid_path_is_error()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            GitInit(root);
+            var fs = DysonWorkspaceTestFs.CreateLocal(root);
+
+            var empty = DysonGitInfo.TryGetFileDiffAnnotations(fs, "   ");
+            Assert.True(empty.IsError);
+            Assert.Contains("empty", empty.Error, StringComparison.OrdinalIgnoreCase);
+
+            var escape = DysonGitInfo.TryGetFileDiffAnnotations(fs, "../secret.txt");
+            Assert.True(escape.IsError);
+            Assert.Contains("escapes", escape.Error, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteQuiet(root);
+        }
+    }
+
+    private static string CreateTempDir()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dyson-git-ann-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    private static void DeleteQuiet(string root)
+    {
+        try
+        {
+            Directory.Delete(root, recursive: true);
+        }
+        catch
+        {
+            // ignore cleanup races
+        }
+    }
+
+    private static void GitInit(string root)
+    {
+        RunGitOrThrow(root, ["init"]);
+        RunGitOrThrow(root, ["config", "user.email", "dyson-tests@example.com"]);
+        RunGitOrThrow(root, ["config", "user.name", "Dyson Tests"]);
+        RunGitOrThrow(root, ["config", "commit.gpgsign", "false"]);
+        RunGitOrThrow(root, ["config", "core.autocrlf", "false"]);
+    }
+
+    private static void WriteAllLf(string path, string contents)
+    {
+        var dir = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+
+        File.WriteAllText(path, contents);
     }
 
     private static void RunGitOrThrow(string workingDirectory, string[] args)

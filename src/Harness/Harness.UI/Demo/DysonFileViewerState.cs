@@ -1,3 +1,5 @@
+using DysonHarness;
+
 namespace Harness.UI.Demo;
 
 /// <summary>Host state for the chat-preserving file viewer overlay.</summary>
@@ -31,6 +33,12 @@ public sealed class DysonFileViewerState
 
     /// <summary>Ordered footer CTAs (stable button order). Empty when none.</summary>
     public IReadOnlyList<DysonFileViewerAction> Actions { get; init; } = [];
+
+    /// <summary>
+    /// Git hunk annotations for a workspace text file. Empty when Git metadata is
+    /// unavailable or the viewer is not a workspace text file.
+    /// </summary>
+    public IReadOnlyList<DysonGitDiffAnnotation> GitDiffAnnotations { get; init; } = [];
 
     public static bool IsPdfPath(string path) =>
         path.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase);
