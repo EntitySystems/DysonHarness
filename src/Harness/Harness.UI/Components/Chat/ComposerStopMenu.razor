@@ -41,8 +41,8 @@
 @code {
     private bool _open;
 
-    private bool CanOpen => Host.IsBusy || Host.HasActiveSubagents;
-    private bool CanStopAll => Host.IsBusy || Host.HasActiveSubagents;
+    private bool CanOpen => Host.IsBusy || Host.HasActiveSubagents();
+    private bool CanStopAll => Host.IsBusy || Host.HasActiveSubagents();
 
     private void Toggle()
     {

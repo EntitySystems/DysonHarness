@@ -4,6 +4,7 @@
 @using Harness.UI.Components.Files
 @using Harness.UI.Demo
 @using Harness.UI.Files
+@using Microsoft.Extensions.Logging
 @implements IAsyncDisposable
 @inject DysonUiHost Host
 @inject IDysonWorkDirectoryRepository WorkDirs
@@ -13,6 +14,7 @@
 @inject IDysonSubjectContext Subject
 @inject ThemeService Theme
 @inject IJSRuntime Js
+@inject ILogger<Home> Logger
 
 <AppShell>
     <Sidebar>
@@ -206,16 +208,20 @@
 
     private void OnHostChanged() => _ = InvokeAsync(async () =>
     {
-        SyncSelectedSlugFromSession();
-        SyncReasoningEffortFromHost();
-        SyncContextTokensFromHost();
-        // Model/effort/token Notify must not clobber a composer mode that is not yet applied.
-        SyncSelectedAgentModeIfSessionModeChanged();
-        UpdateActiveTitle();
         try
         {
+            SyncSelectedSlugFromSession();
+            SyncReasoningEffortFromHost();
+            SyncContextTokensFromHost();
+            // Model/effort/token Notify must not clobber a composer mode that is not yet applied.
+            SyncSelectedAgentModeIfSessionModeChanged();
+            UpdateActiveTitle();
             StateHasChanged();
             await RefreshSessionsQuietAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Host-changed session refresh failed.");
         }
         finally
         {

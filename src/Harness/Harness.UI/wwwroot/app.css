@@ -5155,27 +5155,45 @@ code, .mono {
 }
 
 .git-changes__path {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   flex: 1 1 auto;
+  min-width: 0;
+}
+
+.git-changes__name {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 12px;
 }
 
-.git-changes__row--added .git-changes__path {
+.git-changes__dir {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.git-changes__row--added .git-changes__name {
   color: var(--success);
 }
 
-.git-changes__row--modified .git-changes__path {
+.git-changes__row--modified .git-changes__name {
   color: var(--git-modified);
 }
 
-.git-changes__row--deleted .git-changes__path {
+.git-changes__row--deleted .git-changes__name {
   color: var(--danger);
 }
 
-.git-changes__row--untracked .git-changes__path {
+.git-changes__row--untracked .git-changes__name {
   color: var(--warning);
 }
 
@@ -6265,6 +6283,48 @@ code, .mono {
 .file-viewer-line:hover,
 .file-viewer-line.is-selected {
   background: var(--accent-soft);
+}
+
+.file-viewer-line.file-viewer-gutter--added,
+.file-viewer-block.file-viewer-gutter--added {
+  --file-viewer-gutter-color: var(--success);
+}
+
+.file-viewer-line.file-viewer-gutter--modified,
+.file-viewer-block.file-viewer-gutter--modified {
+  --file-viewer-gutter-color: var(--warning);
+}
+
+.file-viewer-line.file-viewer-gutter--added.file-viewer-gutter--modified,
+.file-viewer-block.file-viewer-gutter--added.file-viewer-gutter--modified {
+  --file-viewer-gutter-color: linear-gradient(to right, var(--success) 0 50%, var(--warning) 50% 100%);
+}
+
+.file-viewer-line.file-viewer-gutter--added::after,
+.file-viewer-line.file-viewer-gutter--modified::after,
+.file-viewer-block.file-viewer-gutter--added::after,
+.file-viewer-block.file-viewer-gutter--modified::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: var(--file-viewer-gutter-color);
+  pointer-events: none;
+}
+
+.file-viewer-line.file-viewer-gutter--deleted::before,
+.file-viewer-block.file-viewer-gutter--deleted::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 8px;
+  height: 2px;
+  background: var(--danger);
+  pointer-events: none;
+  border-radius: 0 1px 1px 0;
 }
 
 .file-viewer-comment {

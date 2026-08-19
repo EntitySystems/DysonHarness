@@ -94,12 +94,19 @@
                     else if (viewer.IsMarkdown)
                     {
                         @* ponytail: selection is paragraph/heading/pre blocks only (split on blank lines), not AST-precise; upgrade to Markdig block walker when comments persist. *@
+                        var markdownBlocks = MarkdownBlocks(viewer.Content).ToArray();
+                        var markdownLastLine = CountLogicalSourceLines(viewer.Content);
+                        var markdownGutters = BuildGitDiffGutters(viewer.GitDiffAnnotations, markdownLastLine);
                         <div class="file-viewer-modal__markdown turn-block__body">
-                            @foreach (var (index, block) in MarkdownBlocks(viewer.Content))
+                            @for (var blockOrdinal = 0; blockOrdinal < markdownBlocks.Length; blockOrdinal++)
                             {
+                                var (index, startLine, endLine, block) = markdownBlocks[blockOrdinal];
                                 var selected = _selectedBlock == index;
                                 var drafting = _draft is { } d && d.BlockIndex == index;
-                                <div class="file-viewer-block @(selected ? "is-selected" : null) @(drafting ? "is-drafting" : null)"
+                                var deletionFrom = blockOrdinal == 0 ? 1 : markdownBlocks[blockOrdinal - 1].EndLine + 1;
+                                var deletionTo = blockOrdinal == markdownBlocks.Length - 1 ? markdownLastLine : endLine;
+                                var gutterClass = MarkdownGutterCssClass(markdownGutters, startLine, endLine, deletionFrom, deletionTo);
+                                <div class="file-viewer-block @(selected ? "is-selected" : null) @(drafting ? "is-drafting" : null) @gutterClass"
                                      @onclick="@(() => SelectBlock(index))"
                                      @onclick:stopPropagation="true">
                                     @MarkdownRenderer.ToHtml(block)
@@ -120,11 +127,14 @@
                     }
                     else
                     {
-                        <pre class="file-viewer-modal__code mono">@foreach (var (index, line) in CodeLines(viewer.Content))
+                        var codeLastLine = CountLogicalSourceLines(viewer.Content);
+                        var codeGutters = BuildGitDiffGutters(viewer.GitDiffAnnotations, codeLastLine);
+                        <pre class="file-viewer-modal__code mono">@foreach (var (index, sourceLine, line) in CodeLines(viewer.Content))
 {
     var selected = _selectedBlock == index;
     var drafting = _draft is { } d && d.BlockIndex == index;
-    <code class="file-viewer-line @(selected ? "is-selected" : null) @(drafting ? "is-drafting" : null)"
+    var gutterClass = LineGutterCssClass(codeGutters, sourceLine);
+    <code class="file-viewer-line @(selected ? "is-selected" : null) @(drafting ? "is-drafting" : null) @gutterClass"
           @onclick="@(() => SelectBlock(index))"
           @onclick:stopPropagation="true">@line
 <button type="button"
@@ -421,26 +431,175 @@
             Close();
     }
 
-    private static IEnumerable<(int Index, string Block)> MarkdownBlocks(string content)
+    [Flags]
+    private enum GitDiffGutter
+    {
+        None = 0,
+        Added = 1,
+        Modified = 2,
+        Deleted = 4,
+    }
+
+    private static IEnumerable<(int Index, int StartLine, int EndLine, string Block)> MarkdownBlocks(string content)
     {
         if (string.IsNullOrEmpty(content))
             yield break;
 
-        var parts = content.Replace("\r\n", "\n").Split("\n\n", StringSplitOptions.None);
+        var normalized = content.Replace("\r\n", "\n");
+        var parts = normalized.Split("\n\n", StringSplitOptions.None);
         var index = 0;
-        foreach (var part in parts)
+        var pos = 0;
+        for (var p = 0; p < parts.Length; p++)
         {
+            var part = parts[p];
+            var startLine = SourceLineAt(normalized, pos);
+            var endLine = part.Length == 0
+                ? startLine
+                : SourceLineAt(normalized, pos + part.Length - 1);
+            pos += part.Length;
+            if (p < parts.Length - 1)
+                pos += 2;
+
             if (string.IsNullOrWhiteSpace(part))
                 continue;
-            yield return (index++, part);
+
+            yield return (index++, startLine, endLine, part);
         }
     }
 
-    private static IEnumerable<(int Index, string Line)> CodeLines(string content)
+    private static IEnumerable<(int Index, int SourceLine, string Line)> CodeLines(string content)
     {
         var lines = content.Replace("\r\n", "\n").Split('\n');
         for (var i = 0; i < lines.Length; i++)
-            yield return (i, lines[i]);
+            yield return (i, i + 1, lines[i]);
+    }
+
+    private static int CountLogicalSourceLines(string content)
+    {
+        var normalized = content.Replace("\r\n", "\n");
+        var count = 1;
+        foreach (var ch in normalized)
+        {
+            if (ch == '\n')
+                count++;
+        }
+
+        return count;
+    }
+
+    private static int SourceLineAt(string normalized, int position)
+    {
+        var line = 1;
+        var limit = Math.Min(Math.Max(position, 0), normalized.Length);
+        for (var i = 0; i < limit; i++)
+        {
+            if (normalized[i] == '\n')
+                line++;
+        }
+
+        return line;
+    }
+
+    private static GitDiffGutter[]? BuildGitDiffGutters(
+        IReadOnlyList<DysonGitDiffAnnotation> annotations,
+        int lastLine)
+    {
+        if (annotations.Count == 0 || lastLine <= 0)
+            return null;
+
+        var flags = new GitDiffGutter[lastLine + 1];
+        foreach (var annotation in annotations)
+        {
+            if (annotation.Kind == DysonGitDiffAnnotationKind.Deleted)
+            {
+                if (annotation.ModifiedLineCount != 0)
+                    continue;
+
+                // Zero-length working-tree range: next surviving line, clamped to EOF.
+                var anchor = annotation.ModifiedStartLine;
+                if (anchor < 1)
+                    anchor = 1;
+                if (anchor > lastLine)
+                    anchor = lastLine;
+                flags[anchor] |= GitDiffGutter.Deleted;
+                continue;
+            }
+
+            if (annotation.ModifiedLineCount <= 0)
+                continue;
+
+            var start = annotation.ModifiedStartLine;
+            var end = start + annotation.ModifiedLineCount - 1;
+            if (start < 1)
+                start = 1;
+            if (end > lastLine)
+                end = lastLine;
+            if (start > end)
+                continue;
+
+            var kind = annotation.Kind == DysonGitDiffAnnotationKind.Added
+                ? GitDiffGutter.Added
+                : annotation.Kind == DysonGitDiffAnnotationKind.Modified
+                    ? GitDiffGutter.Modified
+                    : GitDiffGutter.None;
+            if (kind == GitDiffGutter.None)
+                continue;
+
+            for (var line = start; line <= end; line++)
+                flags[line] |= kind;
+        }
+
+        return flags;
+    }
+
+    private static string? LineGutterCssClass(GitDiffGutter[]? gutters, int sourceLine)
+    {
+        if (gutters is null || sourceLine < 1 || sourceLine >= gutters.Length)
+            return null;
+        return GutterCssClass(gutters[sourceLine]);
+    }
+
+    private static string? MarkdownGutterCssClass(
+        GitDiffGutter[]? gutters,
+        int startLine,
+        int endLine,
+        int deletionFrom,
+        int deletionTo)
+    {
+        if (gutters is null)
+            return null;
+
+        var flags = GitDiffGutter.None;
+        var addFrom = Math.Max(startLine, 1);
+        var addTo = Math.Min(endLine, gutters.Length - 1);
+        for (var line = addFrom; line <= addTo; line++)
+            flags |= gutters[line] & (GitDiffGutter.Added | GitDiffGutter.Modified);
+
+        var delFrom = Math.Max(deletionFrom, 1);
+        var delTo = Math.Min(deletionTo, gutters.Length - 1);
+        for (var line = delFrom; line <= delTo; line++)
+        {
+            if ((gutters[line] & GitDiffGutter.Deleted) != 0)
+            {
+                flags |= GitDiffGutter.Deleted;
+                break;
+            }
+        }
+
+        return GutterCssClass(flags);
+    }
+
+    private static string? GutterCssClass(GitDiffGutter flags)
+    {
+        if (flags == GitDiffGutter.None)
+            return null;
+
+        var css = (flags & GitDiffGutter.Added) != 0 ? "file-viewer-gutter--added" : null;
+        if ((flags & GitDiffGutter.Modified) != 0)
+            css = css is null ? "file-viewer-gutter--modified" : css + " file-viewer-gutter--modified";
+        if ((flags & GitDiffGutter.Deleted) != 0)
+            css = css is null ? "file-viewer-gutter--deleted" : css + " file-viewer-gutter--deleted";
+        return css;
     }
 
     public void Dispose() => Host.Changed -= OnHostChanged;

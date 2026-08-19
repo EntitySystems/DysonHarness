@@ -197,9 +197,21 @@ public sealed class DysonWindowsShell : DysonShell
             return Result<(string, string[]), string>.AsValue((fileName, ["-c"]));
         }
 
+        if (baseName.Equals("python", StringComparison.OrdinalIgnoreCase)
+            || baseName.Equals("python3", StringComparison.OrdinalIgnoreCase))
+        {
+            return Result<(string, string[]), string>.AsValue((fileName, ["-c"]));
+        }
+
+        if (baseName.Equals("node", StringComparison.OrdinalIgnoreCase)
+            || baseName.Equals("nodejs", StringComparison.OrdinalIgnoreCase))
+        {
+            return Result<(string, string[]), string>.AsValue((fileName, ["-e"]));
+        }
+
         return Result<(string, string[]), string>.AsError(
             $"Unsupported shell executable basename '{baseName}'. " +
-            "Expected pwsh, powershell, cmd, bash, sh, zsh, or git-bash — " +
+            "Expected pwsh, powershell, cmd, bash, sh, zsh, git-bash, python, python3, node, or nodejs — " +
             "or set Fixed args in Settings → Shells.");
     }
 

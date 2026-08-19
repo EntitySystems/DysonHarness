@@ -123,11 +123,14 @@ public sealed class DysonMcpPipeline
 
         var listed = string.Join(", ", names);
         var enumJson = string.Join(", ", names.Select(n => $"\"{n}\""));
+        var commandDescription = AppendPythonNodeCommandSchemaDescription(
+            "Command line to execute in the chosen shell.", names);
 
         var description =
             "Run a command in the session work directory. " +
             $"Available shells for this session: {listed}. " +
             "You must pass shell as one of these. Prefer dedicated MCP file tools over shell when they fit.";
+        description = AppendPythonNodeSnippetSentence(description, names);
         if (planMode)
             description += " " + PlanShellExecuteWarning;
 
@@ -146,7 +149,7 @@ public sealed class DysonMcpPipeline
                     },
                     "command": {
                       "type": "string",
-                      "description": "Command line to execute in the chosen shell."
+                      "description": "{{commandDescription}}"
                     },
                     "timeoutMs": {
                       "type": "integer",
@@ -181,6 +184,8 @@ public sealed class DysonMcpPipeline
 
         var listed = string.Join(", ", names);
         var enumJson = string.Join(", ", names.Select(n => $"\"{n}\""));
+        var commandDescription = AppendPythonNodeCommandSchemaDescription(
+            "Command line to run in the background.", names);
 
         var startDescription =
             "Recommended for E2E test runs, large application builds, and keeping development servers running. " +
@@ -189,6 +194,7 @@ public sealed class DysonMcpPipeline
             "Use ListLongRunningShells / ReadLongRunningShellTail / LongRunningShellInteract / " +
             "SubscribeToLongRunningShellCompletion / RequestLongRunningShellCancellation / AbortLongRunningShell to manage it. " +
             "Not persisted across UI restart (orphans OS processes). Prefer ShellExecute for one-shot commands.";
+        startDescription = AppendPythonNodeSnippetSentence(startDescription, names);
         if (planMode)
             startDescription += " " + PlanShellExecuteWarning;
 
@@ -207,7 +213,7 @@ public sealed class DysonMcpPipeline
                     },
                     "command": {
                       "type": "string",
-                      "description": "Command line to run in the background."
+                      "description": "{{commandDescription}}"
                     },
                     "workingDirectory": {
                       "type": "string",
@@ -360,6 +366,37 @@ public sealed class DysonMcpPipeline
                 }
                 """,
         };
+    }
+
+    /// <summary>
+    /// When the session enum includes Python and/or Node, remind the model those commands are snippets.
+    /// </summary>
+    private static string AppendPythonNodeSnippetSentence(string description, IReadOnlyList<string> names)
+    {
+        var hasPython = names.Any(n => n.Equals("Python", StringComparison.OrdinalIgnoreCase));
+        var hasNode = names.Any(n => n.Equals("Node", StringComparison.OrdinalIgnoreCase));
+        if (!hasPython && !hasNode)
+            return description;
+
+        if (hasPython && hasNode)
+            return description + " When shell is Python, command is a raw Python snippet (passed to `-c`), not a file path or shell command line. When shell is Node, command is a raw JavaScript snippet (passed to `-e`), not a file path or shell command line.";
+        if (hasPython)
+            return description + " When shell is Python, command is a raw Python snippet (passed to `-c`), not a file path or shell command line.";
+        return description + " When shell is Node, command is a raw JavaScript snippet (passed to `-e`), not a file path or shell command line.";
+    }
+
+    /// <summary>
+    /// Appends Python/Node snippet clauses to the <c>command</c> schema description when those shells are present.
+    /// </summary>
+    private static string AppendPythonNodeCommandSchemaDescription(string baseDescription, IReadOnlyList<string> names)
+    {
+        var hasPython = names.Any(n => n.Equals("Python", StringComparison.OrdinalIgnoreCase));
+        var hasNode = names.Any(n => n.Equals("Node", StringComparison.OrdinalIgnoreCase));
+        if (hasPython)
+            baseDescription += " For Python, pass a raw Python snippet (`-c`).";
+        if (hasNode)
+            baseDescription += " For Node, pass a raw JavaScript snippet (`-e`).";
+        return baseDescription;
     }
 
     /// <summary>Formats the tools dictionary into a prompt-injectable catalog string.</summary>
@@ -1095,7 +1132,7 @@ public sealed class DysonMcpPipeline
                 "Spawn a nested agent session for delegated work (non-blocking). " +
                 "Returns immediately with subagentId / persistenceId; the child runs in the background. " +
                 "When the child calls SubmitSubagentReport, the parent is notified and the host queues a turn. " +
-                "Do not WaitForSubagent on Drones; Wait only on Explore (or other) children whose output blocks the next planned turn. " +
+                "Do not WaitForSubagent on Drones. In Work (and Drone), any Explore you start is a blocker: WaitForSubagent on a later stage of the same turn before further parent work. In Plan, Wait only when that Explore blocks the next automatic turn. " +
                 "Optional todos seeds the child’s own session todo list. " +
                 "Optional modelSlug picks a different model (slug or display alias; omit to inherit parent). " +
                 "Optional reasoningEffort overrides the child’s reasoning_effort (omit/null → chosen slug’s defaultEffort; when inheriting parent model, omit keeps the parent’s current effort). " +
@@ -1253,10 +1290,9 @@ public sealed class DysonMcpPipeline
             Description =
                 "Block until this subagent finishes (completed / failed / stopped) or timeoutMs. " +
                 "Default timeout is 300000 ms (5 minutes) when timeoutMs is omitted. " +
-                "Wait only when the child’s result is a blocker for your next automatic turn in a multi-step plan " +
-                "(canonical case: one or more Explores must finish before implementation / before starting Drones). " +
-                "After launching a Drone, do not Wait — keep the session free; the harness queues a parent turn when SubmitSubagentReport arrives. " +
-                "Blocking the chat with Wait when you could multitask is incorrect.",
+                "In Work (and Drone), Wait immediately after starting an Explore — do not continue parent work until the report returns. " +
+                "After launching a Drone, do not Wait; the harness queues a parent turn when SubmitSubagentReport arrives. " +
+                "In Plan, Wait only when that Explore blocks the next automatic turn.",
             InputSchemaJson = """
                 {
                   "type": "object",

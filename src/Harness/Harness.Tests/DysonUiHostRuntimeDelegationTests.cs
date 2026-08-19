@@ -366,6 +366,49 @@ public class DysonUiHostRuntimeDelegationTests
     }
 
     [Fact]
+    public async Task HasActiveSubagents_resolves_unfocused_idle_parent_with_live_child()
+    {
+        await using var harness = await HostHarness.CreateAsync();
+        var host = harness.CreateHost();
+
+        var startedA = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(startedA.IsSuccess, startedA.IsError ? startedA.Error : null);
+        var sessionA = host.Session ?? throw new InvalidOperationException("Expected session A.");
+        var sessionAId = sessionA.PersistenceId;
+
+        var spawned = await sessionA.CreateChildAsync(DysonAgentModes.Explore, "hold");
+        Assert.True(spawned.IsSuccess, spawned.IsError ? spawned.Error : null);
+        Assert.True(sessionA.TryGetSubagent(spawned.Value.SubagentId, out var child));
+        CancelBackgroundRunForTests(child);
+        Assert.Equal(DysonSessionStatus.Active, child.Status);
+
+        Assert.False(host.IsSessionBusy(sessionAId));
+        Assert.True(host.HasActiveSubagents(sessionAId));
+        Assert.True(host.HasActiveSubagents());
+
+        var startedB = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(startedB.IsSuccess, startedB.IsError ? startedB.Error : null);
+        Assert.NotEqual(sessionAId, host.ActiveSessionId);
+        Assert.True(host.HasActiveSubagents(sessionAId));
+        Assert.False(host.IsSessionBusy(sessionAId));
+        Assert.False(host.HasActiveSubagents());
+
+        await host.DisposeAsync();
+        await using var second = harness.CreateHost();
+        var startedOnSecond = await second.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(startedOnSecond.IsSuccess, startedOnSecond.IsError ? startedOnSecond.Error : null);
+        Assert.NotEqual(sessionAId, second.ActiveSessionId);
+        Assert.True(second.HasActiveSubagents(sessionAId));
+        Assert.False(second.IsSessionBusy(sessionAId));
+
+        Assert.True(child.TryMarkTerminal(DysonSessionStatus.Completed, "done"));
+        Assert.False(second.HasActiveSubagents(sessionAId));
+    }
+
+    [Fact]
     public async Task Ask_ui_waits_until_session_is_rejoined()
     {
         await using var harness = await HostHarness.CreateAsync();
@@ -456,6 +499,15 @@ public class DysonUiHostRuntimeDelegationTests
         Assert.True(respond.IsSuccess, respond.IsError ? respond.Error : null);
         var dialog = await dialogTask.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.True(dialog.IsSuccess, dialog.IsError ? dialog.Error : null);
+    }
+
+    private static void CancelBackgroundRunForTests(DysonAgentSession session)
+    {
+        var method = typeof(DysonAgentSession).GetMethod(
+            "CancelBackgroundRun",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        method.Invoke(session, null);
     }
 
     private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)

@@ -180,19 +180,46 @@ public class DysonPlanFirstTurnMandateTests
     private static void AssertStartSubagentCatalogWording()
     {
         var pipeline = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess);
-        if (!pipeline.Tools.TryGetValue("StartSubagent", out var tool))
+        if (!pipeline.Tools.TryGetValue("StartSubagent", out var start))
             throw new InvalidOperationException("StartSubagent must be in the FullAccess catalog.");
 
-        if (!tool.Description.Contains("Plan parent may StartSubagent Explore", StringComparison.Ordinal))
+        if (!start.Description.Contains("Plan parent may StartSubagent Explore", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 "StartSubagent description must contain 'Plan parent may StartSubagent Explore'.");
         }
 
-        if (tool.Description.Contains("Plan is banned as a subagent mode", StringComparison.Ordinal))
+        if (start.Description.Contains("Plan is banned as a subagent mode", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 "StartSubagent description must not use the old 'Plan is banned as a subagent mode' phrase.");
+        }
+
+        const string startExploreBlocker =
+            "Do not WaitForSubagent on Drones. In Work (and Drone), any Explore you start is a blocker: WaitForSubagent on a later stage of the same turn before further parent work. In Plan, Wait only when that Explore blocks the next automatic turn.";
+        if (!start.Description.Contains(startExploreBlocker, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "StartSubagent description must contain the Work/Drone Explore-blocker wait policy.");
+        }
+
+        if (!pipeline.Tools.TryGetValue("WaitForSubagent", out var wait))
+            throw new InvalidOperationException("WaitForSubagent must be in the FullAccess catalog.");
+
+        const string waitExploreBlocker =
+            "In Work (and Drone), Wait immediately after starting an Explore — do not continue parent work until the report returns. After launching a Drone, do not Wait; the harness queues a parent turn when SubmitSubagentReport arrives. In Plan, Wait only when that Explore blocks the next automatic turn.";
+        if (!wait.Description.Contains(waitExploreBlocker, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "WaitForSubagent description must contain the Work/Drone Explore-always-wait policy.");
+        }
+
+        const string oldMultitaskWait = "Blocking the chat with Wait when you could multitask is incorrect";
+        if (start.Description.Contains(oldMultitaskWait, StringComparison.Ordinal)
+            || wait.Description.Contains(oldMultitaskWait, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "StartSubagent/WaitForSubagent descriptions must not contain the old multitasking-Wait phrase.");
         }
     }
 

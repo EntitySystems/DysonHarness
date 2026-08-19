@@ -331,6 +331,25 @@ public sealed class DysonUiHost : IAsyncDisposable
         return false;
     }
 
+    /// <summary>
+    /// Live in-memory graph for that id (this circuit's registry, else attached runtime).
+    /// Cold DB-only leftovers are not live.
+    /// </summary>
+    private bool TryResolveLiveSession(Guid sessionId, out DysonAgentSession session)
+    {
+        if (_sessionsById.TryGetValue(sessionId, out session!))
+            return true;
+
+        if (TryGetAttachedRuntime(out var runtime) && runtime.TryGetSession(sessionId, out var retained))
+        {
+            session = retained;
+            return true;
+        }
+
+        session = null!;
+        return false;
+    }
+
     private async Task<DysonSessionRuntime?> TryAttachRuntimeForDemoAsync(
         CancellationToken cancellationToken)
     {
@@ -423,10 +442,22 @@ public sealed class DysonUiHost : IAsyncDisposable
         ActiveSessionId is Guid id && IsSessionBusy(id);
 
     /// <summary>
+    /// True when that session (not necessarily focused) has any descendant still
+    /// <see cref="DysonSessionStatus.Active"/>.
+    /// </summary>
+    public bool HasActiveSubagents(Guid sessionId)
+    {
+        if (sessionId == Guid.Empty)
+            return false;
+        return TryResolveLiveSession(sessionId, out var session)
+            && DysonSubagentHostLogic.HasActiveDescendant(session);
+    }
+
+    /// <summary>
     /// True when any descendant of the focused session is still <see cref="DysonSessionStatus.Active"/>.
     /// </summary>
-    public bool HasActiveSubagents =>
-        _session is not null && DysonSubagentHostLogic.HasActiveDescendant(_session);
+    public bool HasActiveSubagents() =>
+        ActiveSessionId is Guid id && HasActiveSubagents(id);
 
     /// <summary>Queued prompts for the focused session (FIFO; first-line previews).</summary>
     public IReadOnlyList<QueuedPrompt> QueuedPrompts
@@ -1342,9 +1373,9 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         var fm = new DysonFileManager(fs);
         var read = fm.ReadText(path);
-
-        SetFileViewer(read.IsError
-            ? new DysonFileViewerState
+        if (read.IsError)
+        {
+            SetFileViewer(new DysonFileViewerState
             {
                 RelativePath = path,
                 Title = title,
@@ -1353,16 +1384,22 @@ public sealed class DysonUiHost : IAsyncDisposable
                 AbsolutePath = absolutePath,
                 Error = read.Error,
                 Actions = actionList,
-            }
-            : new DysonFileViewerState
-            {
-                RelativePath = path,
-                Title = title,
-                Content = read.Value,
-                IsMarkdown = isMd,
-                AbsolutePath = absolutePath,
-                Actions = actionList,
             });
+            return;
+        }
+
+        var gitDiffAnnotations = await TryGetGitDiffAnnotationsAsync(fs, path, cancellationToken)
+            .ConfigureAwait(true);
+        SetFileViewer(new DysonFileViewerState
+        {
+            RelativePath = path,
+            Title = title,
+            Content = read.Value,
+            IsMarkdown = isMd,
+            AbsolutePath = absolutePath,
+            Actions = actionList,
+            GitDiffAnnotations = gitDiffAnnotations,
+        });
     }
 
     /// <summary>
@@ -1452,6 +1489,22 @@ public sealed class DysonUiHost : IAsyncDisposable
     private static IReadOnlyList<DysonFileViewerAction> NormalizeFileViewerActions(
         IReadOnlyList<DysonFileViewerAction>? actions) =>
         actions is { Count: > 0 } ? actions : [];
+
+    /// <summary>
+    /// Optional Git hunks for a workspace text file. Runs off the Blazor sync context.
+    /// API errors and unavailable metadata become an empty list so readable files still open.
+    /// </summary>
+    private static async Task<IReadOnlyList<DysonGitDiffAnnotation>> TryGetGitDiffAnnotationsAsync(
+        IDysonWorkspaceFileSystem fs,
+        string relativePath,
+        CancellationToken cancellationToken)
+    {
+        var result = await Task.Run(
+                () => DysonGitInfo.TryGetFileDiffAnnotations(fs, relativePath),
+                cancellationToken)
+            .ConfigureAwait(true);
+        return result.IsSuccess ? result.Value : [];
+    }
 
     private static bool IsMarkdownPath(string path) =>
         path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
@@ -1905,7 +1958,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         foreach (var summary in list.Value)
         {
             var id = summary.Id;
-            if (IsSessionBusy(id) || runtime is not null && runtime.IsBusy(id))
+            if (IsSessionBusy(id) || HasActiveSubagents(id) || runtime is not null && runtime.IsBusy(id))
                 liveActiveIds.Add(id);
         }
 
