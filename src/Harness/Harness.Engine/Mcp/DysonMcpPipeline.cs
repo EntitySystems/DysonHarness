@@ -1099,7 +1099,7 @@ public sealed class DysonMcpPipeline
                 "Optional todos seeds the child’s own session todo list. " +
                 "Optional modelSlug picks a different model (slug or display alias; omit to inherit parent). " +
                 "Optional reasoningEffort overrides the child’s reasoning_effort (omit/null → chosen slug’s defaultEffort; when inheriting parent model, omit keeps the parent’s current effort). " +
-                "Plan is banned as a subagent mode. Explore cannot spawn. Drone may spawn Explore only (not another Drone).",
+                "Cannot spawn a child whose agentMode is Plan (Plan is top-level only). A Plan parent may StartSubagent Explore. Explore parents cannot spawn. Drone may spawn Explore only (not another Drone).",
             InputSchemaJson = """
                 {
                   "type": "object",

@@ -14,6 +14,7 @@ public class DysonSubagentSpawnGateTests
         AssertOk(DysonAgentSession.ValidateSubagentSpawn(DysonAgentModes.Work, DysonAgentModes.Explore));
         AssertOk(DysonAgentSession.ValidateSubagentSpawn(DysonAgentModes.Work, DysonAgentModes.Drone));
         AssertOk(DysonAgentSession.ValidateSubagentSpawn(DysonAgentModes.Drone, DysonAgentModes.Explore));
+        AssertOk(DysonAgentSession.ValidateSubagentSpawn(DysonAgentModes.Plan, DysonAgentModes.Explore));
 
         AssertErr(
             DysonAgentSession.ValidateSubagentSpawn(DysonAgentModes.Explore, DysonAgentModes.Drone),

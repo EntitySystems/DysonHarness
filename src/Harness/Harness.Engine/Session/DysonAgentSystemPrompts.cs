@@ -71,8 +71,9 @@ public static class DysonAgentSystemPrompts
         """;
 
     /// <summary>
-    /// Prepended at API/transcript time on the first incomplete Plan-mode user turn
-    /// (not stored on <see cref="DysonAgentTurn.Instruction"/>).
+    /// Prepended at API/transcript time on the first incomplete Plan-stint user turn
+    /// (skips ModeSwitch / DisplayInfo / PlanResult; not stored on
+    /// <see cref="DysonAgentTurn.Instruction"/>).
     /// </summary>
     public const string PlanFirstTurnMandate = """
         Plan mandate (first turn only):
