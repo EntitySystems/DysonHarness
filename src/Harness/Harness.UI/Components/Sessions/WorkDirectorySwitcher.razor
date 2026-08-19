@@ -2,6 +2,7 @@
 @using DysonHarness
 @using Microsoft.AspNetCore.Components.Web
 @inject IDysonWorkDirectoryRepository WorkDirs
+@inject DysonWorkDirectoryService WorkDirectoryService
 
 <div class="workdir-switcher">
     <div class="sidebar__section-label">Work directory</div>
@@ -265,11 +266,17 @@
         _error = null;
         _selectingId = id;
         StateHasChanged();
+        // ponytail: Blazor Server/WebView will not flush StateHasChanged until the
+        // circuit is idle. 1ms timer yields a render frame so the row spinner paints
+        // before I/O. Upgrade: a real circuit flush API if Blazor ever adds one.
+        await Task.Delay(1);
         try
         {
             var touch = await WorkDirs.TouchOpenedAsync(id);
             if (touch.IsError)
                 _error = touch.Error;
+            else
+                await WorkDirectoryService.RefreshGitOriginAsync(id);
 
             await ActiveWorkDirectoryIdChanged.InvokeAsync(id);
             if (ActiveWorkDirectoryId != id)
@@ -315,10 +322,15 @@
 
         _selectingId = create.Value;
         StateHasChanged();
+        // ponytail: Blazor Server/WebView will not flush StateHasChanged until the
+        // circuit is idle. 1ms timer yields a render frame so the row spinner paints
+        // before I/O. Upgrade: a real circuit flush API if Blazor ever adds one.
+        await Task.Delay(1);
         try
         {
             await RefreshAsync();
             await WorkDirs.TouchOpenedAsync(create.Value);
+            await WorkDirectoryService.RefreshGitOriginAsync(create.Value);
             await ActiveWorkDirectoryIdChanged.InvokeAsync(create.Value);
             if (ActiveWorkDirectoryId != create.Value)
             {

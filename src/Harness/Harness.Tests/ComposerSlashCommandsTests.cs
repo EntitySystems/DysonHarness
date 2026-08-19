@@ -55,6 +55,21 @@ public class ComposerSlashCommandsTests
         if (ComposerSlashCommands.HelpCatalog.All(e => e.Template != "/summarize"))
             throw new InvalidOperationException("HelpCatalog must include /summarize.");
 
+        if (!ComposerSlashCommands.TryResolve("/summarize-full", models, out var summarizeFullParsed)
+            || summarizeFullParsed!.Suggestion.Kind != ComposerSlashCommands.Kind.SummarizeFull)
+            throw new InvalidOperationException("TryResolve(/summarize-full) failed.");
+
+        if (summarizeFilter.All(s => s.Token != "/summarize"))
+            throw new InvalidOperationException("Filter(/sum) should still include /summarize.");
+
+        var summarizeFullFilter = ComposerSlashCommands.Filter("/summarize-f", models);
+        if (summarizeFullFilter.Count == 0
+            || summarizeFullFilter.All(s => s.Token != "/summarize-full"))
+            throw new InvalidOperationException("Filter(/summarize-f) should include /summarize-full.");
+
+        if (ComposerSlashCommands.HelpCatalog.All(e => e.Template != "/summarize-full"))
+            throw new InvalidOperationException("HelpCatalog must include /summarize-full.");
+
         if (!ComposerSlashCommands.TryResolve("/GPT Fast", models, out var modelParsed)
             || modelParsed!.Suggestion.ModelSlugId != models[0].Id)
             throw new InvalidOperationException("TryResolve display alias failed.");

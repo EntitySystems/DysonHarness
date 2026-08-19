@@ -198,6 +198,9 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         if (!_sessionsById.TryGetValue(sessionId, out var session) || session.PersistenceId == Guid.Empty)
             return Result<DysonQueuedPrompt, string>.AsError("Session is not registered with this runtime.");
 
+        if (!turn.AllowEnqueue)
+            return Result<DysonQueuedPrompt, string>.AsError("TaskEndReflect cannot be enqueued.");
+
         var entry = new DysonQueuedPrompt
         {
             SessionId = sessionId,
@@ -596,6 +599,10 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
                     if (last.Kind == DysonAgentTurnKind.ShellExited)
                         DysonLongRunningShellExitedFlow.TrimInstructionAfterCompletion(last);
 
+                    IReadOnlyList<DysonAgentTurn> dropped = [];
+                    if (DysonFullSummarizeFlow.ShouldApplyAfterCompletion(last.Kind))
+                        dropped = DysonFullSummarizeFlow.ApplyAfterCompletion(session, last);
+
                     foreach (var turn in session.Turns)
                     {
                         if (turn.CompletedUtc is not null)
@@ -606,6 +613,11 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
                         if (complete.IsError)
                             return complete;
                     }
+
+                    var persistDropped = await PersistDroppedTurnsAsync(session, dropped, token)
+                        .ConfigureAwait(false);
+                    if (persistDropped.IsError)
+                        return persistDropped;
 
                     RaiseChanged(DysonRuntimeChangeKind.SessionGraph, sessionId);
                 }
@@ -669,6 +681,28 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
 
         return await PersistAsync(() => _sessions.AppendLogAsync(completed, cancellationToken))
             .ConfigureAwait(false);
+    }
+
+    private async Task<VoidResult<string>> PersistDroppedTurnsAsync(
+        DysonAgentSession session,
+        IReadOnlyList<DysonAgentTurn> dropped,
+        CancellationToken cancellationToken)
+    {
+        if (session.PersistenceId == Guid.Empty || dropped.Count == 0)
+            return VoidResult<string>.Success;
+
+        var sessionId = session.PersistenceId;
+        foreach (var turn in dropped)
+        {
+            var sequence = IndexOfTurn(session, turn);
+            var entity = DysonTurnPersistence.ToEntity(turn, sessionId, sequence);
+            var upsert = await PersistAsync(() => _sessions.UpsertTurnAsync(entity, cancellationToken))
+                .ConfigureAwait(false);
+            if (upsert.IsError)
+                return upsert;
+        }
+
+        return VoidResult<string>.Success;
     }
 
     private void CancelPromptTokens(Guid sessionId)

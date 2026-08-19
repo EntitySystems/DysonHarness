@@ -136,6 +136,92 @@ public static class DysonGitInfo
     }
 
     /// <summary>
+    /// Runs <c>git remote get-url origin</c> against the outermost repo from
+    /// <see cref="TryFindRootMostRepo(IDysonWorkspaceFileSystem)"/>.
+    /// </summary>
+    public static Result<string, string> TryGetOrigin(IDysonWorkspaceFileSystem workspaceFileSystem)
+    {
+        ArgumentNullException.ThrowIfNull(workspaceFileSystem);
+        return TryGetOrigin(workspaceFileSystem.NativeRootPath);
+    }
+
+    /// <summary>
+    /// Runs <c>git remote get-url origin</c> against the outermost repo from
+    /// <see cref="TryFindRootMostRepo(string)"/> so nested workdirs see the outer remote.
+    /// </summary>
+    public static Result<string, string> TryGetOrigin(string absolutePath)
+    {
+        var root = TryFindRootMostRepo(absolutePath);
+        if (root.IsError)
+            return Result<string, string>.AsError(root.Error);
+
+        var run = RunGit(root.Value, ["remote", "get-url", "origin"], Timeout);
+        if (run.IsError)
+            return Result<string, string>.AsError(run.Error);
+
+        var (exitCode, stdout, stderr) = run.Value;
+        var origin = stdout.Trim();
+        if (exitCode != 0 || string.IsNullOrWhiteSpace(origin))
+        {
+            return Result<string, string>.AsError(
+                string.IsNullOrWhiteSpace(stderr) ? "No origin remote." : stderr.Trim());
+        }
+
+        return Result<string, string>.AsValue(origin);
+    }
+
+    /// <summary>
+    /// Classifies a git remote URL as a known host family. Empty or unparseable values
+    /// are <see cref="DysonGitProvider.None"/>.
+    /// </summary>
+    public static DysonGitProvider ClassifyProvider(string? origin)
+    {
+        var host = TryParseRemoteHost(origin);
+        if (host is null)
+            return DysonGitProvider.None;
+
+        // GitHub / GitLab / Azure before Cursor so github.com stays GitHub
+        // (GitHub-synced Origin copies still push to GitHub).
+        if (host.Contains("github", StringComparison.OrdinalIgnoreCase))
+            return DysonGitProvider.GitHub;
+        if (host.Contains("gitlab", StringComparison.OrdinalIgnoreCase))
+            return DysonGitProvider.GitLab;
+        if (IsAzureDevOpsHost(host))
+            return DysonGitProvider.AzureDevOps;
+        if (IsCursorHost(host))
+            return DysonGitProvider.CursorOrigin;
+
+        return DysonGitProvider.Other;
+    }
+
+    /// <summary>
+    /// Slug persisted for <paramref name="provider"/>. <see cref="DysonGitProvider.None"/> is null.
+    /// </summary>
+    public static string? ToStoredSlug(DysonGitProvider provider) => provider switch
+    {
+        DysonGitProvider.GitHub => "github",
+        DysonGitProvider.GitLab => "gitlab",
+        DysonGitProvider.AzureDevOps => "azure-devops",
+        DysonGitProvider.CursorOrigin => "cursor-origin",
+        DysonGitProvider.Other => "other",
+        _ => null,
+    };
+
+    /// <summary>
+    /// Inverse of <see cref="ToStoredSlug"/>. Unknown or empty slugs are
+    /// <see cref="DysonGitProvider.None"/>.
+    /// </summary>
+    public static DysonGitProvider FromStoredSlug(string? stored) => stored?.Trim() switch
+    {
+        "github" => DysonGitProvider.GitHub,
+        "gitlab" => DysonGitProvider.GitLab,
+        "azure-devops" => DysonGitProvider.AzureDevOps,
+        "cursor-origin" => DysonGitProvider.CursorOrigin,
+        "other" => DysonGitProvider.Other,
+        _ => DysonGitProvider.None,
+    };
+
+    /// <summary>
     /// Runs <c>git -C</c> against the workspace native root with <c>status --porcelain=v1 -uall</c>.
     /// Prefer resolving the repo root via <see cref="TryFindRootMostRepo(IDysonWorkspaceFileSystem)"/> first.
     /// </summary>
@@ -295,6 +381,46 @@ public static class DysonGitInfo
             return Result<(int, string, string), string>.AsError($"git failed: {ex.Message}");
         }
     }
+
+    private static string? TryParseRemoteHost(string? origin)
+    {
+        if (string.IsNullOrWhiteSpace(origin))
+            return null;
+
+        var value = origin.Trim();
+        if (value.Contains("://", StringComparison.Ordinal))
+        {
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
+                return null;
+
+            return string.IsNullOrWhiteSpace(uri.Host) ? null : uri.Host;
+        }
+
+        // scp-like: git@host:path
+        var at = value.IndexOf('@');
+        if (at <= 0)
+            return null;
+
+        var colon = value.IndexOf(':', at + 1);
+        if (colon <= at + 1)
+            return null;
+
+        var host = value[(at + 1)..colon];
+        if (host.Length == 0 || host.Contains('/') || host.Contains('\\'))
+            return null;
+
+        return host;
+    }
+
+    private static bool IsAzureDevOpsHost(string host) =>
+        host.Equals("dev.azure.com", StringComparison.OrdinalIgnoreCase)
+        || host.EndsWith(".dev.azure.com", StringComparison.OrdinalIgnoreCase)
+        || host.Equals("visualstudio.com", StringComparison.OrdinalIgnoreCase)
+        || host.EndsWith(".visualstudio.com", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsCursorHost(string host) =>
+        host.Equals("cursor.com", StringComparison.OrdinalIgnoreCase)
+        || host.EndsWith(".cursor.com", StringComparison.OrdinalIgnoreCase);
 
     private static string ExtractPath(string pathPart)
     {

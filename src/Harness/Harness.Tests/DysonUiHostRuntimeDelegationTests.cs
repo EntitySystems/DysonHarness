@@ -330,6 +330,199 @@ public class DysonUiHostRuntimeDelegationTests
         Assert.Equal(afterDispose, Volatile.Read(ref notifies));
     }
 
+    [Fact]
+    public async Task Focus_switch_does_not_cancel_runtime_prompt()
+    {
+        await using var harness = await HostHarness.CreateAsync(waiting: true);
+        await using var host = harness.CreateHost();
+
+        var startedA = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(startedA.IsSuccess, startedA.IsError ? startedA.Error : null);
+        var sessionA = host.Session ?? throw new InvalidOperationException("Expected session A.");
+        var sessionAId = sessionA.PersistenceId;
+
+        var prompt = host.PromptAsync("hold this");
+        await harness.WaitingFactory!.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(host.IsBusy);
+        Assert.True(host.IsSessionBusy(sessionAId));
+        Assert.True(harness.Runtime.IsBusy(sessionAId));
+
+        var startedB = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(startedB.IsSuccess, startedB.IsError ? startedB.Error : null);
+        Assert.NotEqual(sessionAId, host.ActiveSessionId);
+        Assert.False(host.IsBusy);
+        Assert.True(host.IsSessionBusy(sessionAId));
+        Assert.True(harness.Runtime.IsBusy(sessionAId));
+        Assert.Equal(0, harness.WaitingFactory.CancelObserved);
+
+        harness.WaitingFactory.Release.TrySetResult();
+        var result = await prompt.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(result.IsSuccess, result.IsError ? result.Error : null);
+        Assert.Equal(0, harness.WaitingFactory.CancelObserved);
+        Assert.False(harness.Runtime.IsBusy(sessionAId));
+        Assert.False(host.IsSessionBusy(sessionAId));
+    }
+
+    [Fact]
+    public async Task Ask_ui_waits_until_session_is_rejoined()
+    {
+        await using var harness = await HostHarness.CreateAsync();
+        await using var host = harness.CreateHost();
+
+        var startedA = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(startedA.IsSuccess, startedA.IsError ? startedA.Error : null);
+        var sessionA = host.Session ?? throw new InvalidOperationException("Expected session A.");
+
+        var askTask = sessionA.AskQuestionAsync(
+            """{"questions":[{"prompt":"Name?","options":["Ada","Grace"]}]}""",
+            CancellationToken.None);
+        await WaitUntilAsync(() => host.PendingAskUi is not null, TimeSpan.FromSeconds(2));
+        Assert.NotNull(host.PendingAskUi);
+        Assert.Equal(sessionA.PersistenceId, host.PendingAskUi.SessionPersistenceId);
+        Assert.NotNull(sessionA.PendingAskQuestions);
+
+        var startedB = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(startedB.IsSuccess, startedB.IsError ? startedB.Error : null);
+        Assert.Null(host.PendingAskUi);
+        Assert.NotNull(sessionA.PendingAskQuestions);
+        Assert.False(askTask.IsCompleted);
+
+        RaiseParentEventsChanged(sessionA);
+        InvokeMaybeOpenAskUiForEvent(host, sessionA);
+        Assert.Null(host.PendingAskUi);
+        Assert.NotNull(sessionA.PendingAskQuestions);
+
+        var resumed = await host.ResumeSessionAsync(sessionA.PersistenceId);
+        Assert.True(resumed.IsSuccess, resumed.IsError ? resumed.Error : null);
+        Assert.NotNull(host.PendingAskUi);
+        Assert.Equal(sessionA.PersistenceId, host.PendingAskUi.SessionPersistenceId);
+        Assert.Equal(DysonAskUiSource.RootAskQuestion, host.PendingAskUi.Source);
+
+        var respond = sessionA.RespondToAskQuestion("A1 - Ada");
+        Assert.True(respond.IsSuccess, respond.IsError ? respond.Error : null);
+        var asked = await askTask.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(asked.IsSuccess, asked.IsError ? asked.Error : null);
+    }
+
+    [Fact]
+    public async Task User_dialog_ui_waits_until_session_is_rejoined()
+    {
+        await using var harness = await HostHarness.CreateAsync();
+        await using var host = harness.CreateHost();
+
+        var startedA = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(startedA.IsSuccess, startedA.IsError ? startedA.Error : null);
+        var sessionA = host.Session ?? throw new InvalidOperationException("Expected session A.");
+
+        var dialogTask = sessionA.PromptUserDialogAsync(
+            """
+            {
+              "title": "Ship?",
+              "description": "Ready to publish?",
+              "actions": [{ "label": "Publish", "primary": true }, { "label": "Hold" }]
+            }
+            """,
+            CancellationToken.None);
+        await WaitUntilAsync(() => host.PendingUserDialogUi is not null, TimeSpan.FromSeconds(2));
+        Assert.NotNull(host.PendingUserDialogUi);
+        Assert.Equal(sessionA.PersistenceId, host.PendingUserDialogUi.SessionPersistenceId);
+        Assert.NotNull(sessionA.PendingUserDialog);
+
+        var startedB = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(startedB.IsSuccess, startedB.IsError ? startedB.Error : null);
+        Assert.Null(host.PendingUserDialogUi);
+        Assert.NotNull(sessionA.PendingUserDialog);
+        Assert.False(dialogTask.IsCompleted);
+
+        RaiseParentEventsChanged(sessionA);
+        InvokeMaybeOpenUserDialogUiForEvent(host, sessionA);
+        Assert.Null(host.PendingUserDialogUi);
+        Assert.NotNull(sessionA.PendingUserDialog);
+
+        var resumed = await host.ResumeSessionAsync(sessionA.PersistenceId);
+        Assert.True(resumed.IsSuccess, resumed.IsError ? resumed.Error : null);
+        Assert.NotNull(host.PendingUserDialogUi);
+        Assert.Equal(sessionA.PersistenceId, host.PendingUserDialogUi.SessionPersistenceId);
+        Assert.Equal(DysonUserDialogUiSource.RootPromptUserDialog, host.PendingUserDialogUi.Source);
+
+        var formatted = DysonPromptUserDialog.FormatResult("Publish", skipped: false);
+        var respond = sessionA.RespondToPromptUserDialog(formatted);
+        Assert.True(respond.IsSuccess, respond.IsError ? respond.Error : null);
+        var dialog = await dialogTask.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(dialog.IsSuccess, dialog.IsError ? dialog.Error : null);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline && !predicate())
+            await Task.Delay(10);
+    }
+
+    private static void RaiseParentEventsChanged(DysonAgentSession session)
+    {
+        var method = typeof(DysonAgentSession).GetMethod(
+            "RaiseParentEventsChanged",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        method.Invoke(session, null);
+    }
+
+    private static void InvokeMaybeOpenAskUiForEvent(DysonUiHost host, DysonAgentSession parent)
+    {
+        var method = typeof(DysonUiHost).GetMethod(
+            "MaybeOpenAskUiForEvent",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        method.Invoke(
+            host,
+            [
+                parent,
+                new DysonAgentInterrupt
+                {
+                    Kind = DysonAgentInterruptKind.SubagentEvent,
+                    SubagentId = 1,
+                    EventId = Guid.NewGuid(),
+                    EventKind = DysonAskQuestion.AskQuestionKind,
+                    Payload = """{"questions":[{"prompt":"Steal?","options":["yes"]}]}""",
+                },
+            ]);
+    }
+
+    private static void InvokeMaybeOpenUserDialogUiForEvent(DysonUiHost host, DysonAgentSession parent)
+    {
+        var method = typeof(DysonUiHost).GetMethod(
+            "MaybeOpenUserDialogUiForEvent",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        method.Invoke(
+            host,
+            [
+                parent,
+                new DysonAgentInterrupt
+                {
+                    Kind = DysonAgentInterruptKind.SubagentEvent,
+                    SubagentId = 1,
+                    EventId = Guid.NewGuid(),
+                    EventKind = DysonPromptUserDialog.PromptUserDialogKind,
+                    Payload =
+                        """
+                        {
+                          "title": "Steal?",
+                          "description": "Should not mount on B.",
+                          "actions": [{ "label": "No" }]
+                        }
+                        """,
+                },
+            ]);
+    }
+
     private static object[] EventTargets(object source, string eventName)
     {
         for (var type = source.GetType(); type is not null; type = type.BaseType)
@@ -472,7 +665,11 @@ public class DysonUiHostRuntimeDelegationTests
                     grantService,
                     mcpResolver);
                 innerFactory = new DysonUiAgentSessionRuntimeFactory(
-                    sessions, models, workDirectories, configBuilder);
+                    sessions,
+                    models,
+                    workDirectories,
+                    new DysonWorkDirectoryService(workDirectories),
+                    configBuilder);
             }
 
             var sessionFactory = new CountingSessionFactory(innerFactory);

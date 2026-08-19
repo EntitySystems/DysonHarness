@@ -578,6 +578,9 @@
                 // overlay immediately (same as other apply-only kinds).
                 ApplySummarize();
                 break;
+            case ComposerSlashCommands.Kind.SummarizeFull:
+                ApplySummarizeFull();
+                break;
         }
     }
 
@@ -615,6 +618,15 @@
             session.PersistenceId,
             ids,
             "Summarized via /summarize");
+    }
+
+    private void ApplySummarizeFull()
+    {
+        var session = Host.Session;
+        if (session is null || session.Turns.Count == 0)
+            return;
+
+        _ = Host.PromptFullSummarizeAsync(session.PersistenceId);
     }
 
     private void OnHelpInsert(string template)

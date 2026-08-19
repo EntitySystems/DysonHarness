@@ -71,8 +71,9 @@ public static class DysonAgentSystemPrompts
         """;
 
     /// <summary>
-    /// Prepended at API/transcript time on the first incomplete Plan-mode user turn
-    /// (not stored on <see cref="DysonAgentTurn.Instruction"/>).
+    /// Prepended at API/transcript time on the first incomplete Plan-stint user turn
+    /// (skips ModeSwitch / DisplayInfo / PlanResult; not stored on
+    /// <see cref="DysonAgentTurn.Instruction"/>).
     /// </summary>
     public const string PlanFirstTurnMandate = """
         Plan mandate (first turn only):
@@ -208,7 +209,7 @@ public static class DysonAgentSystemPrompts
         - When used as a subagent: finish with SubmitSubagentReport (`completed` with findings, or `failed` with a concrete failure reason if blocked).
         """;
 
-    /// <summary>Formats the session-captured presentation guidance for the visualization tool.</summary>
+    /// <summary>Formats current presentation guidance for the visualization tool description.</summary>
     public static string FormatVisualizationThemeGuidance(DysonUiThemeSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);

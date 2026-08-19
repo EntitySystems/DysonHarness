@@ -496,10 +496,13 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
     {
         ArgumentNullException.ThrowIfNull(turn);
 
+        ApplyUiTheme(Config.UiTheme);
+
         OptimizeContextIfNeeded();
 
         if (allowDropContextInject
             && turn.Kind != DysonAgentTurnKind.DropContext
+            && turn.Kind != DysonAgentTurnKind.FullSummarize
             && DysonDropContextFlow.TryBeginInject(this))
         {
             var dropTurn = CreateDropContextTurn();

@@ -22,6 +22,12 @@ public sealed class DysonAgentTurn
     public DysonAgentTurnKind Kind { get; init; }
 
     /// <summary>
+    /// Host/runtime prompt-queue policy. False for TaskEndReflect (never a pending action).
+    /// Session EnqueuePendingTurn is not gated by this.
+    /// </summary>
+    public bool AllowEnqueue => DysonAgentTurnKindRules.AllowsEnqueue(Kind);
+
+    /// <summary>
     /// Workspace-relative plan path for <see cref="DysonAgentTurnKind.PlanResult"/> /
     /// <see cref="DysonAgentTurnKind.BeginBuildPlan"/> turns
     /// (forward slashes, e.g. <c>.dyson/plans/slug-hash.md</c>).

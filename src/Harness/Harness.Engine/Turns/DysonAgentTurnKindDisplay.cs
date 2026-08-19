@@ -21,6 +21,7 @@ public static class DysonAgentTurnKindDisplay
         DysonAgentTurnKind.DropContext => "Drop context",
         DysonAgentTurnKind.TaskEndReflect => "Task end reflection",
         DysonAgentTurnKind.BugReview => "Code review",
+        DysonAgentTurnKind.FullSummarize => "Full summary",
         _ => kind.ToString(),
     };
 }

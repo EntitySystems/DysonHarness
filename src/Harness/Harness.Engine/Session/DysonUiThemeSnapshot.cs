@@ -1,7 +1,7 @@
 namespace DysonHarness;
 
 /// <summary>
-/// Immutable presentation guidance captured when a root session starts.
+/// Immutable presentation value object: validated <c>light</c>/<c>dark</c> plus lowercase <c>#rrggbb</c>.
 /// </summary>
 public sealed class DysonUiThemeSnapshot
 {

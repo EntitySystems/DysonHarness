@@ -7,6 +7,11 @@
       "Description": "C# Result pattern, abstraction cap, EF DateTime UTC rules"
     },
     {
+      "Path": "rules/rules_engine_ui.md",
+      "Mode": "AgentOptional",
+      "Description": "Engine/UI boundary — functional code lives in Engine; UI only hooks"
+    },
+    {
       "Path": "rules/rules_skills.md",
       "Mode": "AgentOptional",
       "Description": "Skills packaging and location rules"

@@ -7,6 +7,7 @@
 @implements IAsyncDisposable
 @inject DysonUiHost Host
 @inject IDysonWorkDirectoryRepository WorkDirs
+@inject DysonWorkDirectoryService WorkDirectoryService
 @inject DysonFileTreeService FileTree
 @inject DysonGitChangesService GitChanges
 @inject IDysonSubjectContext Subject
@@ -20,17 +21,16 @@
                 <WorkDirectorySwitcher @ref="_workdirSwitcher"
                                        ActiveWorkDirectoryId="_activeWorkDirectoryId"
                                        ActiveWorkDirectoryIdChanged="OnWorkDirectoryChangedAsync"
-                                       Busy="Host.IsBusy"
                                        OnChanged="OnWorkDirectoryListChangedAsync" />
             </WorkDirectory>
             <SessionList>
                 <SessionList Sessions="_sessions"
                              ActiveSessionId="Host.ActiveSessionId"
-                             Busy="Host.IsBusy"
                              Error="@_listError"
                              OnNew="StartNewAsync"
                              OnResume="ResumeAsync"
                              OnDelete="DeleteAsync"
+                             OnDeleteInactive="DeleteInactiveAsync"
                              OnRefresh="RefreshSessionsAsync" />
             </SessionList>
         </Sidebar>
@@ -110,6 +110,7 @@
     private int _outgoingContextTokens;
     private int? _lastReportedPromptTokens;
     private string _selectedAgentMode = DysonAgentModes.Work;
+    private string? _lastSyncedSessionMode;
     private Guid? _activeWorkDirectoryId;
     private string? _gitBranch;
     private bool _workdirHydrated;
@@ -172,6 +173,7 @@
                     _activeWorkDirectoryId = id;
                     Host.SetComposerWorkDirectoryId(id);
                     await WorkDirs.TouchOpenedAsync(id);
+                    await WorkDirectoryService.RefreshGitOriginAsync(id);
                     await RefreshGitBranchAsync(get.Value.AbsolutePath);
                     await RefreshSessionsAsync();
                     StateHasChanged();
@@ -191,6 +193,7 @@
         {
             var first = list.Value[0];
             await SetActiveWorkDirectoryAsync(first.Id, first.AbsolutePath);
+            await WorkDirectoryService.RefreshGitOriginAsync(first.Id);
         }
         else
         {
@@ -206,7 +209,8 @@
         SyncSelectedSlugFromSession();
         SyncReasoningEffortFromHost();
         SyncContextTokensFromHost();
-        SyncSelectedAgentModeFromSession();
+        // Model/effort/token Notify must not clobber a composer mode that is not yet applied.
+        SyncSelectedAgentModeIfSessionModeChanged();
         UpdateActiveTitle();
         try
         {
@@ -274,10 +278,20 @@
         _lastReportedPromptTokens = Host.SessionLastReportedPromptTokens;
     }
 
+    private void SyncSelectedAgentModeIfSessionModeChanged()
+    {
+        if (Host.Session is { } session
+            && !string.Equals(_lastSyncedSessionMode, session.Mode, StringComparison.OrdinalIgnoreCase))
+            SyncSelectedAgentModeFromSession();
+    }
+
     private void SyncSelectedAgentModeFromSession()
     {
         if (Host.Session is { } session)
+        {
             _selectedAgentMode = session.Mode;
+            _lastSyncedSessionMode = session.Mode;
+        }
     }
 
     private Task OnAgentModeChanged(string mode)
@@ -482,6 +496,16 @@
     private async Task DeleteAsync(Guid sessionId)
     {
         var result = await Host.DeleteSessionAsync(sessionId);
+        if (result.IsError)
+            _listError = result.Error;
+        await RefreshSessionsAsync();
+    }
+
+    private async Task DeleteInactiveAsync()
+    {
+        if (_activeWorkDirectoryId is null)
+            return;
+        var result = await Host.DeleteInactiveSessionsAsync(_activeWorkDirectoryId.Value);
         if (result.IsError)
             _listError = result.Error;
         await RefreshSessionsAsync();
