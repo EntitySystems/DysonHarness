@@ -76,6 +76,8 @@ Config key `DysonHosting:Mode` = `Local` | `Cloud` (default **Local**).
 
 `"shared"` is never minted as a cookie subject. Access evaluator remains permissive until roles bind to users (see RBAC).
 
+Cloud keeps `CircuitOptions.DetailedErrors` off. `dyson.log` is still a single machine file next to that host’s `dyson.db` (not tenant-split); see [models.md](models.md#platform-paths-dysonapppaths).
+
 ## User-binding intent (not implemented)
 
 Later:

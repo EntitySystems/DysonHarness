@@ -70,7 +70,7 @@ Runtime mirror: `DysonSessionTodo` (same fields; `Comments` as `IReadOnlyList<st
 
 ### `session_logs` (discriminated JSON)
 
-Append-only. Filter by `Kind`; payload fields live in `PayloadJson`.
+Append-only. Filter by `Kind`; payload fields live in `PayloadJson`. `session_logs` remains the structured DB/UI timeline; `dyson.log` is the host/framework exception file next to `dyson.db` (see [models.md](models.md#platform-paths-dysonapppaths)).
 
 | Property | Notes |
 | -------- | ----- |

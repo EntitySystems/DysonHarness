@@ -50,7 +50,31 @@ public class DysonWindowsShellTests
         if (gitBash.IsError || gitBash.Value.FixedArgs is not ["-c"])
             throw new InvalidOperationException("git-bash basename must map to -c.");
 
-        var unknown = DysonWindowsShell.MapFixedArgsFromExecutablePath("python.exe");
+        var python = DysonWindowsShell.MapFixedArgsFromExecutablePath(@"C:\Python311\python.exe");
+        if (python.IsError
+            || python.Value.FileName != @"C:\Python311\python.exe"
+            || python.Value.FixedArgs is not ["-c"])
+        {
+            throw new InvalidOperationException("python basename must keep full path and map to -c.");
+        }
+
+        var python3 = DysonWindowsShell.MapFixedArgsFromExecutablePath("python3");
+        if (python3.IsError || python3.Value.FixedArgs is not ["-c"])
+            throw new InvalidOperationException("python3 basename must map to -c.");
+
+        var node = DysonWindowsShell.MapFixedArgsFromExecutablePath(@"C:\Program Files\nodejs\node.exe");
+        if (node.IsError
+            || node.Value.FileName != @"C:\Program Files\nodejs\node.exe"
+            || node.Value.FixedArgs is not ["-e"])
+        {
+            throw new InvalidOperationException("node basename must keep full path and map to -e.");
+        }
+
+        var nodejs = DysonWindowsShell.MapFixedArgsFromExecutablePath("nodejs.exe");
+        if (nodejs.IsError || nodejs.Value.FixedArgs is not ["-e"])
+            throw new InvalidOperationException("nodejs basename must map to -e.");
+
+        var unknown = DysonWindowsShell.MapFixedArgsFromExecutablePath("foo.exe");
         if (!unknown.IsError
             || !unknown.Error.Contains("Fixed args", StringComparison.OrdinalIgnoreCase))
         {

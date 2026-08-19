@@ -2,8 +2,10 @@ using DysonHarness;
 using Harness.UI.Components;
 using Harness.UI.Demo;
 using Harness.UI.Files;
+using Harness.UI.Logging;
 using Harness.UI.Services;
 using Harness.UI.Theme;
+using Microsoft.AspNetCore.Components.Server;
 using Microsoft.AspNetCore.Components.Server.Circuits;
 using Microsoft.EntityFrameworkCore;
 
@@ -154,11 +156,30 @@ public static class DysonUiWebHost
             var factory = sp.GetRequiredService<IHttpClientFactory>();
             return new DysonAppUpdateService(factory.CreateClient(DysonGitHubReleaseClient.HttpClientName));
         });
+        builder.Services.AddHttpClient("embedded-runtimes", client =>
+        {
+            client.Timeout = TimeSpan.FromMinutes(20);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("DysonHarness/1.0");
+        });
+        builder.Services.AddSingleton(sp =>
+        {
+            var factory = sp.GetRequiredService<IHttpClientFactory>();
+            return new DysonEmbeddedRuntimeInstaller(factory.CreateClient("embedded-runtimes"));
+        });
 
         if (hostingMode == DysonHostingMode.Cloud)
             builder.Services.AddScoped<CircuitHandler, DysonCloudSubjectCircuitHandler>();
 
+        builder.Logging.AddProvider(
+            new DysonFileLoggerProvider(DysonAppPaths.GetLogFilePath(DysonBuildInfo.Current)));
+
+        builder.Services.Configure<Microsoft.AspNetCore.Components.Server.CircuitOptions>(o =>
+        {
+            o.DetailedErrors = hostingMode != DysonHostingMode.Cloud;
+        });
+
         var app = builder.Build();
+        RegisterProcessExceptionHooksOnce(app.Services.GetRequiredService<ILoggerFactory>());
 
         {
             using var db = app.Services
@@ -218,6 +239,46 @@ public static class DysonUiWebHost
             .AddInteractiveServerRenderMode();
 
         return app;
+    }
+
+    private static int _processExceptionHooksRegistered;
+
+    /// <summary>
+    /// Subscribe process-wide exception events once so a second <see cref="Create"/>
+    /// (tests / UI restart) does not double-log.
+    /// </summary>
+    private static void RegisterProcessExceptionHooksOnce(ILoggerFactory loggerFactory)
+    {
+        if (Interlocked.Exchange(ref _processExceptionHooksRegistered, 1) != 0)
+            return;
+
+        var logger = loggerFactory.CreateLogger("DysonHarness.Process");
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            try
+            {
+                if (e.ExceptionObject is Exception ex)
+                    logger.LogCritical(ex, "Unhandled exception.");
+                else
+                    logger.LogCritical("Unhandled exception: {ExceptionObject}", e.ExceptionObject);
+            }
+            catch
+            {
+                // process hooks must not throw
+            }
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            try
+            {
+                logger.LogError(e.Exception, "Unobserved task exception.");
+            }
+            catch
+            {
+                // process hooks must not throw
+            }
+        };
     }
 
     /// <summary>Migrate DB then run until shutdown (CLI entrypoint).</summary>

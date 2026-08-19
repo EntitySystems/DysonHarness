@@ -6267,6 +6267,48 @@ code, .mono {
   background: var(--accent-soft);
 }
 
+.file-viewer-line.file-viewer-gutter--added,
+.file-viewer-block.file-viewer-gutter--added {
+  --file-viewer-gutter-color: var(--success);
+}
+
+.file-viewer-line.file-viewer-gutter--modified,
+.file-viewer-block.file-viewer-gutter--modified {
+  --file-viewer-gutter-color: var(--warning);
+}
+
+.file-viewer-line.file-viewer-gutter--added.file-viewer-gutter--modified,
+.file-viewer-block.file-viewer-gutter--added.file-viewer-gutter--modified {
+  --file-viewer-gutter-color: linear-gradient(to right, var(--success) 0 50%, var(--warning) 50% 100%);
+}
+
+.file-viewer-line.file-viewer-gutter--added::after,
+.file-viewer-line.file-viewer-gutter--modified::after,
+.file-viewer-block.file-viewer-gutter--added::after,
+.file-viewer-block.file-viewer-gutter--modified::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: var(--file-viewer-gutter-color);
+  pointer-events: none;
+}
+
+.file-viewer-line.file-viewer-gutter--deleted::before,
+.file-viewer-block.file-viewer-gutter--deleted::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 8px;
+  height: 2px;
+  background: var(--danger);
+  pointer-events: none;
+  border-radius: 0 1px 1px 0;
+}
+
 .file-viewer-comment {
   position: absolute;
   top: 2px;

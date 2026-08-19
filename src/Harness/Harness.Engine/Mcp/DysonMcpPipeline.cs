@@ -123,11 +123,14 @@ public sealed class DysonMcpPipeline
 
         var listed = string.Join(", ", names);
         var enumJson = string.Join(", ", names.Select(n => $"\"{n}\""));
+        var commandDescription = AppendPythonNodeCommandSchemaDescription(
+            "Command line to execute in the chosen shell.", names);
 
         var description =
             "Run a command in the session work directory. " +
             $"Available shells for this session: {listed}. " +
             "You must pass shell as one of these. Prefer dedicated MCP file tools over shell when they fit.";
+        description = AppendPythonNodeSnippetSentence(description, names);
         if (planMode)
             description += " " + PlanShellExecuteWarning;
 
@@ -146,7 +149,7 @@ public sealed class DysonMcpPipeline
                     },
                     "command": {
                       "type": "string",
-                      "description": "Command line to execute in the chosen shell."
+                      "description": "{{commandDescription}}"
                     },
                     "timeoutMs": {
                       "type": "integer",
@@ -181,6 +184,8 @@ public sealed class DysonMcpPipeline
 
         var listed = string.Join(", ", names);
         var enumJson = string.Join(", ", names.Select(n => $"\"{n}\""));
+        var commandDescription = AppendPythonNodeCommandSchemaDescription(
+            "Command line to run in the background.", names);
 
         var startDescription =
             "Recommended for E2E test runs, large application builds, and keeping development servers running. " +
@@ -189,6 +194,7 @@ public sealed class DysonMcpPipeline
             "Use ListLongRunningShells / ReadLongRunningShellTail / LongRunningShellInteract / " +
             "SubscribeToLongRunningShellCompletion / RequestLongRunningShellCancellation / AbortLongRunningShell to manage it. " +
             "Not persisted across UI restart (orphans OS processes). Prefer ShellExecute for one-shot commands.";
+        startDescription = AppendPythonNodeSnippetSentence(startDescription, names);
         if (planMode)
             startDescription += " " + PlanShellExecuteWarning;
 
@@ -207,7 +213,7 @@ public sealed class DysonMcpPipeline
                     },
                     "command": {
                       "type": "string",
-                      "description": "Command line to run in the background."
+                      "description": "{{commandDescription}}"
                     },
                     "workingDirectory": {
                       "type": "string",
@@ -360,6 +366,37 @@ public sealed class DysonMcpPipeline
                 }
                 """,
         };
+    }
+
+    /// <summary>
+    /// When the session enum includes Python and/or Node, remind the model those commands are snippets.
+    /// </summary>
+    private static string AppendPythonNodeSnippetSentence(string description, IReadOnlyList<string> names)
+    {
+        var hasPython = names.Any(n => n.Equals("Python", StringComparison.OrdinalIgnoreCase));
+        var hasNode = names.Any(n => n.Equals("Node", StringComparison.OrdinalIgnoreCase));
+        if (!hasPython && !hasNode)
+            return description;
+
+        if (hasPython && hasNode)
+            return description + " When shell is Python, command is a raw Python snippet (passed to `-c`), not a file path or shell command line. When shell is Node, command is a raw JavaScript snippet (passed to `-e`), not a file path or shell command line.";
+        if (hasPython)
+            return description + " When shell is Python, command is a raw Python snippet (passed to `-c`), not a file path or shell command line.";
+        return description + " When shell is Node, command is a raw JavaScript snippet (passed to `-e`), not a file path or shell command line.";
+    }
+
+    /// <summary>
+    /// Appends Python/Node snippet clauses to the <c>command</c> schema description when those shells are present.
+    /// </summary>
+    private static string AppendPythonNodeCommandSchemaDescription(string baseDescription, IReadOnlyList<string> names)
+    {
+        var hasPython = names.Any(n => n.Equals("Python", StringComparison.OrdinalIgnoreCase));
+        var hasNode = names.Any(n => n.Equals("Node", StringComparison.OrdinalIgnoreCase));
+        if (hasPython)
+            baseDescription += " For Python, pass a raw Python snippet (`-c`).";
+        if (hasNode)
+            baseDescription += " For Node, pass a raw JavaScript snippet (`-e`).";
+        return baseDescription;
     }
 
     /// <summary>Formats the tools dictionary into a prompt-injectable catalog string.</summary>

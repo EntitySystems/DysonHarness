@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 
 namespace DysonHarness;
 
@@ -20,6 +21,10 @@ public sealed record DysonGitStatusEntry(string Path, DysonGitChangeKind Kind);
 public static class DysonGitInfo
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(2);
+
+    private static readonly Regex UnifiedHunkHeader = new(
+        @"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     /// <summary>
     /// Runs <c>git -C path rev-parse --abbrev-ref HEAD</c>. Failure means no usable git repo.
@@ -267,6 +272,75 @@ public static class DysonGitInfo
         return Result<IReadOnlyList<DysonGitStatusEntry>, string>.AsValue(ParsePorcelain(stdout));
     }
 
+    /// <summary>
+    /// Returns unified-diff hunks for <paramref name="relativePath"/> versus <c>HEAD</c>
+    /// (net staged plus unstaged). Git is optional: no repository, no usable git executable,
+    /// or no comparable baseline yields an empty list. Invalid or sandbox-escaping paths
+    /// remain Result errors. Untracked files, and newly added files in an unborn repository,
+    /// are a single <see cref="DysonGitDiffAnnotationKind.Added"/> span of all logical source
+    /// lines. Unchanged tracked files return an empty list.
+    /// </summary>
+    public static Result<IReadOnlyList<DysonGitDiffAnnotation>, string> TryGetFileDiffAnnotations(
+        IDysonWorkspaceFileSystem workspaceFileSystem,
+        string relativePath)
+    {
+        ArgumentNullException.ThrowIfNull(workspaceFileSystem);
+
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsError("Path is empty.");
+
+        var resolved = workspaceFileSystem.ResolvePath(relativePath);
+        if (resolved.IsError)
+            return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsError(resolved.Error);
+
+        var repo = TryFindRootMostRepo(workspaceFileSystem);
+        if (repo.IsError)
+            return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue([]);
+
+        var repoRelative = TryGetRepoRelativePath(repo.Value, resolved.Value);
+        if (repoRelative.IsError)
+            return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsError(repoRelative.Error);
+
+        if (Directory.Exists(resolved.Value))
+            return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue([]);
+
+        var statusRun = RunGit(
+            repo.Value,
+            ["status", "--porcelain=v1", "-uall", "--", repoRelative.Value],
+            Timeout);
+        if (statusRun.IsError)
+            return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue([]);
+
+        var (statusExit, statusStdout, _) = statusRun.Value;
+        if (statusExit != 0)
+            return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue([]);
+
+        var statusEntries = ParsePorcelain(statusStdout);
+        var isUntracked = statusEntries.Any(static e => e.Kind == DysonGitChangeKind.Untracked);
+        var isNewlyAdded = statusEntries.Any(static e => e.Kind == DysonGitChangeKind.Added);
+        var hasHead = HasComparableHead(repo.Value);
+
+        if (isUntracked || (!hasHead && isNewlyAdded))
+            return TryCreateFullFileAddedAnnotation(workspaceFileSystem, relativePath);
+
+        if (!hasHead)
+            return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue([]);
+
+        var diffRun = RunGit(
+            repo.Value,
+            ["diff", "--no-color", "--no-ext-diff", "--unified=0", "HEAD", "--", repoRelative.Value],
+            Timeout);
+        if (diffRun.IsError)
+            return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue([]);
+
+        var (diffExit, diffStdout, _) = diffRun.Value;
+        if (diffExit != 0)
+            return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue([]);
+
+        return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue(
+            ParseUnifiedDiffHunks(diffStdout));
+    }
+
     /// <summary>Parse porcelain v1 lines into grouped change entries (public for unit tests).</summary>
     public static IReadOnlyList<DysonGitStatusEntry> ParsePorcelain(string stdout)
     {
@@ -312,6 +386,139 @@ public static class DysonGitInfo
         });
 
         return entries;
+    }
+
+    /// <summary>Parse unified hunk headers (omitted counts are one). Internal for unit tests.</summary>
+    internal static IReadOnlyList<DysonGitDiffAnnotation> ParseUnifiedDiffHunks(string stdout)
+    {
+        if (string.IsNullOrEmpty(stdout))
+            return [];
+
+        var annotations = new List<DysonGitDiffAnnotation>();
+        foreach (var rawLine in stdout.Replace("\r\n", "\n").Split('\n'))
+        {
+            var match = UnifiedHunkHeader.Match(rawLine);
+            if (!match.Success)
+                continue;
+
+            if (!int.TryParse(match.Groups[1].Value, out var originalStart))
+                continue;
+
+            var originalCount = 1;
+            if (match.Groups[2].Success && !int.TryParse(match.Groups[2].Value, out originalCount))
+                continue;
+
+            if (!int.TryParse(match.Groups[3].Value, out var modifiedStart))
+                continue;
+
+            var modifiedCount = 1;
+            if (match.Groups[4].Success && !int.TryParse(match.Groups[4].Value, out modifiedCount))
+                continue;
+
+            DysonGitDiffAnnotationKind kind;
+            if (originalCount == 0 && modifiedCount > 0)
+                kind = DysonGitDiffAnnotationKind.Added;
+            else if (originalCount > 0 && modifiedCount == 0)
+                kind = DysonGitDiffAnnotationKind.Deleted;
+            else if (originalCount > 0 && modifiedCount > 0)
+                kind = DysonGitDiffAnnotationKind.Modified;
+            else
+                continue;
+
+            annotations.Add(new DysonGitDiffAnnotation(
+                kind,
+                originalStart,
+                originalCount,
+                modifiedStart,
+                modifiedCount));
+        }
+
+        return annotations;
+    }
+
+    private static Result<IReadOnlyList<DysonGitDiffAnnotation>, string> TryCreateFullFileAddedAnnotation(
+        IDysonWorkspaceFileSystem workspaceFileSystem,
+        string relativePath)
+    {
+        var exists = workspaceFileSystem.FileExists(relativePath);
+        if (exists.IsError)
+            return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsError(exists.Error);
+
+        if (!exists.Value)
+            return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue([]);
+
+        var text = workspaceFileSystem.ReadAllText(relativePath);
+        if (text.IsError)
+            return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsError(text.Error);
+
+        var lineCount = CountLogicalLines(text.Value);
+        if (lineCount == 0)
+            return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue([]);
+
+        return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue(
+        [
+            new DysonGitDiffAnnotation(
+                DysonGitDiffAnnotationKind.Added,
+                OriginalStartLine: 0,
+                OriginalLineCount: 0,
+                ModifiedStartLine: 1,
+                ModifiedLineCount: lineCount),
+        ]);
+    }
+
+    private static int CountLogicalLines(string text)
+    {
+        if (text.Length == 0)
+            return 0;
+
+        var count = 0;
+        using var reader = new StringReader(text);
+        while (reader.ReadLine() is not null)
+            count++;
+
+        return count;
+    }
+
+    private static bool HasComparableHead(string repoRoot)
+    {
+        var run = RunGit(repoRoot, ["rev-parse", "--verify", "HEAD"], Timeout);
+        if (run.IsError)
+            return false;
+
+        return run.Value.ExitCode == 0;
+    }
+
+    private static Result<string, string> TryGetRepoRelativePath(string repoRoot, string absoluteTarget)
+    {
+        try
+        {
+            var fullRepo = Path.GetFullPath(repoRoot);
+            var fullTarget = Path.GetFullPath(absoluteTarget);
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+
+            var repoPrefix = fullRepo.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                             + Path.DirectorySeparatorChar;
+            var repoTrimmed = fullRepo.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var targetTrimmed = fullTarget.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            if (!string.Equals(targetTrimmed, repoTrimmed, comparison)
+                && !fullTarget.StartsWith(repoPrefix, comparison))
+            {
+                return Result<string, string>.AsError("Path is outside the git repository.");
+            }
+
+            var relative = Path.GetRelativePath(fullRepo, fullTarget).Replace('\\', '/');
+            if (relative.StartsWith("..", StringComparison.Ordinal))
+                return Result<string, string>.AsError("Path is outside the git repository.");
+
+            return Result<string, string>.AsValue(relative);
+        }
+        catch (Exception ex)
+        {
+            return Result<string, string>.AsError($"Invalid path: {ex.Message}");
+        }
     }
 
     /// <summary>
