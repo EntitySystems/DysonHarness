@@ -11,6 +11,8 @@ public static class DysonSessionInitialization
     /// <summary>
     /// Ephemeral yes/no rename review appended at API/transcript time only (never stored on
     /// <see cref="DysonAgentTurn.Instruction"/>, never re-emitted for completed history turns).
+    /// The transcript builder passes a chrome-skipped 1-based index to
+    /// <see cref="IsRenameReviewTurn"/>.
     /// </summary>
     public const string RenameSessionReviewMandate = """
         Decide whether to rename this session:
@@ -21,6 +23,9 @@ public static class DysonSessionInitialization
     /// <summary>
     /// True when the 1-based turn index is a rename-review slot (1, 9, 17, …).
     /// Equivalent to <c>TurnHistory.Count % 8 == 0</c> before adding the new turn.
+    /// Caller must pass a chrome-skipped 1-based index (DisplayInfo / ModeSwitch / PlanResult
+    /// omitted); <see cref="OpenAiCacheFriendlyTranscriptBuilder"/> does this.
+    /// Formula and interval are unchanged.
     /// </summary>
     public static bool IsRenameReviewTurn(int oneBasedTurnIndex) =>
         oneBasedTurnIndex > 0

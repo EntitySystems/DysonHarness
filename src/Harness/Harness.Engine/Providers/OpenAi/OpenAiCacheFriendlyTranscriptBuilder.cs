@@ -748,9 +748,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     {
         for (var i = turns.Count - 1; i >= 0; i--)
         {
-            if (turns[i].Kind is DysonAgentTurnKind.PlanResult
-                or DysonAgentTurnKind.DisplayInfo
-                or DysonAgentTurnKind.ModeSwitch)
+            if (IsTranscriptChromeKind(turns[i].Kind))
                 continue;
             if (string.IsNullOrEmpty(turns[i].AssistantText))
                 return i;
@@ -763,7 +761,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     /// <summary>
     /// History turns always send clean <see cref="DysonAgentTurn.Instruction"/> with a
     /// <c>[turnId=…]</c> header. Incomplete current turn may append ephemeral mandates
-    /// (rename review; Plan first-turn Explore).
+    /// (chrome-skipped rename review; first Plan-stint Explore).
     /// </summary>
     private static string FormatTurnUserContent(
         DysonAgentSession session,
@@ -791,16 +789,16 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         if (!incompleteCurrent)
             return sb.ToString().TrimEnd();
 
-        if (zeroBasedIndex == 0
-            && string.Equals(session.Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase))
+        if (ShouldAppendPlanFirstTurnMandate(
+                session, session.Turns, zeroBasedIndex, turn, incompleteCurrent))
         {
             sb.AppendLine();
             sb.AppendLine();
             sb.Append(DysonAgentSystemPrompts.PlanFirstTurnMandate.Trim());
         }
 
-        var oneBased = zeroBasedIndex + 1;
-        if (DysonSessionInitialization.IsRenameReviewTurn(oneBased))
+        if (DysonSessionInitialization.IsRenameReviewTurn(
+                ChromeSkippedOneBasedIndex(session.Turns, zeroBasedIndex)))
         {
             sb.AppendLine();
             sb.AppendLine();
@@ -809,6 +807,74 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
         return sb.ToString().TrimEnd();
     }
+
+    /// <summary>
+    /// DisplayInfo / ModeSwitch / PlanResult occupy list slots but are not eligible
+    /// prompt turns (same set as <see cref="FindIncompleteCurrentIndex"/>).
+    /// </summary>
+    private static bool IsTranscriptChromeKind(DysonAgentTurnKind kind) =>
+        kind is DysonAgentTurnKind.DisplayInfo
+            or DysonAgentTurnKind.ModeSwitch
+            or DysonAgentTurnKind.PlanResult;
+
+    /// <summary>
+    /// 1-based count of non-chrome turns in <paramref name="turns"/>[0..<paramref name="currentIndex"/>].
+    /// </summary>
+    private static int ChromeSkippedOneBasedIndex(
+        IReadOnlyList<DysonAgentTurn> turns,
+        int currentIndex)
+    {
+        var count = 0;
+        var last = Math.Min(currentIndex, turns.Count - 1);
+        for (var i = 0; i <= last; i++)
+        {
+            if (IsTranscriptChromeKind(turns[i].Kind))
+                continue;
+            count++;
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// True for the first incomplete Normal/InitializeSession prompt in the current Plan stint.
+    /// ModeSwitch is inspected (To=Plan starts a stint); DisplayInfo / PlanResult are skipped.
+    /// </summary>
+    private static bool ShouldAppendPlanFirstTurnMandate(
+        DysonAgentSession session,
+        IReadOnlyList<DysonAgentTurn> turns,
+        int currentIndex,
+        DysonAgentTurn turn,
+        bool incompleteCurrent)
+    {
+        if (!incompleteCurrent)
+            return false;
+        if (!string.Equals(session.Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (!IsEligiblePlanStintUserTurn(turn))
+            return false;
+
+        for (var i = currentIndex - 1; i >= 0; i--)
+        {
+            var prior = turns[i];
+            if (prior.Kind is DysonAgentTurnKind.DisplayInfo or DysonAgentTurnKind.PlanResult)
+                continue;
+
+            if (prior.Kind == DysonAgentTurnKind.ModeSwitch
+                && TryParseModeSwitch(prior, out _, out var to)
+                && string.Equals(to, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (IsEligiblePlanStintUserTurn(prior))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsEligiblePlanStintUserTurn(DysonAgentTurn turn) =>
+        turn.Kind is DysonAgentTurnKind.Normal or DysonAgentTurnKind.InitializeSession
+        && !string.IsNullOrEmpty(turn.Instruction);
 
     /// <summary>
     /// Completions user content: plain string when no images; multimodal parts when
@@ -921,21 +987,33 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     {
         var from = "?";
         var to = "?";
-        var instruction = turn.Instruction ?? "";
-        var arrow = instruction.IndexOf('→');
-        if (arrow > 0 && arrow < instruction.Length - 1)
+        if (TryParseModeSwitch(turn, out var parsedFrom, out var parsedTo))
         {
-            from = instruction[..arrow].Trim();
-            to = instruction[(arrow + 1)..].Trim();
+            if (!string.IsNullOrEmpty(parsedFrom))
+                from = parsedFrom;
+            if (!string.IsNullOrEmpty(parsedTo))
+                to = parsedTo;
         }
-
-        if (string.IsNullOrEmpty(from))
-            from = "?";
-        if (string.IsNullOrEmpty(to))
-            to = "?";
 
         return
             $"[Harness: agent mode switched from {from} to {to}. Follow the current system instructions for {to} mode from this point on.]";
+    }
+
+    /// <summary>
+    /// Parses <see cref="DysonAgentTurn.Instruction"/> <c>From→To</c> on a ModeSwitch turn.
+    /// </summary>
+    private static bool TryParseModeSwitch(DysonAgentTurn turn, out string from, out string to)
+    {
+        from = "";
+        to = "";
+        var instruction = turn.Instruction ?? "";
+        var arrow = instruction.IndexOf('→');
+        if (arrow <= 0 || arrow >= instruction.Length - 1)
+            return false;
+
+        from = instruction[..arrow].Trim();
+        to = instruction[(arrow + 1)..].Trim();
+        return true;
     }
 
     private static string FormatAssistantReply(DysonAgentTurn turn)
