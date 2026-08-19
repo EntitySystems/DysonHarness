@@ -76,20 +76,52 @@
                             title="@entry.Path"
                             @onclick="@(() => OpenAsync(entry))"
                             @onkeydown="@(e => OnRowKeyDown(e, entry))">
-                            <span class="git-changes__path mono">@entry.Path</span>
+                            @RowLabel(entry)
                         </li>
                     }
                     else
                     {
                         <li class="git-changes__row git-changes__row--disabled @rowClass"
                             title="@entry.Path">
-                            <span class="git-changes__path mono">@entry.Path</span>
+                            @RowLabel(entry)
                         </li>
                     }
                 }
             </ul>
         </div>
     };
+
+    private static RenderFragment RowLabel(DysonGitStatusEntry entry)
+    {
+        var (name, directory) = SplitDisplayPath(entry.Path);
+        return __builder =>
+        {
+            <span class="git-changes__path">
+                <span class="git-changes__name mono">@name</span>
+                @if (directory is not null)
+                {
+                    <span class="git-changes__dir mono">@directory</span>
+                }
+            </span>
+        };
+    }
+
+    private static (string Name, string? Directory) SplitDisplayPath(string path)
+    {
+        var normalized = path.Replace('\\', '/').Trim();
+        if (normalized.Length == 0)
+            return (path, null);
+
+        var slash = normalized.LastIndexOf('/');
+        if (slash < 0)
+            return (normalized, null);
+
+        var name = normalized[(slash + 1)..];
+        var directory = normalized[..slash];
+        return string.IsNullOrEmpty(name)
+            ? (normalized, null)
+            : (name, string.IsNullOrEmpty(directory) ? null : directory);
+    }
 
     private async Task OnRowKeyDown(KeyboardEventArgs e, DysonGitStatusEntry entry)
     {
