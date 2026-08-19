@@ -5155,27 +5155,45 @@ code, .mono {
 }
 
 .git-changes__path {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   flex: 1 1 auto;
+  min-width: 0;
+}
+
+.git-changes__name {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 12px;
 }
 
-.git-changes__row--added .git-changes__path {
+.git-changes__dir {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.git-changes__row--added .git-changes__name {
   color: var(--success);
 }
 
-.git-changes__row--modified .git-changes__path {
+.git-changes__row--modified .git-changes__name {
   color: var(--git-modified);
 }
 
-.git-changes__row--deleted .git-changes__path {
+.git-changes__row--deleted .git-changes__name {
   color: var(--danger);
 }
 
-.git-changes__row--untracked .git-changes__path {
+.git-changes__row--untracked .git-changes__name {
   color: var(--warning);
 }
 
