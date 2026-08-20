@@ -1788,7 +1788,23 @@ code, .mono {
   text-overflow: ellipsis;
 }
 
-.session-list .list-item__title .turn-block__spinner { display: inline-block; vertical-align: middle; margin-right: 6px; }
+.session-list .list-item__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.session-list .list-item__title .turn-block__spinner {
+  flex-shrink: 0;
+}
+
+.session-list .list-item__title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .list-item__meta {
   color: var(--text-dim);
