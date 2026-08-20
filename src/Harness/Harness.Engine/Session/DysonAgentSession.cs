@@ -572,9 +572,13 @@ public abstract class DysonAgentSession
         if (!TryGetSubagent(subagentId, out var child))
             return Task.FromResult(Result<string, string>.AsError($"Unknown subagentId {subagentId}."));
 
-        child.CancelBackgroundRun();
+        // Terminal-first: mark Stopped before cancelling so KickOffChildPrompt cannot
+        // drain a pending turn onto a new CTS (restart race).
+        child.ClearPendingTurns();
         var summary = string.IsNullOrWhiteSpace(reason) ? "Stopped by parent." : reason.Trim();
-        if (child.TryMarkTerminal(DysonSessionStatus.Stopped, summary))
+        var marked = child.TryMarkTerminal(DysonSessionStatus.Stopped, summary);
+        child.CancelBackgroundRun();
+        if (marked)
             NotifySubagentStopped(child.Id, summary, child.PersistenceId == Guid.Empty ? null : child.PersistenceId);
 
         return Task.FromResult(Result<string, string>.AsValue(JsonSerializer.Serialize(new
@@ -970,7 +974,7 @@ public abstract class DysonAgentSession
         Parent.RaiseParentEventsChanged();
     }
 
-    internal bool HasActiveBackgroundRun
+    public bool HasActiveBackgroundRun
     {
         get
         {
@@ -1335,8 +1339,8 @@ public abstract class DysonAgentSession
                 var result = await child.PromptHarnessTurnAsync(turn, runCts.Token).ConfigureAwait(false);
                 if (runCts.IsCancellationRequested)
                 {
-                    // Interrupt / Stop owns follow-up; still drain pending turns if child stays active.
-                    TryDrainPendingTurn(child);
+                    // Stop/interrupt owns follow-up. Do not drain — a pending turn on a new
+                    // CTS is the restart race (Stop used to cancel before marking Stopped).
                     return;
                 }
 
@@ -1369,8 +1373,7 @@ public abstract class DysonAgentSession
             }
             catch (OperationCanceledException) when (runCts.IsCancellationRequested)
             {
-                // StopSubagent / interrupt owns terminal state; drain queued turns if still active.
-                TryDrainPendingTurn(child);
+                // Stop/interrupt owns follow-up; do not start a pending turn on a new CTS.
             }
             catch (Exception ex)
             {

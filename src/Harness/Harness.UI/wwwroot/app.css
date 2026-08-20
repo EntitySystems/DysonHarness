@@ -1524,6 +1524,9 @@ code, .mono {
   justify-content: center;
   padding: 24px;
   background: var(--overlay);
+  /* Overlay chips sit in a pointer-events:none cluster; display:contents
+     promotes this backdrop into that cluster, so restore hit-testing. */
+  pointer-events: auto;
 }
 
 .confirm-dialog {
@@ -2336,46 +2339,72 @@ code, .mono {
   background: var(--bg-2);
 }
 
-/* Session todos overview (between header and chat) */
-.session-todos {
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-chrome);
+/* Session overview chips overlay the transcript (top-right of the main stage). */
+.session-main-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
 }
 
-.session-todos__toggle {
+.session-overview-actions {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  z-index: 6;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+
+.session-todos,
+.session-subagents,
+.session-visualizations {
+  display: contents;
+}
+
+.session-overview-actions__button {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
-  padding: 6px 14px;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.session-todos__toggle:hover {
-  background: var(--bg-hover);
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-3) 82%, var(--accent));
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-2);
+  border: 1px solid var(--border-strong);
   color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
 }
 
-.session-todos__chevron {
-  width: 1em;
-  color: var(--text-dim);
+.session-overview-actions__button:hover {
+  background: color-mix(in srgb, var(--bg-3) 68%, var(--accent));
+  border-color: var(--accent);
+}
+
+.session-overview-actions__button.is-open {
+  background: color-mix(in srgb, var(--bg-3) 62%, var(--accent));
+  border-color: var(--accent);
 }
 
 .session-todos__list {
   list-style: none;
   margin: 0;
-  padding: 0 14px 8px;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 220px;
-  overflow-y: auto;
 }
 
 .session-todos__item {
@@ -2499,29 +2528,45 @@ code, .mono {
   line-height: 1.4;
 }
 
-/* Session subagent overview (between todos and chat) — opens modal */
-.session-subagents {
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-chrome);
+/* Session todos modal — confirm-dialog shell, same size as subagents */
+.session-todos-modal {
+  width: min(560px, 100%);
+  max-height: min(80vh, 640px);
 }
 
-.session-subagents__toggle {
+.session-todos-modal__title-row {
   display: flex;
-  align-items: center;
-  width: 100%;
-  padding: 6px 14px;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
 }
 
-.session-subagents__toggle:hover {
-  background: var(--bg-hover);
-  color: var(--text);
+.session-todos-modal__counts {
+  font-size: 12px;
+  font-weight: 450;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.session-todos-modal__close {
+  min-width: 28px;
+  padding: 2px 8px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.session-todos-modal__body {
+  padding: 12px 14px 14px;
+}
+
+.session-todos-modal .session-todos__item:first-child {
+  border-top: none;
+}
+
+.session-todos-modal__empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
 }
 
 /* Session subagents modal — confirm-dialog shell, wider for card titles */
@@ -2594,29 +2639,6 @@ code, .mono {
 
 .turn-visualization__frame {
   height: clamp(360px, 42vw, 480px);
-}
-
-.session-visualizations {
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-chrome);
-}
-
-.session-visualizations__toggle {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  padding: 6px 14px;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-}
-
-.session-visualizations__toggle:hover {
-  background: var(--bg-hover);
-  color: var(--text);
 }
 
 .session-visualizations-modal {

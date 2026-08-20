@@ -341,6 +341,7 @@ public sealed class DysonSessionRepository(
                 existing.ToolStateJson = turn.ToolStateJson;
                 existing.ToolHistoryOptimized = turn.ToolHistoryOptimized;
                 existing.CompactToolHistory = turn.CompactToolHistory;
+                existing.ContextSummary = turn.ContextSummary;
                 existing.IsExcludedFromContext = turn.IsExcludedFromContext;
                 existing.InterruptionReason = turn.InterruptionReason;
                 existing.CompletedUtc = turn.CompletedUtc;

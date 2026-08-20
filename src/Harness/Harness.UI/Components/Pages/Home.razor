@@ -43,29 +43,33 @@
                        GitBranch="@_gitBranch"
                        ShowBackToParent="Host.ActiveParentSessionId is not null"
                        OnBackToParent="NavigateToParentAsync" />
-        <SessionTodoOverview Session="Host.Session" />
-        <SessionSubagentOverview Session="Host.Session" />
-        <SessionVisualizationOverview Session="Host.Session" />
-        @if (!string.IsNullOrEmpty(Host.LastError))
-        {
-            <ErrorToast @key="Host.LastError" Message="@Host.LastError" />
-        }
-        <ChatPanel Turns="@(Host.Session?.Turns ?? Array.Empty<DysonAgentTurn>())"
-                   Disabled="@(Host.Session is null)"
-                   SessionBusy="Host.IsBusy"
-                   OnCancelPrompt="CancelPrompt"
-                   SelectedSlugId="_selectedSlugId"
-                   SelectedSlugIdChanged="OnSelectedSlugIdChangedAsync"
-                   ReasoningEffort="@_reasoningEffort"
-                   ReasoningEffortChanged="OnReasoningEffortChangedAsync"
-                   MaxTargetContextTokens="_maxTargetContextTokens"
-                   MaxTargetContextTokensChanged="OnMaxTargetContextTokensChangedAsync"
-                   OutgoingContextTokens="_outgoingContextTokens"
-                   LastReportedPromptTokens="_lastReportedPromptTokens"
-                   SelectedAgentMode="@_selectedAgentMode"
-                   SelectedAgentModeChanged="OnAgentModeChanged"
-                   OnSubmit="PromptAsync"
-                   OnNewSession="StartNewAsync" />
+        <div class="session-main-stage">
+            <div class="session-overview-actions">
+                <SessionTodoOverview Session="Host.Session" />
+                <SessionSubagentOverview Session="Host.Session" />
+                <SessionVisualizationOverview Session="Host.Session" />
+            </div>
+            @if (!string.IsNullOrEmpty(Host.LastError))
+            {
+                <ErrorToast @key="Host.LastError" Message="@Host.LastError" />
+            }
+            <ChatPanel Turns="@(Host.Session?.Turns ?? Array.Empty<DysonAgentTurn>())"
+                       Disabled="@(Host.Session is null)"
+                       SessionBusy="Host.IsBusy"
+                       OnCancelPrompt="CancelPrompt"
+                       SelectedSlugId="_selectedSlugId"
+                       SelectedSlugIdChanged="OnSelectedSlugIdChangedAsync"
+                       ReasoningEffort="@_reasoningEffort"
+                       ReasoningEffortChanged="OnReasoningEffortChangedAsync"
+                       MaxTargetContextTokens="_maxTargetContextTokens"
+                       MaxTargetContextTokensChanged="OnMaxTargetContextTokensChangedAsync"
+                       OutgoingContextTokens="_outgoingContextTokens"
+                       LastReportedPromptTokens="_lastReportedPromptTokens"
+                       SelectedAgentMode="@_selectedAgentMode"
+                       SelectedAgentModeChanged="OnAgentModeChanged"
+                       OnSubmit="PromptAsync"
+                       OnNewSession="StartNewAsync" />
+        </div>
     </Main>
     <Rail>
         <RailSidePanel ActiveWorkDirectoryId="_activeWorkDirectoryId" />
@@ -536,7 +540,7 @@
         await RefreshSessionsAsync();
     }
 
-    private void CancelPrompt() => Host.CancelPrompt();
+    private Task CancelPrompt() => Host.StopAllExecution();
 
     public async ValueTask DisposeAsync()
     {

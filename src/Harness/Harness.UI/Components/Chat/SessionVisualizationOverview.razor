@@ -5,9 +5,9 @@
 {
     <div class="session-visualizations">
         <button type="button"
-                class="session-visualizations__toggle"
+                class="session-overview-actions__button session-visualizations__toggle @(_open ? "is-open" : null)"
                 aria-haspopup="dialog"
-                aria-expanded="@_open"
+                aria-expanded="@(_open ? "true" : "false")"
                 @onclick="Toggle">
             <span>Visualizations (@_count)</span>
         </button>
