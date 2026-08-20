@@ -5,7 +5,7 @@ namespace Harness.Tests;
 /// <summary>
 /// ponytail: assert-only self-check for session todo TaskCode uniqueness, status enum round-trip,
 /// SubmitSubagentReport incomplete-todo gate, Failed-supersede, post-submit reject, EndsCurrentTurn,
-/// and Failed→Failed reject (Xunit Fact).
+/// Failed→Failed reject, catalog wording, and root catalog omit (Xunit Fact).
 /// </summary>
 public class DysonSessionTodoTests
 {
@@ -19,6 +19,8 @@ public class DysonSessionTodoTests
         AssertSubmitSubagentReportRejectsRetryAfterCompleted().GetAwaiter().GetResult();
         AssertSubmitSubagentReportRejectsFailedRetry().GetAwaiter().GetResult();
         AssertSubmitSubagentReportEndsCurrentTurn().GetAwaiter().GetResult();
+        AssertSubmitSubagentReportCatalogWording();
+        AssertSubmitSubagentReportRootCatalogOmit();
     }
 
     private static void AssertStatusRoundTrip()
@@ -281,12 +283,97 @@ public class DysonSessionTodoTests
             throw new InvalidOperationException("Expected Failed→Completed supersede after agent failed.");
     }
 
+    private static void AssertSubmitSubagentReportCatalogWording()
+    {
+        var pipeline = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess);
+        if (!pipeline.Tools.TryGetValue("SubmitSubagentReport", out var report))
+            throw new InvalidOperationException("SubmitSubagentReport must be in the FullAccess catalog.");
+
+        if (!report.Description.Contains("call ListTodos first", StringComparison.Ordinal)
+            || !report.Description.Contains("All session todos must be Complete", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "SubmitSubagentReport description must contain 'call ListTodos first' and 'All session todos must be Complete'.");
+        }
+
+        if (report.Description.Contains("root Work session", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "SubmitSubagentReport description must not contain 'root Work session'.");
+        }
+
+        if (!pipeline.Tools.TryGetValue("ListTodos", out var listTodos))
+            throw new InvalidOperationException("ListTodos must be in the FullAccess catalog.");
+
+        if (!listTodos.Description.Contains("before SubmitSubagentReport", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "ListTodos description must contain 'before SubmitSubagentReport'.");
+        }
+    }
+
+    private static void AssertSubmitSubagentReportRootCatalogOmit()
+    {
+        const string tool = "SubmitSubagentReport";
+        var config = new DysonAgentSessionConfig();
+
+        foreach (var mode in new[] { DysonAgentModes.Work, DysonAgentModes.Plan, DysonAgentModes.Ask })
+        {
+            var pipeline = DysonSessionToolsetBuilder.Build(config, mode);
+            if (pipeline.Tools.ContainsKey(tool))
+                throw new InvalidOperationException($"Root Build({mode}) must omit {tool}.");
+        }
+
+        var childPipeline = DysonSessionToolsetBuilder.Build(
+            config,
+            DysonAgentModes.Work,
+            omitRootTaskCompletionTools: true);
+        if (!childPipeline.Tools.ContainsKey(tool))
+        {
+            throw new InvalidOperationException(
+                $"Build(omitRootTaskCompletionTools: true) must keep {tool}.");
+        }
+
+        var root = new StubSession();
+        root.ConfigureRootForTest();
+        if (root.McpPipeline.Tools.ContainsKey(tool))
+            throw new InvalidOperationException($"ConfigureRootForTest / ConfigureRootInterAgentTools must omit {tool}.");
+
+        var catalog = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess);
+        if (!catalog.Tools.ContainsKey(tool))
+            throw new InvalidOperationException($"CreateDefault must still contain {tool}.");
+
+        var inAllCatalog = false;
+        foreach (var named in DysonSessionToolsetBuilder.AllCatalogTools())
+        {
+            if (string.Equals(named.Name, tool, StringComparison.Ordinal))
+            {
+                inAllCatalog = true;
+                break;
+            }
+        }
+
+        if (!inAllCatalog)
+            throw new InvalidOperationException($"AllCatalogTools must still contain {tool}.");
+
+        var parent = new StubSession();
+        parent.ConfigureRootForTest();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+        if (!child.McpPipeline.Tools.ContainsKey(tool))
+            throw new InvalidOperationException($"Registered child catalog must keep {tool}.");
+        if (parent.McpPipeline.Tools.ContainsKey(tool))
+            throw new InvalidOperationException($"Parent root catalog must still omit {tool} after RegisterForTest.");
+    }
+
     private static async Task AssertSubmitSubagentReportEndsCurrentTurn()
     {
-        var session = new StubSession();
-        session.ConfigureRootForTest();
+        var parent = new StubSession();
+        parent.ConfigureRootForTest();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+        var executor = DysonWorkspaceTestFs.CreateExecutor(child, Path.GetTempPath(), http);
 
         var result = await executor.ExecuteAsync(new DysonToolCall
         {
@@ -300,7 +387,7 @@ public class DysonSessionTodoTests
             throw new InvalidOperationException("SubmitSubagentReport should succeed: " + result.Content);
         if (!result.EndsCurrentTurn)
             throw new InvalidOperationException("First successful SubmitSubagentReport must set EndsCurrentTurn.");
-        if (session.Status != DysonSessionStatus.Completed)
+        if (child.Status != DysonSessionStatus.Completed)
             throw new InvalidOperationException("Expected session Completed after executor submit.");
 
         var retry = await executor.ExecuteAsync(new DysonToolCall
@@ -322,9 +409,11 @@ public class DysonSessionTodoTests
             throw new InvalidOperationException("Rejected SubmitSubagentReport must not set EndsCurrentTurn.");
 
         // Failed handoff also ends the turn
-        var failedSession = new StubSession();
-        failedSession.ConfigureRootForTest();
-        var failedExecutor = DysonWorkspaceTestFs.CreateExecutor(failedSession, Path.GetTempPath(), http);
+        var failedParent = new StubSession();
+        failedParent.ConfigureRootForTest();
+        var failedChild = new StubSession();
+        failedParent.RegisterForTest(failedChild);
+        var failedExecutor = DysonWorkspaceTestFs.CreateExecutor(failedChild, Path.GetTempPath(), http);
         var failedResult = await failedExecutor.ExecuteAsync(new DysonToolCall
         {
             CallId = "r3",
@@ -337,7 +426,7 @@ public class DysonSessionTodoTests
             throw new InvalidOperationException("Failed SubmitSubagentReport should succeed: " + failedResult.Content);
         if (!failedResult.EndsCurrentTurn)
             throw new InvalidOperationException("Successful failed-status SubmitSubagentReport must set EndsCurrentTurn.");
-        if (failedSession.Status != DysonSessionStatus.Failed)
+        if (failedChild.Status != DysonSessionStatus.Failed)
             throw new InvalidOperationException("Expected session Failed after failed-status submit.");
     }
 
@@ -348,6 +437,8 @@ public class DysonSessionTodoTests
         new DysonAgentSessionConfig(),
         new StubProvider())
     {
+        public void RegisterForTest(DysonAgentSession child) => RegisterSubagent(child);
+
         public void ConfigureRootForTest() => ConfigureRootInterAgentTools();
 
         public override Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(

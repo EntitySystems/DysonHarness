@@ -1185,7 +1185,8 @@ public sealed class DysonMcpPipeline
             Name = "ListTodos",
             Description =
                 "List todos for the current session (JSON array). " +
-                "Each session (root or subagent) owns its own list.",
+                "Each session (root or subagent) owns its own list. " +
+                "Call this before SubmitSubagentReport to check for pending or ongoing work.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1371,9 +1372,10 @@ public sealed class DysonMcpPipeline
                 "Notifies the parent with the summary so the host can queue a parent turn. " +
                 "All session todos must be Complete before a successful (completed) report; " +
                 "failed reports may leave todos incomplete. " +
+                "Before submitting: call ListTodos first to see if this session has any pending work; " +
+                "if ListTodos shows pending or ongoing items, complete those via UpdateTodo first, then submit. " +
                 "A successful submit ends the current turn; further SubmitSubagentReport calls fail " +
-                "(except a completed handoff may supersede a prior harness Failed). " +
-                "Do not use from a root Work session unless debugging.",
+                "(except a completed handoff may supersede a prior harness Failed).",
             InputSchemaJson = """
                 {
                   "type": "object",
