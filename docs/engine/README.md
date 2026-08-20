@@ -193,12 +193,22 @@ The UI renders the payload only in an inline iframe using `sandbox="allow-script
 - Caps: depth 8, 50 nested invocations, `MaxIterations` 1–20 (default 5). No self-call.
 - Result includes program-shaped `flow` tree (`executed` flags) for the UI flow modal. Spec: [json-dynamic-toolchain.md](json-dynamic-toolchain.md). Agent guide: `Resources/Skills/JDSL.md` — load via `LoadSkill(name: "JDSL", loadIndexOnly: true)` or composer `/skill-jdsl`. Covered by `DysonJsonDynamicToolchainTests` / `DysonSkillLoaderTests`.
 
+### ReadFile
+
+Workspace file reads return at most **32KiB** (~<20K tokens). Larger requested slices **error** (`IsError`) with instruction to pass `offset`+`limit` or Grep first — the file body is **not** returned (not a truncated dump).
+
+- `offset` is 1-based; **negative = tail** (`-80` = last 80 lines).
+- Per-line read capped at **8KiB** (giant EF/SQL lines are clipped).
+- Binary/image → error, use `LoadBinary`.
+- Implemented via `IDysonWorkspaceFileSystem.ReadLineSlice` (never full-file `ReadAllText` for this tool).
+
 ### ShellExecute
 
 - Session config `AvailableShells` is an `IReadOnlyList<DysonConfiguredShellSpec>` (`Name` + `ExecutablePath` + optional `FixedArgs`). Empty ⇒ `ShellExecute` and all long-running shell tools are omitted. The UI host loads **enabled** rows from `configured_shells` (`IDysonConfiguredShellRepository.EnsureDefaultsAsync` + `ListEnabledSpecsAsync`) on new/resume.
 - MCP schema `shell` enum + description list those **names**; the model must pass `shell` plus `command` (optional `timeoutMs`, `workingDirectory` under the work root).
 - Default cwd is the session workspace FS `NativeRootPath` (from `DysonWorkspaceFileSystems.CreateLocalAsync` / `IDysonWorkspaceFileSystem`); optional `workingDirectory` is resolved through the same sandboxed FS.
 - Executor resolves name → path/`FixedArgs` against `AvailableShells`, then `DysonWindowsShell.ExecuteWithPathAsync` via `ResolveFixedArgs`: non-empty spec `FixedArgs` win; else basename heuristics (`pwsh`/`powershell` → `-NoProfile -NonInteractive -Command`, `cmd` → `/d /c`, `bash`/`sh`/`zsh`/`git-bash` → `-c`, `python`/`python3` → `-c`, `node`/`nodejs` → `-e`). Unknown basename without Fixed args errors (list includes `python`/`python3`/`node`/`nodejs`) and still tells the user to set Fixed args in Settings → Shells.
+- **Capture cap:** stdout and stderr are captured up to **64KiB each**; overflow is truncated (the command may still run until timeout). `DysonShellRunResult.StdoutTruncated` / `StderrTruncated`. Do not kill the process solely for overflow.
 - **Snippet contract:** When the session enum includes `Python` and/or `Node` (`OrdinalIgnoreCase` on those names only), `ShellExecute` and `StartLongRunningShell` descriptions append the matching half (or both): “When shell is Python, command is a raw Python snippet (passed to `-c`), not a file path or shell command line.” / “When shell is Node, command is a raw JavaScript snippet (passed to `-e`), not a file path or shell command line.” The `command` schema keeps “Command line to execute in the chosen shell.” / “Command line to run in the background.” and appends “ For Python, pass a raw Python snippet (`-c`).” and/or “ For Node, pass a raw JavaScript snippet (`-e`).” Plan warning still appends after. No `DysonShellType` values added.
 - Related: `DysonConfiguredShellSpec`, `DysonShellType` (legacy/heuristics), abstract `DysonShell`, `DysonShellRunResult`, `ResolveFixedArgs` / `MapFixedArgsFromExecutablePath`.
 - **Plan soft warning:** in Plan mode, `ConfigureShellExecuteForMode(true)` appends a read-only-inspection warning to the tool description (prefer `dir` / `git status` / small reads; never run builds/installs/servers; prefer `ReadFile` / `Grep` / `ListDirectory`). The executor still runs the command but prepends the same WARNING to Ok/Error content. Non-Plan modes use the plain description. Covered by `DysonShellExecutePlanWarningTests` in `Harness.Tests`.
@@ -210,17 +220,17 @@ Workdir-scoped background processes for E2E runs, large builds, and keeping deve
 | Type / tool | Role |
 | ----------- | ---- |
 | `DysonLongRunningShellRegistry` | Static workdir buckets; incremental `longRunningShellId` ints per workdir; shared by parent/child sessions; completion subscribers |
-| `DysonLongRunningShell` | Process + stdin + stdout/stderr/combined rings (~256KB each); stores configured `ShellName` |
+| `DysonLongRunningShell` | Process + stdin + stdout/stderr/combined rings (~256KB each, memory ceiling); stores configured `ShellName` |
 | `DysonLongRunningShellExitedFlow` | `ShellExited` turn Instruction (auto-read tail) + trim after completion; Instruction uses configured shell name |
 | `StartLongRunningShell` | `shell` (enabled name) + `command` (+ optional `workingDirectory`) → `longRunningShellId` |
 | `ListLongRunningShells` | Compact roster for the workdir (`id`, `status`, `shell` = configured name, short `command`, `exitCode`, `startedUtc`) |
-| `ReadLongRunningShellTail` | Tail combined output; optional `timeoutMs` wait for new bytes |
+| `ReadLongRunningShellTail` | Tail combined output; `maxChars` default **8KiB**, **clamped to 64KiB** (model-facing only). Optional `timeoutMs` wait for new bytes |
 | `AbortLongRunningShell` | Kill process tree (same as UI Force stop) |
 | `RequestLongRunningShellCancellation` | Soft cancel (`\x03` stdin, else `CloseMainWindow`) |
 | `LongRunningShellInteract` | Write stdin (+ newline if missing) |
-| `SubscribeToLongRunningShellCompletion` | Non-blocking subscribe → on terminal, `LongRunningShellExited` interrupt → host `ShellExited` auto-turn (always drained, including Plan); Instruction auto-reads tail then trims it after the turn |
+| `SubscribeToLongRunningShellCompletion` | Non-blocking subscribe → on terminal, `LongRunningShellExited` interrupt → host `ShellExited` auto-turn (always drained, including Plan); Instruction auto-reads tail (`includeTailMaxChars` same **64KiB** clamp) then trims it after the turn |
 
-Same platform gate as `ShellExecute` (omitted when no shells). Plan soft-warns on `StartLongRunningShell` (description + result preamble). Covered by `DysonLongRunningShellTests` in `Harness.Tests`.
+Same platform gate as `ShellExecute` (omitted when no shells). Plan soft-warns on `StartLongRunningShell` (description + result preamble). The 256KB ring stays as a memory ceiling; the 64KiB clamp only limits what enters the model. Covered by `DysonLongRunningShellTests` in `Harness.Tests`.
 
 ### Browser control
 
@@ -249,10 +259,10 @@ Port of [agent-search-mcp](https://github.com/lennney/agent-search-mcp) as catal
 | `FreeSearch` | Parallel free engines (`duckduckgo`, `bing`, `wikipedia`); tool-owned summary (skip if ≤~1500 tokens); optional `summarizePrompt` |
 | `FreeSearchAdvanced` | Waterfall (DDG+Bing+Wikipedia → Brave if keyed), domain filters, optional WebFetch enrich; tool-owned summary; optional `summarizePrompt` |
 | `SearchWithSynthesis` | Waterfall search + string `prompt_hint` (no LLM call for synthesis); tool-owned summary; optional `summarizePrompt` |
-| `WebFetch` | Default page extractor. GET URL; summarize by default → summary only (`maxBytes` default **64KB**). `fullHtml: true` → return HTML JSON to parent (`maxBytes` default **2MB**). Optional `summarizePrompt` (ignored when `fullHtml`). SSRF-guarded |
+| `WebFetch` | Default page extractor. GET URL; summarize by default → summary only (`maxBytes` default **64KB**). `fullHtml: true` may still **download** up to **2MB** internally (`maxBytes` default **2MB**), but model-facing `Content` is **64KB** via the global Ok/Error cap (intentional: 2MB HTML ~500K tokens). Optional `summarizePrompt` (ignored when `fullHtml`). SSRF-guarded |
 | `FetchGithubReadme` | `raw.githubusercontent.com` README for a GitHub repo URL; tool-owned summary; optional `summarizePrompt` |
 
-**Result summarization:** runs **inside** `DysonWorkspaceToolExecutor` via `DysonWebSearchSummarizer.SummarizeAsync` before MCP `Content` is returned. By default the parent session / UI never sees raw SERP dumps or HTML — not even transiently. **Exception:** `WebFetch` with `fullHtml: true` intentionally returns full HTML. Other web tools skip the LLM when already ≤ ~1500 tokens (`summarizePrompt` unused when skipped). Hard cap ≤ 10K tokens (`IDysonTokenCounter`); prompt text lives in `DysonWebSearchSummarizerPrompt` (editable constant; optional “Agent focus” from `summarizePrompt`). Optional dedicated model via `DysonAgentSessionConfig.SummarizerProvider` (null ⇒ session provider); UI: Settings → General → Web search summarizer.
+**Result summarization:** runs **inside** `DysonWorkspaceToolExecutor` via `DysonWebSearchSummarizer.SummarizeAsync` before MCP `Content` is returned. By default the parent session / UI never sees raw SERP dumps or HTML — not even transiently. **Exception:** `WebFetch` with `fullHtml: true` may still download up to 2MB internally for summarization, but model-facing `Content` is **64KB** via the global Ok/Error cap (intentional: 2MB HTML ~500K tokens). Other web tools skip the LLM when already ≤ ~1500 tokens (`summarizePrompt` unused when skipped). Hard cap ≤ 10K tokens (`IDysonTokenCounter`); prompt text lives in `DysonWebSearchSummarizerPrompt` (editable constant; optional “Agent focus” from `summarizePrompt`). Optional dedicated model via `DysonAgentSessionConfig.SummarizerProvider` (null ⇒ session provider); UI: Settings → General → Web search summarizer.
 
 SSRF validation lives in `SearchHttp.ValidateUrl` (blocks localhost, private IPs, metadata hosts). Covered by `SearchTests` in `Harness.Tests` (SSRF + DDG HTML / Bing RSS parser fixtures + summarizer policy).
 
@@ -334,6 +344,8 @@ During any turn the model may call **`SummarizeTurns`** (`turnIds` from `[turnId
 
 When estimated outgoing Completions/Responses tokens (same `OpenAiCacheFriendlyTranscriptBuilder` path + tiktoken; see `DysonOutgoingContextTokens`) exceed the effective max target (`session.MaxTargetContextTokens` → slug `DefaultMaxTargetContextTokens` → **100_000**; session **0** = Off), the next **Send** (`PromptWithTurnAsync`) may inject a `DropContext` turn (`DysonDropContextFlow`, keep last **4** turns) so the agent can prefer **`SummarizeTurns`** on verbose-but-useful older turns or **`DropTurnContext`** on true noise, then continues the original prompt (`allowDropContextInject: false` prevents nesting). Footer/idle overage does **not** inject — only the start of the next prompt.
 
+**Live tool `Content` is hard-capped at the tool-result boundary** (`DysonToolResultLimits`: 64KiB on every Ok/Error; ReadFile fail-closes at 32KiB). DropContext / the optimizer do **not** protect the current turn — they only compact or drop **older** turns (`KeepRecentTurns` = 4 DropContext / 2 optimizer). Unbounded live tool results (the ~12M-token incident class) must be capped at the executor, not after the fact.
+
 Gates: effective max > 0; not already in a DropContext phase; at least one non-excluded turn older than the keep-last-4 window; and a **5-user-turn throttle** after a DropContext (`Normal` | `InitializeSession` counts; first inject with no prior DropContext is immediate). Session log: `drop-context: inject (estimated=… max=…)` on inject, or `drop-context: skip (reason; estimated=… max=…)` when over a positive max but skipping (`in-phase`, `no-droppable-older`, `throttle`; Evaluate also returns `off` when max is 0). Covered by `DysonDropContextTests`.
 
 ### Full summarize
@@ -345,7 +357,7 @@ Composer **`/summarize-full`** (host `PromptFullSummarizeAsync`) queues a **`Ful
 `DysonContextOptimizer` (code-generated compaction, no LLM):
 
 - Triggers on turn count or unoptimized token size (`IDysonTokenCounter`, default Tiktoken).
-- Compacts **older** turns only (`KeepRecentTurns`); sets `ToolHistoryOptimized` + `CompactToolHistory` for prompt-cache stability.
+- Compacts **older** turns only (`KeepRecentTurns`); sets `ToolHistoryOptimized` + `CompactToolHistory` for prompt-cache stability. Does not protect the in-flight turn — live tool `Content` is capped at Ok/Error instead (see Max target context + DropContext inject).
 - Compact lines use a harness-tagged shape (`[compact] {Tool} params: … || result: …`), not natural “Called … with params” prose.
 - Cache-friendly Completions/Responses builders inject compacted history as **`role: user`** with a fixed harness prefix (historical summary only — do not imitate; use native tool calls). It is **not** emitted as assistant content.
 - If a no-`tool_calls` model round echoes only compact-shaped lines (new or legacy), the session clears that body instead of storing it as `AssistantText`.

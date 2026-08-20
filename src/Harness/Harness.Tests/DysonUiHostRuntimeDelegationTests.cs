@@ -409,6 +409,103 @@ public class DysonUiHostRuntimeDelegationTests
     }
 
     [Fact]
+    public async Task StopAllExecution_with_live_child_does_not_restart()
+    {
+        await using var harness = await HostHarness.CreateAsync(waiting: true);
+        await using var host = harness.CreateHost();
+
+        var started = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(started.IsSuccess, started.IsError ? started.Error : null);
+        var session = host.Session ?? throw new InvalidOperationException("Expected focused session.");
+        var parentId = session.PersistenceId;
+
+        var prompt = host.PromptAsync("hold this");
+        await harness.WaitingFactory!.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(host.IsSessionBusy(parentId));
+
+        var spawned = await session.CreateChildAsync(DysonAgentModes.Explore, "hold child");
+        Assert.True(spawned.IsSuccess, spawned.IsError ? spawned.Error : null);
+        Assert.True(session.TryGetSubagent(spawned.Value.SubagentId, out var child));
+        await harness.WaitingFactory.ChildEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => child.HasActiveBackgroundRun && child.PersistenceId != Guid.Empty,
+            TimeSpan.FromSeconds(5));
+
+        await host.StopAllExecution();
+
+        await WaitUntilAsync(
+            () => child.Status == DysonSessionStatus.Stopped
+                  && !child.HasActiveBackgroundRun
+                  && !host.IsSessionBusy(parentId),
+            TimeSpan.FromSeconds(5));
+
+        var promptResult = await prompt.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(promptResult.IsError);
+        Assert.Contains("cancel", promptResult.Error, StringComparison.OrdinalIgnoreCase);
+
+        await Task.Delay(300);
+
+        Assert.Equal(DysonSessionStatus.Stopped, child.Status);
+        Assert.False(child.HasActiveBackgroundRun);
+        Assert.False(host.IsSessionBusy(parentId));
+        Assert.False(host.IsBusy);
+        Assert.Equal(0, harness.WaitingFactory.ReportProcessingCalls);
+        Assert.DoesNotContain(
+            session.Turns,
+            turn => turn.Kind == DysonAgentTurnKind.SubagentReportProcessing);
+        Assert.Equal(0, harness.Runtime.GetQueuedPromptCount(parentId));
+
+        var persisted = await harness.Sessions.GetFullSessionAsync(child.PersistenceId);
+        Assert.True(persisted.IsSuccess, persisted.IsError ? persisted.Error : null);
+        Assert.Equal(DysonSessionStatus.Stopped, persisted.Value.Session.Status);
+    }
+
+    [Fact]
+    public async Task IsSessionBusy_for_focused_child_with_background_run()
+    {
+        await using var harness = await HostHarness.CreateAsync(waiting: true);
+        await using var host = harness.CreateHost();
+
+        var started = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(started.IsSuccess, started.IsError ? started.Error : null);
+        var session = host.Session ?? throw new InvalidOperationException("Expected focused session.");
+        var parentId = session.PersistenceId;
+
+        var spawned = await session.CreateChildAsync(DysonAgentModes.Explore, "hold child");
+        Assert.True(spawned.IsSuccess, spawned.IsError ? spawned.Error : null);
+        Assert.True(session.TryGetSubagent(spawned.Value.SubagentId, out var child));
+        await harness.WaitingFactory!.ChildEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => child.HasActiveBackgroundRun && child.PersistenceId != Guid.Empty,
+            TimeSpan.FromSeconds(5));
+
+        var childId = child.PersistenceId;
+        Assert.False(host.IsSessionBusy(parentId));
+        Assert.True(host.HasActiveSubagents(parentId));
+        Assert.True(host.IsSessionBusy(childId));
+
+        var focused = await host.NavigateToSessionAsync(childId);
+        Assert.True(focused.IsSuccess, focused.IsError ? focused.Error : null);
+        Assert.Equal(childId, host.ActiveSessionId);
+        Assert.True(host.IsBusy);
+        Assert.True(host.IsSessionBusy(childId));
+        Assert.False(host.IsSessionBusy(parentId));
+        Assert.True(host.HasActiveSubagents(parentId));
+
+        await host.StopAllExecution();
+        await WaitUntilAsync(
+            () => child.Status == DysonSessionStatus.Stopped && !child.HasActiveBackgroundRun,
+            TimeSpan.FromSeconds(5));
+
+        Assert.False(host.IsSessionBusy(childId));
+        Assert.False(host.IsBusy);
+        Assert.False(host.IsSessionBusy(parentId));
+        Assert.False(host.HasActiveSubagents(parentId));
+    }
+
+    [Fact]
     public async Task Ask_ui_waits_until_session_is_rejoined()
     {
         await using var harness = await HostHarness.CreateAsync();
@@ -838,8 +935,14 @@ public class DysonUiHostRuntimeDelegationTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public readonly TaskCompletionSource Release =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource ChildEntered =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int CancelObserved;
+        public int ReportProcessingCalls;
         public bool EnqueueFollowUp;
+        public IDysonSessionRepository Sessions => sessions;
+        public Guid WorkDirectoryId { get; private set; }
+        public Guid? ModelSlugId { get; private set; }
 
         public async Task<Result<DysonAgentSessionRuntimeLease, string>> CreateRootAsync(
             DysonAgentSessionRuntimeCreateRequest request,
@@ -860,6 +963,8 @@ public class DysonUiHostRuntimeDelegationTests
             if (created.IsError)
                 return Result<DysonAgentSessionRuntimeLease, string>.AsError(created.Error);
 
+            WorkDirectoryId = request.WorkDirectoryId;
+            ModelSlugId = request.ModelSlugId;
             var session = new WaitingSession(this);
             session.SetPersistenceIdForTest(created.Value);
             return Result<DysonAgentSessionRuntimeLease, string>.AsValue(
@@ -877,16 +982,21 @@ public class DysonUiHostRuntimeDelegationTests
         }
     }
 
-    private sealed class WaitingSession(WaitingSessionFactory factory) : DysonAgentSession(
-        DysonAgentModes.Work,
-        new DysonAgentSessionConfig(),
-        new DemoDysonAgentProvider(slug: null))
+    private sealed class WaitingSession : DysonAgentSession
     {
         public const string FollowUpInstruction = "runtime-follow-up";
 
+        private readonly WaitingSessionFactory _factory;
+
+        public WaitingSession(WaitingSessionFactory factory, string agentMode = DysonAgentModes.Work)
+            : base(agentMode, new DysonAgentSessionConfig(), new DemoDysonAgentProvider(slug: null))
+        {
+            _factory = factory;
+        }
+
         public void SetPersistenceIdForTest(Guid persistenceId) => SetPersistenceId(persistenceId);
 
-        public override Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
+        public override async Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
             string agentMode,
             string task,
             string? context = null,
@@ -894,7 +1004,50 @@ public class DysonUiHostRuntimeDelegationTests
             string? modelSlug = null,
             string? reasoningEffort = null,
             CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            _ = context;
+            _ = initialTodos;
+            _ = modelSlug;
+            _ = reasoningEffort;
+
+            var child = new WaitingSession(_factory, agentMode);
+            RegisterSubagent(child);
+            var title = TitleFromTask(task);
+            child.SetDisplayTitle(title);
+
+            var created = await _factory.Sessions.CreateSessionAsync(
+                    new DysonSessionCreateRequest
+                    {
+                        RuntimeId = child.Id,
+                        ParentSessionId = PersistenceId,
+                        AgentMode = agentMode,
+                        ModelSlugId = _factory.ModelSlugId,
+                        WorkDirectoryId = _factory.WorkDirectoryId,
+                        Title = title,
+                        SystemPromptSnapshot = "waiting-child",
+                        Status = DysonSessionStatus.Active,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (created.IsError)
+                return Result<DysonStartSubagentResult, string>.AsError(created.Error);
+
+            child.SetPersistenceIdForTest(created.Value);
+            var runCts = new CancellationTokenSource();
+            child.AttachBackgroundRun(runCts);
+            KickOffChildPrompt(
+                child,
+                CreateNormalTurn("hold child"),
+                runCts);
+
+            return Result<DysonStartSubagentResult, string>.AsValue(new DysonStartSubagentResult
+            {
+                SubagentId = child.Id,
+                PersistenceId = child.PersistenceId,
+                AgentMode = agentMode,
+                Title = title,
+            });
+        }
 
         public override Task<VoidResult<string>> LoadFunctionalContextAsync(
             CancellationToken cancellationToken = default)
@@ -915,20 +1068,35 @@ public class DysonUiHostRuntimeDelegationTests
             DysonAgentTurn turn,
             CancellationToken cancellationToken = default)
         {
-            factory.Entered.TrySetResult();
+            if (Parent is not null)
+            {
+                _factory.ChildEntered.TrySetResult();
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+                    return VoidResult<string>.Success;
+                }
+                catch (OperationCanceledException)
+                {
+                    Interlocked.Increment(ref _factory.CancelObserved);
+                    return VoidResult<string>.AsError("Prompt was cancelled.");
+                }
+            }
+
+            _factory.Entered.TrySetResult();
             try
             {
-                await factory.Release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                await _factory.Release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
-                Interlocked.Increment(ref factory.CancelObserved);
+                Interlocked.Increment(ref _factory.CancelObserved);
                 return VoidResult<string>.AsError("Prompt was cancelled.");
             }
 
             turn.AssistantText = "done";
             AddTurn(turn);
-            if (factory.EnqueueFollowUp
+            if (_factory.EnqueueFollowUp
                 && !string.Equals(turn.Instruction, FollowUpInstruction, StringComparison.Ordinal))
             {
                 EnqueuePendingTurn(CreateNormalTurn(FollowUpInstruction));
@@ -947,12 +1115,23 @@ public class DysonUiHostRuntimeDelegationTests
             DysonAgentInterrupt interrupt,
             string? title = null,
             CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            _ = interrupt;
+            _ = title;
+            _ = cancellationToken;
+            Interlocked.Increment(ref _factory.ReportProcessingCalls);
+            return Task.FromResult(VoidResult<string>.Success);
+        }
 
         public override Task<VoidResult<string>> PromptSubagentReportProcessingAsync(
             string instruction,
             CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            _ = instruction;
+            _ = cancellationToken;
+            Interlocked.Increment(ref _factory.ReportProcessingCalls);
+            return Task.FromResult(VoidResult<string>.Success);
+        }
 
         public override Task<VoidResult<string>> PromptShellExitedAsync(
             DysonAgentInterrupt interrupt,

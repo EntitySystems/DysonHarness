@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using DysonHarness;
 
 namespace Harness.Tests;
@@ -153,6 +154,146 @@ public class DysonLocalWorkspaceFileSystemTests
             Assert.True(fileMove.IsSuccess, fileMove.IsError ? fileMove.Error : null);
             Assert.True(fs.FileExists("beta/note.txt").Value);
             Assert.False(fs.FileExists("gamma/note.txt").Value);
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    [Fact]
+    public async Task ReadLineSlice_skip_and_maxLines()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            var created = await DysonWorkspaceFileSystems.CreateLocalAsync(root);
+            Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+            var fs = created.Value;
+
+            var body = string.Join('\n', Enumerable.Range(1, 20).Select(i => $"line-{i}"));
+            Assert.True(fs.WriteAllText("lines.txt", body).IsSuccess);
+
+            var slice = fs.ReadLineSlice("lines.txt", startLine: 10, maxLines: 3, maxChars: 1_000_000, maxLineChars: 1_000_000);
+            Assert.True(slice.IsSuccess, slice.IsError ? slice.Error : null);
+            Assert.Equal(3, slice.Value.Lines.Count);
+            Assert.Equal(10, slice.Value.StartLine);
+            Assert.Equal(13, slice.Value.NextLine);
+            Assert.True(slice.Value.Truncated);
+            Assert.False(slice.Value.Tailed);
+            Assert.Equal(new[] { 10, 11, 12 }, slice.Value.Lines.Select(l => l.LineNumber));
+            Assert.Equal(new[] { "line-10", "line-11", "line-12" }, slice.Value.Lines.Select(l => l.Text));
+            Assert.All(slice.Value.Lines, l => Assert.False(l.Clipped));
+            Assert.True(slice.Value.FileLengthBytes > 0);
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    [Fact]
+    public async Task ReadLineSlice_maxChars_truncates()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            var created = await DysonWorkspaceFileSystems.CreateLocalAsync(root);
+            Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+            var fs = created.Value;
+
+            var body = string.Join('\n', Enumerable.Repeat("xx", 10));
+            Assert.True(fs.WriteAllText("short.txt", body).IsSuccess);
+
+            var slice = fs.ReadLineSlice("short.txt", startLine: 1, maxLines: 20, maxChars: 5, maxLineChars: 1000);
+            Assert.True(slice.IsSuccess, slice.IsError ? slice.Error : null);
+            Assert.True(slice.Value.Truncated);
+            Assert.False(slice.Value.Tailed);
+            var raw = slice.Value.Lines.Sum(l => l.Text.Length);
+            Assert.True(raw <= 5, $"collected raw length {raw} exceeded maxChars");
+            Assert.Equal(2, slice.Value.Lines.Count);
+            Assert.Equal(new[] { "xx", "xx" }, slice.Value.Lines.Select(l => l.Text));
+            Assert.Equal(3, slice.Value.NextLine);
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    [Fact]
+    public async Task ReadLineSlice_tail()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            var created = await DysonWorkspaceFileSystems.CreateLocalAsync(root);
+            Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+            var fs = created.Value;
+
+            var body = string.Join('\n', Enumerable.Range(1, 10).Select(i => $"line-{i}"));
+            Assert.True(fs.WriteAllText("tail.txt", body).IsSuccess);
+
+            var slice = fs.ReadLineSlice("tail.txt", startLine: -2, maxLines: null, maxChars: 1_000_000, maxLineChars: 1_000_000);
+            Assert.True(slice.IsSuccess, slice.IsError ? slice.Error : null);
+            Assert.True(slice.Value.Tailed);
+            Assert.False(slice.Value.Truncated);
+            Assert.Equal(9, slice.Value.StartLine);
+            Assert.Equal(11, slice.Value.NextLine);
+            Assert.Equal(2, slice.Value.Lines.Count);
+            Assert.Equal(new[] { 9, 10 }, slice.Value.Lines.Select(l => l.LineNumber));
+            Assert.Equal(new[] { "line-9", "line-10" }, slice.Value.Lines.Select(l => l.Text));
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    [Fact]
+    public async Task ReadLineSlice_giant_line_clips()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            var created = await DysonWorkspaceFileSystems.CreateLocalAsync(root);
+            Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+            var fs = created.Value;
+
+            Assert.True(fs.WriteAllText("giant.txt", new string('A', 200_000)).IsSuccess);
+
+            var sw = Stopwatch.StartNew();
+            var slice = fs.ReadLineSlice("giant.txt", startLine: 1, maxLines: 10, maxChars: 1_000_000, maxLineChars: 8192);
+            sw.Stop();
+
+            Assert.True(slice.IsSuccess, slice.IsError ? slice.Error : null);
+            Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"giant-line clip took {sw.Elapsed}");
+            Assert.Single(slice.Value.Lines);
+            Assert.Equal(8192, slice.Value.Lines[0].Text.Length);
+            Assert.True(slice.Value.Lines[0].Clipped);
+            Assert.Equal(1, slice.Value.Lines[0].LineNumber);
+            Assert.False(slice.Value.Tailed);
+            Assert.True(slice.Value.FileLengthBytes >= 200_000);
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    [Fact]
+    public async Task ReadLineSlice_missing_file()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            var created = await DysonWorkspaceFileSystems.CreateLocalAsync(root);
+            Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+            var fs = created.Value;
+
+            var slice = fs.ReadLineSlice("missing.txt", startLine: 1, maxLines: 10, maxChars: 1000, maxLineChars: 1000);
+            Assert.True(slice.IsError);
+            Assert.Contains("not found", slice.Error, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

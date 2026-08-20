@@ -1,0 +1,98 @@
+@namespace Harness.UI.Components.Chat
+@using Microsoft.AspNetCore.Components.Web
+@using DysonHarness
+
+@if (IsOpen)
+{
+    <div class="confirm-dialog-backdrop"
+         role="presentation"
+         @onclick="CloseAsync"
+         @onkeydown="OnKeyDown">
+        <div class="confirm-dialog session-todos-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="session-todos-modal-title"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnKeyDown">
+            <div class="confirm-dialog__header">
+                <div class="session-todos-modal__title-row">
+                    <h3 id="session-todos-modal-title">Tasks</h3>
+                    <span class="session-todos-modal__counts">
+                        @CompleteCount/@Todos.Count done
+                    </span>
+                </div>
+                <button type="button"
+                        class="btn btn-ghost session-todos-modal__close"
+                        @onclick="CloseAsync"
+                        aria-label="Close">×</button>
+            </div>
+
+            <div class="confirm-dialog__body session-todos-modal__body">
+                @if (Todos.Count == 0)
+                {
+                    <p class="session-todos-modal__empty">No tasks for this session.</p>
+                }
+                else
+                {
+                    <ul class="session-todos__list">
+                        @foreach (var todo in Todos)
+                        {
+                            <li class="session-todos__item">
+                                <div class="session-todos__row">
+                                    <span class="session-todos__name">@todo.DisplayName</span>
+                                    <span class="session-todos__code mono">@todo.TaskCode</span>
+                                    <span class="badge session-todos__status session-todos__status--@StatusClass(todo.Status)">
+                                        @StatusLabel(todo.Status)
+                                    </span>
+                                </div>
+                                @if (todo.Comments.Count > 0)
+                                {
+                                    <ul class="session-todos__comments">
+                                        @foreach (var comment in todo.Comments)
+                                        {
+                                            <li>@comment</li>
+                                        }
+                                    </ul>
+                                }
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+
+    [Parameter] public IReadOnlyList<DysonSessionTodo> Todos { get; set; } = [];
+
+    [Parameter] public int CompleteCount { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private void OnKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            _ = CloseAsync();
+    }
+
+    private static string StatusLabel(DysonSessionTodoStatus status) => status switch
+    {
+        DysonSessionTodoStatus.Pending => "pending",
+        DysonSessionTodoStatus.Ongoing => "ongoing",
+        DysonSessionTodoStatus.Complete => "complete",
+        _ => status.ToString().ToLowerInvariant(),
+    };
+
+    private static string StatusClass(DysonSessionTodoStatus status) => status switch
+    {
+        DysonSessionTodoStatus.Pending => "pending",
+        DysonSessionTodoStatus.Ongoing => "ongoing",
+        DysonSessionTodoStatus.Complete => "complete",
+        _ => "pending",
+    };
+}

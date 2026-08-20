@@ -8,9 +8,9 @@
 {
     <div class="session-subagents">
         <button type="button"
-                class="session-subagents__toggle"
+                class="session-overview-actions__button session-subagents__toggle @(_open ? "is-open" : null)"
                 aria-haspopup="dialog"
-                aria-expanded="@_open"
+                aria-expanded="@(_open ? "true" : "false")"
                 @onclick="Toggle">
             <span>@_children.Count subagents (@_activeCount active)</span>
         </button>

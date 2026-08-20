@@ -68,7 +68,7 @@
     /// <summary>True when this turn is the latest in the transcript.</summary>
     [Parameter] public bool IsLatestTurn { get; set; }
 
-    /// <summary>Cancels the in-flight prompt (same chain as turn-header cancel).</summary>
+    /// <summary>Halts the focused session tree (same chain as turn-header cancel).</summary>
     [Parameter] public EventCallback OnCancel { get; set; }
 
     private bool _expanded;

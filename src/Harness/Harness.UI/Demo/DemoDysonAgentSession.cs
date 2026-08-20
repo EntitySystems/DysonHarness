@@ -608,6 +608,8 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             turn.ClearStreamingPreview();
+            turn.FinalizeIncompleteTools(
+                OpenAiCacheFriendlyTranscriptBuilder.IncompleteToolResultContent);
             return new VoidResult<string>("Prompt was cancelled.");
         }
     }

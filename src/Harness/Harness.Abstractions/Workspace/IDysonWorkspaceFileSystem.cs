@@ -41,6 +41,17 @@ public interface IDysonWorkspaceFileSystem
     /// <summary>Reads up to <paramref name="maxBytes"/> from the start of the file.</summary>
     Result<byte[], string> ReadFileHead(string path, int maxBytes);
 
+    /// <summary>
+    /// Streams a 1-based line window without loading the rest of the file.
+    /// Negative <paramref name="startLine"/> tails from EOF. <c>0</c> is treated as <c>1</c>.
+    /// </summary>
+    Result<DysonWorkspaceLineSlice, string> ReadLineSlice(
+        string path,
+        int startLine,
+        int? maxLines,
+        int maxChars,
+        int maxLineChars);
+
     VoidResult<string> WriteAllText(string path, string contents);
 
     VoidResult<string> WriteAllBytes(string path, byte[] contents);

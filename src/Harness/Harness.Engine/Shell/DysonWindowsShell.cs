@@ -64,9 +64,10 @@ public sealed class DysonWindowsShell : DysonShell
         var (fileName, fixedArgs) = mapped.Value;
         var limitMs = timeoutMs is > 0 ? timeoutMs.Value : DefaultTimeoutMs;
 
+        Process? process = null;
         try
         {
-            using var process = new Process
+            process = new Process
             {
                 StartInfo = new ProcessStartInfo
                 {
@@ -88,8 +89,10 @@ public sealed class DysonWindowsShell : DysonShell
             if (!process.Start())
                 return Result<DysonShellRunResult, string>.AsError($"Failed to start {fileName}.");
 
-            var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            var stdoutTask = ReadBoundedAsync(
+                process.StandardOutput.BaseStream, DysonToolResultLimits.MaxShellStreamBytes, cancellationToken);
+            var stderrTask = ReadBoundedAsync(
+                process.StandardError.BaseStream, DysonToolResultLimits.MaxShellStreamBytes, cancellationToken);
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(limitMs);
@@ -106,11 +109,13 @@ public sealed class DysonWindowsShell : DysonShell
                 return Result<DysonShellRunResult, string>.AsValue(new DysonShellRunResult
                 {
                     ExitCode = -1,
-                    Stdout = stdoutTimed,
-                    Stderr = string.IsNullOrEmpty(stderrTimed)
+                    Stdout = stdoutTimed.Text,
+                    Stderr = string.IsNullOrEmpty(stderrTimed.Text)
                         ? $"Timed out after {limitMs}ms."
-                        : stderrTimed,
+                        : stderrTimed.Text,
                     TimedOut = true,
+                    StdoutTruncated = stdoutTimed.Truncated,
+                    StderrTruncated = !string.IsNullOrEmpty(stderrTimed.Text) && stderrTimed.Truncated,
                 });
             }
 
@@ -119,17 +124,28 @@ public sealed class DysonWindowsShell : DysonShell
             return Result<DysonShellRunResult, string>.AsValue(new DysonShellRunResult
             {
                 ExitCode = process.ExitCode,
-                Stdout = stdout,
-                Stderr = stderr,
+                Stdout = stdout.Text,
+                Stderr = stderr.Text,
+                StdoutTruncated = stdout.Truncated,
+                StderrTruncated = stderr.Truncated,
             });
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            TryKill(process);
             return Result<DysonShellRunResult, string>.AsError("Shell execution was cancelled.");
         }
         catch (Exception ex)
         {
             return Result<DysonShellRunResult, string>.AsError($"Shell failed: {ex.Message}");
+        }
+        finally
+        {
+            if (process is not null)
+            {
+                TryKill(process);
+                process.Dispose();
+            }
         }
     }
 
@@ -215,11 +231,11 @@ public sealed class DysonWindowsShell : DysonShell
             "or set Fixed args in Settings → Shells.");
     }
 
-    private static void TryKill(Process process)
+    private static void TryKill(Process? process)
     {
         try
         {
-            if (!process.HasExited)
+            if (process is { HasExited: false })
                 process.Kill(entireProcessTree: true);
         }
         catch
@@ -228,7 +244,7 @@ public sealed class DysonWindowsShell : DysonShell
         }
     }
 
-    private static async Task<string> SafeRead(Task<string> readTask)
+    private static async Task<BoundedRead> SafeRead(Task<BoundedRead> readTask)
     {
         try
         {
@@ -236,7 +252,39 @@ public sealed class DysonWindowsShell : DysonShell
         }
         catch
         {
-            return "";
+            return new BoundedRead("", Truncated: false);
         }
     }
+
+    /// <summary>
+    /// Capture at most <paramref name="limit"/> bytes, then keep draining so the child can exit.
+    /// Does not kill on overflow (timeout/cancel still kill).
+    /// </summary>
+    private static async Task<BoundedRead> ReadBoundedAsync(
+        Stream stream,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        var buffer = new byte[4_096];
+        using var captured = new MemoryStream(Math.Min(limit, 16 * 1024));
+        var total = 0L;
+        var truncated = false;
+        while (true)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+                break;
+
+            total += read;
+            var remaining = Math.Max(0, limit - (int)Math.Min(total - read, limit));
+            if (remaining > 0)
+                captured.Write(buffer, 0, Math.Min(read, remaining));
+            if (total > limit)
+                truncated = true;
+        }
+
+        return new BoundedRead(Encoding.UTF8.GetString(captured.ToArray()), truncated);
+    }
+
+    private sealed record BoundedRead(string Text, bool Truncated);
 }
