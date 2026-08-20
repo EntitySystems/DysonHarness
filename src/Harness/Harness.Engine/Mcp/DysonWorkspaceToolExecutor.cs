@@ -200,7 +200,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             ToolName = call.ToolName,
             Stage = call.Stage,
             IsError = false,
-            Content = content,
+            Content = DysonToolResultLimits.TruncateContent(content),
             BinaryAttachment = binaryAttachment,
             HtmlVisualization = htmlVisualization,
             EndsCurrentTurn = endsCurrentTurn,
@@ -213,7 +213,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             ToolName = call.ToolName,
             Stage = call.Stage,
             IsError = true,
-            Content = content,
+            Content = DysonToolResultLimits.TruncateContent(content),
         };
 
     private async Task<DysonToolCallResult> RenameSessionAsync(
@@ -1641,39 +1641,68 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (!exists.Value)
             return Task.FromResult(Error(call, $"File not found: {path.Value}"));
 
-        var text = _fs.ReadAllText(path.Value);
-        if (text.IsError)
-            return Task.FromResult(Error(call, text.Error));
-
-        var lines = text.Value.Replace("\r\n", "\n").Split('\n');
-        // Preserve trailing empty line semantics of ReadAllLines for a final newline.
-        if (text.Value.Length > 0
-            && (text.Value.EndsWith('\n') || text.Value.EndsWith('\r')))
+        var kind = ClassifyGrepFile(path.Value);
+        if (kind is GrepFileKind.Binary or GrepFileKind.Image)
         {
-            if (lines.Length > 0 && lines[^1].Length == 0)
-                lines = lines[..^1];
+            return Task.FromResult(Error(
+                call,
+                $"ReadFile: binary/image file. Use LoadBinary to inspect {path.Value}."));
         }
 
         var offset = GetInt(doc.RootElement, "offset") ?? 1;
         var limit = GetInt(doc.RootElement, "limit");
-        if (offset < 1)
-            offset = 1;
-
-        var start = Math.Min(offset - 1, lines.Length);
-        var take = limit is null ? lines.Length - start : Math.Max(0, limit.Value);
-        var slice = lines.Skip(start).Take(take);
-
-        var sb = new StringBuilder();
-        var lineNo = start + 1;
-        foreach (var line in slice)
+        int startLine;
+        int? maxLines = limit;
+        if (offset < 0)
         {
-            sb.Append(lineNo);
-            sb.Append('|');
-            sb.AppendLine(line);
-            lineNo++;
+            var mag = offset == int.MinValue ? int.MaxValue : -offset;
+            var tailN = Math.Min(mag, DysonToolResultLimits.MaxReadFileTailLines);
+            startLine = -tailN;
+        }
+        else
+        {
+            startLine = offset == 0 ? 1 : offset;
         }
 
-        return Task.FromResult(Ok(call, sb.Length == 0 ? "(empty)" : sb.ToString().TrimEnd()));
+        var sliceResult = _fs.ReadLineSlice(
+            path.Value,
+            startLine,
+            maxLines,
+            DysonToolResultLimits.MaxReadFileChars,
+            DysonToolResultLimits.MaxReadFileLineChars);
+        if (sliceResult.IsError)
+            return Task.FromResult(Error(call, sliceResult.Error));
+
+        var slice = sliceResult.Value;
+        var sb = new StringBuilder();
+        foreach (var line in slice.Lines)
+        {
+            sb.Append(line.LineNumber);
+            sb.Append('|');
+            sb.AppendLine(line.Text);
+            if (line.Clipped)
+            {
+                sb.AppendLine(
+                    $"line {line.LineNumber} clipped at {DysonToolResultLimits.MaxReadFileLineChars} chars");
+            }
+        }
+
+        var formatted = sb.Length == 0 ? "(empty)" : sb.ToString().TrimEnd();
+        var limitSatisfied = limit is int l && l > 0 && slice.Lines.Count == l;
+        var overCap = formatted.Length > DysonToolResultLimits.MaxReadFileChars
+            || (slice.Truncated && !limitSatisfied);
+        if (overCap)
+        {
+            var start = slice.Lines.Count == 0 ? startLine : slice.StartLine;
+            var msg =
+                $"ReadFile exceeds the 32KiB cap (~<20K tokens; file {slice.FileLengthBytes} bytes, started at line {start}).\n" +
+                "Do not re-read the whole file. Pass offset (1-based; negative = tail) and limit to read a slice, or Grep first to find the relevant lines.";
+            if (slice.NextLine > 0)
+                msg += $"\nExample: offset={slice.NextLine} limit=80";
+            return Task.FromResult(Error(call, msg));
+        }
+
+        return Task.FromResult(Ok(call, formatted));
     }
 
     private async Task<DysonToolCallResult> LoadSkillAsync(
@@ -2565,6 +2594,11 @@ public sealed partial class DysonWorkspaceToolExecutor
             sb.AppendLine(r.Stderr.TrimEnd());
         }
 
+        if (r.StdoutTruncated)
+            sb.AppendLine($"… truncated (stdout captured {DysonToolResultLimits.MaxShellStreamBytes} bytes)");
+        if (r.StderrTruncated)
+            sb.AppendLine($"… truncated (stderr captured {DysonToolResultLimits.MaxShellStreamBytes} bytes)");
+
         var content = sb.ToString().TrimEnd();
         if (string.IsNullOrEmpty(content))
             content = "(no output)";
@@ -2715,7 +2749,8 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (id is null)
             return Error(call, "Missing required integer field 'longRunningShellId'.");
 
-        var maxChars = GetInt(doc.RootElement, "maxChars") ?? 8 * 1024;
+        var requested = GetInt(doc.RootElement, "maxChars") ?? 8 * 1024;
+        var maxChars = Math.Clamp(requested, 1, DysonToolResultLimits.MaxLongRunningTailChars);
         var timeoutMs = GetInt(doc.RootElement, "timeoutMs") ?? 0;
 
         var tail = await DysonLongRunningShellRegistry
@@ -2835,8 +2870,9 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (id is null)
             return Error(call, "Missing required integer field 'longRunningShellId'.");
 
-        var maxChars = GetInt(doc.RootElement, "includeTailMaxChars")
+        var requested = GetInt(doc.RootElement, "includeTailMaxChars")
             ?? DysonLongRunningShellExitedFlow.DefaultIncludeTailMaxChars;
+        var maxChars = Math.Clamp(requested, 1, DysonToolResultLimits.MaxLongRunningTailChars);
 
         var result = DysonLongRunningShellRegistry.SubscribeToCompletion(
             _workDirectoryId, id.Value, _session, maxChars);

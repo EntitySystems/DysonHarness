@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using DysonHarness;
 
 namespace Harness.Tests;
@@ -103,6 +104,173 @@ public class DysonWindowsShellTests
             || nullOverride.Value.FixedArgs is not ["-NoProfile", "-NonInteractive", "-Command"])
         {
             throw new InvalidOperationException("Null override must use basename heuristics.");
+        }
+    }
+
+    [Fact]
+    public void ExecuteWithPathAsync_UserCancel_KillsProcess()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var cwd = Path.Combine(Path.GetTempPath(), "dyson-shell-cancel-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(cwd);
+        var pidPath = Path.Combine(cwd, "alive.pid");
+        using var cts = new CancellationTokenSource();
+        int? pid = null;
+        try
+        {
+            // powershell.exe is always present on Windows; $pid is the OS process ExecuteWithPathAsync started.
+            var run = DysonWindowsShell.ExecuteWithPathAsync(
+                "powershell.exe",
+                "$pid | Set-Content -Path 'alive.pid' -Encoding ASCII; Start-Sleep -Seconds 60",
+                cwd,
+                timeoutMs: 120_000,
+                cts.Token);
+
+            var readyDeadline = DateTime.UtcNow.AddSeconds(15);
+            while (DateTime.UtcNow < readyDeadline)
+            {
+                try
+                {
+                    if (File.Exists(pidPath)
+                        && int.TryParse(File.ReadAllText(pidPath).Trim(), out var parsed)
+                        && parsed > 0)
+                    {
+                        pid = parsed;
+                        break;
+                    }
+                }
+                catch (IOException)
+                {
+                    // Set-Content may still have the file open.
+                }
+
+                if (run.IsCompleted)
+                {
+                    var early = run.GetAwaiter().GetResult();
+                    throw new InvalidOperationException(
+                        "Shell exited before writing pid; cannot assert cancel-kill. " +
+                        $"IsError={early.IsError} Error={early.Error}");
+                }
+
+                Thread.Sleep(50);
+            }
+
+            if (pid is null)
+                throw new InvalidOperationException("Timed out waiting for shell pid file.");
+
+            cts.Cancel();
+            var result = run.GetAwaiter().GetResult();
+            if (!result.IsError || result.Error != "Shell execution was cancelled.")
+            {
+                throw new InvalidOperationException(
+                    $"Expected cancelled error, got IsError={result.IsError} Error={result.Error}.");
+            }
+
+            var goneDeadline = DateTime.UtcNow.AddSeconds(10);
+            while (DateTime.UtcNow < goneDeadline)
+            {
+                if (!IsOsProcessAlive(pid.Value))
+                    return;
+                Thread.Sleep(50);
+            }
+
+            throw new InvalidOperationException($"Process {pid.Value} was still alive after cancel.");
+        }
+        finally
+        {
+            if (pid is int livePid && IsOsProcessAlive(livePid))
+            {
+                try
+                {
+                    Process.GetProcessById(livePid).Kill(entireProcessTree: true);
+                }
+                catch
+                {
+                    // Best-effort test cleanup.
+                }
+            }
+
+            try
+            {
+                Directory.Delete(cwd, recursive: true);
+            }
+            catch
+            {
+                // ignore cleanup races
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteWithPathAsync_StdoutOverflow_TruncatesWithoutKilling()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var cwd = Path.Combine(Path.GetTempPath(), "dyson-shell-overflow-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(cwd);
+        try
+        {
+            var result = await DysonWindowsShell.ExecuteWithPathAsync(
+                "powershell.exe",
+                "[Console]::Out.Write(('x' * 200000)); [Console]::Error.Write(('y' * 200000))",
+                cwd,
+                timeoutMs: 60_000);
+
+            if (result.IsError)
+                throw new InvalidOperationException($"Expected success, got error: {result.Error}");
+
+            var run = result.Value;
+            if (run.TimedOut)
+                throw new InvalidOperationException("Overflow must drain, not time out.");
+            if (run.ExitCode != 0)
+            {
+                throw new InvalidOperationException(
+                    $"Expected exit 0, got {run.ExitCode}. Stderr={run.Stderr}");
+            }
+
+            if (!run.StdoutTruncated)
+                throw new InvalidOperationException("Expected StdoutTruncated.");
+            if (!run.StderrTruncated)
+                throw new InvalidOperationException("Expected StderrTruncated.");
+            if (run.Stdout.Length >= 200_000)
+                throw new InvalidOperationException($"Stdout length {run.Stdout.Length} was not truncated.");
+            if (run.Stderr.Length >= 200_000)
+                throw new InvalidOperationException($"Stderr length {run.Stderr.Length} was not truncated.");
+            if (run.Stdout.Length > DysonToolResultLimits.MaxShellStreamBytes)
+                throw new InvalidOperationException($"Stdout length {run.Stdout.Length} exceeded {DysonToolResultLimits.MaxShellStreamBytes} cap.");
+            if (run.Stderr.Length > DysonToolResultLimits.MaxShellStreamBytes)
+                throw new InvalidOperationException($"Stderr length {run.Stderr.Length} exceeded {DysonToolResultLimits.MaxShellStreamBytes} cap.");
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(cwd, recursive: true);
+            }
+            catch
+            {
+                // ignore cleanup races
+            }
+        }
+    }
+
+    private static bool IsOsProcessAlive(int processId)
+    {
+        try
+        {
+            var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
         }
     }
 }

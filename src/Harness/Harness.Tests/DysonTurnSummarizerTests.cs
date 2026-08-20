@@ -6,7 +6,7 @@ using DysonHarness;
 namespace Harness.Tests;
 
 /// <summary>
-/// ponytail: SummarizeTurns worker caps, claims/dedupe/enqueue flag, MCP skip/reason, transcript stubs (Xunit Fact).
+/// ponytail: SummarizeTurns worker caps, claims/dedupe/enqueue flag, MCP skip/reason, transcript stubs, SQLite existing-row ContextSummary upsert (Xunit Fact).
 /// </summary>
 public class DysonTurnSummarizerTests
 {
@@ -16,6 +16,7 @@ public class DysonTurnSummarizerTests
         AssertCapsAndHelpers();
         AssertSummarizeClaimsAndGate();
         AssertPersistenceRoundTrip();
+        await AssertContextSummaryPersistsOnExistingRowUpsertAsync();
         AssertTranscriptEmitsSummaryStub();
         AssertDropContextPrefersSummarize();
         await AssertSummarizeTurnsToolAsync();
@@ -83,6 +84,90 @@ public class DysonTurnSummarizerTests
         var entity = DysonTurnPersistence.ToEntity(turn, Guid.NewGuid(), sequence: 3);
         if (!string.Equals(entity.ContextSummary, "short stub", StringComparison.Ordinal))
             throw new InvalidOperationException("ToEntity must map ContextSummary.");
+    }
+
+    private static async Task AssertContextSummaryPersistsOnExistingRowUpsertAsync()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var subject = DysonTempDb.Subject("subject-a");
+        var sessions = DysonTempDb.Sessions(accessor, subject);
+
+        var created = await sessions.CreateSessionAsync(new DysonSessionCreateRequest
+        {
+            RuntimeId = 0,
+            AgentMode = DysonAgentModes.Work,
+            SystemPromptSnapshot = "root",
+            Title = "summary-upsert",
+        }).ConfigureAwait(false);
+        if (created.IsError)
+            throw new InvalidOperationException(created.Error);
+
+        var turnId = Guid.NewGuid();
+        var completedUtc = DateTime.UtcNow;
+        var seed = await sessions.UpsertTurnAsync(new DysonTurnEntity
+        {
+            Id = turnId,
+            SessionId = created.Value,
+            Sequence = 1,
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "inspect auth",
+            ToolStateJson = "{}",
+            ContextSummary = null,
+            CompletedUtc = completedUtc,
+        }).ConfigureAwait(false);
+        if (seed.IsError)
+            throw new InvalidOperationException(seed.Error);
+
+        var upsertSummary = await sessions.UpsertTurnAsync(new DysonTurnEntity
+        {
+            Id = turnId,
+            SessionId = created.Value,
+            Sequence = 1,
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "inspect auth",
+            ToolStateJson = "{}",
+            ContextSummary = "compact facts",
+            CompletedUtc = completedUtc,
+        }).ConfigureAwait(false);
+        if (upsertSummary.IsError)
+            throw new InvalidOperationException(upsertSummary.Error);
+
+        var full = await sessions.GetFullSessionAsync(created.Value).ConfigureAwait(false);
+        if (full.IsError)
+            throw new InvalidOperationException(full.Error);
+        if (full.Value.Turns.Count != 1
+            || !string.Equals(full.Value.Turns[0].ContextSummary, "compact facts", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Existing-row UpsertTurnAsync must persist ContextSummary.");
+        }
+
+        var upsertExcluded = await sessions.UpsertTurnAsync(new DysonTurnEntity
+        {
+            Id = turnId,
+            SessionId = created.Value,
+            Sequence = 1,
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "inspect auth",
+            ToolStateJson = "{}",
+            ContextSummary = "compact facts",
+            IsExcludedFromContext = true,
+            CompletedUtc = completedUtc,
+        }).ConfigureAwait(false);
+        if (upsertExcluded.IsError)
+            throw new InvalidOperationException(upsertExcluded.Error);
+
+        var afterExclude = await sessions.GetFullSessionAsync(created.Value).ConfigureAwait(false);
+        if (afterExclude.IsError)
+            throw new InvalidOperationException(afterExclude.Error);
+        if (afterExclude.Value.Turns.Count != 1
+            || !afterExclude.Value.Turns[0].IsExcludedFromContext
+            || !string.Equals(afterExclude.Value.Turns[0].ContextSummary, "compact facts", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Existing-row UpsertTurnAsync must keep ContextSummary when IsExcludedFromContext is set.");
+        }
     }
 
     private static void AssertTranscriptEmitsSummaryStub()

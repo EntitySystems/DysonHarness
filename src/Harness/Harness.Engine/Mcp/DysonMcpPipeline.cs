@@ -131,6 +131,8 @@ public sealed class DysonMcpPipeline
             $"Available shells for this session: {listed}. " +
             "You must pass shell as one of these. Prefer dedicated MCP file tools over shell when they fit.";
         description = AppendPythonNodeSnippetSentence(description, names);
+        description +=
+            " stdout/stderr are captured up to 64KiB each; overflow is truncated (command may still run until timeout).";
         if (planMode)
             description += " " + PlanShellExecuteWarning;
 
@@ -244,7 +246,8 @@ public sealed class DysonMcpPipeline
             Name = "ReadLongRunningShellTail",
             Description =
                 "Read recent output from a long-running shell. " +
-                "Optional timeoutMs > 0 waits for new output; default 0 returns immediately.",
+                "Optional timeoutMs > 0 waits for new output; default 0 returns immediately. " +
+                "maxChars defaults to 8KiB and is clamped to 64KiB.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -255,7 +258,7 @@ public sealed class DysonMcpPipeline
                     },
                     "maxChars": {
                       "type": "integer",
-                      "description": "Max characters of combined output to return (default 8192)."
+                      "description": "Max characters of combined output to return (default 8KiB, clamped to 64KiB)."
                     },
                     "timeoutMs": {
                       "type": "integer",
@@ -359,7 +362,7 @@ public sealed class DysonMcpPipeline
                     },
                     "includeTailMaxChars": {
                       "type": "integer",
-                      "description": "Max characters of auto-read tail for the ShellExited Instruction (default 8000)."
+                      "description": "Max characters of auto-read tail for the ShellExited Instruction (default 8000, clamped to 64KiB)."
                     }
                   },
                   "required": ["longRunningShellId"]
@@ -1185,7 +1188,8 @@ public sealed class DysonMcpPipeline
             Name = "ListTodos",
             Description =
                 "List todos for the current session (JSON array). " +
-                "Each session (root or subagent) owns its own list.",
+                "Each session (root or subagent) owns its own list. " +
+                "Call this before SubmitSubagentReport to check for pending or ongoing work.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1371,9 +1375,10 @@ public sealed class DysonMcpPipeline
                 "Notifies the parent with the summary so the host can queue a parent turn. " +
                 "All session todos must be Complete before a successful (completed) report; " +
                 "failed reports may leave todos incomplete. " +
+                "Before submitting: call ListTodos first to see if this session has any pending work; " +
+                "if ListTodos shows pending or ongoing items, complete those via UpdateTodo first, then submit. " +
                 "A successful submit ends the current turn; further SubmitSubagentReport calls fail " +
-                "(except a completed handoff may supersede a prior harness Failed). " +
-                "Do not use from a root Work session unless debugging.",
+                "(except a completed handoff may supersede a prior harness Failed).",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1782,14 +1787,16 @@ public sealed class DysonMcpPipeline
             Description =
                 "Read workspace file contents by path. Prefer this over shell for reading files. " +
                 "Each line is formatted as lineNumber|content (e.g. '42|    foo();'). " +
-                "When copying into WriteFile old_text/new_text, use only the content after the first '|' — never include the line-number prefix.",
+                "When copying into WriteFile old_text/new_text, use only the content after the first '|' — never include the line-number prefix. " +
+                "Capped at 32KiB (~<20K tokens); larger slices error (IsError) with instruction to pass offset+limit or Grep first — file body is not returned. " +
+                "offset is 1-based; negative = tail (e.g. -80 = last 80 lines). Per-line clip is 8KiB. Binary/image files error — use LoadBinary.",
             InputSchemaJson = """
                 {
                   "type": "object",
                   "properties": {
                     "path": { "type": "string", "description": "Workspace-relative or absolute file path." },
-                    "offset": { "type": "integer", "description": "Optional 1-based start line." },
-                    "limit": { "type": "integer", "description": "Optional max number of lines to return." }
+                    "offset": { "type": "integer", "description": "1-based start line; negative = tail from EOF (e.g. -80 = last 80 lines)." },
+                    "limit": { "type": "integer", "description": "Max lines to return. Omit only for small files; over 32KiB the tool errors — use limit or Grep." }
                   },
                   "required": ["path"]
                 }

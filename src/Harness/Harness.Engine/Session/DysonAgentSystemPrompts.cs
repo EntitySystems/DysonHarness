@@ -39,7 +39,7 @@ public static class DysonAgentSystemPrompts
         - After ConfirmTaskComplete, the harness schedules a final ReportSummary turn; write a brief handoff summary for a parent agent (outcome, key files/changes, verification, residual risks). Prefer writing the summary in your reply; avoid further work tools unless essential.
 
         Tool-round budget and rethink:
-        - Each turn has a tool-round budget (35 by default; Explore mode 120). Hitting it soft-pauses the turn.
+        - Each turn has a tool-round budget (50 by default; Explore mode 120). Hitting it soft-pauses the turn.
         - Non-Explore: schedules a RethinkToolUsage turn. On rethink, use readonly tools only when a peek is needed; if justified you may StartSubagent Explore and must WaitForSubagent until it finishes this turn before resume vs stop. Call ResumeCurrentTask if continuing is justified, or reply with text only if stuck (do not resume a doom loop).
         - Explore sessions do not get rethink turns: hitting the budget yields one final no-tools recap reply (findings may be incomplete).
         - WaitForSeconds (1–300) blocks until the wait finishes; use for short deliberate delays.
@@ -117,7 +117,7 @@ public static class DysonAgentSystemPrompts
         - Prefer breadth-first discovery, then deepen on the hottest paths.
         - Call out uncertainty explicitly when evidence is incomplete.
         - Never spawn subagents (StartSubagent is forbidden in Explore).
-        - Mark all session todos Complete via UpdateTodo before SubmitSubagentReport (`completed`); if blocked, report `failed` without requiring todo completion.
+        - Call ListTodos first; mark all session todos Complete via UpdateTodo before SubmitSubagentReport (`completed`); if blocked, report `failed` without requiring todo completion.
         - SubmitSubagentReport is mandatory: do not end a turn with findings-only text (including an H1 + prose) as if the session is finished.
         - When investigation is done — or blocked — call SubmitSubagentReport with structured findings (`completed` or `failed`) so the parent can continue.
         - Blocked or incomplete investigation: SubmitSubagentReport with status `failed` and a concrete failure reason (missing data, access blocker, tool error) — do not silently abandon, and do not retry SubmitSubagentReport after a successful submit.
@@ -142,7 +142,7 @@ public static class DysonAgentSystemPrompts
         - After a tool failure: diagnose, retry or take an alternate approach, and keep working until the task is done or truly blocked. Do not stop after a single failed tool or wait for the user to say “resume”.
         - On success: verify as required, update todos, then SubmitSubagentReport with status completed and a crisp handoff the parent can consume without re-deriving your steps.
         - Prefer minimal output: completed work, files touched, verification, and any residual risks.
-        - Mark all session todos Complete via UpdateTodo before SubmitSubagentReport (`completed`); if blocked, report `failed` without requiring todo completion.
+        - Call ListTodos first; mark all session todos Complete via UpdateTodo before SubmitSubagentReport (`completed`); if blocked, report `failed` without requiring todo completion.
         """;
 
     /// <summary>
@@ -153,6 +153,7 @@ public static class DysonAgentSystemPrompts
         Harness mandate (first turn only):
         - Plain text (including an H1-only reply) does not finish this subagent.
         - Always end by calling SubmitSubagentReport with status completed or failed and a concrete summary.
+        - Before a successful (completed) SubmitSubagentReport: call ListTodos; if any todos are pending or ongoing, UpdateTodo them to complete first. Failed reports may leave todos incomplete.
         - A completion report may use status failed with a concrete failure reason in the summary (e.g. missing data, blocker, agent/tool error) — that is a valid finish; the parent continues from that report.
         - The parent WaitForSubagent / notification path only continues on SubmitSubagentReport (or stop/fail).
         """;

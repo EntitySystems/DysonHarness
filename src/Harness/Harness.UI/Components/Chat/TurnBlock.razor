@@ -377,7 +377,7 @@
     /// <summary>Toggles expand/collapse from the turn header.</summary>
     [Parameter] public EventCallback OnToggleExpand { get; set; }
 
-    /// <summary>Cancels the in-flight prompt (wired only for the latest busy turn).</summary>
+    /// <summary>Halts the focused session tree (wired for the latest live turn).</summary>
     [Parameter] public EventCallback OnCancel { get; set; }
 
     /// <summary>Re-sends this turn's instruction as a new prompt when idle.</summary>

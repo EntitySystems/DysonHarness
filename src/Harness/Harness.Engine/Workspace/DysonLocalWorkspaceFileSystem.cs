@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace DysonHarness;
 
 /// <summary>
@@ -201,6 +203,120 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
         catch (Exception ex)
         {
             return Result<byte[], string>.AsError($"Failed to read file: {ex.Message}");
+        }
+    }
+
+    public Result<DysonWorkspaceLineSlice, string> ReadLineSlice(
+        string path,
+        int startLine,
+        int? maxLines,
+        int maxChars,
+        int maxLineChars)
+    {
+        if (maxLineChars < 1)
+            return Result<DysonWorkspaceLineSlice, string>.AsError("maxLineChars must be at least 1.");
+        if (maxChars < 1)
+            return Result<DysonWorkspaceLineSlice, string>.AsError("maxChars must be at least 1.");
+        if (maxLines is < 1)
+            return Result<DysonWorkspaceLineSlice, string>.AsError("maxLines must be at least 1 when set.");
+
+        var resolved = ResolvePath(path);
+        if (resolved.IsError)
+            return Result<DysonWorkspaceLineSlice, string>.AsError(resolved.Error);
+
+        try
+        {
+            if (!File.Exists(resolved.Value))
+                return Result<DysonWorkspaceLineSlice, string>.AsError($"File not found: {path}");
+
+            using var stream = new FileStream(
+                resolved.Value,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 4096,
+                FileOptions.SequentialScan);
+            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            var fileLength = stream.Length;
+            var tailed = startLine < 0;
+            var lines = new List<DysonWorkspaceLine>();
+            var rawChars = 0;
+            var truncated = false;
+            var lineNumber = 0;
+
+            if (tailed)
+            {
+                var windowSize = startLine <= -int.MaxValue ? int.MaxValue : -startLine;
+                var window = new Queue<DysonWorkspaceLine>();
+                while (TryReadBoundedLine(reader, maxLineChars, capture: true, out var text, out var clipped))
+                {
+                    lineNumber++;
+                    if (window.Count == windowSize)
+                        window.Dequeue();
+                    window.Enqueue(new DysonWorkspaceLine(lineNumber, text, clipped));
+                }
+
+                foreach (var line in window)
+                {
+                    if (maxLines is int ml && lines.Count >= ml)
+                    {
+                        truncated = true;
+                        break;
+                    }
+
+                    if (rawChars + line.Text.Length > maxChars)
+                    {
+                        if (lines.Count == 0)
+                            lines.Add(line);
+                        truncated = true;
+                        break;
+                    }
+
+                    lines.Add(line);
+                    rawChars += line.Text.Length;
+                }
+            }
+            else
+            {
+                var first = startLine == 0 ? 1 : startLine;
+                while (TryReadBoundedLine(
+                    reader,
+                    maxLineChars,
+                    capture: lineNumber + 1 >= first,
+                    out var text,
+                    out var clipped))
+                {
+                    lineNumber++;
+                    if (lineNumber < first)
+                        continue;
+
+                    if (rawChars + text.Length > maxChars)
+                    {
+                        if (lines.Count == 0)
+                            lines.Add(new DysonWorkspaceLine(lineNumber, text, clipped));
+                        truncated = true;
+                        break;
+                    }
+
+                    lines.Add(new DysonWorkspaceLine(lineNumber, text, clipped));
+                    rawChars += text.Length;
+
+                    if (maxLines is int ml && lines.Count >= ml)
+                    {
+                        truncated = reader.Peek() >= 0;
+                        break;
+                    }
+                }
+            }
+
+            var start = lines.Count == 0 ? 0 : lines[0].LineNumber;
+            var next = lines.Count == 0 ? lineNumber + 1 : lines[^1].LineNumber + 1;
+            return Result<DysonWorkspaceLineSlice, string>.AsValue(
+                new DysonWorkspaceLineSlice(lines, start, next, truncated, fileLength, tailed));
+        }
+        catch (Exception ex)
+        {
+            return Result<DysonWorkspaceLineSlice, string>.AsError($"Failed to read file: {ex.Message}");
         }
     }
 
@@ -478,5 +594,70 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
             return true;
 
         return full.StartsWith(root, PathComparison);
+    }
+
+    /// <returns>false when EOF is hit at the start of a line (no line to emit).</returns>
+    private static bool TryReadBoundedLine(
+        StreamReader reader,
+        int maxLineChars,
+        bool capture,
+        out string text,
+        out bool clipped)
+    {
+        text = "";
+        clipped = false;
+        StringBuilder? sb = capture ? new StringBuilder() : null;
+        var count = 0;
+
+        while (count < maxLineChars)
+        {
+            var c = reader.Read();
+            if (c < 0)
+            {
+                if (count == 0)
+                    return false;
+                if (sb is not null)
+                    text = ToLineText(sb);
+                return true;
+            }
+
+            if (c == '\n')
+            {
+                if (sb is not null)
+                    text = ToLineText(sb);
+                return true;
+            }
+
+            sb?.Append((char)c);
+            count++;
+        }
+
+        var next = reader.Peek();
+        if (next == '\n')
+        {
+            reader.Read();
+        }
+        else if (next >= 0)
+        {
+            clipped = true;
+            while (true)
+            {
+                var c = reader.Read();
+                if (c < 0 || c == '\n')
+                    break;
+            }
+        }
+
+        if (sb is not null)
+            text = ToLineText(sb);
+        return true;
+    }
+
+    private static string ToLineText(StringBuilder sb)
+    {
+        var n = sb.Length;
+        if (n > 0 && sb[n - 1] == '\r')
+            n--;
+        return sb.ToString(0, n);
     }
 }

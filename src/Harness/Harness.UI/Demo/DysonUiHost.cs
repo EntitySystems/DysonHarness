@@ -50,6 +50,11 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly Dictionary<Guid, List<QueuedPromptEntry>> _promptQueues = new();
     private readonly object _promptQueueGate = new();
     private readonly ConcurrentDictionary<Guid, ConcurrentQueue<DysonAgentInterrupt>> _pendingReportsByParent = new();
+    /// <summary>
+    /// Per-session user-stop generation. Bumped by <see cref="StopAllExecution"/> before cancel;
+    /// drains/follow-ups no-op while present. Cleared only on the next user <see cref="PromptAsync"/>.
+    /// </summary>
+    private readonly ConcurrentDictionary<Guid, int> _userStopGeneration = new();
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _autoTurnGates = new();
     /// <summary>Serializes root task-lifecycle actions while a turn completion triggers its event.</summary>
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _taskLifecycleGates = new();
@@ -376,7 +381,11 @@ public sealed class DysonUiHost : IAsyncDisposable
             _runtimeOwnedSessionIds[session.PersistenceId] = 0;
     }
 
-    /// <summary>True when that session (not necessarily focused) has an in-flight host or runtime prompt.</summary>
+    /// <summary>
+    /// True when that session (not necessarily focused) has an in-flight host or runtime prompt,
+    /// or an active background run (child <c>KickOffChildPrompt</c> / <c>runCts</c>).
+    /// Does not fold descendants into the parent id — use <see cref="HasActiveSubagents(Guid)"/>.
+    /// </summary>
     public bool IsSessionBusy(Guid sessionId)
     {
         if (sessionId == Guid.Empty)
@@ -389,7 +398,11 @@ public sealed class DysonUiHost : IAsyncDisposable
             return true;
         }
 
-        return _busySessions.ContainsKey(sessionId);
+        if (_busySessions.ContainsKey(sessionId))
+            return true;
+
+        return TryResolveLiveSession(sessionId, out var session)
+            && session.HasActiveBackgroundRun;
     }
 
     /// <summary>Clears <see cref="LastError"/> and notifies listeners (Home toast dismiss / expiry).</summary>
@@ -437,7 +450,10 @@ public sealed class DysonUiHost : IAsyncDisposable
     public int? SessionLastReportedPromptTokens =>
         _session?.LastReportedPromptTokens;
 
-    /// <summary>True when the focused session has an in-flight host or runtime prompt.</summary>
+    /// <summary>
+    /// True when the focused session has an in-flight host or runtime prompt,
+    /// or an active background run.
+    /// </summary>
     public bool IsBusy =>
         ActiveSessionId is Guid id && IsSessionBusy(id);
 
@@ -3115,7 +3131,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     /// <summary>
     /// Live card snapshot for a child persistence id. Null when the child is not in the host registry.
-    /// Child status is persisted by the engine (<c>UpdateSessionMetaAsync</c>) on report/stop.
+    /// Child status is persisted by MCP StopSubagent / SubmitSubagentReport, and by
+    /// <see cref="StopAllExecution"/> for user halt (engine <c>StopSubagentAsync</c> does not persist).
     /// </summary>
     public DysonSubagentCardState? GetSubagentCardState(Guid persistenceId)
     {
@@ -3171,22 +3188,38 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
-    /// Cancels the focused session's in-flight prompt, clears its prompt queue, and recursively
-    /// stops active subagents (plus any host prompt CTS held for descendant persistence ids).
+    /// Hard-halts the focused session tree: in-flight prompt, queued prompts, auto-turns,
+    /// and descendant subagents. Does not abort workdir long-running shells (header Force stop).
     /// </summary>
-    public void StopAllExecution()
+    public async Task StopAllExecution()
     {
         if (ActiveSessionId is not Guid id)
             return;
 
+        var focused = _session;
+        MarkUserStopped(id);
+        if (focused is not null)
+            MarkUserStoppedTree(focused);
+
         // Clear queue before cancel so PromptOnSession finally → DrainQueuedPrompts finds nothing.
         // Stop-all is user discard (runtime DiscardQueuedPrompts); host dispose must not do this.
         ClearPromptQueue(id);
+        DiscardPendingReports(id);
+        CancelTaskLifecycleEvaluate(id);
         CancelPrompt();
 
-        if (_session is not null)
-            StopAllDescendants(_session);
+        if (focused is { Parent: not null, Id: > 0 } child)
+        {
+            var stopped = await child.Parent.StopSubagentAsync(child.Id, "Stopped by user.")
+                .ConfigureAwait(false);
+            if (!stopped.IsError)
+                await PersistStoppedSessionAsync(child).ConfigureAwait(false);
+        }
 
+        if (focused is not null)
+            await StopAllDescendantsAsync(focused).ConfigureAwait(false);
+
+        DiscardPendingReports(id);
         Notify();
     }
 
@@ -3238,12 +3271,12 @@ public sealed class DysonUiHost : IAsyncDisposable
             _promptQueues.Remove(sessionId);
     }
 
-    private void StopAllDescendants(DysonAgentSession parent)
+    private async Task StopAllDescendantsAsync(DysonAgentSession parent)
     {
         // Snapshot: StopSubagentAsync may mutate parent maps / terminal state.
         foreach (var child in parent.SubSessions.ToArray())
         {
-            StopAllDescendants(child);
+            await StopAllDescendantsAsync(child).ConfigureAwait(false);
 
             if (child.PersistenceId != Guid.Empty)
             {
@@ -3251,11 +3284,47 @@ public sealed class DysonUiHost : IAsyncDisposable
                     runtime.CancelPrompt(child.PersistenceId);
                 else if (_promptCtsBySession.TryGetValue(child.PersistenceId, out var cts))
                     cts.Cancel();
+
+                CancelTaskLifecycleEvaluate(child.PersistenceId);
+                DiscardPendingReports(child.PersistenceId);
             }
 
-            if (child.Id > 0)
-                _ = parent.StopSubagentAsync(child.Id, reason: "Stopped by user.");
+            if (child.Id <= 0)
+                continue;
+
+            var stopped = await parent.StopSubagentAsync(child.Id, reason: "Stopped by user.")
+                .ConfigureAwait(false);
+            if (!stopped.IsError)
+                await PersistStoppedSessionAsync(child).ConfigureAwait(false);
         }
+    }
+
+    private void MarkUserStopped(Guid sessionId)
+    {
+        if (sessionId == Guid.Empty)
+            return;
+        _userStopGeneration.AddOrUpdate(sessionId, 1, static (_, n) => n + 1);
+    }
+
+    private void MarkUserStoppedTree(DysonAgentSession session)
+    {
+        if (session.PersistenceId != Guid.Empty)
+            MarkUserStopped(session.PersistenceId);
+        foreach (var child in session.SubSessions)
+            MarkUserStoppedTree(child);
+    }
+
+    private bool IsUserStopped(Guid sessionId) =>
+        sessionId != Guid.Empty && _userStopGeneration.ContainsKey(sessionId);
+
+    private void ClearUserStop(Guid sessionId) =>
+        _userStopGeneration.TryRemove(sessionId, out _);
+
+    private void DiscardPendingReports(Guid sessionId)
+    {
+        if (sessionId == Guid.Empty)
+            return;
+        _pendingReportsByParent.TryRemove(sessionId, out _);
     }
 
     public async Task<VoidResult<string>> PromptAsync(
@@ -3324,6 +3393,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         var built = turnBuild.Value;
         var sessionId = session.PersistenceId;
+        // User PromptAsync is the only path that lifts a StopAllExecution drain suppress.
+        ClearUserStop(sessionId);
         // Enqueue while busy or mid-summarize (do not set _busySessions for summarize — Send stays enabled).
         if (IsSessionBusy(sessionId) || session.HasAnySummarizingTurn)
         {
@@ -4322,6 +4393,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private void UnregisterSession(Guid persistenceId)
     {
         _pendingReportsByParent.TryRemove(persistenceId, out _);
+        _userStopGeneration.TryRemove(persistenceId, out _);
         _busySessions.TryRemove(persistenceId, out _);
         _pendingSessionModelSlugIds.TryRemove(persistenceId, out _);
         _parentSessionIdByChild.TryRemove(persistenceId, out _);
@@ -4399,6 +4471,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _sessionsById.Clear();
         _parentSessionIdByChild.Clear();
         _pendingReportsByParent.Clear();
+        _userStopGeneration.Clear();
         _busySessions.Clear();
         _pendingSessionModelSlugIds.Clear();
         _lastTaskLifecycleActionBySession.Clear();
@@ -4688,8 +4761,13 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private void EvaluateTaskLifecycle(DysonAgentSession session)
     {
-        if (session.Parent is not null || session.PersistenceId == Guid.Empty || session.IsTerminal)
+        if (session.Parent is not null
+            || session.PersistenceId == Guid.Empty
+            || session.IsTerminal
+            || IsUserStopped(session.PersistenceId))
+        {
             return;
+        }
 
         CancelTaskLifecycleEvaluate(session.PersistenceId);
         var cts = new CancellationTokenSource();
@@ -4724,7 +4802,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return;
             if (!_sessionsById.TryGetValue(session.PersistenceId, out var live)
                 || live.Parent is not null
-                || live.IsTerminal)
+                || live.IsTerminal
+                || IsUserStopped(live.PersistenceId))
             {
                 return;
             }
@@ -4753,8 +4832,13 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonAgentSession session,
         DysonTaskLifecycleKind kind)
     {
-        if (session.Parent is not null || session.PersistenceId == Guid.Empty || session.IsTerminal)
+        if (session.Parent is not null
+            || session.PersistenceId == Guid.Empty
+            || session.IsTerminal
+            || IsUserStopped(session.PersistenceId))
+        {
             return;
+        }
 
         var sessionId = session.PersistenceId;
         var gate = _taskLifecycleGates.GetOrAdd(sessionId, _ => new SemaphoreSlim(1, 1));
@@ -5297,6 +5381,12 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private async Task DrainAutoTurnsAsync(Guid parentPersistenceId)
     {
+        if (IsUserStopped(parentPersistenceId))
+        {
+            DiscardPendingReports(parentPersistenceId);
+            return;
+        }
+
         var gate = _autoTurnGates.GetOrAdd(parentPersistenceId, _ => new SemaphoreSlim(1, 1));
         if (!await gate.WaitAsync(0).ConfigureAwait(false))
             return;
@@ -5306,6 +5396,13 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             while (true)
             {
+                if (IsUserStopped(parentPersistenceId))
+                {
+                    DiscardPendingReports(parentPersistenceId);
+                    deferredCompletions.Clear();
+                    break;
+                }
+
                 if (!_pendingReportsByParent.TryGetValue(parentPersistenceId, out var queue)
                     || !queue.TryDequeue(out var interrupt))
                 {
@@ -5390,6 +5487,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         finally
         {
             if (deferredCompletions.Count > 0
+                && !IsUserStopped(parentPersistenceId)
                 && _pendingReportsByParent.TryGetValue(parentPersistenceId, out var requeue))
             {
                 foreach (var item in deferredCompletions)
@@ -5397,6 +5495,12 @@ public sealed class DysonUiHost : IAsyncDisposable
             }
 
             gate.Release();
+        }
+
+        if (IsUserStopped(parentPersistenceId))
+        {
+            DiscardPendingReports(parentPersistenceId);
+            return;
         }
 
         // Race: interrupt may enqueue after last empty check while gate was held.
@@ -5465,6 +5569,9 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>("Session is not persisted.");
 
         var sessionId = session.PersistenceId;
+        if (IsUserStopped(sessionId))
+            return new VoidResult<string>("Prompt was cancelled.");
+
         if (IsRuntimeOwned(session) && TryGetAttachedRuntime(out var runtime))
             return await ExecuteRuntimePromptOnSessionAsync(runtime, session, run).ConfigureAwait(false);
 
@@ -5557,6 +5664,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         Func<DysonAgentSession, CancellationToken, Task<VoidResult<string>>> run)
     {
         var sessionId = session.PersistenceId;
+        if (IsUserStopped(sessionId))
+            return new VoidResult<string>("Prompt was cancelled.");
+
         Notify();
         try
         {
@@ -5596,8 +5706,13 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private void AdoptRuntimeOwnedFollowUp(DysonAgentSession session)
     {
-        if (_disposed || !IsRuntimeOwned(session) || session.PersistenceId == Guid.Empty)
+        if (_disposed
+            || !IsRuntimeOwned(session)
+            || session.PersistenceId == Guid.Empty
+            || IsUserStopped(session.PersistenceId))
+        {
             return;
+        }
 
         EnqueueHostFollowUpWork(session);
         _ = DrainAutoTurnsAsync(session.PersistenceId);
@@ -5610,7 +5725,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
 
         var sessionId = session.PersistenceId;
-        if (sessionId == Guid.Empty)
+        if (sessionId == Guid.Empty || IsUserStopped(sessionId))
             return;
 
         while (session.TryDequeuePendingTurn(out var pending))
@@ -5839,7 +5954,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private async Task DrainQueuedPromptsAsync(Guid sessionId)
     {
         // Runtime-owned sessions dequeue via TryDequeuePrompt → runtime.TryDequeuePrompt.
-        if (_disposed || IsSessionBusy(sessionId))
+        if (_disposed || IsUserStopped(sessionId) || IsSessionBusy(sessionId))
             return;
 
         if (!_sessionsById.TryGetValue(sessionId, out var session))
@@ -5911,9 +6026,34 @@ public sealed class DysonUiHost : IAsyncDisposable
             .ConfigureAwait(false);
     }
 
+    private async Task PersistStoppedSessionAsync(DysonAgentSession session)
+    {
+        if (session.PersistenceId == Guid.Empty)
+            return;
+
+        _ = await PersistSessionStatusAsync(
+                session,
+                DysonSessionStatus.Stopped,
+                "Stopped by user.",
+                CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
     private async Task<VoidResult<string>> PersistRootTerminalAsync(
         DysonAgentSession session,
         string summary,
+        CancellationToken cancellationToken) =>
+        await PersistSessionStatusAsync(
+                session,
+                DysonSessionStatus.Completed,
+                summary,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+    private async Task<VoidResult<string>> PersistSessionStatusAsync(
+        DysonAgentSession session,
+        DysonSessionStatus status,
+        string? reason,
         CancellationToken cancellationToken)
     {
         if (session.PersistenceId == Guid.Empty)
@@ -5924,7 +6064,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     new DysonSessionMetaUpdate
                     {
                         SessionId = session.PersistenceId,
-                        Status = DysonSessionStatus.Completed,
+                        Status = status,
                     },
                     cancellationToken),
                 cancellationToken)
@@ -5935,7 +6075,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         var statusLog = DysonSessionLogPayload.CreateEntry(
             session.PersistenceId,
             DysonSessionLogKind.SessionStatusChanged,
-            new DysonSessionLogSessionStatusChanged(DysonSessionStatus.Completed, summary));
+            new DysonSessionLogSessionStatusChanged(status, reason));
 
         return await PersistAsync(
                 () => _sessions.AppendLogAsync(statusLog, cancellationToken),

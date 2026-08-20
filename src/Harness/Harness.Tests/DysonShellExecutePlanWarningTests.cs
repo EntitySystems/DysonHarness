@@ -133,7 +133,8 @@ public class DysonShellExecutePlanWarningTests
                 "Run a command in the session work directory. " +
                 $"Available shells for this session: {listed}. " +
                 "You must pass shell as one of these. Prefer dedicated MCP file tools over shell when they fit. " +
-                snippetSentences;
+                snippetSentences +
+                " stdout/stderr are captured up to 64KiB each; overflow is truncated (command may still run until timeout).";
             var startExpected =
                 "Recommended for E2E test runs, large application builds, and keeping development servers running. " +
                 "Start a background long-running shell in the session work directory. " +
