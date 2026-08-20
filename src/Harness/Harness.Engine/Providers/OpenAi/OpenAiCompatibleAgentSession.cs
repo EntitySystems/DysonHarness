@@ -6,7 +6,7 @@ namespace DysonHarness;
 public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 {
     /// <summary>Default tool-round budget per turn (non-Explore modes).</summary>
-    public const int MaxToolRounds = 35;
+    public const int MaxToolRounds = 50;
 
     /// <summary>Explore-mode tool-round budget per turn.</summary>
     public const int MaxToolRoundsExplore = 120;
