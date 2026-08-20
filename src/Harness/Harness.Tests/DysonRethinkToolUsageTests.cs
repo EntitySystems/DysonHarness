@@ -94,18 +94,18 @@ public class DysonRethinkToolUsageTests
 
     private static void AssertMaxToolRounds()
     {
-        if (OpenAiCompatibleAgentSession.MaxToolRounds != 35
+        if (OpenAiCompatibleAgentSession.MaxToolRounds != 50
             || OpenAiCompatibleAgentSession.MaxToolRoundsExplore != 120)
         {
-            throw new InvalidOperationException("MaxToolRounds must be 35; Explore 120.");
+            throw new InvalidOperationException("MaxToolRounds must be 50; Explore 120.");
         }
 
-        if (OpenAiCompatibleAgentSession.ResolveMaxToolRounds(DysonAgentModes.Work) != 35
-            || OpenAiCompatibleAgentSession.ResolveMaxToolRounds(DysonAgentModes.Ask) != 35
+        if (OpenAiCompatibleAgentSession.ResolveMaxToolRounds(DysonAgentModes.Work) != 50
+            || OpenAiCompatibleAgentSession.ResolveMaxToolRounds(DysonAgentModes.Ask) != 50
             || OpenAiCompatibleAgentSession.ResolveMaxToolRounds(DysonAgentModes.Explore) != 120)
         {
             throw new InvalidOperationException(
-                "ResolveMaxToolRounds: Explore=120, non-Explore=35.");
+                "ResolveMaxToolRounds: Explore=120, non-Explore=50.");
         }
     }
 
@@ -120,7 +120,8 @@ public class DysonRethinkToolUsageTests
         };
         session.AddTurnForTest(turn);
 
-        var result = OpenAiCompatibleAgentSession.SoftPauseAfterToolLoopExhaustion(session, turn, 35);
+        var result = OpenAiCompatibleAgentSession.SoftPauseAfterToolLoopExhaustion(
+            session, turn, OpenAiCompatibleAgentSession.MaxToolRounds);
         if (result.IsError)
             throw new InvalidOperationException("Soft-pause must not return an error string.");
 
@@ -141,7 +142,8 @@ public class DysonRethinkToolUsageTests
         var turn = DysonRethinkToolUsageFlow.CreateTurn();
         session.AddTurnForTest(turn);
 
-        var result = OpenAiCompatibleAgentSession.SoftPauseAfterToolLoopExhaustion(session, turn, 35);
+        var result = OpenAiCompatibleAgentSession.SoftPauseAfterToolLoopExhaustion(
+            session, turn, OpenAiCompatibleAgentSession.MaxToolRounds);
         if (result.IsError)
             throw new InvalidOperationException("Rethink soft-pause must not return an error string.");
 
