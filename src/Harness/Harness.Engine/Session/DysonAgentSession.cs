@@ -57,6 +57,7 @@ public abstract class DysonAgentSession
     protected void ConfigureRootInterAgentTools()
     {
         McpPipeline.ConfigureInterAgentTools(0);
+        DysonSessionToolsetBuilder.OmitSubmitSubagentReport(McpPipeline);
         DysonSessionToolsetBuilder.ReapplyDisabledTools(
             McpPipeline, Config, Mode, ResolveModelSlugId());
     }

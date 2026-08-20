@@ -7,7 +7,8 @@ public static class DysonSessionToolsetBuilder
 {
     /// <summary>
     /// Full catalog for a live session: CreateDefault, shell/Plan gate, inter-agent depth,
-    /// optional subagent completion omit, then mode denylist.
+    /// root vs child completion-tool omit (children drop CompleteTask; roots drop
+    /// SubmitSubagentReport), then mode denylist.
     /// </summary>
     public static DysonMcpPipeline Build(
         DysonAgentSessionConfig config,
@@ -30,6 +31,8 @@ public static class DysonSessionToolsetBuilder
 
         if (omitRootTaskCompletionTools)
             OmitRootTaskCompletionTools(pipeline);
+        else
+            OmitSubmitSubagentReport(pipeline);
 
         // Dynamic sources merge after structural gates. User custom MCP wins any collision; managed
         // plugin tools may never replace built-ins or custom tools. Denylist remains authoritative.
@@ -138,5 +141,11 @@ public static class DysonSessionToolsetBuilder
         pipeline.Tools.Remove("CompleteTask");
         pipeline.Tools.Remove("ConfirmTaskComplete");
         pipeline.Tools.Remove("ContinueWork");
+    }
+
+    public static void OmitSubmitSubagentReport(DysonMcpPipeline pipeline)
+    {
+        ArgumentNullException.ThrowIfNull(pipeline);
+        pipeline.Tools.Remove("SubmitSubagentReport");
     }
 }
