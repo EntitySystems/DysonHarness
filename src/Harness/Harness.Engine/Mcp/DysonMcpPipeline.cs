@@ -593,7 +593,8 @@ public sealed class DysonMcpPipeline
             Description =
                 "Parent → child: inject a prompt. Default (interruptSubagent=false) queues for the child’s next turn. " +
                 "interruptSubagent=true cancels the in-flight child turn (and any pending parent-event wait) and runs the payload immediately. " +
-                "Fails without interrupt when the child is awaiting a parent-event reply. Returns quickly (queued vs interrupted).",
+                "Fails without interrupt when the child is awaiting a parent-event reply. Returns quickly (queued vs interrupted). " +
+                "Injecting into a child that already submitted a report reopens it (`Active`) so SubmitSubagentReport works again.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1377,8 +1378,9 @@ public sealed class DysonMcpPipeline
                 "failed reports may leave todos incomplete. " +
                 "Before submitting: call ListTodos first to see if this session has any pending work; " +
                 "if ListTodos shows pending or ongoing items, complete those via UpdateTodo first, then submit. " +
-                "A successful submit ends the current turn; further SubmitSubagentReport calls fail " +
-                "(except a completed handoff may supersede a prior harness Failed).",
+                "A successful submit ends the current turn; further SubmitSubagentReport calls fail until the parent injects a new assignment via TriggerSubagentEvent " +
+                "(that reopens the child so a new report cycle can run; except a completed handoff may supersede a prior harness Failed). " +
+                "If submit fails because a report already landed, call TriggerParentEvent (mid-run parent coordination, not a new report cycle).",
             InputSchemaJson = """
                 {
                   "type": "object",

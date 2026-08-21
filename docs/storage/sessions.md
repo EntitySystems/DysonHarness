@@ -20,7 +20,7 @@ Contracts: `IDysonSessionRepository` in `Harness.Abstractions`. Implementation: 
 | `MaxTargetContextTokens` | Session max target context; null = inherit slug `DefaultMaxTargetContextTokens` / harness 100K; `0` = Off (no DropContext inject) |
 | `WorkDirectoryId` | Guid? FK to `work_directories` (`SetNull` on delete; required for new sessions) |
 | `McpAccessMode` | enum |
-| `Status` | `Active`=0 / `Completed`=1 / `Stopped`=2 / `Failed`=3 / `Interrupted`=4 (append-only; child terminal after process-restart recovery; roots stay `Active`) |
+| `Status` | `Active`=0 / `Completed`=1 / `Stopped`=2 / `Failed`=3 / `Interrupted`=4 (child terminal after process-restart recovery; roots stay `Active`; `Completed`/`Failed` children may return to `Active` after parent `TriggerSubagentEvent`) |
 | `Title` | Optional UI title (agent `RenameSession` / first prompt); mirrored live as `DysonAgentSession.DisplayTitle` |
 | `SystemPromptSnapshot` | Prompt at create time; updated on mid-session `ApplyAgentMode` |
 | `CreatedUtc`, `UpdatedUtc`, `LastActivityUtc` | `DateTime` UTC |
@@ -167,7 +167,7 @@ The sweep is idempotent. Counts land on `DysonSessionRecoveryReport` (`Unfinishe
 
 ## Subagents
 
-Parent FK (`ParentSessionId`) links the graph. `CreateChildAsync` persists the child with `ParentSessionId = parent.PersistenceId`, allocates runtime id ≥ 1, optionally seeds the child todo list (`ReplaceTodosAsync` / in-memory hydrate from optional `initialTodos`), and starts a background prompt. Child status updates via `UpdateSessionMetaAsync` on `SubmitSubagentReport` / stop / fail.
+Parent FK (`ParentSessionId`) links the graph. `CreateChildAsync` persists the child with `ParentSessionId = parent.PersistenceId`, allocates runtime id ≥ 1, optionally seeds the child todo list (`ReplaceTodosAsync` / in-memory hydrate from optional `initialTodos`), and starts a background prompt. Child status updates via `UpdateSessionMetaAsync` on `SubmitSubagentReport` / stop / fail. After a parent `TriggerSubagentEvent`, a `Completed` or `Failed` child can return to `Active` (reopen; persist via `UpdateSessionMetaAsync` + `SessionStatusChanged`).
 
 Subagents are **session-owned**: the live graph (`SubSessions` / `SubagentsById`) is rebuilt from DB children on parent load (not only from the spawning turn’s tool cards). `ListChildSessionsAsync` returns direct children ordered by `RuntimeId`. Grandchildren hydrate when that child session is opened.
 
