@@ -197,6 +197,22 @@ public class OpenRouterManagedInferenceProviderTests
     }
 
     [Fact]
+    public void ResolveNextUrl_joins_root_relative_to_https_authority()
+    {
+        const string current = "https://openrouter.ai/api/v1/models?output_modalities=text";
+        Assert.Equal(
+            "https://openrouter.ai/api/v1/models?output_modalities=text&after=page2",
+            OpenRouterManagedInferenceProvider.ResolveNextUrl(
+                current,
+                "/api/v1/models?output_modalities=text&after=page2"));
+        Assert.Equal(
+            "https://openrouter.ai/api/v1/models?after=x",
+            OpenRouterManagedInferenceProvider.ResolveNextUrl(
+                current,
+                "https://openrouter.ai/api/v1/models?after=x"));
+    }
+
+    [Fact]
     public async Task GetModelsAsync_follows_two_pages_including_relative_next()
     {
         var handler = new StubHttpHandler(req =>

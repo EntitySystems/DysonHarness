@@ -201,16 +201,23 @@ public sealed class OpenRouterManagedInferenceProvider : IManagedInferenceProvid
 
     internal static string ResolveNextUrl(string currentUrl, string next)
     {
-        if (Uri.TryCreate(next, UriKind.Absolute, out var absolute))
-            return absolute.ToString();
-
-        if (Uri.TryCreate(currentUrl, UriKind.Absolute, out var current)
-            && Uri.TryCreate(current, next, out var resolved))
+        next = next.Trim();
+        // Do not Uri.TryCreate("/path", Absolute): on Unix that is file:///path.
+        if (next.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            || next.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
         {
-            return resolved.ToString();
+            return next;
         }
 
-        return next;
+        if (!Uri.TryCreate(currentUrl, UriKind.Absolute, out var current))
+            return next;
+
+        if (next.StartsWith('/'))
+            return current.GetLeftPart(UriPartial.Authority) + next;
+
+        return Uri.TryCreate(current, next, out var resolved)
+            ? resolved.ToString()
+            : next;
     }
 
     private static IReadOnlyList<string> MapEffortLevels(JsonElement item)
