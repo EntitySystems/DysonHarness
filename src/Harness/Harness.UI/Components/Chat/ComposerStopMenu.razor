@@ -6,8 +6,13 @@
     <button type="button"
             class="btn btn--xs btn-ghost composer-stop__trigger"
             disabled="@(!CanStop)"
+            aria-busy="@CanStop"
             title="Halt this session tree (prompt, queue, and subagents)"
             @onclick="StopAll">
+        @if (CanStop)
+        {
+            <span class="composer-stop__spinner" aria-hidden="true"></span>
+        }
         Stop
     </button>
 </div>

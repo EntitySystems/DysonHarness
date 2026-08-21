@@ -6789,6 +6789,17 @@ code, .mono {
   border-color: var(--danger);
 }
 
+.composer-stop__spinner {
+  box-sizing: border-box;
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  border-top-color: var(--danger);
+  border-radius: 50%;
+  animation: turn-block-spin 0.65s linear infinite;
+}
+
 .composer-stop__caret {
   font-size: 9px;
   line-height: 1;
