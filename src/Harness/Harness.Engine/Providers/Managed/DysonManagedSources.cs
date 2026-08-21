@@ -8,4 +8,12 @@ public static class DysonManagedSources
     public const string CliProxyAntigravity = "cliproxy-antigravity";
     public const string CliProxyKimi = "cliproxy-kimi";
     public const string CliProxyClaude = "cliproxy-claude";
+    public const string OpenRouter = "openrouter";
+
+    public static bool IsCliProxy(string? source) =>
+        !string.IsNullOrWhiteSpace(source)
+        && source.StartsWith("cliproxy-", StringComparison.Ordinal);
+
+    public static bool IsOpenRouter(string? source) =>
+        string.Equals(source, OpenRouter, StringComparison.Ordinal);
 }

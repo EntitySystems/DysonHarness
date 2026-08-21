@@ -100,7 +100,7 @@ public static class DysonAgentSystemPrompts
         - If you started an Explore, that Explore is always a blocker: WaitForSubagent until it finishes before any further parent work (implementation, extra mapping, new Drones, shells, or other tools). Do not fire-and-forget an Explore and keep working. Do not WaitForSubagent on Drones.
         - Never call WaitForSubagent while also expecting a child TriggerParentEvent / AskQuestionFromParent / PromptUserDialogFromParent — Wait blocks the orchestrator from addressing new parent events (deadlock). Prefer notification turns, or RespondToSubagentEvent for already-pending events (Respond works even mid-Wait).
         - When a harness continuation reports a subagent event, call RespondToSubagentEvent with the eventId so the child unblocks. askQuestion / promptUserDialog events are answered by the Auto UI (you do not Respond for those).
-        - Use TriggerSubagentEvent to inject instructions into a child (queued next turn by default; interruptSubagent=true cancels the child’s in-flight turn / pending parent-event wait and runs immediately).
+        - Use TriggerSubagentEvent to inject instructions into a child (queued next turn by default; interruptSubagent=true cancels the child’s in-flight turn / pending parent-event wait and runs immediately). Follow-up work on a finished child is TriggerSubagentEvent (reuse the same child), not a new StartSubagent.
         - Root clarifying / design questions: AskQuestion (composer UI). Root concrete action choices: PromptUserDialog (modal). Do not use FromParent tools on the root.
         - Use ListSubagents to rediscover child ids after resume or when StartSubagent results are no longer in recent context; then InspectSubagentLog / StopSubagent / Wait as needed — never busy-wait in a tight loop.
         - Keep diffs focused when you do implement; follow project rules (including C# Result pattern and /skills location).
@@ -120,7 +120,7 @@ public static class DysonAgentSystemPrompts
         - Call ListTodos first; mark all session todos Complete via UpdateTodo before SubmitSubagentReport (`completed`); if blocked, report `failed` without requiring todo completion.
         - SubmitSubagentReport is mandatory: do not end a turn with findings-only text (including an H1 + prose) as if the session is finished.
         - When investigation is done — or blocked — call SubmitSubagentReport with structured findings (`completed` or `failed`) so the parent can continue.
-        - Blocked or incomplete investigation: SubmitSubagentReport with status `failed` and a concrete failure reason (missing data, access blocker, tool error) — do not silently abandon, and do not retry SubmitSubagentReport after a successful submit.
+        - Blocked or incomplete investigation: SubmitSubagentReport with status `failed` and a concrete failure reason (missing data, access blocker, tool error) — do not silently abandon, and do not retry SubmitSubagentReport after a successful submit unless the parent sent a new assignment via TriggerSubagentEvent.
         - Prefer SubmitSubagentReport for final handoff. Mid-run parent coordination: TriggerParentEvent (blocks until RespondToSubagentEvent). Do not TriggerParentEvent while the parent may be inside WaitForSubagent — that call fails (deadlock guard).
         - L1 clarifying / design questions for the user: AskQuestionFromParent (not AskQuestion). L1 concrete action choices: PromptUserDialogFromParent. Deeper layers: TriggerParentEvent only (no AskQuestionFromParent / PromptUserDialogFromParent).
         """;
@@ -143,6 +143,7 @@ public static class DysonAgentSystemPrompts
         - On success: verify as required, update todos, then SubmitSubagentReport with status completed and a crisp handoff the parent can consume without re-deriving your steps.
         - Prefer minimal output: completed work, files touched, verification, and any residual risks.
         - Call ListTodos first; mark all session todos Complete via UpdateTodo before SubmitSubagentReport (`completed`); if blocked, report `failed` without requiring todo completion.
+        - After a successful submit, do not retry unless the parent injected a new assignment via TriggerSubagentEvent.
         """;
 
     /// <summary>
@@ -156,6 +157,7 @@ public static class DysonAgentSystemPrompts
         - Before a successful (completed) SubmitSubagentReport: call ListTodos; if any todos are pending or ongoing, UpdateTodo them to complete first. Failed reports may leave todos incomplete.
         - A completion report may use status failed with a concrete failure reason in the summary (e.g. missing data, blocker, agent/tool error) — that is a valid finish; the parent continues from that report.
         - The parent WaitForSubagent / notification path only continues on SubmitSubagentReport (or stop/fail).
+        - A later parent TriggerSubagentEvent starts a new report cycle.
         """;
 
     /// <summary>
@@ -165,7 +167,7 @@ public static class DysonAgentSystemPrompts
     public const string ExploreFirstTurnReportMandate = """
         Explore mandate (first turn only):
         - When you are done investigating — or blocked — call SubmitSubagentReport with structured findings.
-        - If blocked or incomplete: status failed plus a concrete failure reason; do not silently abandon or retry after a successful submit.
+        - If blocked or incomplete: status failed plus a concrete failure reason; do not silently abandon or retry after a successful submit unless the parent sent a new assignment via TriggerSubagentEvent.
         - Do not treat findings-only text as a finish; the parent only continues on SubmitSubagentReport (or stop/fail).
         """;
 
@@ -184,6 +186,7 @@ public static class DysonAgentSystemPrompts
         - After a tool failure: diagnose, retry or alternate approach; do not stop after one failure or wait for “resume”.
         - On true blocker: SubmitSubagentReport with status failed and a concrete failure reason (missing context, errors).
         - On success: verify, update todos, then SubmitSubagentReport with status completed and a crisp handoff.
+        - After a successful submit, do not retry unless the parent injected a new assignment via TriggerSubagentEvent.
         """;
 
     public const string SecurityReviewDirective = """

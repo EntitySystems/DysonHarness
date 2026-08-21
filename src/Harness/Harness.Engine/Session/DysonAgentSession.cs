@@ -13,8 +13,10 @@ public abstract class DysonAgentSession
     private readonly List<DysonSessionTodo> _todos = [];
     private readonly object _todosGate = new();
     private readonly object _terminalGate = new();
-    private readonly TaskCompletionSource<(DysonSessionStatus Status, string? Summary)> _terminalTcs =
+    private TaskCompletionSource<(DysonSessionStatus Status, string? Summary)> _terminalTcs =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private const string TerminalReportRejectHint =
+        "To communicate with the parent without a new report cycle, call TriggerParentEvent instead.";
     private CancellationTokenSource? _runCts;
     private readonly ConcurrentDictionary<Guid, DysonParentEvent> _pendingParentEvents = new();
     private readonly HashSet<int> _waitingOnSubagentIds = [];
@@ -123,7 +125,10 @@ public abstract class DysonAgentSession
     /// <summary>Live parent when this session was spawned via <see cref="RegisterSubagent"/>.</summary>
     public DysonAgentSession? Parent { get; private set; }
 
-    /// <summary>Mirrored from persisted session status (Active until report/stop/fail/interrupt).</summary>
+    /// <summary>
+    /// Mirrored from persisted session status (Active until report/stop/fail/interrupt).
+    /// Completed/Failed can return to Active after parent <c>TriggerSubagentEvent</c>.
+    /// </summary>
     public DysonSessionStatus Status { get; private set; } = DysonSessionStatus.Active;
 
     /// <summary>Last SubmitSubagentReport / stop / fail summary when terminal.</summary>
@@ -724,7 +729,7 @@ public abstract class DysonAgentSession
     /// Parent → child inject. Default queues next-turn prompt; <paramref name="interruptSubagent"/> cancels
     /// in-flight turn (and any parent-event wait) then starts immediately.
     /// </summary>
-    public Task<Result<string, string>> TriggerSubagentEventAsync(
+    public async Task<Result<string, string>> TriggerSubagentEventAsync(
         int subagentId,
         string payload,
         bool interruptSubagent = false,
@@ -733,18 +738,22 @@ public abstract class DysonAgentSession
         cancellationToken.ThrowIfCancellationRequested();
 
         if (!TryGetSubagent(subagentId, out var child))
-            return Task.FromResult(Result<string, string>.AsError($"Unknown subagentId {subagentId}."));
+            return Result<string, string>.AsError($"Unknown subagentId {subagentId}.");
 
         if (string.IsNullOrWhiteSpace(payload))
-            return Task.FromResult(Result<string, string>.AsError("TriggerSubagentEvent: payload is required."));
+            return Result<string, string>.AsError("TriggerSubagentEvent: payload is required.");
 
         var trimmed = payload.Trim();
 
         if (child.HasPendingParentEventWait && !interruptSubagent)
         {
-            return Task.FromResult(Result<string, string>.AsError(
-                "TriggerSubagentEvent: child is awaiting a parent-event reply; pass interruptSubagent=true to cancel that wait and inject."));
+            return Result<string, string>.AsError(
+                "TriggerSubagentEvent: child is awaiting a parent-event reply; pass interruptSubagent=true to cancel that wait and inject.");
         }
+
+        var reopened = child.TryReopenForNewParentTask();
+        if (reopened)
+            await PersistReopenForParentTaskAsync(child).ConfigureAwait(false);
 
         if (interruptSubagent)
         {
@@ -754,17 +763,18 @@ public abstract class DysonAgentSession
             child.ClearPendingTurns();
             var runCts = new CancellationTokenSource();
             child.AttachBackgroundRun(runCts);
-            KickOffChildPrompt(child, CreateInjectedSubagentTurn(trimmed), runCts);
+            KickOffChildPrompt(child, CreateInjectedSubagentTurn(trimmed, reportReenabled: reopened), runCts);
 
-            return Task.FromResult(Result<string, string>.AsValue(JsonSerializer.Serialize(new
+            return Result<string, string>.AsValue(JsonSerializer.Serialize(new
             {
                 subagentId,
                 persistenceId = child.PersistenceId,
                 status = "interrupted",
-            })));
+                reopened,
+            }));
         }
 
-        child.EnqueuePendingTurn(CreateInjectedSubagentTurn(trimmed));
+        child.EnqueuePendingTurn(CreateInjectedSubagentTurn(trimmed, reportReenabled: reopened));
         if (!child.HasActiveBackgroundRun)
         {
             var runCts = new CancellationTokenSource();
@@ -775,12 +785,13 @@ public abstract class DysonAgentSession
                 runCts.Dispose();
         }
 
-        return Task.FromResult(Result<string, string>.AsValue(JsonSerializer.Serialize(new
+        return Result<string, string>.AsValue(JsonSerializer.Serialize(new
         {
             subagentId,
             persistenceId = child.PersistenceId,
             status = "queued",
-        })));
+            reopened,
+        }));
     }
 
     /// <summary>Root-only: block until the host UI answers (composer Ask popover).</summary>
@@ -1107,18 +1118,27 @@ public abstract class DysonAgentSession
 
     private void RaiseParentEventsChanged() => ParentEventsChanged?.Invoke(this, EventArgs.Empty);
 
-    private static string BuildInjectedSubagentPrompt(string payload) =>
-        """
-        Harness injection: the parent sent instructions via TriggerSubagentEvent. Follow them and continue your task.
+    private static string BuildInjectedSubagentPrompt(string payload, bool reportReenabled)
+    {
+        var body = payload.Trim();
+        if (reportReenabled)
+        {
+            return
+                "Harness injection: the parent sent instructions via TriggerSubagentEvent. Follow them and continue your task.\n"
+                + "SubmitSubagentReport is enabled again for this assignment and must be called when the new work is done or blocked.\n\n"
+                + body;
+        }
 
-        ## Injected instructions
-        """ + payload.Trim();
+        return
+            "Harness injection: the parent sent instructions via TriggerSubagentEvent. Follow them and continue your task.\n\n"
+            + body;
+    }
 
-    private static DysonAgentTurn CreateInjectedSubagentTurn(string payload) =>
+    private static DysonAgentTurn CreateInjectedSubagentTurn(string payload, bool reportReenabled) =>
         new()
         {
             Kind = DysonAgentTurnKind.Normal,
-            Instruction = BuildInjectedSubagentPrompt(payload),
+            Instruction = BuildInjectedSubagentPrompt(payload, reportReenabled),
             StartedUtc = DateTime.UtcNow,
         };
 
@@ -1166,8 +1186,8 @@ public abstract class DysonAgentSession
         {
             return Task.FromResult(Result<string, string>.AsError(
                 Status == DysonSessionStatus.Stopped
-                    ? $"SubmitSubagentReport: session already {Status}."
-                    : "SubmitSubagentReport: already submitted."));
+                    ? $"SubmitSubagentReport: session already {Status}. {TerminalReportRejectHint}"
+                    : $"SubmitSubagentReport: already submitted. {TerminalReportRejectHint}"));
         }
 
         if (!TryAcceptSubagentReport(status, trimmed))
@@ -1175,8 +1195,8 @@ public abstract class DysonAgentSession
             // Race: another thread accepted between the check and TryAccept.
             return Task.FromResult(Result<string, string>.AsError(
                 Status is DysonSessionStatus.Completed or DysonSessionStatus.Failed
-                    ? "SubmitSubagentReport: already submitted."
-                    : $"SubmitSubagentReport: session already {Status}."));
+                    ? $"SubmitSubagentReport: already submitted. {TerminalReportRejectHint}"
+                    : $"SubmitSubagentReport: session already {Status}. {TerminalReportRejectHint}"));
         }
 
         if (Parent is not null)
@@ -1199,13 +1219,31 @@ public abstract class DysonAgentSession
     public Task<(DysonSessionStatus Status, string? Summary)> WaitForTerminalAsync(
         CancellationToken cancellationToken = default)
     {
+        Task<(DysonSessionStatus Status, string? Summary)> wait;
         lock (_terminalGate)
         {
             if (IsTerminal)
                 return Task.FromResult((Status, LastReportSummary));
+            wait = _terminalTcs.Task;
         }
 
-        return _terminalTcs.Task.WaitAsync(cancellationToken);
+        return wait.WaitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Reopens a Completed/Failed child so a new SubmitSubagentReport cycle can run after parent TriggerSubagentEvent.
+    /// </summary>
+    public bool TryReopenForNewParentTask()
+    {
+        lock (_terminalGate)
+        {
+            if (Status is not (DysonSessionStatus.Completed or DysonSessionStatus.Failed))
+                return false;
+
+            Status = DysonSessionStatus.Active;
+            _terminalTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            return true;
+        }
     }
 
     /// <summary>Marks terminal status once; returns false if already terminal.</summary>
@@ -1274,6 +1312,17 @@ public abstract class DysonAgentSession
         {
             // already disposed
         }
+    }
+
+    /// <summary>
+    /// Clears the stored CTS when this background run ends so <see cref="HasActiveBackgroundRun"/> is false
+    /// (a later parent inject can start a new KickOff). No-op if a newer run already replaced it.
+    /// </summary>
+    protected void DetachBackgroundRun(CancellationTokenSource runCts)
+    {
+        ArgumentNullException.ThrowIfNull(runCts);
+        if (ReferenceEquals(_runCts, runCts))
+            _runCts = null;
     }
 
     /// <summary>
@@ -1389,6 +1438,7 @@ public abstract class DysonAgentSession
             }
             finally
             {
+                child.DetachBackgroundRun(runCts);
                 runCts.Dispose();
             }
         });
@@ -1455,6 +1505,31 @@ public abstract class DysonAgentSession
             return trimmed;
 
         return trimmed[..maxChars] + "…";
+    }
+
+    /// <summary>
+    /// Persist child Active after parent TriggerSubagentEvent reopened a Completed/Failed report cycle.
+    /// </summary>
+    private static async Task PersistReopenForParentTaskAsync(DysonAgentSession child)
+    {
+        var store = child.SessionStore;
+        if (store is null || child.PersistenceId == Guid.Empty)
+            return;
+
+        await store.UpdateSessionMetaAsync(
+            new DysonSessionMetaUpdate
+            {
+                SessionId = child.PersistenceId,
+                Status = DysonSessionStatus.Active,
+            }).ConfigureAwait(false);
+
+        var statusLog = DysonSessionLogPayload.CreateEntry(
+            child.PersistenceId,
+            DysonSessionLogKind.SessionStatusChanged,
+            new DysonSessionLogSessionStatusChanged(
+                DysonSessionStatus.Active,
+                "parent TriggerSubagentEvent"));
+        await store.AppendLogAsync(statusLog).ConfigureAwait(false);
     }
 
     /// <summary>

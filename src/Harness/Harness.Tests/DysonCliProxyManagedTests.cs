@@ -348,4 +348,50 @@ public class DysonCliProxySharedSecretsTests
         Assert.Equal(staleKey, userProvider.ApiKey);
         Assert.Equal(staleUrl, userProvider.BaseUrl);
     }
+
+    [Fact]
+    public void OpenAiCompatibleAgentProvider_openrouter_managed_source_keeps_credentials()
+    {
+        const string apiKey = "sk-or-user-key";
+        const string baseUrl = "https://openrouter.ai/api/v1";
+
+        var openRouter = new DysonModelProviderEntity
+        {
+            DisplayName = "OpenRouter",
+            ProviderKind = DysonProviderKinds.OpenAICompatible,
+            ManagedSource = DysonManagedSources.OpenRouter,
+            ApiKey = apiKey,
+            BaseUrl = baseUrl,
+        };
+        var provider = new OpenAiCompatibleAgentProvider(openRouter, slug: null);
+        Assert.Equal(apiKey, provider.ApiKey);
+        Assert.Equal(baseUrl, provider.BaseUrl);
+        Assert.NotEqual(DysonCliProxyHost.DefaultApiKey, provider.ApiKey);
+        Assert.NotEqual(DysonCliProxyHost.DefaultLocalBaseUrl, provider.BaseUrl);
+    }
+}
+
+public class DysonManagedSourcesTests
+{
+    [Theory]
+    [InlineData("cliproxy-codex", true)]
+    [InlineData("cliproxy-grok", true)]
+    [InlineData("openrouter", false)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    [InlineData("   ", false)]
+    public void IsCliProxy_prefix_gated(string? source, bool expected)
+    {
+        Assert.Equal(expected, DysonManagedSources.IsCliProxy(source));
+    }
+
+    [Theory]
+    [InlineData("openrouter", true)]
+    [InlineData("cliproxy-codex", false)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    public void IsOpenRouter_matches_const(string? source, bool expected)
+    {
+        Assert.Equal(expected, DysonManagedSources.IsOpenRouter(source));
+    }
 }

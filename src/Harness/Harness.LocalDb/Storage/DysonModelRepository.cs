@@ -183,6 +183,7 @@ public sealed class DysonModelRepository(
         string openAiApiMode,
         IReadOnlyList<ManagedSlugSpec> slugs,
         bool shared = false,
+        bool syncSlugs = true,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(managedSource);
@@ -242,54 +243,57 @@ public sealed class DysonModelRepository(
                 }
 
                 var providerId = existing.Id;
-                var bySlug = existing.Slugs.ToDictionary(s => s.Slug, StringComparer.OrdinalIgnoreCase);
-                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                var defaultAssigned = false;
-
-                foreach (var spec in slugs)
+                if (syncSlugs)
                 {
-                    if (string.IsNullOrWhiteSpace(spec.Slug) || string.IsNullOrWhiteSpace(spec.DisplayAlias))
-                        continue;
+                    var bySlug = existing.Slugs.ToDictionary(s => s.Slug, StringComparer.OrdinalIgnoreCase);
+                    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var defaultAssigned = false;
 
-                    var slugKey = spec.Slug.Trim();
-                    seen.Add(slugKey);
+                    foreach (var spec in slugs)
+                    {
+                        if (string.IsNullOrWhiteSpace(spec.Slug) || string.IsNullOrWhiteSpace(spec.DisplayAlias))
+                            continue;
 
-                    var isDefault = !defaultAssigned
-                        && priorDefaultSlug is not null
-                        && string.Equals(priorDefaultSlug, slugKey, StringComparison.OrdinalIgnoreCase);
-                    if (isDefault)
-                    {
-                        await ClearDefaultsAsync(db, cancellationToken).ConfigureAwait(false);
-                        defaultAssigned = true;
-                    }
+                        var slugKey = spec.Slug.Trim();
+                        seen.Add(slugKey);
 
-                    if (bySlug.TryGetValue(slugKey, out var row))
-                    {
-                        row.DisplayAlias = spec.DisplayAlias.Trim();
-                        row.IsDefault = isDefault;
-                        row.ReasoningModes = StringListJsonValueConverter.Normalize(spec.ReasoningModes);
-                        row.UpdatedUtc = now;
-                    }
-                    else
-                    {
-                        db.ModelSlugs.Add(new DysonModelSlugEntity
+                        var isDefault = !defaultAssigned
+                            && priorDefaultSlug is not null
+                            && string.Equals(priorDefaultSlug, slugKey, StringComparison.OrdinalIgnoreCase);
+                        if (isDefault)
                         {
-                            Id = Guid.NewGuid(),
-                            ProviderId = providerId,
-                            Slug = slugKey,
-                            DisplayAlias = spec.DisplayAlias.Trim(),
-                            IsDefault = isDefault,
-                            IsEnabled = true,
-                            DefaultReasoningEffort = NormalizeReasoningEffort(spec.DefaultReasoningEffort),
-                            ReasoningModes = StringListJsonValueConverter.Normalize(spec.ReasoningModes),
-                            CreatedUtc = now,
-                            UpdatedUtc = now,
-                        });
-                    }
-                }
+                            await ClearDefaultsAsync(db, cancellationToken).ConfigureAwait(false);
+                            defaultAssigned = true;
+                        }
 
-                foreach (var obsolete in existing.Slugs.Where(s => !seen.Contains(s.Slug)).ToList())
-                    db.ModelSlugs.Remove(obsolete);
+                        if (bySlug.TryGetValue(slugKey, out var row))
+                        {
+                            row.DisplayAlias = spec.DisplayAlias.Trim();
+                            row.IsDefault = isDefault;
+                            row.ReasoningModes = StringListJsonValueConverter.Normalize(spec.ReasoningModes);
+                            row.UpdatedUtc = now;
+                        }
+                        else
+                        {
+                            db.ModelSlugs.Add(new DysonModelSlugEntity
+                            {
+                                Id = Guid.NewGuid(),
+                                ProviderId = providerId,
+                                Slug = slugKey,
+                                DisplayAlias = spec.DisplayAlias.Trim(),
+                                IsDefault = isDefault,
+                                IsEnabled = true,
+                                DefaultReasoningEffort = NormalizeReasoningEffort(spec.DefaultReasoningEffort),
+                                ReasoningModes = StringListJsonValueConverter.Normalize(spec.ReasoningModes),
+                                CreatedUtc = now,
+                                UpdatedUtc = now,
+                            });
+                        }
+                    }
+
+                    foreach (var obsolete in existing.Slugs.Where(s => !seen.Contains(s.Slug)).ToList())
+                        db.ModelSlugs.Remove(obsolete);
+                }
 
                 await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
                 return Result<Guid, string>.AsValue(providerId);
@@ -297,6 +301,83 @@ public sealed class DysonModelRepository(
             catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
             {
                 return Result<Guid, string>.AsError($"Failed to upsert managed provider: {ex.Message}", ex);
+            }
+        }, cancellationToken);
+    }
+
+    public Task<Result<Guid, string>> UpsertManagedSlugAsync(
+        Guid providerId,
+        ManagedSlugSpec spec,
+        bool enabled,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+
+        if (string.IsNullOrWhiteSpace(spec.Slug) || string.IsNullOrWhiteSpace(spec.DisplayAlias))
+        {
+            return Task.FromResult(Result<Guid, string>.AsError(
+                "Slug and display alias are required."));
+        }
+
+        var currentSubject = _subjectContext.SubjectId;
+        return _accessor.RunAsync(async (db, cancellationToken) =>
+        {
+            try
+            {
+                var provider = await db.ModelProviders
+                    .Include(p => p.Slugs)
+                    .FirstOrDefaultAsync(p => p.Id == providerId, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (provider is null)
+                    return Result<Guid, string>.AsError($"Model provider '{providerId}' not found.");
+
+                var writeGate = GateProviderWrite(provider, currentSubject);
+                if (writeGate is not null)
+                    return Result<Guid, string>.AsError(writeGate);
+
+                if (string.IsNullOrWhiteSpace(provider.ManagedSource))
+                {
+                    return Result<Guid, string>.AsError(
+                        "Managed slug upsert is only available for managed providers.");
+                }
+
+                var now = DateTime.UtcNow;
+                var slugKey = spec.Slug.Trim();
+                var row = provider.Slugs.FirstOrDefault(s =>
+                    string.Equals(s.Slug, slugKey, StringComparison.OrdinalIgnoreCase));
+
+                if (row is null)
+                {
+                    row = new DysonModelSlugEntity
+                    {
+                        Id = Guid.NewGuid(),
+                        ProviderId = providerId,
+                        Slug = slugKey,
+                        DisplayAlias = spec.DisplayAlias.Trim(),
+                        IsDefault = false,
+                        IsEnabled = enabled,
+                        DefaultReasoningEffort = NormalizeReasoningEffort(spec.DefaultReasoningEffort),
+                        ReasoningModes = StringListJsonValueConverter.Normalize(spec.ReasoningModes),
+                        CreatedUtc = now,
+                        UpdatedUtc = now,
+                    };
+                    db.ModelSlugs.Add(row);
+                }
+                else
+                {
+                    row.DisplayAlias = spec.DisplayAlias.Trim();
+                    row.ReasoningModes = StringListJsonValueConverter.Normalize(spec.ReasoningModes);
+                    row.IsEnabled = enabled;
+                    row.UpdatedUtc = now;
+                }
+
+                await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
+                return Result<Guid, string>.AsValue(row.Id);
+            }
+            catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+            {
+                return Result<Guid, string>.AsError($"Failed to upsert managed slug: {ex.Message}", ex);
             }
         }, cancellationToken);
     }

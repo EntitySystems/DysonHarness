@@ -12,6 +12,9 @@ public class DysonModelSlugEnabledTests
     {
         AssertUpsertMergePreservesIdAndIsEnabled();
         AssertUpsertMergePreservesDefaultReasoningEffort();
+        AssertUpsertSyncSlugsFalseLeavesCatalogUnchanged();
+        AssertUpsertManagedSlugInsertUpdateAndDisableKeepsRow();
+        AssertUpsertManagedSlugRejectsManual();
         AssertSetSlugEnabledRejectsManual();
         AssertSetSlugDefaultReasoningEffortManagedAndRejectsManual();
         AssertSetSlugDefaultMaxTargetContextTokensManagedAndRejectsManual();
@@ -140,6 +143,168 @@ public class DysonModelSlugEnabledTests
         var fresh = provider.Slugs.Single(s => s.Slug == "fresh");
         if (!string.Equals(fresh.DefaultReasoningEffort, "high", StringComparison.Ordinal))
             throw new InvalidOperationException("New API slugs must get catalog DefaultReasoningEffort.");
+    }
+
+    private static void AssertUpsertSyncSlugsFalseLeavesCatalogUnchanged()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var store = DysonTempDb.Models(accessor);
+
+        var first = store.UpsertManagedProviderAsync(
+            "cliproxy-nosync",
+            "No Sync",
+            "http://127.0.0.1:1/v1",
+            "key",
+            DysonOpenAiApiModes.Responses,
+            [
+                new ManagedSlugSpec("keep-a", "Keep A", "high", ["high"]),
+                new ManagedSlugSpec("keep-b", "Keep B", null, []),
+            ]).GetAwaiter().GetResult();
+        if (first.IsError)
+            throw new InvalidOperationException(first.Error);
+
+        var listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+        if (listed.IsError)
+            throw new InvalidOperationException(listed.Error);
+
+        var provider = listed.Value.Single(p => p.ManagedSource == "cliproxy-nosync");
+        var idA = provider.Slugs.Single(s => s.Slug == "keep-a").Id;
+        var idB = provider.Slugs.Single(s => s.Slug == "keep-b").Id;
+
+        var noSync = store.UpsertManagedProviderAsync(
+            "cliproxy-nosync",
+            "No Sync Renamed",
+            "http://127.0.0.1:9999/v1",
+            "new-key",
+            DysonOpenAiApiModes.Responses,
+            [new ManagedSlugSpec("should-not-add", "Nope", null, [])],
+            shared: false,
+            syncSlugs: false).GetAwaiter().GetResult();
+        if (noSync.IsError)
+            throw new InvalidOperationException(noSync.Error);
+
+        listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+        if (listed.IsError)
+            throw new InvalidOperationException(listed.Error);
+
+        provider = listed.Value.Single(p => p.ManagedSource == "cliproxy-nosync");
+        if (!string.Equals(provider.DisplayName, "No Sync Renamed", StringComparison.Ordinal))
+            throw new InvalidOperationException("syncSlugs:false must still update DisplayName.");
+        if (!string.Equals(provider.BaseUrl, "http://127.0.0.1:9999/v1", StringComparison.Ordinal))
+            throw new InvalidOperationException("syncSlugs:false must still update BaseUrl.");
+        if (!string.Equals(provider.ApiKey, "new-key", StringComparison.Ordinal))
+            throw new InvalidOperationException("syncSlugs:false must still update ApiKey.");
+        if (provider.Slugs.Count != 2)
+            throw new InvalidOperationException($"syncSlugs:false must not add/remove slugs, got {provider.Slugs.Count}.");
+        if (provider.Slugs.Any(s => s.Slug == "should-not-add"))
+            throw new InvalidOperationException("syncSlugs:false must ignore the slugs argument.");
+        if (provider.Slugs.Single(s => s.Slug == "keep-a").Id != idA
+            || provider.Slugs.Single(s => s.Slug == "keep-b").Id != idB)
+        {
+            throw new InvalidOperationException("syncSlugs:false must preserve existing slug Ids.");
+        }
+    }
+
+    private static void AssertUpsertManagedSlugInsertUpdateAndDisableKeepsRow()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var store = DysonTempDb.Models(accessor);
+
+        var upsert = store.UpsertManagedProviderAsync(
+            "cliproxy-oneslug",
+            "One Slug",
+            "http://127.0.0.1:1/v1",
+            "key",
+            DysonOpenAiApiModes.Responses,
+            slugs: []).GetAwaiter().GetResult();
+        if (upsert.IsError)
+            throw new InvalidOperationException(upsert.Error);
+
+        var insert = store.UpsertManagedSlugAsync(
+            upsert.Value,
+            new ManagedSlugSpec("or-model", "OR Model", "high", ["high"]),
+            enabled: true).GetAwaiter().GetResult();
+        if (insert.IsError)
+            throw new InvalidOperationException(insert.Error);
+
+        var listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+        if (listed.IsError)
+            throw new InvalidOperationException(listed.Error);
+
+        var row = listed.Value.Single().Slugs.Single(s => s.Slug == "or-model");
+        if (row.Id != insert.Value)
+            throw new InvalidOperationException("UpsertManagedSlugAsync insert must return the new slug Id.");
+        if (!row.IsEnabled)
+            throw new InvalidOperationException("UpsertManagedSlugAsync insert must honor enabled:true.");
+        if (row.IsDefault)
+            throw new InvalidOperationException("UpsertManagedSlugAsync insert must set IsDefault=false.");
+
+        var setEffort = store.SetSlugDefaultReasoningEffortAsync(row.Id, "medium").GetAwaiter().GetResult();
+        if (setEffort.IsError)
+            throw new InvalidOperationException(setEffort.Error);
+
+        var second = store.UpsertManagedSlugAsync(
+            upsert.Value,
+            new ManagedSlugSpec("or-model", "OR Model Renamed", "low", ["none", "low"]),
+            enabled: true).GetAwaiter().GetResult();
+        if (second.IsError)
+            throw new InvalidOperationException(second.Error);
+        if (second.Value != insert.Value)
+            throw new InvalidOperationException("UpsertManagedSlugAsync must preserve slug Id on update.");
+
+        listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+        if (listed.IsError)
+            throw new InvalidOperationException(listed.Error);
+
+        row = listed.Value.Single().Slugs.Single(s => s.Slug == "or-model");
+        if (!string.Equals(row.DisplayAlias, "OR Model Renamed", StringComparison.Ordinal))
+            throw new InvalidOperationException("UpsertManagedSlugAsync must refresh DisplayAlias.");
+        if (row.ReasoningModes is not ["none", "low"])
+            throw new InvalidOperationException("UpsertManagedSlugAsync must refresh ReasoningModes.");
+        if (!string.Equals(row.DefaultReasoningEffort, "medium", StringComparison.Ordinal))
+            throw new InvalidOperationException("UpsertManagedSlugAsync must preserve user DefaultReasoningEffort.");
+        if (!row.IsEnabled)
+            throw new InvalidOperationException("UpsertManagedSlugAsync update must set IsEnabled.");
+
+        var disable = store.SetSlugEnabledAsync(row.Id, enabled: false).GetAwaiter().GetResult();
+        if (disable.IsError)
+            throw new InvalidOperationException(disable.Error);
+
+        listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+        if (listed.IsError)
+            throw new InvalidOperationException(listed.Error);
+
+        row = listed.Value.Single().Slugs.Single(s => s.Slug == "or-model");
+        if (row.IsEnabled)
+            throw new InvalidOperationException("SetSlugEnabledAsync(false) must disable the slug.");
+        if (listed.Value.Single().Slugs.Count != 1)
+            throw new InvalidOperationException("SetSlugEnabledAsync(false) must keep the slug row.");
+    }
+
+    private static void AssertUpsertManagedSlugRejectsManual()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var store = DysonTempDb.Models(accessor);
+
+        var create = store.CreateProviderAsync(new DysonModelProviderEntity
+        {
+            DisplayName = "Manual Upsert",
+            ProviderKind = DysonProviderKinds.OpenAICompatible,
+            BaseUrl = "https://api.openai.com/v1",
+            ApiKey = "k",
+        }).GetAwaiter().GetResult();
+        if (create.IsError)
+            throw new InvalidOperationException(create.Error);
+
+        var reject = store.UpsertManagedSlugAsync(
+            create.Value,
+            new ManagedSlugSpec("gpt-4o", "GPT-4o", null, []),
+            enabled: true).GetAwaiter().GetResult();
+        if (!reject.IsError)
+            throw new InvalidOperationException("UpsertManagedSlugAsync must reject manual providers.");
     }
 
     private static void AssertSetSlugEnabledRejectsManual()

@@ -694,6 +694,10 @@ code, .mono {
   overflow: hidden;
 }
 
+.model-slug-modal--wide {
+  width: min(720px, 100%);
+}
+
 .model-slug-modal__header {
   display: flex;
   align-items: center;
@@ -753,6 +757,28 @@ code, .mono {
   align-items: stretch;
   gap: 2px;
   border-radius: var(--radius-sm);
+}
+
+.model-slug-modal__row--catalog {
+  align-items: flex-start;
+}
+
+.model-slug-modal__catalog-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 8px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.model-slug-modal__catalog-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .model-slug-modal__row.is-selected {
@@ -1788,7 +1814,23 @@ code, .mono {
   text-overflow: ellipsis;
 }
 
-.session-list .list-item__title .turn-block__spinner { display: inline-block; vertical-align: middle; margin-right: 6px; }
+.session-list .list-item__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.session-list .list-item__title .turn-block__spinner {
+  flex-shrink: 0;
+}
+
+.session-list .list-item__title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .list-item__meta {
   color: var(--text-dim);
@@ -6747,7 +6789,7 @@ code, .mono {
   margin: 6px 0;
 }
 
-/* Composer effort picker ? panel opens upward above the composer */
+/* Models + composer: panel opens upward so it is not clipped by the list/footer */
 .effort-picker--up .effort-picker__panel {
   top: auto;
   bottom: calc(100% + 4px);
@@ -6771,6 +6813,17 @@ code, .mono {
 .composer-stop__trigger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 12%, var(--bg-3));
   border-color: var(--danger);
+}
+
+.composer-stop__spinner {
+  box-sizing: border-box;
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  border-top-color: var(--danger);
+  border-radius: 50%;
+  animation: turn-block-spin 0.65s linear infinite;
 }
 
 .composer-stop__caret {
