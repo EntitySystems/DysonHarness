@@ -82,6 +82,22 @@
                 </button>
             }
         </div>
+        <div class="list-item__meta" style="margin:8px 0 8px;">
+            OpenRouter is a direct API-key provider (not CLIProxy). Import stores the key; use Browse models to enable slugs.
+        </div>
+        <div class="btn-row" style="margin:0 0 8px;flex-wrap:wrap;gap:6px;">
+            @foreach (var direct in ManagedCatalog.Direct)
+            {
+                var source = direct.ManagedSource;
+                var already = _providers.Any(p => string.Equals(p.ManagedSource, source, StringComparison.Ordinal));
+                <button type="button"
+                        class="btn btn--sm"
+                        disabled="@(already || _busy)"
+                        @onclick="() => OpenOpenRouterImport(direct)">
+                    @(already ? $"Imported: {direct.DisplayName}" : $"Import {direct.DisplayName}")
+                </button>
+            }
+        </div>
     </div>
 
     <div class="models-panel__list list" style="max-height:none;">
@@ -113,6 +129,8 @@
                               OnVerify="() => VerifyManagedAsync(p)"
                               OnDisconnect="() => DisconnectManagedAsync(p)"
                               OnDelete="() => ConfirmDeleteProviderAsync(p)"
+                              OnBrowseModels="() => OpenOpenRouterBrowse(p)"
+                              OnUpdateApiKey="() => OpenOpenRouterUpdateKey(p)"
                               OnEditProvider="() => OpenEditProviderModal(p)"
                               OnDeleteProvider="() => ConfirmDeleteProviderAsync(p)"
                               OnAddSlug="() => OpenAddSlugModal(p.Id)"
@@ -137,6 +155,17 @@
                SlugToEdit="_slugDraft"
                OnClose="CloseSlugModal"
                OnSubmit="OnSlugFormSubmitAsync" />
+
+<OpenRouterApiKeyModal IsOpen="_openRouterKeyOpen"
+                       Title="@_openRouterKeyTitle"
+                       OnClose="CloseOpenRouterKeyModal"
+                       OnSubmit="OnOpenRouterKeySubmitAsync" />
+
+<OpenRouterModelsModal IsOpen="_openRouterModelsOpen"
+                       Provider="_openRouterBrowseProvider"
+                       Direct="_openRouterDirect"
+                       OnClose="CloseOpenRouterModelsModal"
+                       OnChanged="OnOpenRouterModelsChangedAsync" />
 
 @code {
     private List<DysonModelProviderEntity> _providers = [];
@@ -164,6 +193,14 @@
     private SlugFormModal.SlugFormDraft? _slugDraft;
     private Guid? _addSlugProviderId;
     private DysonModelSlugEntity? _editingSlug;
+
+    // OpenRouter direct-managed import / key / browse.
+    private IManagedInferenceProvider? _openRouterDirect;
+    private bool _openRouterKeyOpen;
+    private bool _openRouterKeyIsUpdate;
+    private string _openRouterKeyTitle = "Import OpenRouter";
+    private bool _openRouterModelsOpen;
+    private DysonModelProviderEntity? _openRouterBrowseProvider;
 
     [Parameter] public EventCallback OnChanged { get; set; }
 
@@ -438,6 +475,101 @@
 
         _status = $"{provider.DisplayName}: disconnected local auth session tracking. Proxy credentials are kept — use Connect to sign in again.";
         return Task.CompletedTask;
+    }
+
+    private void OpenOpenRouterImport(IManagedInferenceProvider direct)
+    {
+        _openRouterDirect = direct;
+        _openRouterKeyIsUpdate = false;
+        _openRouterKeyTitle = $"Import {direct.DisplayName}";
+        _openRouterKeyOpen = true;
+    }
+
+    private void OpenOpenRouterUpdateKey(DysonModelProviderEntity provider)
+    {
+        var direct = ManagedCatalog.FindDirectBySource(provider.ManagedSource);
+        if (direct is null)
+        {
+            _error = $"Unknown direct managed source '{provider.ManagedSource}'.";
+            return;
+        }
+
+        _openRouterDirect = direct;
+        _openRouterKeyIsUpdate = true;
+        _openRouterKeyTitle = $"Update {direct.DisplayName} API key";
+        _openRouterKeyOpen = true;
+    }
+
+    private void CloseOpenRouterKeyModal() => _openRouterKeyOpen = false;
+
+    private async Task OnOpenRouterKeySubmitAsync(string apiKey)
+    {
+        if (_openRouterDirect is null)
+        {
+            _error = "OpenRouter provider is not available.";
+            return;
+        }
+
+        _error = null;
+        _status = null;
+        _busy = true;
+        try
+        {
+            if (_openRouterKeyIsUpdate)
+            {
+                var update = await _openRouterDirect.UpdateApiKeyAsync(apiKey);
+                if (update.IsError)
+                {
+                    _error = update.Error;
+                    return;
+                }
+
+                _status = $"{_openRouterDirect.DisplayName} API key updated.";
+            }
+            else
+            {
+                var import = await _openRouterDirect.ImportAsync(apiKey);
+                if (import.IsError)
+                {
+                    _error = import.Error;
+                    return;
+                }
+
+                _status = $"Imported {_openRouterDirect.DisplayName}. Browse models to enable slugs.";
+            }
+
+            _openRouterKeyOpen = false;
+            await RefreshAsync();
+            await OnChanged.InvokeAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void OpenOpenRouterBrowse(DysonModelProviderEntity provider)
+    {
+        var direct = ManagedCatalog.FindDirectBySource(provider.ManagedSource);
+        if (direct is null)
+        {
+            _error = $"Unknown direct managed source '{provider.ManagedSource}'.";
+            return;
+        }
+
+        _openRouterDirect = direct;
+        _openRouterBrowseProvider = provider;
+        _openRouterModelsOpen = true;
+    }
+
+    private void CloseOpenRouterModelsModal() => _openRouterModelsOpen = false;
+
+    private async Task OnOpenRouterModelsChangedAsync()
+    {
+        await RefreshAsync();
+        if (_openRouterBrowseProvider is { } current)
+            _openRouterBrowseProvider = _providers.FirstOrDefault(p => p.Id == current.Id) ?? current;
+        await OnChanged.InvokeAsync();
     }
 
     // --- Provider add/edit/delete (modal-driven) ---

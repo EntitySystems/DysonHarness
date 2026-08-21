@@ -27,7 +27,7 @@ public sealed class OpenAiCompatibleAgentProvider : DysonAgentProvider
             reasoningEffort ?? slug?.DefaultReasoningEffort);
         DefaultMaxTargetContextTokens = slug?.DefaultMaxTargetContextTokens;
 
-        if (!string.IsNullOrWhiteSpace(ManagedSource))
+        if (DysonManagedSources.IsCliProxy(ManagedSource))
         {
             BaseUrl = DysonCliProxyHost.DefaultLocalBaseUrl;
             ApiKey = DysonCliProxyHost.DefaultApiKey;
@@ -72,7 +72,10 @@ public sealed class OpenAiCompatibleAgentProvider : DysonAgentProvider
     public string? BaseUrl { get; }
     public string ProviderDisplayName { get; }
     public string OpenAiApiMode { get; }
-    /// <summary>When set (e.g. cliproxy-codex), provider is managed; null = direct/user-owned.</summary>
+    /// <summary>
+    /// When set (e.g. cliproxy-codex, openrouter), provider is managed; null = direct/user-owned.
+    /// CLIProxy loopback rewrite applies only when <see cref="DysonManagedSources.IsCliProxy"/>.
+    /// </summary>
     public string? ManagedSource { get; }
     /// <summary>Top-level request reasoning_effort; null/empty = omit.</summary>
     public string? ReasoningEffort { get; set; }

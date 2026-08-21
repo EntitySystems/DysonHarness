@@ -1,6 +1,6 @@
 # Inference providers
 
-Per-provider reference for model slugs, auth/base URLs, and thinking/effort parameters for specific integrations. Not a general proxy catalog — **OpenRouter is later**.
+Per-provider reference for model slugs, auth/base URLs, and thinking/effort parameters for specific integrations. This includes direct API-key managed providers and local CLIProxy-backed providers; the two lifecycles are distinct.
 
 Research date: **2026-07-27** (slugs and effort enums rot quickly; catalogs may drift).
 
@@ -8,6 +8,7 @@ Research date: **2026-07-27** (slugs and effort enums rot quickly; catalogs may 
 
 | Provider | Page |
 | -------- | ---- |
+| OpenRouter | [openrouter.md](openrouter.md) |
 | Ollama | [ollama.md](ollama.md) |
 | Kimi Code | [kimi-code.md](kimi-code.md) |
 | Kimi (CLIProxy) | [kimi-cliproxy.md](kimi-cliproxy.md) |
@@ -19,7 +20,13 @@ Research date: **2026-07-27** (slugs and effort enums rot quickly; catalogs may 
 | Claude Code | [claude-code.md](claude-code.md) |
 | OpenCode Zen / Go | [opencode-zen-go.md](opencode-zen-go.md) |
 
-## Managed CLIProxy providers
+## Managed provider paths
+
+### Direct managed (API key)
+
+[OpenRouter](openrouter.md) is a direct managed provider (`ManagedSource=openrouter`). Dyson stores the user-supplied Bearer API key on the provider row, calls `https://openrouter.ai/api/v1` directly, and lets the user browse the live text-model catalog and enable only selected models. It does not use CLIProxy, loopback port 8317, OAuth Connect/Verify, or a local managed binary.
+
+### Managed CLIProxy providers
 
 Dyson can import **ChatGPT Codex**, **Grok Build**, **Antigravity**, **Kimi**, and **Claude Code** as managed rows (`ManagedSource` = `cliproxy-codex` / `cliproxy-grok` / `cliproxy-antigravity` / `cliproxy-kimi` / `cliproxy-claude`) that talk to a pinned local [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) process:
 
@@ -28,18 +35,19 @@ Dyson can import **ChatGPT Codex**, **Grok Build**, **Antigravity**, **Kimi**, a
 - Secrets: client + management keys are stable shared plaintext constants on `DysonCliProxyHost` (`DefaultApiKey` / `DefaultManagementKey`), not per-install random `keys.json`. Loopback-only (`127.0.0.1`); every Dyson build can attach to one local CLIProxy. Sidecar `keys.json` is a mirror.
 - Auth: Management API OAuth (`BeginConnection` / `CompleteConnection` / `VerifyConnection` on the `Managed*InferenceProvider` subclasses in the catalog)
 - Inference: unchanged OpenAI-compatible session path — `BaseUrl=http://127.0.0.1:8317/v1`, `OpenAiApiMode=Responses` (including Claude — proxy exposes OpenAI `/v1/responses`, not Anthropic Messages). Explicit `prompt_cache_options` are omitted (CLIProxy rejects them); `prompt_cache_key` + stable transcript ordering still apply.
-- UI: Settings → Models **Third-party managed providers** section (Import / Connect / Verify); session resolve calls `EnsureRunningAsync` when the selected slug’s provider has `ManagedSource`
+- UI: Settings → Models **Third-party managed providers** section (Import / Connect / Verify); session resolve calls `EnsureRunningAsync` only when the selected slug’s `ManagedSource` is a `cliproxy-` source
 
 **Skipped in v7.2.102:** Qwen Code and Z.ai/iFlow — pinned CLIProxy has no `*-auth-url` management OAuth for those providers. Anthropic Messages dialect / `ManagedEndpointKind.AnthropicCompatible` session work remains reserved and not shipped.
 
 ## Harness mapping
 
-Today: `ProviderKind=OpenAICompatible` with per-provider `BaseUrl` / `ApiKey` / `OpenAiApiMode`, and per-slug `Slug` + freeform `DefaultReasoningEffort` / `ReasoningModes` ([storage/models.md](../storage/models.md)). Non-empty effort → Completions top-level `"reasoning_effort"`; Responses nested `"reasoning": { "effort": "…" }` ([engine/README.md](../engine/README.md)); blank/null omits the field.
+Today: `ProviderKind=OpenAICompatible` with per-provider `BaseUrl` / `ApiKey` / `OpenAiApiMode`, and per-slug `Slug` + freeform `DefaultReasoningEffort` / `ReasoningModes` ([storage/models.md](../storage/models.md)). Non-empty effort → Completions top-level `"reasoning_effort"`, except OpenRouter Completions uses nested `"reasoning": { "effort": "…" }`; Responses also uses nested `reasoning.effort` ([engine/README.md](../engine/README.md)). Blank/null omits the field.
 
 **Works today** with that path:
 
 | Provider | Fit |
 | -------- | --- |
+| [OpenRouter](openrouter.md) | Direct managed API-key provider; Completions with nested `reasoning.effort`; live text-model discovery with enable-only persistence |
 | [Ollama](ollama.md) | Completions + top-level `reasoning_effort` (`high` / `medium` / `low` / `max` / `none`); Responses mode would send nested `reasoning.effort` |
 | [Kimi Code](kimi-code.md) | Completions + K3 `low` / `high` / `max`; omit effort for K2.7 Code |
 | [Kimi (CLIProxy)](kimi-cliproxy.md) | Subscription via CLIProxy managed provider (`cliproxy-kimi`); local Responses |

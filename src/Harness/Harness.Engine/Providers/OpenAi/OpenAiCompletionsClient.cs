@@ -42,8 +42,7 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
             };
         }
 
-        if (!string.IsNullOrWhiteSpace(provider.ReasoningEffort))
-            body["reasoning_effort"] = provider.ReasoningEffort.Trim();
+        ApplyReasoningEffort(body, provider);
 
         var content = new StringBuilder();
         var reasoning = new StringBuilder();
@@ -189,6 +188,25 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
                 PromptTokens = promptTokens,
             },
         });
+    }
+
+    /// <summary>
+    /// Completions reasoning: OpenRouter uses nested <c>reasoning.effort</c>; everyone else uses
+    /// top-level <c>reasoning_effort</c>. Blank/null effort omits both. Literal <c>none</c> is sent.
+    /// </summary>
+    internal static void ApplyReasoningEffort(JsonObject body, OpenAiCompatibleAgentProvider provider)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        ArgumentNullException.ThrowIfNull(provider);
+
+        if (string.IsNullOrWhiteSpace(provider.ReasoningEffort))
+            return;
+
+        var effort = provider.ReasoningEffort.Trim();
+        if (DysonManagedSources.IsOpenRouter(provider.ManagedSource))
+            body["reasoning"] = new JsonObject { ["effort"] = effort };
+        else
+            body["reasoning_effort"] = effort;
     }
 
     public static Result<OpenAiModelReply, string> Parse(JsonObject response)

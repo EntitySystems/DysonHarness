@@ -1,0 +1,114 @@
+@namespace Harness.UI.Components.Models
+@using DysonHarness
+@using Microsoft.AspNetCore.Components.Web
+
+@if (IsOpen)
+{
+    <div class="confirm-dialog-backdrop"
+         role="presentation"
+         @onclick="CancelAsync">
+        <div class="confirm-dialog"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="openrouter-key-modal-title"
+             style="max-width:480px;width:100%;"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnKeyDown">
+            <div class="confirm-dialog__header">
+                <h3 id="openrouter-key-modal-title">@Title</h3>
+            </div>
+            <div class="confirm-dialog__body">
+                @if (!string.IsNullOrEmpty(_error))
+                {
+                    <div class="error-banner" style="margin:0 0 8px;">@_error</div>
+                }
+
+                <div class="field">
+                    <label>API key</label>
+                    <input class="field"
+                           @bind="_apiKey"
+                           type="password"
+                           autocomplete="off" />
+                </div>
+            </div>
+            <div class="confirm-dialog__actions">
+                <button type="button"
+                        class="btn btn-ghost btn--sm"
+                        disabled="@_busy"
+                        @onclick="CancelAsync">
+                    Cancel
+                </button>
+                <button type="button"
+                        class="btn btn-primary btn--sm"
+                        disabled="@_busy"
+                        @onclick="SubmitAsync">
+                    Save
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public string Title { get; set; } = "OpenRouter API key";
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback<string> OnSubmit { get; set; }
+
+    private string _apiKey = "";
+    private string? _error;
+    private bool _busy;
+    private bool _initializedForOpen;
+
+    protected override void OnParametersSet()
+    {
+        if (IsOpen && !_initializedForOpen)
+        {
+            _initializedForOpen = true;
+            _error = null;
+            _busy = false;
+            _apiKey = "";
+        }
+        else if (!IsOpen)
+        {
+            _initializedForOpen = false;
+        }
+    }
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape" && !_busy)
+            _ = CancelAsync();
+    }
+
+    private async Task CancelAsync()
+    {
+        if (_busy)
+            return;
+
+        await OnClose.InvokeAsync();
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (_busy)
+            return;
+
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_apiKey))
+        {
+            _error = "API key is required.";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            await OnSubmit.InvokeAsync(_apiKey.Trim());
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

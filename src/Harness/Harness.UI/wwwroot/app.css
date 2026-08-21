@@ -694,6 +694,10 @@ code, .mono {
   overflow: hidden;
 }
 
+.model-slug-modal--wide {
+  width: min(720px, 100%);
+}
+
 .model-slug-modal__header {
   display: flex;
   align-items: center;
@@ -753,6 +757,28 @@ code, .mono {
   align-items: stretch;
   gap: 2px;
   border-radius: var(--radius-sm);
+}
+
+.model-slug-modal__row--catalog {
+  align-items: flex-start;
+}
+
+.model-slug-modal__catalog-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 8px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.model-slug-modal__catalog-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .model-slug-modal__row.is-selected {
@@ -6763,7 +6789,7 @@ code, .mono {
   margin: 6px 0;
 }
 
-/* Composer effort picker ? panel opens upward above the composer */
+/* Models + composer: panel opens upward so it is not clipped by the list/footer */
 .effort-picker--up .effort-picker__panel {
   top: auto;
   bottom: calc(100% + 4px);
