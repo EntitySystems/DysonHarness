@@ -5,7 +5,7 @@ namespace Harness.Tests;
 /// <summary>
 /// ponytail: assert-only self-check for session todo TaskCode uniqueness, status enum round-trip,
 /// SubmitSubagentReport incomplete-todo gate, Failed-supersede, post-submit reject, EndsCurrentTurn,
-/// Failed→Failed reject, catalog wording, and root catalog omit (Xunit Fact).
+/// Failed→Failed reject, TryReopenForNewParentTask resubmit, catalog wording, and root catalog omit (Xunit Fact).
 /// </summary>
 public class DysonSessionTodoTests
 {
@@ -18,6 +18,7 @@ public class DysonSessionTodoTests
         AssertSubmitSubagentReportFailedSupersede().GetAwaiter().GetResult();
         AssertSubmitSubagentReportRejectsRetryAfterCompleted().GetAwaiter().GetResult();
         AssertSubmitSubagentReportRejectsFailedRetry().GetAwaiter().GetResult();
+        AssertSubmitSubagentReportReopenForNewParentTask().GetAwaiter().GetResult();
         AssertSubmitSubagentReportEndsCurrentTurn().GetAwaiter().GetResult();
         AssertSubmitSubagentReportCatalogWording();
         AssertSubmitSubagentReportRootCatalogOmit();
@@ -199,10 +200,13 @@ public class DysonSessionTodoTests
         // Completed → second submit rejected (not idempotent Ok)
         var second = await failed.SubmitSubagentReportAsync("again").ConfigureAwait(false);
         if (!second.IsError
-            || second.Error.IndexOf("already submitted", StringComparison.OrdinalIgnoreCase) < 0)
+            || second.Error.IndexOf("already submitted", StringComparison.OrdinalIgnoreCase) < 0
+            || second.Error.IndexOf(
+                "To communicate with the parent without a new report cycle, call TriggerParentEvent instead.",
+                StringComparison.Ordinal) < 0)
         {
             throw new InvalidOperationException(
-                $"Expected second submit rejected with already submitted, got: {(second.IsError ? second.Error : "ok")}");
+                $"Expected second submit rejected with already submitted + TriggerParentEvent, got: {(second.IsError ? second.Error : "ok")}");
         }
 
         if (failed.Status != DysonSessionStatus.Completed)
@@ -216,10 +220,13 @@ public class DysonSessionTodoTests
             throw new InvalidOperationException("Expected TryMarkTerminal Stopped to succeed.");
         var stoppedReport = await stopped.SubmitSubagentReportAsync("should reject").ConfigureAwait(false);
         if (!stoppedReport.IsError
-            || stoppedReport.Error.IndexOf("already Stopped", StringComparison.OrdinalIgnoreCase) < 0)
+            || stoppedReport.Error.IndexOf("already Stopped", StringComparison.OrdinalIgnoreCase) < 0
+            || stoppedReport.Error.IndexOf(
+                "To communicate with the parent without a new report cycle, call TriggerParentEvent instead.",
+                StringComparison.Ordinal) < 0)
         {
             throw new InvalidOperationException(
-                $"Expected Stopped submit rejected, got: {(stoppedReport.IsError ? stoppedReport.Error : "ok")}");
+                $"Expected Stopped submit rejected with TriggerParentEvent, got: {(stoppedReport.IsError ? stoppedReport.Error : "ok")}");
         }
     }
 
@@ -234,10 +241,13 @@ public class DysonSessionTodoTests
 
         var retry = await session.SubmitSubagentReportAsync("retry noise").ConfigureAwait(false);
         if (!retry.IsError
-            || retry.Error.IndexOf("already submitted", StringComparison.OrdinalIgnoreCase) < 0)
+            || retry.Error.IndexOf("already submitted", StringComparison.OrdinalIgnoreCase) < 0
+            || retry.Error.IndexOf(
+                "To communicate with the parent without a new report cycle, call TriggerParentEvent instead.",
+                StringComparison.Ordinal) < 0)
         {
             throw new InvalidOperationException(
-                $"Expected post-completed retry rejected with already submitted, got: {(retry.IsError ? retry.Error : "ok")}");
+                $"Expected post-completed retry rejected with already submitted + TriggerParentEvent, got: {(retry.IsError ? retry.Error : "ok")}");
         }
 
         if (session.Status != DysonSessionStatus.Completed)
@@ -264,10 +274,13 @@ public class DysonSessionTodoTests
             .SubmitSubagentReportAsync("still blocked", failed: true)
             .ConfigureAwait(false);
         if (!again.IsError
-            || again.Error.IndexOf("already submitted", StringComparison.OrdinalIgnoreCase) < 0)
+            || again.Error.IndexOf("already submitted", StringComparison.OrdinalIgnoreCase) < 0
+            || again.Error.IndexOf(
+                "To communicate with the parent without a new report cycle, call TriggerParentEvent instead.",
+                StringComparison.Ordinal) < 0)
         {
             throw new InvalidOperationException(
-                $"Expected Failed→Failed rejected with already submitted, got: {(again.IsError ? again.Error : "ok")}");
+                $"Expected Failed→Failed rejected with already submitted + TriggerParentEvent, got: {(again.IsError ? again.Error : "ok")}");
         }
 
         if (session.Status != DysonSessionStatus.Failed)
@@ -300,6 +313,13 @@ public class DysonSessionTodoTests
         {
             throw new InvalidOperationException(
                 "SubmitSubagentReport description must not contain 'root Work session'.");
+        }
+
+        if (!report.Description.Contains("TriggerSubagentEvent", StringComparison.Ordinal)
+            || !report.Description.Contains("TriggerParentEvent", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "SubmitSubagentReport description must contain 'TriggerSubagentEvent' and 'TriggerParentEvent'.");
         }
 
         if (!pipeline.Tools.TryGetValue("ListTodos", out var listTodos))
@@ -399,10 +419,13 @@ public class DysonSessionTodoTests
         }).ConfigureAwait(false);
 
         if (!retry.IsError
-            || retry.Content.IndexOf("already submitted", StringComparison.OrdinalIgnoreCase) < 0)
+            || retry.Content.IndexOf("already submitted", StringComparison.OrdinalIgnoreCase) < 0
+            || retry.Content.IndexOf(
+                "To communicate with the parent without a new report cycle, call TriggerParentEvent instead.",
+                StringComparison.Ordinal) < 0)
         {
             throw new InvalidOperationException(
-                $"Expected executor retry error with already submitted, got: {(retry.IsError ? retry.Content : "ok")}");
+                $"Expected executor retry error with already submitted + TriggerParentEvent, got: {(retry.IsError ? retry.Content : "ok")}");
         }
 
         if (retry.EndsCurrentTurn)
@@ -428,6 +451,88 @@ public class DysonSessionTodoTests
             throw new InvalidOperationException("Successful failed-status SubmitSubagentReport must set EndsCurrentTurn.");
         if (failedChild.Status != DysonSessionStatus.Failed)
             throw new InvalidOperationException("Expected session Failed after failed-status submit.");
+    }
+
+    private static async Task AssertSubmitSubagentReportReopenForNewParentTask()
+    {
+        // Completed → reopen → second completed report succeeds with the new summary.
+        var completed = new StubSession();
+        var first = await completed.SubmitSubagentReportAsync("first handoff").ConfigureAwait(false);
+        if (first.IsError)
+            throw new InvalidOperationException($"Expected first completed report ok, got: {first.Error}");
+        if (completed.Status != DysonSessionStatus.Completed)
+            throw new InvalidOperationException("Expected first completed report to mark Completed.");
+
+        if (!completed.TryReopenForNewParentTask())
+            throw new InvalidOperationException("Expected TryReopenForNewParentTask true after Completed.");
+        if (completed.Status != DysonSessionStatus.Active)
+            throw new InvalidOperationException("Expected Status Active after reopen from Completed.");
+        if (completed.IsTerminal)
+            throw new InvalidOperationException("Expected reopened session to be non-terminal.");
+        if (!string.Equals(completed.LastReportSummary, "first handoff", StringComparison.Ordinal))
+            throw new InvalidOperationException("Expected LastReportSummary kept after reopen from Completed.");
+
+        var second = await completed.SubmitSubagentReportAsync("second handoff").ConfigureAwait(false);
+        if (second.IsError)
+            throw new InvalidOperationException($"Expected second completed report after reopen ok, got: {second.Error}");
+        if (completed.Status != DysonSessionStatus.Completed)
+            throw new InvalidOperationException("Expected second completed report to mark Completed.");
+        if (!string.Equals(completed.LastReportSummary, "second handoff", StringComparison.Ordinal))
+            throw new InvalidOperationException("Expected LastReportSummary replaced on second completed report.");
+
+        // Failed → reopen → second failed report succeeds (new cycle; without reopen Failed→Failed rejects).
+        var failed = new StubSession();
+        var failedFirst = await failed
+            .SubmitSubagentReportAsync("blocked: missing schema", failed: true)
+            .ConfigureAwait(false);
+        if (failedFirst.IsError)
+            throw new InvalidOperationException($"Expected first failed report ok, got: {failedFirst.Error}");
+        if (failed.Status != DysonSessionStatus.Failed)
+            throw new InvalidOperationException("Expected first failed report to mark Failed.");
+
+        if (!failed.TryReopenForNewParentTask())
+            throw new InvalidOperationException("Expected TryReopenForNewParentTask true after Failed.");
+        if (failed.Status != DysonSessionStatus.Active)
+            throw new InvalidOperationException("Expected Status Active after reopen from Failed.");
+        if (!string.Equals(failed.LastReportSummary, "blocked: missing schema", StringComparison.Ordinal))
+            throw new InvalidOperationException("Expected LastReportSummary kept after reopen from Failed.");
+
+        var failedSecond = await failed
+            .SubmitSubagentReportAsync("still blocked after reopen", failed: true)
+            .ConfigureAwait(false);
+        if (failedSecond.IsError)
+            throw new InvalidOperationException($"Expected second failed report after reopen ok, got: {failedSecond.Error}");
+        if (failed.Status != DysonSessionStatus.Failed)
+            throw new InvalidOperationException("Expected second failed report after reopen to mark Failed.");
+        if (!string.Equals(failed.LastReportSummary, "still blocked after reopen", StringComparison.Ordinal))
+            throw new InvalidOperationException("Expected LastReportSummary replaced on second failed report.");
+
+        // Reopen is a no-op on already-Active.
+        var active = new StubSession();
+        if (active.Status != DysonSessionStatus.Active)
+            throw new InvalidOperationException("Expected new StubSession to start Active.");
+        if (active.TryReopenForNewParentTask())
+            throw new InvalidOperationException("Expected TryReopenForNewParentTask false on Active.");
+        if (active.Status != DysonSessionStatus.Active)
+            throw new InvalidOperationException("Expected Status unchanged after reopen no-op on Active.");
+
+        // Reopen is a no-op on Stopped.
+        var stopped = new StubSession();
+        if (!stopped.TryMarkTerminal(DysonSessionStatus.Stopped, "stopped by parent"))
+            throw new InvalidOperationException("Expected TryMarkTerminal Stopped to succeed.");
+        if (stopped.TryReopenForNewParentTask())
+            throw new InvalidOperationException("Expected TryReopenForNewParentTask false on Stopped.");
+        if (stopped.Status != DysonSessionStatus.Stopped)
+            throw new InvalidOperationException("Expected Status unchanged after reopen no-op on Stopped.");
+
+        // Reopen is a no-op on Interrupted.
+        var interrupted = new StubSession();
+        if (!interrupted.TryMarkTerminal(DysonSessionStatus.Interrupted, "interrupted"))
+            throw new InvalidOperationException("Expected TryMarkTerminal Interrupted to succeed.");
+        if (interrupted.TryReopenForNewParentTask())
+            throw new InvalidOperationException("Expected TryReopenForNewParentTask false on Interrupted.");
+        if (interrupted.Status != DysonSessionStatus.Interrupted)
+            throw new InvalidOperationException("Expected Status unchanged after reopen no-op on Interrupted.");
     }
 
     private sealed class StubProvider : DysonAgentProvider;

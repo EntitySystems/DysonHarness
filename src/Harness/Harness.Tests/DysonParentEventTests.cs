@@ -7,7 +7,8 @@ namespace Harness.Tests;
 /// <summary>
 /// ponytail: assert-only checks for inter-agent events + AskQuestion (Xunit Fact).
 /// Covers: any-wait deadlock on TriggerParentEvent only; Respond while waiting; interrupt cancels
-/// event wait; non-interrupt fails while child waiting; layer omit; Q/A formatter.
+/// event wait; non-interrupt fails while child waiting; inject after completed report reopens and
+/// Wait waits for the second handoff; layer omit; Q/A formatter.
 /// </summary>
 public class DysonParentEventTests
 {
@@ -20,6 +21,7 @@ public class DysonParentEventTests
         AssertDeadlockAndRespondWhileWaiting().GetAwaiter().GetResult();
         AssertInterruptCancelsEventWait().GetAwaiter().GetResult();
         AssertNonInterruptFailsWhileWaiting().GetAwaiter().GetResult();
+        AssertInjectAfterCompletedReportWaitsForSecond().GetAwaiter().GetResult();
     }
 
     private static void AssertLayerGating()
@@ -251,6 +253,90 @@ public class DysonParentEventTests
         _ = await triggerTask.ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// After a completed report, parent inject reopens the child and WaitForSubagent waits for the
+    /// second handoff (not the old Completed). Hanging PromptHarnessTurnAsync so kickoff cannot
+    /// mark Failed before the second submit.
+    /// </summary>
+    private static async Task AssertInjectAfterCompletedReportWaitsForSecond()
+    {
+        var parent = new StubSession();
+        var child = new HangingChildSession();
+        parent.RegisterForTest(child);
+
+        try
+        {
+            var first = await child.SubmitSubagentReportAsync("first handoff").ConfigureAwait(false);
+            if (first.IsError)
+                throw new InvalidOperationException("Expected first completed report ok: " + first.Error);
+            if (child.Status != DysonSessionStatus.Completed)
+                throw new InvalidOperationException("Expected first report to mark Completed.");
+
+            var injected = await parent
+                .TriggerSubagentEventAsync(child.Id, "new assignment")
+                .ConfigureAwait(false);
+            if (injected.IsError)
+                throw new InvalidOperationException("Expected inject after report ok: " + injected.Error);
+
+            var json = injected.Value;
+            if ((json.IndexOf("\"reopened\":true", StringComparison.Ordinal) < 0
+                    && json.IndexOf("\"reopened\": true", StringComparison.Ordinal) < 0)
+                || json.IndexOf("queued", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                throw new InvalidOperationException(
+                    "Expected inject JSON with reopened:true and queued: " + json);
+            }
+
+            if (child.Status != DysonSessionStatus.Active)
+                throw new InvalidOperationException("Expected reopen to Active, got " + child.Status);
+            if (!string.Equals(child.LastReportSummary, "first handoff", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected LastReportSummary unchanged until second submit.");
+
+            await child.PromptStarted.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+
+            var waitTask = parent.WaitForSubagentAsync(child.Id, timeoutMs: 5000);
+            await Task.Delay(80).ConfigureAwait(false);
+            if (waitTask.IsCompleted)
+            {
+                var early = await waitTask.ConfigureAwait(false);
+                throw new InvalidOperationException(
+                    "WaitForSubagent returned the old Completed instead of waiting for the second report: " +
+                    (early.IsError ? early.Error : early.Value));
+            }
+
+            var second = await child.SubmitSubagentReportAsync("second handoff").ConfigureAwait(false);
+            if (second.IsError)
+                throw new InvalidOperationException("Expected second report ok: " + second.Error);
+            if (child.Status != DysonSessionStatus.Completed)
+                throw new InvalidOperationException("Expected second report to mark Completed.");
+            if (!string.Equals(child.LastReportSummary, "second handoff", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected LastReportSummary replaced by second handoff.");
+
+            var waited = await waitTask.ConfigureAwait(false);
+            if (waited.IsError)
+                throw new InvalidOperationException("Expected wait after second report ok: " + waited.Error);
+            if (waited.Value.IndexOf("Completed", StringComparison.Ordinal) < 0
+                || waited.Value.IndexOf("second handoff", StringComparison.Ordinal) < 0
+                || waited.Value.IndexOf("first handoff", StringComparison.Ordinal) >= 0)
+            {
+                throw new InvalidOperationException(
+                    "Expected wait JSON Completed with second handoff, not first: " + waited.Value);
+            }
+        }
+        finally
+        {
+            child.CancelBackgroundRunForTest();
+            try
+            {
+                await child.PromptFinished.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Prompt never started (kickoff failed before hang).
+            }
+        }
+    }
+
     private static void AssertHas(DysonMcpPipeline pipeline, string name)
     {
         if (!pipeline.Tools.ContainsKey(name))
@@ -265,7 +351,7 @@ public class DysonParentEventTests
 
     private sealed class StubProvider : DysonAgentProvider;
 
-    private sealed class StubSession() : DysonAgentSession(
+    private class StubSession() : DysonAgentSession(
         DysonAgentModes.Work,
         new DysonAgentSessionConfig(),
         new StubProvider())
@@ -331,5 +417,37 @@ public class DysonParentEventTests
         public override Task<Result<DysonAgentSessionEvent, string>> WaitForNotifyAsync(
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// Dedicated child whose PromptHarnessTurnAsync hangs until cancelled so KickOffChildPrompt
+    /// cannot mark Failed after reopen (existing StubSession returns Success immediately).
+    /// </summary>
+    private sealed class HangingChildSession() : StubSession
+    {
+        public int PromptCount;
+        public readonly TaskCompletionSource PromptStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource PromptFinished =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void CancelBackgroundRunForTest() => CancelBackgroundRun();
+
+        public override async Task<VoidResult<string>> PromptHarnessTurnAsync(
+            DysonAgentTurn turn,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref PromptCount);
+            PromptStarted.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+                return VoidResult<string>.Success;
+            }
+            finally
+            {
+                PromptFinished.TrySetResult();
+            }
+        }
     }
 }
