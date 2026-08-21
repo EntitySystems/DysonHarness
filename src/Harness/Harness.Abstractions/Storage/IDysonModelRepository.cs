@@ -39,10 +39,14 @@ public interface IDysonModelRepository
 
     /// <summary>
     /// Insert-or-update a managed provider by <paramref name="managedSource"/> (id-stable),
-    /// merging slugs by name (preserves slug Id and IsEnabled). Empty <paramref name="slugs"/> clears the catalog.
+    /// merging slugs by name (preserves slug Id and IsEnabled). Empty <paramref name="slugs"/> clears the catalog
+    /// when <paramref name="syncSlugs"/> is true.
     /// </summary>
     /// <param name="shared">
     /// When true, managed provider is shared; otherwise subject-owned.
+    /// </param>
+    /// <param name="syncSlugs">
+    /// When false, update provider fields only and ignore <paramref name="slugs"/>.
     /// </param>
     Task<Result<Guid, string>> UpsertManagedProviderAsync(
         string managedSource,
@@ -52,6 +56,16 @@ public interface IDysonModelRepository
         string openAiApiMode,
         IReadOnlyList<ManagedSlugSpec> slugs,
         bool shared = false,
+        bool syncSlugs = true,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Insert or update a single managed-provider slug by name. Manual providers are rejected.
+    /// </summary>
+    Task<Result<Guid, string>> UpsertManagedSlugAsync(
+        Guid providerId,
+        ManagedSlugSpec spec,
+        bool enabled,
         CancellationToken cancellationToken = default);
 
     Task<VoidResult<string>> DeleteProviderAsync(

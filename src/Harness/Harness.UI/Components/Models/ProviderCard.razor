@@ -22,14 +22,14 @@
         <span class="list-item__meta mono">@Provider.BaseUrl</span>
     }
 
-    @if (IsManaged && !CliProxyInstalled)
+    @if (IsCliProxy && !CliProxyInstalled)
     {
         <div class="error-banner">
             CLIProxyAPI binary missing — Connect blocked until reinstall (use Import above).
         </div>
     }
 
-    @if (IsManaged && DownloadProgress is { } prog)
+    @if (IsCliProxy && DownloadProgress is { } prog)
     {
         <div class="provider-card__download">
             <div class="list-item__meta mono">
@@ -54,7 +54,7 @@
         </div>
     }
 
-    @if (IsManaged
+    @if (IsCliProxy
         && AuthPending
         && (!string.IsNullOrWhiteSpace(PendingUserCode) || !string.IsNullOrWhiteSpace(PendingAuthUrl)))
     {
@@ -71,7 +71,13 @@
     }
 
     <div class="btn-row provider-card__actions">
-        @if (IsManaged)
+        @if (IsOpenRouter)
+        {
+            <button type="button" class="btn btn-primary btn--sm" @onclick="OnBrowseModels">Browse models</button>
+            <button type="button" class="btn btn--sm" @onclick="OnUpdateApiKey">Update API key</button>
+            <button type="button" class="btn btn-ghost btn--sm" @onclick="OnDelete">Delete</button>
+        }
+        else if (IsCliProxy)
         {
             @if (AuthPending)
             {
@@ -112,7 +118,11 @@
             @if (Provider.Slugs.Count == 0)
             {
                 <div class="list-item__meta">
-                    @(IsManaged ? "No slugs yet — Connect then Verify / Refresh models." : "No slugs")
+                    @(IsOpenRouter
+                        ? "No slugs yet — Browse models to enable some."
+                        : IsManaged
+                            ? "No slugs yet — Connect then Verify / Refresh models."
+                            : "No slugs")
                 </div>
             }
             else
@@ -148,6 +158,12 @@
     /// <summary>Computed: managed when <see cref="DysonModelProviderEntity.ManagedSource"/> is set.</summary>
     public bool IsManaged => Provider.ManagedSource is not null;
 
+    /// <summary>CLIProxy OAuth chrome (Connect / Verify / missing binary).</summary>
+    public bool IsCliProxy => DysonManagedSources.IsCliProxy(Provider.ManagedSource);
+
+    /// <summary>Direct OpenRouter API-key managed provider.</summary>
+    public bool IsOpenRouter => DysonManagedSources.IsOpenRouter(Provider.ManagedSource);
+
     /// <summary>False blocks Connect / Verify (CLIProxyAPI binary missing).</summary>
     [Parameter] public bool CliProxyInstalled { get; set; }
 
@@ -175,6 +191,8 @@
     [Parameter] public EventCallback OnDisconnect { get; set; }
     [Parameter] public EventCallback OnDelete { get; set; }
     [Parameter] public EventCallback OnImport { get; set; }
+    [Parameter] public EventCallback OnBrowseModels { get; set; }
+    [Parameter] public EventCallback OnUpdateApiKey { get; set; }
 
     // Manual-provider callbacks.
     [Parameter] public EventCallback OnEditProvider { get; set; }

@@ -4187,7 +4187,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             provider?.BaseUrl,
             provider?.ApiKey);
 
-        if (!string.IsNullOrWhiteSpace(provider?.ManagedSource))
+        if (DysonManagedSources.IsCliProxy(provider?.ManagedSource))
         {
             var ensure = await _cliProxy.EnsureRunningAsync(progress: null, cancellationToken)
                 .ConfigureAwait(false);

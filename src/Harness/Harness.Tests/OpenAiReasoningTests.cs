@@ -16,6 +16,7 @@ public class OpenAiReasoningTests
         AssertCompletionsParseReasoning();
         AssertResponsesParseReasoning();
         AssertResponsesCreateBodyNestedReasoningEffort();
+        AssertCompletionsCreateBodyReasoningEffort();
         AssertPromptCacheOptionsGate();
         AssertTurnReasoningPreviewHandoff();
         AssertNullEffortFallsBackToSlugDefault();
@@ -178,6 +179,78 @@ public class OpenAiReasoningTests
             throw new InvalidOperationException(
                 $"Expected reasoning.effort 'high', got '{effort ?? "null"}'.");
         }
+    }
+
+    private static void AssertCompletionsCreateBodyReasoningEffort()
+    {
+        static OpenAiCompatibleAgentProvider MakeProvider(string? managedSource, string? reasoningEffort)
+        {
+            var entity = new DysonModelProviderEntity
+            {
+                Id = Guid.NewGuid(),
+                DisplayName = managedSource is null ? "Direct OpenAI" : "Managed",
+                ProviderKind = DysonProviderKinds.OpenAICompatible,
+                BaseUrl = "https://example.test/v1",
+                ApiKey = "sk-test",
+                OpenAiApiMode = DysonOpenAiApiModes.Completions,
+                ManagedSource = managedSource,
+            };
+            var slugEntity = new DysonModelSlugEntity
+            {
+                Id = Guid.NewGuid(),
+                ProviderId = entity.Id,
+                Slug = "test-model",
+                DisplayAlias = "test-model",
+                Provider = entity,
+            };
+            return new OpenAiCompatibleAgentProvider(entity, slugEntity, reasoningEffort);
+        }
+
+        static JsonObject BodyFor(OpenAiCompatibleAgentProvider provider)
+        {
+            var body = new JsonObject();
+            OpenAiCompletionsClient.ApplyReasoningEffort(body, provider);
+            return body;
+        }
+
+        static void ExpectNested(JsonObject body, string expected)
+        {
+            if (body.ContainsKey("reasoning_effort"))
+                throw new InvalidOperationException("OpenRouter Completions body must not include top-level reasoning_effort.");
+
+            var actual = body["reasoning"]?["effort"]?.GetValue<string>();
+            if (!string.Equals(actual, expected, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Expected reasoning.effort '{expected}', got '{actual ?? "null"}'.");
+            }
+        }
+
+        static void ExpectTopLevel(JsonObject body, string expected)
+        {
+            if (body.ContainsKey("reasoning"))
+                throw new InvalidOperationException("Non-OpenRouter Completions body must not include nested reasoning.");
+
+            var actual = body["reasoning_effort"]?.GetValue<string>();
+            if (!string.Equals(actual, expected, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Expected reasoning_effort '{expected}', got '{actual ?? "null"}'.");
+            }
+        }
+
+        static void ExpectOmitted(JsonObject body)
+        {
+            if (body.ContainsKey("reasoning") || body.ContainsKey("reasoning_effort"))
+                throw new InvalidOperationException("Blank/null effort must omit both Completions reasoning shapes.");
+        }
+
+        ExpectNested(BodyFor(MakeProvider(DysonManagedSources.OpenRouter, "high")), "high");
+        ExpectTopLevel(BodyFor(MakeProvider(managedSource: null, "high")), "high");
+        ExpectTopLevel(BodyFor(MakeProvider(DysonManagedSources.CliProxyCodex, "high")), "high");
+        ExpectOmitted(BodyFor(MakeProvider(DysonManagedSources.OpenRouter, null)));
+        ExpectOmitted(BodyFor(MakeProvider(DysonManagedSources.OpenRouter, "  ")));
+        ExpectNested(BodyFor(MakeProvider(DysonManagedSources.OpenRouter, "none")), "none");
     }
 
     private static void AssertPromptCacheOptionsGate()

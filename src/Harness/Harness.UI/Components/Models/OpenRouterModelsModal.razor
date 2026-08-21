@@ -1,0 +1,281 @@
+@namespace Harness.UI.Components.Models
+@using DysonHarness
+@using Microsoft.AspNetCore.Components.Web
+@inject IDysonModelRepository ModelStore
+
+@if (IsOpen)
+{
+    <div class="model-slug-modal-backdrop"
+         role="presentation"
+         @onclick="CloseAsync"
+         @onkeydown="OnBackdropKeyDown">
+        <div class="model-slug-modal model-slug-modal--wide"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="openrouter-models-modal-title"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnModalKeyDown">
+            <div class="model-slug-modal__header">
+                <h3 id="openrouter-models-modal-title">Browse OpenRouter models</h3>
+                <button type="button"
+                        class="btn btn-ghost model-slug-modal__close"
+                        disabled="@_toggleBusy"
+                        @onclick="CloseAsync"
+                        aria-label="Close">×</button>
+            </div>
+
+            <div class="model-slug-modal__search">
+                <input type="search"
+                       placeholder="Search slug or display name…"
+                       value="@_search"
+                       disabled="@_busy"
+                       @oninput="OnSearchInput"
+                       @onkeydown="OnModalKeyDown" />
+            </div>
+
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <div class="error-banner" style="margin:8px 14px;">@_error</div>
+            }
+            @if (_busy)
+            {
+                <div class="list-item__meta" style="padding:8px 14px;">Loading models…</div>
+            }
+
+            <div class="model-slug-modal__list">
+                @if (!_busy && FilteredModels.Count == 0)
+                {
+                    <div class="model-slug-modal__empty">
+                        @(string.IsNullOrWhiteSpace(_search) ? "No models." : "No matching models.")
+                    </div>
+                }
+                else
+                {
+                    @foreach (var model in FilteredModels)
+                    {
+                        var enabled = IsRowEnabled(model);
+                        <div class="model-slug-modal__row model-slug-modal__row--catalog @(enabled ? "is-selected" : null)">
+                            <label class="checkbox-row model-slug-modal__catalog-label">
+                                <input type="checkbox"
+                                       checked="@enabled"
+                                       disabled="@(_busy || _toggleBusy)"
+                                       @onchange="args => ToggleAsync(model, args)" />
+                                <span class="model-slug-modal__catalog-copy">
+                                    <span class="list-item__title">@model.DisplayName</span>
+                                    <span class="list-item__meta mono">@model.Slug</span>
+                                    @if (model.EffortLevels.Count > 0)
+                                    {
+                                        <div class="models-panel__modes">
+                                            @foreach (var mode in model.EffortLevels)
+                                            {
+                                                <span class="models-panel__mode-chip"><span class="mono">@mode</span></span>
+                                            }
+                                        </div>
+                                    }
+                                </span>
+                            </label>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public DysonModelProviderEntity? Provider { get; set; }
+    [Parameter] public IManagedInferenceProvider? Direct { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private readonly Dictionary<string, DysonModelSlugEntity> _persisted =
+        new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<ManagedInferenceModel> _models = [];
+    private string _search = "";
+    private string? _error;
+    private bool _busy;
+    private bool _toggleBusy;
+    private bool _initializedForOpen;
+
+    private IReadOnlyList<ManagedInferenceModel> FilteredModels
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(_search))
+                return _models;
+
+            var term = _search.Trim();
+            return _models
+                .Where(m =>
+                    m.Slug.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || m.DisplayName.Contains(term, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (IsOpen && !_initializedForOpen)
+        {
+            _initializedForOpen = true;
+            await LoadAsync();
+        }
+        else if (!IsOpen)
+        {
+            _initializedForOpen = false;
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _search = "";
+        _error = null;
+        _busy = false;
+        _toggleBusy = false;
+        _models = [];
+        RebuildPersisted(Provider);
+
+        if (Direct is null || Provider is null)
+        {
+            _error = "OpenRouter provider is not available.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(Provider.ApiKey))
+        {
+            _error = "Update API key first";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var result = await Direct.GetModelsAsync(Provider.ApiKey);
+            if (!IsOpen)
+                return;
+
+            if (result.IsError)
+            {
+                _error = result.Error;
+                return;
+            }
+
+            _models = result.Value;
+            await ReloadPersistedAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private bool IsRowEnabled(ManagedInferenceModel model) =>
+        _persisted.TryGetValue(model.Slug, out var row) && row.IsEnabled;
+
+    private async Task ToggleAsync(ManagedInferenceModel model, ChangeEventArgs args)
+    {
+        if (_toggleBusy || Provider is null)
+            return;
+
+        var wantEnabled = IsChecked(args);
+        if (wantEnabled == IsRowEnabled(model))
+            return;
+
+        _toggleBusy = true;
+        _error = null;
+        try
+        {
+            if (wantEnabled)
+            {
+                var spec = new ManagedSlugSpec(
+                    model.Slug,
+                    model.DisplayName,
+                    model.DefaultReasoningEffort,
+                    model.EffortLevels);
+                var upsert = await ModelStore.UpsertManagedSlugAsync(Provider.Id, spec, enabled: true);
+                if (upsert.IsError)
+                {
+                    _error = upsert.Error;
+                    return;
+                }
+            }
+            else if (_persisted.TryGetValue(model.Slug, out var row))
+            {
+                var set = await ModelStore.SetSlugEnabledAsync(row.Id, false);
+                if (set.IsError)
+                {
+                    _error = set.Error;
+                    return;
+                }
+            }
+
+            await ReloadPersistedAsync();
+            await OnChanged.InvokeAsync();
+        }
+        finally
+        {
+            _toggleBusy = false;
+        }
+    }
+
+    private async Task ReloadPersistedAsync()
+    {
+        if (Provider is null)
+            return;
+
+        var get = await ModelStore.GetProviderAsync(Provider.Id);
+        if (!IsOpen)
+            return;
+
+        if (get.IsError)
+        {
+            _error = get.Error;
+            return;
+        }
+
+        RebuildPersisted(get.Value);
+    }
+
+    private void RebuildPersisted(DysonModelProviderEntity? provider)
+    {
+        _persisted.Clear();
+        if (provider is null)
+            return;
+
+        foreach (var slug in provider.Slugs)
+        {
+            if (string.IsNullOrWhiteSpace(slug.Slug))
+                continue;
+            _persisted[slug.Slug] = slug;
+        }
+    }
+
+    private void OnSearchInput(ChangeEventArgs args) =>
+        _search = args.Value?.ToString() ?? "";
+
+    private void OnBackdropKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            _ = CloseAsync();
+    }
+
+    private void OnModalKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            _ = CloseAsync();
+    }
+
+    private async Task CloseAsync()
+    {
+        if (_toggleBusy)
+            return;
+
+        await OnClose.InvokeAsync();
+    }
+
+    private static bool IsChecked(ChangeEventArgs args) =>
+        args.Value is bool flag
+            ? flag
+            : bool.TryParse(args.Value?.ToString(), out var parsed) && parsed;
+}
