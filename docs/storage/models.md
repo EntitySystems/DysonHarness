@@ -62,7 +62,9 @@ Shipped SQLite lives in **`Harness.LocalDb`** (not Engine). External hosts may i
 - `DysonDbContext` via `IDbContextFactory` at `DysonAppPaths.GetDatabasePath(DysonBuildInfo.Current)`
 - Thread-safe entrypoint: singleton `DysonDbAccessor` (process-wide gate per DB path, fresh context per `RunAsync`)
 - Repository impls depend on the accessor (or a pass-down context with single-thread ownership) — never a shared scoped long-lived `DbContext`
-- DI: `AddDysonLocalDb(databasePath)` (UI / hosts)
+- DI: `AddDysonLocalDb(databasePath)` (UI / hosts); starts `DysonSqliteVacuumHostedService`
+- Every 10 minutes, after a 10-minute initial delay, the hosted service `VACUUM`s through `DysonDbAccessor` when `PRAGMA freelist_count >= 64`
+- Vacuum holds the writer gate for the duration (seconds on a large file). It reclaims **deleted** pages only; live `turns.ToolStateJson` / `session_logs` still dominate size
 - `Database.Migrate()` **once** at startup; migrations under `Harness.LocalDb/Migrations/`
 - Entity timestamps are `DateTime` (UTC). Do not use `DateTimeOffset` on EF entities or in EF `OrderBy` queries (SQLite limitation).
 - `UpsertTurnAsync` retries EF concurrent-context / SQLITE_BUSY (5) / locked (6) before failing; other ops rely on the accessor gate + busy `SaveChanges` retry
