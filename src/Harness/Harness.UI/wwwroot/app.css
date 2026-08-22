@@ -525,6 +525,31 @@ code, .mono {
   padding: 14px;
 }
 
+.settings-page__picker-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.settings-page__picker-row-model {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-page__picker-row-effort {
+  flex: 0 0 9.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-page__picker-row-effort select {
+  width: 100%;
+}
+
 .settings-page:has(.models-panel),
 .settings-page--plugins {
   max-width: 980px;

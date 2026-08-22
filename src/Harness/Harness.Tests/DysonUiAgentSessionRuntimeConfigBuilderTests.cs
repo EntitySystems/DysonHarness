@@ -150,6 +150,61 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
     }
 
     [Fact]
+    public async Task BuildAsync_hydrates_provider_reasoning_effort_from_settings_or_slug_default()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var catalog = await harness.SeedProvidersAsync(
+            defaultReasoningEffort: "medium",
+            reasoningModes: ["low", "medium", "high"]);
+        var slugId = catalog.OpenAiSlugId.ToString("D");
+
+        var exploreSlug = await harness.Settings.SetSettingAsync(
+            DysonAppSettingKeys.ExploreModelSlugId, slugId);
+        Assert.False(exploreSlug.IsError, exploreSlug.IsError ? exploreSlug.Error : null);
+        var summarizerSlug = await harness.Settings.SetSettingAsync(
+            DysonAppSettingKeys.WebSearchSummarizerModelSlugId, slugId);
+        Assert.False(summarizerSlug.IsError, summarizerSlug.IsError ? summarizerSlug.Error : null);
+        var turnSlug = await harness.Settings.SetSettingAsync(
+            DysonAppSettingKeys.TurnSummarizerModelSlugId, slugId);
+        Assert.False(turnSlug.IsError, turnSlug.IsError ? turnSlug.Error : null);
+
+        await using (var missingEffort = (await harness.Builder.BuildAsync(new DysonUiAgentSessionRuntimeConfigRequest
+        {
+            AgentMode = DysonAgentModes.Work,
+        })).Value)
+        {
+            var explore = Assert.IsType<OpenAiCompatibleAgentProvider>(missingEffort.Config.ExploreDefaultProvider);
+            Assert.Equal("medium", explore.ReasoningEffort);
+            var summarizer = Assert.IsType<OpenAiCompatibleAgentProvider>(missingEffort.Config.SummarizerProvider);
+            Assert.Equal("medium", summarizer.ReasoningEffort);
+            var turn = Assert.IsType<OpenAiCompatibleAgentProvider>(missingEffort.Config.TurnSummarizerProvider);
+            Assert.Equal("medium", turn.ReasoningEffort);
+        }
+
+        var exploreEffort = await harness.Settings.SetSettingAsync(
+            DysonAppSettingKeys.ExploreReasoningEffort, "high");
+        Assert.False(exploreEffort.IsError, exploreEffort.IsError ? exploreEffort.Error : null);
+        var summarizerEffort = await harness.Settings.SetSettingAsync(
+            DysonAppSettingKeys.WebSearchSummarizerReasoningEffort, "low");
+        Assert.False(summarizerEffort.IsError, summarizerEffort.IsError ? summarizerEffort.Error : null);
+        var turnEffort = await harness.Settings.SetSettingAsync(
+            DysonAppSettingKeys.TurnSummarizerReasoningEffort, "high");
+        Assert.False(turnEffort.IsError, turnEffort.IsError ? turnEffort.Error : null);
+
+        await using var overridden = (await harness.Builder.BuildAsync(new DysonUiAgentSessionRuntimeConfigRequest
+        {
+            AgentMode = DysonAgentModes.Work,
+        })).Value;
+
+        var exploreOverride = Assert.IsType<OpenAiCompatibleAgentProvider>(overridden.Config.ExploreDefaultProvider);
+        Assert.Equal("high", exploreOverride.ReasoningEffort);
+        var summarizerOverride = Assert.IsType<OpenAiCompatibleAgentProvider>(overridden.Config.SummarizerProvider);
+        Assert.Equal("low", summarizerOverride.ReasoningEffort);
+        var turnOverride = Assert.IsType<OpenAiCompatibleAgentProvider>(overridden.Config.TurnSummarizerProvider);
+        Assert.Equal("high", turnOverride.ReasoningEffort);
+    }
+
+    [Fact]
     public async Task DisposeAsync_releases_custom_mcp_retain()
     {
         await using var harness = await Harness.CreateAsync();
@@ -250,7 +305,9 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
             return new SeededWork(created.Value, _workRoot);
         }
 
-        public async Task<SeededProviders> SeedProvidersAsync()
+        public async Task<SeededProviders> SeedProvidersAsync(
+            string? defaultReasoningEffort = null,
+            IEnumerable<string>? reasoningModes = null)
         {
             var demoProvider = await Models.CreateProviderAsync(new DysonModelProviderEntity
             {
@@ -270,7 +327,12 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
                 ApiKey = "sk-test",
             }).ConfigureAwait(false);
             Assert.True(openAiProvider.IsSuccess, openAiProvider.IsError ? openAiProvider.Error : null);
-            var openAiSlug = await Models.AddSlugAsync(openAiProvider.Value, "gpt-test", "GPT Test")
+            var openAiSlug = await Models.AddSlugAsync(
+                    openAiProvider.Value,
+                    "gpt-test",
+                    "GPT Test",
+                    defaultReasoningEffort: defaultReasoningEffort,
+                    reasoningModes: reasoningModes)
                 .ConfigureAwait(false);
             Assert.True(openAiSlug.IsSuccess, openAiSlug.IsError ? openAiSlug.Error : null);
 

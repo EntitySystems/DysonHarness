@@ -3,6 +3,7 @@
 @using DysonHarness
 @using Harness.UI.Components.Models
 @inject IDysonSubjectSettingsRepository AppSettings
+@inject IDysonModelRepository Models
 
 <PageTitle>Agent behavior — Settings</PageTitle>
 
@@ -52,11 +53,28 @@
         </p>
 
         <div class="field" style="margin-top:16px;">
-            <label>Turn summarizer model</label>
-            <ModelSlugPicker SelectedSlugId="_turnSummarizerSlugId"
-                             SelectedSlugIdChanged="OnTurnSummarizerSlugChangedAsync"
-                             AllowEmpty="true"
-                             EmptyLabel="Use session model" />
+            <div class="settings-page__picker-row">
+                <div class="settings-page__picker-row-model">
+                    <label>Turn summarizer model</label>
+                    <ModelSlugPicker SelectedSlugId="_turnSummarizerSlugId"
+                                     SelectedSlugIdChanged="OnTurnSummarizerSlugChangedAsync"
+                                     AllowEmpty="true"
+                                     EmptyLabel="Use session model" />
+                </div>
+                <div class="settings-page__picker-row-effort">
+                    <label for="turn-summarizer-effort">Effort</label>
+                    <select id="turn-summarizer-effort"
+                            value="@_turnSummarizerEffort"
+                            disabled="@(_turnSummarizerSlugId is null)"
+                            @onchange="OnTurnSummarizerEffortChangedAsync">
+                        <option value="">Default</option>
+                        @foreach (var mode in EffortModesFor(_turnSummarizerSlugId))
+                        {
+                            <option value="@mode">@mode</option>
+                        }
+                    </select>
+                </div>
+            </div>
         </div>
         <p class="settings-page__copy" style="margin:0;">
             Model used by SummarizeTurns / the turn context menu to compress older turns into transcript stubs.
@@ -64,11 +82,28 @@
         </p>
 
         <div class="field" style="margin-top:16px;">
-            <label>Web search summarizer</label>
-            <ModelSlugPicker SelectedSlugId="_webSearchSummarizerSlugId"
-                             SelectedSlugIdChanged="OnWebSearchSummarizerSlugChangedAsync"
-                             AllowEmpty="true"
-                             EmptyLabel="Use session model" />
+            <div class="settings-page__picker-row">
+                <div class="settings-page__picker-row-model">
+                    <label>Web search summarizer</label>
+                    <ModelSlugPicker SelectedSlugId="_webSearchSummarizerSlugId"
+                                     SelectedSlugIdChanged="OnWebSearchSummarizerSlugChangedAsync"
+                                     AllowEmpty="true"
+                                     EmptyLabel="Use session model" />
+                </div>
+                <div class="settings-page__picker-row-effort">
+                    <label for="web-search-summarizer-effort">Effort</label>
+                    <select id="web-search-summarizer-effort"
+                            value="@_webSearchSummarizerEffort"
+                            disabled="@(_webSearchSummarizerSlugId is null)"
+                            @onchange="OnWebSearchSummarizerEffortChangedAsync">
+                        <option value="">Default</option>
+                        @foreach (var mode in EffortModesFor(_webSearchSummarizerSlugId))
+                        {
+                            <option value="@mode">@mode</option>
+                        }
+                    </select>
+                </div>
+            </div>
         </div>
         <p class="settings-page__copy" style="margin:0;">
             Model used to compress FreeSearch / WebFetch / extract tool results before they enter the agent transcript.
@@ -76,11 +111,28 @@
         </p>
 
         <div class="field" style="margin-top:16px;">
-            <label>Explore default model</label>
-            <ModelSlugPicker SelectedSlugId="_exploreSlugId"
-                             SelectedSlugIdChanged="OnExploreSlugChangedAsync"
-                             AllowEmpty="true"
-                             EmptyLabel="Use session model" />
+            <div class="settings-page__picker-row">
+                <div class="settings-page__picker-row-model">
+                    <label>Explore default model</label>
+                    <ModelSlugPicker SelectedSlugId="_exploreSlugId"
+                                     SelectedSlugIdChanged="OnExploreSlugChangedAsync"
+                                     AllowEmpty="true"
+                                     EmptyLabel="Use session model" />
+                </div>
+                <div class="settings-page__picker-row-effort">
+                    <label for="explore-effort">Effort</label>
+                    <select id="explore-effort"
+                            value="@_exploreEffort"
+                            disabled="@(_exploreSlugId is null)"
+                            @onchange="OnExploreEffortChangedAsync">
+                        <option value="">Default</option>
+                        @foreach (var mode in EffortModesFor(_exploreSlugId))
+                        {
+                            <option value="@mode">@mode</option>
+                        }
+                    </select>
+                </div>
+            </div>
         </div>
         <p class="settings-page__copy" style="margin:0;">
             Default model for Explore subagents when StartSubagent omits modelSlug.
@@ -88,11 +140,28 @@
         </p>
 
         <div class="field" style="margin-top:16px;">
-            <label>Drone default model</label>
-            <ModelSlugPicker SelectedSlugId="_droneSlugId"
-                             SelectedSlugIdChanged="OnDroneSlugChangedAsync"
-                             AllowEmpty="true"
-                             EmptyLabel="Use session model" />
+            <div class="settings-page__picker-row">
+                <div class="settings-page__picker-row-model">
+                    <label>Drone default model</label>
+                    <ModelSlugPicker SelectedSlugId="_droneSlugId"
+                                     SelectedSlugIdChanged="OnDroneSlugChangedAsync"
+                                     AllowEmpty="true"
+                                     EmptyLabel="Use session model" />
+                </div>
+                <div class="settings-page__picker-row-effort">
+                    <label for="drone-effort">Effort</label>
+                    <select id="drone-effort"
+                            value="@_droneEffort"
+                            disabled="@(_droneSlugId is null)"
+                            @onchange="OnDroneEffortChangedAsync">
+                        <option value="">Default</option>
+                        @foreach (var mode in EffortModesFor(_droneSlugId))
+                        {
+                            <option value="@mode">@mode</option>
+                        }
+                    </select>
+                </div>
+            </div>
         </div>
         <p class="settings-page__copy" style="margin:0;">
             Default model for Drone subagents when StartSubagent omits modelSlug.
@@ -100,11 +169,28 @@
         </p>
 
         <div class="field" style="margin-top:16px;">
-            <label>Security Review default model</label>
-            <ModelSlugPicker SelectedSlugId="_securityReviewSlugId"
-                             SelectedSlugIdChanged="OnSecurityReviewSlugChangedAsync"
-                             AllowEmpty="true"
-                             EmptyLabel="Use session model" />
+            <div class="settings-page__picker-row">
+                <div class="settings-page__picker-row-model">
+                    <label>Security Review default model</label>
+                    <ModelSlugPicker SelectedSlugId="_securityReviewSlugId"
+                                     SelectedSlugIdChanged="OnSecurityReviewSlugChangedAsync"
+                                     AllowEmpty="true"
+                                     EmptyLabel="Use session model" />
+                </div>
+                <div class="settings-page__picker-row-effort">
+                    <label for="security-review-effort">Effort</label>
+                    <select id="security-review-effort"
+                            value="@_securityReviewEffort"
+                            disabled="@(_securityReviewSlugId is null)"
+                            @onchange="OnSecurityReviewEffortChangedAsync">
+                        <option value="">Default</option>
+                        @foreach (var mode in EffortModesFor(_securityReviewSlugId))
+                        {
+                            <option value="@mode">@mode</option>
+                        }
+                    </select>
+                </div>
+            </div>
         </div>
         <p class="settings-page__copy" style="margin:0;">
             Default model for Security Review subagents when StartSubagent omits modelSlug.
@@ -112,11 +198,28 @@
         </p>
 
         <div class="field" style="margin-top:16px;">
-            <label>Bug Review default model</label>
-            <ModelSlugPicker SelectedSlugId="_bugReviewSlugId"
-                             SelectedSlugIdChanged="OnBugReviewSlugChangedAsync"
-                             AllowEmpty="true"
-                             EmptyLabel="Use session model" />
+            <div class="settings-page__picker-row">
+                <div class="settings-page__picker-row-model">
+                    <label>Bug Review default model</label>
+                    <ModelSlugPicker SelectedSlugId="_bugReviewSlugId"
+                                     SelectedSlugIdChanged="OnBugReviewSlugChangedAsync"
+                                     AllowEmpty="true"
+                                     EmptyLabel="Use session model" />
+                </div>
+                <div class="settings-page__picker-row-effort">
+                    <label for="bug-review-effort">Effort</label>
+                    <select id="bug-review-effort"
+                            value="@_bugReviewEffort"
+                            disabled="@(_bugReviewSlugId is null)"
+                            @onchange="OnBugReviewEffortChangedAsync">
+                        <option value="">Default</option>
+                        @foreach (var mode in EffortModesFor(_bugReviewSlugId))
+                        {
+                            <option value="@mode">@mode</option>
+                        }
+                    </select>
+                </div>
+            </div>
         </div>
         <p class="settings-page__copy" style="margin:0;">
             Default model for Bug Review subagents when StartSubagent omits modelSlug.
@@ -131,6 +234,7 @@
 </div>
 
 @code {
+    private readonly Dictionary<Guid, IReadOnlyList<string>> _slugReasoningModes = new();
     private string _automaticCodeReview = DysonAutomaticCodeReviewSetting.None;
     private string _automaticCodeReviewAction = DysonAutomaticCodeReviewSetting.ReportOnly;
     private Guid? _turnSummarizerSlugId;
@@ -139,6 +243,12 @@
     private Guid? _droneSlugId;
     private Guid? _securityReviewSlugId;
     private Guid? _bugReviewSlugId;
+    private string _turnSummarizerEffort = "";
+    private string _webSearchSummarizerEffort = "";
+    private string _exploreEffort = "";
+    private string _droneEffort = "";
+    private string _securityReviewEffort = "";
+    private string _bugReviewEffort = "";
     private string? _error;
     private bool _saved;
 
@@ -162,16 +272,8 @@
 
         _automaticCodeReviewAction = action.Value;
 
-        var summarizer = await AppSettings.GetSettingAsync(DysonAppSettingKeys.TurnSummarizerModelSlugId);
-        if (summarizer.IsError)
-        {
-            _error = summarizer.Error;
+        if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.TurnSummarizerModelSlugId, v => _turnSummarizerSlugId = v))
             return;
-        }
-
-        if (Guid.TryParse(summarizer.Value, out var id) && id != Guid.Empty)
-            _turnSummarizerSlugId = id;
-
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId, v => _webSearchSummarizerSlugId = v))
             return;
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.ExploreModelSlugId, v => _exploreSlugId = v))
@@ -181,6 +283,22 @@
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.SecurityReviewModelSlugId, v => _securityReviewSlugId = v))
             return;
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.BugReviewModelSlugId, v => _bugReviewSlugId = v))
+            return;
+
+        if (!await TryLoadSlugModesAsync())
+            return;
+
+        if (!await TryLoadEffortSettingAsync(_turnSummarizerSlugId, DysonAppSettingKeys.TurnSummarizerReasoningEffort, v => _turnSummarizerEffort = v))
+            return;
+        if (!await TryLoadEffortSettingAsync(_webSearchSummarizerSlugId, DysonAppSettingKeys.WebSearchSummarizerReasoningEffort, v => _webSearchSummarizerEffort = v))
+            return;
+        if (!await TryLoadEffortSettingAsync(_exploreSlugId, DysonAppSettingKeys.ExploreReasoningEffort, v => _exploreEffort = v))
+            return;
+        if (!await TryLoadEffortSettingAsync(_droneSlugId, DysonAppSettingKeys.DroneReasoningEffort, v => _droneEffort = v))
+            return;
+        if (!await TryLoadEffortSettingAsync(_securityReviewSlugId, DysonAppSettingKeys.SecurityReviewReasoningEffort, v => _securityReviewEffort = v))
+            return;
+        if (!await TryLoadEffortSettingAsync(_bugReviewSlugId, DysonAppSettingKeys.BugReviewReasoningEffort, v => _bugReviewEffort = v))
             return;
     }
 
@@ -198,6 +316,66 @@
         else
             assign(null);
         return true;
+    }
+
+    private async Task<bool> TryLoadSlugModesAsync()
+    {
+        var result = await Models.ListProvidersAsync();
+        if (result.IsError)
+        {
+            _error = result.Error;
+            return false;
+        }
+
+        _slugReasoningModes.Clear();
+        foreach (var provider in result.Value)
+        {
+            foreach (var slug in provider.Slugs)
+                _slugReasoningModes[slug.Id] = slug.ReasoningModes;
+        }
+
+        return true;
+    }
+
+    private async Task<bool> TryLoadEffortSettingAsync(Guid? slugId, string effortKey, Action<string> assign)
+    {
+        var setting = await AppSettings.GetSettingAsync(effortKey);
+        if (setting.IsError)
+        {
+            _error = setting.Error;
+            return false;
+        }
+
+        var effort = setting.Value?.Trim() ?? "";
+        if (string.IsNullOrEmpty(effort) || slugId is null || !EffortModesFor(slugId).Contains(effort, StringComparer.OrdinalIgnoreCase))
+        {
+            assign("");
+            if (!string.IsNullOrEmpty(effort))
+            {
+                var cleared = await AppSettings.SetSettingAsync(effortKey, null);
+                if (cleared.IsError)
+                {
+                    _error = cleared.Error;
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        assign(effort);
+        return true;
+    }
+
+    private IReadOnlyList<string> EffortModesFor(Guid? slugId)
+    {
+        if (slugId is not Guid id)
+            return [];
+
+        if (_slugReasoningModes.TryGetValue(id, out var modes) && modes.Count > 0)
+            return modes;
+
+        return EffortPickerPopup.FallbackEffortModes;
     }
 
     private async Task OnAutomaticCodeReviewChangedAsync(ChangeEventArgs e)
@@ -247,47 +425,118 @@
     private Task OnTurnSummarizerSlugChangedAsync(Guid? id) =>
         SaveSlugSettingAsync(
             id,
+            _turnSummarizerSlugId,
             v => _turnSummarizerSlugId = v,
-            DysonAppSettingKeys.TurnSummarizerModelSlugId);
+            v => _turnSummarizerEffort = v,
+            DysonAppSettingKeys.TurnSummarizerModelSlugId,
+            DysonAppSettingKeys.TurnSummarizerReasoningEffort);
 
     private Task OnWebSearchSummarizerSlugChangedAsync(Guid? id) =>
         SaveSlugSettingAsync(
             id,
+            _webSearchSummarizerSlugId,
             v => _webSearchSummarizerSlugId = v,
-            DysonAppSettingKeys.WebSearchSummarizerModelSlugId);
+            v => _webSearchSummarizerEffort = v,
+            DysonAppSettingKeys.WebSearchSummarizerModelSlugId,
+            DysonAppSettingKeys.WebSearchSummarizerReasoningEffort);
 
     private Task OnExploreSlugChangedAsync(Guid? id) =>
         SaveSlugSettingAsync(
             id,
+            _exploreSlugId,
             v => _exploreSlugId = v,
-            DysonAppSettingKeys.ExploreModelSlugId);
+            v => _exploreEffort = v,
+            DysonAppSettingKeys.ExploreModelSlugId,
+            DysonAppSettingKeys.ExploreReasoningEffort);
 
     private Task OnDroneSlugChangedAsync(Guid? id) =>
         SaveSlugSettingAsync(
             id,
+            _droneSlugId,
             v => _droneSlugId = v,
-            DysonAppSettingKeys.DroneModelSlugId);
+            v => _droneEffort = v,
+            DysonAppSettingKeys.DroneModelSlugId,
+            DysonAppSettingKeys.DroneReasoningEffort);
 
     private Task OnSecurityReviewSlugChangedAsync(Guid? id) =>
         SaveSlugSettingAsync(
             id,
+            _securityReviewSlugId,
             v => _securityReviewSlugId = v,
-            DysonAppSettingKeys.SecurityReviewModelSlugId);
+            v => _securityReviewEffort = v,
+            DysonAppSettingKeys.SecurityReviewModelSlugId,
+            DysonAppSettingKeys.SecurityReviewReasoningEffort);
 
     private Task OnBugReviewSlugChangedAsync(Guid? id) =>
         SaveSlugSettingAsync(
             id,
+            _bugReviewSlugId,
             v => _bugReviewSlugId = v,
-            DysonAppSettingKeys.BugReviewModelSlugId);
+            v => _bugReviewEffort = v,
+            DysonAppSettingKeys.BugReviewModelSlugId,
+            DysonAppSettingKeys.BugReviewReasoningEffort);
 
-    private async Task SaveSlugSettingAsync(Guid? id, Action<Guid?> assign, string key)
+    private Task OnTurnSummarizerEffortChangedAsync(ChangeEventArgs e) =>
+        SaveEffortSettingAsync(e, v => _turnSummarizerEffort = v, DysonAppSettingKeys.TurnSummarizerReasoningEffort);
+
+    private Task OnWebSearchSummarizerEffortChangedAsync(ChangeEventArgs e) =>
+        SaveEffortSettingAsync(e, v => _webSearchSummarizerEffort = v, DysonAppSettingKeys.WebSearchSummarizerReasoningEffort);
+
+    private Task OnExploreEffortChangedAsync(ChangeEventArgs e) =>
+        SaveEffortSettingAsync(e, v => _exploreEffort = v, DysonAppSettingKeys.ExploreReasoningEffort);
+
+    private Task OnDroneEffortChangedAsync(ChangeEventArgs e) =>
+        SaveEffortSettingAsync(e, v => _droneEffort = v, DysonAppSettingKeys.DroneReasoningEffort);
+
+    private Task OnSecurityReviewEffortChangedAsync(ChangeEventArgs e) =>
+        SaveEffortSettingAsync(e, v => _securityReviewEffort = v, DysonAppSettingKeys.SecurityReviewReasoningEffort);
+
+    private Task OnBugReviewEffortChangedAsync(ChangeEventArgs e) =>
+        SaveEffortSettingAsync(e, v => _bugReviewEffort = v, DysonAppSettingKeys.BugReviewReasoningEffort);
+
+    private async Task SaveSlugSettingAsync(
+        Guid? id,
+        Guid? currentId,
+        Action<Guid?> assignSlug,
+        Action<string> assignEffort,
+        string slugKey,
+        string effortKey)
+    {
+        if (id == currentId)
+            return;
+
+        _error = null;
+        _saved = false;
+        assignSlug(id);
+        assignEffort("");
+
+        var value = id is Guid g && g != Guid.Empty ? g.ToString("D") : null;
+        var set = await AppSettings.SetSettingAsync(slugKey, value);
+        if (set.IsError)
+        {
+            _error = set.Error;
+            return;
+        }
+
+        var clearEffort = await AppSettings.SetSettingAsync(effortKey, null);
+        if (clearEffort.IsError)
+        {
+            _error = clearEffort.Error;
+            return;
+        }
+
+        _saved = true;
+    }
+
+    private async Task SaveEffortSettingAsync(ChangeEventArgs e, Action<string> assign, string effortKey)
     {
         _error = null;
         _saved = false;
-        assign(id);
 
-        var value = id is Guid g && g != Guid.Empty ? g.ToString("D") : null;
-        var set = await AppSettings.SetSettingAsync(key, value);
+        var next = e.Value?.ToString()?.Trim() ?? "";
+        assign(next);
+
+        var set = await AppSettings.SetSettingAsync(effortKey, string.IsNullOrEmpty(next) ? null : next);
         if (set.IsError)
         {
             _error = set.Error;

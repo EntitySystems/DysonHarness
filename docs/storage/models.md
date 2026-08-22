@@ -112,8 +112,11 @@ Subject-scoped key/value (`DysonAppSettingEntity`). Callers use `IDysonSubjectSe
 
 Known keys (`DysonAppSettingKeys`):
 - `web_search_summarizer_model_slug_id` — Guid string of the model slug for web-search/fetch summarization; empty / missing ⇒ session model.
+- `web_search_summarizer_reasoning_effort` — optional reasoning-effort override for that slug; empty / missing ⇒ the slug’s `DefaultReasoningEffort`. Edited via Settings → Agent behavior. Changing the companion slug clears this key.
 - `turn_summarizer_model_slug_id` — Guid string of the model slug for turn context summarization (`SummarizeTurns`); empty / missing ⇒ session model. Edited via Settings → Agent behavior.
+- `turn_summarizer_reasoning_effort` — optional reasoning-effort override for the turn summarizer slug; empty / missing ⇒ the slug’s `DefaultReasoningEffort`. Cleared when the companion slug changes.
 - `explore_model_slug_id` / `drone_model_slug_id` / `security_review_model_slug_id` / `bug_review_model_slug_id` — Guid strings of default model slugs for Explore / Drone / Security Review / Bug Review subagents when `StartSubagent.modelSlug` is omitted; empty / missing ⇒ inherit parent session model. Edited via Settings → Agent behavior; hydrated onto `DysonAgentSessionConfig` at session create/resume.
+- `explore_reasoning_effort` / `drone_reasoning_effort` / `security_review_reasoning_effort` / `bug_review_reasoning_effort` — optional reasoning-effort overrides for those default slugs; empty / missing ⇒ the slug’s `DefaultReasoningEffort`. Cleared when the companion slug changes. Hydrate passes `null` (not `""`) for Default so `OpenAiCompatibleAgentProvider` still applies `slug.DefaultReasoningEffort`.
 - `tool_panel_width_percent` — chat tools column width as a percent of the turn content row (clamped 12–50, default 30); empty / missing ⇒ 30.
 - `ui_rail_open` — `"true"` / `"false"`; right rail (files/git) open preference. Restored on desktop AppShell hydrate; narrow viewports still start with the rail closed (drawer UX) and re-apply this preference when returning to desktop. Intentional toggles (header button / backdrop close) persist. Missing ⇒ `"true"`.
 - `ui_sidebar_open` — `"true"` / `"false"`; left sidebar open vs collapsed. Restored on AppShell hydrate; toggles persist. Missing ⇒ `"true"`.

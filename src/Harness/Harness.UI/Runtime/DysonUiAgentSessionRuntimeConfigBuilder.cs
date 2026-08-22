@@ -200,31 +200,37 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
 
             await TryHydrateOpenAiProviderSettingAsync(
                     DysonAppSettingKeys.WebSearchSummarizerModelSlugId,
+                    DysonAppSettingKeys.WebSearchSummarizerReasoningEffort,
                     p => config.SummarizerProvider = p,
                     cancellationToken)
                 .ConfigureAwait(false);
             await TryHydrateOpenAiProviderSettingAsync(
                     DysonAppSettingKeys.TurnSummarizerModelSlugId,
+                    DysonAppSettingKeys.TurnSummarizerReasoningEffort,
                     p => config.TurnSummarizerProvider = p,
                     cancellationToken)
                 .ConfigureAwait(false);
             await TryHydrateOpenAiProviderSettingAsync(
                     DysonAppSettingKeys.ExploreModelSlugId,
+                    DysonAppSettingKeys.ExploreReasoningEffort,
                     p => config.ExploreDefaultProvider = p,
                     cancellationToken)
                 .ConfigureAwait(false);
             await TryHydrateOpenAiProviderSettingAsync(
                     DysonAppSettingKeys.DroneModelSlugId,
+                    DysonAppSettingKeys.DroneReasoningEffort,
                     p => config.DroneDefaultProvider = p,
                     cancellationToken)
                 .ConfigureAwait(false);
             await TryHydrateOpenAiProviderSettingAsync(
                     DysonAppSettingKeys.SecurityReviewModelSlugId,
+                    DysonAppSettingKeys.SecurityReviewReasoningEffort,
                     p => config.SecurityReviewDefaultProvider = p,
                     cancellationToken)
                 .ConfigureAwait(false);
             await TryHydrateOpenAiProviderSettingAsync(
                     DysonAppSettingKeys.BugReviewModelSlugId,
+                    DysonAppSettingKeys.BugReviewReasoningEffort,
                     p => config.BugReviewDefaultProvider = p,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -341,6 +347,7 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
 
     private async Task TryHydrateOpenAiProviderSettingAsync(
         string settingKey,
+        string effortSettingKey,
         Action<OpenAiCompatibleAgentProvider> assign,
         CancellationToken cancellationToken)
     {
@@ -364,7 +371,14 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
             return;
         }
 
-        assign(new OpenAiCompatibleAgentProvider(slugResult.Value));
+        var effortSetting = await _appSettings
+            .GetSettingAsync(effortSettingKey, cancellationToken)
+            .ConfigureAwait(false);
+        var effortOverride = effortSetting.IsError
+            ? null
+            : OpenAiCompatibleAgentProvider.NormalizeReasoningEffort(effortSetting.Value);
+
+        assign(new OpenAiCompatibleAgentProvider(slugResult.Value, effortOverride));
     }
 
     private static bool IsOpenAiCompatibleSlug(DysonModelSlugEntity slug)

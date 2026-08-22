@@ -10,10 +10,22 @@ public static class DysonAppSettingKeys
     public const string WebSearchSummarizerModelSlugId = "web_search_summarizer_model_slug_id";
 
     /// <summary>
+    /// Reasoning-effort override for the web-search summarizer slug.
+    /// Empty / missing ⇒ the slug’s <c>DefaultReasoningEffort</c>.
+    /// </summary>
+    public const string WebSearchSummarizerReasoningEffort = "web_search_summarizer_reasoning_effort";
+
+    /// <summary>
     /// Guid string of the model slug used for turn context summarization (<c>SummarizeTurns</c>).
     /// Empty / missing ⇒ use the session model.
     /// </summary>
     public const string TurnSummarizerModelSlugId = "turn_summarizer_model_slug_id";
+
+    /// <summary>
+    /// Reasoning-effort override for the turn summarizer slug.
+    /// Empty / missing ⇒ the slug’s <c>DefaultReasoningEffort</c>.
+    /// </summary>
+    public const string TurnSummarizerReasoningEffort = "turn_summarizer_reasoning_effort";
 
     /// <summary>
     /// Guid string of the default model slug for Explore subagents when <c>StartSubagent.modelSlug</c> is omitted.
@@ -22,10 +34,22 @@ public static class DysonAppSettingKeys
     public const string ExploreModelSlugId = "explore_model_slug_id";
 
     /// <summary>
+    /// Reasoning-effort override for the Explore default slug.
+    /// Empty / missing ⇒ the slug’s <c>DefaultReasoningEffort</c>.
+    /// </summary>
+    public const string ExploreReasoningEffort = "explore_reasoning_effort";
+
+    /// <summary>
     /// Guid string of the default model slug for Drone subagents when <c>StartSubagent.modelSlug</c> is omitted.
     /// Empty / missing ⇒ inherit the parent session model.
     /// </summary>
     public const string DroneModelSlugId = "drone_model_slug_id";
+
+    /// <summary>
+    /// Reasoning-effort override for the Drone default slug.
+    /// Empty / missing ⇒ the slug’s <c>DefaultReasoningEffort</c>.
+    /// </summary>
+    public const string DroneReasoningEffort = "drone_reasoning_effort";
 
     /// <summary>
     /// Guid string of the default model slug for Security Review subagents when <c>StartSubagent.modelSlug</c> is omitted.
@@ -34,10 +58,22 @@ public static class DysonAppSettingKeys
     public const string SecurityReviewModelSlugId = "security_review_model_slug_id";
 
     /// <summary>
+    /// Reasoning-effort override for the Security Review default slug.
+    /// Empty / missing ⇒ the slug’s <c>DefaultReasoningEffort</c>.
+    /// </summary>
+    public const string SecurityReviewReasoningEffort = "security_review_reasoning_effort";
+
+    /// <summary>
     /// Guid string of the default model slug for Bug Review subagents when <c>StartSubagent.modelSlug</c> is omitted.
     /// Empty / missing ⇒ inherit the parent session model.
     /// </summary>
     public const string BugReviewModelSlugId = "bug_review_model_slug_id";
+
+    /// <summary>
+    /// Reasoning-effort override for the Bug Review default slug.
+    /// Empty / missing ⇒ the slug’s <c>DefaultReasoningEffort</c>.
+    /// </summary>
+    public const string BugReviewReasoningEffort = "bug_review_reasoning_effort";
 
     /// <summary>
     /// Chat tools column width as a percent of the turn content row (e.g. "30").

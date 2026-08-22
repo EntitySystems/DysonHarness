@@ -4032,59 +4032,39 @@ public sealed class DysonUiHost : IAsyncDisposable
             }
         }
 
-        var setting = await _appSettings
-            .GetSettingAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId, cancellationToken)
+        await TryHydrateOpenAiProviderSettingAsync(
+                DysonAppSettingKeys.WebSearchSummarizerModelSlugId,
+                DysonAppSettingKeys.WebSearchSummarizerReasoningEffort,
+                p => config.SummarizerProvider = p,
+                cancellationToken)
             .ConfigureAwait(false);
-
-        if (!setting.IsError
-            && !string.IsNullOrWhiteSpace(setting.Value)
-            && Guid.TryParse(setting.Value, out var slugId)
-            && slugId != Guid.Empty)
-        {
-            var slugResult = await _models.GetSlugAsync(slugId, cancellationToken).ConfigureAwait(false);
-            if (!slugResult.IsError
-                && slugResult.Value is not null
-                && IsOpenAiCompatibleSlug(slugResult.Value))
-            {
-                config.SummarizerProvider = new OpenAiCompatibleAgentProvider(slugResult.Value);
-            }
-        }
-
-        var turnSummarizerSetting = await _appSettings
-            .GetSettingAsync(DysonAppSettingKeys.TurnSummarizerModelSlugId, cancellationToken)
+        await TryHydrateOpenAiProviderSettingAsync(
+                DysonAppSettingKeys.TurnSummarizerModelSlugId,
+                DysonAppSettingKeys.TurnSummarizerReasoningEffort,
+                p => config.TurnSummarizerProvider = p,
+                cancellationToken)
             .ConfigureAwait(false);
-
-        if (!turnSummarizerSetting.IsError
-            && !string.IsNullOrWhiteSpace(turnSummarizerSetting.Value)
-            && Guid.TryParse(turnSummarizerSetting.Value, out var turnSlugId)
-            && turnSlugId != Guid.Empty)
-        {
-            var turnSlugResult = await _models.GetSlugAsync(turnSlugId, cancellationToken).ConfigureAwait(false);
-            if (!turnSlugResult.IsError
-                && turnSlugResult.Value is not null
-                && IsOpenAiCompatibleSlug(turnSlugResult.Value))
-            {
-                config.TurnSummarizerProvider = new OpenAiCompatibleAgentProvider(turnSlugResult.Value);
-            }
-        }
-
         await TryHydrateOpenAiProviderSettingAsync(
                 DysonAppSettingKeys.ExploreModelSlugId,
+                DysonAppSettingKeys.ExploreReasoningEffort,
                 p => config.ExploreDefaultProvider = p,
                 cancellationToken)
             .ConfigureAwait(false);
         await TryHydrateOpenAiProviderSettingAsync(
                 DysonAppSettingKeys.DroneModelSlugId,
+                DysonAppSettingKeys.DroneReasoningEffort,
                 p => config.DroneDefaultProvider = p,
                 cancellationToken)
             .ConfigureAwait(false);
         await TryHydrateOpenAiProviderSettingAsync(
                 DysonAppSettingKeys.SecurityReviewModelSlugId,
+                DysonAppSettingKeys.SecurityReviewReasoningEffort,
                 p => config.SecurityReviewDefaultProvider = p,
                 cancellationToken)
             .ConfigureAwait(false);
         await TryHydrateOpenAiProviderSettingAsync(
                 DysonAppSettingKeys.BugReviewModelSlugId,
+                DysonAppSettingKeys.BugReviewReasoningEffort,
                 p => config.BugReviewDefaultProvider = p,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -4094,6 +4074,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private async Task TryHydrateOpenAiProviderSettingAsync(
         string settingKey,
+        string effortSettingKey,
         Action<OpenAiCompatibleAgentProvider> assign,
         CancellationToken cancellationToken)
     {
@@ -4117,7 +4098,14 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
         }
 
-        assign(new OpenAiCompatibleAgentProvider(slugResult.Value));
+        var effortSetting = await _appSettings
+            .GetSettingAsync(effortSettingKey, cancellationToken)
+            .ConfigureAwait(false);
+        var effortOverride = effortSetting.IsError
+            ? null
+            : OpenAiCompatibleAgentProvider.NormalizeReasoningEffort(effortSetting.Value);
+
+        assign(new OpenAiCompatibleAgentProvider(slugResult.Value, effortOverride));
     }
 
     private static bool IsOpenAiCompatibleSlug(DysonModelSlugEntity slug)
