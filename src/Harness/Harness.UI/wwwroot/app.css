@@ -525,29 +525,44 @@ code, .mono {
   padding: 14px;
 }
 
+.settings-page__picker-group {
+  margin-top: 16px;
+}
+
 .settings-page__picker-row {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
+  display: grid;
+  grid-template-columns: max-content max-content;
+  column-gap: 10px;
+  row-gap: 4px;
+  align-items: end;
+  width: max-content;
+  max-width: 100%;
 }
 
-.settings-page__picker-row-model {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.settings-page__picker-row > label {
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
-.settings-page__picker-row-effort {
-  flex: 0 0 9.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.settings-page__picker-group .settings-page__copy {
+  margin: 4px 0 0;
 }
 
-.settings-page__picker-row-effort select {
+.settings-page__picker-row .model-slug-picker,
+.settings-page__picker-row .model-slug-picker .field {
   width: 100%;
+  margin-bottom: 0;
+}
+
+.settings-page__picker-row .model-slug-picker__trigger,
+.settings-page__picker-row .effort-picker__trigger {
+  height: 28px;
+  box-sizing: border-box;
+}
+
+.settings-page__picker-row .model-slug-picker__trigger {
+  width: 100%;
+  max-width: none;
 }
 
 .settings-page:has(.models-panel),
