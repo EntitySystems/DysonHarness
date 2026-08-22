@@ -382,6 +382,107 @@ public static class OpenAiCompatibleHttp
     }
 
     /// <summary>
+    /// Parses Completions/Responses/Anthropic-style token usage. Missing numbers store as 0.
+    /// Returns false when the payload has no <c>usage</c> object.
+    /// </summary>
+    public static bool TryParseUsage(JsonObject? response, out DysonParsedUsage usage)
+    {
+        usage = new DysonParsedUsage();
+        var usageObj = response?["usage"] as JsonObject;
+        if (usageObj is null)
+            return false;
+
+        var promptDetails = usageObj["prompt_tokens_details"] as JsonObject
+            ?? usageObj["input_tokens_details"] as JsonObject;
+        var outputDetails = usageObj["completion_tokens_details"] as JsonObject
+            ?? usageObj["output_tokens_details"] as JsonObject;
+
+        var input = FirstToken(usageObj, "prompt_tokens", "input_tokens");
+        var write = FirstToken(usageObj, "completion_tokens", "output_tokens");
+        var cache = FirstToken(
+            (promptDetails, "cached_tokens"),
+            (promptDetails, "cache_read_input_tokens"),
+            (usageObj, "cached_tokens"),
+            (usageObj, "cache_read_input_tokens"));
+        var cacheWrite = FirstToken(
+            (promptDetails, "cache_write_tokens"),
+            (promptDetails, "cache_creation_input_tokens"),
+            (usageObj, "cache_write_tokens"),
+            (usageObj, "cache_creation_input_tokens"));
+        var outputCache = FirstToken(
+            (outputDetails, "cached_tokens"),
+            (outputDetails, "cache_read_output_tokens"),
+            (usageObj, "cache_read_output_tokens"),
+            (usageObj, "output_cached_tokens"));
+
+        usage = new DysonParsedUsage
+        {
+            InputTokens = input,
+            CacheTokens = cache,
+            WriteTokens = write,
+            CacheWriteTokens = cacheWrite,
+            InputTokensAfterCache = Math.Max(0, input - cache),
+            WriteTokensAfterCache = outputCache > 0 ? Math.Max(0, write - outputCache) : write,
+        };
+        return true;
+    }
+
+    private static int FirstToken(JsonObject obj, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (obj.TryGetPropertyValue(name, out var node) && node is not null)
+                return ReadTokenCount(node);
+        }
+
+        return 0;
+    }
+
+    private static int FirstToken(params (JsonObject? Obj, string Name)[] candidates)
+    {
+        foreach (var (obj, name) in candidates)
+        {
+            if (obj is not null && obj.TryGetPropertyValue(name, out var node) && node is not null)
+                return ReadTokenCount(node);
+        }
+
+        return 0;
+    }
+
+    internal static int ReadTokenCount(JsonNode? node)
+    {
+        if (node is not JsonValue value)
+            return 0;
+
+        try
+        {
+            if (value.TryGetValue(out int i))
+                return i < 0 ? 0 : i;
+            if (value.TryGetValue(out long l))
+                return l <= 0 ? 0 : (l > int.MaxValue ? int.MaxValue : (int)l);
+            if (value.TryGetValue(out double d))
+            {
+                if (double.IsNaN(d) || d <= 0)
+                    return 0;
+                return d >= int.MaxValue ? int.MaxValue : (int)d;
+            }
+
+            if (value.TryGetValue(out string? s)
+                && int.TryParse(s, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+            {
+                return parsed < 0 ? 0 : parsed;
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            return 0;
+        }
+
+        return 0;
+    }
+
+    /// <summary>
     /// POST JSON and read Server-Sent Events <c>data:</c> payloads until <c>[DONE]</c>.
     /// Yields each JSON payload string; first item may be an error Result.
     /// </summary>

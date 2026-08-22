@@ -51,6 +51,7 @@ Always configure through `DysonSqliteConfigurator` (not bare `Data Source=`):
 - Connection string: `Data Source={path};Default Timeout=30` (busy timeout seconds)
 - On open: `PRAGMA journal_mode=WAL;` + `PRAGMA synchronous=NORMAL;`
 - Used by DI factory registration, `OnConfiguring`, design-time factory, and tests that open file-backed DBs
+- Compaction is `DysonSqliteVacuumHostedService` (`AddDysonLocalDb`); do not ad-hoc `VACUUM` from repositories
 
 ```csharp
 DysonSqliteConfigurator.Configure(options, databasePath);
@@ -162,6 +163,7 @@ Pick delete behavior deliberately; SQLite will enforce FKs when enabled. Always 
 - [ ] No `DateTimeOffset` on EF entities / ordered queries
 - [ ] Collection JSON properties use converter + comparer (or immutable replace of the list)
 - [ ] Connection uses `DysonSqliteConfigurator` (timeout + WAL), not bare `Data Source=`
+- [ ] Do not ad-hoc `VACUUM` from repositories — compaction is `DysonSqliteVacuumHostedService` (`AddDysonLocalDb`)
 - [ ] Migrate **once** at startup — not per DI scope
 - [ ] Subject filters on every list/get/write; never ensure `"shared"` as a real subject row
 - [ ] Shared provider writes go through `IDysonAccessEvaluator.Can(ManageSharedProviders)`

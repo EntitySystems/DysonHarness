@@ -119,6 +119,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     private readonly OpenAiCompletionsClient _completions;
     private readonly OpenAiResponsesClient _responses;
     private readonly IDysonModelRepository? _models;
+    private readonly IDysonUsageAnalyticsRepository? _usageAnalytics;
+    private readonly string _workDirectoryName;
 
     public OpenAiCompatibleAgentSession(
         string agentMode,
@@ -129,7 +131,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         IDysonSessionRepository? store = null,
         Guid workDirectoryId = default,
         IDysonModelRepository? models = null,
-        string? systemPromptSuffix = null)
+        string? systemPromptSuffix = null,
+        IDysonUsageAnalyticsRepository? usageAnalytics = null,
+        string workDirectoryName = "")
         : base(agentMode, config, provider, systemPromptSuffix)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -139,6 +143,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         SessionStore = store;
         _workDirectoryId = workDirectoryId;
         _models = models;
+        _usageAnalytics = usageAnalytics;
+        _workDirectoryName = workDirectoryName ?? "";
         _completions = new OpenAiCompletionsClient(_http);
         _responses = new OpenAiResponsesClient(_http);
     }
@@ -159,6 +165,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         DysonAgentSessionConfig? config = null,
         string? title = null,
         IDysonModelRepository? models = null,
+        IDysonUsageAnalyticsRepository? usageAnalytics = null,
+        string workDirectoryName = "",
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -176,7 +184,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             .ConfigureAwait(false);
         var session = new OpenAiCompatibleAgentSession(
             agentMode, config, provider, http, workDirectoryAbsolutePath, store, workDirectoryId, models,
-            suffix);
+            suffix, usageAnalytics, workDirectoryName);
         session.ConfigureRootInterAgentTools();
         session.SlugDefaultMaxTargetContextTokens = provider.DefaultMaxTargetContextTokens;
         var initialTitle = title ?? "New session";
@@ -224,6 +232,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         DysonAgentSessionConfig? config = null,
         IDysonModelRepository? models = null,
         bool appendResumeLog = true,
+        IDysonUsageAnalyticsRepository? usageAnalytics = null,
+        string workDirectoryName = "",
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -254,7 +264,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             store,
             state.Session.WorkDirectoryId ?? Guid.Empty,
             models,
-            suffix);
+            suffix,
+            usageAnalytics,
+            workDirectoryName);
         session.RestoreFromPersisted(state);
         session.SlugDefaultMaxTargetContextTokens = provider.DefaultMaxTargetContextTokens;
         if (state.Session.ParentSessionId is null)
@@ -322,7 +334,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             _store,
             _workDirectoryId,
             _models,
-            suffix);
+            suffix,
+            _usageAnalytics,
+            _workDirectoryName);
 
         RegisterSubagent(child);
 
@@ -688,6 +702,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 }
 
                 var reply = replyResult.Value;
+                await RecordUsageAsync(reply, cancellationToken).ConfigureAwait(false);
                 if (!string.IsNullOrEmpty(reply.UsageCacheHint))
                     AppendLog(reply.UsageCacheHint);
                 if (reply.PromptTokens is int promptTokens)
@@ -877,6 +892,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         }
 
         var reply = replyResult.Value;
+        await RecordUsageAsync(reply, cancellationToken).ConfigureAwait(false);
         if (!string.IsNullOrEmpty(reply.UsageCacheHint))
             AppendLog(reply.UsageCacheHint);
         if (reply.PromptTokens is int promptTokens)
@@ -893,6 +909,54 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         turn.FinishReasoningStreaming();
         AppendLog($"explore budget recap complete: {turn.AgentTitle ?? turn.Id.ToString("N")[..8]}");
         return VoidResult<string>.Success;
+    }
+
+    private async Task RecordUsageAsync(OpenAiModelReply reply, CancellationToken cancellationToken)
+    {
+        if (_usageAnalytics is null)
+            return;
+
+        var parsed = reply.Usage ?? new DysonParsedUsage();
+        var alias = string.IsNullOrWhiteSpace(OpenAiProvider.DisplayAlias)
+            ? OpenAiProvider.Slug
+            : OpenAiProvider.DisplayAlias;
+        var row = new DysonUsageRequestEntity
+        {
+            Id = Guid.NewGuid(),
+            WorkDirectoryName = _workDirectoryName,
+            SessionId = PersistenceId,
+            RootSessionId = ResolveRootPersistenceId(),
+            ModelSlug = OpenAiProvider.Slug,
+            ModelDisplayAlias = alias,
+            ReasoningEffort = OpenAiProvider.ReasoningEffort ?? "",
+            OccurredUtc = DateTime.UtcNow,
+            InputTokens = parsed.InputTokens,
+            CacheTokens = parsed.CacheTokens,
+            WriteTokens = parsed.WriteTokens,
+            CacheWriteTokens = parsed.CacheWriteTokens,
+            InputTokensAfterCache = parsed.InputTokensAfterCache,
+            WriteTokensAfterCache = parsed.WriteTokensAfterCache,
+        };
+
+        try
+        {
+            var result = await _usageAnalytics.AppendAsync(row, cancellationToken).ConfigureAwait(false);
+            if (result.IsError)
+                AppendLog($"usage analytics: {result.Error}");
+        }
+        catch (Exception ex)
+        {
+            if (ex is not OperationCanceledException)
+                AppendLog($"usage analytics: {ex.Message}");
+        }
+    }
+
+    private Guid ResolveRootPersistenceId()
+    {
+        DysonAgentSession current = this;
+        while (current.Parent is not null)
+            current = current.Parent;
+        return current.PersistenceId == Guid.Empty ? PersistenceId : current.PersistenceId;
     }
 
     private static bool TurnHasSubmitSubagentReport(DysonAgentTurn turn) =>

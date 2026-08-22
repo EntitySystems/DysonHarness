@@ -14,7 +14,7 @@ Persistence is scoped by a **subject id** (`IDysonSubjectContext.SubjectId`), no
 | `DysonSubjects.Shared` | `"shared"` | Sentinel for **shared model providers** only. Not a real `subjects` row; never a cookie value. |
 | `DysonWorkspaceSubjects.LocalFs` | `"local_fs"` | Workspace FS subject for `IDysonWorkspaceFileSystem` — **distinct** from persistence `"local"`. |
 
-Cloud mode may mint other subject ids (Guid strings). Always-subject-owned data: sessions, work directories, favorites, app settings (via subject settings), configured shells. Model providers are either subject-owned or shared (see below).
+Cloud mode may mint other subject ids (Guid strings). Always-subject-owned data: sessions, work directories, favorites, app settings (via subject settings), configured shells, usage requests. Model providers are either subject-owned or shared (see below).
 
 ### `subjects` table
 
@@ -50,6 +50,7 @@ Callers depend on functional interfaces in `Harness.Abstractions` (not generic C
 | `IDysonModelRepository` | Providers, slugs, favorites (`shared` flag on create/update/managed upsert) |
 | `IDysonConfiguredShellRepository` | Configured shells |
 | `IDysonSubjectSettingsRepository` | `EnsureSubjectAsync` + subject-scoped KV settings |
+| `IDysonUsageAnalyticsRepository` | Append-only Completions/Responses usage rows (`usage_requests`) |
 
 Visibility: subject-owned tables filter/write the current `IDysonSubjectContext.SubjectId` only; cross-subject get-by-id → hard error. Model providers follow the shared rules above. Full note: [`STORAGE_CONTRACTS.md`](../../src/Harness/Harness.Abstractions/Storage/STORAGE_CONTRACTS.md).
 

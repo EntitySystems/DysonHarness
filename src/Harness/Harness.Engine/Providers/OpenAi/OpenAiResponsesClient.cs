@@ -217,6 +217,12 @@ public sealed class OpenAiResponsesClient(HttpClient http)
         var promptTokens = completedResponse is not null
             ? OpenAiCompatibleHttp.TryParsePromptTokens(completedResponse)
             : null;
+        DysonParsedUsage? parsedUsage = null;
+        if (completedResponse is not null
+            && OpenAiCompatibleHttp.TryParseUsage(completedResponse, out var streamUsage))
+        {
+            parsedUsage = streamUsage;
+        }
 
         // Prefer streamed accumulation; fall back to completed response payload if empty.
         var reasoningContent = reasoning.Length == 0
@@ -235,6 +241,7 @@ public sealed class OpenAiResponsesClient(HttpClient http)
                 UsageCacheHint = usageHint,
                 PromptTokens = promptTokens,
                 ReasoningOutputItems = reasoningItems,
+                Usage = parsedUsage,
             },
         });
     }
@@ -359,6 +366,7 @@ public sealed class OpenAiResponsesClient(HttpClient http)
             UsageCacheHint = OpenAiCompatibleHttp.FormatUsageCacheHint(response),
             PromptTokens = OpenAiCompatibleHttp.TryParsePromptTokens(response),
             ReasoningOutputItems = reasoningItems,
+            Usage = OpenAiCompatibleHttp.TryParseUsage(response, out var parsed) ? parsed : null,
         });
     }
 

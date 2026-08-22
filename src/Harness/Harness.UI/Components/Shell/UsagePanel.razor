@@ -1,0 +1,161 @@
+@namespace Harness.UI.Components.Shell
+@using DysonHarness
+@using Harness.UI.Demo
+@implements IDisposable
+@inject DysonUiHost Host
+@inject IDysonUsageAnalyticsRepository UsageAnalytics
+
+<div class="usage-panel">
+    @if (!string.IsNullOrWhiteSpace(_emptyMessage))
+    {
+        <div class="usage-panel__empty">@_emptyMessage</div>
+    }
+    else if (_error is not null)
+    {
+        <div class="usage-panel__empty">@_error</div>
+    }
+    else if (_recap is null)
+    {
+        <div class="usage-panel__empty">Loading…</div>
+    }
+    else if (_recap.Models.Count == 0)
+    {
+        <div class="usage-panel__empty">No usage recorded for this session yet.</div>
+    }
+    else
+    {
+        <div class="usage-tree">
+            <details class="usage-tree__branch" open>
+                <summary class="usage-tree__summary" style="--usage-tree-depth:0">
+                    @RecapHead("Total", null, _recap.Totals, expandable: true)
+                    @RecapMetrics(_recap.Totals)
+                </summary>
+                <ul class="usage-tree__children">
+                    @foreach (var model in _recap.Models)
+                    {
+                        <li>
+                            <details class="usage-tree__branch">
+                                <summary class="usage-tree__summary"
+                                         style="--usage-tree-depth:1"
+                                         title="@model.Totals.ModelSlug">
+                                    @RecapHead(model.Totals.ModelDisplayAlias, model.Totals.ModelSlug, model.Totals, expandable: true)
+                                    @RecapMetrics(model.Totals)
+                                </summary>
+                                <ul class="usage-tree__children">
+                                    @foreach (var effort in model.Efforts)
+                                    {
+                                        var effortLabel = string.IsNullOrWhiteSpace(effort.ReasoningEffort) ? "omit" : effort.ReasoningEffort;
+                                        <li class="usage-tree__leaf" style="--usage-tree-depth:2">
+                                            @RecapHead(effortLabel, null, effort, expandable: false)
+                                            @RecapMetrics(effort)
+                                        </li>
+                                    }
+                                </ul>
+                            </details>
+                        </li>
+                    }
+                </ul>
+            </details>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public Guid? ActiveSessionId { get; set; }
+
+    private DysonUsageSessionRecap? _recap;
+    private string? _emptyMessage;
+    private string? _error;
+    private bool _wasBusy;
+    private Guid? _boundSessionId;
+    private bool _loaded;
+    private int _loadVersion;
+
+    protected override void OnInitialized()
+    {
+        Host.Changed += OnHostChanged;
+        _wasBusy = Host.IsBusy;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loaded && _boundSessionId == ActiveSessionId)
+            return;
+
+        _loaded = true;
+        _boundSessionId = ActiveSessionId;
+        await RefreshAsync();
+    }
+
+    private void OnHostChanged() => _ = InvokeAsync(async () =>
+    {
+        var busy = Host.IsBusy;
+        var becameIdle = _wasBusy && !busy;
+        _wasBusy = busy;
+        if (becameIdle)
+            await RefreshAsync();
+    });
+
+    private async Task RefreshAsync()
+    {
+        var session = Host.Session;
+        if (session is null)
+        {
+            _recap = null;
+            _emptyMessage = "Select a session to see usage.";
+            _error = null;
+            return;
+        }
+
+        DysonAgentSession root = session;
+        while (root.Parent is not null)
+            root = root.Parent;
+
+        if (root.PersistenceId == Guid.Empty)
+        {
+            _recap = null;
+            _emptyMessage = "Select a session to see usage.";
+            _error = null;
+            return;
+        }
+
+        _emptyMessage = null;
+        var version = ++_loadVersion;
+        var listed = await UsageAnalytics.ListByRootSessionAsync(root.PersistenceId);
+        if (version != _loadVersion)
+            return;
+
+        if (listed.IsError)
+        {
+            _recap = null;
+            _error = listed.Error;
+            return;
+        }
+
+        _error = null;
+        _recap = DysonUsageSessionRecap.FromRows(listed.Value);
+    }
+
+    private static RenderFragment RecapHead(string label, string? title, DysonUsageSessionRecapRow row, bool expandable) => __builder =>
+    {
+        <div class="usage-tree__head" title="@title">
+            <span class="usage-tree__chevron@(expandable ? null : " usage-tree__chevron--spacer")" aria-hidden="true"></span>
+            <span class="usage-tree__label">@label</span>
+            <span class="usage-tree__reqs mono" title="Requests">@row.RequestCount req</span>
+        </div>
+    };
+
+    private static RenderFragment RecapMetrics(DysonUsageSessionRecapRow row) => __builder =>
+    {
+        <dl class="usage-tree__metrics">
+            <div title="Input"><dt>in</dt><dd class="mono">@DysonMaxTargetContextTokens.FormatCompact(row.InputTokens)</dd></div>
+            <div title="Cache"><dt>cache</dt><dd class="mono">@DysonMaxTargetContextTokens.FormatCompact(row.CacheTokens)</dd></div>
+            <div title="Write"><dt>write</dt><dd class="mono">@DysonMaxTargetContextTokens.FormatCompact(row.WriteTokens)</dd></div>
+            <div title="Cache write"><dt>c.write</dt><dd class="mono">@DysonMaxTargetContextTokens.FormatCompact(row.CacheWriteTokens)</dd></div>
+            <div title="Input after cache"><dt>in after</dt><dd class="mono">@DysonMaxTargetContextTokens.FormatCompact(row.InputTokensAfterCache)</dd></div>
+            <div title="Write after cache"><dt>write after</dt><dd class="mono">@DysonMaxTargetContextTokens.FormatCompact(row.WriteTokensAfterCache)</dd></div>
+        </dl>
+    };
+
+    public void Dispose() => Host.Changed -= OnHostChanged;
+}

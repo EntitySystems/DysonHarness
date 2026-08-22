@@ -19,6 +19,7 @@ public static class MarkdownRenderer
         .UseTaskLists()
         .UseSoftlineBreakAsHardlineBreak()
         .DisableHtml()
+        .Use(new ColorCodeMarkdownExtension())
         .Build();
 
     public static MarkupString ToHtml(string? markdown)
