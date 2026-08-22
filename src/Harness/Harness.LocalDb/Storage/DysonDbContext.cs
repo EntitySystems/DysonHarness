@@ -31,6 +31,7 @@ public sealed class DysonDbContext : DbContext
     public DbSet<DysonPluginMcpGrantEntity> PluginMcpGrants => Set<DysonPluginMcpGrantEntity>();
     public DbSet<DysonPluginHookReviewEntity> PluginHookReviews => Set<DysonPluginHookReviewEntity>();
     public DbSet<DysonPluginHookAuditEntity> PluginHookAudits => Set<DysonPluginHookAuditEntity>();
+    public DbSet<DysonUsageRequestEntity> UsageRequests => Set<DysonUsageRequestEntity>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -303,6 +304,20 @@ public sealed class DysonDbContext : DbContext
             e.HasIndex(x => new { x.SubjectId, x.Name }).IsUnique();
             e.HasIndex(x => x.SortOrder);
             e.HasIndex(x => x.SubjectId);
+        });
+
+        modelBuilder.Entity<DysonUsageRequestEntity>(e =>
+        {
+            e.ToTable("usage_requests");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.SubjectId).IsRequired();
+            e.Property(x => x.WorkDirectoryName).IsRequired();
+            e.Property(x => x.ModelSlug).IsRequired();
+            e.Property(x => x.ModelDisplayAlias).IsRequired();
+            e.Property(x => x.ReasoningEffort).IsRequired();
+            e.HasIndex(x => new { x.SubjectId, x.OccurredUtc });
+            e.HasIndex(x => new { x.SubjectId, x.WorkDirectoryName });
+            e.HasIndex(x => new { x.SubjectId, x.RootSessionId });
         });
     }
 

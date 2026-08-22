@@ -35,6 +35,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly DysonPluginLifecycleService _pluginLifecycle;
     private readonly ThemeService _theme;
     private readonly DysonUiRuntimeAttachment? _runtimeAttachment;
+    private readonly IDysonUsageAnalyticsRepository? _usageAnalytics;
     private readonly SemaphoreSlim _persistGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, DysonAgentSession> _sessionsById = new();
     private readonly ConcurrentDictionary<DysonAgentSession, byte> _hookedSessions = new();
@@ -120,7 +121,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonPluginLifecycleService pluginLifecycle,
         ThemeService theme,
         IDysonBrowserControl? browserControl = null,
-        DysonUiRuntimeAttachment? runtimeAttachment = null)
+        DysonUiRuntimeAttachment? runtimeAttachment = null,
+        IDysonUsageAnalyticsRepository? usageAnalytics = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -140,6 +142,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _theme = theme ?? throw new ArgumentNullException(nameof(theme));
         _theme.Changed += OnThemeChanged;
         _runtimeAttachment = runtimeAttachment;
+        _usageAnalytics = usageAnalytics;
         if (_runtimeAttachment is not null)
             _runtimeAttachment.Changed += OnRuntimeChanged;
         _pluginLifecycle.Changed += OnPluginCatalogChanged;
@@ -2062,6 +2065,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 agentMode,
                 config: config,
                 models: _models,
+                usageAnalytics: _usageAnalytics,
+                workDirectoryName: workDir.Value.Name,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (created.IsError)
@@ -3642,6 +3647,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return Result<LoadedSession, string>.AsError(providerResult.Error);
 
         string? workPath = null;
+        string workDirectoryName = "";
         if (full.Value.Session.WorkDirectoryId is Guid wdId)
         {
             var wd = await _workDirectories.GetAsync(wdId, cancellationToken).ConfigureAwait(false);
@@ -3649,6 +3655,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return Result<LoadedSession, string>.AsError(wd.Error);
 
             workPath = wd.Value.AbsolutePath;
+            workDirectoryName = wd.Value.Name;
         }
 
         DysonUiThemeSnapshot? inheritedUiTheme = null;
@@ -3689,6 +3696,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 openAiConfig,
                 models: _models,
                 appendResumeLog: appendResumeLog,
+                usageAnalytics: _usageAnalytics,
+                workDirectoryName: workDirectoryName,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (loaded.IsError)

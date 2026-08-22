@@ -51,7 +51,7 @@ Pinned Node/Python binaries (`DysonEmbeddedRuntimeInstaller.Pins`) unpack under 
 - Node v24.19.0: `{root}/runtimes/node/v24.19.0/node-v24.19.0-{win|darwin|linux}-x64/…` — Windows `node.exe`; macOS `bin/node`; Linux `bin/node` (official `.tar.gz`, not xz). URLs: `https://nodejs.org/dist/v24.19.0/node-v24.19.0-win-x64.zip`, `…-darwin-x64.tar.gz`, `…-linux-x64.tar.gz`. SHA best-effort: `https://nodejs.org/dist/v24.19.0/SHASUMS256.txt`.
 - Python 3.14.7 Windows embed: `{root}/runtimes/python/3.14.7/python.exe` from `https://www.python.org/ftp/python/3.14.7/python-3.14.7-embed-amd64.zip`. Non-Windows `Probe` searches PATH for `python3` then `python` (not `python.exe` on Windows PATH).
 
-Single SQLite file holds providers, slugs, sessions, app settings, and plugin installation metadata for that mode. Plugin package/data payloads remain outside the database in their explicit project or global roots.
+Single SQLite file holds providers, slugs, sessions, app settings, plugin installation metadata, and usage analytics for that mode. Plugin package/data payloads remain outside the database in their explicit project or global roots.
 
 ## Database
 
@@ -145,6 +145,30 @@ Subject-owned shell catalog for MCP `ShellExecute` / long-running shell tools (`
 | `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
 
 Unique: `(SubjectId, Name)`. `EnsureDefaultsAsync` seeds Windows rows when the current subject has no rows: `Pwsh`→`pwsh`, `PowerShell`→`powershell.exe`, `Cmd`→`cmd.exe` (all enabled). Other platforms seed nothing until Bash/Zsh runners exist. Settings → Shells edits the table (optional Fixed args as space-separated tokens → `FixedArgsJson`); new/resume sessions load enabled specs into `DysonAgentSessionConfig.AvailableShells` (`Name`, `ExecutablePath`, optional `FixedArgs`). Settings → Shells **Embedded runtimes** download/register the pinned Node/Python binaries and upsert enabled subject-owned rows named `Node` (`FixedArgs` `["-e"]`) and `Python` (`["-c"]`) by name `OrdinalIgnoreCase`. Catalog rows are subject-owned; binaries live in host `{root}/runtimes`, not per-subject. No LocalDb/schema/`EnsureDefaults` changes. No `DysonShellType` values added.
+
+## Usage requests (`usage_requests`)
+
+Append-only subject-owned token usage for successful OpenAI-compatible Completions/Responses rounds (`DysonUsageRequestEntity` / `IDysonUsageAnalyticsRepository`). No FKs — snapshots survive workdir/session delete. Demo sessions write nothing. Web-search / turn-summarizer Completions are out of scope.
+
+| Property | Notes |
+| -------- | ----- |
+| `Id` | Guid PK |
+| `SubjectId` | Owning subject |
+| `WorkDirectoryName` | Snapshot of `DysonWorkDirectoryEntity.Name` at request time |
+| `SessionId` | Persistence id of the session that issued the round |
+| `RootSessionId` | Persistence id of that session’s root (equals `SessionId` on roots); recap query key |
+| `ModelSlug` | API slug at request time |
+| `ModelDisplayAlias` | UI alias snapshot (fallback to slug if empty) |
+| `ReasoningEffort` | Effort snapshot; empty string when omit |
+| `OccurredUtc` | `DateTime` UTC |
+| `InputTokens` | `prompt_tokens` / `input_tokens` (missing → 0) |
+| `CacheTokens` | `cached_tokens` / `cache_read_input_tokens` (missing → 0) |
+| `WriteTokens` | `completion_tokens` / `output_tokens` (missing → 0) |
+| `CacheWriteTokens` | `cache_write_tokens` / `cache_creation_input_tokens` (missing → 0) |
+| `InputTokensAfterCache` | `max(0, InputTokens - CacheTokens)` |
+| `WriteTokensAfterCache` | `WriteTokens`, or `max(0, WriteTokens - outputCache)` when the provider reports output cache |
+
+Indexes: `(SubjectId, OccurredUtc)`, `(SubjectId, WorkDirectoryName)`, `(SubjectId, RootSessionId)`. `AppendAsync` stamps `SubjectId` from `IDysonSubjectContext`. `ListAsync(workDirectoryName?, fromUtc?, toUtc?)` is newest-first (later workdir analytics). `ListByRootSessionAsync` feeds the Usage-rail recap (`DysonUsageSessionRecap.FromRows` nests Total → model → effort). Migration `AddUsageRequests`. `AddDysonLocalDb` registers `IDysonUsageAnalyticsRepository`.
 
 ## Model providers (`model_providers`)
 

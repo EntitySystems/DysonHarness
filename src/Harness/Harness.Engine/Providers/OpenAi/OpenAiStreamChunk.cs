@@ -15,11 +15,25 @@ public sealed class OpenAiModelReply
     /// <summary>Provider <c>prompt_tokens</c> / <c>input_tokens</c> when usage is present.</summary>
     public int? PromptTokens { get; init; }
 
+    /// <summary>Parsed token usage for the round when the provider sent a usage object.</summary>
+    public DysonParsedUsage? Usage { get; init; }
+
     /// <summary>
     /// Raw Responses <c>type:reasoning</c> output items (incl. <c>encrypted_content</c>) for
     /// stateless tool-loop replay. Separate from UI <see cref="ReasoningContent"/>.
     /// </summary>
     public IReadOnlyList<JsonObject> ReasoningOutputItems { get; init; } = [];
+}
+
+/// <summary>Token counts from a Completions or Responses <c>usage</c> object. Missing numbers are 0.</summary>
+public sealed class DysonParsedUsage
+{
+    public int InputTokens { get; init; }
+    public int CacheTokens { get; init; }
+    public int WriteTokens { get; init; }
+    public int CacheWriteTokens { get; init; }
+    public int InputTokensAfterCache { get; init; }
+    public int WriteTokensAfterCache { get; init; }
 }
 
 /// <summary>Incremental delta from a streaming Completions or Responses round.</summary>

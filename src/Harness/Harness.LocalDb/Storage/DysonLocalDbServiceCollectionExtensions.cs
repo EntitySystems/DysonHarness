@@ -34,6 +34,7 @@ public static class DysonLocalDbServiceCollectionExtensions
         services.AddScoped<IDysonModelRepository, DysonModelRepository>();
         services.AddScoped<IDysonConfiguredShellRepository, DysonConfiguredShellRepository>();
         services.AddScoped<IDysonSubjectSettingsRepository, DysonSubjectSettingsRepository>();
+        services.AddScoped<IDysonUsageAnalyticsRepository, DysonUsageAnalyticsRepository>();
 
         services.AddHostedService<DysonSqliteVacuumHostedService>();
 

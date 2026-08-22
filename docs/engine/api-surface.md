@@ -71,6 +71,9 @@ Conceptual overview: [README.md](README.md).
 | `OpenAiCompatibleHttp.SupportsExplicitPromptCache` | True for direct GPT-5.6+ slugs when `ManagedSource` is unset |
 | `OpenAiCompatibleHttp.SupportsResponsesServerChaining` | True when `ManagedSource` is unset (direct OpenAI store+`previous_response_id`); false for any managed source → local item replay |
 | `OpenAiCompatibleHttp.IsUsableResponsesCallId` / `IsMissingToolCallForOutputError` | `call_id` must be usable (not `fc_*`/Guid); detector for the known store-chain 400 |
+| `OpenAiCompatibleHttp.TryParseUsage` | Completions/Responses/Anthropic `usage` → `DysonParsedUsage` (missing numbers 0); false when no usage object |
+| `DysonParsedUsage` | Input / cache / write / cache-write / after-cache token counts on `OpenAiModelReply.Usage` |
+| `DysonUsageSessionRecap` | `FromRows` nests `usage_requests` Total → model → reasoning effort and sums token columns + request count for the Usage rail (`Models` / `DysonUsageSessionRecapModel.Efforts`) |
 
 ### Session members (high level)
 

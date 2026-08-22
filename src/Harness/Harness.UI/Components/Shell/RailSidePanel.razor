@@ -41,7 +41,7 @@
         }
         else
         {
-            <div class="rail-tabs__placeholder">coming soon</div>
+            <UsagePanel ActiveSessionId="ActiveSessionId" />
         }
     </div>
 </div>
@@ -58,11 +58,13 @@
     private Guid? _boundWorkDirectoryId;
 
     [Parameter] public Guid? ActiveWorkDirectoryId { get; set; }
+    [Parameter] public Guid? ActiveSessionId { get; set; }
 
     private string? BodyModifierClass => _activeTab switch
     {
         RailTab.Files => " rail-tabs__body--files",
         RailTab.Git => " rail-tabs__body--git",
+        RailTab.Usage => " rail-tabs__body--usage",
         _ => null,
     };
 
