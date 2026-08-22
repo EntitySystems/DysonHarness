@@ -127,16 +127,28 @@
                     }
                     else
                     {
-                        var codeLastLine = CountLogicalSourceLines(viewer.Content);
-                        var codeGutters = BuildGitDiffGutters(viewer.GitDiffAnnotations, codeLastLine);
-                        <pre class="file-viewer-modal__code mono">@foreach (var (index, sourceLine, line) in CodeLines(viewer.Content))
+                        var codeLines = CodeLines(viewer.Content).ToArray();
+                        var highlightedLines = ColorCodeHtml.TryHighlightSourceLines(viewer.RelativePath, viewer.Content);
+                        if (highlightedLines?.Length != codeLines.Length)
+                            highlightedLines = null;
+
+                        var codeGutters = BuildGitDiffGutters(viewer.GitDiffAnnotations, codeLines.Length);
+                        <pre class="file-viewer-modal__code mono">@foreach (var (index, sourceLine, line) in codeLines)
 {
     var selected = _selectedBlock == index;
     var drafting = _draft is { } d && d.BlockIndex == index;
     var gutterClass = LineGutterCssClass(codeGutters, sourceLine);
+    var highlightedLine = highlightedLines?[index];
     <code class="file-viewer-line @(selected ? "is-selected" : null) @(drafting ? "is-drafting" : null) @gutterClass"
           @onclick="@(() => SelectBlock(index))"
-          @onclick:stopPropagation="true">@line
+          @onclick:stopPropagation="true"><span class="file-viewer-line__content">@if (highlightedLine is not null)
+{
+    @((MarkupString)highlightedLine)
+}
+else
+{
+    @line
+}</span>
 <button type="button"
         class="file-viewer-comment"
         title="Comment on this line"

@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <PackageReference Include="Markdig" Version="1.3.2" />
+    <PackageReference Include="ColorCode.HTML" Version="2.0.15" />
     <!-- Direct ref so CefSharp buildTransitive targets run on this exe (locales next to Harness.UI.exe).
          ProjectReference alone does not import those targets into the Web host. -->
     <PackageReference Include="CefSharp.Wpf.NETCore" Version="149.0.40"
