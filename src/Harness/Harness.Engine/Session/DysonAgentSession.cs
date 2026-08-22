@@ -16,7 +16,7 @@ public abstract class DysonAgentSession
     private TaskCompletionSource<(DysonSessionStatus Status, string? Summary)> _terminalTcs =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private const string TerminalReportRejectHint =
-        "To communicate with the parent without a new report cycle, call TriggerParentEvent instead.";
+        "To communicate with the parent without a new report cycle, call TriggerParentEvent instead. After TriggerParentEvent, do not call any more tools; end the turn.";
     private CancellationTokenSource? _runCts;
     private readonly ConcurrentDictionary<Guid, DysonParentEvent> _pendingParentEvents = new();
     private readonly HashSet<int> _waitingOnSubagentIds = [];

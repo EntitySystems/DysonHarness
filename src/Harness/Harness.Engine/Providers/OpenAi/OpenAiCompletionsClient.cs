@@ -174,6 +174,12 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
         var promptTokens = usageResponse is not null
             ? OpenAiCompatibleHttp.TryParsePromptTokens(usageResponse)
             : null;
+        DysonParsedUsage? parsedUsage = null;
+        if (usageResponse is not null
+            && OpenAiCompatibleHttp.TryParseUsage(usageResponse, out var streamUsage))
+        {
+            parsedUsage = streamUsage;
+        }
 
         yield return Result<OpenAiStreamChunk, string>.AsValue(new OpenAiStreamChunk
         {
@@ -186,6 +192,7 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
                 ResponseId = responseId,
                 UsageCacheHint = usageHint,
                 PromptTokens = promptTokens,
+                Usage = parsedUsage,
             },
         });
     }
@@ -257,6 +264,7 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
             ResponseId = response["id"]?.GetValue<string>(),
             UsageCacheHint = OpenAiCompatibleHttp.FormatUsageCacheHint(response),
             PromptTokens = OpenAiCompatibleHttp.TryParsePromptTokens(response),
+            Usage = OpenAiCompatibleHttp.TryParseUsage(response, out var parsed) ? parsed : null,
         });
     }
 

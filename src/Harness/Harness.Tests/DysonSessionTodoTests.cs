@@ -202,7 +202,7 @@ public class DysonSessionTodoTests
         if (!second.IsError
             || second.Error.IndexOf("already submitted", StringComparison.OrdinalIgnoreCase) < 0
             || second.Error.IndexOf(
-                "To communicate with the parent without a new report cycle, call TriggerParentEvent instead.",
+                "To communicate with the parent without a new report cycle, call TriggerParentEvent instead. After TriggerParentEvent, do not call any more tools; end the turn.",
                 StringComparison.Ordinal) < 0)
         {
             throw new InvalidOperationException(
@@ -222,7 +222,7 @@ public class DysonSessionTodoTests
         if (!stoppedReport.IsError
             || stoppedReport.Error.IndexOf("already Stopped", StringComparison.OrdinalIgnoreCase) < 0
             || stoppedReport.Error.IndexOf(
-                "To communicate with the parent without a new report cycle, call TriggerParentEvent instead.",
+                "To communicate with the parent without a new report cycle, call TriggerParentEvent instead. After TriggerParentEvent, do not call any more tools; end the turn.",
                 StringComparison.Ordinal) < 0)
         {
             throw new InvalidOperationException(
@@ -243,7 +243,7 @@ public class DysonSessionTodoTests
         if (!retry.IsError
             || retry.Error.IndexOf("already submitted", StringComparison.OrdinalIgnoreCase) < 0
             || retry.Error.IndexOf(
-                "To communicate with the parent without a new report cycle, call TriggerParentEvent instead.",
+                "To communicate with the parent without a new report cycle, call TriggerParentEvent instead. After TriggerParentEvent, do not call any more tools; end the turn.",
                 StringComparison.Ordinal) < 0)
         {
             throw new InvalidOperationException(
@@ -276,7 +276,7 @@ public class DysonSessionTodoTests
         if (!again.IsError
             || again.Error.IndexOf("already submitted", StringComparison.OrdinalIgnoreCase) < 0
             || again.Error.IndexOf(
-                "To communicate with the parent without a new report cycle, call TriggerParentEvent instead.",
+                "To communicate with the parent without a new report cycle, call TriggerParentEvent instead. After TriggerParentEvent, do not call any more tools; end the turn.",
                 StringComparison.Ordinal) < 0)
         {
             throw new InvalidOperationException(
@@ -316,10 +316,11 @@ public class DysonSessionTodoTests
         }
 
         if (!report.Description.Contains("TriggerSubagentEvent", StringComparison.Ordinal)
-            || !report.Description.Contains("TriggerParentEvent", StringComparison.Ordinal))
+            || !report.Description.Contains("TriggerParentEvent", StringComparison.Ordinal)
+            || !report.Description.Contains("do not call any more tools", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "SubmitSubagentReport description must contain 'TriggerSubagentEvent' and 'TriggerParentEvent'.");
+                "SubmitSubagentReport description must contain 'TriggerSubagentEvent', 'TriggerParentEvent', and 'do not call any more tools'.");
         }
 
         if (!pipeline.Tools.TryGetValue("ListTodos", out var listTodos))
@@ -421,7 +422,7 @@ public class DysonSessionTodoTests
         if (!retry.IsError
             || retry.Content.IndexOf("already submitted", StringComparison.OrdinalIgnoreCase) < 0
             || retry.Content.IndexOf(
-                "To communicate with the parent without a new report cycle, call TriggerParentEvent instead.",
+                "To communicate with the parent without a new report cycle, call TriggerParentEvent instead. After TriggerParentEvent, do not call any more tools; end the turn.",
                 StringComparison.Ordinal) < 0)
         {
             throw new InvalidOperationException(

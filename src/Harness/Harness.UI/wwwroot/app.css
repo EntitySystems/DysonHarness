@@ -3862,6 +3862,316 @@ code, .mono {
   line-height: 1.45;
 }
 
+/* ColorCode token colors. Keep these scoped: names such as .string and .comment
+   are intentionally generic and must not style unrelated UI content. */
+:root,
+[data-theme="dark"] {
+  --syntax-plain: #dadada;
+  --syntax-comment: #57a64a;
+  --syntax-keyword: #569cd6;
+  --syntax-string: #d69d85;
+  --syntax-number: #b5cea8;
+  --syntax-type: #4ec9b0;
+  --syntax-function: #dcdcaa;
+  --syntax-property: #9cdcfe;
+  --syntax-constant: #4fc1ff;
+  --syntax-operator: #d4d4d4;
+  --syntax-attribute: #9cdcfe;
+  --syntax-tag: #569cd6;
+  --syntax-regex: #d16969;
+  --syntax-escape: #d7ba7d;
+  --syntax-json-key: #ce9178;
+  --syntax-json-string: #4ec9b0;
+  --syntax-json-const: #c586c0;
+}
+
+[data-theme="light"] {
+  --syntax-plain: #1e1e1e;
+  --syntax-comment: #008000;
+  --syntax-keyword: #0000ff;
+  --syntax-string: #a31515;
+  --syntax-number: #098658;
+  --syntax-type: #2b91af;
+  --syntax-function: #795e26;
+  --syntax-property: #001080;
+  --syntax-constant: #0070c1;
+  --syntax-operator: #1e1e1e;
+  --syntax-attribute: #800000;
+  --syntax-tag: #0000ff;
+  --syntax-regex: #811f3f;
+  --syntax-escape: #ee0000;
+  --syntax-json-key: #a31515;
+  --syntax-json-string: #2b91af;
+  --syntax-json-const: #af00db;
+}
+
+.turn-block__body pre .plainText,
+.file-viewer-modal__code .plainText,
+.turn-block__body pre .text,
+.file-viewer-modal__code .text {
+  color: var(--syntax-plain);
+}
+
+.turn-block__body pre .comment,
+.file-viewer-modal__code .comment,
+.turn-block__body pre .xmlComment,
+.file-viewer-modal__code .xmlComment,
+.turn-block__body pre .htmlComment,
+.file-viewer-modal__code .htmlComment,
+.turn-block__body pre .xmlDocComment,
+.file-viewer-modal__code .xmlDocComment,
+.turn-block__body pre .xmlDocTag,
+.file-viewer-modal__code .xmlDocTag,
+.turn-block__body pre .xmlCDataSection,
+.file-viewer-modal__code .xmlCDataSection,
+.turn-block__body pre .cssComment,
+.file-viewer-modal__code .cssComment,
+.turn-block__body pre .powershellComment,
+.file-viewer-modal__code .powershellComment,
+.turn-block__body pre .markdownComment,
+.file-viewer-modal__code .markdownComment {
+  color: var(--syntax-comment);
+}
+
+.turn-block__body pre .keyword,
+.file-viewer-modal__code .keyword,
+.turn-block__body pre .controlKeyword,
+.file-viewer-modal__code .controlKeyword,
+.turn-block__body pre .preprocessorKeyword,
+.file-viewer-modal__code .preprocessorKeyword,
+.turn-block__body pre .pseudoKeyword,
+.file-viewer-modal__code .pseudoKeyword,
+.turn-block__body pre .cssKeyword,
+.file-viewer-modal__code .cssKeyword,
+.turn-block__body pre .powershellKeyword,
+.file-viewer-modal__code .powershellKeyword {
+  color: var(--syntax-keyword);
+}
+
+.turn-block__body pre .string,
+.file-viewer-modal__code .string,
+.turn-block__body pre .stringCSharpVerbatim,
+.file-viewer-modal__code .stringCSharpVerbatim,
+.turn-block__body pre .verbatimString,
+.file-viewer-modal__code .verbatimString,
+.turn-block__body pre .markdownCode,
+.file-viewer-modal__code .markdownCode,
+.turn-block__body pre .cssString,
+.file-viewer-modal__code .cssString,
+.turn-block__body pre .powershellString,
+.file-viewer-modal__code .powershellString,
+.turn-block__body pre .xmlAttributeValue,
+.file-viewer-modal__code .xmlAttributeValue,
+.turn-block__body pre .xmlAttributeQuotes,
+.file-viewer-modal__code .xmlAttributeQuotes,
+.turn-block__body pre .htmlAttributeValue,
+.file-viewer-modal__code .htmlAttributeValue {
+  color: var(--syntax-string);
+}
+
+.turn-block__body pre .number,
+.file-viewer-modal__code .number,
+.turn-block__body pre .jsonNumber,
+.file-viewer-modal__code .jsonNumber,
+.turn-block__body pre .cssNumber,
+.file-viewer-modal__code .cssNumber,
+.turn-block__body pre .powershellNumber,
+.file-viewer-modal__code .powershellNumber {
+  color: var(--syntax-number);
+}
+
+.turn-block__body pre .className,
+.file-viewer-modal__code .className,
+.turn-block__body pre .type,
+.file-viewer-modal__code .type,
+.turn-block__body pre .typeVariable,
+.file-viewer-modal__code .typeVariable,
+.turn-block__body pre .namespace,
+.file-viewer-modal__code .namespace,
+.turn-block__body pre .jsonString,
+.file-viewer-modal__code .jsonString,
+.turn-block__body pre .interfaceName,
+.file-viewer-modal__code .interfaceName,
+.turn-block__body pre .enumName,
+.file-viewer-modal__code .enumName,
+.turn-block__body pre .delegateName,
+.file-viewer-modal__code .delegateName,
+.turn-block__body pre .typeName,
+.file-viewer-modal__code .typeName {
+  color: var(--syntax-type);
+}
+
+.turn-block__body pre .jsonKey,
+.file-viewer-modal__code .jsonKey {
+  color: var(--syntax-json-key);
+}
+
+.turn-block__body pre .jsonConst,
+.file-viewer-modal__code .jsonConst,
+.turn-block__body pre .constant,
+.file-viewer-modal__code .constant,
+.turn-block__body pre .predefined,
+.file-viewer-modal__code .predefined,
+.turn-block__body pre .builtinValue,
+.file-viewer-modal__code .builtinValue {
+  color: var(--syntax-json-const);
+}
+
+.turn-block__body pre .function,
+.file-viewer-modal__code .function,
+.turn-block__body pre .builtinFunction,
+.file-viewer-modal__code .builtinFunction,
+.turn-block__body pre .sqlSystemFunction,
+.file-viewer-modal__code .sqlSystemFunction,
+.turn-block__body pre .methodName,
+.file-viewer-modal__code .methodName,
+.turn-block__body pre .methodDeclaration,
+.file-viewer-modal__code .methodDeclaration,
+.turn-block__body pre .constructor,
+.file-viewer-modal__code .constructor {
+  color: var(--syntax-function);
+}
+
+.turn-block__body pre .propertyName,
+.file-viewer-modal__code .propertyName,
+.turn-block__body pre .fieldName,
+.file-viewer-modal__code .fieldName,
+.turn-block__body pre .localVariable,
+.file-viewer-modal__code .localVariable,
+.turn-block__body pre .parameter,
+.file-viewer-modal__code .parameter,
+.turn-block__body pre .variable,
+.file-viewer-modal__code .variable,
+.turn-block__body pre .cssPropertyName,
+.file-viewer-modal__code .cssPropertyName,
+.turn-block__body pre .powershellVariable,
+.file-viewer-modal__code .powershellVariable,
+.turn-block__body pre .powershellParameter,
+.file-viewer-modal__code .powershellParameter {
+  color: var(--syntax-property);
+}
+
+.turn-block__body pre .operator,
+.file-viewer-modal__code .operator,
+.turn-block__body pre .punctuation,
+.file-viewer-modal__code .punctuation,
+.turn-block__body pre .delimiter,
+.file-viewer-modal__code .delimiter,
+.turn-block__body pre .htmlOperator,
+.file-viewer-modal__code .htmlOperator,
+.turn-block__body pre .xmlOperator,
+.file-viewer-modal__code .xmlOperator,
+.turn-block__body pre .powershellOperator,
+.file-viewer-modal__code .powershellOperator {
+  color: var(--syntax-operator);
+}
+
+.turn-block__body pre .attribute,
+.file-viewer-modal__code .attribute,
+.turn-block__body pre .attributeName,
+.file-viewer-modal__code .attributeName,
+.turn-block__body pre .htmlAttributeName,
+.file-viewer-modal__code .htmlAttributeName,
+.turn-block__body pre .xmlAttributeName,
+.file-viewer-modal__code .xmlAttributeName,
+.turn-block__body pre .xmlAttribute,
+.file-viewer-modal__code .xmlAttribute,
+.turn-block__body pre .cssPropertyValue,
+.file-viewer-modal__code .cssPropertyValue,
+.turn-block__body pre .powershellAttribute,
+.file-viewer-modal__code .powershellAttribute {
+  color: var(--syntax-attribute);
+}
+
+.turn-block__body pre .tagName,
+.file-viewer-modal__code .tagName,
+.turn-block__body pre .htmlElementName,
+.file-viewer-modal__code .htmlElementName,
+.turn-block__body pre .htmlTagName,
+.file-viewer-modal__code .htmlTagName,
+.turn-block__body pre .xmlElementName,
+.file-viewer-modal__code .xmlElementName,
+.turn-block__body pre .xmlName,
+.file-viewer-modal__code .xmlName,
+.turn-block__body pre .htmlTagDelimiter,
+.file-viewer-modal__code .htmlTagDelimiter,
+.turn-block__body pre .xmlTagDelimiter,
+.file-viewer-modal__code .xmlTagDelimiter,
+.turn-block__body pre .xmlDelimiter,
+.file-viewer-modal__code .xmlDelimiter,
+.turn-block__body pre .htmlServerSideScript,
+.file-viewer-modal__code .htmlServerSideScript {
+  color: var(--syntax-tag);
+}
+
+.turn-block__body pre .htmlEntity,
+.file-viewer-modal__code .htmlEntity,
+.turn-block__body pre .xmlEntity,
+.file-viewer-modal__code .xmlEntity,
+.turn-block__body pre .stringEscape,
+.file-viewer-modal__code .stringEscape,
+.turn-block__body pre .specialChar,
+.file-viewer-modal__code .specialChar,
+.turn-block__body pre .escape,
+.file-viewer-modal__code .escape {
+  color: var(--syntax-escape);
+}
+
+.turn-block__body pre .regex,
+.file-viewer-modal__code .regex {
+  color: var(--syntax-regex);
+}
+
+.turn-block__body pre .cssSelector,
+.file-viewer-modal__code .cssSelector,
+.turn-block__body pre .cssClassName,
+.file-viewer-modal__code .cssClassName,
+.turn-block__body pre .cssId,
+.file-viewer-modal__code .cssId,
+.turn-block__body pre .cssPseudoClass,
+.file-viewer-modal__code .cssPseudoClass,
+.turn-block__body pre .cssPseudoElement,
+.file-viewer-modal__code .cssPseudoElement,
+.turn-block__body pre .cssAtRule,
+.file-viewer-modal__code .cssAtRule,
+.turn-block__body pre .powershellCommand,
+.file-viewer-modal__code .powershellCommand,
+.turn-block__body pre .powershellType,
+.file-viewer-modal__code .powershellType,
+.turn-block__body pre .markdownHeader,
+.file-viewer-modal__code .markdownHeader,
+.turn-block__body pre .markdownLinkText,
+.file-viewer-modal__code .markdownLinkText {
+  color: var(--syntax-type);
+}
+
+.turn-block__body pre .markdownListItem,
+.file-viewer-modal__code .markdownListItem,
+.turn-block__body pre .markdownQuote,
+.file-viewer-modal__code .markdownQuote,
+.turn-block__body pre .markdownReferenceDefinition,
+.file-viewer-modal__code .markdownReferenceDefinition,
+.turn-block__body pre .markdownLinkTarget,
+.file-viewer-modal__code .markdownLinkTarget,
+.turn-block__body pre .markdownHorizontalRule,
+.file-viewer-modal__code .markdownHorizontalRule,
+.turn-block__body pre .markdownAutoLink,
+.file-viewer-modal__code .markdownAutoLink,
+.turn-block__body pre .label,
+.file-viewer-modal__code .label {
+  color: var(--syntax-comment);
+}
+
+.turn-block__body pre .italic,
+.file-viewer-modal__code .italic {
+  font-style: italic;
+}
+
+.turn-block__body pre .bold,
+.file-viewer-modal__code .bold {
+  font-weight: 700;
+}
+
 .turn-block__body a {
   color: var(--accent-text);
   text-decoration: underline;
@@ -5136,7 +5446,8 @@ code, .mono {
 }
 
 .rail-tabs__body--files,
-.rail-tabs__body--git {
+.rail-tabs__body--git,
+.rail-tabs__body--usage {
   align-items: stretch;
   justify-content: flex-start;
   padding: 4px 0 8px;
@@ -5147,7 +5458,8 @@ code, .mono {
 
 /* Size to content so the body (not a nested flex shrink) owns scrolling. */
 .rail-tabs__body--files > .file-tree,
-.rail-tabs__body--git > .git-changes {
+.rail-tabs__body--git > .git-changes,
+.rail-tabs__body--usage > .usage-panel {
   flex: 0 0 auto;
   min-height: auto;
 }
@@ -5156,6 +5468,156 @@ code, .mono {
   color: var(--text-dim);
   font-size: 12px;
   text-align: center;
+}
+
+.usage-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.usage-panel__empty {
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: center;
+  padding: 16px 8px;
+}
+
+.usage-tree {
+  width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.usage-tree__children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.usage-tree__branch {
+  min-width: 0;
+}
+
+.usage-tree__children > li {
+  min-width: 0;
+}
+
+.usage-tree__summary {
+  display: block;
+  list-style: none;
+  cursor: pointer;
+  min-width: 0;
+  padding: 4px 8px 6px calc(8px + (var(--usage-tree-depth, 0) * 12px));
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+
+.usage-tree__summary::-webkit-details-marker,
+.usage-tree__summary::marker {
+  display: none;
+  content: "";
+}
+
+.usage-tree__summary:hover,
+.usage-tree__leaf:hover {
+  background: var(--bg-hover);
+}
+
+.usage-tree__summary:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.usage-tree__leaf {
+  min-width: 0;
+  padding: 4px 8px 6px calc(8px + (var(--usage-tree-depth, 0) * 12px));
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.usage-tree__head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.usage-tree__chevron {
+  flex: 0 0 16px;
+  width: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 600;
+}
+
+.usage-tree__chevron::before {
+  content: "▸";
+}
+
+.usage-tree__branch[open] > .usage-tree__summary .usage-tree__chevron::before {
+  content: "▾";
+}
+
+.usage-tree__summary:hover .usage-tree__chevron:not(.usage-tree__chevron--spacer) {
+  color: var(--text);
+}
+
+.usage-tree__chevron--spacer::before {
+  visibility: hidden;
+}
+
+.usage-tree__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.usage-tree__reqs {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.usage-tree__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  margin: 4px 0 0;
+  padding-left: 20px;
+  min-width: 0;
+}
+
+.usage-tree__metrics > div {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.usage-tree__metrics dt {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.usage-tree__metrics dd {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text);
 }
 
 /* Git change list */
@@ -6329,6 +6791,7 @@ code, .mono {
 
 .file-viewer-modal__code {
   margin: 0;
+  color: var(--syntax-plain);
   padding: 0;
   white-space: pre-wrap;
   word-break: break-word;
