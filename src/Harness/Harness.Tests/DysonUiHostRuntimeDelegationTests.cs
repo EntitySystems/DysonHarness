@@ -1003,12 +1003,14 @@ public class DysonUiHostRuntimeDelegationTests
             IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
             string? modelSlug = null,
             string? reasoningEffort = null,
+            IReadOnlyList<string>? contextFiles = null,
             CancellationToken cancellationToken = default)
         {
             _ = context;
             _ = initialTodos;
             _ = modelSlug;
             _ = reasoningEffort;
+            _ = contextFiles;
 
             var child = new WaitingSession(_factory, agentMode);
             RegisterSubagent(child);

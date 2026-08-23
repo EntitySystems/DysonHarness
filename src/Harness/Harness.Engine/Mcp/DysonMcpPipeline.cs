@@ -1138,6 +1138,7 @@ public sealed class DysonMcpPipeline
                 "When the child calls SubmitSubagentReport, the parent is notified and the host queues a turn. " +
                 "Do not WaitForSubagent on Drones. In Work (and Drone), any Explore you start is a blocker: WaitForSubagent on a later stage of the same turn before further parent work. In Plan, Wait only when that Explore blocks the next automatic turn. " +
                 "Optional todos seeds the child’s own session todo list. " +
+                "Optional contextFiles preloads work-relative files into the child’s first turn as File context (path visible as `[File: relative/path]` before contents). The caller is encouraged to share relevant files so the subagent does not need to load them manually. " +
                 "Optional modelSlug picks a different model (slug or display alias; omit to inherit parent). " +
                 "Optional reasoningEffort overrides the child’s reasoning_effort (omit/null → chosen slug’s defaultEffort; when inheriting parent model, omit keeps the parent’s current effort). " +
                 "Cannot spawn a child whose agentMode is Plan (Plan is top-level only). A Plan parent may StartSubagent Explore. Explore parents cannot spawn. Drone may spawn Explore only (not another Drone).",
@@ -1177,6 +1178,11 @@ public sealed class DysonMcpPipeline
                         },
                         "required": ["displayName", "taskCode"]
                       }
+                    },
+                    "contextFiles": {
+                      "type": "array",
+                      "description": "Optional work-relative file paths to preload into the child’s first turn as File context (`[File: path]` then contents). Encouraged: share relevant files so the subagent does not need to load them manually.",
+                      "items": { "type": "string", "description": "Work-relative or workspace file path." }
                     }
                   },
                   "required": ["agentMode", "task"]

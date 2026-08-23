@@ -1710,7 +1710,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         Notify();
     }
 
-    public void OpenSkillViewer(DysonSkillUsedEntry entry)
+    public void OpenSkillViewer(DysonContextFileEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
         _skillViewer = new DysonSkillViewerState
@@ -3498,7 +3498,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 pluginContributions: _session?.Config.PluginContributions);
             if (loaded.IsError)
                 return Result<BuiltUserTurn, string>.AsError(loaded.Error);
-            turn.AttachLoadedSkill(loaded.Value);
+            turn.AttachContextFile(loaded.Value, DysonContextFileKind.Skill);
         }
 
         return Result<BuiltUserTurn, string>.AsValue(new BuiltUserTurn(turn, pendingFiles));

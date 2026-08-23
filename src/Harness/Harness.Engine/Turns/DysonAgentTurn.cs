@@ -65,13 +65,14 @@ public sealed class DysonAgentTurn
         }
     }
 
-    private readonly List<DysonSkillUsedEntry> _skillsUsed = [];
+    private readonly List<DysonContextFileEntry> _contextFiles = [];
     private readonly List<DysonBinaryAttachment> _userImages = [];
 
     /// <summary>
-    /// Skills attached this turn (slash / <c>LoadSkill</c>). Injected into provider transcripts + UI chip/modal.
+    /// Context files attached this turn (slash / <c>LoadSkill</c> skills, or StartSubagent
+    /// <c>contextFiles</c> workspace files). Injected into provider transcripts + UI chip/modal.
     /// </summary>
-    public IReadOnlyList<DysonSkillUsedEntry> SkillsUsed => _skillsUsed;
+    public IReadOnlyList<DysonContextFileEntry> ContextFiles => _contextFiles;
 
     /// <summary>
     /// User-attached images for this turn (composer). Persist across history and re-emit in
@@ -307,20 +308,20 @@ public sealed class DysonAgentTurn
         }
     }
 
-    /// <summary>Appends a skill used on this turn (slash attach or <c>LoadSkill</c>).</summary>
-    public void AddSkillUsed(DysonSkillUsedEntry entry)
+    /// <summary>Appends a context file used on this turn (slash / <c>LoadSkill</c> or StartSubagent files).</summary>
+    public void AddContextFile(DysonContextFileEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        _skillsUsed.Add(entry);
+        _contextFiles.Add(entry);
     }
 
-    /// <summary>Replaces <see cref="SkillsUsed"/> from a persisted snapshot.</summary>
-    public void RestoreSkillsUsed(IEnumerable<DysonSkillUsedEntry> skills)
+    /// <summary>Replaces <see cref="ContextFiles"/> from a persisted snapshot.</summary>
+    public void RestoreContextFiles(IEnumerable<DysonContextFileEntry> files)
     {
-        ArgumentNullException.ThrowIfNull(skills);
+        ArgumentNullException.ThrowIfNull(files);
 
-        _skillsUsed.Clear();
-        _skillsUsed.AddRange(skills);
+        _contextFiles.Clear();
+        _contextFiles.AddRange(files);
     }
 
     /// <summary>Appends a user-attached image for this turn (composer).</summary>
@@ -346,23 +347,27 @@ public sealed class DysonAgentTurn
         }
     }
 
-    /// <summary>Maps a loaded skill onto a <see cref="DysonSkillUsedEntry"/> and appends it.</summary>
-    public DysonSkillUsedEntry AttachLoadedSkill(DysonLoadedSkill loaded)
+    /// <summary>
+    /// Maps a loaded skill/file onto a <see cref="DysonContextFileEntry"/> and appends it.
+    /// File entries use <see cref="DysonLoadedSkill.ResolvedPath"/> as <see cref="DysonContextFileEntry.DisplayName"/>.
+    /// </summary>
+    public DysonContextFileEntry AttachContextFile(DysonLoadedSkill loaded, DysonContextFileKind kind)
     {
         ArgumentNullException.ThrowIfNull(loaded);
 
-        var entry = new DysonSkillUsedEntry
+        var entry = new DysonContextFileEntry
         {
-            SkillId = loaded.Id,
-            DisplayName = loaded.DisplayName,
+            Id = loaded.Id,
+            DisplayName = kind == DysonContextFileKind.File ? loaded.ResolvedPath : loaded.DisplayName,
             MarkdownContent = loaded.Markdown,
             ResolvedPath = loaded.ResolvedPath,
             LoadIndexOnly = loaded.LoadIndexOnly,
             PluginId = loaded.PluginId,
             PluginPackageRelativePath = loaded.PluginPackageRelativePath,
             UsedUtc = DateTime.UtcNow,
+            Kind = kind,
         };
-        AddSkillUsed(entry);
+        AddContextFile(entry);
         return entry;
     }
 

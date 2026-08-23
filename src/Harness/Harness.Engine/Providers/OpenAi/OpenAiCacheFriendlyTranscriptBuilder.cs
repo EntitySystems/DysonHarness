@@ -306,7 +306,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 });
             }
 
-            AppendSkillUserMessages(messages, turn);
+            AppendContextFileUserMessages(messages, turn);
 
             if (incompleteCurrent)
                 continue;
@@ -406,7 +406,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 });
             }
 
-            AppendSkillUserMessages(input, turn);
+            AppendContextFileUserMessages(input, turn);
 
             if (incompleteCurrent)
                 continue;
@@ -964,17 +964,17 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     }
 
     /// <summary>
-    /// Emits one user message per skill after the turn instruction so the model sees full markdown
-    /// without dumping it into the visible prompt UI.
+    /// Emits one user message per context file after the turn instruction so the model sees full
+    /// markdown without dumping it into the visible prompt UI.
     /// </summary>
-    private static void AppendSkillUserMessages(JsonArray messages, DysonAgentTurn turn)
+    private static void AppendContextFileUserMessages(JsonArray messages, DysonAgentTurn turn)
     {
-        foreach (var skill in turn.SkillsUsed)
+        foreach (var entry in turn.ContextFiles)
         {
             messages.Add(new JsonObject
             {
                 ["role"] = "user",
-                ["content"] = $"[Skill: {skill.DisplayName}]\n\n{skill.MarkdownContent}",
+                ["content"] = $"[{entry.Kind}: {entry.DisplayName}]\n\n{entry.MarkdownContent}",
             });
         }
     }

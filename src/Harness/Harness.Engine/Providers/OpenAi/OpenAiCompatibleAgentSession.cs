@@ -294,6 +294,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
         string? modelSlug = null,
         string? reasoningEffort = null,
+        IReadOnlyList<string>? contextFiles = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentMode);
@@ -318,6 +319,17 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             return Result<DysonStartSubagentResult, string>.AsError(resolved.Error);
 
         var childProvider = resolved.Value;
+
+        var firstTurn = DysonSessionInitialization.CreateTurn(BuildChildFirstPrompt(agentMode, task, context));
+        var attached = await AttachContextFilesToChildTurnAsync(
+                firstTurn,
+                contextFiles,
+                _workDirectoryPath,
+                Config.PluginContributions,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (attached.IsError)
+            return Result<DysonStartSubagentResult, string>.AsError(attached.Error);
 
         var providerKind = DysonProviderKinds.EffectiveKind(
             childProvider.ProviderKind, childProvider.BaseUrl, childProvider.ApiKey);
@@ -386,7 +398,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         child.AttachBackgroundRun(runCts);
         KickOffChildPrompt(
             child,
-            DysonSessionInitialization.CreateTurn(BuildChildFirstPrompt(agentMode, task, context)),
+            firstTurn,
             runCts);
 
         AppendLog($"started subagent {child.Id} ({agentMode}): {title}");

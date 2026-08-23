@@ -67,22 +67,23 @@
     </header>
     @if (IsExpanded)
     {
-        @if (IsUserTurn && (!string.IsNullOrWhiteSpace(Turn.Instruction) || Turn.SkillsUsed.Count > 0 || Turn.UserImages.Count > 0))
+        @if (IsUserTurn && (!string.IsNullOrWhiteSpace(Turn.Instruction) || Turn.ContextFiles.Count > 0 || Turn.UserImages.Count > 0))
         {
             <div class="turn-block__user">
                 <div class="turn-block__user-main">
-                    @if (Turn.SkillsUsed.Count > 0)
+                    @if (Turn.ContextFiles.Count > 0)
                     {
                         <div class="turn-block__skills">
-                            @foreach (var skill in Turn.SkillsUsed)
+                            @foreach (var contextFile in Turn.ContextFiles)
                             {
-                                var entry = skill;
+                                var entry = contextFile;
+                                var chipKind = entry.Kind == DysonContextFileKind.File ? "file" : "skill";
                                 <button type="button"
                                         class="turn-block__skill-chip"
                                         title="@(entry.ResolvedPath ?? entry.DisplayName)"
                                         @onclick:stopPropagation="true"
                                         @onclick="() => Host.OpenSkillViewer(entry)">
-                                    Used skill @entry.DisplayName
+                                    Used @chipKind @entry.DisplayName
                                 </button>
                             }
                         </div>

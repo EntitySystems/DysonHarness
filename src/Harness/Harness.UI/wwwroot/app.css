@@ -525,18 +525,20 @@ code, .mono {
   padding: 14px;
 }
 
-.settings-page__picker-group {
-  margin-top: 16px;
-}
-
-.settings-page__picker-row {
+.settings-page__picker-stack {
   display: grid;
   grid-template-columns: max-content max-content;
   column-gap: 10px;
   row-gap: 4px;
   align-items: end;
+  margin-top: 16px;
   width: max-content;
   max-width: 100%;
+}
+
+.settings-page__picker-group,
+.settings-page__picker-row {
+  display: contents;
 }
 
 .settings-page__picker-row > label {
@@ -545,12 +547,20 @@ code, .mono {
 }
 
 .settings-page__picker-group .settings-page__copy {
+  grid-column: 1 / -1;
+  width: 0;
+  min-width: 100%;
   margin: 4px 0 0;
+}
+
+.settings-page__picker-group:not(:last-child) .settings-page__copy {
+  margin-bottom: 16px;
 }
 
 .settings-page__picker-row .model-slug-picker,
 .settings-page__picker-row .model-slug-picker .field {
   width: 100%;
+  min-width: max-content;
   margin-bottom: 0;
 }
 

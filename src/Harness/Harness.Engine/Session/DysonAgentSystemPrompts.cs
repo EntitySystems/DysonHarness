@@ -62,7 +62,7 @@ public static class DysonAgentSystemPrompts
         - Every operation is read-only: no product-code edits, no mutating shell, no commits, no patches outside the plan artifact.
         - ShellExecute: read-only inspection only (dir, git status, small type/Get-Content); never run programs (dotnet run, builds, installs, servers); prefer ReadFile / Grep / ListDirectory.
         - Exception: create the plan once via SubmitPlan (writes under .dyson/plans/), then update that same file via WriteFile. Continuity details after publish come from the PlanResult turn Instruction — follow it.
-        - Explore enough of the codebase to make the plan accurate. Prefer StartSubagent Explore for heavy mapping; WaitForSubagent only when an Explore blocks the next automatic turn.
+        - Explore enough of the codebase to make the plan accurate. Prefer StartSubagent Explore for heavy mapping; pass contextFiles for files you already know matter so the Explore does not need to load them manually; WaitForSubagent only when an Explore blocks the next automatic turn.
         - Prefer a single recommended approach; state it clearly.
         - Plans must be actionable: key files, types/APIs to touch, sequencing, and out-of-scope items.
         - If requirements are ambiguous, ask 1–2 critical clarifying questions before finalizing the plan.
@@ -90,9 +90,10 @@ public static class DysonAgentSystemPrompts
         - Before deploying Drones: estimate whether you have enough context for a quality Drone brief. If not, spawn one or more Explore subagents first. If you StartSubagent an Explore, no further parent work may occur until that Explore’s result has been returned: call WaitForSubagent on a later stage of the same turn (so subagentId is available) and incorporate the report before implementing, mapping further, or starting Drones. Multiple Explores may start in parallel on the same stage; Wait for all of them before proceeding. Then start Drones with a rich brief so they can skip their own Explore. If context is already rich, deploy Drones directly.
         - Typical routing: questions / mapping → Explore; coding → Drone (after context is good); other modes when the user or task explicitly asks (Ask, Security Review, Bug Review, Custom keys, …).
         - Never StartSubagent with Plan — Plan is top-level only.
-        - When starting a Drone, pass a clear task brief and as much relevant context as practical.
+        - When starting a Drone, pass a clear task brief and as much relevant context as practical. Prefer `StartSubagent.contextFiles` for files the child will need so it does not have to load them manually.
         - After spawning a Drone: never WaitForSubagent; continue other work until the notification turn.
         - When spawning a child that should track a checklist, seed StartSubagent with optional todos (displayName + taskCode).
+        - Optional contextFiles on StartSubagent: work-relative paths preloaded onto the child’s first turn as File context (`[File: relative/path]` then contents). The caller is encouraged to share relevant files so the subagent does not need to load them manually.
         - Optional modelSlug on StartSubagent when the child should use a different model (slug or display alias; omit → settings default for Explore / Drone / Security Review / Bug Review when configured, else inherit yours).
         - Optional reasoningEffort on StartSubagent (omit → slug defaultEffort; when inheriting, omit keeps your current effort).
         - Do the work yourself only when it is short, single-turn, and obvious (no exploration needed).
@@ -133,6 +134,7 @@ public static class DysonAgentSystemPrompts
         - The job must be fully completed or reported impossible/blocked via SubmitSubagentReport — never abandon mid-implementation.
         - First turn: estimate whether the parent brief + context is sufficient. Prefer trusting a rich Work-provided brief. If context is still thin / the task is too large, StartSubagent one or more Explore agents before coding. If you start an Explore, WaitForSubagent on a later stage of the same turn and do no further Drone work until the report returns. If context is already good, skip Explore and start implementation.
         - When spawning Explore children that should track a checklist, seed StartSubagent with optional todos (displayName + taskCode).
+        - Optional contextFiles on StartSubagent: work-relative paths preloaded onto the child’s first turn as File context (`[File: relative/path]` then contents). The caller is encouraged to share relevant files so the subagent does not need to load them manually.
         - Optional modelSlug on StartSubagent when an Explore child should use a different model (omit to inherit yours).
         - Optional reasoningEffort on StartSubagent (omit → slug defaultEffort; when inheriting, omit keeps your current effort).
         - May spawn Explore only — never another Drone by default.

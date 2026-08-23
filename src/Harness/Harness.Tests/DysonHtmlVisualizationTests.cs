@@ -201,7 +201,7 @@ public class DysonHtmlVisualizationTests
         config,
         new StubProvider())
     {
-        public override Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(string agentMode, string task, string? context = null, IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null, string? modelSlug = null, string? reasoningEffort = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public override Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(string agentMode, string task, string? context = null, IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null, string? modelSlug = null, string? reasoningEffort = null, IReadOnlyList<string>? contextFiles = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public override Task<VoidResult<string>> LoadFunctionalContextAsync(CancellationToken cancellationToken = default) => Task.FromResult(VoidResult<string>.Success);
         public override Task<VoidResult<string>> PromptAsync(string prompt, CancellationToken cancellationToken = default) => Task.FromResult(VoidResult<string>.Success);
         public override Task<VoidResult<string>> PromptAsync(string prompt, IReadOnlyList<string> filePaths, CancellationToken cancellationToken = default) => Task.FromResult(VoidResult<string>.Success);
