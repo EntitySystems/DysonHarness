@@ -101,7 +101,7 @@
         }
         else
         {
-            <div class="analytics-chart" aria-label="Stacked area chart of token usage">
+            <div class="analytics-chart" aria-label="Area chart of token usage">
                 <ApexChart @key="_chartKey"
                            TItem="DysonUsageTimeSeriesPoint"
                            Options="_chartOptions"
@@ -138,6 +138,29 @@
         (DysonUsageTimeSeriesWindow.ThirtyDays, "30D"),
         (DysonUsageTimeSeriesWindow.Custom, "Custom"),
     ];
+
+    // Keep in sync with DysonMaxTargetContextTokens.FormatCompact.
+    private const string CompactTokenFormatter = """
+        function(value, _) {
+            if (value == null || !Number.isFinite(value) || value <= 0) return "0";
+
+            const absolute = Math.abs(value);
+            let divisor = 1;
+            let suffix = "";
+            if (absolute >= 1e9) {
+                divisor = 1e9;
+                suffix = "B";
+            } else if (absolute >= 1e6) {
+                divisor = 1e6;
+                suffix = "M";
+            } else if (absolute >= 1e3) {
+                divisor = 1e3;
+                suffix = "K";
+            }
+
+            return `${Math.round((value / divisor) * 10) / 10}${suffix}`;
+        }
+        """;
 
     private readonly List<DysonUsageRequestEntity> _windowRows = [];
     private readonly List<DysonUsageRequestEntity> _filteredRows = [];
@@ -365,18 +388,18 @@
             Chart = new Chart
             {
                 Type = ChartType.Area,
-                Stacked = true,
+                Stacked = false,
                 Toolbar = new Toolbar { Show = false },
                 Background = "transparent",
                 ForeColor = labelColor,
             },
-            Colors = [GetAccentColor(), "#3dbf7a", "#9b7aef"],
+            Colors = ["#4c8bf5", "#3dbf7a", "#e8a23a"],
             Theme = new Theme { Mode = isLightTheme ? Mode.Light : Mode.Dark },
             DataLabels = new DataLabels { Enabled = false },
             Stroke = new Stroke
             {
                 Curve = Curve.Smooth,
-                Width = 1,
+                Width = 2,
             },
             Fill = new Fill
             {
@@ -418,21 +441,23 @@
                 {
                     AxisBorder = new AxisBorder { Show = false },
                     AxisTicks = new AxisTicks { Show = false },
-                    Labels = new YAxisLabels { Style = new AxisLabelStyle { Colors = [labelColor] } },
+                    Labels = new YAxisLabels
+                    {
+                        Formatter = CompactTokenFormatter,
+                        Style = new AxisLabelStyle { Colors = [labelColor] },
+                    },
                 },
             ],
-            Tooltip = new Tooltip { Theme = isLightTheme ? Mode.Light : Mode.Dark, Shared = true },
+            Tooltip = new Tooltip
+            {
+                Theme = isLightTheme ? Mode.Light : Mode.Dark,
+                Shared = true,
+                Y = new TooltipY { Formatter = CompactTokenFormatter },
+            },
         };
         _chartKey++;
     }
 
-    private string GetAccentColor() => Theme.Accent switch
-    {
-        "green" => "#3dbf7a",
-        "red" => "#e25b5b",
-        "purple" => "#9b7aef",
-        _ => "#4c8bf5",
-    };
 
     private void OnThemeChanged() => _ = InvokeAsync(() =>
     {

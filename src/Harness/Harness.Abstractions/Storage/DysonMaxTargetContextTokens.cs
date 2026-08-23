@@ -37,24 +37,28 @@ public static class DysonMaxTargetContextTokens
         return value.Value;
     }
 
-    /// <summary>Format for UI steppers / chips (e.g. <c>100K</c>, <c>12.4K</c>). Use <paramref name="zeroAsOff"/> for max-target display.</summary>
-    public static string FormatCompact(int tokens, bool zeroAsOff = false)
+    /// <summary>Format for UI steppers / chips (e.g. <c>100K</c>, <c>1.4M</c>, <c>3B</c>). Use <paramref name="zeroAsOff"/> for max-target display.</summary>
+    public static string FormatCompact(int tokens, bool zeroAsOff = false) =>
+        FormatCompact((long)tokens, zeroAsOff);
+
+    /// <summary>Format token counts using K, M, and B suffixes.</summary>
+    public static string FormatCompact(long tokens, bool zeroAsOff = false)
     {
         if (tokens <= 0)
             return zeroAsOff ? "Off" : "0";
 
-        if (tokens % 1000 == 0 && tokens >= 1000)
-        {
-            var k = tokens / 1000;
-            return $"{k}K";
-        }
+        if (tokens >= 1_000_000_000)
+            return FormatScaled(tokens, 1_000_000_000, "B");
 
-        if (tokens >= 1000)
-        {
-            var k = tokens / 1000.0;
-            return k % 1 == 0 ? $"{(int)k}K" : $"{k:0.#}K";
-        }
+        if (tokens >= 1_000_000)
+            return FormatScaled(tokens, 1_000_000, "M");
+
+        if (tokens >= 1_000)
+            return FormatScaled(tokens, 1_000, "K");
 
         return tokens.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
+
+    private static string FormatScaled(long tokens, long divisor, string suffix) =>
+        $"{(tokens / (double)divisor).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}{suffix}";
 }

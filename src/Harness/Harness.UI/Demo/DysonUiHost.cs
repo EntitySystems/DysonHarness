@@ -2483,6 +2483,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// <summary>
     /// Apply a model slug to the focused session (same provider kind only).
     /// Resets session reasoning effort to the slug's default.
+    /// Same live slug is a no-op (no provider swap, effort reset, persist, or busy stash).
     /// While busy, validates and stashes the slug for apply after the turn finishes.
     /// With no session, preference is caller-owned (<c>_selectedSlugId</c>); updates pending effort to slug default.
     /// </summary>
@@ -2530,6 +2531,13 @@ public sealed class DysonUiHost : IAsyncDisposable
             return VoidResult<string>.Success;
         }
 
+        // Leftover picker callbacks re-apply the current slug; do not swap or stash a no-op.
+        if (SessionProviderSlugId(_session.Provider) == modelSlugId)
+        {
+            Notify();
+            return VoidResult<string>.Success;
+        }
+
         if (IsBusy)
         {
             var deferred = await ResolveProviderAsync(modelSlugId, reasoningEffort: null, cancellationToken)
@@ -2561,6 +2569,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     /// <summary>
     /// Resolve + same-kind check + swap <see cref="DysonAgentSession.Provider"/> + persist.
+    /// Same live slug is a no-op (including flush of a leftover pending).
     /// Does not mutate Provider mid-turn; callers must only invoke when the session is idle.
     /// </summary>
     private async Task<VoidResult<string>> ApplySessionModelSlugCoreAsync(
@@ -2569,6 +2578,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(session);
+
+        if (SessionProviderSlugId(session.Provider) == modelSlugId)
+        {
+            Notify();
+            return VoidResult<string>.Success;
+        }
 
         // null effort → constructor uses slug DefaultReasoningEffort
         var providerResult = await ResolveProviderAsync(modelSlugId, reasoningEffort: null, cancellationToken)
@@ -2796,6 +2811,14 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             OpenAiCompatibleAgentProvider => DysonProviderKinds.OpenAICompatible,
             _ => DysonProviderKinds.Demo,
+        };
+
+    private static Guid? SessionProviderSlugId(DysonAgentProvider provider) =>
+        provider switch
+        {
+            OpenAiCompatibleAgentProvider oai => oai.SlugId,
+            DemoDysonAgentProvider demo => demo.SlugId,
+            _ => null,
         };
 
     public async Task<VoidResult<string>> ResumeSessionAsync(
