@@ -227,27 +227,9 @@
             }
         }
 
-        if (_options.Count == 0)
-        {
-            if (SelectedSlugId is not null)
-                await SelectedSlugIdChanged.InvokeAsync(null);
-            return;
-        }
-
-        if (SelectedSlugId is Guid selected && _options.Any(o => o.Id == selected))
-            return;
-
-        if (AllowEmpty)
-        {
-            if (SelectedSlugId is not null)
-                await SelectedSlugIdChanged.InvokeAsync(null);
-            return;
-        }
-
-        var fallback = _options.FirstOrDefault(o => o.IsEligible && o.IsDefault)
-            ?? _options.FirstOrDefault(o => o.IsEligible);
-        if (fallback is not null)
-            await SelectedSlugIdChanged.InvokeAsync(fallback.Id);
+        var selectedIsListed = SelectedSlugId is Guid selected && _options.Any(o => o.Id == selected);
+        if (ModelSlugPickerSelection.TryGetAutoWrite(SelectedSlugId, AllowEmpty, selectedIsListed, out var write))
+            await SelectedSlugIdChanged.InvokeAsync(write);
     }
 
     private void OpenModal()

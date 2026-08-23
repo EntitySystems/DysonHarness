@@ -8,6 +8,7 @@
 @implements IAsyncDisposable
 @inject DysonUiHost Host
 @inject IDysonWorkDirectoryRepository WorkDirs
+@inject IDysonModelRepository ModelStore
 @inject DysonWorkDirectoryService WorkDirectoryService
 @inject DysonFileTreeService FileTree
 @inject DysonGitChangesService GitChanges
@@ -134,6 +135,17 @@
 
         await Host.EnsureDefaultModelAsync();
         await RefreshSessionsAsync();
+
+        SyncSelectedSlugFromSession();
+        SyncReasoningEffortFromHost();
+        SyncContextTokensFromHost();
+
+        if (_selectedSlugId is null)
+        {
+            var def = await ModelStore.GetDefaultSlugAsync();
+            if (def.IsSuccess && def.Value is { } slug)
+                _selectedSlugId = slug.Id;
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
