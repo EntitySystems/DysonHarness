@@ -112,6 +112,7 @@ public static class DysonToolCallUi
             "WebFetch" => SummarizeWebFetch(argumentsJson),
             "FetchGithubReadme" => TextSummary(Truncate(GithubOwnerRepo(GetString(argumentsJson, "url")), SummaryMaxLength)),
             "BrowserTakeScreenshot" => SummarizeScreenshot(resultContent, hasResult),
+            "GenerateImage" => SummarizeGenerateImage(resultContent, hasResult),
             _ => TextSummary(Truncate(CompactJson(argumentsJson), SummaryMaxLength)),
         };
     }
@@ -181,7 +182,7 @@ public static class DysonToolCallUi
         };
     }
 
-    public static string FormatByteSize(int bytes)
+    public static string FormatByteSize(long bytes)
     {
         if (bytes < 1024)
             return $"{bytes} B";
@@ -189,6 +190,21 @@ public static class DysonToolCallUi
         if (kb < 1024)
             return $"{kb:0.#} KB";
         return $"{kb / 1024.0:0.#} MB";
+    }
+
+    private static CollapsedSummary SummarizeGenerateImage(string? resultContent, bool hasResult)
+    {
+        if (!hasResult || !TryParseObject(resultContent, out var root))
+            return TextSummary("image generation");
+
+        var count = root.TryGetProperty("artifactCount", out var countValue)
+            && countValue.ValueKind == JsonValueKind.Number
+            && countValue.TryGetInt32(out var parsedCount)
+            ? parsedCount
+            : 0;
+        return TextSummary(count > 0
+            ? $"{count} generated image{(count == 1 ? null : "s")}"
+            : "image generation");
     }
 
     private static CollapsedSummary SummarizeScreenshot(string? resultContent, bool hasResult)

@@ -150,6 +150,53 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
     }
 
     [Fact]
+    public async Task BuildAsync_hydrates_direct_openai_image_generation_setting_only()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var directProvider = await harness.Models.CreateProviderAsync(new DysonModelProviderEntity
+        {
+            DisplayName = "Direct OpenAI",
+            ProviderKind = DysonProviderKinds.OpenAICompatible,
+            BaseUrl = OpenAiCompatibleHttp.DefaultBaseUrl,
+            ApiKey = "sk-test",
+        });
+        Assert.True(directProvider.IsSuccess, directProvider.IsError ? directProvider.Error : null);
+        var directSlug = await harness.Models.AddSlugAsync(
+            directProvider.Value, "gpt-image-1", "Image generation");
+        Assert.True(directSlug.IsSuccess, directSlug.IsError ? directSlug.Error : null);
+
+        var saved = await harness.Settings.SetSettingAsync(
+            DysonAppSettingKeys.ImageGenerationModelSlugId, directSlug.Value.ToString("D"));
+        Assert.True(saved.IsSuccess, saved.IsError ? saved.Error : null);
+
+        await using (var hydrated = (await harness.Builder.BuildAsync(new DysonUiAgentSessionRuntimeConfigRequest())).Value)
+        {
+            var provider = Assert.IsType<OpenAiCompatibleAgentProvider>(hydrated.Config.ImageGenerationProvider);
+            Assert.Equal(directSlug.Value, provider.SlugId);
+            Assert.Equal("gpt-image-1", provider.Slug);
+            Assert.Null(provider.ReasoningEffort);
+        }
+
+        foreach (var invalidSetting in new[] { "", "not-a-guid", Guid.NewGuid().ToString("D") })
+        {
+            var invalid = await harness.Settings.SetSettingAsync(
+                DysonAppSettingKeys.ImageGenerationModelSlugId, invalidSetting);
+            Assert.True(invalid.IsSuccess, invalid.IsError ? invalid.Error : null);
+
+            await using var ignored = (await harness.Builder.BuildAsync(new DysonUiAgentSessionRuntimeConfigRequest())).Value;
+            Assert.Null(ignored.Config.ImageGenerationProvider);
+        }
+
+        var compatibleCatalog = await harness.SeedProvidersAsync();
+        var unsupported = await harness.Settings.SetSettingAsync(
+            DysonAppSettingKeys.ImageGenerationModelSlugId, compatibleCatalog.OpenAiSlugId.ToString("D"));
+        Assert.True(unsupported.IsSuccess, unsupported.IsError ? unsupported.Error : null);
+
+        await using var nonDirect = (await harness.Builder.BuildAsync(new DysonUiAgentSessionRuntimeConfigRequest())).Value;
+        Assert.Null(nonDirect.Config.ImageGenerationProvider);
+    }
+
+    [Fact]
     public async Task BuildAsync_hydrates_provider_reasoning_effort_from_settings_or_slug_default()
     {
         await using var harness = await Harness.CreateAsync();

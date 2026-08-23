@@ -76,6 +76,12 @@ public static class DysonAppSettingKeys
     public const string BugReviewReasoningEffort = "bug_review_reasoning_effort";
 
     /// <summary>
+    /// Guid string of the dedicated direct-OpenAI model slug used by <c>GenerateImage</c>.
+    /// Empty, invalid, or unsupported ⇒ image generation is disabled; it never falls back to the chat model.
+    /// </summary>
+    public const string ImageGenerationModelSlugId = "image_generation_model_slug_id";
+
+    /// <summary>
     /// Chat tools column width as a percent of the turn content row (e.g. "30").
     /// Empty / missing ⇒ default 30%.
     /// </summary>

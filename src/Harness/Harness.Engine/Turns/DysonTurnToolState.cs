@@ -27,15 +27,19 @@ public static class DysonTurnToolStateSerializer
         WriteIndented = false,
     };
 
-    public static string Serialize(DysonTurnToolState state) =>
-        JsonSerializer.Serialize(state, Options);
+    public static string Serialize(DysonTurnToolState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        return JsonSerializer.Serialize(SanitizeGeneratedImageArtifacts(state), Options);
+    }
 
     public static DysonTurnToolState Deserialize(string? json)
     {
         if (string.IsNullOrWhiteSpace(json) || json == "{}")
             return new DysonTurnToolState();
 
-        return JsonSerializer.Deserialize<DysonTurnToolState>(json, Options) ?? new DysonTurnToolState();
+        var state = JsonSerializer.Deserialize<DysonTurnToolState>(json, Options) ?? new DysonTurnToolState();
+        return SanitizeGeneratedImageArtifacts(state);
     }
 
     public static string CaptureFromTurn(DysonAgentTurn turn)
@@ -82,5 +86,43 @@ public static class DysonTurnToolStateSerializer
         turn.ToolCalls.AddRange(state.ToolCalls);
         turn.RestoreTrackedCalls(state.Tracked);
         turn.RestoreResponseLog(state.ResponseLog);
+    }
+
+    private static DysonTurnToolState SanitizeGeneratedImageArtifacts(DysonTurnToolState state)
+    {
+        state.ResponseLog = [.. state.ResponseLog.Select(SanitizeResult)];
+        state.Tracked =
+        [
+            .. state.Tracked.Select(tracked => new DysonPersistedTrackedToolCall
+            {
+                CallId = tracked.CallId,
+                Status = tracked.Status,
+                Result = tracked.Result is null ? null : SanitizeResult(tracked.Result),
+            }),
+        ];
+        return state;
+    }
+
+    private static DysonToolCallResult SanitizeResult(DysonToolCallResult result)
+    {
+        var artifacts = (result.GeneratedImageArtifacts ?? [])
+            .Select(DysonGeneratedImageArtifact.TryRehydrate)
+            .Where(artifact => !artifact.IsError)
+            .Select(artifact => artifact.Value)
+            .ToArray();
+
+        return new DysonToolCallResult
+        {
+            CallId = result.CallId,
+            ToolName = result.ToolName,
+            Stage = result.Stage,
+            IsError = result.IsError,
+            Content = result.Content,
+            BinaryAttachment = result.BinaryAttachment,
+            HtmlVisualization = result.HtmlVisualization,
+            GeneratedImageArtifacts = artifacts,
+            EndsCurrentTurn = result.EndsCurrentTurn,
+            CompletedAt = result.CompletedAt,
+        };
     }
 }

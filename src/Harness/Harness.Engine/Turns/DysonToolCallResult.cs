@@ -57,6 +57,12 @@ public sealed class DysonToolCallResult
     /// </summary>
     public DysonHtmlVisualization? HtmlVisualization { get; init; }
 
+    /// <summary>
+    /// Durable PNG metadata emitted by <c>GenerateImage</c>. Image bytes stay at the validated
+    /// workspace paths; this list contains neither base64 data nor transient preview identifiers.
+    /// </summary>
+    public IReadOnlyList<DysonGeneratedImageArtifact> GeneratedImageArtifacts { get; init; } = [];
+
     /// <summary>Copy without <see cref="BinaryAttachment"/> (ack <see cref="Content"/> kept).</summary>
     public DysonToolCallResult WithoutBinaryAttachment() =>
         BinaryAttachment is null
@@ -69,6 +75,7 @@ public sealed class DysonToolCallResult
                 IsError = IsError,
                 Content = Content,
                 HtmlVisualization = HtmlVisualization,
+                GeneratedImageArtifacts = GeneratedImageArtifacts,
                 EndsCurrentTurn = EndsCurrentTurn,
                 CompletedAt = CompletedAt,
             };
