@@ -198,6 +198,10 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
                 }
             }
 
+            await TryHydrateImageGenerationProviderSettingAsync(
+                    p => config.ImageGenerationProvider = p,
+                    cancellationToken)
+                .ConfigureAwait(false);
             await TryHydrateOpenAiProviderSettingAsync(
                     DysonAppSettingKeys.WebSearchSummarizerModelSlugId,
                     DysonAppSettingKeys.WebSearchSummarizerReasoningEffort,
@@ -343,6 +347,29 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
         }
 
         return names;
+    }
+
+    private async Task TryHydrateImageGenerationProviderSettingAsync(
+        Action<OpenAiCompatibleAgentProvider> assign,
+        CancellationToken cancellationToken)
+    {
+        var setting = await _appSettings
+            .GetSettingAsync(DysonAppSettingKeys.ImageGenerationModelSlugId, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (setting.IsError
+            || string.IsNullOrWhiteSpace(setting.Value)
+            || !Guid.TryParse(setting.Value, out var slugId)
+            || slugId == Guid.Empty)
+        {
+            return;
+        }
+
+        var slugResult = await _models.GetSlugAsync(slugId, cancellationToken).ConfigureAwait(false);
+        if (slugResult.IsError || !OpenAiImageGenerationEligibility.IsEligible(slugResult.Value))
+            return;
+
+        assign(new OpenAiCompatibleAgentProvider(slugResult.Value));
     }
 
     private async Task TryHydrateOpenAiProviderSettingAsync(

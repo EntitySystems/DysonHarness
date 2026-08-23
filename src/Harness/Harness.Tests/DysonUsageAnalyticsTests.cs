@@ -82,6 +82,121 @@ public class DysonUsageAnalyticsTests
     }
 
     [Fact]
+    public async Task List_filters_by_model_slug_with_work_directory_and_date_window()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var repo = DysonTempDb.Usage(accessor);
+        var rootId = Guid.NewGuid();
+        var start = new DateTime(2026, 8, 23, 10, 0, 0, DateTimeKind.Utc);
+
+        Assert.True((await repo.AppendAsync(Row(
+            rootId, "alpha", start.AddMinutes(10), input: 10, modelSlug: "model-a"))).IsSuccess);
+        Assert.True((await repo.AppendAsync(Row(
+            rootId, "alpha", start.AddMinutes(20), input: 20, modelSlug: "model-b"))).IsSuccess);
+        Assert.True((await repo.AppendAsync(Row(
+            rootId, "beta", start.AddMinutes(30), input: 30, modelSlug: "model-a"))).IsSuccess);
+        Assert.True((await repo.AppendAsync(Row(
+            rootId, "alpha", start.AddDays(1), input: 40, modelSlug: "model-a"))).IsSuccess);
+
+        var listed = await repo.ListAsync(
+            workDirectoryName: "alpha",
+            fromUtc: start,
+            toUtc: start.AddHours(1),
+            modelSlug: "model-a");
+
+        Assert.False(listed.IsError);
+        var row = Assert.Single(listed.Value);
+        Assert.Equal("model-a", row.ModelSlug);
+        Assert.Equal("alpha", row.WorkDirectoryName);
+        Assert.Equal(10, row.InputTokens);
+    }
+
+    [Fact]
+    public void Time_series_aligns_hourly_buckets_and_zero_fills()
+    {
+        var from = new DateTime(2026, 8, 23, 10, 30, 0, DateTimeKind.Utc);
+        var to = new DateTime(2026, 8, 23, 13, 10, 0, DateTimeKind.Utc);
+        var rows = new[]
+        {
+            UsageRow(from.AddMinutes(15), inputAfterCache: 5, cache: 2, writeAfterCache: 3),
+            UsageRow(from.AddHours(1).AddMinutes(35), inputAfterCache: 7, cache: 11, writeAfterCache: 13),
+            UsageRow(from.AddHours(-1), inputAfterCache: 99, cache: 99, writeAfterCache: 99),
+        };
+
+        var result = DysonUsageTimeSeries.FromRows(rows, from, to, DysonUsageTimeSeriesBucket.Hour);
+
+        Assert.False(result.IsError);
+        var points = result.Value.Points;
+        Assert.Equal(4, points.Count);
+        Assert.Equal(new DateTime(2026, 8, 23, 10, 0, 0, DateTimeKind.Utc), points[0].StartUtc);
+        Assert.Equal(new DateTime(2026, 8, 23, 11, 0, 0, DateTimeKind.Utc), points[1].StartUtc);
+        Assert.Equal(new DateTime(2026, 8, 23, 12, 0, 0, DateTimeKind.Utc), points[2].StartUtc);
+        Assert.Equal(new DateTime(2026, 8, 23, 13, 0, 0, DateTimeKind.Utc), points[3].StartUtc);
+        Assert.Equal(5, points[0].InputTokensAfterCache);
+        Assert.Equal(2, points[0].CacheTokens);
+        Assert.Equal(3, points[0].WriteTokensAfterCache);
+        Assert.Equal(0, points[1].InputTokensAfterCache);
+        Assert.Equal(7, points[2].InputTokensAfterCache);
+        Assert.Equal(11, points[2].CacheTokens);
+        Assert.Equal(13, points[2].WriteTokensAfterCache);
+        Assert.Equal(0, points[3].WriteTokensAfterCache);
+    }
+
+    [Fact]
+    public void Time_series_exposes_unfiltered_filter_options_and_aggregates_selected_rows()
+    {
+        var from = new DateTime(2026, 8, 23, 0, 0, 0, DateTimeKind.Utc);
+        var rows = new[]
+        {
+            UsageRow(from.AddHours(1), "alpha", "model-a", "Model A", 2, 3, 5),
+            UsageRow(from.AddHours(2), "alpha", "model-a", "Model A latest", 7, 11, 13),
+            UsageRow(from.AddHours(3), "beta", "model-b", "Model B", 17, 19, 23),
+        };
+
+        var options = DysonUsageTimeSeries.GetFilterOptions(rows);
+        var selectedRows = rows.Where(row =>
+            row.WorkDirectoryName == "alpha" && row.ModelSlug == "model-a");
+        var result = DysonUsageTimeSeries.FromRows(
+            selectedRows,
+            from,
+            from.AddHours(6),
+            DysonUsageTimeSeriesBucket.Day);
+
+        Assert.Equal(new[] { "alpha", "beta" }, options.WorkDirectoryNames);
+        Assert.Equal(2, options.Models.Count);
+        var modelA = Assert.Single(options.Models, model => model.ModelSlug == "model-a");
+        Assert.Equal("Model A latest", modelA.ModelDisplayAlias);
+        Assert.Contains(options.Models, model =>
+            model.ModelSlug == "model-b" && model.ModelDisplayAlias == "Model B");
+
+        Assert.False(result.IsError);
+        var point = Assert.Single(result.Value.Points);
+        Assert.Equal(9, point.InputTokensAfterCache);
+        Assert.Equal(14, point.CacheTokens);
+        Assert.Equal(18, point.WriteTokensAfterCache);
+    }
+
+    [Theory]
+    [InlineData(DysonUsageTimeSeriesWindow.OneDay, 1, DysonUsageTimeSeriesBucket.Hour)]
+    [InlineData(DysonUsageTimeSeriesWindow.SevenDays, 7, DysonUsageTimeSeriesBucket.Day)]
+    [InlineData(DysonUsageTimeSeriesWindow.ThirtyDays, 30, DysonUsageTimeSeriesBucket.Day)]
+    [InlineData(DysonUsageTimeSeriesWindow.Custom, 2, DysonUsageTimeSeriesBucket.Hour)]
+    [InlineData(DysonUsageTimeSeriesWindow.Custom, 3, DysonUsageTimeSeriesBucket.Day)]
+    public void Time_series_resolves_preset_and_custom_bucket_sizes(
+        DysonUsageTimeSeriesWindow window,
+        int durationDays,
+        DysonUsageTimeSeriesBucket expected)
+    {
+        var from = new DateTime(2026, 8, 23, 0, 0, 0, DateTimeKind.Utc);
+
+        var result = DysonUsageTimeSeries.ResolveBucket(window, from, from.AddDays(durationDays));
+
+        Assert.False(result.IsError);
+        Assert.Equal(expected, result.Value);
+    }
+
+    [Fact]
     public void Recap_nests_total_then_model_then_effort_and_sums()
     {
         var now = DateTime.UtcNow;
@@ -184,17 +299,50 @@ public class DysonUsageAnalyticsTests
         string workDirectoryName,
         DateTime occurredUtc,
         int input = 1,
-        Guid? sessionId = null) =>
+        Guid? sessionId = null,
+        string modelSlug = "gpt-test") =>
         new()
         {
             WorkDirectoryName = workDirectoryName,
             SessionId = sessionId ?? rootSessionId,
             RootSessionId = rootSessionId,
-            ModelSlug = "gpt-test",
+            ModelSlug = modelSlug,
             ModelDisplayAlias = "Test",
             ReasoningEffort = "high",
             OccurredUtc = occurredUtc,
             InputTokens = input,
             InputTokensAfterCache = input,
+        };
+
+    private static DysonUsageRequestEntity UsageRow(
+        DateTime occurredUtc,
+        int inputAfterCache,
+        int cache,
+        int writeAfterCache) =>
+        new()
+        {
+            OccurredUtc = occurredUtc,
+            InputTokensAfterCache = inputAfterCache,
+            CacheTokens = cache,
+            WriteTokensAfterCache = writeAfterCache,
+        };
+
+    private static DysonUsageRequestEntity UsageRow(
+        DateTime occurredUtc,
+        string workDirectoryName,
+        string modelSlug,
+        string modelDisplayAlias,
+        int inputAfterCache,
+        int cache,
+        int writeAfterCache) =>
+        new()
+        {
+            OccurredUtc = occurredUtc,
+            WorkDirectoryName = workDirectoryName,
+            ModelSlug = modelSlug,
+            ModelDisplayAlias = modelDisplayAlias,
+            InputTokensAfterCache = inputAfterCache,
+            CacheTokens = cache,
+            WriteTokensAfterCache = writeAfterCache,
         };
 }

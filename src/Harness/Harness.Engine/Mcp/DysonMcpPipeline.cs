@@ -1115,6 +1115,57 @@ public sealed class DysonMcpPipeline
                 """,
         };
 
+    private static DysonMcpTool CreateGenerateImageTool() =>
+        new()
+        {
+            Name = "GenerateImage",
+            Description =
+                "Generate one or more images from a text prompt using the session's configured image-generation model. " +
+                "Generated images are written as PNG artifacts beneath `.dyson/image-gen/`, returned as compact metadata acknowledgements (never base64), and rendered by the application. " +
+                "Use this only when the user asks to create or generate an image. " +
+                "prompt is required; size, quality, style, background, outputFormat, and count are optional generation settings. " +
+                "The configured model is selected by the application and cannot be overridden by this tool.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "prompt": {
+                      "type": "string",
+                      "description": "Required description of the image to generate. Be specific about subject, composition, lighting, style, and any text that must appear."
+                    },
+                    "size": {
+                      "type": "string",
+                      "description": "Optional requested image dimensions, such as 1024x1024, 1536x1024, 1024x1536, or auto."
+                    },
+                    "quality": {
+                      "type": "string",
+                      "description": "Optional generation quality, such as low, medium, high, or auto."
+                    },
+                    "style": {
+                      "type": "string",
+                      "description": "Optional rendering style, such as vivid or natural when supported by the configured model."
+                    },
+                    "background": {
+                      "type": "string",
+                      "description": "Optional background preference, such as transparent, opaque, or auto when supported by the configured model."
+                    },
+                    "outputFormat": {
+                      "type": "string",
+                      "description": "Optional provider output format preference: png, jpeg, or webp. Saved artifacts are always normalized to PNG."
+                    },
+                    "count": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 10,
+                      "description": "Optional number of images to generate. Defaults to one."
+                    }
+                  },
+                  "required": ["prompt"],
+                  "additionalProperties": false
+                }
+                """,
+        };
+
     private static IEnumerable<DysonMcpTool> DefaultTools(
         IReadOnlyList<string> availableShellNames,
         bool browserControlAvailable,
@@ -1848,6 +1899,8 @@ public sealed class DysonMcpPipeline
         };
 
         yield return CreateRenderHtmlVisualizationTool(uiTheme);
+
+        yield return CreateGenerateImageTool();
 
         yield return new DysonMcpTool
         {

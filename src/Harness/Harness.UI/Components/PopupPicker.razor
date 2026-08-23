@@ -1,0 +1,79 @@
+@namespace Harness.UI.Components
+
+<div class="effort-picker" @onkeydown="HandleKeyDown">
+    <button type="button"
+            class="btn btn--xs effort-picker__trigger"
+            disabled="@Disabled"
+            aria-label="@TriggerAriaLabel"
+            aria-haspopup="true"
+            aria-expanded="@_open"
+            @onclick="Toggle">
+        <span class="effort-picker__value">@SelectedLabel</span>
+        <span class="effort-picker__caret">▾</span>
+    </button>
+
+    @if (_open)
+    {
+        <div class="effort-picker__backdrop" @onclick="Close"></div>
+        <div class="effort-picker__panel" tabindex="0">
+            <div class="effort-picker__section-label">@SectionLabel</div>
+            <button type="button"
+                    class="effort-picker__option @(string.IsNullOrWhiteSpace(Value) ? "is-selected" : null)"
+                    @onclick="() => PickAsync(null)">
+                <span>@EmptyLabel</span>
+            </button>
+            @foreach (var option in Options)
+            {
+                var pickerOption = option;
+                <button type="button"
+                        class="effort-picker__option @(string.Equals(Value, pickerOption.Value, StringComparison.OrdinalIgnoreCase) ? "is-selected" : null)"
+                        title="@pickerOption.SecondaryLabel"
+                        @onclick="() => PickAsync(pickerOption.Value)">
+                    <span>@pickerOption.Label</span>
+                    @if (!string.IsNullOrWhiteSpace(pickerOption.SecondaryLabel))
+                    {
+                        <span class="list-item__meta mono">@pickerOption.SecondaryLabel</span>
+                    }
+                </button>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private bool _open;
+
+    [Parameter] public IReadOnlyList<PopupPickerOption> Options { get; set; } = [];
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public string EmptyLabel { get; set; } = "All";
+    [Parameter] public string SectionLabel { get; set; } = "Options";
+    [Parameter] public string TriggerAriaLabel { get; set; } = "Choose an option";
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public EventCallback<string?> OnPick { get; set; }
+
+    private string SelectedLabel => string.IsNullOrWhiteSpace(Value)
+        ? EmptyLabel
+        : Options.FirstOrDefault(option => string.Equals(option.Value, Value, StringComparison.OrdinalIgnoreCase))?.Label ?? Value;
+
+    private void Toggle()
+    {
+        if (!Disabled)
+            _open = !_open;
+    }
+
+    private void Close() => _open = false;
+
+    private async Task PickAsync(string? value)
+    {
+        _open = false;
+        await OnPick.InvokeAsync(value);
+    }
+
+    private void HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            _open = false;
+    }
+
+    public sealed record PopupPickerOption(string Value, string Label, string? SecondaryLabel = null);
+}

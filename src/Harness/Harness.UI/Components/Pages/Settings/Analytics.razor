@@ -1,0 +1,446 @@
+@page "/settings/analytics"
+@layout SettingsLayout
+@implements IDisposable
+@using System.Globalization
+@inject IDysonUsageAnalyticsRepository UsageAnalytics
+@inject ThemeService Theme
+
+<PageTitle>Analytics — Settings</PageTitle>
+
+<div class="settings-page settings-page--analytics">
+    <h1 class="settings-page__title">Usage analytics</h1>
+    <p class="settings-page__copy">
+        Review token usage from successful provider requests. Times are shown in UTC.
+    </p>
+
+    @if (!string.IsNullOrWhiteSpace(_error))
+    {
+        <div class="error-banner" role="alert">@_error</div>
+    }
+
+    <div class="settings-page__panel panel analytics-panel">
+        <div class="analytics-panel__filters">
+            <div class="analytics-range" role="group" aria-label="Date range">
+                @foreach (var range in Ranges)
+                {
+                    <button type="button"
+                            class="analytics-range__chip @(_range == range.Value ? "is-active" : null)"
+                            @onclick="() => SetRangeAsync(range.Value)"
+                            disabled="@_loading">
+                        @range.Label
+                    </button>
+                }
+            </div>
+
+            @if (_range == DysonUsageTimeSeriesWindow.Custom)
+            {
+                <div class="analytics-custom-range">
+                    <div class="field">
+                        <label for="analytics-from">From (local time)</label>
+                        <input id="analytics-from"
+                               type="datetime-local"
+                               value="@_customFromLocal"
+                               @onchange="OnCustomFromChanged" />
+                    </div>
+                    <div class="field">
+                        <label for="analytics-to">To (local time)</label>
+                        <input id="analytics-to"
+                               type="datetime-local"
+                               value="@_customToLocal"
+                               @onchange="OnCustomToChanged" />
+                    </div>
+                    <button type="button"
+                            class="btn"
+                            @onclick="ApplyCustomRangeAsync"
+                            disabled="@_loading">
+                        Apply
+                    </button>
+                </div>
+            }
+
+            <div class="analytics-selects">
+                <div class="field">
+                    <label>Work directory</label>
+                    <PopupPicker Options="WorkDirectoryPickerOptions"
+                                 Value="@_selectedWorkDirectory"
+                                 EmptyLabel="All work directories"
+                                 SectionLabel="Work directories"
+                                 TriggerAriaLabel="Filter usage analytics by work directory"
+                                 Disabled="@_loading"
+                                 OnPick="OnWorkDirectoryPicked" />
+                </div>
+
+                <div class="field">
+                    <label>Model</label>
+                    <PopupPicker Options="ModelPickerOptions"
+                                 Value="@_selectedModelSlug"
+                                 EmptyLabel="All models"
+                                 SectionLabel="Models"
+                                 TriggerAriaLabel="Filter usage analytics by model"
+                                 Disabled="@_loading"
+                                 OnPick="OnModelPicked" />
+                </div>
+
+                <button type="button"
+                        class="btn analytics-panel__refresh"
+                        @onclick="LoadAsync"
+                        disabled="@_loading"
+                        aria-busy="@_loading">
+                    @(_loading ? "Loading…" : "Refresh")
+                </button>
+            </div>
+        </div>
+
+        @if (_loading)
+        {
+            <p class="analytics-panel__message" role="status">Loading usage…</p>
+        }
+        else if (_filteredRows.Count == 0)
+        {
+            <p class="analytics-panel__message">@(_windowRows.Count == 0 ? "No usage in this range." : "No usage matches these filters.")</p>
+        }
+        else
+        {
+            <div class="analytics-chart" aria-label="Stacked area chart of token usage">
+                <ApexChart @key="_chartKey"
+                           TItem="DysonUsageTimeSeriesPoint"
+                           Options="_chartOptions"
+                           Height="320">
+                    <ApexPointSeries TItem="DysonUsageTimeSeriesPoint"
+                                     Items="_points"
+                                     Name="Input after cache"
+                                     SeriesType="SeriesType.Area"
+                                     XValue="point => point.StartUtc"
+                                     YValue="point => point.InputTokensAfterCache" />
+                    <ApexPointSeries TItem="DysonUsageTimeSeriesPoint"
+                                     Items="_points"
+                                     Name="Cache"
+                                     SeriesType="SeriesType.Area"
+                                     XValue="point => point.StartUtc"
+                                     YValue="point => point.CacheTokens" />
+                    <ApexPointSeries TItem="DysonUsageTimeSeriesPoint"
+                                     Items="_points"
+                                     Name="Output after cache"
+                                     SeriesType="SeriesType.Area"
+                                     XValue="point => point.StartUtc"
+                                     YValue="point => point.WriteTokensAfterCache" />
+                </ApexChart>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private static readonly (DysonUsageTimeSeriesWindow Value, string Label)[] Ranges =
+    [
+        (DysonUsageTimeSeriesWindow.OneDay, "1D"),
+        (DysonUsageTimeSeriesWindow.SevenDays, "7D"),
+        (DysonUsageTimeSeriesWindow.ThirtyDays, "30D"),
+        (DysonUsageTimeSeriesWindow.Custom, "Custom"),
+    ];
+
+    private readonly List<DysonUsageRequestEntity> _windowRows = [];
+    private readonly List<DysonUsageRequestEntity> _filteredRows = [];
+    private IReadOnlyList<DysonUsageTimeSeriesPoint> _points = [];
+    private ApexChartOptions<DysonUsageTimeSeriesPoint> _chartOptions = new();
+    private DysonUsageTimeSeriesFilterOptions _filterOptions = new();
+    private DysonUsageTimeSeriesWindow _range = DysonUsageTimeSeriesWindow.SevenDays;
+    private DateTime? _fromUtc;
+    private DateTime? _toUtc;
+    private string _customFromLocal = "";
+    private string _customToLocal = "";
+    private string _selectedWorkDirectory = "";
+    private string _selectedModelSlug = "";
+    private string? _error;
+    private bool _loading;
+    private int _chartKey;
+
+    private IEnumerable<KeyValuePair<string, string>> WorkDirectories => _filterOptions.WorkDirectoryNames
+        .Select(name => new KeyValuePair<string, string>(name, string.IsNullOrWhiteSpace(name) ? "No work directory" : name));
+
+    private IEnumerable<DysonUsageTimeSeriesModelOption> Models => _filterOptions.Models;
+
+    private IReadOnlyList<PopupPicker.PopupPickerOption> WorkDirectoryPickerOptions =>
+        [.. WorkDirectories.Select(workDirectory =>
+            new PopupPicker.PopupPickerOption(workDirectory.Key, workDirectory.Value))];
+
+    private IReadOnlyList<PopupPicker.PopupPickerOption> ModelPickerOptions =>
+        [.. Models.Select(model =>
+            new PopupPicker.PopupPickerOption(model.ModelSlug, model.ModelDisplayAlias, model.ModelSlug))];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Theme.Changed += OnThemeChanged;
+        BuildChartOptions();
+        await LoadAsync();
+    }
+
+    private async Task SetRangeAsync(DysonUsageTimeSeriesWindow range)
+    {
+        _range = range;
+        if (range == DysonUsageTimeSeriesWindow.Custom)
+        {
+            var now = DateTime.UtcNow;
+            _customFromLocal = ToDateTimeLocalValue(now.AddDays(-7));
+            _customToLocal = ToDateTimeLocalValue(now);
+            return;
+        }
+
+        await LoadAsync();
+    }
+
+    private void OnCustomFromChanged(ChangeEventArgs args) =>
+        _customFromLocal = args.Value?.ToString() ?? "";
+
+    private void OnCustomToChanged(ChangeEventArgs args) =>
+        _customToLocal = args.Value?.ToString() ?? "";
+
+    private async Task ApplyCustomRangeAsync()
+    {
+        if (!TryGetCustomUtcRange(out _, out _, out var error))
+        {
+            _error = error;
+            return;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+
+        var (fromUtc, toUtc) = GetUtcRange();
+        if (fromUtc is null || toUtc is null)
+        {
+            _loading = false;
+            _error = "Enter a valid start and end time.";
+            return;
+        }
+
+        _fromUtc = fromUtc.Value;
+        _toUtc = toUtc.Value;
+        var result = await UsageAnalytics.ListAsync(
+            fromUtc: _fromUtc.Value,
+            toUtc: _toUtc.Value,
+            cancellationToken: CancellationToken.None);
+        _loading = false;
+
+        if (result.IsError)
+        {
+            _windowRows.Clear();
+            _filteredRows.Clear();
+            _points = [];
+            _filterOptions = new();
+            _error = result.Error;
+            return;
+        }
+
+        _windowRows.Clear();
+        _windowRows.AddRange(result.Value);
+        _filterOptions = DysonUsageTimeSeries.GetFilterOptions(_windowRows);
+        if (!_filterOptions.WorkDirectoryNames.Contains(_selectedWorkDirectory, StringComparer.OrdinalIgnoreCase))
+            _selectedWorkDirectory = "";
+        if (!_filterOptions.Models.Any(model =>
+            string.Equals(model.ModelSlug, _selectedModelSlug, StringComparison.OrdinalIgnoreCase)))
+        {
+            _selectedModelSlug = "";
+        }
+
+        ApplyFilters();
+    }
+
+    private (DateTime? FromUtc, DateTime? ToUtc) GetUtcRange()
+    {
+        var now = DateTime.UtcNow;
+        return _range switch
+        {
+            DysonUsageTimeSeriesWindow.OneDay => (now.AddDays(-1), now),
+            DysonUsageTimeSeriesWindow.SevenDays => (now.AddDays(-7), now),
+            DysonUsageTimeSeriesWindow.ThirtyDays => (now.AddDays(-30), now),
+            DysonUsageTimeSeriesWindow.Custom when TryGetCustomUtcRange(out var fromUtc, out var toUtc, out _) => (fromUtc, toUtc),
+            _ => (null, null),
+        };
+    }
+
+    private bool TryGetCustomUtcRange(out DateTime fromUtc, out DateTime toUtc, out string error)
+    {
+        fromUtc = default;
+        toUtc = default;
+        error = "Enter a valid local start and end time.";
+        if (!TryParseLocalDateTime(_customFromLocal, out var fromLocal)
+            || !TryParseLocalDateTime(_customToLocal, out var toLocal))
+        {
+            return false;
+        }
+
+        fromUtc = DateTime.SpecifyKind(fromLocal, DateTimeKind.Local).ToUniversalTime();
+        toUtc = DateTime.SpecifyKind(toLocal, DateTimeKind.Local).ToUniversalTime();
+        if (fromUtc > toUtc)
+        {
+            error = "The start time must be before the end time.";
+            return false;
+        }
+
+        error = "";
+        return true;
+    }
+
+    private static bool TryParseLocalDateTime(string value, out DateTime parsed) =>
+        DateTime.TryParseExact(
+            value,
+            "yyyy-MM-ddTHH:mm",
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            out parsed);
+
+    private static string ToDateTimeLocalValue(DateTime utc) =>
+        utc.ToLocalTime().ToString("yyyy-MM-ddTHH:mm", CultureInfo.InvariantCulture);
+
+    private void OnWorkDirectoryPicked(string? workDirectory)
+    {
+        _selectedWorkDirectory = workDirectory ?? "";
+        ApplyFilters();
+    }
+
+    private void OnModelPicked(string? modelSlug)
+    {
+        _selectedModelSlug = modelSlug ?? "";
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        _filteredRows.Clear();
+        _filteredRows.AddRange(_windowRows.Where(row =>
+            (string.IsNullOrWhiteSpace(_selectedWorkDirectory)
+                || string.Equals(row.WorkDirectoryName, _selectedWorkDirectory, StringComparison.OrdinalIgnoreCase))
+            && (string.IsNullOrWhiteSpace(_selectedModelSlug)
+                || string.Equals(row.ModelSlug, _selectedModelSlug, StringComparison.OrdinalIgnoreCase))));
+
+        if (_fromUtc is null || _toUtc is null)
+        {
+            _points = [];
+            _error = "The selected range is unavailable.";
+            _chartKey++;
+            return;
+        }
+
+        var bucket = DysonUsageTimeSeries.ResolveBucket(_range, _fromUtc.Value, _toUtc.Value);
+        if (bucket.IsError)
+        {
+            _points = [];
+            _error = bucket.Error;
+            _chartKey++;
+            return;
+        }
+
+        var timeSeries = DysonUsageTimeSeries.FromRows(
+            _filteredRows,
+            _fromUtc.Value,
+            _toUtc.Value,
+            bucket.Value);
+        if (timeSeries.IsError)
+        {
+            _points = [];
+            _error = timeSeries.Error;
+            _chartKey++;
+            return;
+        }
+
+        _points = timeSeries.Value.Points;
+        _error = null;
+        _chartKey++;
+    }
+
+    private void BuildChartOptions()
+    {
+        var isLightTheme = Theme.Theme == "light";
+        var labelColor = isLightTheme ? "#5c6678" : "#9aa3b2";
+        var gridColor = isLightTheme ? "#d7dde7" : "#303946";
+
+        _chartOptions = new ApexChartOptions<DysonUsageTimeSeriesPoint>
+        {
+            Chart = new Chart
+            {
+                Type = ChartType.Area,
+                Stacked = true,
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                ForeColor = labelColor,
+            },
+            Colors = [GetAccentColor(), "#3dbf7a", "#9b7aef"],
+            Theme = new Theme { Mode = isLightTheme ? Mode.Light : Mode.Dark },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke
+            {
+                Curve = Curve.Smooth,
+                Width = 1,
+            },
+            Fill = new Fill
+            {
+                Type = FillType.Gradient,
+                Gradient = new FillGradient
+                {
+                    OpacityFrom = isLightTheme ? 0.32 : 0.38,
+                    OpacityTo = isLightTheme ? 0.04 : 0.08,
+                    Stops = [0, 92, 100],
+                },
+            },
+            Grid = new Grid
+            {
+                BorderColor = gridColor,
+                StrokeDashArray = 4,
+            },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = Align.Left,
+                FontSize = "12px",
+                Labels = new LegendLabels { Colors = labelColor },
+                ItemMargin = new LegendItemMargin { Horizontal = 10, Vertical = 0 },
+            },
+            Xaxis = new XAxis
+            {
+                Type = XAxisType.Datetime,
+                AxisBorder = new AxisBorder { Show = false },
+                AxisTicks = new AxisTicks { Show = false },
+                Labels = new XAxisLabels
+                {
+                    DatetimeUTC = true,
+                    Style = new AxisLabelStyle { Colors = [labelColor] },
+                },
+            },
+            Yaxis =
+            [
+                new YAxis
+                {
+                    AxisBorder = new AxisBorder { Show = false },
+                    AxisTicks = new AxisTicks { Show = false },
+                    Labels = new YAxisLabels { Style = new AxisLabelStyle { Colors = [labelColor] } },
+                },
+            ],
+            Tooltip = new Tooltip { Theme = isLightTheme ? Mode.Light : Mode.Dark, Shared = true },
+        };
+        _chartKey++;
+    }
+
+    private string GetAccentColor() => Theme.Accent switch
+    {
+        "green" => "#3dbf7a",
+        "red" => "#e25b5b",
+        "purple" => "#9b7aef",
+        _ => "#4c8bf5",
+    };
+
+    private void OnThemeChanged() => _ = InvokeAsync(() =>
+    {
+        BuildChartOptions();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Theme.Changed -= OnThemeChanged;
+
+
+}

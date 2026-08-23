@@ -53,6 +53,7 @@
                                   ArgumentsJson="@Tracked.Call.ArgumentsJson"
                                   ResultContent="@(Tracked.Result?.Content)"
                                   BinaryAttachment="@(Tracked.Result?.BinaryAttachment)"
+                                  GeneratedImageArtifacts="@(Tracked.Result?.GeneratedImageArtifacts ?? [])"
                                   IsError="@(Tracked.Result?.IsError == true || Tracked.Status == DysonToolCallStatus.Failed)"
                                   ArgsOnly="false" />
         </div>

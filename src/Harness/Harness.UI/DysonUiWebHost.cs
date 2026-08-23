@@ -1,3 +1,4 @@
+using ApexCharts;
 using DysonHarness;
 using Harness.UI.Components;
 using Harness.UI.Demo;
@@ -40,6 +41,7 @@ public static class DysonUiWebHost
 
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
+        builder.Services.AddApexCharts();
 
         builder.Services.AddHttpClient();
         builder.Services.AddHttpClient(SkillsHubSkillExplorerProvider.ProviderId, client =>

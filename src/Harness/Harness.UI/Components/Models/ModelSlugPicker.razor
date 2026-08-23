@@ -12,7 +12,7 @@
     @if (_options.Count == 0)
     {
         <div class="empty-state" style="padding:8px 0;">
-            No registered slugs.
+            @NoEligibleOptionsLabel
             <a href="/settings/models">Add models</a>
         </div>
     }
@@ -80,9 +80,14 @@
                         <div class="model-slug-modal__row @(selected ? "is-selected" : null)" role="option" aria-selected="@selected">
                             <button type="button"
                                     class="model-slug-modal__option"
+                                    disabled="@(!option.IsEligible)"
                                     @onclick="() => SelectAsync(option.Id)">
                                 <span class="model-slug-modal__option-label">@option.Label</span>
-                                @if (option.IsFavorite)
+                                @if (!option.IsEligible)
+                                {
+                                    <span class="model-slug-modal__badge">@IneligibleLabel</span>
+                                }
+                                else if (option.IsFavorite)
                                 {
                                     <span class="model-slug-modal__badge">Favorite</span>
                                 }
@@ -118,11 +123,27 @@
     [Parameter] public bool AllowEmpty { get; set; }
     /// <summary>Label when <see cref="AllowEmpty"/> and <see cref="SelectedSlugId"/> is null.</summary>
     [Parameter] public string EmptyLabel { get; set; } = "Use session model";
+    /// <summary>Optional setting-specific eligibility filter. The current selection remains visible for recovery.</summary>
+    [Parameter] public Func<DysonModelSlugEntity, DysonModelProviderEntity, bool>? IsEligible { get; set; }
+    /// <summary>Shown when no selectable model satisfies <see cref="IsEligible"/>.</summary>
+    [Parameter] public string NoEligibleOptionsLabel { get; set; } = "No registered slugs.";
+    /// <summary>Suffix and badge for a retained selection that is no longer eligible.</summary>
+    [Parameter] public string IneligibleLabel { get; set; } = "Unavailable for this setting";
 
-    private string CurrentLabel =>
-        SelectedSlugId is Guid id
-            ? (_options.FirstOrDefault(o => o.Id == id)?.Label ?? "Select model…")
-            : (AllowEmpty ? EmptyLabel : "Select model…");
+    private string CurrentLabel
+    {
+        get
+        {
+            if (SelectedSlugId is not Guid id)
+                return AllowEmpty ? EmptyLabel : "Select model…";
+
+            var option = _options.FirstOrDefault(o => o.Id == id);
+            if (option is null)
+                return "Select model…";
+
+            return option.IsEligible ? option.Label : $"{option.Label} ({IneligibleLabel})";
+        }
+    }
 
     private IReadOnlyList<SlugOption> FilteredOptions
     {
@@ -189,8 +210,9 @@
         {
             foreach (var slug in provider.Slugs)
             {
-                // Keep current selection visible even if disabled (resume / in-flight session).
-                if (!slug.IsEnabled && SelectedSlugId != slug.Id)
+                // Keep current selection visible even if disabled or ineligible so it can be cleared.
+                var isEligible = slug.IsEnabled && (IsEligible?.Invoke(slug, provider) ?? true);
+                if (!isEligible && SelectedSlugId != slug.Id)
                     continue;
 
                 _options.Add(new SlugOption(
@@ -200,7 +222,8 @@
                     slug.Slug,
                     $"{slug.DisplayAlias} · {provider.DisplayName} / {slug.Slug}",
                     slug.IsDefault,
-                    _favoriteIds.Contains(slug.Id)));
+                    _favoriteIds.Contains(slug.Id),
+                    isEligible));
             }
         }
 
@@ -221,8 +244,10 @@
             return;
         }
 
-        var fallback = _options.FirstOrDefault(o => o.IsDefault) ?? _options[0];
-        await SelectedSlugIdChanged.InvokeAsync(fallback.Id);
+        var fallback = _options.FirstOrDefault(o => o.IsEligible && o.IsDefault)
+            ?? _options.FirstOrDefault(o => o.IsEligible);
+        if (fallback is not null)
+            await SelectedSlugIdChanged.InvokeAsync(fallback.Id);
     }
 
     private void OpenModal()
@@ -307,5 +332,6 @@
         string Slug,
         string Label,
         bool IsDefault,
-        bool IsFavorite);
+        bool IsFavorite,
+        bool IsEligible);
 }

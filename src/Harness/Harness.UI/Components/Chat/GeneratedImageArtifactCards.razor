@@ -1,0 +1,143 @@
+@namespace Harness.UI.Components.Chat
+@using DysonHarness
+@using Harness.UI.Demo
+@implements IAsyncDisposable
+@inject DysonUiHost Host
+
+<div class="generated-image-grid">
+    @foreach (var artifact in Artifacts)
+    {
+        var preview = GetPreview(artifact);
+        <article @key="artifact.RelativePath" class="generated-image-card">
+            <div class="generated-image-card__preview">
+                @if (preview?.Url is { } url)
+                {
+                    <img src="@url" alt="Generated image: @artifact.FileName" />
+                }
+                else if (preview?.Failed == true)
+                {
+                    <div class="generated-image-card__unavailable" role="status">Preview unavailable</div>
+                }
+                else
+                {
+                    <div class="generated-image-card__loading" role="status">Loading preview…</div>
+                }
+            </div>
+            <div class="generated-image-card__body">
+                <div class="generated-image-card__filename mono" title="@artifact.FileName">@artifact.FileName</div>
+                <div class="generated-image-card__path mono" title="@artifact.RelativePath">@artifact.RelativePath</div>
+                <div class="generated-image-card__metadata mono">
+                    @artifact.Width×@artifact.Height · @DysonToolCallUi.FormatByteSize(artifact.ByteLength)
+                </div>
+                <div class="generated-image-card__model" title="@artifact.ModelSlug">@artifact.ModelLabel</div>
+                <button type="button"
+                        class="btn generated-image-card__open"
+                        disabled="@_openingPaths.Contains(artifact.RelativePath)"
+                        @onclick="() => OpenFileAsync(artifact)"
+                        @onclick:stopPropagation="true">
+                    Open file
+                </button>
+            </div>
+        </article>
+    }
+</div>
+
+@code {
+    private readonly Dictionary<string, PreviewState> _previews = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _openingPaths = new(StringComparer.Ordinal);
+    private bool _disposed;
+
+    [Parameter, EditorRequired] public IReadOnlyList<DysonGeneratedImageArtifact> Artifacts { get; set; } = [];
+
+    protected override void OnParametersSet()
+    {
+        var livePaths = Artifacts.Select(artifact => artifact.RelativePath)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var (path, preview) in _previews.ToArray())
+        {
+            if (livePaths.Contains(path))
+                continue;
+
+            Revoke(preview);
+            _previews.Remove(path);
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        var needsPreview = Artifacts
+            .Where(artifact => !_previews.ContainsKey(artifact.RelativePath))
+            .ToArray();
+        if (needsPreview.Length == 0 || _disposed)
+            return;
+
+        foreach (var artifact in needsPreview)
+        {
+            // Mark before awaiting so render notifications never issue duplicate reads.
+            _previews[artifact.RelativePath] = new PreviewState();
+            var preview = await Host.CreateGeneratedImagePreviewAsync(artifact);
+            if (_disposed || !_previews.TryGetValue(artifact.RelativePath, out var state))
+            {
+                if (preview.IsSuccess)
+                    Host.RevokeGeneratedImagePreview(preview.Value.Id);
+                continue;
+            }
+
+            if (preview.IsSuccess)
+                state.Set(preview.Value);
+            else
+                state.Fail();
+        }
+
+        if (!_disposed)
+            await InvokeAsync(StateHasChanged);
+    }
+
+    private PreviewState? GetPreview(DysonGeneratedImageArtifact artifact) =>
+        _previews.GetValueOrDefault(artifact.RelativePath);
+
+    private async Task OpenFileAsync(DysonGeneratedImageArtifact artifact)
+    {
+        if (!_openingPaths.Add(artifact.RelativePath))
+            return;
+
+        try
+        {
+            await Host.OpenFileViewerAsync(artifact.RelativePath);
+        }
+        finally
+        {
+            _openingPaths.Remove(artifact.RelativePath);
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        foreach (var preview in _previews.Values)
+            Revoke(preview);
+        _previews.Clear();
+        return ValueTask.CompletedTask;
+    }
+
+    private void Revoke(PreviewState preview)
+    {
+        if (preview.Id is { } id)
+            Host.RevokeGeneratedImagePreview(id);
+    }
+
+    private sealed class PreviewState
+    {
+        public string? Id { get; private set; }
+        public string? Url { get; private set; }
+        public bool Failed { get; private set; }
+
+        public void Set(DysonGeneratedImagePreview preview)
+        {
+            Id = preview.Id;
+            Url = preview.Url;
+        }
+
+        public void Fail() => Failed = true;
+    }
+}

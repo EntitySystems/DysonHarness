@@ -55,6 +55,25 @@
         <div class="settings-page__picker-stack">
         <div class="settings-page__picker-group">
             <div class="settings-page__picker-row">
+                <label>Image generation default model</label>
+                <span aria-hidden="true"></span>
+                <ModelSlugPicker SelectedSlugId="_imageGenerationSlugId"
+                                 SelectedSlugIdChanged="OnImageGenerationSlugChangedAsync"
+                                 AllowEmpty="true"
+                                 EmptyLabel="Disable GenerateImage"
+                                 IsEligible="IsImageGenerationEligible"
+                                 NoEligibleOptionsLabel="No direct OpenAI image-generation model is available."
+                                 IneligibleLabel="Unavailable for direct OpenAI Images" />
+                <span aria-hidden="true"></span>
+            </div>
+            <p class="settings-page__copy">
+                Direct OpenAI Images API model for GenerateImage. Clearing this disables GenerateImage for
+                newly created and resumed sessions; it never falls back to the active chat model.
+            </p>
+        </div>
+
+        <div class="settings-page__picker-group">
+            <div class="settings-page__picker-row">
                 <label>Turn summarizer model</label>
                 <label>Effort</label>
                 <ModelSlugPicker SelectedSlugId="_turnSummarizerSlugId"
@@ -209,6 +228,7 @@
     private readonly Dictionary<Guid, IReadOnlyList<string>> _slugReasoningModes = new();
     private string _automaticCodeReview = DysonAutomaticCodeReviewSetting.None;
     private string _automaticCodeReviewAction = DysonAutomaticCodeReviewSetting.ReportOnly;
+    private Guid? _imageGenerationSlugId;
     private Guid? _turnSummarizerSlugId;
     private Guid? _webSearchSummarizerSlugId;
     private Guid? _exploreSlugId;
@@ -244,6 +264,8 @@
 
         _automaticCodeReviewAction = action.Value;
 
+        if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.ImageGenerationModelSlugId, v => _imageGenerationSlugId = v))
+            return;
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.TurnSummarizerModelSlugId, v => _turnSummarizerSlugId = v))
             return;
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId, v => _webSearchSummarizerSlugId = v))
@@ -393,6 +415,31 @@
 
         _saved = true;
     }
+
+    private async Task OnImageGenerationSlugChangedAsync(Guid? id)
+    {
+        if (id == _imageGenerationSlugId)
+            return;
+
+        _error = null;
+        _saved = false;
+        _imageGenerationSlugId = id;
+
+        var value = id is Guid slugId && slugId != Guid.Empty ? slugId.ToString("D") : null;
+        var set = await AppSettings.SetSettingAsync(DysonAppSettingKeys.ImageGenerationModelSlugId, value);
+        if (set.IsError)
+        {
+            _error = set.Error;
+            return;
+        }
+
+        _saved = true;
+    }
+
+    private static bool IsImageGenerationEligible(
+        DysonModelSlugEntity slug,
+        DysonModelProviderEntity provider) =>
+        OpenAiImageGenerationEligibility.IsEligible(slug, provider);
 
     private Task OnTurnSummarizerSlugChangedAsync(Guid? id) =>
         SaveSlugSettingAsync(

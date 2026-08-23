@@ -11,13 +11,15 @@ public interface IDysonUsageAnalyticsRepository
 
     /// <summary>
     /// Lists usage for the current subject, newest first.
-    /// Optional work-directory name and UTC window filter later workdir analytics.
+    /// Optional work-directory name and UTC window filter support usage analytics.
+    /// <paramref name="modelSlug"/> is trailing to preserve positional callers of the original API.
     /// </summary>
     Task<Result<IReadOnlyList<DysonUsageRequestEntity>, string>> ListAsync(
         string? workDirectoryName = null,
         DateTime? fromUtc = null,
         DateTime? toUtc = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        string? modelSlug = null);
 
     /// <summary>
     /// Usage-panel recap: all rows whose <see cref="DysonUsageRequestEntity.RootSessionId"/>
