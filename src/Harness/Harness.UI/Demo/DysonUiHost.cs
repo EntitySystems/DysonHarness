@@ -478,6 +478,64 @@ public sealed class DysonUiHost : IAsyncDisposable
     public bool HasActiveSubagents() =>
         ActiveSessionId is Guid id && HasActiveSubagents(id);
 
+    /// <summary>
+    /// True when the focused session can be hard-halted (busy, descendants, live CTS,
+    /// queued prompts, or a live transcript turn). Does not change <see cref="IsBusy"/>.
+    /// </summary>
+    public bool CanStopExecution() =>
+        ActiveSessionId is Guid id && CanStopExecution(id);
+
+    /// <summary>
+    /// True when that session can be hard-halted. Union of <see cref="IsSessionBusy(Guid)"/>,
+    /// <see cref="HasActiveSubagents(Guid)"/>, live prompt CTS, queued prompts, and a live
+    /// transcript turn. Does not change <see cref="IsBusy"/>.
+    /// </summary>
+    public bool CanStopExecution(Guid sessionId)
+    {
+        if (sessionId == Guid.Empty)
+            return false;
+
+        if (IsSessionBusy(sessionId) || HasActiveSubagents(sessionId))
+            return true;
+
+        if (_promptCtsBySession.ContainsKey(sessionId))
+            return true;
+
+        if (IsRuntimeOwned(sessionId)
+            && TryGetAttachedRuntime(out var runtime)
+            && runtime.HasLivePrompt(sessionId))
+        {
+            return true;
+        }
+
+        if (HostHasQueuedPrompt(sessionId))
+            return true;
+
+        return TryResolveLiveSession(sessionId, out var session)
+            && SessionHasLiveTranscriptTurn(session);
+    }
+
+    private static bool SessionHasLiveTranscriptTurn(DysonAgentSession session)
+    {
+        if (session.InFlightPromptTurn is not null)
+            return true;
+
+        if (session.Turns.Count == 0)
+            return false;
+
+        var last = session.Turns[^1];
+        if (last.IsStreaming || last.IsReasoningStreaming)
+            return true;
+
+        foreach (var tracked in last.TrackedToolCalls)
+        {
+            if (tracked.Status is DysonToolCallStatus.Working or DysonToolCallStatus.Queued)
+                return true;
+        }
+
+        return false;
+    }
+
     /// <summary>Queued prompts for the focused session (FIFO; first-line previews).</summary>
     public IReadOnlyList<QueuedPrompt> QueuedPrompts
     {

@@ -167,6 +167,24 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
     public bool IsBusy(Guid sessionId) =>
         _disposed == 0 && sessionId != Guid.Empty && _busySessions.ContainsKey(sessionId);
 
+    /// <summary>
+    /// True when this session has a live prompt CTS, including the gate-wait window
+    /// before <see cref="IsBusy(Guid)"/> is set. Not folded into busy.
+    /// </summary>
+    public bool HasLivePrompt(Guid sessionId)
+    {
+        if (_disposed != 0 || sessionId == Guid.Empty)
+            return false;
+
+        foreach (var kv in _livePromptCts)
+        {
+            if (kv.Value == sessionId)
+                return true;
+        }
+
+        return false;
+    }
+
     public int GetQueuedPromptCount(Guid sessionId)
     {
         if (_disposed != 0 || sessionId == Guid.Empty)

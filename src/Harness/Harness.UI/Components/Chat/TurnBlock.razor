@@ -402,7 +402,7 @@
         && Turn.Kind != DysonAgentTurnKind.DisplayInfo
         && Turn.Kind != DysonAgentTurnKind.ModeSwitch;
 
-    private bool CanCancel => SessionBusy && IsLatestTurn && OnCancel.HasDelegate;
+    private bool CanCancel => Host.CanStopExecution() && IsLatestTurn && OnCancel.HasDelegate;
 
     private bool ShowResubmit =>
         OnResubmit.HasDelegate && !string.IsNullOrWhiteSpace(Turn.Instruction);

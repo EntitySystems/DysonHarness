@@ -241,6 +241,67 @@ public class DysonSkillExplorerTests
     }
 
     [Fact]
+    public async Task Explorer_download_registers_agent_optional_skill_in_openrules()
+    {
+        const string slug = "openrules-register-skill";
+        var zipBytes = BuildSkillZip(
+            rootFolder: slug,
+            skillMarkdown: "# OpenRules Register Skill\n\nHello.",
+            extraRelativePath: null,
+            extraContents: null);
+
+        var handler = new StubHandler(req =>
+        {
+            Assert.Contains($"/api/skills/{slug}/download", req.RequestUri!.AbsoluteUri, StringComparison.Ordinal);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(zipBytes)
+                {
+                    Headers = { ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/zip") },
+                },
+            };
+        });
+
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://www.skillsdirectory.com/") };
+        var provider = new SkillsDirectorySkillExplorerProvider(http);
+        var explorer = new DysonSkillExplorer([provider]);
+
+        var root = Path.Combine(Path.GetTempPath(), "dyson-skill-openrules-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var fs = DysonWorkspaceTestFs.CreateLocal(root);
+            var downloaded = await explorer.DownloadAsync(
+                SkillsDirectorySkillExplorerProvider.ProviderId,
+                slug,
+                fs);
+            Assert.True(downloaded.IsSuccess, downloaded.IsError ? downloaded.Error : null);
+            var installed = Assert.IsType<DysonSkillExplorerDownloadOutcome.Installed>(downloaded.Value);
+            Assert.Equal($".dyson/skills/{slug}", installed.RelativePath.Replace('\\', '/'));
+
+            var skillMd = fs.ReadAllText($".dyson/skills/{slug}/SKILL.md");
+            Assert.True(skillMd.IsSuccess, skillMd.IsError ? skillMd.Error : null);
+            Assert.Contains("Hello.", skillMd.Value, StringComparison.Ordinal);
+
+            var manifestExists = fs.FileExists("openrules.json");
+            Assert.True(manifestExists.IsSuccess);
+            Assert.True(manifestExists.Value);
+
+            var json = fs.ReadAllText("openrules.json");
+            Assert.True(json.IsSuccess, json.IsError ? json.Error : null);
+            Assert.Contains(
+                $""""Path": ".dyson/skills/{slug}/SKILL.md"""",
+                json.Value,
+                StringComparison.Ordinal);
+            Assert.Contains(""""Mode": "AgentOptional"""", json.Value, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    [Fact]
     public async Task SkillsDirectory_rejects_invalid_slug_and_missing_skill_md()
     {
         using var http = new HttpClient(new StubHandler(_ =>
