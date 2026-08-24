@@ -51,14 +51,21 @@ Property names are PascalCase (as shown). Nested `AGENTS.md` files are **not** a
 
 On session **create / load / child spawn / mode switch**, the harness appends an open-rules block after the available-models catalog:
 
-1. `[OpenRules Root: …]` + file body
-2. Each `AutoInclude` Rule/Skill that **applies to the runtime provider** (`dyson` by default), with path, optional description, and body (local FS or URL fetch)
+1. `[OpenRules Manifest: openrules.json]` + raw JSON body, or `(missing: openrules.json)` when the file is absent but implicit Root (`AGENTS.md`) still applies
+2. Root (`[OpenRules Root: …]` + body)
+3. AutoInclude rules/skills (provider-filtered): each `AutoInclude` Rule/Skill that **applies to the runtime provider** (`dyson` by default), with path, optional description, and body (local FS or URL fetch)
 
-Missing files / failed URL fetches become a short warning line (session create does not fail). Soft caps: **50 000** characters per file, **100 000** total for the block (`DysonOpenRules.MaxCharsPerFile` / `MaxTotalChars`). Content is a snapshot at create/load/mode change — not re-read every turn.
+AgentOptional **bodies** are still not injected; their **rows** are visible in the injected manifest JSON. That is the point.
+
+Missing files / failed URL fetches become a short warning line (session create does not fail). Soft caps: **50 000** characters per file, **100 000** total for the block (`DysonOpenRules.MaxCharsPerFile` / `MaxTotalChars`). Content is a snapshot at create/load/mode change — not re-read every turn. `/skill-search` installs and workspace Mode flips do **not** rebuild a live session prompt.
+
+Composer `/skill-search` download (via `DysonSkillExplorer.DownloadAsync`) calls `DysonOpenRules.EnsureAgentOptionalSkill` so the installed `{workRoot}/.dyson/skills/{slug}/SKILL.md` is appended as an **AgentOptional** Skills row. Creates the default manifest if missing (same EntitySystems URL skill as `InitializeOpenRules`). Idempotent; does not change Mode of an existing row.
+
+Workspace settings (work-directory cog → `WorkDirectorySettingsModal`) lists Rules/Skills and writes Mode via `DysonOpenRules.SetEntryMode`. Root is always AutoInclude (read-only in the UI). Mode flips take effect on the next session create, load, or agent-mode switch.
 
 ## AgentOptional + catalog
 
-`AgentOptional` Rules and Skills are **not** injected into the system prompt. They extend (provider-filtered):
+`AgentOptional` **bodies** are **not** injected into the system prompt (their rows still appear in the injected `openrules.json` file). They extend (provider-filtered):
 
 - MCP `LoadSkill` resolve order (after included → `.dyson/skills` → literal); URL Paths are fetched
 - Composer `/skill-` via `DysonSkillLoader.ListCatalog` (`DysonSkillSource.OpenRules`)

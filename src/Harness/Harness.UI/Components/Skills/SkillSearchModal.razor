@@ -415,7 +415,7 @@
             }
 
             ClearAmbiguousMatches();
-            _status = $"Downloaded to {installed.RelativePath}";
+            _status = $"Downloaded to {installed.RelativePath} (referenced in openrules.json)";
             Host.NotifySkillCatalogChanged();
             if (closeViewer)
                 Host.CloseFileViewer();

@@ -63,4 +63,21 @@ public class ColorCodeLanguagesTests
         Assert.Equal("c#", ColorCodeLanguages.TryResolve(".CS")?.Id);
         Assert.Equal("c#", ColorCodeLanguages.TryResolve("cs")?.Id);
     }
+
+    [Fact]
+    public void TryResolve_keeps_source_languages_disjoint_from_msbuild_project_xml()
+    {
+        Assert.Equal("c#", ColorCodeLanguages.TryResolve(".cs")?.Id);
+        Assert.Equal("c#", ColorCodeLanguages.TryResolve("cs")?.Id);
+        Assert.Equal("xml", ColorCodeLanguages.TryResolve(".csproj")?.Id);
+        Assert.Equal("xml", ColorCodeLanguages.TryResolve("csproj")?.Id);
+
+        Assert.Equal("f#", ColorCodeLanguages.TryResolve(".fs")?.Id);
+        Assert.Equal("f#", ColorCodeLanguages.TryResolve("fs")?.Id);
+        Assert.Equal("xml", ColorCodeLanguages.TryResolve(".fsproj")?.Id);
+        Assert.Equal("xml", ColorCodeLanguages.TryResolve("fsproj")?.Id);
+
+        Assert.Equal("vb.net", ColorCodeLanguages.TryResolve(".vb")?.Id);
+        Assert.Equal("xml", ColorCodeLanguages.TryResolve(".vbproj")?.Id);
+    }
 }

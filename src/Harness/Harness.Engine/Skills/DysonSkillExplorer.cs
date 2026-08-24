@@ -66,7 +66,7 @@ public sealed class DysonSkillExplorer : IDysonSkillExplorer
         return resolved.Value.PreviewSkillMarkdownAsync(slug, cancellationToken);
     }
 
-    public Task<Result<DysonSkillExplorerDownloadOutcome, string>> DownloadAsync(
+    public async Task<Result<DysonSkillExplorerDownloadOutcome, string>> DownloadAsync(
         string providerName,
         string slug,
         IDysonWorkspaceFileSystem fs,
@@ -75,8 +75,50 @@ public sealed class DysonSkillExplorer : IDysonSkillExplorer
         ArgumentNullException.ThrowIfNull(fs);
         var resolved = Resolve(providerName);
         if (resolved.IsError)
-            return Task.FromResult(Result<DysonSkillExplorerDownloadOutcome, string>.AsError(resolved.Error));
-        return resolved.Value.DownloadAsync(slug, fs, cancellationToken);
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(resolved.Error);
+
+        var downloaded = await resolved.Value.DownloadAsync(slug, fs, cancellationToken).ConfigureAwait(false);
+        if (downloaded.IsError)
+            return downloaded;
+        if (downloaded.Value is not DysonSkillExplorerDownloadOutcome.Installed installed)
+            return downloaded;
+
+        var relativeDir = installed.RelativePath.TrimEnd('/', '\\').Replace('\\', '/');
+        var skillMd = relativeDir + "/SKILL.md";
+        var description = Path.GetFileName(relativeDir);
+        var skillText = fs.ReadAllText(skillMd);
+        if (skillText.IsSuccess)
+            description = TryReadFirstAtxHeading(skillText.Value) ?? description;
+
+        var registered = DysonOpenRules.EnsureAgentOptionalSkill(fs, skillMd, description);
+        if (registered.IsError)
+        {
+            return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(
+                $"Installed to '{relativeDir}' but failed to reference in openrules.json: {registered.Error}");
+        }
+
+        return downloaded;
+    }
+
+    /// <summary>First ATX H1 (<c># …</c>); no YAML frontmatter parser.</summary>
+    private static string? TryReadFirstAtxHeading(string markdown)
+    {
+        using var reader = new StringReader(markdown);
+        while (reader.ReadLine() is { } line)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+
+            var trimmed = line.TrimStart();
+            if (trimmed.Length < 2 || trimmed[0] != '#' || !char.IsWhiteSpace(trimmed[1]))
+                continue;
+
+            var heading = trimmed[1..].Trim();
+            if (heading.Length > 0)
+                return heading;
+        }
+
+        return null;
     }
 
     private Result<IDysonSkillExplorerProvider, string> Resolve(string providerName)

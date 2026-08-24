@@ -283,6 +283,115 @@ public static class DysonOpenRules
     }
 
     /// <summary>
+    /// Ensures an AgentOptional Skills row for a work-relative skill markdown path.
+    /// Creates <c>openrules.json</c> from <see cref="CreateDefaultDocument"/> when missing.
+    /// Returns true when a row was added; false when already referenced.
+    /// </summary>
+    public static Result<bool, string> EnsureAgentOptionalSkill(
+        IDysonWorkspaceFileSystem fs,
+        string skillMarkdownRelativePath,
+        string? description = null)
+    {
+        // ponytail: DTO round-trip drops comments/unknown properties. Same serializer as
+        // InitializeOrRead. Upgrade path: JsonNode merge.
+        ArgumentNullException.ThrowIfNull(fs);
+        if (!fs.IsInitialized)
+            return Result<bool, string>.AsError("Workspace filesystem is not initialized.");
+        if (string.IsNullOrWhiteSpace(skillMarkdownRelativePath))
+            return Result<bool, string>.AsError("Skill path is empty.");
+
+        if (IsPathUrl(skillMarkdownRelativePath))
+        {
+            return Result<bool, string>.AsError(
+                "Skill path must be a work-relative path, not a URL.");
+        }
+
+        var normalized = StripDotSlashPrefix(NormalizePath(skillMarkdownRelativePath));
+        if (string.IsNullOrWhiteSpace(normalized))
+            return Result<bool, string>.AsError("Skill path is empty.");
+        if (HasDotDotSegment(normalized))
+        {
+            return Result<bool, string>.AsError(
+                $"Skill path must not contain '..' segments: {skillMarkdownRelativePath}");
+        }
+
+        var skillMdPath = EnsureSkillMarkdownPath(normalized);
+        var resolved = fs.ResolvePath(skillMdPath);
+        if (resolved.IsError)
+            return Result<bool, string>.AsError(resolved.Error);
+
+        var loaded = TryReadManifestDocument(fs, createIfMissing: true);
+        if (loaded.IsError)
+            return Result<bool, string>.AsError(loaded.Error);
+
+        var doc = loaded.Value;
+        doc.Rules ??= [];
+        doc.Skills ??= [];
+
+        if (IsAlreadyReferenced(doc, skillMdPath))
+            return Result<bool, string>.AsValue(false);
+
+        var desc = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
+        doc.Skills.Add(new DysonOpenRulesEntryDto
+        {
+            Path = skillMdPath,
+            Mode = DysonOpenRulesModes.AgentOptional,
+            Description = desc,
+        });
+
+        return WriteManifest(fs, doc, value: true);
+    }
+
+    /// <summary>
+    /// Sets Mode on an existing Rules or Skills row. Does not create <c>openrules.json</c>.
+    /// Returns true when Mode changed; false when already that mode.
+    /// </summary>
+    public static Result<bool, string> SetEntryMode(
+        IDysonWorkspaceFileSystem fs,
+        string path,
+        bool isSkill,
+        string mode)
+    {
+        // ponytail: DTO round-trip drops comments/unknown properties. Same serializer as
+        // InitializeOrRead. Upgrade path: JsonNode merge.
+        ArgumentNullException.ThrowIfNull(fs);
+        if (!fs.IsInitialized)
+            return Result<bool, string>.AsError("Workspace filesystem is not initialized.");
+        if (string.IsNullOrWhiteSpace(path))
+            return Result<bool, string>.AsError("Path is empty.");
+        if (!DysonOpenRulesModes.IsKnown(mode))
+        {
+            return Result<bool, string>.AsError(
+                $"Mode must be '{DysonOpenRulesModes.AutoInclude}' or " +
+                $"'{DysonOpenRulesModes.AgentOptional}'.");
+        }
+
+        var loaded = TryReadManifestDocument(fs, createIfMissing: false);
+        if (loaded.IsError)
+            return Result<bool, string>.AsError(loaded.Error);
+
+        var doc = loaded.Value;
+        var list = isSkill ? doc.Skills : doc.Rules;
+        var normalized = NormalizePath(path);
+        var entry = FindEntry(list, normalized);
+        if (entry is null)
+        {
+            var kind = isSkill ? "Skills" : "Rules";
+            return Result<bool, string>.AsError(
+                $"No {kind} entry with Path '{normalized}'.");
+        }
+
+        var canonical = DysonOpenRulesModes.IsAutoInclude(mode)
+            ? DysonOpenRulesModes.AutoInclude
+            : DysonOpenRulesModes.AgentOptional;
+        if (string.Equals(entry.Mode, canonical, StringComparison.OrdinalIgnoreCase))
+            return Result<bool, string>.AsValue(false);
+
+        entry.Mode = canonical;
+        return WriteManifest(fs, doc, value: true);
+    }
+
+    /// <summary>
     /// GET <paramref name="url"/> via <see cref="SearchHttp"/>; truncates at
     /// <see cref="MaxCharsPerFile"/>. SSRF-guarded.
     /// </summary>
@@ -675,12 +784,23 @@ public static class DysonOpenRules
         sb.AppendLine("## OpenRules");
         sb.AppendLine();
         sb.AppendLine(
-            "Always-on Root + AutoInclude entries from work-root openrules.json " +
-            "(or implicit AGENTS.md). AgentOptional entries are available via LoadSkill / " +
+            "Always includes the work-root openrules.json file (or a missing warning), then Root, " +
+            "then AutoInclude bodies. AgentOptional bodies remain on-demand via LoadSkill / " +
             "composer /skill- and summarized by GetOpenRulesConfig.");
         sb.AppendLine();
 
         var remaining = MaxTotalChars;
+        AppendFileSection(
+            sb,
+            ref remaining,
+            header: $"[OpenRules Manifest: {ManifestFileName}]",
+            path: ManifestFileName,
+            description: null,
+            fs,
+            exists: config.ManifestPresent,
+            isUrl: false,
+            urlBodyLoader);
+
         AppendFileSection(
             sb,
             ref remaining,
@@ -897,6 +1017,137 @@ public static class DysonOpenRules
         sb.AppendLine(body.TrimEnd());
         sb.AppendLine();
         remaining -= header.Length + body.Length + 8;
+    }
+
+    private static Result<DysonOpenRulesDocumentDto, string> TryReadManifestDocument(
+        IDysonWorkspaceFileSystem fs,
+        bool createIfMissing)
+    {
+        var exists = fs.FileExists(ManifestFileName);
+        if (exists.IsError)
+            return Result<DysonOpenRulesDocumentDto, string>.AsError(exists.Error);
+
+        if (!exists.Value)
+        {
+            if (!createIfMissing)
+                return Result<DysonOpenRulesDocumentDto, string>.AsError("openrules.json is missing.");
+            return Result<DysonOpenRulesDocumentDto, string>.AsValue(CreateDefaultDocument());
+        }
+
+        var text = fs.ReadAllText(ManifestFileName);
+        if (text.IsError)
+            return Result<DysonOpenRulesDocumentDto, string>.AsError(text.Error);
+
+        try
+        {
+            var doc = JsonSerializer.Deserialize<DysonOpenRulesDocumentDto>(text.Value, JsonOptions)
+                      ?? new DysonOpenRulesDocumentDto();
+            return Result<DysonOpenRulesDocumentDto, string>.AsValue(doc);
+        }
+        catch (JsonException ex)
+        {
+            return Result<DysonOpenRulesDocumentDto, string>.AsError(
+                $"Invalid {ManifestFileName}: {ex.Message}");
+        }
+    }
+
+    private static Result<bool, string> WriteManifest(
+        IDysonWorkspaceFileSystem fs,
+        DysonOpenRulesDocumentDto doc,
+        bool value)
+    {
+        var json = JsonSerializer.Serialize(doc, JsonOptions);
+        var write = fs.WriteAllText(ManifestFileName, json);
+        if (write.IsError)
+            return Result<bool, string>.AsError(write.Error);
+        return Result<bool, string>.AsValue(value);
+    }
+
+    private static DysonOpenRulesEntryDto? FindEntry(
+        List<DysonOpenRulesEntryDto>? entries,
+        string normalizedPath)
+    {
+        if (entries is null)
+            return null;
+
+        foreach (var entry in entries)
+        {
+            if (entry is null || string.IsNullOrWhiteSpace(entry.Path))
+                continue;
+            if (string.Equals(NormalizePath(entry.Path), normalizedPath, StringComparison.OrdinalIgnoreCase))
+                return entry;
+        }
+
+        return null;
+    }
+
+    private static bool IsAlreadyReferenced(DysonOpenRulesDocumentDto doc, string skillMdPath)
+    {
+        var parent = SkillParentDirectory(skillMdPath);
+        return EntryPathMatches(doc.Rules, skillMdPath, parent)
+            || EntryPathMatches(doc.Skills, skillMdPath, parent);
+    }
+
+    private static bool EntryPathMatches(
+        List<DysonOpenRulesEntryDto>? entries,
+        string skillMdPath,
+        string? parentDirectory)
+    {
+        if (entries is null)
+            return false;
+
+        foreach (var entry in entries)
+        {
+            if (entry is null || string.IsNullOrWhiteSpace(entry.Path))
+                continue;
+
+            var existing = NormalizePath(entry.Path);
+            if (string.Equals(existing, skillMdPath, StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (!string.IsNullOrEmpty(parentDirectory)
+                && string.Equals(existing, parentDirectory, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string EnsureSkillMarkdownPath(string normalizedPath)
+    {
+        var trimmed = StripDotSlashPrefix(normalizedPath).TrimEnd('/');
+        var leaf = Path.GetFileName(trimmed);
+        if (leaf.Equals("SKILL.md", StringComparison.OrdinalIgnoreCase))
+            return trimmed;
+        return trimmed + "/SKILL.md";
+    }
+
+    private static string? SkillParentDirectory(string skillMdPath)
+    {
+        const string suffix = "/SKILL.md";
+        return skillMdPath.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)
+            ? skillMdPath[..^suffix.Length]
+            : null;
+    }
+
+    private static string StripDotSlashPrefix(string path)
+    {
+        var current = path;
+        while (current.StartsWith("./", StringComparison.Ordinal))
+            current = current[2..];
+        return current;
+    }
+
+    private static bool HasDotDotSegment(string normalizedPath)
+    {
+        foreach (var segment in normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (segment == "..")
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>Normalizes work-relative paths; leaves absolute http(s) URLs intact.</summary>

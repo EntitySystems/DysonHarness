@@ -1,6 +1,6 @@
 @namespace Harness.UI.Components
 
-<div class="effort-picker" @onkeydown="HandleKeyDown">
+<div class="effort-picker @(OpenUp ? "effort-picker--up" : null)" @onkeydown="HandleKeyDown">
     <button type="button"
             class="btn btn--xs effort-picker__trigger"
             disabled="@Disabled"
@@ -17,11 +17,14 @@
         <div class="effort-picker__backdrop" @onclick="Close"></div>
         <div class="effort-picker__panel" tabindex="0">
             <div class="effort-picker__section-label">@SectionLabel</div>
-            <button type="button"
-                    class="effort-picker__option @(string.IsNullOrWhiteSpace(Value) ? "is-selected" : null)"
-                    @onclick="() => PickAsync(null)">
-                <span>@EmptyLabel</span>
-            </button>
+            @if (ShowEmpty)
+            {
+                <button type="button"
+                        class="effort-picker__option @(string.IsNullOrWhiteSpace(Value) ? "is-selected" : null)"
+                        @onclick="() => PickAsync(null)">
+                    <span>@EmptyLabel</span>
+                </button>
+            }
             @foreach (var option in Options)
             {
                 var pickerOption = option;
@@ -49,6 +52,8 @@
     [Parameter] public string SectionLabel { get; set; } = "Options";
     [Parameter] public string TriggerAriaLabel { get; set; } = "Choose an option";
     [Parameter] public bool Disabled { get; set; }
+    [Parameter] public bool ShowEmpty { get; set; } = true;
+    [Parameter] public bool OpenUp { get; set; }
     [Parameter] public EventCallback<string?> OnPick { get; set; }
 
     private string SelectedLabel => string.IsNullOrWhiteSpace(Value)

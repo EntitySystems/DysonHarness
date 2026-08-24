@@ -5,6 +5,7 @@
 @implements IAsyncDisposable
 @inject IDysonWorkDirectoryConfigurationRepository WorkDirConfigs
 @inject ConfirmDialogService Confirm
+@inject DysonUiHost Host
 
 @if (_open && WorkDirectory is not null)
 {
@@ -33,6 +34,106 @@
             }
 
             <div class="workdir-settings-modal__body">
+                <section class="workdir-settings-section">
+                    <h4 class="workdir-settings-section__title">OpenRules</h4>
+                    <p class="workdir-settings-section__hint">
+                        Always-include vs on-demand. Takes effect on next session create, load, or agent-mode switch.
+                    </p>
+
+                    @if (_openRulesRootPath is not null)
+                    {
+                        <div class="workdir-settings-server">
+                            <div class="workdir-settings-openrules-row @(!_openRulesRootExists ? "is-missing" : null)">
+                                <span class="workdir-settings-server__badge">Root</span>
+                                <span class="workdir-settings-openrules-row__path mono" title="@_openRulesRootPath">@_openRulesRootPath</span>
+                                <span class="workdir-settings-openrules-row__mode">Always include</span>
+                            </div>
+                        </div>
+                    }
+
+                    <div class="workdir-settings-section__row">
+                        <h4 class="workdir-settings-section__title">Rules</h4>
+                    </div>
+                    @if (_openRulesRules.Count == 0)
+                    {
+                        <div class="workdir-modal__empty">No rules in <span class="mono">openrules.json</span>.</div>
+                    }
+                    else
+                    {
+                        <div class="workdir-settings-openrules">
+                            @foreach (var entry in _openRulesRules)
+                            {
+                                var rule = entry;
+                                <div class="workdir-settings-server">
+                                    <div class="workdir-settings-openrules-row @(IsOpenRulesEntryMissing(rule) ? "is-missing" : null)">
+                                        <div class="workdir-settings-openrules-row__copy">
+                                            <span class="workdir-settings-openrules-row__path mono" title="@rule.Path">@rule.Path</span>
+                                            @if (!string.IsNullOrWhiteSpace(rule.Description))
+                                            {
+                                                <span class="workdir-settings-openrules-row__desc">@rule.Description</span>
+                                            }
+                                        </div>
+                                        <PopupPicker Options="OpenRulesModeOptions"
+                                                     Value="@rule.Mode"
+                                                     ShowEmpty="false"
+                                                     OpenUp="true"
+                                                     SectionLabel="Include"
+                                                     TriggerAriaLabel="Include mode"
+                                                     Disabled="@Busy"
+                                                     OnPick="value => OnOpenRulesModePickedAsync(rule, isSkill: false, value)" />
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    <div class="workdir-settings-section__row">
+                        <h4 class="workdir-settings-section__title">Skills</h4>
+                    </div>
+                    @if (_openRulesSkills.Count == 0)
+                    {
+                        <div class="workdir-modal__empty">No skills in <span class="mono">openrules.json</span>.</div>
+                    }
+                    else
+                    {
+                        <div class="workdir-settings-openrules">
+                            @foreach (var entry in _openRulesSkills)
+                            {
+                                var skill = entry;
+                                <div class="workdir-settings-server">
+                                    <div class="workdir-settings-openrules-row @(IsOpenRulesEntryMissing(skill) ? "is-missing" : null)">
+                                        <div class="workdir-settings-openrules-row__copy">
+                                            <span class="workdir-settings-openrules-row__path mono" title="@skill.Path">@skill.Path</span>
+                                            @if (!string.IsNullOrWhiteSpace(skill.Description))
+                                            {
+                                                <span class="workdir-settings-openrules-row__desc">@skill.Description</span>
+                                            }
+                                        </div>
+                                        <PopupPicker Options="OpenRulesModeOptions"
+                                                     Value="@skill.Mode"
+                                                     ShowEmpty="false"
+                                                     OpenUp="true"
+                                                     SectionLabel="Include"
+                                                     TriggerAriaLabel="Include mode"
+                                                     Disabled="@Busy"
+                                                     OnPick="value => OnOpenRulesModePickedAsync(skill, isSkill: true, value)" />
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (!_openRulesManifestPresent)
+                    {
+                        <button type="button"
+                                class="btn btn-ghost btn-sm"
+                                disabled="@Busy"
+                                @onclick="CreateOpenRulesAsync">
+                            Create openrules.json
+                        </button>
+                    }
+                </section>
+
                 <section class="workdir-settings-section">
                     <h4 class="workdir-settings-section__title">MCP</h4>
                     <label class="workdir-settings-toggle">
@@ -158,6 +259,17 @@
     private string? _editingServerId;
     private string _editServerId = "";
     private string _editJson = DefaultStubJson;
+    private bool _openRulesManifestPresent;
+    private string? _openRulesRootPath;
+    private bool _openRulesRootExists;
+    private readonly List<DysonOpenRulesResolvedEntry> _openRulesRules = [];
+    private readonly List<DysonOpenRulesResolvedEntry> _openRulesSkills = [];
+
+    private static readonly IReadOnlyList<PopupPicker.PopupPickerOption> OpenRulesModeOptions =
+    [
+        new(DysonOpenRulesModes.AutoInclude, "Always include"),
+        new(DysonOpenRulesModes.AgentOptional, "On demand"),
+    ];
 
     private const string DefaultStubJson =
         """
@@ -181,6 +293,7 @@
         _error = null;
         CancelEditor();
         await RetainAndLoadAsync();
+        await LoadOpenRulesAsync();
         StateHasChanged();
     }
 
@@ -209,6 +322,105 @@
         _host.PromptUpdater.EnqueueRefresh();
         RefreshStatuses();
     }
+
+    private async Task LoadOpenRulesAsync()
+    {
+        _openRulesManifestPresent = false;
+        _openRulesRootPath = null;
+        _openRulesRootExists = false;
+        _openRulesRules.Clear();
+        _openRulesSkills.Clear();
+
+        if (WorkDirectory is null)
+            return;
+
+        var created = await DysonWorkspaceFileSystems.CreateLocalAsync(WorkDirectory.AbsolutePath);
+        if (created.IsError)
+        {
+            _error = created.Error;
+            return;
+        }
+
+        var loaded = DysonOpenRules.TryLoad(created.Value);
+        if (loaded.IsError)
+        {
+            _error = loaded.Error;
+            return;
+        }
+
+        if (loaded.Value is null)
+            return;
+
+        var config = loaded.Value;
+        _openRulesManifestPresent = config.ManifestPresent;
+        _openRulesRootPath = config.RootPath;
+        _openRulesRootExists = config.RootExists;
+        _openRulesRules.AddRange(config.Rules);
+        _openRulesSkills.AddRange(config.Skills);
+    }
+
+    private async Task CreateOpenRulesAsync()
+    {
+        if (WorkDirectory is null)
+            return;
+
+        _error = null;
+        var created = await DysonWorkspaceFileSystems.CreateLocalAsync(WorkDirectory.AbsolutePath);
+        if (created.IsError)
+        {
+            _error = created.Error;
+            return;
+        }
+
+        var initialized = DysonOpenRules.InitializeOrRead(created.Value);
+        if (initialized.IsError)
+        {
+            _error = initialized.Error;
+            return;
+        }
+
+        await LoadOpenRulesAsync();
+        await NotifyOpenRulesChangedAsync();
+    }
+
+    private async Task OnOpenRulesModePickedAsync(
+        DysonOpenRulesResolvedEntry entry,
+        bool isSkill,
+        string? value)
+    {
+        if (WorkDirectory is null || string.IsNullOrWhiteSpace(value))
+            return;
+        if (string.Equals(value, entry.Mode, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        _error = null;
+        var created = await DysonWorkspaceFileSystems.CreateLocalAsync(WorkDirectory.AbsolutePath);
+        if (created.IsError)
+        {
+            _error = created.Error;
+            return;
+        }
+
+        var set = DysonOpenRules.SetEntryMode(created.Value, entry.Path, isSkill, value);
+        if (set.IsError)
+        {
+            _error = set.Error;
+            return;
+        }
+
+        await LoadOpenRulesAsync();
+        await NotifyOpenRulesChangedAsync();
+    }
+
+    private async Task NotifyOpenRulesChangedAsync()
+    {
+        await OnChanged.InvokeAsync();
+        if (WorkDirectory is not null && Host.ActiveWorkDirectoryId == WorkDirectory.Id)
+            Host.NotifySkillCatalogChanged();
+    }
+
+    private static bool IsOpenRulesEntryMissing(DysonOpenRulesResolvedEntry entry) =>
+        !entry.Exists && !entry.IsUrl;
 
     private void OnHostChanged()
     {
