@@ -107,6 +107,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "LoadSkill" => await LoadSkillAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateFile" => await CreateFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "RenderHtmlVisualization" => await RenderHtmlVisualizationAsync(call, cancellationToken).ConfigureAwait(false),
+                "GenerateImage" => await GenerateImageAsync(call, cancellationToken).ConfigureAwait(false),
                 "WriteFile" => await WriteFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "Grep" => await GrepAsync(call, cancellationToken).ConfigureAwait(false),
                 "LoadBinary" => await LoadBinaryAsync(call, cancellationToken).ConfigureAwait(false),
@@ -386,6 +387,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         string? modelSlug;
         string? reasoningEffort;
         IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos;
+        IReadOnlyList<string>? contextFiles;
         try
         {
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
@@ -407,6 +409,11 @@ public sealed partial class DysonWorkspaceToolExecutor
             if (todos.IsError)
                 return Error(call, todos.Error);
             initialTodos = todos.Value;
+
+            var files = TryParseOptionalStringArray(root, "contextFiles");
+            if (files.IsError)
+                return Error(call, files.Error);
+            contextFiles = files.Value;
         }
         catch (JsonException)
         {
@@ -420,6 +427,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 initialTodos,
                 modelSlug,
                 reasoningEffort,
+                contextFiles,
                 cancellationToken)
             .ConfigureAwait(false);
         if (started.IsError)
@@ -1732,7 +1740,7 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         var turn = _session.Turns.Count > 0 ? _session.Turns[^1] : null;
         if (turn is not null && turn.CompletedUtc is null)
-            turn.AttachLoadedSkill(loaded.Value);
+            turn.AttachContextFile(loaded.Value, DysonContextFileKind.Skill);
 
         var header =
             $"Loaded skill '{loaded.Value.DisplayName}' " +
@@ -3226,7 +3234,10 @@ public sealed partial class DysonWorkspaceToolExecutor
             $"Field '{name}' must be one of: pending, ongoing, complete.");
     }
 
-    private static Result<IReadOnlyList<string>?, string> TryParseOptionalStringArray(
+    /// <summary>
+    /// Parses optional <paramref name="name"/> string array. Missing or null → null (omit).
+    /// </summary>
+    public static Result<IReadOnlyList<string>?, string> TryParseOptionalStringArray(
         JsonElement root,
         string name)
     {

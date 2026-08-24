@@ -168,6 +168,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
         string? modelSlug = null,
         string? reasoningEffort = null,
+        IReadOnlyList<string>? contextFiles = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentMode);
@@ -192,6 +193,17 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             return Result<DysonStartSubagentResult, string>.AsError(resolved.Error);
 
         var childProvider = resolved.Value;
+
+        var firstTurn = DysonSessionInitialization.CreateTurn(BuildChildFirstPrompt(agentMode, task, context));
+        var attached = await AttachContextFilesToChildTurnAsync(
+                firstTurn,
+                contextFiles,
+                _workDirectoryPath,
+                Config.PluginContributions,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (attached.IsError)
+            return Result<DysonStartSubagentResult, string>.AsError(attached.Error);
 
         var providerKind = childProvider is DemoDysonAgentProvider demoKind
             ? DysonProviderKinds.EffectiveKind(demoKind.ProviderKind, demoKind.BaseUrl, demoKind.ApiKey)
@@ -256,7 +268,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         child.AttachBackgroundRun(runCts);
         KickOffChildPrompt(
             child,
-            DysonSessionInitialization.CreateTurn(BuildChildFirstPrompt(agentMode, task, context)),
+            firstTurn,
             runCts);
 
         AppendLog($"started subagent {child.Id} ({agentMode}): {title}");
@@ -703,6 +715,9 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                 var todos = DysonWorkspaceToolExecutor.TryParseTodoSeedItems(root, "todos");
                 if (todos.IsError)
                     return ToolError(call, todos.Error);
+                var contextFiles = DysonWorkspaceToolExecutor.TryParseOptionalStringArray(root, "contextFiles");
+                if (contextFiles.IsError)
+                    return ToolError(call, contextFiles.Error);
 
                 var started = await CreateChildAsync(
                         modeProp.GetString()!,
@@ -711,6 +726,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                         todos.Value,
                         modelSlug,
                         reasoningEffort,
+                        contextFiles.Value,
                         cancellationToken)
                     .ConfigureAwait(false);
                 if (started.IsError)

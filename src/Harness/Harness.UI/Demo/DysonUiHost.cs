@@ -1208,6 +1208,69 @@ public sealed class DysonUiHost : IAsyncDisposable
         _session is null ? null : DysonPlanReadyUi.TryGetPending(_session.Turns);
 
     /// <summary>
+    /// Creates an ephemeral preview URL for a persisted generated-image artifact in the focused
+    /// workspace. The URL token is intentionally not part of the persisted turn metadata.
+    /// </summary>
+    public async Task<Result<DysonGeneratedImagePreview, string>> CreateGeneratedImagePreviewAsync(
+        DysonGeneratedImageArtifact artifact,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(artifact);
+        var safeArtifact = DysonGeneratedImageArtifact.TryCreate(
+            artifact.RelativePath,
+            artifact.FileName,
+            artifact.MimeType,
+            artifact.Width,
+            artifact.Height,
+            artifact.ByteLength,
+            artifact.ModelLabel,
+            artifact.ModelSlug);
+        if (safeArtifact.IsError)
+            return Result<DysonGeneratedImagePreview, string>.AsError(safeArtifact.Error);
+
+        var root = await TryResolveActiveWorkRootAsync(cancellationToken).ConfigureAwait(true);
+        if (root is null)
+        {
+            return Result<DysonGeneratedImagePreview, string>.AsError(
+                "No active work directory to read the generated image.");
+        }
+
+        var fsResult = await DysonWorkspaceFileSystems
+            .CreateLocalAsync(root, cancellationToken)
+            .ConfigureAwait(true);
+        if (fsResult.IsError)
+            return Result<DysonGeneratedImagePreview, string>.AsError(fsResult.Error);
+
+        var fileLength = fsResult.Value.GetFileLength(safeArtifact.Value.RelativePath);
+        if (fileLength.IsError)
+            return Result<DysonGeneratedImagePreview, string>.AsError(fileLength.Error);
+
+        if (fileLength.Value != safeArtifact.Value.ByteLength
+            || fileLength.Value > 100L * 1024 * 1024)
+        {
+            return Result<DysonGeneratedImagePreview, string>.AsError(
+                "Generated image file length does not match its persisted metadata.");
+        }
+
+        var bytes = fsResult.Value.ReadAllBytes(safeArtifact.Value.RelativePath);
+        if (bytes.IsError)
+            return Result<DysonGeneratedImagePreview, string>.AsError(bytes.Error);
+
+        if (!DysonGeneratedImagePreview.LooksLikePng(bytes.Value))
+        {
+            return Result<DysonGeneratedImagePreview, string>.AsError(
+                "Generated image is not a valid PNG file.");
+        }
+
+        var id = _filePreviews.Put(bytes.Value, "image/png");
+        return Result<DysonGeneratedImagePreview, string>.AsValue(
+            new DysonGeneratedImagePreview(id, DysonFilePreviewStore.UrlFor(id)));
+    }
+
+    /// <summary>Releases an ephemeral generated-image preview URL created by this host.</summary>
+    public void RevokeGeneratedImagePreview(string? previewId) => _filePreviews.Remove(previewId);
+
+    /// <summary>
     /// Opens the file viewer for a workspace-relative path under the focused session work root.
     /// Does not navigate away from chat.
     /// </summary>
@@ -1710,7 +1773,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         Notify();
     }
 
-    public void OpenSkillViewer(DysonSkillUsedEntry entry)
+    public void OpenSkillViewer(DysonContextFileEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
         _skillViewer = new DysonSkillViewerState
@@ -2420,6 +2483,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// <summary>
     /// Apply a model slug to the focused session (same provider kind only).
     /// Resets session reasoning effort to the slug's default.
+    /// Same live slug is a no-op (no provider swap, effort reset, persist, or busy stash).
     /// While busy, validates and stashes the slug for apply after the turn finishes.
     /// With no session, preference is caller-owned (<c>_selectedSlugId</c>); updates pending effort to slug default.
     /// </summary>
@@ -2467,6 +2531,13 @@ public sealed class DysonUiHost : IAsyncDisposable
             return VoidResult<string>.Success;
         }
 
+        // Leftover picker callbacks re-apply the current slug; do not swap or stash a no-op.
+        if (SessionProviderSlugId(_session.Provider) == modelSlugId)
+        {
+            Notify();
+            return VoidResult<string>.Success;
+        }
+
         if (IsBusy)
         {
             var deferred = await ResolveProviderAsync(modelSlugId, reasoningEffort: null, cancellationToken)
@@ -2498,6 +2569,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     /// <summary>
     /// Resolve + same-kind check + swap <see cref="DysonAgentSession.Provider"/> + persist.
+    /// Same live slug is a no-op (including flush of a leftover pending).
     /// Does not mutate Provider mid-turn; callers must only invoke when the session is idle.
     /// </summary>
     private async Task<VoidResult<string>> ApplySessionModelSlugCoreAsync(
@@ -2506,6 +2578,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(session);
+
+        if (SessionProviderSlugId(session.Provider) == modelSlugId)
+        {
+            Notify();
+            return VoidResult<string>.Success;
+        }
 
         // null effort → constructor uses slug DefaultReasoningEffort
         var providerResult = await ResolveProviderAsync(modelSlugId, reasoningEffort: null, cancellationToken)
@@ -2733,6 +2811,14 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             OpenAiCompatibleAgentProvider => DysonProviderKinds.OpenAICompatible,
             _ => DysonProviderKinds.Demo,
+        };
+
+    private static Guid? SessionProviderSlugId(DysonAgentProvider provider) =>
+        provider switch
+        {
+            OpenAiCompatibleAgentProvider oai => oai.SlugId,
+            DemoDysonAgentProvider demo => demo.SlugId,
+            _ => null,
         };
 
     public async Task<VoidResult<string>> ResumeSessionAsync(
@@ -3498,7 +3584,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 pluginContributions: _session?.Config.PluginContributions);
             if (loaded.IsError)
                 return Result<BuiltUserTurn, string>.AsError(loaded.Error);
-            turn.AttachLoadedSkill(loaded.Value);
+            turn.AttachContextFile(loaded.Value, DysonContextFileKind.Skill);
         }
 
         return Result<BuiltUserTurn, string>.AsValue(new BuiltUserTurn(turn, pendingFiles));
@@ -4032,6 +4118,10 @@ public sealed class DysonUiHost : IAsyncDisposable
             }
         }
 
+        await TryHydrateImageGenerationProviderSettingAsync(
+                p => config.ImageGenerationProvider = p,
+                cancellationToken)
+            .ConfigureAwait(false);
         await TryHydrateOpenAiProviderSettingAsync(
                 DysonAppSettingKeys.WebSearchSummarizerModelSlugId,
                 DysonAppSettingKeys.WebSearchSummarizerReasoningEffort,
@@ -4070,6 +4160,29 @@ public sealed class DysonUiHost : IAsyncDisposable
             .ConfigureAwait(false);
 
         return config;
+    }
+
+    private async Task TryHydrateImageGenerationProviderSettingAsync(
+        Action<OpenAiCompatibleAgentProvider> assign,
+        CancellationToken cancellationToken)
+    {
+        var setting = await _appSettings
+            .GetSettingAsync(DysonAppSettingKeys.ImageGenerationModelSlugId, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (setting.IsError
+            || string.IsNullOrWhiteSpace(setting.Value)
+            || !Guid.TryParse(setting.Value, out var slugId)
+            || slugId == Guid.Empty)
+        {
+            return;
+        }
+
+        var slugResult = await _models.GetSlugAsync(slugId, cancellationToken).ConfigureAwait(false);
+        if (slugResult.IsError || !OpenAiImageGenerationEligibility.IsEligible(slugResult.Value))
+            return;
+
+        assign(new OpenAiCompatibleAgentProvider(slugResult.Value));
     }
 
     private async Task TryHydrateOpenAiProviderSettingAsync(

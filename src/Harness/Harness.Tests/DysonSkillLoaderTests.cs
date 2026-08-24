@@ -3,7 +3,7 @@ using DysonHarness;
 namespace Harness.Tests;
 
 /// <summary>
-/// ponytail: skill resolve order, loadIndexOnly, LoadSkill MCP, SkillsUsed persistence + transcript.
+/// ponytail: skill resolve order, loadIndexOnly, LoadSkill MCP, ContextFiles persistence + transcript.
 /// </summary>
 public class DysonSkillLoaderTests
 {
@@ -16,7 +16,17 @@ public class DysonSkillLoaderTests
         AssertLoadIndexOnlyVsFull();
         AssertMissingAndPathEscape();
         AssertLoadSkillToolAttachesAndTranscript();
-        AssertSkillsUsedPersistenceRoundTrip();
+        AssertContextFilesPersistenceRoundTrip();
+        AssertLegacySkillsUsedJsonWithoutKindRestoresAsSkill();
+    }
+
+    [Fact]
+    public void ContextFiles_preload_transcript_schema_and_prompts()
+    {
+        AssertContextFileHelperAttachesAndTranscript();
+        AssertContextFileHelperMissingAndBlankPathsError();
+        AssertStartSubagentContextFilesCatalog();
+        AssertContextFilesPromptGuidance();
     }
 
     private static void AssertCatalogIncludesJdsl()
@@ -193,10 +203,11 @@ public class DysonSkillLoaderTests
             var result = executor.ExecuteAsync(call).GetAwaiter().GetResult();
             if (result.IsError)
                 throw new InvalidOperationException($"LoadSkill failed: {result.Content}");
-            if (turn.SkillsUsed.Count != 1
-                || !string.Equals(turn.SkillsUsed[0].DisplayName, "JDSL", StringComparison.OrdinalIgnoreCase))
+            if (turn.ContextFiles.Count != 1
+                || turn.ContextFiles[0].Kind != DysonContextFileKind.Skill
+                || !string.Equals(turn.ContextFiles[0].DisplayName, "JDSL", StringComparison.OrdinalIgnoreCase))
             {
-                throw new InvalidOperationException("LoadSkill must attach SkillsUsed on current turn.");
+                throw new InvalidOperationException("LoadSkill must attach a Skill context file on current turn.");
             }
 
             turn.CompletedUtc = DateTime.UtcNow;
@@ -222,7 +233,7 @@ public class DysonSkillLoaderTests
         }
     }
 
-    private static void AssertSkillsUsedPersistenceRoundTrip()
+    private static void AssertContextFilesPersistenceRoundTrip()
     {
         var turn = new DysonAgentTurn
         {
@@ -230,29 +241,180 @@ public class DysonSkillLoaderTests
             Instruction = "hi",
             StartedUtc = DateTime.UtcNow,
         };
-        turn.AddSkillUsed(new DysonSkillUsedEntry
+        turn.AddContextFile(new DysonContextFileEntry
         {
-            SkillId = "JDSL",
+            Id = "JDSL",
             DisplayName = "JDSL",
             MarkdownContent = "# body",
             ResolvedPath = "Resources/Skills/JDSL.md",
             LoadIndexOnly = true,
             UsedUtc = DateTime.UtcNow,
+            Kind = DysonContextFileKind.Skill,
         });
 
         var entity = DysonTurnPersistence.ToEntity(turn, Guid.NewGuid(), sequence: 0);
         if (string.IsNullOrWhiteSpace(entity.SkillsUsedJson))
             throw new InvalidOperationException("ToEntity must serialize SkillsUsedJson.");
+        if (!entity.SkillsUsedJson.Contains("\"skillId\"", StringComparison.Ordinal))
+            throw new InvalidOperationException("SkillsUsedJson must keep JSON name skillId.");
 
         var restored = new DysonAgentTurn { Id = entity.Id, Kind = entity.Kind };
-        restored.RestoreSkillsUsed(DysonSkillsUsedSerializer.Deserialize(entity.SkillsUsedJson));
-        if (restored.SkillsUsed.Count != 1
-            || restored.SkillsUsed[0].SkillId != "JDSL"
-            || restored.SkillsUsed[0].MarkdownContent != "# body"
-            || !restored.SkillsUsed[0].LoadIndexOnly)
+        restored.RestoreContextFiles(DysonContextFilesSerializer.Deserialize(entity.SkillsUsedJson));
+        if (restored.ContextFiles.Count != 1
+            || restored.ContextFiles[0].Id != "JDSL"
+            || restored.ContextFiles[0].MarkdownContent != "# body"
+            || !restored.ContextFiles[0].LoadIndexOnly
+            || restored.ContextFiles[0].Kind != DysonContextFileKind.Skill)
         {
             throw new InvalidOperationException("SkillsUsedJson round-trip lost fields.");
         }
+    }
+
+    private static void AssertLegacySkillsUsedJsonWithoutKindRestoresAsSkill()
+    {
+        const string json =
+            """[{"skillId":"JDSL","displayName":"JDSL","markdownContent":"# body","resolvedPath":"Resources/Skills/JDSL.md","loadIndexOnly":true,"usedUtc":"2026-01-01T00:00:00Z"}]""";
+        var restored = DysonContextFilesSerializer.Deserialize(json);
+        if (restored.Count != 1
+            || restored[0].Id != "JDSL"
+            || restored[0].Kind != DysonContextFileKind.Skill
+            || restored[0].MarkdownContent != "# body")
+        {
+            throw new InvalidOperationException("Old SkillsUsedJson without kind must restore as Skill.");
+        }
+    }
+
+    private static void AssertContextFileHelperAttachesAndTranscript()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dyson-ctx-file-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "docs"));
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "docs", "guide.md"), "# guide body");
+
+            var session = new StubSession();
+            var turn = new DysonAgentTurn
+            {
+                Kind = DysonAgentTurnKind.Normal,
+                Instruction = "read the guide",
+                StartedUtc = DateTime.UtcNow,
+            };
+            session.AddTurnForTest(turn);
+
+            var attached = session.AttachContextFilesForTest(turn, ["docs/guide.md"], root)
+                .GetAwaiter()
+                .GetResult();
+            if (attached.IsError)
+                throw new InvalidOperationException($"Attach context file failed: {attached.Error}");
+            if (turn.ContextFiles.Count != 1
+                || turn.ContextFiles[0].Kind != DysonContextFileKind.File
+                || !string.Equals(turn.ContextFiles[0].DisplayName, "docs/guide.md", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Helper must attach Kind.File with DisplayName = relative path.");
+            }
+
+            turn.CompletedUtc = DateTime.UtcNow;
+            turn.AssistantText = "done";
+            var built = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+                session,
+                currentUserPrompt: null,
+                currentFilePaths: null,
+                inFlightRounds: []);
+            var json = built.Messages.ToJsonString();
+            if (!json.Contains("[File: docs/guide.md]", StringComparison.Ordinal)
+                || json.Contains("[Skill:", StringComparison.Ordinal)
+                || !json.Contains("guide body", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Transcript must inject [File: docs/guide.md] not [Skill: …].");
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    private static void AssertContextFileHelperMissingAndBlankPathsError()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dyson-ctx-miss-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var session = new StubSession();
+            var turn = new DysonAgentTurn
+            {
+                Kind = DysonAgentTurnKind.Normal,
+                Instruction = "x",
+                StartedUtc = DateTime.UtcNow,
+            };
+
+            var missing = session.AttachContextFilesForTest(turn, ["docs/no-such.md"], root)
+                .GetAwaiter()
+                .GetResult();
+            if (!missing.IsError)
+                throw new InvalidOperationException("Missing context file path must error.");
+
+            var blank = session.AttachContextFilesForTest(turn, ["  "], root)
+                .GetAwaiter()
+                .GetResult();
+            if (!blank.IsError)
+                throw new InvalidOperationException("Blank contextFiles path must error.");
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    private static void AssertStartSubagentContextFilesCatalog()
+    {
+        var pipeline = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess);
+        if (!pipeline.Tools.TryGetValue("StartSubagent", out var start))
+            throw new InvalidOperationException("StartSubagent must be in the FullAccess catalog.");
+
+        const string descriptionNeedle =
+            "Optional contextFiles preloads work-relative files into the child’s first turn as File context (path visible as `[File: relative/path]` before contents). The caller is encouraged to share relevant files so the subagent does not need to load them manually.";
+        if (!start.Description.Contains(descriptionNeedle, StringComparison.Ordinal))
+            throw new InvalidOperationException("StartSubagent description must mention contextFiles preload.");
+        if (start.Description.Contains("LoadSkill", StringComparison.Ordinal))
+            throw new InvalidOperationException("StartSubagent description must not mention LoadSkill.");
+
+        if (!start.InputSchemaJson.Contains("\"contextFiles\"", StringComparison.Ordinal)
+            || !start.InputSchemaJson.Contains("[File: path]", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("StartSubagent schema must include contextFiles.");
+        }
+        if (start.InputSchemaJson.Contains("LoadSkill", StringComparison.Ordinal))
+            throw new InvalidOperationException("StartSubagent schema must not mention LoadSkill.");
+    }
+
+    private static void AssertContextFilesPromptGuidance()
+    {
+        MustContain(
+            DysonAgentSystemPrompts.WorkDirective,
+            "Prefer `StartSubagent.contextFiles` for files the child will need so it does not have to load them manually.");
+        MustContain(
+            DysonAgentSystemPrompts.WorkDirective,
+            "Optional contextFiles on StartSubagent: work-relative paths preloaded onto the child’s first turn as File context (`[File: relative/path]` then contents). The caller is encouraged to share relevant files so the subagent does not need to load them manually.");
+        MustContain(
+            DysonAgentSystemPrompts.DroneDirective,
+            "Optional contextFiles on StartSubagent: work-relative paths preloaded onto the child’s first turn as File context (`[File: relative/path]` then contents). The caller is encouraged to share relevant files so the subagent does not need to load them manually.");
+        MustContain(
+            DysonAgentSystemPrompts.PlanDirective,
+            "pass contextFiles for files you already know matter so the Explore does not need to load them manually");
+
+        if (DysonAgentSystemPrompts.WorkDirective.Contains("LoadSkill", StringComparison.Ordinal)
+            || DysonAgentSystemPrompts.DroneDirective.Contains("LoadSkill", StringComparison.Ordinal)
+            || DysonAgentSystemPrompts.PlanDirective.Contains("LoadSkill", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Work/Drone/Plan directives must not mention LoadSkill.");
+        }
+    }
+
+    private static void MustContain(string text, string needle)
+    {
+        if (!text.Contains(needle, StringComparison.Ordinal))
+            throw new InvalidOperationException($"Expected to contain '{needle}'.");
     }
 
     private sealed class StubProvider : DysonAgentProvider;
@@ -264,6 +426,18 @@ public class DysonSkillLoaderTests
     {
         public void AddTurnForTest(DysonAgentTurn turn) => AddTurn(turn);
 
+        public Task<VoidResult<string>> AttachContextFilesForTest(
+            DysonAgentTurn turn,
+            IReadOnlyList<string>? contextFiles,
+            string? workDirectoryPath,
+            CancellationToken cancellationToken = default) =>
+            AttachContextFilesToChildTurnAsync(
+                turn,
+                contextFiles,
+                workDirectoryPath,
+                Config.PluginContributions,
+                cancellationToken);
+
         public override Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
             string agentMode,
             string task,
@@ -271,6 +445,7 @@ public class DysonSkillLoaderTests
             IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
             string? modelSlug = null,
             string? reasoningEffort = null,
+            IReadOnlyList<string>? contextFiles = null,
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 

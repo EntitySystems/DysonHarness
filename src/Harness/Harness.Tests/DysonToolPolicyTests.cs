@@ -15,6 +15,7 @@ public class DysonToolPolicyTests
         AssertModeSwitchRebuildRestoresTools();
         AssertResolverIgnoresModelOverlays();
         AssertStructuralGateStillWins();
+        AssertGenerateImageCatalogGates();
     }
 
     private static void AssertEmptyPolicyKeepsTools()
@@ -124,6 +125,51 @@ public class DysonToolPolicyTests
             throw new InvalidOperationException("Structural shell gate should omit ShellExecute.");
     }
 
+    private static void AssertGenerateImageCatalogGates()
+    {
+        const string tool = "GenerateImage";
+
+        var unavailable = new DysonAgentSessionConfig();
+        if (DysonSessionToolsetBuilder.Build(unavailable, DysonAgentModes.Work).Tools.ContainsKey(tool)
+            || DysonSessionToolsetBuilder.BuildInitial(unavailable, DysonAgentModes.Work).Tools.ContainsKey(tool))
+        {
+            throw new InvalidOperationException(
+                "GenerateImage must be structurally omitted when ImageGenerationProvider is not configured.");
+        }
+
+        var configuredProvider = new OpenAiCompatibleAgentProvider(
+            new DysonModelSlugEntity { Slug = "gpt-image-1", DisplayAlias = "Image model" });
+        var available = new DysonAgentSessionConfig { ImageGenerationProvider = configuredProvider };
+        var pipeline = DysonSessionToolsetBuilder.Build(available, DysonAgentModes.Work);
+        if (!pipeline.Tools.TryGetValue(tool, out var generateImage))
+            throw new InvalidOperationException("GenerateImage must be present when ImageGenerationProvider is configured.");
+
+        if (!generateImage.InputSchemaJson.Contains("\"prompt\"", StringComparison.Ordinal)
+            || !generateImage.InputSchemaJson.Contains("\"outputFormat\"", StringComparison.Ordinal)
+            || !generateImage.InputSchemaJson.Contains("\"count\"", StringComparison.Ordinal)
+            || !generateImage.InputSchemaJson.Contains("\"required\": [\"prompt\"]", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("GenerateImage catalog schema must describe its required prompt and common settings.");
+        }
+
+        var policyDisabled = new DysonAgentSessionConfig
+        {
+            ImageGenerationProvider = configuredProvider,
+            DisabledTools = new HashSet<string>(StringComparer.Ordinal) { tool },
+        };
+        if (DysonSessionToolsetBuilder.Build(policyDisabled, DysonAgentModes.Work).Tools.ContainsKey(tool))
+        {
+            throw new InvalidOperationException(
+                "Tool policy must still be able to remove GenerateImage after the provider gate.");
+        }
+
+        if (!DysonSessionToolsetBuilder.AllCatalogTools().Any(candidate => candidate.Name == tool))
+        {
+            throw new InvalidOperationException(
+                "AllCatalogTools must retain GenerateImage for agent-mode policy configuration.");
+        }
+    }
+
     private sealed class StubProvider : DysonAgentProvider;
 
     private sealed class StubSession(string mode, DysonAgentSessionConfig config) : DysonAgentSession(
@@ -140,6 +186,7 @@ public class DysonToolPolicyTests
             IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
             string? modelSlug = null,
             string? reasoningEffort = null,
+            IReadOnlyList<string>? contextFiles = null,
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 

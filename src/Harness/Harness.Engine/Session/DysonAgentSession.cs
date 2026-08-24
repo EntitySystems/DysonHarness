@@ -485,6 +485,7 @@ public abstract class DysonAgentSession
     /// <param name="initialTodos">Optional seed for the child’s own todo list (applied after the child row is persisted).</param>
     /// <param name="modelSlug">Optional model slug/alias; omit to inherit the parent’s current provider.</param>
     /// <param name="reasoningEffort">Optional effort override; null/omit → slug default when resolving a slug, else keep parent’s current effort.</param>
+    /// <param name="contextFiles">Optional work-relative paths preloaded onto the child’s first turn as File context.</param>
     public abstract Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
         string agentMode,
         string task,
@@ -492,6 +493,7 @@ public abstract class DysonAgentSession
         IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
         string? modelSlug = null,
         string? reasoningEffort = null,
+        IReadOnlyList<string>? contextFiles = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Default WaitForSubagent timeout when the tool omits <c>timeoutMs</c> (5 minutes).</summary>
@@ -1357,6 +1359,53 @@ public abstract class DysonAgentSession
         return sb.ToString().TrimEnd();
     }
 
+    /// <summary>
+    /// Preloads StartSubagent <paramref name="contextFiles"/> onto the child’s first turn as File context.
+    /// Omitted or empty is a no-op. Fails before the caller persists the child.
+    /// </summary>
+    protected static async Task<VoidResult<string>> AttachContextFilesToChildTurnAsync(
+        DysonAgentTurn turn,
+        IReadOnlyList<string>? contextFiles,
+        string? workDirectoryPath,
+        DysonPluginContributionSet? pluginContributions,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+
+        if (contextFiles is null || contextFiles.Count == 0)
+            return VoidResult<string>.Success;
+
+        if (string.IsNullOrWhiteSpace(workDirectoryPath))
+            return VoidResult<string>.AsError("Work directory is required to attach context files.");
+
+        var fsResult = await DysonWorkspaceFileSystems
+            .CreateLocalAsync(workDirectoryPath, cancellationToken)
+            .ConfigureAwait(false);
+        if (fsResult.IsError)
+            return VoidResult<string>.AsError(fsResult.Error);
+
+        foreach (var raw in contextFiles)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return VoidResult<string>.AsError("contextFiles items must be non-empty paths.");
+
+            var loaded = await DysonSkillLoader
+                .ResolveAndLoadAsync(
+                    raw,
+                    loadIndexOnly: true,
+                    fsResult.Value,
+                    cancellationToken,
+                    pluginContributions)
+                .ConfigureAwait(false);
+            if (loaded.IsError)
+                return VoidResult<string>.AsError(loaded.Error);
+
+            turn.AttachContextFile(loaded.Value, DysonContextFileKind.File);
+        }
+
+        return VoidResult<string>.Success;
+    }
+
     protected static string TitleFromTask(string task)
     {
         var t = task.Trim().Replace('\r', ' ').Replace('\n', ' ');
@@ -1677,7 +1726,7 @@ public abstract class DysonAgentSession
             };
             turn.RestoreReasoningLog(
                 DysonReasoningLogSerializer.DeserializeOrSynthesize(row.ReasoningLogJson, row.ReasoningText));
-            turn.RestoreSkillsUsed(DysonSkillsUsedSerializer.Deserialize(row.SkillsUsedJson));
+            turn.RestoreContextFiles(DysonContextFilesSerializer.Deserialize(row.SkillsUsedJson));
             turn.RestoreUserImages(DysonUserImagesSerializer.Deserialize(row.UserImagesJson));
             DysonTurnToolStateSerializer.ApplyToTurn(turn, row.ToolStateJson);
             turn.FinalizeIncompleteTools(

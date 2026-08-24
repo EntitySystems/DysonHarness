@@ -25,7 +25,8 @@ public sealed class DysonTurnEntity
     public string? ReasoningLogJson { get; set; }
 
     /// <summary>
-    /// Skills attached this turn (JSON). Injected into provider transcripts on restore.
+    /// Context-file JSON for this turn (column name kept; includes <c>kind</c>).
+    /// Injected into provider transcripts on restore.
     /// </summary>
     public string? SkillsUsedJson { get; set; }
 

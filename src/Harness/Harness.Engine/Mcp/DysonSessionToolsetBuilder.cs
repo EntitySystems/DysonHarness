@@ -6,8 +6,8 @@ namespace DysonHarness;
 public static class DysonSessionToolsetBuilder
 {
     /// <summary>
-    /// Full catalog for a live session: CreateDefault, shell/Plan gate, inter-agent depth,
-    /// root vs child completion-tool omit (children drop CompleteTask; roots drop
+    /// Full catalog for a live session: CreateDefault, shell/Plan and image-provider gates,
+    /// inter-agent depth, root vs child completion-tool omit (children drop CompleteTask; roots drop
     /// SubmitSubagentReport), then mode denylist.
     /// </summary>
     public static DysonMcpPipeline Build(
@@ -34,16 +34,18 @@ public static class DysonSessionToolsetBuilder
         else
             OmitSubmitSubagentReport(pipeline);
 
-        // Dynamic sources merge after structural gates. User custom MCP wins any collision; managed
-        // plugin tools may never replace built-ins or custom tools. Denylist remains authoritative.
+        // Dynamic sources merge after the general structural gates. This dedicated provider gate
+        // deliberately runs after the merge, so neither a custom nor plugin catalog can expose
+        // GenerateImage when the session did not configure an image-generation provider.
         config.CustomMcpHost?.ApplyToPipeline(pipeline);
         config.PluginMcpHost?.ApplyToPipeline(pipeline);
+        ApplyImageGenerationProviderGate(pipeline, config);
         ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
         return pipeline;
     }
 
     /// <summary>
-    /// Ctor-time catalog before Parent/depth is known: CreateDefault + shell gate + denylist.
+    /// Ctor-time catalog before Parent/depth is known: CreateDefault + shell and image-provider gates + denylist.
     /// Callers apply inter-agent / omit-completion afterward, then
     /// <see cref="ReapplyDisabledTools"/>.
     /// </summary>
@@ -64,6 +66,7 @@ public static class DysonSessionToolsetBuilder
             string.Equals(agentMode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase));
         config.CustomMcpHost?.ApplyToPipeline(pipeline);
         config.PluginMcpHost?.ApplyToPipeline(pipeline);
+        ApplyImageGenerationProviderGate(pipeline, config);
         ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
         return pipeline;
     }
@@ -84,6 +87,19 @@ public static class DysonSessionToolsetBuilder
     }
 
     /// <summary>
+    /// Removes <c>GenerateImage</c> unless this session has a resolved image-generation provider.
+    /// This runs after dynamic MCP sources so an unavailable provider cannot be bypassed by a
+    /// colliding external tool registration.
+    /// </summary>
+    private static void ApplyImageGenerationProviderGate(
+        DysonMcpPipeline pipeline,
+        DysonAgentSessionConfig config)
+    {
+        if (config.ImageGenerationProvider is null)
+            pipeline.Tools.Remove("GenerateImage");
+    }
+
+    /// <summary>
     /// Re-apply denylist after structural gates that may <c>Ensure*</c> tools back into the catalog.
     /// </summary>
     public static void ReapplyDisabledTools(
@@ -94,15 +110,17 @@ public static class DysonSessionToolsetBuilder
     {
         ArgumentNullException.ThrowIfNull(pipeline);
         ArgumentNullException.ThrowIfNull(config);
-        // Structural gates run before dynamic merge; mode policy is applied last so it can disable
-        // built-in, custom MCP, and managed plugin MCP names uniformly.
+        // Reapply dynamic sources first; the provider gate and mode policy remain authoritative.
         config.CustomMcpHost?.ApplyToPipeline(pipeline);
         config.PluginMcpHost?.ApplyToPipeline(pipeline);
+        ApplyImageGenerationProviderGate(pipeline, config);
         ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
     }
 
     /// <summary>
-    /// Full catalog tools for Settings checklists (browser included; platform shells).
+    /// Full catalog tools for Settings checklists (browser included; platform shells). Includes
+    /// <c>GenerateImage</c> so policies can deny it, although live catalogs still require an
+    /// image-generation provider.
     /// </summary>
     public static IReadOnlyList<DysonMcpTool> AllCatalogTools()
     {

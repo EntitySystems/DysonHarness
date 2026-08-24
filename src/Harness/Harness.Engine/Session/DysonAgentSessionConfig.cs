@@ -76,6 +76,12 @@ public class DysonAgentSessionConfig
     public DysonAgentProvider? BugReviewDefaultProvider { get; set; }
 
     /// <summary>
+    /// Dedicated direct-OpenAI provider identity for image generation.
+    /// Null means <c>GenerateImage</c> is unavailable; it never falls back to the session chat provider.
+    /// </summary>
+    public OpenAiCompatibleAgentProvider? ImageGenerationProvider { get; set; }
+
+    /// <summary>
     /// Settings default provider for Explore / Drone / Security Review / Bug Review; other modes ⇒ null (inherit).
     /// </summary>
     public DysonAgentProvider? TryGetSubagentDefaultProvider(string? agentMode)

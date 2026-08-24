@@ -83,6 +83,7 @@ public class DysonStopSubagentTests
             IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
             string? modelSlug = null,
             string? reasoningEffort = null,
+            IReadOnlyList<string>? contextFiles = null,
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
@@ -185,6 +186,7 @@ public class DysonStopSubagentTests
             IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
             string? modelSlug = null,
             string? reasoningEffort = null,
+            IReadOnlyList<string>? contextFiles = null,
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 

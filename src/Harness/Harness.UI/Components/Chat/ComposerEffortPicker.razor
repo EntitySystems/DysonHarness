@@ -1,15 +1,18 @@
 @namespace Harness.UI.Components.Chat
 
-<div class="effort-picker effort-picker--up" @onkeydown="HandleKeyDown">
+<div class="effort-picker @(OpenUp ? "effort-picker--up" : null)" @onkeydown="HandleKeyDown">
     <button type="button"
             class="btn btn--xs effort-picker__trigger composer-effort__trigger"
             disabled="@Disabled"
-            title="Session reasoning_effort (omit = provider default)"
+            title="@Title"
             aria-haspopup="true"
             aria-expanded="@_open"
             @onclick="Toggle">
-        <span class="models-panel__effort-label">effort</span>
-        <span class="effort-picker__value mono">@(string.IsNullOrWhiteSpace(Value) ? "omit" : Value)</span>
+        @if (ShowTriggerLabel)
+        {
+            <span class="models-panel__effort-label">effort</span>
+        }
+        <span class="effort-picker__value mono">@(string.IsNullOrWhiteSpace(Value) ? EmptyLabel : Value)</span>
         <span class="effort-picker__caret">▾</span>
     </button>
 
@@ -17,11 +20,11 @@
     {
         <div class="effort-picker__backdrop" @onclick="Close"></div>
         <div class="effort-picker__panel" tabindex="0">
-            <div class="effort-picker__section-label">Session reasoning effort</div>
+            <div class="effort-picker__section-label">@SectionLabel</div>
             <button type="button"
                     class="effort-picker__option @(string.IsNullOrWhiteSpace(Value) ? "is-selected" : null)"
                     @onclick="() => PickAsync(null)">
-                <span class="mono">omit</span>
+                <span class="mono">@EmptyLabel</span>
             </button>
             @foreach (var mode in Options)
             {
@@ -39,13 +42,19 @@
 @code {
     private bool _open;
 
-    /// <summary>Available effort modes for the selected slug (may be empty — then only "omit" and the current value show).</summary>
+    /// <summary>Available effort modes for the selected slug (may be empty — then only <see cref="EmptyLabel"/> shows).</summary>
     [Parameter] public IEnumerable<string> Options { get; set; } = [];
-    /// <summary>Current effort draft value; null/empty = omit.</summary>
+    /// <summary>Current effort draft value; null/empty = <see cref="EmptyLabel"/>.</summary>
     [Parameter] public string? Value { get; set; }
     [Parameter] public bool Disabled { get; set; }
-    /// <summary>Fired with the picked effort; null = omit.</summary>
+    /// <summary>Fired with the picked effort; null = empty/<see cref="EmptyLabel"/>.</summary>
     [Parameter] public EventCallback<string?> OnPick { get; set; }
+    /// <summary>First-option and empty-value label. Composer uses omit; Agent behavior uses Default.</summary>
+    [Parameter] public string EmptyLabel { get; set; } = "omit";
+    [Parameter] public string SectionLabel { get; set; } = "Session reasoning effort";
+    [Parameter] public string Title { get; set; } = "Session reasoning_effort (omit = provider default)";
+    [Parameter] public bool ShowTriggerLabel { get; set; } = true;
+    [Parameter] public bool OpenUp { get; set; } = true;
 
     private void Toggle()
     {

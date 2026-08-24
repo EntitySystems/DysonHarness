@@ -24,11 +24,19 @@ public sealed class DysonUsageAnalyticsRepository(
         string? workDirectoryName = null,
         DateTime? fromUtc = null,
         DateTime? toUtc = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? modelSlug = null)
     {
         var subjectId = _subjectContext.SubjectId;
         return _accessor.RunAsync(
-            (db, ct) => ListCoreAsync(db, subjectId, workDirectoryName, fromUtc, toUtc, ct),
+            (db, ct) => ListCoreAsync(
+                db,
+                subjectId,
+                workDirectoryName,
+                fromUtc,
+                toUtc,
+                modelSlug,
+                ct),
             cancellationToken);
     }
 
@@ -87,6 +95,7 @@ public sealed class DysonUsageAnalyticsRepository(
         string? workDirectoryName,
         DateTime? fromUtc,
         DateTime? toUtc,
+        string? modelSlug,
         CancellationToken cancellationToken)
     {
         try
@@ -95,6 +104,9 @@ public sealed class DysonUsageAnalyticsRepository(
 
             if (!string.IsNullOrWhiteSpace(workDirectoryName))
                 query = query.Where(r => r.WorkDirectoryName == workDirectoryName);
+
+            if (!string.IsNullOrWhiteSpace(modelSlug))
+                query = query.Where(r => r.ModelSlug == modelSlug);
 
             if (fromUtc is DateTime from)
                 query = query.Where(r => r.OccurredUtc >= from);

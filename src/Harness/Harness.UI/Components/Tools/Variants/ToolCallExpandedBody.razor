@@ -83,6 +83,13 @@
                                 IsError="@IsError"
                                 ArgsOnly="@ArgsOnly" />
         break;
+    case "GenerateImage":
+        <GenerateImageToolCallBody ArgumentsJson="@ArgumentsJson"
+                                   ResultContent="@ResultContent"
+                                   GeneratedImageArtifacts="@GeneratedImageArtifacts"
+                                   IsError="@IsError"
+                                   ArgsOnly="@ArgsOnly" />
+        break;
     default:
         <GenericToolCallBody CallId="@CallId"
                              Stage="@Stage"
@@ -100,6 +107,7 @@
     [Parameter] public string? ArgumentsJson { get; set; }
     [Parameter] public string? ResultContent { get; set; }
     [Parameter] public DysonBinaryAttachment? BinaryAttachment { get; set; }
+    [Parameter] public IReadOnlyList<DysonGeneratedImageArtifact> GeneratedImageArtifacts { get; set; } = [];
     [Parameter] public bool IsError { get; set; }
     [Parameter] public bool ArgsOnly { get; set; }
 }

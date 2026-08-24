@@ -1115,6 +1115,57 @@ public sealed class DysonMcpPipeline
                 """,
         };
 
+    private static DysonMcpTool CreateGenerateImageTool() =>
+        new()
+        {
+            Name = "GenerateImage",
+            Description =
+                "Generate one or more images from a text prompt using the session's configured image-generation model. " +
+                "Generated images are written as PNG artifacts beneath `.dyson/image-gen/`, returned as compact metadata acknowledgements (never base64), and rendered by the application. " +
+                "Use this only when the user asks to create or generate an image. " +
+                "prompt is required; size, quality, style, background, outputFormat, and count are optional generation settings. " +
+                "The configured model is selected by the application and cannot be overridden by this tool.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "prompt": {
+                      "type": "string",
+                      "description": "Required description of the image to generate. Be specific about subject, composition, lighting, style, and any text that must appear."
+                    },
+                    "size": {
+                      "type": "string",
+                      "description": "Optional requested image dimensions, such as 1024x1024, 1536x1024, 1024x1536, or auto."
+                    },
+                    "quality": {
+                      "type": "string",
+                      "description": "Optional generation quality, such as low, medium, high, or auto."
+                    },
+                    "style": {
+                      "type": "string",
+                      "description": "Optional rendering style, such as vivid or natural when supported by the configured model."
+                    },
+                    "background": {
+                      "type": "string",
+                      "description": "Optional background preference, such as transparent, opaque, or auto when supported by the configured model."
+                    },
+                    "outputFormat": {
+                      "type": "string",
+                      "description": "Optional provider output format preference: png, jpeg, or webp. Saved artifacts are always normalized to PNG."
+                    },
+                    "count": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 10,
+                      "description": "Optional number of images to generate. Defaults to one."
+                    }
+                  },
+                  "required": ["prompt"],
+                  "additionalProperties": false
+                }
+                """,
+        };
+
     private static IEnumerable<DysonMcpTool> DefaultTools(
         IReadOnlyList<string> availableShellNames,
         bool browserControlAvailable,
@@ -1138,6 +1189,7 @@ public sealed class DysonMcpPipeline
                 "When the child calls SubmitSubagentReport, the parent is notified and the host queues a turn. " +
                 "Do not WaitForSubagent on Drones. In Work (and Drone), any Explore you start is a blocker: WaitForSubagent on a later stage of the same turn before further parent work. In Plan, Wait only when that Explore blocks the next automatic turn. " +
                 "Optional todos seeds the child’s own session todo list. " +
+                "Optional contextFiles preloads work-relative files into the child’s first turn as File context (path visible as `[File: relative/path]` before contents). The caller is encouraged to share relevant files so the subagent does not need to load them manually. " +
                 "Optional modelSlug picks a different model (slug or display alias; omit to inherit parent). " +
                 "Optional reasoningEffort overrides the child’s reasoning_effort (omit/null → chosen slug’s defaultEffort; when inheriting parent model, omit keeps the parent’s current effort). " +
                 "Cannot spawn a child whose agentMode is Plan (Plan is top-level only). A Plan parent may StartSubagent Explore. Explore parents cannot spawn. Drone may spawn Explore only (not another Drone).",
@@ -1177,6 +1229,11 @@ public sealed class DysonMcpPipeline
                         },
                         "required": ["displayName", "taskCode"]
                       }
+                    },
+                    "contextFiles": {
+                      "type": "array",
+                      "description": "Optional work-relative file paths to preload into the child’s first turn as File context (`[File: path]` then contents). Encouraged: share relevant files so the subagent does not need to load them manually.",
+                      "items": { "type": "string", "description": "Work-relative or workspace file path." }
                     }
                   },
                   "required": ["agentMode", "task"]
@@ -1842,6 +1899,8 @@ public sealed class DysonMcpPipeline
         };
 
         yield return CreateRenderHtmlVisualizationTool(uiTheme);
+
+        yield return CreateGenerateImageTool();
 
         yield return new DysonMcpTool
         {

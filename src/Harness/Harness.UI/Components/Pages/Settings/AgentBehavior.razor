@@ -52,179 +52,170 @@
             fixes confirmed bugs once, verifies them, and reports anything unresolved.
         </p>
 
-        <div class="field" style="margin-top:16px;">
+        <div class="settings-page__picker-stack">
+        <div class="settings-page__picker-group">
             <div class="settings-page__picker-row">
-                <div class="settings-page__picker-row-model">
-                    <label>Turn summarizer model</label>
-                    <ModelSlugPicker SelectedSlugId="_turnSummarizerSlugId"
-                                     SelectedSlugIdChanged="OnTurnSummarizerSlugChangedAsync"
-                                     AllowEmpty="true"
-                                     EmptyLabel="Use session model" />
-                </div>
-                <div class="settings-page__picker-row-effort">
-                    <label for="turn-summarizer-effort">Effort</label>
-                    <select id="turn-summarizer-effort"
-                            value="@_turnSummarizerEffort"
-                            disabled="@(_turnSummarizerSlugId is null)"
-                            @onchange="OnTurnSummarizerEffortChangedAsync">
-                        <option value="">Default</option>
-                        @foreach (var mode in EffortModesFor(_turnSummarizerSlugId))
-                        {
-                            <option value="@mode">@mode</option>
-                        }
-                    </select>
-                </div>
+                <label>Image generation default model</label>
+                <span aria-hidden="true"></span>
+                <ModelSlugPicker SelectedSlugId="_imageGenerationSlugId"
+                                 SelectedSlugIdChanged="OnImageGenerationSlugChangedAsync"
+                                 AllowEmpty="true"
+                                 EmptyLabel="Disable GenerateImage"
+                                 IsEligible="IsImageGenerationEligible"
+                                 NoEligibleOptionsLabel="No direct OpenAI image-generation model is available."
+                                 IneligibleLabel="Unavailable for direct OpenAI Images" />
+                <span aria-hidden="true"></span>
             </div>
+            <p class="settings-page__copy">
+                Direct OpenAI Images API model for GenerateImage. Clearing this disables GenerateImage for
+                newly created and resumed sessions; it never falls back to the active chat model.
+            </p>
         </div>
-        <p class="settings-page__copy" style="margin:0;">
-            Model used by SummarizeTurns / the turn context menu to compress older turns into transcript stubs.
-            Leave as “Use session model” to reuse the chat model.
-        </p>
 
-        <div class="field" style="margin-top:16px;">
+        <div class="settings-page__picker-group">
             <div class="settings-page__picker-row">
-                <div class="settings-page__picker-row-model">
-                    <label>Web search summarizer</label>
-                    <ModelSlugPicker SelectedSlugId="_webSearchSummarizerSlugId"
-                                     SelectedSlugIdChanged="OnWebSearchSummarizerSlugChangedAsync"
-                                     AllowEmpty="true"
-                                     EmptyLabel="Use session model" />
+                <label>Turn summarizer model</label>
+                <label>Effort</label>
+                <ModelSlugPicker SelectedSlugId="_turnSummarizerSlugId"
+                             SelectedSlugIdChanged="OnTurnSummarizerSlugChangedAsync"
+                             AllowEmpty="true"
+                             EmptyLabel="Use session model" />
+                <ComposerEffortPicker Options="EffortModesFor(_turnSummarizerSlugId)"
+                                  Value="@_turnSummarizerEffort"
+                                  Disabled="@(_turnSummarizerSlugId is null)"
+                                  EmptyLabel="Default"
+                                  SectionLabel="Reasoning effort"
+                                  Title="Reasoning effort (Default uses the slug default)"
+                                  ShowTriggerLabel="false"
+                                  OpenUp="false"
+                                  OnPick="OnTurnSummarizerEffortPickedAsync" />
                 </div>
-                <div class="settings-page__picker-row-effort">
-                    <label for="web-search-summarizer-effort">Effort</label>
-                    <select id="web-search-summarizer-effort"
-                            value="@_webSearchSummarizerEffort"
-                            disabled="@(_webSearchSummarizerSlugId is null)"
-                            @onchange="OnWebSearchSummarizerEffortChangedAsync">
-                        <option value="">Default</option>
-                        @foreach (var mode in EffortModesFor(_webSearchSummarizerSlugId))
-                        {
-                            <option value="@mode">@mode</option>
-                        }
-                    </select>
-                </div>
-            </div>
+            <p class="settings-page__copy">
+                Model used by SummarizeTurns / the turn context menu to compress older turns into transcript stubs.
+                Leave as “Use session model” to reuse the chat model.
+            </p>
         </div>
-        <p class="settings-page__copy" style="margin:0;">
-            Model used to compress FreeSearch / WebFetch / extract tool results before they enter the agent transcript.
-            Leave as “Use session model” to reuse the chat model.
-        </p>
 
-        <div class="field" style="margin-top:16px;">
+        <div class="settings-page__picker-group">
             <div class="settings-page__picker-row">
-                <div class="settings-page__picker-row-model">
-                    <label>Explore default model</label>
-                    <ModelSlugPicker SelectedSlugId="_exploreSlugId"
-                                     SelectedSlugIdChanged="OnExploreSlugChangedAsync"
-                                     AllowEmpty="true"
-                                     EmptyLabel="Use session model" />
+                <label>Web search summarizer</label>
+                <label>Effort</label>
+                <ModelSlugPicker SelectedSlugId="_webSearchSummarizerSlugId"
+                             SelectedSlugIdChanged="OnWebSearchSummarizerSlugChangedAsync"
+                             AllowEmpty="true"
+                             EmptyLabel="Use session model" />
+                <ComposerEffortPicker Options="EffortModesFor(_webSearchSummarizerSlugId)"
+                                  Value="@_webSearchSummarizerEffort"
+                                  Disabled="@(_webSearchSummarizerSlugId is null)"
+                                  EmptyLabel="Default"
+                                  SectionLabel="Reasoning effort"
+                                  Title="Reasoning effort (Default uses the slug default)"
+                                  ShowTriggerLabel="false"
+                                  OpenUp="false"
+                                  OnPick="OnWebSearchSummarizerEffortPickedAsync" />
                 </div>
-                <div class="settings-page__picker-row-effort">
-                    <label for="explore-effort">Effort</label>
-                    <select id="explore-effort"
-                            value="@_exploreEffort"
-                            disabled="@(_exploreSlugId is null)"
-                            @onchange="OnExploreEffortChangedAsync">
-                        <option value="">Default</option>
-                        @foreach (var mode in EffortModesFor(_exploreSlugId))
-                        {
-                            <option value="@mode">@mode</option>
-                        }
-                    </select>
-                </div>
-            </div>
+            <p class="settings-page__copy">
+                Model used to compress FreeSearch / WebFetch / extract tool results before they enter the agent transcript.
+                Leave as “Use session model” to reuse the chat model.
+            </p>
         </div>
-        <p class="settings-page__copy" style="margin:0;">
-            Default model for Explore subagents when StartSubagent omits modelSlug.
-            Leave as “Use session model” to inherit the parent chat model.
-        </p>
 
-        <div class="field" style="margin-top:16px;">
+        <div class="settings-page__picker-group">
             <div class="settings-page__picker-row">
-                <div class="settings-page__picker-row-model">
-                    <label>Drone default model</label>
-                    <ModelSlugPicker SelectedSlugId="_droneSlugId"
-                                     SelectedSlugIdChanged="OnDroneSlugChangedAsync"
-                                     AllowEmpty="true"
-                                     EmptyLabel="Use session model" />
+                <label>Explore default model</label>
+                <label>Effort</label>
+                <ModelSlugPicker SelectedSlugId="_exploreSlugId"
+                             SelectedSlugIdChanged="OnExploreSlugChangedAsync"
+                             AllowEmpty="true"
+                             EmptyLabel="Use session model" />
+                <ComposerEffortPicker Options="EffortModesFor(_exploreSlugId)"
+                                  Value="@_exploreEffort"
+                                  Disabled="@(_exploreSlugId is null)"
+                                  EmptyLabel="Default"
+                                  SectionLabel="Reasoning effort"
+                                  Title="Reasoning effort (Default uses the slug default)"
+                                  ShowTriggerLabel="false"
+                                  OpenUp="false"
+                                  OnPick="OnExploreEffortPickedAsync" />
                 </div>
-                <div class="settings-page__picker-row-effort">
-                    <label for="drone-effort">Effort</label>
-                    <select id="drone-effort"
-                            value="@_droneEffort"
-                            disabled="@(_droneSlugId is null)"
-                            @onchange="OnDroneEffortChangedAsync">
-                        <option value="">Default</option>
-                        @foreach (var mode in EffortModesFor(_droneSlugId))
-                        {
-                            <option value="@mode">@mode</option>
-                        }
-                    </select>
-                </div>
-            </div>
+            <p class="settings-page__copy">
+                Default model for Explore subagents when StartSubagent omits modelSlug.
+                Leave as “Use session model” to inherit the parent chat model.
+            </p>
         </div>
-        <p class="settings-page__copy" style="margin:0;">
-            Default model for Drone subagents when StartSubagent omits modelSlug.
-            Leave as “Use session model” to inherit the parent chat model.
-        </p>
 
-        <div class="field" style="margin-top:16px;">
+        <div class="settings-page__picker-group">
             <div class="settings-page__picker-row">
-                <div class="settings-page__picker-row-model">
-                    <label>Security Review default model</label>
-                    <ModelSlugPicker SelectedSlugId="_securityReviewSlugId"
-                                     SelectedSlugIdChanged="OnSecurityReviewSlugChangedAsync"
-                                     AllowEmpty="true"
-                                     EmptyLabel="Use session model" />
+                <label>Drone default model</label>
+                <label>Effort</label>
+                <ModelSlugPicker SelectedSlugId="_droneSlugId"
+                             SelectedSlugIdChanged="OnDroneSlugChangedAsync"
+                             AllowEmpty="true"
+                             EmptyLabel="Use session model" />
+                <ComposerEffortPicker Options="EffortModesFor(_droneSlugId)"
+                                  Value="@_droneEffort"
+                                  Disabled="@(_droneSlugId is null)"
+                                  EmptyLabel="Default"
+                                  SectionLabel="Reasoning effort"
+                                  Title="Reasoning effort (Default uses the slug default)"
+                                  ShowTriggerLabel="false"
+                                  OpenUp="false"
+                                  OnPick="OnDroneEffortPickedAsync" />
                 </div>
-                <div class="settings-page__picker-row-effort">
-                    <label for="security-review-effort">Effort</label>
-                    <select id="security-review-effort"
-                            value="@_securityReviewEffort"
-                            disabled="@(_securityReviewSlugId is null)"
-                            @onchange="OnSecurityReviewEffortChangedAsync">
-                        <option value="">Default</option>
-                        @foreach (var mode in EffortModesFor(_securityReviewSlugId))
-                        {
-                            <option value="@mode">@mode</option>
-                        }
-                    </select>
-                </div>
-            </div>
+            <p class="settings-page__copy">
+                Default model for Drone subagents when StartSubagent omits modelSlug.
+                Leave as “Use session model” to inherit the parent chat model.
+            </p>
         </div>
-        <p class="settings-page__copy" style="margin:0;">
-            Default model for Security Review subagents when StartSubagent omits modelSlug.
-            Leave as “Use session model” to inherit the parent chat model.
-        </p>
 
-        <div class="field" style="margin-top:16px;">
+        <div class="settings-page__picker-group">
             <div class="settings-page__picker-row">
-                <div class="settings-page__picker-row-model">
-                    <label>Bug Review default model</label>
-                    <ModelSlugPicker SelectedSlugId="_bugReviewSlugId"
-                                     SelectedSlugIdChanged="OnBugReviewSlugChangedAsync"
-                                     AllowEmpty="true"
-                                     EmptyLabel="Use session model" />
+                <label>Security Review default model</label>
+                <label>Effort</label>
+                <ModelSlugPicker SelectedSlugId="_securityReviewSlugId"
+                             SelectedSlugIdChanged="OnSecurityReviewSlugChangedAsync"
+                             AllowEmpty="true"
+                             EmptyLabel="Use session model" />
+                <ComposerEffortPicker Options="EffortModesFor(_securityReviewSlugId)"
+                                  Value="@_securityReviewEffort"
+                                  Disabled="@(_securityReviewSlugId is null)"
+                                  EmptyLabel="Default"
+                                  SectionLabel="Reasoning effort"
+                                  Title="Reasoning effort (Default uses the slug default)"
+                                  ShowTriggerLabel="false"
+                                  OpenUp="false"
+                                  OnPick="OnSecurityReviewEffortPickedAsync" />
                 </div>
-                <div class="settings-page__picker-row-effort">
-                    <label for="bug-review-effort">Effort</label>
-                    <select id="bug-review-effort"
-                            value="@_bugReviewEffort"
-                            disabled="@(_bugReviewSlugId is null)"
-                            @onchange="OnBugReviewEffortChangedAsync">
-                        <option value="">Default</option>
-                        @foreach (var mode in EffortModesFor(_bugReviewSlugId))
-                        {
-                            <option value="@mode">@mode</option>
-                        }
-                    </select>
-                </div>
-            </div>
+            <p class="settings-page__copy">
+                Default model for Security Review subagents when StartSubagent omits modelSlug.
+                Leave as “Use session model” to inherit the parent chat model.
+            </p>
         </div>
-        <p class="settings-page__copy" style="margin:0;">
-            Default model for Bug Review subagents when StartSubagent omits modelSlug.
-            Leave as “Use session model” to inherit the parent chat model.
-        </p>
+
+        <div class="settings-page__picker-group">
+            <div class="settings-page__picker-row">
+                <label>Bug Review default model</label>
+                <label>Effort</label>
+                <ModelSlugPicker SelectedSlugId="_bugReviewSlugId"
+                             SelectedSlugIdChanged="OnBugReviewSlugChangedAsync"
+                             AllowEmpty="true"
+                             EmptyLabel="Use session model" />
+                <ComposerEffortPicker Options="EffortModesFor(_bugReviewSlugId)"
+                                  Value="@_bugReviewEffort"
+                                  Disabled="@(_bugReviewSlugId is null)"
+                                  EmptyLabel="Default"
+                                  SectionLabel="Reasoning effort"
+                                  Title="Reasoning effort (Default uses the slug default)"
+                                  ShowTriggerLabel="false"
+                                  OpenUp="false"
+                                  OnPick="OnBugReviewEffortPickedAsync" />
+                </div>
+            <p class="settings-page__copy">
+                Default model for Bug Review subagents when StartSubagent omits modelSlug.
+                Leave as “Use session model” to inherit the parent chat model.
+            </p>
+        </div>
+        </div>
 
         @if (_saved)
         {
@@ -237,6 +228,7 @@
     private readonly Dictionary<Guid, IReadOnlyList<string>> _slugReasoningModes = new();
     private string _automaticCodeReview = DysonAutomaticCodeReviewSetting.None;
     private string _automaticCodeReviewAction = DysonAutomaticCodeReviewSetting.ReportOnly;
+    private Guid? _imageGenerationSlugId;
     private Guid? _turnSummarizerSlugId;
     private Guid? _webSearchSummarizerSlugId;
     private Guid? _exploreSlugId;
@@ -272,6 +264,8 @@
 
         _automaticCodeReviewAction = action.Value;
 
+        if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.ImageGenerationModelSlugId, v => _imageGenerationSlugId = v))
+            return;
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.TurnSummarizerModelSlugId, v => _turnSummarizerSlugId = v))
             return;
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId, v => _webSearchSummarizerSlugId = v))
@@ -422,6 +416,31 @@
         _saved = true;
     }
 
+    private async Task OnImageGenerationSlugChangedAsync(Guid? id)
+    {
+        if (id == _imageGenerationSlugId)
+            return;
+
+        _error = null;
+        _saved = false;
+        _imageGenerationSlugId = id;
+
+        var value = id is Guid slugId && slugId != Guid.Empty ? slugId.ToString("D") : null;
+        var set = await AppSettings.SetSettingAsync(DysonAppSettingKeys.ImageGenerationModelSlugId, value);
+        if (set.IsError)
+        {
+            _error = set.Error;
+            return;
+        }
+
+        _saved = true;
+    }
+
+    private static bool IsImageGenerationEligible(
+        DysonModelSlugEntity slug,
+        DysonModelProviderEntity provider) =>
+        OpenAiImageGenerationEligibility.IsEligible(slug, provider);
+
     private Task OnTurnSummarizerSlugChangedAsync(Guid? id) =>
         SaveSlugSettingAsync(
             id,
@@ -476,23 +495,23 @@
             DysonAppSettingKeys.BugReviewModelSlugId,
             DysonAppSettingKeys.BugReviewReasoningEffort);
 
-    private Task OnTurnSummarizerEffortChangedAsync(ChangeEventArgs e) =>
-        SaveEffortSettingAsync(e, v => _turnSummarizerEffort = v, DysonAppSettingKeys.TurnSummarizerReasoningEffort);
+    private Task OnTurnSummarizerEffortPickedAsync(string? effort) =>
+        SaveEffortSettingAsync(effort, v => _turnSummarizerEffort = v, DysonAppSettingKeys.TurnSummarizerReasoningEffort);
 
-    private Task OnWebSearchSummarizerEffortChangedAsync(ChangeEventArgs e) =>
-        SaveEffortSettingAsync(e, v => _webSearchSummarizerEffort = v, DysonAppSettingKeys.WebSearchSummarizerReasoningEffort);
+    private Task OnWebSearchSummarizerEffortPickedAsync(string? effort) =>
+        SaveEffortSettingAsync(effort, v => _webSearchSummarizerEffort = v, DysonAppSettingKeys.WebSearchSummarizerReasoningEffort);
 
-    private Task OnExploreEffortChangedAsync(ChangeEventArgs e) =>
-        SaveEffortSettingAsync(e, v => _exploreEffort = v, DysonAppSettingKeys.ExploreReasoningEffort);
+    private Task OnExploreEffortPickedAsync(string? effort) =>
+        SaveEffortSettingAsync(effort, v => _exploreEffort = v, DysonAppSettingKeys.ExploreReasoningEffort);
 
-    private Task OnDroneEffortChangedAsync(ChangeEventArgs e) =>
-        SaveEffortSettingAsync(e, v => _droneEffort = v, DysonAppSettingKeys.DroneReasoningEffort);
+    private Task OnDroneEffortPickedAsync(string? effort) =>
+        SaveEffortSettingAsync(effort, v => _droneEffort = v, DysonAppSettingKeys.DroneReasoningEffort);
 
-    private Task OnSecurityReviewEffortChangedAsync(ChangeEventArgs e) =>
-        SaveEffortSettingAsync(e, v => _securityReviewEffort = v, DysonAppSettingKeys.SecurityReviewReasoningEffort);
+    private Task OnSecurityReviewEffortPickedAsync(string? effort) =>
+        SaveEffortSettingAsync(effort, v => _securityReviewEffort = v, DysonAppSettingKeys.SecurityReviewReasoningEffort);
 
-    private Task OnBugReviewEffortChangedAsync(ChangeEventArgs e) =>
-        SaveEffortSettingAsync(e, v => _bugReviewEffort = v, DysonAppSettingKeys.BugReviewReasoningEffort);
+    private Task OnBugReviewEffortPickedAsync(string? effort) =>
+        SaveEffortSettingAsync(effort, v => _bugReviewEffort = v, DysonAppSettingKeys.BugReviewReasoningEffort);
 
     private async Task SaveSlugSettingAsync(
         Guid? id,
@@ -528,12 +547,12 @@
         _saved = true;
     }
 
-    private async Task SaveEffortSettingAsync(ChangeEventArgs e, Action<string> assign, string effortKey)
+    private async Task SaveEffortSettingAsync(string? effort, Action<string> assign, string effortKey)
     {
         _error = null;
         _saved = false;
 
-        var next = e.Value?.ToString()?.Trim() ?? "";
+        var next = effort?.Trim() ?? "";
         assign(next);
 
         var set = await AppSettings.SetSettingAsync(effortKey, string.IsNullOrEmpty(next) ? null : next);

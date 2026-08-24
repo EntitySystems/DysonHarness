@@ -67,22 +67,23 @@
     </header>
     @if (IsExpanded)
     {
-        @if (IsUserTurn && (!string.IsNullOrWhiteSpace(Turn.Instruction) || Turn.SkillsUsed.Count > 0 || Turn.UserImages.Count > 0))
+        @if (IsUserTurn && (!string.IsNullOrWhiteSpace(Turn.Instruction) || Turn.ContextFiles.Count > 0 || Turn.UserImages.Count > 0))
         {
             <div class="turn-block__user">
                 <div class="turn-block__user-main">
-                    @if (Turn.SkillsUsed.Count > 0)
+                    @if (Turn.ContextFiles.Count > 0)
                     {
                         <div class="turn-block__skills">
-                            @foreach (var skill in Turn.SkillsUsed)
+                            @foreach (var contextFile in Turn.ContextFiles)
                             {
-                                var entry = skill;
+                                var entry = contextFile;
+                                var chipKind = entry.Kind == DysonContextFileKind.File ? "file" : "skill";
                                 <button type="button"
                                         class="turn-block__skill-chip"
                                         title="@(entry.ResolvedPath ?? entry.DisplayName)"
                                         @onclick:stopPropagation="true"
                                         @onclick="() => Host.OpenSkillViewer(entry)">
-                                    Used skill @entry.DisplayName
+                                    Used @chipKind @entry.DisplayName
                                 </button>
                             }
                         </div>
@@ -152,7 +153,7 @@
 
         @if (Turn.Kind != DysonAgentTurnKind.DisplayInfo
              && Turn.Kind != DysonAgentTurnKind.ModeSwitch
-             && (HasAssistantBody || HasReasoning || HasTools || HasVisualizations || ShowThinkingIdleDots))
+             && (HasAssistantBody || HasReasoning || HasTools || HasVisualizations || HasGeneratedImages || ShowThinkingIdleDots))
         {
             <div @ref="_contentEl" class="turn-block__content">
                 <div class="turn-block__main">
@@ -279,6 +280,11 @@
                     @if (HasVisualizations)
                     {
                         <TurnVisualizations Turn="Turn" />
+                    }
+
+                    @if (HasGeneratedImages)
+                    {
+                        <TurnGeneratedImages Turn="Turn" />
                     }
 
                     @if (ShowThinkingIdleDots)
@@ -464,6 +470,10 @@
 
     private bool HasVisualizations => Turn.TrackedToolCalls.Any(call =>
         call.Status == DysonToolCallStatus.Completed && call.Result?.HtmlVisualization is not null);
+
+    private bool HasGeneratedImages => Turn.TrackedToolCalls.Any(call =>
+        call.Status == DysonToolCallStatus.Completed
+        && call.Result is { IsError: false, GeneratedImageArtifacts.Count: > 0 });
 
     private bool HasPendingTools =>
         Turn.TrackedToolCalls.Any(t =>

@@ -271,9 +271,9 @@ public class DysonPluginContributionResolverTests
     [Fact]
     public void Turn_skill_provenance_round_trips()
     {
-        var entry = new DysonSkillUsedEntry
+        var entry = new DysonContextFileEntry
         {
-            SkillId = "alpha:demo",
+            Id = "alpha:demo",
             DisplayName = "Alpha · demo",
             MarkdownContent = "body",
             ResolvedPath = "skills/demo/SKILL.md",
@@ -281,7 +281,7 @@ public class DysonPluginContributionResolverTests
             PluginPackageRelativePath = "skills/demo/SKILL.md",
             UsedUtc = DateTime.UtcNow,
         };
-        var restored = Assert.Single(DysonSkillsUsedSerializer.Deserialize(DysonSkillsUsedSerializer.Serialize([entry])));
+        var restored = Assert.Single(DysonContextFilesSerializer.Deserialize(DysonContextFilesSerializer.Serialize([entry])));
         Assert.Equal("alpha", restored.PluginId);
         Assert.Equal("skills/demo/SKILL.md", restored.PluginPackageRelativePath);
     }
@@ -371,6 +371,7 @@ public class DysonPluginContributionResolverTests
             IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos = null,
             string? modelSlug = null,
             string? reasoningEffort = null,
+            IReadOnlyList<string>? contextFiles = null,
             CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public override Task<VoidResult<string>> LoadFunctionalContextAsync(

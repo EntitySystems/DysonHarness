@@ -198,7 +198,7 @@ public sealed class DysonSessionRecoveryService
         };
         turn.RestoreReasoningLog(
             DysonReasoningLogSerializer.DeserializeOrSynthesize(row.ReasoningLogJson, row.ReasoningText));
-        turn.RestoreSkillsUsed(DysonSkillsUsedSerializer.Deserialize(row.SkillsUsedJson));
+        turn.RestoreContextFiles(DysonContextFilesSerializer.Deserialize(row.SkillsUsedJson));
         turn.RestoreUserImages(DysonUserImagesSerializer.Deserialize(row.UserImagesJson));
         DysonTurnToolStateSerializer.ApplyToTurn(turn, row.ToolStateJson);
         return turn;

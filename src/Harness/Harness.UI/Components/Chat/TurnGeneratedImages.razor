@@ -1,0 +1,24 @@
+@namespace Harness.UI.Components.Chat
+@using DysonHarness
+
+@{
+    var artifacts = GeneratedImages;
+}
+
+@if (artifacts.Count > 0)
+{
+    <section class="turn-generated-images" aria-label="Generated images">
+        <h3 class="turn-generated-images__title">Generated images</h3>
+        <GeneratedImageArtifactCards Artifacts="artifacts" />
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public DysonAgentTurn Turn { get; set; } = default!;
+
+    private IReadOnlyList<DysonGeneratedImageArtifact> GeneratedImages => Turn.TrackedToolCalls
+        .Where(call => call.Status == DysonToolCallStatus.Completed
+                       && call.Result is { IsError: false, GeneratedImageArtifacts.Count: > 0 })
+        .SelectMany(call => call.Result!.GeneratedImageArtifacts)
+        .ToArray();
+}
