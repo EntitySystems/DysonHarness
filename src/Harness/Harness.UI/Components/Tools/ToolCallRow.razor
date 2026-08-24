@@ -2,6 +2,7 @@
 @using DysonHarness
 @using Harness.UI.Components.Tools.Variants
 @using Harness.UI.Demo
+@inject DysonUiHost Host
 
 <div class="tool-row @(_expanded ? "tool-row--expanded" : null)">
     <div class="tool-row__header">
@@ -75,7 +76,7 @@
     private bool _expanded;
     private DysonToolCallUi.CollapsedSummary _summary = new();
 
-    private bool CanCancel => SessionBusy && IsLatestTurn && OnCancel.HasDelegate;
+    private bool CanCancel => Host.CanStopExecution() && IsLatestTurn && OnCancel.HasDelegate;
 
     protected override void OnParametersSet()
     {

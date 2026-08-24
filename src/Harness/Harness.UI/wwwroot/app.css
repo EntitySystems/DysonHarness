@@ -7494,6 +7494,15 @@ code, .mono {
   border-color: var(--danger);
 }
 
+/* Live Stop must beat .btn:disabled { opacity: 0.5 } */
+.composer-stop__trigger--live,
+.composer-stop__trigger--live:disabled {
+  opacity: 1;
+  pointer-events: auto;
+  cursor: pointer;
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
 
 .composer-stop__spinner {
   box-sizing: border-box;

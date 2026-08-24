@@ -462,6 +462,37 @@ public class DysonUiHostRuntimeDelegationTests
     }
 
     [Fact]
+    public async Task StopAllExecution_queued_only_discards_without_starting()
+    {
+        await using var harness = await HostHarness.CreateAsync();
+        await using var host = harness.CreateHost();
+
+        var started = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(started.IsSuccess, started.IsError ? started.Error : null);
+        var session = host.Session ?? throw new InvalidOperationException("Expected focused session.");
+
+        const string queuedInstruction = "queued later";
+        var enqueued = harness.Runtime.EnqueuePrompt(
+            session.PersistenceId,
+            DysonAgentSession.CreateNormalTurn(queuedInstruction));
+        Assert.True(enqueued.IsSuccess, enqueued.IsError ? enqueued.Error : null);
+
+        Assert.False(host.IsBusy);
+        Assert.True(host.CanStopExecution());
+        Assert.Equal(1, harness.Runtime.GetQueuedPromptCount(session.PersistenceId));
+
+        await host.StopAllExecution();
+
+        Assert.Equal(0, harness.Runtime.GetQueuedPromptCount(session.PersistenceId));
+        Assert.False(host.CanStopExecution());
+        Assert.False(host.IsBusy);
+        Assert.DoesNotContain(
+            session.Turns,
+            turn => string.Equals(turn.Instruction, queuedInstruction, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task IsSessionBusy_for_focused_child_with_background_run()
     {
         await using var harness = await HostHarness.CreateAsync(waiting: true);

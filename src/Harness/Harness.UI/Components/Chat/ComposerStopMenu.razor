@@ -1,10 +1,11 @@
 @namespace Harness.UI.Components.Chat
 @using Harness.UI.Demo
+@implements IDisposable
 @inject DysonUiHost Host
 
 <div class="composer-stop">
     <button type="button"
-            class="btn btn--xs btn-ghost composer-stop__trigger"
+            class="btn btn--xs btn-ghost composer-stop__trigger @(CanStop ? "composer-stop__trigger--live" : null)"
             disabled="@(!CanStop)"
             aria-busy="@CanStop"
             title="Halt this session tree (prompt, queue, and subagents)"
@@ -18,7 +19,11 @@
 </div>
 
 @code {
-    private bool CanStop => Host.IsBusy || Host.HasActiveSubagents();
+    private bool CanStop => Host.CanStopExecution();
+
+    protected override void OnInitialized() => Host.Changed += OnHostChanged;
+
+    private void OnHostChanged() => _ = InvokeAsync(StateHasChanged);
 
     private Task StopAll()
     {
@@ -26,4 +31,6 @@
             return Task.CompletedTask;
         return Host.StopAllExecution();
     }
+
+    public void Dispose() => Host.Changed -= OnHostChanged;
 }
