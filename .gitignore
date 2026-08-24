@@ -56,6 +56,7 @@ artifacts/
 .dyson/temp/
 .dyson/tmp/
 .dyson/tmp*/
+.dyson/build/
 .dyson/skills/xobi667-ui-ux-pro-max/
 
 # Cursor IDE rules (migrated to openrules.json; files live in rules/)
