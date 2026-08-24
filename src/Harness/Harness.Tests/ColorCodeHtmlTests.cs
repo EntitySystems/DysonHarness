@@ -73,6 +73,27 @@ public class ColorCodeHtmlTests
         Assert.Null(TryHighlightSourceLines("Example.cs", new string('x', 64 * 1024 + 1)));
     }
 
+    [Fact]
+    public void TryHighlightSourceLines_highlights_msbuild_project_files_as_xml()
+    {
+        Assert.Equal(25, ColorCodeLanguages.All.Count);
+
+        const string source = "<Project Sdk=\"Microsoft.NET.Sdk\">\n</Project>\n";
+        var csproj = TryHighlightSourceLines("CashTrackServer.csproj", source);
+        var fsproj = TryHighlightSourceLines("Library.fsproj", source);
+
+        Assert.NotNull(csproj);
+        Assert.NotNull(fsproj);
+        Assert.Contains(csproj!, ContainsXmlClass);
+        Assert.Contains(fsproj!, ContainsXmlClass);
+    }
+
+    private static bool ContainsXmlClass(string line) =>
+        line.Contains("class=\"xmlElementName\"", StringComparison.Ordinal)
+        || line.Contains("class=\"xmlTagDelimiter\"", StringComparison.Ordinal)
+        || line.Contains("class=\"xmlName\"", StringComparison.Ordinal)
+        || line.Contains("class=\"xmlDelimiter\"", StringComparison.Ordinal);
+
     private static string[]? TryHighlightSourceLines(string? relativePath, string content)
     {
         var helper = typeof(MarkdownRenderer).Assembly.GetType("Harness.UI.Markdown.ColorCodeHtml", throwOnError: true)!;

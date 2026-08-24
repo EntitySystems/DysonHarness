@@ -326,6 +326,45 @@ public class DysonSessionRuntimeTests
     }
 
     [Fact]
+    public async Task HasLivePrompt_is_true_while_second_prompt_waits_on_gate()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var created = await harness.Runtime.CreateRootAsync(RootRequest());
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+        var session = created.Value;
+        var sessionId = session.PersistenceId;
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task<VoidResult<string>> Run(DysonAgentSession _, CancellationToken cancellationToken)
+        {
+            firstEntered.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+            return VoidResult<string>.Success;
+        }
+
+        var first = harness.Runtime.ExecutePromptAsync(session, Run);
+        await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(harness.Runtime.IsBusy(sessionId));
+        Assert.True(harness.Runtime.HasLivePrompt(sessionId));
+
+        var second = harness.Runtime.ExecutePromptAsync(session, Run);
+        Assert.False(second.IsCompleted);
+        Assert.True(harness.Runtime.HasLivePrompt(sessionId));
+
+        var cancelled = harness.Runtime.CancelPrompt(sessionId);
+        Assert.True(cancelled.IsSuccess, cancelled.IsError ? cancelled.Error : null);
+
+        var results = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.All(results, result =>
+        {
+            Assert.True(result.IsError);
+            Assert.Contains("cancelled", result.Error, StringComparison.OrdinalIgnoreCase);
+        });
+        Assert.False(harness.Runtime.HasLivePrompt(sessionId));
+        Assert.False(harness.Runtime.IsBusy(sessionId));
+    }
+
+    [Fact]
     public async Task Dispose_cancels_and_awaits_in_flight_prompt_before_releasing_lease()
     {
         await using var harness = await Harness.CreateAsync();
