@@ -1437,7 +1437,8 @@ public sealed class DysonMcpPipeline
                 "if ListTodos shows pending or ongoing items, complete those via UpdateTodo first, then submit. " +
                 "A successful submit ends the current turn; further SubmitSubagentReport calls fail until the parent injects a new assignment via TriggerSubagentEvent " +
                 "(that reopens the child so a new report cycle can run; except a completed handoff may supersede a prior harness Failed). " +
-                "If submit fails because a report already landed, call TriggerParentEvent (mid-run parent coordination, not a new report cycle). After TriggerParentEvent, do not call any more tools; end the turn.",
+                "If submit fails because a report already landed, call TriggerParentEvent (mid-run parent coordination, not a new report cycle). After TriggerParentEvent, do not call any more tools; end the turn. " +
+                "If SubmitSubagentReport fails twice in the same turn, the harness auto-submits the last parseable report, cancels the child's current run, and ends the child so the model loop cannot issue another provider request. Parent TriggerSubagentEvent can still reopen the child for new work.",
             InputSchemaJson = """
                 {
                   "type": "object",

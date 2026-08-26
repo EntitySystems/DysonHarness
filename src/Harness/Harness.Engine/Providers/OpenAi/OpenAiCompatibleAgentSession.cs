@@ -782,6 +782,15 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                         return SoftCloseAfterEndsCurrentTurn(turn, ending.ToolName, reply.Content);
                     }
 
+                    if (Parent is not null
+                        && await TryAutoSubmitAfterRepeatedFailuresAsync(turn).ConfigureAwait(false))
+                    {
+                        AppendLog($"tool round {round + 1}: auto-submit after 2 failed SubmitSubagentReport");
+                        var closed = SoftCloseAfterEndsCurrentTurn(turn, "SubmitSubagentReport", reply.Content);
+                        CancelBackgroundRun();
+                        return closed;
+                    }
+
                     // Continuing tool loop — interim assistant words (not final reply).
                     CommitInterimText(turn, reply.Content, round);
                     continue;

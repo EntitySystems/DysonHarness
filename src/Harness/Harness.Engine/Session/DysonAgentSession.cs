@@ -1156,10 +1156,16 @@ public abstract class DysonAgentSession
         };
     }
 
+    public const int MaxSubmitSubagentReportFailuresPerTurn = 2;
+
+    public const string AutoSubmitSubagentReportHarnessNote =
+        "\n\n[Harness: auto-submitted after 2 failed SubmitSubagentReport calls this turn.]";
+
     public Task<Result<string, string>> SubmitSubagentReportAsync(
         string summary,
         bool failed = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool bypassIncompleteTodos = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -1172,7 +1178,7 @@ public abstract class DysonAgentSession
             .ToArray();
 
         // Failed reports may leave todos incomplete (blocker handoff). Successful reports require all Complete.
-        if (incomplete.Length > 0 && !failed)
+        if (incomplete.Length > 0 && !failed && !bypassIncompleteTodos)
         {
             return Task.FromResult(Result<string, string>.AsError(
                 "SubmitSubagentReport: incomplete todos: " + string.Join("; ", incomplete)));
@@ -1216,6 +1222,130 @@ public abstract class DysonAgentSession
             status = Status.ToString(),
             summary = trimmed,
         })));
+    }
+
+    /// <summary>
+    /// After two failed <c>SubmitSubagentReport</c> results this turn, auto-accepts the last
+    /// parseable report (bypassing incomplete todos) or marks Failed if none is parseable,
+    /// then cancels the current background run. Never marks <see cref="DysonSessionStatus.Stopped"/>.
+    /// </summary>
+    public async Task<bool> TryAutoSubmitAfterRepeatedFailuresAsync(DysonAgentTurn turn)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+
+        var failedCount = 0;
+        var hasSuccessfulSubmit = false;
+        foreach (var row in turn.ResponseLog.ToArray())
+        {
+            if (!string.Equals(row.ToolName, "SubmitSubagentReport", StringComparison.Ordinal))
+                continue;
+
+            if (row.IsError)
+                failedCount++;
+            else if (row.EndsCurrentTurn)
+                hasSuccessfulSubmit = true;
+        }
+
+        if (failedCount < MaxSubmitSubagentReportFailuresPerTurn)
+            return false;
+
+        // Success on this turn wins over the strike (SoftClose already ended the loop).
+        if (hasSuccessfulSubmit)
+            return false;
+
+        string? parsedSummary = null;
+        var parsedFailed = false;
+        for (var i = turn.ToolCalls.Count - 1; i >= 0; i--)
+        {
+            var call = turn.ToolCalls[i];
+            if (!string.Equals(call.ToolName, "SubmitSubagentReport", StringComparison.Ordinal))
+                continue;
+
+            if (!TryParseSubmitSubagentReportArgs(call.ArgumentsJson, out var summary, out var failed))
+                continue;
+
+            parsedSummary = summary;
+            parsedFailed = failed;
+            break;
+        }
+
+        if (parsedSummary is not null)
+        {
+            var summaryWithNote = parsedSummary + AutoSubmitSubagentReportHarnessNote;
+            var submitted = await SubmitSubagentReportAsync(
+                    summaryWithNote,
+                    parsedFailed,
+                    CancellationToken.None,
+                    bypassIncompleteTodos: true)
+                .ConfigureAwait(false);
+
+            // Already-terminal reject: still cancel and return true; do not overwrite status.
+            if (!submitted.IsError)
+            {
+                await PersistTerminalChildStatusAsync(
+                        this,
+                        Status,
+                        LastReportSummary ?? summaryWithNote)
+                    .ConfigureAwait(false);
+            }
+        }
+        else
+        {
+            const string failSummary =
+                "Harness auto-failed after 2 failed SubmitSubagentReport calls this turn (no parseable summary).";
+            if (TryMarkTerminal(DysonSessionStatus.Failed, failSummary))
+            {
+                await PersistTerminalChildStatusAsync(
+                        this,
+                        DysonSessionStatus.Failed,
+                        LastReportSummary ?? failSummary)
+                    .ConfigureAwait(false);
+                Parent?.NotifySubagentFailed(
+                    Id,
+                    LastReportSummary,
+                    PersistenceId == Guid.Empty ? null : PersistenceId);
+            }
+        }
+
+        CancelBackgroundRun();
+        return true;
+    }
+
+    private static bool TryParseSubmitSubagentReportArgs(
+        string? argumentsJson,
+        out string summary,
+        out bool failed)
+    {
+        summary = "";
+        failed = false;
+        try
+        {
+            using var doc = JsonDocument.Parse(
+                string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
+            if (!doc.RootElement.TryGetProperty("summary", out var summaryProp)
+                || summaryProp.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var value = summaryProp.GetString();
+            if (string.IsNullOrWhiteSpace(value))
+                return false;
+
+            summary = value.Trim();
+            if (doc.RootElement.TryGetProperty("status", out var statusProp)
+                && statusProp.ValueKind == JsonValueKind.String
+                && string.Equals(statusProp.GetString(), "failed", StringComparison.OrdinalIgnoreCase))
+            {
+                failed = true;
+            }
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     public Task<(DysonSessionStatus Status, string? Summary)> WaitForTerminalAsync(
@@ -1462,7 +1592,11 @@ public abstract class DysonAgentSession
                 var failSummary = ResolveKickOffFailureSummary(child, result);
                 if (child.TryMarkTerminal(DysonSessionStatus.Failed, failSummary))
                 {
-                    await PersistKickOffFailureAsync(child, failSummary).ConfigureAwait(false);
+                    await PersistTerminalChildStatusAsync(
+                            child,
+                            DysonSessionStatus.Failed,
+                            failSummary)
+                        .ConfigureAwait(false);
                     child.Parent?.NotifySubagentFailed(
                         child.Id,
                         failSummary,
@@ -1478,7 +1612,11 @@ public abstract class DysonAgentSession
                 var failSummary = FormatKickOffExceptionSummary(ex);
                 if (child.TryMarkTerminal(DysonSessionStatus.Failed, failSummary))
                 {
-                    await PersistKickOffFailureAsync(child, failSummary).ConfigureAwait(false);
+                    await PersistTerminalChildStatusAsync(
+                            child,
+                            DysonSessionStatus.Failed,
+                            failSummary)
+                        .ConfigureAwait(false);
                     child.Parent?.NotifySubagentFailed(
                         child.Id,
                         failSummary,
@@ -1582,9 +1720,12 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
-    /// Persist child Failed status + parent interrupt log (mirrors SubmitSubagentReport executor path).
+    /// Persist child Completed/Failed status + parent interrupt log (mirrors SubmitSubagentReport executor path).
     /// </summary>
-    private static async Task PersistKickOffFailureAsync(DysonAgentSession child, string summary)
+    private static async Task PersistTerminalChildStatusAsync(
+        DysonAgentSession child,
+        DysonSessionStatus status,
+        string summary)
     {
         var store = child.SessionStore;
         if (store is null || child.PersistenceId == Guid.Empty)
@@ -1594,24 +1735,27 @@ public abstract class DysonAgentSession
             new DysonSessionMetaUpdate
             {
                 SessionId = child.PersistenceId,
-                Status = DysonSessionStatus.Failed,
+                Status = status,
             }).ConfigureAwait(false);
 
         var statusLog = DysonSessionLogPayload.CreateEntry(
             child.PersistenceId,
             DysonSessionLogKind.SessionStatusChanged,
-            new DysonSessionLogSessionStatusChanged(DysonSessionStatus.Failed, summary));
+            new DysonSessionLogSessionStatusChanged(status, summary));
         await store.AppendLogAsync(statusLog).ConfigureAwait(false);
 
         var parent = child.Parent;
         if (parent is null || parent.PersistenceId == Guid.Empty)
             return;
 
+        var interruptKind = status == DysonSessionStatus.Completed
+            ? DysonAgentInterruptKind.SubagentCompleted
+            : DysonAgentInterruptKind.SubagentFailed;
         var interruptLog = DysonSessionLogPayload.CreateEntry(
             parent.PersistenceId,
             DysonSessionLogKind.Interrupt,
             new DysonSessionLogInterrupt(
-                DysonAgentInterruptKind.SubagentFailed.ToString(),
+                interruptKind.ToString(),
                 SubagentId: child.Id,
                 Summary: summary,
                 PersistenceId: child.PersistenceId));
