@@ -67,4 +67,17 @@ public class MarkdownRendererTests
     {
         Assert.Equal("", MarkdownRenderer.ToHtml(markdown).Value);
     }
+
+    [Fact]
+    public void ToHtml_returns_same_value_instance_for_identical_source()
+    {
+        const string source = "hello **world**";
+        var first = MarkdownRenderer.ToHtml(source);
+        var second = MarkdownRenderer.ToHtml(source);
+        var other = MarkdownRenderer.ToHtml("other markdown");
+
+        Assert.Same(first.Value, second.Value);
+        Assert.Contains("other markdown", other.Value, StringComparison.Ordinal);
+        Assert.NotSame(first.Value, other.Value);
+    }
 }

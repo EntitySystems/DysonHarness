@@ -107,6 +107,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             "ExpandThoughtProcess" =>
                 "# Expanding thought process\n\n" +
                 "ExpandThoughtProcess was called; this turn ends. A reformulation turn will run next.",
+            "SubmitSubagentReport" =>
+                "# Report accepted\n\n" +
+                "SubmitSubagentReport was accepted; this turn ends.",
             _ =>
                 "# Turn ended\n\n" +
                 "An end-turn tool was called; this turn ends.",
