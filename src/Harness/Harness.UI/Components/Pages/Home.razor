@@ -222,7 +222,7 @@
         StateHasChanged();
     }
 
-    private void OnHostChanged() => _ = InvokeAsync(async () =>
+    private void OnHostChanged() => _ = InvokeAsync(() =>
     {
         try
         {
@@ -231,17 +231,13 @@
             SyncContextTokensFromHost();
             // Model/effort/token Notify must not clobber a composer mode that is not yet applied.
             SyncSelectedAgentModeIfSessionModeChanged();
+            _sessions = OverlayLiveTitle(_sessions);
             UpdateActiveTitle();
             StateHasChanged();
-            await RefreshSessionsQuietAsync();
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Host-changed session refresh failed.");
-        }
-        finally
-        {
-            StateHasChanged();
         }
     });
 
@@ -426,28 +422,15 @@
         UpdateActiveTitle();
     }
 
-    private async Task RefreshSessionsQuietAsync()
-    {
-        if (_activeWorkDirectoryId is null)
-        {
-            _sessions = [];
-            UpdateActiveTitle();
-            return;
-        }
-
-        var list = await Host.ListSessionsAsync(_activeWorkDirectoryId);
-        if (list.IsSuccess)
-        {
-            _sessions = OverlayLiveTitle(list.Value);
-            UpdateActiveTitle();
-        }
-    }
-
     private IReadOnlyList<DysonSessionSummary> OverlayLiveTitle(
         IReadOnlyList<DysonSessionSummary> list)
     {
-        if (Host.Session?.PersistenceId is not Guid pid || Host.Session.DisplayTitle is null)
+        if (Host.Session?.PersistenceId is not Guid pid)
             return list;
+
+        var liveTitle = Host.Session.DisplayTitle;
+        var lastTurn = Host.Session.Turns.Count > 0 ? Host.Session.Turns[^1] : null;
+        var liveActivity = lastTurn?.CompletedUtc ?? lastTurn?.StartedUtc;
 
         return list
             .Select(s => s.Id == pid
@@ -458,11 +441,11 @@
                     ParentSessionId = s.ParentSessionId,
                     AgentMode = s.AgentMode,
                     Status = s.Status,
-                    Title = Host.Session.DisplayTitle,
+                    Title = liveTitle ?? s.Title,
                     ModelSlugId = s.ModelSlugId,
                     WorkDirectoryId = s.WorkDirectoryId,
                     CreatedUtc = s.CreatedUtc,
-                    LastActivityUtc = s.LastActivityUtc,
+                    LastActivityUtc = liveActivity ?? s.LastActivityUtc,
                 }
                 : s)
             .ToList();

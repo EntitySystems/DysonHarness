@@ -17,6 +17,8 @@ public abstract class DysonAgentSession
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private const string TerminalReportRejectHint =
         "To communicate with the parent without a new report cycle, call TriggerParentEvent instead. After TriggerParentEvent, do not call any more tools; end the turn.";
+    private const string AcceptedReportEndTurnHint =
+        "Report accepted. Do not call any more tools; end the turn.";
     private CancellationTokenSource? _runCts;
     private readonly ConcurrentDictionary<Guid, DysonParentEvent> _pendingParentEvents = new();
     private readonly HashSet<int> _waitingOnSubagentIds = [];
@@ -1029,10 +1031,14 @@ public abstract class DysonAgentSession
     /// <summary>
     /// Marks <paramref name="turn"/> as the in-flight prompt turn until disposed.
     /// Nestable (DropContext inject inside another prompt). Call after <see cref="AddTurn"/>.
+    /// A child <see cref="DysonSessionStatus.Completed"/> / <see cref="DysonSessionStatus.Failed"/>
+    /// session is reopened to <see cref="DysonSessionStatus.Active"/> at the start of a new in-flight prompt.
     /// </summary>
     public IDisposable BeginInFlightPrompt(DysonAgentTurn turn)
     {
         ArgumentNullException.ThrowIfNull(turn);
+        if (Parent is not null)
+            TryReopenForNewParentTask();
         _inFlightPromptStack.Push(turn);
         return new InFlightPromptScope(this);
     }
@@ -1215,13 +1221,15 @@ public abstract class DysonAgentSession
                 Parent.NotifySubagentCompleted(Id, trimmed, PersistenceId == Guid.Empty ? null : PersistenceId);
         }
 
-        return Task.FromResult(Result<string, string>.AsValue(JsonSerializer.Serialize(new
+        var acceptedJson = JsonSerializer.Serialize(new
         {
             subagentId = Id,
             persistenceId = PersistenceId,
             status = Status.ToString(),
             summary = trimmed,
-        })));
+        });
+        return Task.FromResult(Result<string, string>.AsValue(
+            acceptedJson + "\n\n" + AcceptedReportEndTurnHint));
     }
 
     /// <summary>
@@ -1363,7 +1371,9 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
-    /// Reopens a Completed/Failed child so a new SubmitSubagentReport cycle can run after parent TriggerSubagentEvent.
+    /// Reopens a Completed/Failed child so a new SubmitSubagentReport cycle can run after parent
+    /// <c>TriggerSubagentEvent</c> or when a new child in-flight prompt begins. Stopped/Interrupted stay locked.
+    /// Sets <see cref="Status"/> to Active in memory only; durable Active is written by the parent inject path.
     /// </summary>
     public bool TryReopenForNewParentTask()
     {

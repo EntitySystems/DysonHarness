@@ -50,7 +50,7 @@
             {
                 var active = session.Id == ActiveSessionId;
                 var title = session.Title ?? "Untitled";
-                <div class="list-item @(active ? "is-active" : null)">
+                <div @key="session.Id" class="list-item @(active ? "is-active" : null)">
                     <button type="button"
                             class="list-item__main"
                             @onclick="() => OnResumeAsync(session.Id)">

@@ -69,7 +69,8 @@
             {
                 if (item.Turn is { } turn)
                 {
-                    <TurnBlock Turn="turn"
+                    <TurnBlock @key="turn.Id"
+                               Turn="turn"
                                SessionBusy="SessionBusy"
                                IsLatestTurn="@(lastTurnId == turn.Id)"
                                IsExpanded="@(!_collapsedIds.Contains(turn.Id))"
@@ -79,7 +80,7 @@
                 }
                 else if (item.Event is { } evt)
                 {
-                    <SubagentEventBlock Item="evt" />
+                    <SubagentEventBlock @key="evt.EventId" Item="evt" />
                 }
             }
         }

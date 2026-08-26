@@ -363,6 +363,10 @@
     private DotNetObjectReference<TurnBlock>? _dotNetRef;
     private bool _stickyAttached;
     private bool _resizerAttached;
+    private Guid _cachedSubagentTurnId;
+    private int _cachedSubagentTrackedCount = -1;
+    private int _cachedSubagentResultFingerprint;
+    private List<Guid> _cachedSubagentIds = [];
     private readonly HashSet<string> _expandedKeys = new(StringComparer.Ordinal);
     private string? _expandPolicyFingerprint;
     private bool _contextMenuOpen;
@@ -689,6 +693,9 @@
             return;
         }
 
+        if (_resizerAttached)
+            return;
+
         try
         {
             _dotNetRef ??= DotNetObjectReference.Create(this);
@@ -788,6 +795,22 @@
 
     private List<Guid> CollectSubagentPersistenceIds()
     {
+        var trackedCount = Turn.TrackedToolCalls.Count;
+        // ponytail: count-only would miss StartSubagent Result landing (count stays put).
+        // Fingerprint is content lengths so we skip JsonDocument.Parse until results change.
+        var fingerprint = 0;
+        foreach (var tracked in Turn.TrackedToolCalls)
+        {
+            if (!string.Equals(tracked.Call.ToolName, "StartSubagent", StringComparison.OrdinalIgnoreCase))
+                continue;
+            fingerprint = HashCode.Combine(fingerprint, tracked.Result?.Content?.Length ?? 0);
+        }
+
+        if (Turn.Id == _cachedSubagentTurnId
+            && trackedCount == _cachedSubagentTrackedCount
+            && fingerprint == _cachedSubagentResultFingerprint)
+            return _cachedSubagentIds;
+
         var ids = new List<Guid>();
         foreach (var tracked in Turn.TrackedToolCalls)
         {
@@ -799,6 +822,10 @@
                 ids.Add(id);
         }
 
+        _cachedSubagentTurnId = Turn.Id;
+        _cachedSubagentTrackedCount = trackedCount;
+        _cachedSubagentResultFingerprint = fingerprint;
+        _cachedSubagentIds = ids;
         return ids;
     }
 
