@@ -236,6 +236,9 @@
     private int _highlight;
     private int _slashRefreshGeneration;
     private bool _queueExpanded;
+    private int _skillCatalogRevision;
+    private int _pluginCatalogRevision;
+    private Guid? _catalogWorkDirectoryId;
 
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public Guid? SelectedSlugId { get; set; }
@@ -327,6 +330,9 @@
         await RefreshModelsAsync();
         await RefreshSkillsAsync();
         await RefreshPluginCommandsAsync();
+        _skillCatalogRevision = Host.SkillCatalogRevision;
+        _pluginCatalogRevision = Host.PluginCatalogRevision;
+        _catalogWorkDirectoryId = Host.CatalogWorkDirectoryId;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -366,8 +372,25 @@
     private void OnHostChanged() => _ = InvokeAsync(async () =>
     {
         DrainPendingSnipPromptLines();
-        await RefreshSkillsAsync();
-        await RefreshPluginCommandsAsync();
+        var skillRev = Host.SkillCatalogRevision;
+        var pluginRev = Host.PluginCatalogRevision;
+        var workdir = Host.CatalogWorkDirectoryId;
+        var workdirChanged = _catalogWorkDirectoryId != workdir;
+        if (workdirChanged || _skillCatalogRevision != skillRev)
+        {
+            await RefreshSkillsAsync();
+            _skillCatalogRevision = skillRev;
+        }
+
+        if (workdirChanged || _pluginCatalogRevision != pluginRev)
+        {
+            await RefreshPluginCommandsAsync();
+            _pluginCatalogRevision = pluginRev;
+        }
+
+        if (workdirChanged)
+            _catalogWorkDirectoryId = workdir;
+
         StateHasChanged();
     });
 

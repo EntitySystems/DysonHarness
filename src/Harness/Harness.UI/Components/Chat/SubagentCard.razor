@@ -1,7 +1,6 @@
 @namespace Harness.UI.Components.Chat
 @using DysonHarness
 @using Harness.UI.Demo
-@implements IDisposable
 @inject DysonUiHost Host
 
 @if (PersistenceId != Guid.Empty)
@@ -46,19 +45,7 @@
 
     private DysonSubagentCardState? _state;
 
-    protected override void OnInitialized()
-    {
-        Host.Changed += OnHostChanged;
-        RefreshState();
-    }
-
     protected override void OnParametersSet() => RefreshState();
-
-    private void OnHostChanged() => _ = InvokeAsync(() =>
-    {
-        RefreshState();
-        StateHasChanged();
-    });
 
     private void RefreshState() =>
         _state = PersistenceId == Guid.Empty
@@ -73,8 +60,6 @@
         await Host.NavigateToSessionAsync(PersistenceId);
         await AfterNavigate.InvokeAsync();
     }
-
-    public void Dispose() => Host.Changed -= OnHostChanged;
 
     private static (string Url, string ColorClass) ResolveModeIcon(string? agentMode)
     {

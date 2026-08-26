@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Markdig;
 using Markdig.Renderers.Html;
 using Markdig.Syntax;
@@ -22,10 +23,15 @@ public static class MarkdownRenderer
         .Use(new ColorCodeMarkdownExtension())
         .Build();
 
+    private static readonly ConcurrentDictionary<string, MarkupString> HtmlCache = new();
+
     public static MarkupString ToHtml(string? markdown)
     {
         if (string.IsNullOrWhiteSpace(markdown))
             return new MarkupString("");
+
+        if (HtmlCache.TryGetValue(markdown, out var cached))
+            return cached;
 
         var document = global::Markdig.Markdown.Parse(markdown, Pipeline);
         foreach (var link in document.Descendants<LinkInline>())
@@ -45,6 +51,13 @@ public static class MarkdownRenderer
             link.GetAttributes().AddPropertyIfNotExist("rel", "noopener noreferrer");
         }
 
-        return new MarkupString(global::Markdig.Markdown.ToHtml(document, Pipeline));
+        var html = new MarkupString(global::Markdig.Markdown.ToHtml(document, Pipeline));
+
+        // ponytail: 64-entry ceiling; global Clear (not LRU). Upgrade to LRU if chat volume needs it.
+        if (HtmlCache.Count >= 64)
+            HtmlCache.Clear();
+
+        HtmlCache[markdown] = html;
+        return html;
     }
 }

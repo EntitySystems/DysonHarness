@@ -64,7 +64,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly ConcurrentDictionary<Guid, DysonTaskLifecycleKind> _lastTaskLifecycleActionBySession = new();
     private readonly ConcurrentDictionary<Guid, EventHandler<DysonToolCallStatusChangedEventArgs>> _toolHandlers = new();
     private readonly ConcurrentDictionary<Guid, EventHandler> _textHandlers = new();
-    private readonly ConcurrentDictionary<Guid, StreamingNotifyState> _streamingNotify = new();
+    private readonly DysonUiNotifyCoalescer _notifyCoalescer;
     private readonly ConcurrentDictionary<Guid, Guid?> _parentSessionIdByChild = new();
     private readonly List<DysonSubagentEventUiItem> _subagentEventUi = [];
     private readonly object _subagentEventUiGate = new();
@@ -140,6 +140,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pluginMcpResolver = pluginMcpResolver ?? throw new ArgumentNullException(nameof(pluginMcpResolver));
         _pluginLifecycle = pluginLifecycle ?? throw new ArgumentNullException(nameof(pluginLifecycle));
         _theme = theme ?? throw new ArgumentNullException(nameof(theme));
+        _notifyCoalescer = new DysonUiNotifyCoalescer(InvokeChanged);
         _theme.Changed += OnThemeChanged;
         _runtimeAttachment = runtimeAttachment;
         _usageAnalytics = usageAnalytics;
@@ -606,13 +607,33 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
+    /// Bumped by <see cref="NotifySkillCatalogChanged"/> so Composer can reload
+    /// <c>/skill-</c> suggestions without listing the catalog on every <see cref="Changed"/>.
+    /// </summary>
+    public int SkillCatalogRevision { get; private set; }
+
+    /// <summary>
+    /// Bumped by <see cref="NotifyPluginCatalogChanged"/> so Composer can reload
+    /// plugin commands without listing the catalog on every <see cref="Changed"/>.
+    /// </summary>
+    public int PluginCatalogRevision { get; private set; }
+
+    /// <summary>
     /// Signals that the on-disk skill catalog changed (e.g. after SkillSearchModal install)
     /// so Composer can reload <c>/skill-</c> suggestions via <see cref="Changed"/>.
     /// </summary>
-    public void NotifySkillCatalogChanged() => Notify();
+    public void NotifySkillCatalogChanged()
+    {
+        SkillCatalogRevision++;
+        Notify();
+    }
 
     /// <summary>Signals a committed plugin lifecycle change to catalog-aware UI.</summary>
-    public void NotifyPluginCatalogChanged() => Notify();
+    public void NotifyPluginCatalogChanged()
+    {
+        PluginCatalogRevision++;
+        Notify();
+    }
 
     /// <summary>The app-data mode used for global plugin installation paths.</summary>
     public DysonAppMode CurrentAppMode => DysonBuildInfo.Current;
@@ -4683,7 +4704,6 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         _toolHandlers.Clear();
         _textHandlers.Clear();
-        _streamingNotify.Clear();
     }
 
     private void HookTurn(DysonAgentTurn turn)
@@ -4696,15 +4716,15 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         EventHandler textHandler = (_, _) =>
         {
-            // Final handoff / clear: flush immediately so Markdig replaces preview without throttle lag.
+            // Final handoff / clear: flush immediately so Markdig replaces preview without coalesce lag.
             if (!turn.IsStreaming && !turn.IsReasoningStreaming)
             {
-                FlushNotifyForTurn(turn.Id);
+                FlushNotify();
                 // Background child PromptAsync bypasses host — persist completion when streaming ends.
                 _ = PersistTurnCompletedIfNeededAsync(turn);
             }
             else
-                ThrottledNotifyForTurn(turn.Id);
+                Notify();
         };
         if (_textHandlers.TryAdd(turn.Id, textHandler))
             turn.AssistantTextChanged += textHandler;
@@ -4717,74 +4737,6 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (_textHandlers.TryRemove(turn.Id, out var textHandler))
             turn.AssistantTextChanged -= textHandler;
-
-        _streamingNotify.TryRemove(turn.Id, out _);
-    }
-
-    private void FlushNotifyForTurn(Guid turnId)
-    {
-        var state = _streamingNotify.GetOrAdd(turnId, _ => new StreamingNotifyState());
-        lock (state.Lock)
-        {
-            state.Pending = false;
-            state.LastNotifyTicks = Environment.TickCount64;
-        }
-
-        Notify();
-    }
-
-    private void ThrottledNotifyForTurn(Guid turnId)
-    {
-        const int intervalMs = 75;
-        var state = _streamingNotify.GetOrAdd(turnId, _ => new StreamingNotifyState());
-
-        lock (state.Lock)
-        {
-            var now = Environment.TickCount64;
-            var elapsed = now - state.LastNotifyTicks;
-            if (elapsed >= intervalMs)
-            {
-                state.LastNotifyTicks = now;
-                state.Pending = false;
-                Notify();
-                return;
-            }
-
-            if (state.Pending)
-                return;
-
-            state.Pending = true;
-            var delayMs = (int)(intervalMs - elapsed);
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await Task.Delay(delayMs).ConfigureAwait(false);
-                }
-                catch
-                {
-                    return;
-                }
-
-                lock (state.Lock)
-                {
-                    if (!state.Pending)
-                        return;
-
-                    state.Pending = false;
-                    state.LastNotifyTicks = Environment.TickCount64;
-                }
-
-                Notify();
-            });
-        }
-    }
-
-    private sealed class StreamingNotifyState
-    {
-        public long LastNotifyTicks;
-        public bool Pending;
-        public object Lock = new();
     }
 
     private void OnSubagentSpawned(object? sender, DysonAgentSession child)
@@ -6504,7 +6456,26 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
     }
 
-    private void Notify() => Changed?.Invoke();
+    private void Notify()
+    {
+        if (_disposed)
+            return;
+        _notifyCoalescer.Notify();
+    }
+
+    private void FlushNotify()
+    {
+        if (_disposed)
+            return;
+        _notifyCoalescer.Flush();
+    }
+
+    private void InvokeChanged()
+    {
+        if (_disposed)
+            return;
+        Changed?.Invoke();
+    }
 
     public async ValueTask DisposeAsync()
     {
@@ -6512,6 +6483,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
 
         _disposed = true;
+        _notifyCoalescer.Dispose();
         _theme.Changed -= OnThemeChanged;
         _pluginLifecycle.Changed -= OnPluginCatalogChanged;
         _pluginMcpGrants.Changed -= OnPluginMcpGrantChanged;
