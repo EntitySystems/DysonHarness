@@ -5,7 +5,8 @@ namespace Harness.Tests;
 /// <summary>
 /// ponytail: assert-only self-check for session todo TaskCode uniqueness, status enum round-trip,
 /// SubmitSubagentReport incomplete-todo gate, Failed-supersede, post-submit reject, EndsCurrentTurn,
-/// Failed→Failed reject, TryReopenForNewParentTask resubmit, 2-strike auto-submit, catalog wording, and root catalog omit (Xunit Fact).
+/// Failed→Failed reject, TryReopenForNewParentTask resubmit, BeginInFlightPrompt child reopen,
+/// success end-turn hint, 2-strike auto-submit, catalog wording, and root catalog omit (Xunit Fact).
 /// </summary>
 public class DysonSessionTodoTests
 {
@@ -19,6 +20,12 @@ public class DysonSessionTodoTests
         AssertSubmitSubagentReportRejectsRetryAfterCompleted().GetAwaiter().GetResult();
         AssertSubmitSubagentReportRejectsFailedRetry().GetAwaiter().GetResult();
         AssertSubmitSubagentReportReopenForNewParentTask().GetAwaiter().GetResult();
+        AssertSubmitSubagentReportBeginInFlightPromptReopenAfterCompleted().GetAwaiter().GetResult();
+        AssertSubmitSubagentReportSameTurnRetryRejected().GetAwaiter().GetResult();
+        AssertSubmitSubagentReportBeginInFlightPromptReopenFailedToFailed().GetAwaiter().GetResult();
+        AssertSubmitSubagentReportBeginInFlightPromptDoesNotReopenStopped();
+        AssertSubmitSubagentReportBeginInFlightPromptRootNoOp().GetAwaiter().GetResult();
+        AssertSubmitSubagentReportSuccessContentEndTurnHint().GetAwaiter().GetResult();
         AssertSubmitSubagentReportEndsCurrentTurn().GetAwaiter().GetResult();
         AssertSubmitSubagentReportCatalogWording();
         AssertSubmitSubagentReportRootCatalogOmit();
@@ -330,6 +337,14 @@ public class DysonSessionTodoTests
                 "SubmitSubagentReport description must contain 'TriggerSubagentEvent', 'TriggerParentEvent', and 'do not call any more tools'.");
         }
 
+        if (!report.Description.Contains("new child turn", StringComparison.Ordinal)
+            || !report.Description.Contains("ShellExited", StringComparison.Ordinal)
+            || !report.Description.Contains("ends this turn", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "SubmitSubagentReport description must contain 'new child turn', 'ShellExited', and 'ends this turn'.");
+        }
+
         if (!report.Description.Contains("auto-submits the last parseable report", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
@@ -427,6 +442,14 @@ public class DysonSessionTodoTests
             throw new InvalidOperationException("SubmitSubagentReport should succeed: " + result.Content);
         if (!result.EndsCurrentTurn)
             throw new InvalidOperationException("First successful SubmitSubagentReport must set EndsCurrentTurn.");
+        if (result.Content.IndexOf(
+                "Report accepted. Do not call any more tools; end the turn.",
+                StringComparison.Ordinal) < 0)
+        {
+            throw new InvalidOperationException(
+                "Successful executor SubmitSubagentReport Content must contain the success end-turn hint.");
+        }
+
         if (child.Status != DysonSessionStatus.Completed)
             throw new InvalidOperationException("Expected session Completed after executor submit.");
 
@@ -450,6 +473,13 @@ public class DysonSessionTodoTests
 
         if (retry.EndsCurrentTurn)
             throw new InvalidOperationException("Rejected SubmitSubagentReport must not set EndsCurrentTurn.");
+        if (retry.Content.IndexOf(
+                "Report accepted. Do not call any more tools; end the turn.",
+                StringComparison.Ordinal) >= 0)
+        {
+            throw new InvalidOperationException(
+                "Rejected executor SubmitSubagentReport must not contain the success end-turn hint.");
+        }
 
         // Failed handoff also ends the turn
         var failedParent = new StubSession();
@@ -469,8 +499,231 @@ public class DysonSessionTodoTests
             throw new InvalidOperationException("Failed SubmitSubagentReport should succeed: " + failedResult.Content);
         if (!failedResult.EndsCurrentTurn)
             throw new InvalidOperationException("Successful failed-status SubmitSubagentReport must set EndsCurrentTurn.");
+        if (failedResult.Content.IndexOf(
+                "Report accepted. Do not call any more tools; end the turn.",
+                StringComparison.Ordinal) < 0)
+        {
+            throw new InvalidOperationException(
+                "Successful failed-status executor Content must contain the success end-turn hint.");
+        }
+
         if (failedChild.Status != DysonSessionStatus.Failed)
             throw new InvalidOperationException("Expected session Failed after failed-status submit.");
+    }
+
+    private static async Task AssertSubmitSubagentReportBeginInFlightPromptReopenAfterCompleted()
+    {
+        var parent = new StubSession();
+        parent.ConfigureRootForTest();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+
+        var first = await child.SubmitSubagentReportAsync("first handoff").ConfigureAwait(false);
+        if (first.IsError)
+            throw new InvalidOperationException($"Expected first completed report ok, got: {first.Error}");
+        if (child.Status != DysonSessionStatus.Completed)
+            throw new InvalidOperationException("Expected first completed report to mark Completed.");
+
+        using (child.BeginInFlightPrompt(new DysonAgentTurn
+               {
+                   Kind = DysonAgentTurnKind.Normal,
+                   Instruction = "later",
+               }))
+        {
+            if (child.Status != DysonSessionStatus.Active)
+            {
+                throw new InvalidOperationException(
+                    "Expected Status Active after BeginInFlightPrompt on Completed child.");
+            }
+
+            var second = await child.SubmitSubagentReportAsync("second handoff").ConfigureAwait(false);
+            if (second.IsError)
+            {
+                throw new InvalidOperationException(
+                    $"Expected second completed report after BeginInFlightPrompt ok, got: {second.Error}");
+            }
+
+            if (child.Status != DysonSessionStatus.Completed)
+                throw new InvalidOperationException("Expected second completed report to mark Completed.");
+            if (!string.Equals(child.LastReportSummary, "second handoff", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected LastReportSummary replaced on second completed report.");
+        }
+    }
+
+    private static async Task AssertSubmitSubagentReportSameTurnRetryRejected()
+    {
+        var parent = new StubSession();
+        parent.ConfigureRootForTest();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+
+        var turn = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "same turn",
+        };
+        using (child.BeginInFlightPrompt(turn))
+        {
+            var first = await child.SubmitSubagentReportAsync("first handoff").ConfigureAwait(false);
+            if (first.IsError)
+                throw new InvalidOperationException($"Expected first completed report ok, got: {first.Error}");
+            if (child.Status != DysonSessionStatus.Completed)
+                throw new InvalidOperationException("Expected first completed report to mark Completed.");
+
+            var retry = await child.SubmitSubagentReportAsync("retry noise").ConfigureAwait(false);
+            if (!retry.IsError
+                || retry.Error.IndexOf("already submitted", StringComparison.OrdinalIgnoreCase) < 0
+                || retry.Error.IndexOf(
+                    "To communicate with the parent without a new report cycle, call TriggerParentEvent instead. After TriggerParentEvent, do not call any more tools; end the turn.",
+                    StringComparison.Ordinal) < 0)
+            {
+                throw new InvalidOperationException(
+                    $"Expected same-turn retry rejected with already submitted + TriggerParentEvent, got: {(retry.IsError ? retry.Error : "ok")}");
+            }
+
+            if (retry.Error.IndexOf(
+                    "Report accepted. Do not call any more tools; end the turn.",
+                    StringComparison.Ordinal) >= 0)
+            {
+                throw new InvalidOperationException(
+                    "Rejected same-turn retry must not contain the success end-turn hint.");
+            }
+
+            if (child.Status != DysonSessionStatus.Completed)
+                throw new InvalidOperationException("Expected status to stay Completed after same-turn retry.");
+            if (!string.Equals(child.LastReportSummary, "first handoff", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected LastReportSummary unchanged on same-turn retry.");
+        }
+    }
+
+    private static async Task AssertSubmitSubagentReportBeginInFlightPromptReopenFailedToFailed()
+    {
+        var parent = new StubSession();
+        parent.ConfigureRootForTest();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+
+        var first = await child
+            .SubmitSubagentReportAsync("blocked: missing schema", failed: true)
+            .ConfigureAwait(false);
+        if (first.IsError)
+            throw new InvalidOperationException($"Expected first failed report ok, got: {first.Error}");
+        if (child.Status != DysonSessionStatus.Failed)
+            throw new InvalidOperationException("Expected first failed report to mark Failed.");
+
+        using (child.BeginInFlightPrompt(new DysonAgentTurn
+               {
+                   Kind = DysonAgentTurnKind.Normal,
+                   Instruction = "later",
+               }))
+        {
+            if (child.Status != DysonSessionStatus.Active)
+            {
+                throw new InvalidOperationException(
+                    "Expected Status Active after BeginInFlightPrompt on Failed child.");
+            }
+
+            var second = await child
+                .SubmitSubagentReportAsync("still blocked after new turn", failed: true)
+                .ConfigureAwait(false);
+            if (second.IsError)
+            {
+                throw new InvalidOperationException(
+                    $"Expected second failed report after BeginInFlightPrompt ok, got: {second.Error}");
+            }
+
+            if (child.Status != DysonSessionStatus.Failed)
+                throw new InvalidOperationException("Expected second failed report after reopen to mark Failed.");
+            if (!string.Equals(child.LastReportSummary, "still blocked after new turn", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected LastReportSummary replaced on second failed report.");
+        }
+    }
+
+    private static void AssertSubmitSubagentReportBeginInFlightPromptDoesNotReopenStopped()
+    {
+        var parent = new StubSession();
+        parent.ConfigureRootForTest();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+
+        if (!child.TryMarkTerminal(DysonSessionStatus.Stopped, "stopped by parent"))
+            throw new InvalidOperationException("Expected TryMarkTerminal Stopped to succeed.");
+
+        using (child.BeginInFlightPrompt(new DysonAgentTurn
+               {
+                   Kind = DysonAgentTurnKind.Normal,
+                   Instruction = "later",
+               }))
+        {
+            if (child.Status != DysonSessionStatus.Stopped)
+                throw new InvalidOperationException("Expected Status still Stopped after BeginInFlightPrompt.");
+        }
+    }
+
+    private static async Task AssertSubmitSubagentReportBeginInFlightPromptRootNoOp()
+    {
+        var root = new StubSession();
+        var first = await root.SubmitSubagentReportAsync("root handoff").ConfigureAwait(false);
+        if (first.IsError)
+            throw new InvalidOperationException($"Expected root completed report ok, got: {first.Error}");
+        if (root.Status != DysonSessionStatus.Completed)
+            throw new InvalidOperationException("Expected root completed report to mark Completed.");
+
+        using (root.BeginInFlightPrompt(new DysonAgentTurn
+               {
+                   Kind = DysonAgentTurnKind.Normal,
+                   Instruction = "later",
+               }))
+        {
+            if (root.Status != DysonSessionStatus.Completed)
+            {
+                throw new InvalidOperationException(
+                    "Expected root (Parent null) to stay Completed after BeginInFlightPrompt.");
+            }
+        }
+    }
+
+    private static async Task AssertSubmitSubagentReportSuccessContentEndTurnHint()
+    {
+        var parent = new StubSession();
+        parent.ConfigureRootForTest();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+
+        var ok = await child.SubmitSubagentReportAsync("done empty").ConfigureAwait(false);
+        if (ok.IsError)
+            throw new InvalidOperationException($"Expected completed report ok, got: {ok.Error}");
+        if (ok.Value.IndexOf(
+                "Report accepted. Do not call any more tools; end the turn.",
+                StringComparison.Ordinal) < 0)
+        {
+            throw new InvalidOperationException(
+                "Expected accepted Value to contain the success end-turn hint.");
+        }
+
+        if (ok.Value.IndexOf("subagentId", StringComparison.Ordinal) < 0
+            || ok.Value.IndexOf("persistenceId", StringComparison.Ordinal) < 0
+            || ok.Value.IndexOf("status", StringComparison.Ordinal) < 0
+            || ok.Value.IndexOf("summary", StringComparison.Ordinal) < 0)
+        {
+            throw new InvalidOperationException($"Expected accepted JSON fields in Value, got: {ok.Value}");
+        }
+
+        var retry = await child.SubmitSubagentReportAsync("again").ConfigureAwait(false);
+        if (!retry.IsError
+            || retry.Error.IndexOf("already submitted", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            throw new InvalidOperationException(
+                $"Expected retry after completed to fail, got: {(retry.IsError ? retry.Error : "ok")}");
+        }
+
+        if (retry.Error.IndexOf(
+                "Report accepted. Do not call any more tools; end the turn.",
+                StringComparison.Ordinal) >= 0)
+        {
+            throw new InvalidOperationException(
+                "Rejected retry must not contain the success end-turn hint.");
+        }
     }
 
     private static async Task AssertSubmitSubagentReportReopenForNewParentTask()
