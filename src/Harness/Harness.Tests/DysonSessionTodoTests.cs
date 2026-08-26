@@ -5,7 +5,7 @@ namespace Harness.Tests;
 /// <summary>
 /// ponytail: assert-only self-check for session todo TaskCode uniqueness, status enum round-trip,
 /// SubmitSubagentReport incomplete-todo gate, Failed-supersede, post-submit reject, EndsCurrentTurn,
-/// Failed→Failed reject, TryReopenForNewParentTask resubmit, catalog wording, and root catalog omit (Xunit Fact).
+/// Failed→Failed reject, TryReopenForNewParentTask resubmit, 2-strike auto-submit, catalog wording, and root catalog omit (Xunit Fact).
 /// </summary>
 public class DysonSessionTodoTests
 {
@@ -22,6 +22,13 @@ public class DysonSessionTodoTests
         AssertSubmitSubagentReportEndsCurrentTurn().GetAwaiter().GetResult();
         AssertSubmitSubagentReportCatalogWording();
         AssertSubmitSubagentReportRootCatalogOmit();
+        AssertSubmitSubagentReportAutoSubmitOneFailure().GetAwaiter().GetResult();
+        AssertSubmitSubagentReportAutoSubmitTwoFailuresCompleted().GetAwaiter().GetResult();
+        AssertSubmitSubagentReportAutoSubmitTwoFailuresFailed().GetAwaiter().GetResult();
+        AssertSubmitSubagentReportAutoSubmitUnparseable().GetAwaiter().GetResult();
+        AssertSubmitSubagentReportAutoSubmitPerTurn().GetAwaiter().GetResult();
+        AssertSubmitSubagentReportAutoSubmitExecutorPathUnchanged().GetAwaiter().GetResult();
+        AssertSubmitSubagentReportAutoSubmitReopen().GetAwaiter().GetResult();
     }
 
     private static void AssertStatusRoundTrip()
@@ -323,6 +330,18 @@ public class DysonSessionTodoTests
                 "SubmitSubagentReport description must contain 'TriggerSubagentEvent', 'TriggerParentEvent', and 'do not call any more tools'.");
         }
 
+        if (!report.Description.Contains("auto-submits the last parseable report", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "SubmitSubagentReport description must contain 'auto-submits the last parseable report'.");
+        }
+
+        if (DysonAgentSession.MaxSubmitSubagentReportFailuresPerTurn != 2)
+        {
+            throw new InvalidOperationException(
+                $"MaxSubmitSubagentReportFailuresPerTurn must be 2, got {DysonAgentSession.MaxSubmitSubagentReportFailuresPerTurn}.");
+        }
+
         if (!pipeline.Tools.TryGetValue("ListTodos", out var listTodos))
             throw new InvalidOperationException("ListTodos must be in the FullAccess catalog.");
 
@@ -534,6 +553,297 @@ public class DysonSessionTodoTests
             throw new InvalidOperationException("Expected TryReopenForNewParentTask false on Interrupted.");
         if (interrupted.Status != DysonSessionStatus.Interrupted)
             throw new InvalidOperationException("Expected Status unchanged after reopen no-op on Interrupted.");
+    }
+
+    private static async Task AssertSubmitSubagentReportAutoSubmitOneFailure()
+    {
+        var parent = new StubSession();
+        parent.ConfigureRootForTest();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+        var pending = await child.CreateTodoAsync("t1", "One").ConfigureAwait(false);
+        if (pending.IsError)
+            throw new InvalidOperationException($"Expected pending todo ok, got: {pending.Error}");
+
+        var turn = NewNormalTurn();
+        EnqueueFailedSubmit(turn, "c1", """{"summary":"findings here"}""");
+
+        var auto = await child.TryAutoSubmitAfterRepeatedFailuresAsync(turn).ConfigureAwait(false);
+        if (auto)
+            throw new InvalidOperationException("Expected 1 failed submit not to auto-submit.");
+        if (child.Status != DysonSessionStatus.Active)
+            throw new InvalidOperationException("Expected child to stay Active after 1 failed submit.");
+        if (parent.TryDequeueInterrupt(out _))
+            throw new InvalidOperationException("Expected no parent interrupt after 1 failed submit.");
+    }
+
+    private static async Task AssertSubmitSubagentReportAutoSubmitTwoFailuresCompleted()
+    {
+        var parent = new StubSession();
+        parent.ConfigureRootForTest();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+        var pending = await child.CreateTodoAsync("t1", "One").ConfigureAwait(false);
+        if (pending.IsError)
+            throw new InvalidOperationException($"Expected pending todo ok, got: {pending.Error}");
+
+        var turn = NewNormalTurn();
+        EnqueueFailedSubmit(turn, "c1", """{"summary":"findings here"}""");
+        EnqueueFailedSubmit(turn, "c2", """{"summary":"findings here"}""");
+
+        var auto = await child.TryAutoSubmitAfterRepeatedFailuresAsync(turn).ConfigureAwait(false);
+        if (!auto)
+            throw new InvalidOperationException("Expected 2 failed submits to auto-submit.");
+        if (child.Status != DysonSessionStatus.Completed)
+            throw new InvalidOperationException("Expected auto-submit with completed args to mark Completed (bypass incomplete todos), not Stopped.");
+        if (child.LastReportSummary is null
+            || child.LastReportSummary.IndexOf("findings here", StringComparison.Ordinal) < 0
+            || !child.LastReportSummary.Contains(DysonAgentSession.AutoSubmitSubagentReportHarnessNote, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Expected LastReportSummary to keep original summary plus harness note, got: {child.LastReportSummary}");
+        }
+
+        if (!parent.TryDequeueInterrupt(out var interrupt)
+            || interrupt.Kind != DysonAgentInterruptKind.SubagentCompleted
+            || interrupt.Summary is null
+            || interrupt.Summary.IndexOf("findings here", StringComparison.Ordinal) < 0
+            || !interrupt.Summary.Contains(DysonAgentSession.AutoSubmitSubagentReportHarnessNote, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Expected parent SubagentCompleted with original summary + harness note, got: {(interrupt is null ? "none" : $"{interrupt.Kind}: {interrupt.Summary}")}");
+        }
+    }
+
+    private static async Task AssertSubmitSubagentReportAutoSubmitTwoFailuresFailed()
+    {
+        var parent = new StubSession();
+        parent.ConfigureRootForTest();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+        var pending = await child.CreateTodoAsync("t1", "One").ConfigureAwait(false);
+        if (pending.IsError)
+            throw new InvalidOperationException($"Expected pending todo ok, got: {pending.Error}");
+
+        var turn = NewNormalTurn();
+        EnqueueFailedSubmit(turn, "c1", """{"summary":"findings here"}""");
+        EnqueueFailedSubmit(turn, "c2", """{"summary":"blocked","status":"failed"}""");
+
+        var auto = await child.TryAutoSubmitAfterRepeatedFailuresAsync(turn).ConfigureAwait(false);
+        if (!auto)
+            throw new InvalidOperationException("Expected 2 failed submits to auto-submit.");
+        if (child.Status != DysonSessionStatus.Failed)
+            throw new InvalidOperationException("Expected last parseable failed-status args to mark Failed.");
+        if (child.LastReportSummary is null
+            || child.LastReportSummary.IndexOf("blocked", StringComparison.Ordinal) < 0
+            || !child.LastReportSummary.Contains(DysonAgentSession.AutoSubmitSubagentReportHarnessNote, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Expected LastReportSummary to keep blocked + harness note, got: {child.LastReportSummary}");
+        }
+
+        if (!parent.TryDequeueInterrupt(out var interrupt)
+            || interrupt.Kind != DysonAgentInterruptKind.SubagentFailed)
+        {
+            throw new InvalidOperationException(
+                $"Expected parent SubagentFailed, got: {(interrupt is null ? "none" : interrupt.Kind.ToString())}");
+        }
+    }
+
+    private static async Task AssertSubmitSubagentReportAutoSubmitUnparseable()
+    {
+        await AssertUnparseableAutoFail("{not json").ConfigureAwait(false);
+        await AssertUnparseableAutoFail("{}").ConfigureAwait(false);
+    }
+
+    private static async Task AssertUnparseableAutoFail(string argumentsJson)
+    {
+        var parent = new StubSession();
+        parent.ConfigureRootForTest();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+
+        var turn = NewNormalTurn();
+        EnqueueFailedSubmit(turn, "c1", argumentsJson);
+        EnqueueFailedSubmit(turn, "c2", argumentsJson);
+
+        var auto = await child.TryAutoSubmitAfterRepeatedFailuresAsync(turn).ConfigureAwait(false);
+        if (!auto)
+            throw new InvalidOperationException("Expected 2 unparseable failed submits to auto-fail.");
+        if (child.Status != DysonSessionStatus.Failed)
+            throw new InvalidOperationException("Expected unparseable auto-submit to mark Failed.");
+
+        const string expected =
+            "Harness auto-failed after 2 failed SubmitSubagentReport calls this turn (no parseable summary).";
+        if (!string.Equals(child.LastReportSummary, expected, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Expected unparseable harness message, got: {child.LastReportSummary}");
+        }
+
+        if (!parent.TryDequeueInterrupt(out var interrupt)
+            || interrupt.Kind != DysonAgentInterruptKind.SubagentFailed
+            || !string.Equals(interrupt.Summary, expected, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Expected parent SubagentFailed with unparseable message, got: {(interrupt is null ? "none" : $"{interrupt.Kind}: {interrupt.Summary}")}");
+        }
+    }
+
+    private static async Task AssertSubmitSubagentReportAutoSubmitPerTurn()
+    {
+        var parent = new StubSession();
+        parent.ConfigureRootForTest();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+        var pending = await child.CreateTodoAsync("t1", "One").ConfigureAwait(false);
+        if (pending.IsError)
+            throw new InvalidOperationException($"Expected pending todo ok, got: {pending.Error}");
+
+        var turnA = NewNormalTurn();
+        EnqueueFailedSubmit(turnA, "a1", """{"summary":"findings here"}""");
+        var first = await child.TryAutoSubmitAfterRepeatedFailuresAsync(turnA).ConfigureAwait(false);
+        if (first)
+            throw new InvalidOperationException("Expected turn A with 1 fail not to auto-submit.");
+        if (child.Status != DysonSessionStatus.Active)
+            throw new InvalidOperationException("Expected child Active after turn A 1 fail.");
+
+        var turnB = NewNormalTurn();
+        EnqueueFailedSubmit(turnB, "b1", """{"summary":"findings here"}""");
+        var second = await child.TryAutoSubmitAfterRepeatedFailuresAsync(turnB).ConfigureAwait(false);
+        if (second)
+            throw new InvalidOperationException("Expected turn B with 1 fail not to auto-submit (strikes are per-turn).");
+        if (child.Status != DysonSessionStatus.Active)
+            throw new InvalidOperationException("Expected child Active after turn B 1 fail.");
+
+        EnqueueFailedSubmit(turnB, "b2", """{"summary":"findings here"}""");
+        var third = await child.TryAutoSubmitAfterRepeatedFailuresAsync(turnB).ConfigureAwait(false);
+        if (!third)
+            throw new InvalidOperationException("Expected turn B with 2 fails to auto-submit.");
+        if (child.Status != DysonSessionStatus.Completed)
+            throw new InvalidOperationException("Expected Completed after turn B 2 fails.");
+    }
+
+    private static async Task AssertSubmitSubagentReportAutoSubmitExecutorPathUnchanged()
+    {
+        var parent = new StubSession();
+        parent.ConfigureRootForTest();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+        var pending = await child.CreateTodoAsync("t1", "One").ConfigureAwait(false);
+        if (pending.IsError)
+            throw new InvalidOperationException($"Expected pending todo ok, got: {pending.Error}");
+
+        using var http = new HttpClient();
+        var executor = DysonWorkspaceTestFs.CreateExecutor(child, Path.GetTempPath(), http);
+        const string args = """{"summary":"findings here"}""";
+
+        var first = await executor.ExecuteAsync(new DysonToolCall
+        {
+            CallId = "e1",
+            ToolName = "SubmitSubagentReport",
+            Stage = 0,
+            ArgumentsJson = args,
+        }).ConfigureAwait(false);
+        if (!first.IsError || first.EndsCurrentTurn)
+        {
+            throw new InvalidOperationException(
+                $"Expected first executor submit with pending todos IsError and no EndsCurrentTurn, got: error={first.IsError} ends={first.EndsCurrentTurn} {first.Content}");
+        }
+
+        var second = await executor.ExecuteAsync(new DysonToolCall
+        {
+            CallId = "e2",
+            ToolName = "SubmitSubagentReport",
+            Stage = 0,
+            ArgumentsJson = args,
+        }).ConfigureAwait(false);
+        if (!second.IsError || second.EndsCurrentTurn)
+        {
+            throw new InvalidOperationException(
+                $"Expected 2nd executor submit still IsError (auto-accept is harness-side), got: error={second.IsError} ends={second.EndsCurrentTurn} {second.Content}");
+        }
+
+        var turn = NewNormalTurn();
+        turn.ToolCalls.Add(new DysonToolCall
+        {
+            CallId = "e1",
+            ToolName = "SubmitSubagentReport",
+            Stage = 0,
+            ArgumentsJson = args,
+        });
+        turn.ToolCalls.Add(new DysonToolCall
+        {
+            CallId = "e2",
+            ToolName = "SubmitSubagentReport",
+            Stage = 0,
+            ArgumentsJson = args,
+        });
+        turn.ResponseLog.Enqueue(first);
+        turn.ResponseLog.Enqueue(second);
+
+        var auto = await child.TryAutoSubmitAfterRepeatedFailuresAsync(turn).ConfigureAwait(false);
+        if (!auto)
+            throw new InvalidOperationException("Expected helper to auto-accept after 2 executor failures.");
+        if (child.Status != DysonSessionStatus.Completed)
+            throw new InvalidOperationException("Expected harness-side auto-accept to mark Completed.");
+
+        var rows = turn.ResponseLog.ToArray();
+        if (rows.Length != 2 || !rows[0].IsError || !rows[1].IsError || rows[1].EndsCurrentTurn)
+        {
+            throw new InvalidOperationException(
+                "Expected both ResponseLog rows to stay IsError (2nd row is not a successful third tool call).");
+        }
+    }
+
+    private static async Task AssertSubmitSubagentReportAutoSubmitReopen()
+    {
+        var parent = new StubSession();
+        parent.ConfigureRootForTest();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+        var pending = await child.CreateTodoAsync("t1", "One").ConfigureAwait(false);
+        if (pending.IsError)
+            throw new InvalidOperationException($"Expected pending todo ok, got: {pending.Error}");
+
+        var turn = NewNormalTurn();
+        EnqueueFailedSubmit(turn, "c1", """{"summary":"findings here"}""");
+        EnqueueFailedSubmit(turn, "c2", """{"summary":"findings here"}""");
+        var auto = await child.TryAutoSubmitAfterRepeatedFailuresAsync(turn).ConfigureAwait(false);
+        if (!auto || child.Status != DysonSessionStatus.Completed)
+            throw new InvalidOperationException("Expected 2-fail auto-complete before reopen.");
+
+        if (!child.TryReopenForNewParentTask())
+            throw new InvalidOperationException("Expected TryReopenForNewParentTask true after 2-fail auto-complete (not Stopped).");
+        if (child.Status != DysonSessionStatus.Active)
+            throw new InvalidOperationException("Expected Status Active after reopen from auto-complete.");
+    }
+
+    private static DysonAgentTurn NewNormalTurn() =>
+        new()
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "x",
+            StartedUtc = DateTime.UtcNow,
+        };
+
+    private static void EnqueueFailedSubmit(DysonAgentTurn turn, string callId, string argumentsJson)
+    {
+        turn.ToolCalls.Add(new DysonToolCall
+        {
+            CallId = callId,
+            ToolName = "SubmitSubagentReport",
+            Stage = 0,
+            ArgumentsJson = argumentsJson,
+        });
+        turn.ResponseLog.Enqueue(new DysonToolCallResult
+        {
+            CallId = callId,
+            ToolName = "SubmitSubagentReport",
+            Stage = 0,
+            IsError = true,
+            Content = "incomplete todos",
+        });
     }
 
     private sealed class StubProvider : DysonAgentProvider;
