@@ -15,6 +15,10 @@ public class DysonLongRunningShellTests
         AssertOutcomeMapping();
         AssertIdAllocationListAndAbort();
         AssertStartIncludesEarlyOutput();
+        AssertSubscribeRootOnly();
+        AssertWaitForTimeoutValidation();
+        AssertWaitForAlreadyExitedImmediate();
+        AssertWaitForLiveTimeoutAndShortCommand();
     }
 
     private static void AssertCatalogGate()
@@ -24,8 +28,8 @@ public class DysonLongRunningShellTests
             throw new InvalidOperationException("Long-running shell tools must be omitted when no shells available.");
 
         var tools = DysonMcpPipeline.CreateLongRunningShellTools(["Pwsh"], planMode: false).ToArray();
-        if (tools.Length != 7)
-            throw new InvalidOperationException($"Expected 7 long-running shell tools, got {tools.Length}.");
+        if (tools.Length != 8)
+            throw new InvalidOperationException($"Expected 8 long-running shell tools, got {tools.Length}.");
 
         var names = tools.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
         foreach (var required in new[]
@@ -37,20 +41,63 @@ public class DysonLongRunningShellTests
                      "RequestLongRunningShellCancellation",
                      "LongRunningShellInteract",
                      "SubscribeToLongRunningShellCompletion",
+                     "WaitForLongRunningShellCompletion",
                  })
         {
             if (!names.Contains(required))
                 throw new InvalidOperationException($"Missing long-running shell tool '{required}'.");
         }
 
+        var waitFor = tools.First(t => t.Name == "WaitForLongRunningShellCompletion");
+        if (!waitFor.InputSchemaJson.Contains("\"longRunningShellId\"", StringComparison.Ordinal)
+            || !waitFor.InputSchemaJson.Contains("\"timeoutMs\"", StringComparison.Ordinal)
+            || !waitFor.InputSchemaJson.Contains("\"required\": [\"longRunningShellId\", \"timeoutMs\"]", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "WaitForLongRunningShellCompletion schema must require longRunningShellId and timeoutMs.");
+        }
+
         var start = tools.First(t => t.Name == "StartLongRunningShell");
         if (!start.Description.Contains("E2E", StringComparison.Ordinal)
             || !start.Description.Contains("ListLongRunningShells", StringComparison.Ordinal)
+            || !start.Description.Contains("WaitForLongRunningShellCompletion", StringComparison.Ordinal)
             || !start.Description.Contains("SubscribeToLongRunningShellCompletion", StringComparison.Ordinal)
             || !start.Description.Contains("~1s", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "StartLongRunningShell description must mention E2E, List/Subscribe tools, and ~1s output.");
+                "StartLongRunningShell description must mention E2E, List/WaitFor/Subscribe tools, and ~1s output.");
+        }
+
+        var root = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess, ["Pwsh"]);
+        root.ConfigureInterAgentTools(0);
+        if (!root.Tools.ContainsKey("SubscribeToLongRunningShellCompletion")
+            || !root.Tools.ContainsKey("WaitForLongRunningShellCompletion"))
+        {
+            throw new InvalidOperationException("Root catalog must include Subscribe and WaitFor long-running shell tools.");
+        }
+
+        var l1 = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess, ["Pwsh"]);
+        l1.ConfigureInterAgentTools(1);
+        if (l1.Tools.ContainsKey("SubscribeToLongRunningShellCompletion")
+            || !l1.Tools.ContainsKey("WaitForLongRunningShellCompletion"))
+        {
+            throw new InvalidOperationException("L1 catalog must omit Subscribe and keep WaitFor.");
+        }
+
+        var deep = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess, ["Pwsh"]);
+        deep.ConfigureInterAgentTools(2);
+        if (deep.Tools.ContainsKey("SubscribeToLongRunningShellCompletion")
+            || !deep.Tools.ContainsKey("WaitForLongRunningShellCompletion"))
+        {
+            throw new InvalidOperationException("Deep catalog must omit Subscribe and keep WaitFor.");
+        }
+
+        var noShells = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess, []);
+        noShells.ConfigureLongRunningShellTools(planMode: false);
+        if (noShells.Tools.ContainsKey("SubscribeToLongRunningShellCompletion")
+            || noShells.Tools.ContainsKey("WaitForLongRunningShellCompletion"))
+        {
+            throw new InvalidOperationException("No-shell catalog must omit Subscribe and WaitFor.");
         }
     }
 
@@ -246,6 +293,188 @@ public class DysonLongRunningShellTests
         }
     }
 
+    private static void AssertSubscribeRootOnly()
+    {
+        var workDirId = Guid.NewGuid();
+        var cwd = Path.GetTempPath();
+        var parent = new StubSession();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+
+        var subscribe = DysonMcpPipeline.CreateLongRunningShellTools(["Cmd"])
+            .First(t => t.Name == "SubscribeToLongRunningShellCompletion");
+        child.McpPipeline.Tools[subscribe.Name] = subscribe;
+
+        using var http = new HttpClient();
+        var executor = DysonWorkspaceTestFs.CreateExecutor(child, cwd, http, store: null, workDirId);
+        var result = executor.ExecuteAsync(new DysonToolCall
+        {
+            CallId = "sub-root",
+            ToolName = "SubscribeToLongRunningShellCompletion",
+            Stage = 0,
+            ArgumentsJson = """{"longRunningShellId":1}""",
+        }).GetAwaiter().GetResult();
+
+        if (!result.IsError
+            || !result.Content.Contains("root sessions only", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Child Subscribe must error with root sessions only. Got:\n" + result.Content);
+        }
+    }
+
+    private static void AssertWaitForTimeoutValidation()
+    {
+        var workDirId = Guid.NewGuid();
+        var cwd = Path.GetTempPath();
+        var session = new StubSession();
+        using var http = new HttpClient();
+        var executor = DysonWorkspaceTestFs.CreateExecutor(session, cwd, http, store: null, workDirId);
+        try
+        {
+            foreach (var args in new[]
+                     {
+                         """{"longRunningShellId":1}""",
+                         """{"longRunningShellId":1,"timeoutMs":0}""",
+                         """{"longRunningShellId":1,"timeoutMs":-1}""",
+                     })
+            {
+                var result = WaitForRaw(executor, args);
+                if (!result.IsError
+                    || !result.Content.Contains(
+                        "WaitForLongRunningShellCompletion: timeoutMs (integer > 0) is required.",
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Expected timeoutMs required for {args}. Got:\n" + result.Content);
+                }
+            }
+        }
+        finally
+        {
+            DysonLongRunningShellRegistry.ClearForTests(workDirId);
+        }
+    }
+
+    private static void AssertWaitForAlreadyExitedImmediate()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var workDirId = Guid.NewGuid();
+        var cwd = Path.GetTempPath();
+        var session = new StubSession();
+        using var http = new HttpClient();
+        var executor = DysonWorkspaceTestFs.CreateExecutor(session, cwd, http, store: null, workDirId);
+        try
+        {
+            var started = DysonLongRunningShellRegistry
+                .StartAsync(workDirId, "Cmd", "cmd.exe", "echo wait-already-exited-marker", cwd)
+                .GetAwaiter()
+                .GetResult();
+            if (started.IsError)
+                throw new InvalidOperationException($"Start already-exited failed: {started.Error}");
+
+            var waited = WaitFor(executor, started.Value.Id, timeoutMs: 10_000);
+            if (waited.IsError)
+                throw new InvalidOperationException($"WaitFor already-exited failed: {waited.Content}");
+            AssertTerminalWaitJson(waited.Content);
+        }
+        finally
+        {
+            DysonLongRunningShellRegistry.ClearForTests(workDirId);
+        }
+    }
+
+    private static void AssertWaitForLiveTimeoutAndShortCommand()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var workDirId = Guid.NewGuid();
+        var cwd = Path.GetTempPath();
+        var session = new StubSession();
+        using var http = new HttpClient();
+        var executor = DysonWorkspaceTestFs.CreateExecutor(session, cwd, http, store: null, workDirId);
+        try
+        {
+            var live = DysonLongRunningShellRegistry
+                .StartAsync(workDirId, "Cmd", "cmd.exe", "ping -n 30 127.0.0.1 >nul", cwd)
+                .GetAwaiter()
+                .GetResult();
+            if (live.IsError)
+                throw new InvalidOperationException($"Start live failed: {live.Error}");
+
+            var timedOut = WaitFor(executor, live.Value.Id, timeoutMs: 500);
+            if (timedOut.IsError)
+                throw new InvalidOperationException($"WaitFor timeout path failed: {timedOut.Content}");
+            if (!timedOut.Content.Contains("\"status\":\"timeout\"", StringComparison.Ordinal)
+                || !timedOut.Content.Contains("\"shellStatus\":\"Running\"", StringComparison.Ordinal)
+                || timedOut.Content.Contains("\"outcome\"", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Timeout JSON must be status timeout, shellStatus Running, no outcome. Got:\n"
+                    + timedOut.Content);
+            }
+
+            var abort = DysonLongRunningShellRegistry
+                .AbortAsync(workDirId, live.Value.Id, timeoutMs: 10_000)
+                .GetAwaiter()
+                .GetResult();
+            if (abort.IsError)
+                throw new InvalidOperationException($"Abort live failed: {abort.Error}");
+
+            var shortCmd = DysonLongRunningShellRegistry
+                .StartAsync(workDirId, "Cmd", "cmd.exe", "echo wait-short-ok", cwd)
+                .GetAwaiter()
+                .GetResult();
+            if (shortCmd.IsError)
+                throw new InvalidOperationException($"Start short failed: {shortCmd.Error}");
+
+            var done = WaitFor(executor, shortCmd.Value.Id, timeoutMs: 15_000);
+            if (done.IsError)
+                throw new InvalidOperationException($"WaitFor short failed: {done.Content}");
+            AssertTerminalWaitJson(done.Content);
+
+            if (session.TryDequeueInterrupt(out var interrupt))
+            {
+                throw new InvalidOperationException(
+                    $"WaitFor must not enqueue interrupts (got {interrupt.Kind}).");
+            }
+        }
+        finally
+        {
+            DysonLongRunningShellRegistry.ClearForTests(workDirId);
+        }
+    }
+
+    private static DysonToolCallResult WaitFor(
+        DysonWorkspaceToolExecutor executor,
+        int id,
+        int timeoutMs) =>
+        WaitForRaw(executor, $$"""{"longRunningShellId":{{id}},"timeoutMs":{{timeoutMs}}}""");
+
+    private static DysonToolCallResult WaitForRaw(DysonWorkspaceToolExecutor executor, string argumentsJson) =>
+        executor.ExecuteAsync(new DysonToolCall
+        {
+            CallId = "wait-for",
+            ToolName = "WaitForLongRunningShellCompletion",
+            Stage = 0,
+            ArgumentsJson = argumentsJson,
+        }).GetAwaiter().GetResult();
+
+    private static void AssertTerminalWaitJson(string content)
+    {
+        if (!content.Contains("\"status\":\"Exited\"", StringComparison.Ordinal)
+            && !content.Contains("\"status\":\"Aborted\"", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Expected terminal status Exited/Aborted. Got:\n" + content);
+        }
+
+        if (!content.Contains("\"outcome\"", StringComparison.Ordinal))
+            throw new InvalidOperationException("Terminal WaitFor JSON must include outcome. Got:\n" + content);
+    }
+
     private sealed class StubProvider : DysonAgentProvider;
 
     private sealed class StubSession() : DysonAgentSession(
@@ -253,6 +482,10 @@ public class DysonLongRunningShellTests
         new DysonAgentSessionConfig { AvailableShells = [new DysonConfiguredShellSpec("Cmd", "cmd.exe")] },
         new StubProvider())
     {
+        public void RegisterForTest(DysonAgentSession child) => RegisterSubagent(child);
+
+        public void SetRuntimeIdForTest(int runtimeId) => Id = runtimeId;
+
         public override Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
             string agentMode,
             string task,

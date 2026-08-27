@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 
 namespace DysonHarness;
 
@@ -237,6 +238,75 @@ public static class DysonLongRunningShellRegistry
             static _ => new ConcurrentDictionary<DysonAgentSession, int>());
         map[session] = includeTailMaxChars;
         return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Block until the shell is terminal or <paramref name="timeoutMs"/> elapses.
+    /// Timeout is a success JSON payload (<c>status: timeout</c>), not an error.
+    /// Does not enqueue ShellExited interrupts.
+    /// </summary>
+    public static async Task<Result<string, string>> WaitForCompletionAsync(
+        Guid workDirectoryId,
+        int id,
+        int timeoutMs,
+        CancellationToken cancellationToken = default)
+    {
+        if (workDirectoryId == Guid.Empty)
+            return Result<string, string>.AsError("Work directory id is required.");
+        if (timeoutMs <= 0)
+            return Result<string, string>.AsError("timeoutMs must be greater than 0.");
+        if (!TryGet(workDirectoryId, id, out var shell) || shell is null)
+            return Result<string, string>.AsError($"Long-running shell #{id} not found.");
+
+        if (shell.Status is DysonLongRunningShellStatus.Exited or DysonLongRunningShellStatus.Aborted)
+            return Result<string, string>.AsValue(FormatWaitCompletionJson(shell, timedOut: false));
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(timeoutMs);
+
+        try
+        {
+            try
+            {
+                await shell.WaitUntilTerminalAsync(timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return Result<string, string>.AsValue(FormatWaitCompletionJson(shell, timedOut: true));
+            }
+
+            return Result<string, string>.AsValue(FormatWaitCompletionJson(shell, timedOut: false));
+        }
+        catch (OperationCanceledException)
+        {
+            return Result<string, string>.AsError("WaitForLongRunningShellCompletion was cancelled.");
+        }
+    }
+
+    private static string FormatWaitCompletionJson(DysonLongRunningShell shell, bool timedOut)
+    {
+        var info = shell.ToInfo();
+        if (timedOut)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                longRunningShellId = info.Id,
+                status = "timeout",
+                shellStatus = info.Status.ToString(),
+                exitCode = info.ExitCode,
+            });
+        }
+
+        var outcome = DysonLongRunningShellExitedFlow.MapOutcome(
+            info.Status, info.ExitCode, shell.WasCancelRequested);
+        return JsonSerializer.Serialize(new
+        {
+            longRunningShellId = info.Id,
+            status = info.Status.ToString(),
+            shellStatus = info.Status.ToString(),
+            outcome,
+            exitCode = info.ExitCode,
+        });
     }
 
     /// <summary>Notify subscribers once when a shell becomes terminal, then clear that shell's list.</summary>

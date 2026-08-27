@@ -93,6 +93,7 @@ public sealed class DysonMcpPipeline
             Tools.Remove("RequestLongRunningShellCancellation");
             Tools.Remove("LongRunningShellInteract");
             Tools.Remove("SubscribeToLongRunningShellCompletion");
+            Tools.Remove("WaitForLongRunningShellCompletion");
             return;
         }
 
@@ -194,7 +195,7 @@ public sealed class DysonMcpPipeline
             "Start a background long-running shell in the session work directory. " +
             $"Available shells: {listed}. Returns longRunningShellId and the first ~1s of combined output. " +
             "Use ListLongRunningShells / ReadLongRunningShellTail / LongRunningShellInteract / " +
-            "SubscribeToLongRunningShellCompletion / RequestLongRunningShellCancellation / AbortLongRunningShell to manage it. " +
+            "WaitForLongRunningShellCompletion / SubscribeToLongRunningShellCompletion (parent-only) / RequestLongRunningShellCancellation / AbortLongRunningShell to manage it. " +
             "Not persisted across UI restart (orphans OS processes). Prefer ShellExecute for one-shot commands.";
         startDescription = AppendPythonNodeSnippetSentence(startDescription, names);
         if (planMode)
@@ -349,6 +350,7 @@ public sealed class DysonMcpPipeline
         {
             Name = "SubscribeToLongRunningShellCompletion",
             Description =
+                "Parent-only (root sessions). Subagents must use WaitForLongRunningShellCompletion. " +
                 "Subscribe the current session to a one-shot ShellExited harness turn when a long-running shell " +
                 "exits/aborts. Returns immediately (subscribed=true). If already terminal, fires once now. " +
                 "Optional includeTailMaxChars (default 8000) caps the auto-read tail in that turn.",
@@ -366,6 +368,31 @@ public sealed class DysonMcpPipeline
                     }
                   },
                   "required": ["longRunningShellId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "WaitForLongRunningShellCompletion",
+            Description =
+                "Block until the shell is Exited/Aborted or timeoutMs elapses. " +
+                "Already-terminal shells return immediately. Does not subscribe and does not queue ShellExited. " +
+                "Prompt cancel / tool cancellation aborts the wait. Available to root and subagents.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "longRunningShellId": {
+                      "type": "integer",
+                      "description": "Id returned by StartLongRunningShell."
+                    },
+                    "timeoutMs": {
+                      "type": "integer",
+                      "description": "Mandatory wait budget in milliseconds. Block until Exited/Aborted or this many ms. Must be > 0 (executor rejects <= 0)."
+                    }
+                  },
+                  "required": ["longRunningShellId", "timeoutMs"]
                 }
                 """,
         };
@@ -445,6 +472,7 @@ public sealed class DysonMcpPipeline
 
         Tools.Remove("AskQuestion");
         Tools.Remove("PromptUserDialog");
+        Tools.Remove("SubscribeToLongRunningShellCompletion");
 
         if (depth == 1)
         {
