@@ -140,7 +140,7 @@ public class DysonShellExecutePlanWarningTests
                 "Start a background long-running shell in the session work directory. " +
                 $"Available shells: {listed}. Returns longRunningShellId and the first ~1s of combined output. " +
                 "Use ListLongRunningShells / ReadLongRunningShellTail / LongRunningShellInteract / " +
-                "SubscribeToLongRunningShellCompletion / RequestLongRunningShellCancellation / AbortLongRunningShell to manage it. " +
+                "WaitForLongRunningShellCompletion / SubscribeToLongRunningShellCompletion (parent-only) / RequestLongRunningShellCancellation / AbortLongRunningShell to manage it. " +
                 "Not persisted across UI restart (orphans OS processes). Prefer ShellExecute for one-shot commands. " +
                 snippetSentences;
             if (planMode)

@@ -63,6 +63,7 @@ public static class DysonToolCallUi
             "RequestLongRunningShellCancellation" => SummarizeLongRunningShellId(argumentsJson, "cancel"),
             "LongRunningShellInteract" => SummarizeLongRunningShellInteract(argumentsJson),
             "SubscribeToLongRunningShellCompletion" => SummarizeLongRunningShellId(argumentsJson, "subscribe"),
+            "WaitForLongRunningShellCompletion" => SummarizeLongRunningShellId(argumentsJson, "wait"),
             "RenameSession" => TextSummary(Quote(Truncate(GetString(argumentsJson, "title"), SummaryMaxLength - 2))),
             "GetDateTime" => SummarizeGetDateTime(argumentsJson, resultContent, hasResult),
             "SubmitPlan" => TextSummary(Truncate(GetString(argumentsJson, "title"), SummaryMaxLength)),

@@ -26,7 +26,7 @@ public class DysonParentEventTests
 
     private static void AssertLayerGating()
     {
-        var root = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess);
+        var root = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess, ["Pwsh"]);
         root.ConfigureInterAgentTools(0);
         AssertHas(root, "AskQuestion");
         AssertMissing(root, "AskQuestionFromParent");
@@ -35,8 +35,10 @@ public class DysonParentEventTests
         AssertMissing(root, "TriggerParentEvent");
         AssertHas(root, "RespondToSubagentEvent");
         AssertHas(root, "TriggerSubagentEvent");
+        AssertHas(root, "SubscribeToLongRunningShellCompletion");
+        AssertHas(root, "WaitForLongRunningShellCompletion");
 
-        var l1 = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess);
+        var l1 = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess, ["Pwsh"]);
         l1.ConfigureInterAgentTools(1);
         AssertMissing(l1, "AskQuestion");
         AssertHas(l1, "AskQuestionFromParent");
@@ -45,8 +47,10 @@ public class DysonParentEventTests
         AssertHas(l1, "TriggerParentEvent");
         AssertHas(l1, "RespondToSubagentEvent");
         AssertHas(l1, "TriggerSubagentEvent");
+        AssertMissing(l1, "SubscribeToLongRunningShellCompletion");
+        AssertHas(l1, "WaitForLongRunningShellCompletion");
 
-        var deep = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess);
+        var deep = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess, ["Pwsh"]);
         deep.ConfigureInterAgentTools(2);
         AssertMissing(deep, "AskQuestion");
         AssertMissing(deep, "AskQuestionFromParent");
@@ -55,6 +59,8 @@ public class DysonParentEventTests
         AssertHas(deep, "TriggerParentEvent");
         AssertHas(deep, "RespondToSubagentEvent");
         AssertHas(deep, "TriggerSubagentEvent");
+        AssertMissing(deep, "SubscribeToLongRunningShellCompletion");
+        AssertHas(deep, "WaitForLongRunningShellCompletion");
     }
 
     /// <summary>
@@ -72,6 +78,8 @@ public class DysonParentEventTests
         AssertMissing(child.McpPipeline, "PromptUserDialogFromParent");
         AssertHas(child.McpPipeline, "AskQuestion");
         AssertHas(child.McpPipeline, "PromptUserDialog");
+        AssertHas(child.McpPipeline, "SubscribeToLongRunningShellCompletion");
+        AssertHas(child.McpPipeline, "WaitForLongRunningShellCompletion");
 
         child.SetRuntimeIdForTest(1);
         parent.RestoreRegisteredSubagent(child);
@@ -84,6 +92,8 @@ public class DysonParentEventTests
         AssertHas(child.McpPipeline, "PromptUserDialogFromParent");
         AssertMissing(child.McpPipeline, "AskQuestion");
         AssertMissing(child.McpPipeline, "PromptUserDialog");
+        AssertMissing(child.McpPipeline, "SubscribeToLongRunningShellCompletion");
+        AssertHas(child.McpPipeline, "WaitForLongRunningShellCompletion");
     }
 
     private static void AssertFormatter()
@@ -353,7 +363,7 @@ public class DysonParentEventTests
 
     private class StubSession() : DysonAgentSession(
         DysonAgentModes.Work,
-        new DysonAgentSessionConfig(),
+        new DysonAgentSessionConfig { AvailableShells = [new DysonConfiguredShellSpec("Cmd", "cmd.exe")] },
         new StubProvider())
     {
         public void RegisterForTest(DysonAgentSession child) => RegisterSubagent(child);
