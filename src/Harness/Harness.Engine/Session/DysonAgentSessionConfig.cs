@@ -40,6 +40,14 @@ public class DysonAgentSessionConfig
     public string? BraveApiKey { get; set; }
 
     /// <summary>
+    /// Optional fallback chat provider used after the session provider exhausts inference
+    /// retries (or on immediate 401/403). Null ⇒ disabled (fail the turn after retries).
+    /// Unlike other role providers, null does <em>not</em> mean “use the session provider”.
+    /// Hydrated only for OpenAI-compatible slugs.
+    /// </summary>
+    public DysonAgentProvider? FallbackChatProvider { get; set; }
+
+    /// <summary>
     /// Optional provider for web-search/fetch result summarization.
     /// Null ⇒ use the session <see cref="DysonAgentSession.Provider"/>.
     /// </summary>
