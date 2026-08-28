@@ -121,7 +121,7 @@ public static class DysonAppSettingKeys
     public const string UiTheme = "ui_theme";
 
     /// <summary>
-    /// UI accent: <c>"blue"</c> / <c>"green"</c> / <c>"red"</c> / <c>"purple"</c>.
+    /// UI accent: <c>"blue"</c> / <c>"green"</c> / <c>"red"</c> / <c>"purple"</c> / <c>"amber"</c>.
     /// Missing ⇒ fall back to browser <c>localStorage</c> (<c>dyson-theme</c>), then blue.
     /// </summary>
     public const string UiAccent = "ui_accent";
