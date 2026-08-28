@@ -20,7 +20,7 @@ public sealed class ThemeService(IJSRuntime js, IDysonSubjectSettingsRepository?
     public event Action? Changed;
 
     public static IReadOnlyList<string> Themes { get; } = ["dark", "light"];
-    public static IReadOnlyList<string> Accents { get; } = ["blue", "green", "red", "purple"];
+    public static IReadOnlyList<string> Accents { get; } = ["blue", "green", "red", "purple", "amber"];
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {

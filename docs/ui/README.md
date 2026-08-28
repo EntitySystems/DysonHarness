@@ -180,7 +180,7 @@ Engine types: `IDysonSkillExplorer`, `SkillsHubSkillExplorerProvider`, `SkillsSh
 
 ## Theming
 
-- CSS variables with `data-theme` (light/dark) and `data-accent` (Blue / Green / Red / Purple)
+- CSS variables with `data-theme` (light/dark) and `data-accent` (Blue / Green / Red / Purple / Amber)
 - Persist preference in subject `app_settings` (`ui_theme` / `ui_accent`). `theme.js` + `localStorage` (`dyson-theme`) remain same-session cache / DOM apply (Windows CEF chrome still reads `dysonTheme.get()`). `ThemeService.InitializeAsync` restores DB first, falls back to `dysonTheme.get`, and write-through-migrates valid localStorage values when the DB keys are empty.
 - Visual direction: dense IDE geometry (unchanged padding, gaps, grid) with softer product materials — accent-tinted chrome (`--surface-chrome`), glass panels (`--surface-glass` + `backdrop-filter` when supported), theme-aware elevation (`--shadow-1..3` / `--overlay`), and 6–12px radii. Motion is color/opacity/shadow only (`--motion` / `--ease`); `prefers-reduced-motion` disables it.
 - Shared tokens also include `--accent-border`, `--accent-glow`, `--focus-ring`, `--text-on-accent`, and aliases `--muted` → `--text-muted`, `--ok` → `--success`. Semantic git colors (`--git-modified`, `--success`, `--danger`) stay independent of the selected accent. Default blue accent remains `#4c8bf5` so `DysonUiThemeSnapshot` stays stable.

@@ -24,35 +24,46 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Error(call, $"{call.ToolName}: invalid JSON arguments.");
         }
 
-        return call.ToolName switch
+        var timeoutMs = GetInt(root, "timeoutMs");
+        var effective = timeoutMs is > 0 ? timeoutMs.Value : DysonBrowserDefaults.DefaultTimeoutMs;
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        linked.CancelAfter(effective);
+        try
         {
-            "OpenBrowser" => await OpenBrowserAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "ListBrowserWindows" => await ListBrowserWindowsAsync(call, control, cancellationToken).ConfigureAwait(false),
-            "CloseBrowser" => await CloseBrowserAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "ResizeBrowser" => await ResizeBrowserAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "ListBrowserTabs" => await ListBrowserTabsAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "NewBrowserTab" => await NewBrowserTabAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "CloseBrowserTab" => await CloseBrowserTabAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "ActivateBrowserTab" => await ActivateBrowserTabAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "BrowserNavigate" => await BrowserNavigateAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "BrowserGoBack" => await BrowserGoBackAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "BrowserGoForward" => await BrowserGoForwardAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "BrowserReload" => await BrowserReloadAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "ClearBrowserCache" => await ClearBrowserCacheAsync(call, control, cancellationToken).ConfigureAwait(false),
-            "BrowserClick" => await BrowserClickAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "BrowserType" => await BrowserTypeAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "BrowserFill" => await BrowserFillAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "BrowserHover" => await BrowserHoverAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "BrowserPressKey" => await BrowserPressKeyAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "BrowserWaitForSelector" => await BrowserWaitForSelectorAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "BrowserWaitForNavigation" => await BrowserWaitForNavigationAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "BrowserExecuteJavaScript" => await BrowserExecuteJavaScriptAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "BrowserGetHtml" => await BrowserGetHtmlAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "BrowserTakeScreenshot" => await BrowserTakeScreenshotAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "BrowserReadConsoleLog" => await BrowserReadConsoleLogAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            "BrowserReadNetworkLog" => await BrowserReadNetworkLogAsync(call, control, root, cancellationToken).ConfigureAwait(false),
-            _ => Stub(call),
-        };
+            return call.ToolName switch
+            {
+                "OpenBrowser" => await OpenBrowserAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "ListBrowserWindows" => await ListBrowserWindowsAsync(call, control, linked.Token).ConfigureAwait(false),
+                "CloseBrowser" => await CloseBrowserAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "ResizeBrowser" => await ResizeBrowserAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "ListBrowserTabs" => await ListBrowserTabsAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "NewBrowserTab" => await NewBrowserTabAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "CloseBrowserTab" => await CloseBrowserTabAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "ActivateBrowserTab" => await ActivateBrowserTabAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "BrowserNavigate" => await BrowserNavigateAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "BrowserGoBack" => await BrowserGoBackAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "BrowserGoForward" => await BrowserGoForwardAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "BrowserReload" => await BrowserReloadAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "ClearBrowserCache" => await ClearBrowserCacheAsync(call, control, linked.Token).ConfigureAwait(false),
+                "BrowserClick" => await BrowserClickAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "BrowserType" => await BrowserTypeAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "BrowserFill" => await BrowserFillAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "BrowserHover" => await BrowserHoverAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "BrowserPressKey" => await BrowserPressKeyAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "BrowserWaitForSelector" => await BrowserWaitForSelectorAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "BrowserWaitForNavigation" => await BrowserWaitForNavigationAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "BrowserExecuteJavaScript" => await BrowserExecuteJavaScriptAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "BrowserGetHtml" => await BrowserGetHtmlAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "BrowserTakeScreenshot" => await BrowserTakeScreenshotAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "BrowserReadConsoleLog" => await BrowserReadConsoleLogAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                "BrowserReadNetworkLog" => await BrowserReadNetworkLogAsync(call, control, root, linked.Token).ConfigureAwait(false),
+                _ => Stub(call),
+            };
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Error(call, $"{call.ToolName} timed out after {effective}ms.");
+        }
     }
 
     private static async Task<DysonToolCallResult> OpenBrowserAsync(

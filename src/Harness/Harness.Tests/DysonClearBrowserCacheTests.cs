@@ -25,10 +25,10 @@ public class DysonClearBrowserCacheTests
         if (!pipeline.Tools.TryGetValue("ClearBrowserCache", out var tool)
             || !tool.Description.Contains("HTTP cache", StringComparison.OrdinalIgnoreCase)
             || !tool.Description.Contains("cef-cache", StringComparison.OrdinalIgnoreCase)
-            || !tool.InputSchemaJson.Contains("\"properties\": {}", StringComparison.Ordinal))
+            || !tool.InputSchemaJson.Contains("timeoutMs", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "ClearBrowserCache must be cataloged with empty properties and shared cef-cache note.");
+                "ClearBrowserCache must be cataloged with timeoutMs and shared cef-cache note.");
         }
 
         var withoutBrowser = DysonMcpPipeline.CreateDefault(
