@@ -22,6 +22,7 @@ public class DysonParentEventTests
         AssertInterruptCancelsEventWait().GetAwaiter().GetResult();
         AssertNonInterruptFailsWhileWaiting().GetAwaiter().GetResult();
         AssertInjectAfterCompletedReportWaitsForSecond().GetAwaiter().GetResult();
+        AssertWaitConsumeMarker().GetAwaiter().GetResult();
     }
 
     private static void AssertLayerGating()
@@ -203,6 +204,15 @@ public class DysonParentEventTests
 
         wait2.Cancel();
         try { await wait2Task.ConfigureAwait(false); } catch { /* cancelled */ }
+
+        if (parent.IsWaitingOnAnySubagent || parent.WaitingOnSubagentIds.Contains(childA.Id))
+            throw new InvalidOperationException("Expected waiting id cleared after Wait cancel.");
+        if (parent.HasWaitConsumedCompletion(childA.Id)
+            || parent.ShouldSuppressWaitedCompletionAutoTurn(childA.Id))
+        {
+            throw new InvalidOperationException(
+                "Cancel must not mark wait-consumed or suppress completion auto-turns.");
+        }
     }
 
     private static async Task AssertInterruptCancelsEventWait()
@@ -344,6 +354,79 @@ public class DysonParentEventTests
             {
                 // Prompt never started (kickoff failed before hang).
             }
+        }
+    }
+
+    /// <summary>
+    /// Successful Wait marks consume (and suppress) then TryReopenForNewParentTask clears it;
+    /// timeout does not mark. Waiting id is set during Wait and cleared after.
+    /// </summary>
+    private static async Task AssertWaitConsumeMarker()
+    {
+        var timeoutParent = new StubSession();
+        var timeoutChild = new StubSession();
+        timeoutParent.RegisterForTest(timeoutChild);
+
+        var timeoutWait = timeoutParent.WaitForSubagentAsync(timeoutChild.Id, timeoutMs: 80);
+        await Task.Delay(15).ConfigureAwait(false);
+        if (!timeoutParent.IsWaitingOnAnySubagent
+            || !timeoutParent.WaitingOnSubagentIds.Contains(timeoutChild.Id)
+            || !timeoutParent.ShouldSuppressWaitedCompletionAutoTurn(timeoutChild.Id))
+        {
+            throw new InvalidOperationException(
+                "Expected waiting id + suppress while WaitForSubagent is in flight.");
+        }
+
+        if (timeoutParent.HasWaitConsumedCompletion(timeoutChild.Id))
+            throw new InvalidOperationException("In-flight Wait must not mark consume until terminal.");
+
+        var timeoutResult = await timeoutWait.ConfigureAwait(false);
+        if (timeoutResult.IsError
+            || timeoutResult.Value.IndexOf("timeout", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            throw new InvalidOperationException(
+                "Expected timeout JSON: " +
+                (timeoutResult.IsError ? timeoutResult.Error : timeoutResult.Value));
+        }
+
+        if (timeoutParent.IsWaitingOnAnySubagent
+            || timeoutParent.WaitingOnSubagentIds.Contains(timeoutChild.Id)
+            || timeoutParent.HasWaitConsumedCompletion(timeoutChild.Id)
+            || timeoutParent.ShouldSuppressWaitedCompletionAutoTurn(timeoutChild.Id))
+        {
+            throw new InvalidOperationException("Timeout must clear waiting id and not mark consume.");
+        }
+
+        var parent = new StubSession();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+
+        if (!child.TryMarkTerminal(DysonSessionStatus.Completed, "waited handoff"))
+            throw new InvalidOperationException("Expected TryMarkTerminal Completed.");
+
+        var waited = await parent.WaitForSubagentAsync(child.Id, timeoutMs: 2000).ConfigureAwait(false);
+        if (waited.IsError || waited.Value.IndexOf("Completed", StringComparison.Ordinal) < 0)
+        {
+            throw new InvalidOperationException(
+                "Expected successful wait JSON: " + (waited.IsError ? waited.Error : waited.Value));
+        }
+
+        if (parent.IsWaitingOnAnySubagent || parent.WaitingOnSubagentIds.Contains(child.Id))
+            throw new InvalidOperationException("Expected waiting id cleared after successful Wait.");
+        if (!parent.HasWaitConsumedCompletion(child.Id)
+            || !parent.ShouldSuppressWaitedCompletionAutoTurn(child.Id))
+        {
+            throw new InvalidOperationException(
+                "Successful Wait must mark HasWaitConsumedCompletion and suppress auto-turn.");
+        }
+
+        if (!child.TryReopenForNewParentTask())
+            throw new InvalidOperationException("Expected TryReopenForNewParentTask after Completed.");
+        if (parent.HasWaitConsumedCompletion(child.Id)
+            || parent.ShouldSuppressWaitedCompletionAutoTurn(child.Id))
+        {
+            throw new InvalidOperationException(
+                "TryReopenForNewParentTask must ClearWaitConsumedCompletion on the parent.");
         }
     }
 
