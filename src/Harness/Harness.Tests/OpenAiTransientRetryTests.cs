@@ -17,6 +17,10 @@ public class OpenAiTransientRetryTests
         AssertRetrySucceedsAfterTwo503s();
         AssertRetrySucceedsAfterStreamReadFail();
         AssertRetryExhaustionPreserves503();
+        AssertFallbackHopsAfterFive503s();
+        AssertFallbackHopsOn401WithoutRetries();
+        AssertFallbackSameSlugIdDoesNotHop();
+        AssertFallbackAlsoExhausts();
     }
 
     private static void AssertTransientClassifier()
@@ -221,7 +225,220 @@ public class OpenAiTransientRetryTests
         }
     }
 
-    private static OpenAiCompatibleAgentSession CreateSession(HttpClient http, string workDir)
+    private static void AssertFallbackHopsAfterFive503s()
+    {
+        var prior = OpenAiCompatibleAgentSession.TransientRetryBackoffMs;
+        OpenAiCompatibleAgentSession.TransientRetryBackoffMs = [0, 0, 0, 0];
+        var workDir = Path.Combine(Path.GetTempPath(), "dyson-fallback-hop-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var handler = new SequencingHandler(
+            [
+                () => Status(HttpStatusCode.ServiceUnavailable, "upstream busy"),
+                () => Status(HttpStatusCode.ServiceUnavailable, "upstream busy"),
+                () => Status(HttpStatusCode.ServiceUnavailable, "upstream busy"),
+                () => Status(HttpStatusCode.ServiceUnavailable, "upstream busy"),
+                () => Status(HttpStatusCode.ServiceUnavailable, "upstream busy"),
+                CompletionsSseSuccess,
+            ]);
+            using var http = new HttpClient(handler);
+            var fallback = CreateOpenAiProvider("gpt-fallback");
+            var session = CreateSession(http, workDir, fallback: fallback);
+
+            var result = session.PromptAsync("ping").GetAwaiter().GetResult();
+            if (result.IsError)
+                throw new InvalidOperationException("Expected success after fallback hop: " + result.Error);
+
+            if (handler.PostCount != 6)
+            {
+                throw new InvalidOperationException(
+                    $"Expected 6 Completions posts (5×503 + fallback success), got {handler.PostCount}.");
+            }
+
+            var live = AssertLiveOpenAi(session);
+            if (live.Slug != "gpt-fallback" || live.SlugId != fallback.SlugId)
+            {
+                throw new InvalidOperationException(
+                    $"Expected session provider slug gpt-fallback; got '{live.Slug}'.");
+            }
+
+            var logs = string.Join('\n', session.SnapshotLog());
+            if (!logs.Contains("fallback: switched", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected fallback switch log.\n" + logs);
+        }
+        finally
+        {
+            OpenAiCompatibleAgentSession.TransientRetryBackoffMs = prior;
+            TryDelete(workDir);
+        }
+    }
+
+    private static void AssertFallbackHopsOn401WithoutRetries()
+    {
+        var prior = OpenAiCompatibleAgentSession.TransientRetryBackoffMs;
+        OpenAiCompatibleAgentSession.TransientRetryBackoffMs = [0, 0, 0, 0];
+        var workDir = Path.Combine(Path.GetTempPath(), "dyson-fallback-401-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var handler = new SequencingHandler(
+            [
+                () => Status(HttpStatusCode.Unauthorized, "no"),
+                CompletionsSseSuccess,
+            ]);
+            using var http = new HttpClient(handler);
+            var fallback = CreateOpenAiProvider("gpt-fallback");
+            var session = CreateSession(http, workDir, fallback: fallback);
+
+            var result = session.PromptAsync("ping").GetAwaiter().GetResult();
+            if (result.IsError)
+                throw new InvalidOperationException("Expected success after 401 hop: " + result.Error);
+
+            if (handler.PostCount != 2)
+            {
+                throw new InvalidOperationException(
+                    $"Expected 2 Completions posts (401 + fallback success), got {handler.PostCount}.");
+            }
+
+            var live = AssertLiveOpenAi(session);
+            if (live.Slug != "gpt-fallback")
+            {
+                throw new InvalidOperationException(
+                    $"Expected session provider slug gpt-fallback; got '{live.Slug}'.");
+            }
+        }
+        finally
+        {
+            OpenAiCompatibleAgentSession.TransientRetryBackoffMs = prior;
+            TryDelete(workDir);
+        }
+    }
+
+    private static void AssertFallbackSameSlugIdDoesNotHop()
+    {
+        var prior = OpenAiCompatibleAgentSession.TransientRetryBackoffMs;
+        OpenAiCompatibleAgentSession.TransientRetryBackoffMs = [0, 0, 0, 0];
+        var workDir = Path.Combine(Path.GetTempPath(), "dyson-fallback-same-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var handler = new SequencingHandler(
+            [
+                () => Status(HttpStatusCode.ServiceUnavailable, "still down"),
+                () => Status(HttpStatusCode.ServiceUnavailable, "still down"),
+                () => Status(HttpStatusCode.ServiceUnavailable, "still down"),
+                () => Status(HttpStatusCode.ServiceUnavailable, "still down"),
+                () => Status(HttpStatusCode.ServiceUnavailable, "still down"),
+            ]);
+            using var http = new HttpClient(handler);
+            var slugId = Guid.NewGuid();
+            var primary = CreateOpenAiProvider("gpt-test", slugId);
+            var fallback = CreateOpenAiProvider("gpt-fallback", slugId);
+            var session = CreateSession(http, workDir, fallback: fallback, provider: primary);
+
+            var result = session.PromptAsync("ping").GetAwaiter().GetResult();
+            if (!result.IsError)
+                throw new InvalidOperationException("Expected failure when fallback SlugId matches current.");
+
+            if (handler.PostCount != 5)
+            {
+                throw new InvalidOperationException(
+                    $"Expected 5 Completions posts with same-SlugId fallback, got {handler.PostCount}.");
+            }
+
+            var live = AssertLiveOpenAi(session);
+            if (live.Slug != "gpt-test")
+            {
+                throw new InvalidOperationException(
+                    $"Expected session to stay on gpt-test; got '{live.Slug}'.");
+            }
+        }
+        finally
+        {
+            OpenAiCompatibleAgentSession.TransientRetryBackoffMs = prior;
+            TryDelete(workDir);
+        }
+    }
+
+    private static void AssertFallbackAlsoExhausts()
+    {
+        var prior = OpenAiCompatibleAgentSession.TransientRetryBackoffMs;
+        OpenAiCompatibleAgentSession.TransientRetryBackoffMs = [0, 0, 0, 0];
+        var workDir = Path.Combine(Path.GetTempPath(), "dyson-fallback-exh-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var handler = new SequencingHandler(
+            [
+                () => Status(HttpStatusCode.ServiceUnavailable, "primary down"),
+                () => Status(HttpStatusCode.ServiceUnavailable, "primary down"),
+                () => Status(HttpStatusCode.ServiceUnavailable, "primary down"),
+                () => Status(HttpStatusCode.ServiceUnavailable, "primary down"),
+                () => Status(HttpStatusCode.ServiceUnavailable, "primary down"),
+                () => Status(HttpStatusCode.ServiceUnavailable, "fallback down"),
+                () => Status(HttpStatusCode.ServiceUnavailable, "fallback down"),
+                () => Status(HttpStatusCode.ServiceUnavailable, "fallback down"),
+                () => Status(HttpStatusCode.ServiceUnavailable, "fallback down"),
+                () => Status(HttpStatusCode.ServiceUnavailable, "fallback down"),
+            ]);
+            using var http = new HttpClient(handler);
+            var fallback = CreateOpenAiProvider("gpt-fallback");
+            var session = CreateSession(http, workDir, fallback: fallback);
+
+            var result = session.PromptAsync("ping").GetAwaiter().GetResult();
+            if (!result.IsError)
+                throw new InvalidOperationException("Expected failure after fallback also exhausted.");
+
+            if (handler.PostCount != 10)
+            {
+                throw new InvalidOperationException(
+                    $"Expected 10 Completions posts (5×503 A + 5×503 B), got {handler.PostCount}.");
+            }
+
+            if (result.Error is null
+                || !result.Error.StartsWith("OpenAI API 503", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Expected fallback 503 error; got '{result.Error ?? "null"}'.");
+            }
+
+            var live = AssertLiveOpenAi(session);
+            if (live.Slug != "gpt-fallback" || live.SlugId != fallback.SlugId)
+            {
+                throw new InvalidOperationException(
+                    $"Expected session to remain on gpt-fallback; got '{live.Slug}'.");
+            }
+        }
+        finally
+        {
+            OpenAiCompatibleAgentSession.TransientRetryBackoffMs = prior;
+            TryDelete(workDir);
+        }
+    }
+
+    private static OpenAiCompatibleAgentSession CreateSession(
+        HttpClient http,
+        string workDir,
+        OpenAiCompatibleAgentProvider? fallback = null,
+        OpenAiCompatibleAgentProvider? provider = null)
+    {
+        provider ??= CreateOpenAiProvider("gpt-test");
+        var config = new DysonAgentSessionConfig();
+        if (fallback is not null)
+            config.FallbackChatProvider = fallback;
+
+        return new OpenAiCompatibleAgentSession(
+            DysonAgentModes.Work,
+            config,
+            provider,
+            http,
+            workDir);
+    }
+
+    private static OpenAiCompatibleAgentProvider CreateOpenAiProvider(
+        string slug,
+        Guid? slugId = null)
     {
         var entity = new DysonModelProviderEntity
         {
@@ -232,23 +449,35 @@ public class OpenAiTransientRetryTests
             ApiKey = "sk-test",
             OpenAiApiMode = DysonOpenAiApiModes.Completions,
         };
-        var provider = new OpenAiCompatibleAgentProvider(
+        return new OpenAiCompatibleAgentProvider(
             entity,
             new DysonModelSlugEntity
             {
-                Id = Guid.NewGuid(),
+                Id = slugId ?? Guid.NewGuid(),
                 ProviderId = entity.Id,
-                Slug = "gpt-test",
-                DisplayAlias = "gpt-test",
+                Slug = slug,
+                DisplayAlias = slug,
                 Provider = entity,
             });
+    }
 
-        return new OpenAiCompatibleAgentSession(
-            DysonAgentModes.Work,
-            new DysonAgentSessionConfig(),
-            provider,
-            http,
-            workDir);
+    private static OpenAiCompatibleAgentProvider AssertLiveOpenAi(OpenAiCompatibleAgentSession session)
+    {
+        if (session.Provider is not OpenAiCompatibleAgentProvider live)
+            throw new InvalidOperationException("Expected OpenAI-compatible session provider.");
+        return live;
+    }
+
+    private static void TryDelete(string workDir)
+    {
+        try
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+        catch
+        {
+            // best-effort temp cleanup
+        }
     }
 
     private static HttpResponseMessage Status(HttpStatusCode code, string body) =>

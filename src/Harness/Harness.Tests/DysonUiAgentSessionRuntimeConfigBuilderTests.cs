@@ -135,6 +135,9 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
         var drone = await harness.Settings.SetSettingAsync(
             DysonAppSettingKeys.DroneModelSlugId, catalog.DemoSlugId.ToString("D"));
         Assert.False(drone.IsError, drone.IsError ? drone.Error : null);
+        var fallback = await harness.Settings.SetSettingAsync(
+            DysonAppSettingKeys.FallbackChatModelSlugId, catalog.OpenAiSlugId.ToString("D"));
+        Assert.False(fallback.IsError, fallback.IsError ? fallback.Error : null);
 
         await using var lease = (await harness.Builder.BuildAsync(new DysonUiAgentSessionRuntimeConfigRequest
         {
@@ -145,8 +148,21 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
         Assert.Equal(catalog.OpenAiSlugId, summarizerProvider.SlugId);
         var exploreProvider = Assert.IsType<OpenAiCompatibleAgentProvider>(lease.Config.ExploreDefaultProvider);
         Assert.Equal(catalog.OpenAiSlugId, exploreProvider.SlugId);
+        var fallbackProvider = Assert.IsType<OpenAiCompatibleAgentProvider>(lease.Config.FallbackChatProvider);
+        Assert.Equal(catalog.OpenAiSlugId, fallbackProvider.SlugId);
         Assert.Null(lease.Config.DroneDefaultProvider);
         Assert.Null(lease.Config.TurnSummarizerProvider);
+
+        var fallbackDemo = await harness.Settings.SetSettingAsync(
+            DysonAppSettingKeys.FallbackChatModelSlugId, catalog.DemoSlugId.ToString("D"));
+        Assert.False(fallbackDemo.IsError, fallbackDemo.IsError ? fallbackDemo.Error : null);
+
+        await using var ignored = (await harness.Builder.BuildAsync(new DysonUiAgentSessionRuntimeConfigRequest
+        {
+            AgentMode = DysonAgentModes.Work,
+        })).Value;
+
+        Assert.Null(ignored.Config.FallbackChatProvider);
     }
 
     [Fact]
@@ -214,6 +230,9 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
         var turnSlug = await harness.Settings.SetSettingAsync(
             DysonAppSettingKeys.TurnSummarizerModelSlugId, slugId);
         Assert.False(turnSlug.IsError, turnSlug.IsError ? turnSlug.Error : null);
+        var fallbackSlug = await harness.Settings.SetSettingAsync(
+            DysonAppSettingKeys.FallbackChatModelSlugId, slugId);
+        Assert.False(fallbackSlug.IsError, fallbackSlug.IsError ? fallbackSlug.Error : null);
 
         await using (var missingEffort = (await harness.Builder.BuildAsync(new DysonUiAgentSessionRuntimeConfigRequest
         {
@@ -226,6 +245,8 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
             Assert.Equal("medium", summarizer.ReasoningEffort);
             var turn = Assert.IsType<OpenAiCompatibleAgentProvider>(missingEffort.Config.TurnSummarizerProvider);
             Assert.Equal("medium", turn.ReasoningEffort);
+            var fallback = Assert.IsType<OpenAiCompatibleAgentProvider>(missingEffort.Config.FallbackChatProvider);
+            Assert.Equal("medium", fallback.ReasoningEffort);
         }
 
         var exploreEffort = await harness.Settings.SetSettingAsync(
@@ -237,6 +258,9 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
         var turnEffort = await harness.Settings.SetSettingAsync(
             DysonAppSettingKeys.TurnSummarizerReasoningEffort, "high");
         Assert.False(turnEffort.IsError, turnEffort.IsError ? turnEffort.Error : null);
+        var fallbackEffort = await harness.Settings.SetSettingAsync(
+            DysonAppSettingKeys.FallbackChatReasoningEffort, "low");
+        Assert.False(fallbackEffort.IsError, fallbackEffort.IsError ? fallbackEffort.Error : null);
 
         await using var overridden = (await harness.Builder.BuildAsync(new DysonUiAgentSessionRuntimeConfigRequest
         {
@@ -249,6 +273,8 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
         Assert.Equal("low", summarizerOverride.ReasoningEffort);
         var turnOverride = Assert.IsType<OpenAiCompatibleAgentProvider>(overridden.Config.TurnSummarizerProvider);
         Assert.Equal("high", turnOverride.ReasoningEffort);
+        var fallbackOverride = Assert.IsType<OpenAiCompatibleAgentProvider>(overridden.Config.FallbackChatProvider);
+        Assert.Equal("low", fallbackOverride.ReasoningEffort);
     }
 
     [Fact]

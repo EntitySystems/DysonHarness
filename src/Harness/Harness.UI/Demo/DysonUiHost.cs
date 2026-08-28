@@ -4202,6 +4202,12 @@ public sealed class DysonUiHost : IAsyncDisposable
                 cancellationToken)
             .ConfigureAwait(false);
         await TryHydrateOpenAiProviderSettingAsync(
+                DysonAppSettingKeys.FallbackChatModelSlugId,
+                DysonAppSettingKeys.FallbackChatReasoningEffort,
+                p => config.FallbackChatProvider = p,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await TryHydrateOpenAiProviderSettingAsync(
                 DysonAppSettingKeys.WebSearchSummarizerModelSlugId,
                 DysonAppSettingKeys.WebSearchSummarizerReasoningEffort,
                 p => config.SummarizerProvider = p,

@@ -124,6 +124,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     private readonly IDysonModelRepository? _models;
     private readonly IDysonUsageAnalyticsRepository? _usageAnalytics;
     private readonly string _workDirectoryName;
+    // ponytail: one hop per prompt; Explore recap shares this so a main-loop hop is not repeated
+    private bool _fallbackAppliedThisTurn;
 
     public OpenAiCompatibleAgentSession(
         string agentMode,
@@ -573,6 +575,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         ArgumentNullException.ThrowIfNull(turn);
         ArgumentNullException.ThrowIfNull(filePaths);
 
+        _fallbackAppliedThisTurn = false;
         ApplyUiTheme(Config.UiTheme);
 
         // Compaction before the next provider request so the new prefix stays byte-stable.
@@ -628,83 +631,100 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                Result<OpenAiModelReply, string> replyResult;
-                if (useResponses)
+                async Task<Result<OpenAiModelReply, string>> ConsumeCurrentProviderRoundAsync()
                 {
-                    // Direct OpenAI: store+delta via previous_response_id when known.
-                    // Managed/CLIProxy: never chain — full local reasoning→call→output replay.
-                    OpenAiCacheFriendlyTranscriptBuilder.BuiltResponsesRequest built;
-                    if (supportsResponsesChaining
-                        && previousResponseId is not null
-                        && inFlight.Count > 0
-                        && harnessFollowUp is null)
+                    if (useResponses)
                     {
-                        await EnsureResponsesBinaryFileIdsAsync(
-                                inFlight[^1].Results,
-                                cancellationToken)
-                            .ConfigureAwait(false);
-                        built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesDelta(
-                            this,
-                            previousResponseId,
-                            inFlight[^1].Results);
-                    }
-                    else
-                    {
-                        await EnsureResponsesVisionFileIdsAsync(inFlight, cancellationToken)
-                            .ConfigureAwait(false);
-                        built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
-                            this,
-                            currentUserPrompt: harnessFollowUp,
-                            currentFilePaths: null,
-                            inFlightRounds: inFlight,
-                            previousResponseId: supportsResponsesChaining ? previousResponseId : null);
-                        if (round == 0 && filePaths.Count > 0)
-                            AppendPathsToLastUser(built.Input, filePaths);
-                    }
+                        // Direct OpenAI: store+delta via previous_response_id when known.
+                        // Managed/CLIProxy: never chain — full local reasoning→call→output replay.
+                        OpenAiCacheFriendlyTranscriptBuilder.BuiltResponsesRequest built;
+                        if (supportsResponsesChaining
+                            && previousResponseId is not null
+                            && inFlight.Count > 0
+                            && harnessFollowUp is null)
+                        {
+                            await EnsureResponsesBinaryFileIdsAsync(
+                                    inFlight[^1].Results,
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+                            built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesDelta(
+                                this,
+                                previousResponseId,
+                                inFlight[^1].Results);
+                        }
+                        else
+                        {
+                            await EnsureResponsesVisionFileIdsAsync(inFlight, cancellationToken)
+                                .ConfigureAwait(false);
+                            built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+                                this,
+                                currentUserPrompt: harnessFollowUp,
+                                currentFilePaths: null,
+                                inFlightRounds: inFlight,
+                                previousResponseId: supportsResponsesChaining ? previousResponseId : null);
+                            if (round == 0 && filePaths.Count > 0)
+                                AppendPathsToLastUser(built.Input, filePaths);
+                        }
 
-                    replyResult = await ConsumeStreamWithTransientRetryAsync(
-                        () => _responses.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
-                        turn,
-                        cancellationToken).ConfigureAwait(false);
-
-                    // Direct only: one full-replay retry when store chaining lost the function_call.
-                    if (replyResult.IsError
-                        && supportsResponsesChaining
-                        && OpenAiCompatibleHttp.IsMissingToolCallForOutputError(replyResult.Error))
-                    {
-                        AppendLog("Responses: missing tool call for output — retrying with full item replay");
-                        previousResponseId = null;
-                        await EnsureResponsesVisionFileIdsAsync(inFlight, cancellationToken)
-                            .ConfigureAwait(false);
-                        var retryBuilt = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
-                            this,
-                            currentUserPrompt: harnessFollowUp,
-                            currentFilePaths: null,
-                            inFlightRounds: inFlight,
-                            previousResponseId: null);
-                        if (round == 0 && filePaths.Count > 0)
-                            AppendPathsToLastUser(retryBuilt.Input, filePaths);
-
-                        replyResult = await ConsumeStreamWithTransientRetryAsync(
-                            () => _responses.StreamCreateAsync(OpenAiProvider, retryBuilt, cancellationToken),
+                        var streamed = await ConsumeStreamWithTransientRetryAsync(
+                            () => _responses.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
                             turn,
                             cancellationToken).ConfigureAwait(false);
+
+                        // Direct only: one full-replay retry when store chaining lost the function_call.
+                        if (streamed.IsError
+                            && supportsResponsesChaining
+                            && OpenAiCompatibleHttp.IsMissingToolCallForOutputError(streamed.Error))
+                        {
+                            AppendLog("Responses: missing tool call for output — retrying with full item replay");
+                            previousResponseId = null;
+                            await EnsureResponsesVisionFileIdsAsync(inFlight, cancellationToken)
+                                .ConfigureAwait(false);
+                            var retryBuilt = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+                                this,
+                                currentUserPrompt: harnessFollowUp,
+                                currentFilePaths: null,
+                                inFlightRounds: inFlight,
+                                previousResponseId: null);
+                            if (round == 0 && filePaths.Count > 0)
+                                AppendPathsToLastUser(retryBuilt.Input, filePaths);
+
+                            streamed = await ConsumeStreamWithTransientRetryAsync(
+                                () => _responses.StreamCreateAsync(OpenAiProvider, retryBuilt, cancellationToken),
+                                turn,
+                                cancellationToken).ConfigureAwait(false);
+                        }
+
+                        return streamed;
                     }
-                }
-                else
-                {
-                    var built = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+
+                    var completionsBuilt = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
                         this,
                         currentUserPrompt: harnessFollowUp,
                         currentFilePaths: null,
                         inFlightRounds: inFlight);
                     if (round == 0 && filePaths.Count > 0)
-                        AppendPathsToLastUser(built.Messages, filePaths);
+                        AppendPathsToLastUser(completionsBuilt.Messages, filePaths);
 
-                    replyResult = await ConsumeStreamWithTransientRetryAsync(
-                        () => _completions.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
+                    return await ConsumeStreamWithTransientRetryAsync(
+                        () => _completions.StreamCreateAsync(OpenAiProvider, completionsBuilt, cancellationToken),
                         turn,
                         cancellationToken).ConfigureAwait(false);
+                }
+
+                var replyResult = await ConsumeCurrentProviderRoundAsync().ConfigureAwait(false);
+                if (replyResult.IsError
+                    && await TryApplyChatFallbackAsync(replyResult.Error, cancellationToken)
+                        .ConfigureAwait(false))
+                {
+                    previousResponseId = null;
+                    useResponses = string.Equals(
+                        OpenAiProvider.OpenAiApiMode,
+                        DysonOpenAiApiModes.Responses,
+                        StringComparison.Ordinal);
+                    supportsResponsesChaining = useResponses
+                        && OpenAiCompatibleHttp.SupportsResponsesServerChaining(OpenAiProvider);
+                    replyResult = await ConsumeCurrentProviderRoundAsync().ConfigureAwait(false);
                 }
 
                 if (replyResult.IsError)
@@ -872,35 +892,47 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         turn.ClearReasoningPreview();
         turn.FinalizeIncompleteTools(incompleteToolReason);
 
-        Result<OpenAiModelReply, string> replyResult;
-        if (useResponses)
+        async Task<Result<OpenAiModelReply, string>> ConsumeRecapAsync(bool recapUseResponses)
         {
-            await EnsureResponsesVisionFileIdsAsync(inFlight, cancellationToken)
-                .ConfigureAwait(false);
-            var built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
-                this,
-                currentUserPrompt: DysonRethinkToolUsageFlow.ExploreBudgetRecapInstruction,
-                currentFilePaths: null,
-                inFlightRounds: inFlight,
-                previousResponseId: null);
-            built.Tools.Clear();
-            replyResult = await ConsumeStreamWithTransientRetryAsync(
-                () => _responses.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
-                turn,
-                cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            var built = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            if (recapUseResponses)
+            {
+                await EnsureResponsesVisionFileIdsAsync(inFlight, cancellationToken)
+                    .ConfigureAwait(false);
+                var built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+                    this,
+                    currentUserPrompt: DysonRethinkToolUsageFlow.ExploreBudgetRecapInstruction,
+                    currentFilePaths: null,
+                    inFlightRounds: inFlight,
+                    previousResponseId: null);
+                built.Tools.Clear();
+                return await ConsumeStreamWithTransientRetryAsync(
+                    () => _responses.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
+                    turn,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            var completionsBuilt = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
                 this,
                 currentUserPrompt: DysonRethinkToolUsageFlow.ExploreBudgetRecapInstruction,
                 currentFilePaths: null,
                 inFlightRounds: inFlight);
-            built.Tools.Clear();
-            replyResult = await ConsumeStreamWithTransientRetryAsync(
-                () => _completions.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
+            completionsBuilt.Tools.Clear();
+            return await ConsumeStreamWithTransientRetryAsync(
+                () => _completions.StreamCreateAsync(OpenAiProvider, completionsBuilt, cancellationToken),
                 turn,
                 cancellationToken).ConfigureAwait(false);
+        }
+
+        var replyResult = await ConsumeRecapAsync(useResponses).ConfigureAwait(false);
+        if (replyResult.IsError
+            && await TryApplyChatFallbackAsync(replyResult.Error, cancellationToken)
+                .ConfigureAwait(false))
+        {
+            var recapUseResponses = string.Equals(
+                OpenAiProvider.OpenAiApiMode,
+                DysonOpenAiApiModes.Responses,
+                StringComparison.Ordinal);
+            replyResult = await ConsumeRecapAsync(recapUseResponses).ConfigureAwait(false);
         }
 
         if (replyResult.IsError)
@@ -1118,6 +1150,49 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         return Result<OpenAiModelReply, string>.AsError(lastError ?? "OpenAI request failed.");
     }
+
+    private async Task<bool> TryApplyChatFallbackAsync(
+        string? error,
+        CancellationToken cancellationToken)
+    {
+        if (_fallbackAppliedThisTurn
+            || cancellationToken.IsCancellationRequested
+            || LooksLikeUserOrStreamCancel(error)
+            || Config.FallbackChatProvider is not OpenAiCompatibleAgentProvider fallback
+            || fallback.SlugId == OpenAiProvider.SlugId)
+        {
+            return false;
+        }
+
+        var previousSlug = OpenAiProvider.Slug;
+        Provider = fallback;
+        SlugDefaultMaxTargetContextTokens = fallback.DefaultMaxTargetContextTokens;
+        _fallbackAppliedThisTurn = true;
+
+        if (PersistenceId != Guid.Empty && _store is not null)
+        {
+            var persist = await _store.UpdateSessionMetaAsync(
+                new DysonSessionMetaUpdate
+                {
+                    SessionId = PersistenceId,
+                    ModelSlugId = fallback.SlugId,
+                    ClearModelSlug = fallback.SlugId is null,
+                    UpdateReasoningEffort = true,
+                    ReasoningEffort = fallback.ReasoningEffort,
+                },
+                cancellationToken).ConfigureAwait(false);
+            if (persist.IsError)
+                AppendLog($"fallback: persist failed: {persist.Error}");
+        }
+
+        AppendLog(
+            $"fallback: switched session model {previousSlug} → {fallback.Slug} after provider error");
+        return true;
+    }
+
+    private static bool LooksLikeUserOrStreamCancel(string? error) =>
+        !string.IsNullOrEmpty(error)
+        && error.Contains("cancelled", StringComparison.OrdinalIgnoreCase);
 
     private static string FormatTransientRetryLog(
         string? error,
