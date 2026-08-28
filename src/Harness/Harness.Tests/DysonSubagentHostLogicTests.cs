@@ -82,6 +82,124 @@ public class DysonSubagentHostLogicTests
         AssertUserDialogUiRouting();
         AssertKickOffFailureSummaries();
         AssertPromptQueueFifo();
+        AssertCompletionAutoTurnSuppression();
+    }
+
+    private static void AssertCompletionAutoTurnSuppression()
+    {
+        string[] parentModes =
+        [
+            DysonAgentModes.Work,
+            DysonAgentModes.Plan,
+            DysonAgentModes.Ask,
+            DysonAgentModes.Drone,
+        ];
+        DysonAgentInterruptKind[] completionKinds =
+        [
+            DysonAgentInterruptKind.SubagentCompleted,
+            DysonAgentInterruptKind.SubagentFailed,
+            DysonAgentInterruptKind.SubagentStopped,
+        ];
+
+        foreach (var mode in parentModes)
+        {
+            var parent = new StubSession(mode);
+            var waited = new StubSession();
+            var sibling = new StubSession();
+            parent.RegisterForTest(waited);
+            parent.RegisterForTest(sibling);
+
+            using var waitCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            var waitTask = parent.WaitForSubagentAsync(waited.Id, timeoutMs: 15_000, waitCts.Token);
+            if (!SpinUntil(() => parent.WaitingOnSubagentIds.Contains(waited.Id), TimeSpan.FromSeconds(2)))
+            {
+                waitCts.Cancel();
+                throw new InvalidOperationException($"Wait id never appeared for parent mode {mode}.");
+            }
+
+            try
+            {
+                foreach (var kind in completionKinds)
+                {
+                    var matching = new DysonAgentInterrupt { Kind = kind, SubagentId = waited.Id };
+                    if (!DysonSubagentHostLogic.ShouldSuppressCompletionAutoTurn(parent, matching))
+                    {
+                        throw new InvalidOperationException(
+                            $"{mode} parent waiting on child must suppress {kind}.");
+                    }
+
+                    var other = new DysonAgentInterrupt { Kind = kind, SubagentId = sibling.Id };
+                    if (DysonSubagentHostLogic.ShouldSuppressCompletionAutoTurn(parent, other))
+                    {
+                        throw new InvalidOperationException(
+                            $"{mode} parent must not suppress a non-waited sibling {kind}.");
+                    }
+                }
+
+                var eventInterrupt = new DysonAgentInterrupt
+                {
+                    Kind = DysonAgentInterruptKind.SubagentEvent,
+                    SubagentId = waited.Id,
+                    EventKind = "status",
+                    Payload = "ok",
+                };
+                if (DysonSubagentHostLogic.ShouldSuppressCompletionAutoTurn(parent, eventInterrupt))
+                {
+                    throw new InvalidOperationException(
+                        "SubagentEvent must not be suppressed even while waiting on that child.");
+                }
+            }
+            finally
+            {
+                waitCts.Cancel();
+                try
+                {
+                    waitTask.GetAwaiter().GetResult();
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+        }
+
+        var consumeParent = new StubSession(DysonAgentModes.Work);
+        var consumeChild = new StubSession();
+        consumeParent.RegisterForTest(consumeChild);
+        if (!consumeChild.TryMarkTerminal(DysonSessionStatus.Completed, "waited"))
+            throw new InvalidOperationException("Expected TryMarkTerminal Completed for consume child.");
+
+        var consumeWait = consumeParent.WaitForSubagentAsync(consumeChild.Id, timeoutMs: 2000)
+            .GetAwaiter()
+            .GetResult();
+        if (consumeWait.IsError)
+            throw new InvalidOperationException("Expected successful Wait: " + consumeWait.Error);
+
+        if (!consumeParent.HasWaitConsumedCompletion(consumeChild.Id))
+            throw new InvalidOperationException("Expected HasWaitConsumedCompletion after successful Wait.");
+
+        var consumed = new DysonAgentInterrupt
+        {
+            Kind = DysonAgentInterruptKind.SubagentCompleted,
+            SubagentId = consumeChild.Id,
+        };
+        if (!DysonSubagentHostLogic.ShouldSuppressCompletionAutoTurn(consumeParent, consumed))
+        {
+            throw new InvalidOperationException(
+                "Consume marker must still suppress completion auto-turn after Wait returns.");
+        }
+    }
+
+    private static bool SpinUntil(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition())
+                return true;
+            Thread.Sleep(10);
+        }
+
+        return condition();
     }
 
     private static void AssertAskUiRouting()
@@ -233,8 +351,8 @@ public class DysonSubagentHostLogicTests
 
     private sealed class StubProvider : DysonAgentProvider;
 
-    private sealed class StubSession() : DysonAgentSession(
-        DysonAgentModes.Work,
+    private sealed class StubSession(string mode = DysonAgentModes.Work) : DysonAgentSession(
+        mode,
         new DysonAgentSessionConfig(),
         new StubProvider())
     {
