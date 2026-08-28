@@ -768,7 +768,7 @@ public class DysonScreenshotAttachmentTests
             }
 
             // Mirror Cef race: linked CT + CancelAfter vs hanging work (no STA host).
-            var timeout = timeoutMs is > 0 ? timeoutMs.Value : 30_000;
+            var timeout = timeoutMs is > 0 ? timeoutMs.Value : DysonBrowserDefaults.DefaultTimeoutMs;
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             linked.CancelAfter(timeout);
             linked.Token.ThrowIfCancellationRequested();
