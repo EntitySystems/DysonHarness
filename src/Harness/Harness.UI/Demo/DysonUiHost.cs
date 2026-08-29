@@ -3332,7 +3332,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             PersistenceId = persistenceId,
             RuntimeId = session.Id,
             Title = session.DisplayTitle,
-            LatestTurnAgentTitle = latest?.AgentTitle,
+            LatestTurnStepTitle = DysonReasoningHistoryUi.TryGetLatestStepTitle(latest),
             ModelLabel = modelLabel,
             AgentMode = session.Mode,
             IsRunning = DysonSubagentHostLogic.IsRunning(session.Status, latest),
