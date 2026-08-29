@@ -9,11 +9,11 @@ public static class DysonThirdPartyResources
     {
         /// <summary>Pinned GitHub release tag page. Bump this to retarget downloads.</summary>
         public const string ReleaseTagUrl =
-            "https://github.com/router-for-me/CLIProxyAPI/releases/tag/v7.2.102";
+            "https://github.com/router-for-me/CLIProxyAPI/releases/tag/v7.2.145";
 
         public static string Tag => ParseTag(ReleaseTagUrl);
 
-        /// <summary>Semver without leading <c>v</c> (e.g. <c>7.2.102</c>).</summary>
+        /// <summary>Semver without leading <c>v</c> (e.g. <c>7.2.145</c>).</summary>
         public static string Version => Tag.StartsWith('v') || Tag.StartsWith('V')
             ? Tag[1..]
             : Tag;

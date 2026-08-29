@@ -10,18 +10,35 @@ public sealed class DysonCliProxyDownloader(HttpClient http)
 {
     private readonly HttpClient _http = http ?? throw new ArgumentNullException(nameof(http));
 
-    public async Task<VoidResult<string>> EnsureInstalledAsync(
+    public Task<VoidResult<string>> EnsureInstalledAsync(
         IProgress<CliProxyDownloadProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool force = false) =>
+        EnsureInstalledAsync(DysonCliProxyPaths.InstallRoot, progress, cancellationToken, force);
+
+    internal async Task<VoidResult<string>> EnsureInstalledAsync(
+        string installRoot,
+        IProgress<CliProxyDownloadProgress>? progress = null,
+        CancellationToken cancellationToken = default,
+        bool force = false)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(installRoot);
+
         var version = DysonThirdPartyResources.CliProxyApi.Version;
-        var exePath = DysonCliProxyPaths.ExpectedExecutablePath(version);
-        if (File.Exists(exePath))
+        var exePath = DysonCliProxyPaths.ExpectedExecutablePath(installRoot, version);
+        if (!force && File.Exists(exePath))
             return VoidResult<string>.Success;
 
         try
         {
-            Directory.CreateDirectory(DysonCliProxyPaths.InstallRoot);
+            if (force)
+            {
+                var pinDir = DysonCliProxyPaths.VersionDirectory(installRoot, version);
+                if (Directory.Exists(pinDir))
+                    Directory.Delete(pinDir, recursive: true);
+            }
+
+            Directory.CreateDirectory(installRoot);
             var assetName = DysonCliProxyAssetResolver.ResolveAssetFileName(version);
             var url = DysonCliProxyAssetResolver.ResolveDownloadUrl(version);
             var archiveExt = assetName.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase)
@@ -43,7 +60,7 @@ public sealed class DysonCliProxyDownloader(HttpClient http)
                 if (checksum.IsError)
                     return checksum;
 
-                var versionDir = DysonCliProxyPaths.VersionDirectory(version);
+                var versionDir = DysonCliProxyPaths.VersionDirectory(installRoot, version);
                 if (Directory.Exists(versionDir))
                     Directory.Delete(versionDir, recursive: true);
                 Directory.CreateDirectory(versionDir);
@@ -53,7 +70,7 @@ public sealed class DysonCliProxyDownloader(HttpClient http)
                     return extract;
 
                 PromoteExecutable(versionDir);
-                if (!File.Exists(DysonCliProxyPaths.ExpectedExecutablePath(version)))
+                if (!File.Exists(DysonCliProxyPaths.ExpectedExecutablePath(installRoot, version)))
                 {
                     return VoidResult<string>.AsError(
                         $"CLIProxyAPI extract succeeded but executable was not found under {versionDir}.");

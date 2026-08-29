@@ -153,6 +153,52 @@ public sealed class DysonCliProxyHost : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Force-replace the pinned binary: kill the process, prune leftover version dirs,
+    /// re-download the pin, rewrite config.yaml with the same shared keys, start, wait healthy.
+    /// Never deletes <c>auths/</c> OAuth files.
+    /// </summary>
+    public async Task<VoidResult<string>> ReinstallAndRestartAsync(
+        IProgress<CliProxyDownloadProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            KillProcess();
+            KillOrphanProcesses();
+
+            DysonCliProxyPaths.PruneObsoleteVersionDirectories(
+                DysonCliProxyPaths.InstallRoot,
+                DysonThirdPartyResources.CliProxyApi.Version);
+
+            var install = await _downloader
+                .EnsureInstalledAsync(progress, cancellationToken, force: true)
+                .ConfigureAwait(false);
+            if (install.IsError)
+                return install;
+
+            var keys = LoadOrCreateKeys();
+            _keys = keys;
+
+            var writeConfig = WriteConfigYaml(keys);
+            if (writeConfig.IsError)
+                return writeConfig;
+
+            var start = StartProcess();
+            if (start.IsError)
+                return start;
+
+            return await WaitForHealthyAsync(keys.ApiKey, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public Result<string, string> GetApiKey()
     {
         _keys ??= LoadOrCreateKeys();

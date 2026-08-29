@@ -28,6 +28,9 @@
         <button type="button" class="btn btn-ghost btn--sm" disabled="@_busy" @onclick="ResetCliProxyAsync">
             Reset CLI proxy
         </button>
+        <button type="button" class="btn btn-ghost btn--sm" disabled="@_busy" @onclick="ReinstallCliProxyAsync">
+            Reinstall CLI proxy
+        </button>
     </div>
 
     <div class="models-panel__managed" style="margin:10px 0 12px;padding:8px 0;border-bottom:1px solid var(--border, #333);">
@@ -44,7 +47,7 @@
             </div>
         }
 
-        @if (_downloadProgress is { } prog && _importingSource is not null)
+        @if (_downloadProgress is { } prog && _connectingSource is null && _verifyingSource is null)
         {
             <div style="margin:6px 0 10px;">
                 <div class="list-item__meta mono" style="margin-bottom:4px;">
@@ -987,6 +990,44 @@
             }
 
             _status = "CLI proxy restarted with fresh config. Use Connect / Verify to re-sync managed providers.";
+            _cliProxyInstalled = CliProxy.IsInstalled;
+            await RefreshAsync();
+            await OnChanged.InvokeAsync();
+        }
+        finally
+        {
+            _busy = false;
+            _downloadProgress = null;
+        }
+    }
+
+    private async Task ReinstallCliProxyAsync()
+    {
+        var pin = DysonThirdPartyResources.CliProxyApi.Tag;
+        var confirmed = await ConfirmDialog.ConfirmAsync(
+            title: "Reinstall CLI proxy",
+            message: $"Re-download pinned {pin}, restart the local process, and keep signed-in OAuth sessions? In-flight requests will fail.",
+            confirmLabel: "Reinstall",
+            cancelLabel: "Cancel",
+            danger: false);
+        if (!confirmed)
+            return;
+
+        _error = null;
+        _status = null;
+        _busy = true;
+        _downloadProgress = null;
+        try
+        {
+            var reinstall = await CliProxy.ReinstallAndRestartAsync(CreateDownloadProgress());
+            if (reinstall.IsError)
+            {
+                _error = reinstall.Error;
+                _cliProxyInstalled = CliProxy.IsInstalled;
+                return;
+            }
+
+            _status = $"CLI proxy {pin} reinstalled and restarted. Signed-in OAuth sessions were kept.";
             _cliProxyInstalled = CliProxy.IsInstalled;
             await RefreshAsync();
             await OnChanged.InvokeAsync();
