@@ -173,7 +173,7 @@ Subagents are **session-owned**: the live graph (`SubSessions` / `SubagentsById`
 
 `ListSessionsAsync(..., rootsOnly: true)` (default) hides children from the sidebar; drill-in is UI navigation only (`NavigateToSessionAsync` / `NavigateToParentAsync`). Root resume loads root turns fully; live host keeps parent+children in a session registry so focus switches do not dispose running children.
 
-Orchestrator policy (engine soft gates + prompts): Plan banned as subagent; Explore never spawns; Drone may spawn Explore only; Work/Drone always Wait on Explore they start, never Wait on Drones, Plan still Wait-if-blocker; completion via `SubmitSubagentReport` → parent interrupt → host FIFO `SubagentReportProcessing` auto-turn (buffered in Plan until BeginBuildPlan or mode leave). See [engine README](../engine/README.md)#orchestrator-subagents.
+Orchestrator policy (engine soft gates + prompts): Plan banned as subagent; Explore never spawns; Drone may spawn Explore only; Work/Drone always Wait on Explore they start, never Wait on Drones, Plan still Wait-if-blocker; completion via `SubmitSubagentReport` → parent interrupt → host FIFO `SubagentReportProcessing` auto-turn unless that child’s completion was consumed by a successful `WaitForSubagent` this cycle (timeout/cancel does not consume; siblings still notify). Plan still buffers non-consumed completions until BeginBuildPlan or mode leave; Wait-consumed reports do not resurrect there. See [engine README](../engine/README.md)#orchestrator-subagents.
 
 ## Live write hooks
 

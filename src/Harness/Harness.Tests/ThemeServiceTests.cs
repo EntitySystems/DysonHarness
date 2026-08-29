@@ -79,6 +79,19 @@ public class ThemeServiceTests
     }
 
     [Fact]
+    public async Task SetAccentAsync_accepts_amber()
+    {
+        var settings = new MemorySettings();
+        var service = new ThemeService(new ThemeJsRuntime("dark", "#4c8bf5"), settings);
+
+        await service.SetAccentAsync("amber");
+
+        Assert.Equal("amber", service.Accent);
+        Assert.Equal("amber", settings.Values[DysonAppSettingKeys.UiAccent]);
+        Assert.Contains("amber", ThemeService.Accents);
+    }
+
+    [Fact]
     public async Task InitializeAsync_ignores_invalid_stored_settings()
     {
         var settings = new MemorySettings();

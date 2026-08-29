@@ -28,6 +28,8 @@ public sealed class DysonLongRunningShell : IDisposable
     private Task? _stdoutPump;
     private Task? _stderrPump;
     private int _disposed;
+    private bool _wasCancelRequested;
+    private readonly TaskCompletionSource _completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public required int Id { get; init; }
     public required Guid WorkDirectoryId { get; init; }
@@ -39,6 +41,19 @@ public sealed class DysonLongRunningShell : IDisposable
 
     public DysonLongRunningShellStatus Status { get; private set; } = DysonLongRunningShellStatus.Running;
     public int? ExitCode { get; private set; }
+
+    /// <summary>True if the shell was in <see cref="DysonLongRunningShellStatus.CancelRequested"/> at first terminal transition.</summary>
+    internal bool WasCancelRequested
+    {
+        get
+        {
+            lock (_gate)
+                return _wasCancelRequested;
+        }
+    }
+
+    internal Task WaitUntilTerminalAsync(CancellationToken cancellationToken) =>
+        _completed.Task.WaitAsync(cancellationToken);
 
     /// <summary>Snapshot for UI/list rows (no Process handle).</summary>
     public DysonLongRunningShellInfo ToInfo()
@@ -345,10 +360,13 @@ public sealed class DysonLongRunningShell : IDisposable
             if (Status is DysonLongRunningShellStatus.Exited
                 || (Status is DysonLongRunningShellStatus.Aborted && ExitCode is not null))
             {
+                _completed.TrySetResult();
                 return;
             }
 
             wasCancelRequested = Status == DysonLongRunningShellStatus.CancelRequested;
+            if (wasCancelRequested)
+                _wasCancelRequested = true;
 
             int? code = null;
             try
@@ -370,6 +388,7 @@ public sealed class DysonLongRunningShell : IDisposable
             becameTerminal = true;
         }
 
+        _completed.TrySetResult();
         try { _combinedSignal.Release(); } catch (SemaphoreFullException) { /* ignore */ } catch (ObjectDisposedException) { /* ignore */ }
         DysonLongRunningShellRegistry.RaiseChanged();
         if (becameTerminal)

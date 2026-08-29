@@ -22,11 +22,12 @@ public class DysonParentEventTests
         AssertInterruptCancelsEventWait().GetAwaiter().GetResult();
         AssertNonInterruptFailsWhileWaiting().GetAwaiter().GetResult();
         AssertInjectAfterCompletedReportWaitsForSecond().GetAwaiter().GetResult();
+        AssertWaitConsumeMarker().GetAwaiter().GetResult();
     }
 
     private static void AssertLayerGating()
     {
-        var root = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess);
+        var root = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess, ["Pwsh"]);
         root.ConfigureInterAgentTools(0);
         AssertHas(root, "AskQuestion");
         AssertMissing(root, "AskQuestionFromParent");
@@ -35,8 +36,10 @@ public class DysonParentEventTests
         AssertMissing(root, "TriggerParentEvent");
         AssertHas(root, "RespondToSubagentEvent");
         AssertHas(root, "TriggerSubagentEvent");
+        AssertHas(root, "SubscribeToLongRunningShellCompletion");
+        AssertHas(root, "WaitForLongRunningShellCompletion");
 
-        var l1 = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess);
+        var l1 = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess, ["Pwsh"]);
         l1.ConfigureInterAgentTools(1);
         AssertMissing(l1, "AskQuestion");
         AssertHas(l1, "AskQuestionFromParent");
@@ -45,8 +48,10 @@ public class DysonParentEventTests
         AssertHas(l1, "TriggerParentEvent");
         AssertHas(l1, "RespondToSubagentEvent");
         AssertHas(l1, "TriggerSubagentEvent");
+        AssertMissing(l1, "SubscribeToLongRunningShellCompletion");
+        AssertHas(l1, "WaitForLongRunningShellCompletion");
 
-        var deep = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess);
+        var deep = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess, ["Pwsh"]);
         deep.ConfigureInterAgentTools(2);
         AssertMissing(deep, "AskQuestion");
         AssertMissing(deep, "AskQuestionFromParent");
@@ -55,6 +60,8 @@ public class DysonParentEventTests
         AssertHas(deep, "TriggerParentEvent");
         AssertHas(deep, "RespondToSubagentEvent");
         AssertHas(deep, "TriggerSubagentEvent");
+        AssertMissing(deep, "SubscribeToLongRunningShellCompletion");
+        AssertHas(deep, "WaitForLongRunningShellCompletion");
     }
 
     /// <summary>
@@ -72,6 +79,8 @@ public class DysonParentEventTests
         AssertMissing(child.McpPipeline, "PromptUserDialogFromParent");
         AssertHas(child.McpPipeline, "AskQuestion");
         AssertHas(child.McpPipeline, "PromptUserDialog");
+        AssertHas(child.McpPipeline, "SubscribeToLongRunningShellCompletion");
+        AssertHas(child.McpPipeline, "WaitForLongRunningShellCompletion");
 
         child.SetRuntimeIdForTest(1);
         parent.RestoreRegisteredSubagent(child);
@@ -84,6 +93,8 @@ public class DysonParentEventTests
         AssertHas(child.McpPipeline, "PromptUserDialogFromParent");
         AssertMissing(child.McpPipeline, "AskQuestion");
         AssertMissing(child.McpPipeline, "PromptUserDialog");
+        AssertMissing(child.McpPipeline, "SubscribeToLongRunningShellCompletion");
+        AssertHas(child.McpPipeline, "WaitForLongRunningShellCompletion");
     }
 
     private static void AssertFormatter()
@@ -193,6 +204,15 @@ public class DysonParentEventTests
 
         wait2.Cancel();
         try { await wait2Task.ConfigureAwait(false); } catch { /* cancelled */ }
+
+        if (parent.IsWaitingOnAnySubagent || parent.WaitingOnSubagentIds.Contains(childA.Id))
+            throw new InvalidOperationException("Expected waiting id cleared after Wait cancel.");
+        if (parent.HasWaitConsumedCompletion(childA.Id)
+            || parent.ShouldSuppressWaitedCompletionAutoTurn(childA.Id))
+        {
+            throw new InvalidOperationException(
+                "Cancel must not mark wait-consumed or suppress completion auto-turns.");
+        }
     }
 
     private static async Task AssertInterruptCancelsEventWait()
@@ -337,6 +357,79 @@ public class DysonParentEventTests
         }
     }
 
+    /// <summary>
+    /// Successful Wait marks consume (and suppress) then TryReopenForNewParentTask clears it;
+    /// timeout does not mark. Waiting id is set during Wait and cleared after.
+    /// </summary>
+    private static async Task AssertWaitConsumeMarker()
+    {
+        var timeoutParent = new StubSession();
+        var timeoutChild = new StubSession();
+        timeoutParent.RegisterForTest(timeoutChild);
+
+        var timeoutWait = timeoutParent.WaitForSubagentAsync(timeoutChild.Id, timeoutMs: 80);
+        await Task.Delay(15).ConfigureAwait(false);
+        if (!timeoutParent.IsWaitingOnAnySubagent
+            || !timeoutParent.WaitingOnSubagentIds.Contains(timeoutChild.Id)
+            || !timeoutParent.ShouldSuppressWaitedCompletionAutoTurn(timeoutChild.Id))
+        {
+            throw new InvalidOperationException(
+                "Expected waiting id + suppress while WaitForSubagent is in flight.");
+        }
+
+        if (timeoutParent.HasWaitConsumedCompletion(timeoutChild.Id))
+            throw new InvalidOperationException("In-flight Wait must not mark consume until terminal.");
+
+        var timeoutResult = await timeoutWait.ConfigureAwait(false);
+        if (timeoutResult.IsError
+            || timeoutResult.Value.IndexOf("timeout", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            throw new InvalidOperationException(
+                "Expected timeout JSON: " +
+                (timeoutResult.IsError ? timeoutResult.Error : timeoutResult.Value));
+        }
+
+        if (timeoutParent.IsWaitingOnAnySubagent
+            || timeoutParent.WaitingOnSubagentIds.Contains(timeoutChild.Id)
+            || timeoutParent.HasWaitConsumedCompletion(timeoutChild.Id)
+            || timeoutParent.ShouldSuppressWaitedCompletionAutoTurn(timeoutChild.Id))
+        {
+            throw new InvalidOperationException("Timeout must clear waiting id and not mark consume.");
+        }
+
+        var parent = new StubSession();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+
+        if (!child.TryMarkTerminal(DysonSessionStatus.Completed, "waited handoff"))
+            throw new InvalidOperationException("Expected TryMarkTerminal Completed.");
+
+        var waited = await parent.WaitForSubagentAsync(child.Id, timeoutMs: 2000).ConfigureAwait(false);
+        if (waited.IsError || waited.Value.IndexOf("Completed", StringComparison.Ordinal) < 0)
+        {
+            throw new InvalidOperationException(
+                "Expected successful wait JSON: " + (waited.IsError ? waited.Error : waited.Value));
+        }
+
+        if (parent.IsWaitingOnAnySubagent || parent.WaitingOnSubagentIds.Contains(child.Id))
+            throw new InvalidOperationException("Expected waiting id cleared after successful Wait.");
+        if (!parent.HasWaitConsumedCompletion(child.Id)
+            || !parent.ShouldSuppressWaitedCompletionAutoTurn(child.Id))
+        {
+            throw new InvalidOperationException(
+                "Successful Wait must mark HasWaitConsumedCompletion and suppress auto-turn.");
+        }
+
+        if (!child.TryReopenForNewParentTask())
+            throw new InvalidOperationException("Expected TryReopenForNewParentTask after Completed.");
+        if (parent.HasWaitConsumedCompletion(child.Id)
+            || parent.ShouldSuppressWaitedCompletionAutoTurn(child.Id))
+        {
+            throw new InvalidOperationException(
+                "TryReopenForNewParentTask must ClearWaitConsumedCompletion on the parent.");
+        }
+    }
+
     private static void AssertHas(DysonMcpPipeline pipeline, string name)
     {
         if (!pipeline.Tools.ContainsKey(name))
@@ -353,7 +446,7 @@ public class DysonParentEventTests
 
     private class StubSession() : DysonAgentSession(
         DysonAgentModes.Work,
-        new DysonAgentSessionConfig(),
+        new DysonAgentSessionConfig { AvailableShells = [new DysonConfiguredShellSpec("Cmd", "cmd.exe")] },
         new StubProvider())
     {
         public void RegisterForTest(DysonAgentSession child) => RegisterSubagent(child);

@@ -63,7 +63,7 @@ Prefer JDSL when several catalog calls should run in **one** turn with branching
 - **Fallback file paths** — try `ReadFile` on primary path → `OnFailure` alternate path(s) (config, README, lockfile variants).
 - **Create-if-missing then write** — `ReadFile` / `ListDirectory` fails → `CreateDirectory` / `CreateFile` → `ContinueWith` `WriteFile`.
 - **Navigate, wait, extract (browser)** — `BrowserNavigate` → `OnSuccess` `BrowserWaitForSelector` → `ContinueWith` `BrowserGetHtml` / `BrowserTakeScreenshot`.
-- **Long-running shell: start then poll** — `StartLongRunningShell` → `Loop` with `ReadLongRunningShellTail` / readiness probe as condition, backoff via `WaitForSeconds` in `Action`; exit into `AbortLongRunningShell` or a success path.
+- **Long-running shell: start then wait** — Prefer `StartLongRunningShell` → `WaitForLongRunningShellCompletion` (required `timeoutMs`) over poll / `WaitForSeconds` loops. Bounded `Loop` probes (`ReadLongRunningShellTail` + `WaitForSeconds`) are still ok when waiting for a log marker rather than process exit.
 - **Research with source fallback** — `FreeSearch` → `OnFailure` `FreeSearchAdvanced` → `OnFailure` `WebFetch` a known docs URL; forward `fromResult:$0` into `CompleteTask`.
 - **Return a value to the caller** — fetch / compute, then `JDSL:ReturnOutput` with `output` (literal or `fromResult:$0`). Stops the program; UI keeps the full flow envelope; the model transcript sees only that output.
 

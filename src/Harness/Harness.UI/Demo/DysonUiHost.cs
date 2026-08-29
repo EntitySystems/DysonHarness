@@ -4202,6 +4202,12 @@ public sealed class DysonUiHost : IAsyncDisposable
                 cancellationToken)
             .ConfigureAwait(false);
         await TryHydrateOpenAiProviderSettingAsync(
+                DysonAppSettingKeys.FallbackChatModelSlugId,
+                DysonAppSettingKeys.FallbackChatReasoningEffort,
+                p => config.FallbackChatProvider = p,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await TryHydrateOpenAiProviderSettingAsync(
                 DysonAppSettingKeys.WebSearchSummarizerModelSlugId,
                 DysonAppSettingKeys.WebSearchSummarizerReasoningEffort,
                 p => config.SummarizerProvider = p,
@@ -4832,9 +4838,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (!DysonSubagentReportPrompt.IsCompletionInterrupt(interrupt.Kind))
             return;
 
-        // The BugReview turn waits for and incorporates this one review child's result.
-        // Do not enqueue a second generic SubagentReportProcessing turn for that same handoff.
-        if (DysonSubagentHostLogic.ShouldSuppressAutomaticReviewCompletion(parent, interrupt))
+        // Wait-consumed / BugReview: cards still update; do not enqueue SubagentReportProcessing.
+        if (DysonSubagentHostLogic.ShouldSuppressCompletionAutoTurn(parent, interrupt))
         {
             Notify();
             return;
@@ -5469,11 +5474,19 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         var kept = new List<DysonAgentInterrupt>();
+        _sessionsById.TryGetValue(parentPersistenceId, out var parent);
         while (queue.TryDequeue(out var interrupt))
         {
             if (!DysonSubagentReportPrompt.IsCompletionInterrupt(interrupt.Kind))
             {
                 kept.Add(interrupt);
+                continue;
+            }
+
+            // Wait-consumed completions must not fold into BeginBuildPlan / leave-Plan.
+            if (parent is not null
+                && DysonSubagentHostLogic.ShouldSuppressCompletionAutoTurn(parent, interrupt))
+            {
                 continue;
             }
 
@@ -5484,7 +5497,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             {
                 title = child.DisplayTitle;
             }
-            else if (_sessionsById.TryGetValue(parentPersistenceId, out var parent)
+            else if (parent is not null
                 && parent.TryGetSubagent(interrupt.SubagentId, out var byRuntime))
             {
                 title = byRuntime.DisplayTitle;
@@ -5533,6 +5546,13 @@ public sealed class DysonUiHost : IAsyncDisposable
                 {
                     deferredCompletions.Add(interrupt);
                     break;
+                }
+
+                // Wait-consumed / BugReview: drop — do not prompt or requeue as SubagentReportProcessing.
+                if (DysonSubagentReportPrompt.IsCompletionInterrupt(interrupt.Kind)
+                    && DysonSubagentHostLogic.ShouldSuppressCompletionAutoTurn(parent, interrupt))
+                {
+                    continue;
                 }
 
                 // Belt-and-suspenders: while Plan, leave completion reports buffered; still drain events + shell exits.

@@ -24,9 +24,27 @@ public static class DysonSubagentHostLogic
     }
 
     /// <summary>
+    /// Skip SubagentReportProcessing when this completion was already delivered via
+    /// <c>WaitForSubagent</c> (waiting or consume marker) or the in-flight BugReview helper.
+    /// </summary>
+    public static bool ShouldSuppressCompletionAutoTurn(
+        DysonAgentSession parent,
+        DysonAgentInterrupt interrupt)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        ArgumentNullException.ThrowIfNull(interrupt);
+
+        if (!DysonSubagentReportPrompt.IsCompletionInterrupt(interrupt.Kind))
+            return false;
+
+        return parent.ShouldSuppressWaitedCompletionAutoTurn(interrupt.SubagentId)
+            || ShouldSuppressAutomaticReviewCompletion(parent, interrupt);
+    }
+
+    /// <summary>
     /// The BugReview orchestration turn consumes its single review child's terminal result
-    /// through WaitForSubagent. Suppress only that duplicate generic completion auto-turn;
-    /// all ordinary waited-child report processing remains unchanged.
+    /// through WaitForSubagent. Keep as a dedicated OR term of
+    /// <see cref="ShouldSuppressCompletionAutoTurn"/>.
     /// </summary>
     public static bool ShouldSuppressAutomaticReviewCompletion(
         DysonAgentSession parent,

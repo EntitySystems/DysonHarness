@@ -74,6 +74,32 @@
 
         <div class="settings-page__picker-group">
             <div class="settings-page__picker-row">
+                <label>Fallback chat model</label>
+                <label>Effort</label>
+                <ModelSlugPicker SelectedSlugId="_fallbackChatSlugId"
+                             SelectedSlugIdChanged="OnFallbackChatSlugChangedAsync"
+                             AllowEmpty="true"
+                             EmptyLabel="None"
+                             IsEligible="IsFallbackChatEligible"
+                             NoEligibleOptionsLabel="No OpenAI-compatible model is available." />
+                <ComposerEffortPicker Options="EffortModesFor(_fallbackChatSlugId)"
+                                  Value="@_fallbackChatEffort"
+                                  Disabled="@(_fallbackChatSlugId is null)"
+                                  EmptyLabel="Default"
+                                  SectionLabel="Reasoning effort"
+                                  Title="Reasoning effort (Default uses the slug default)"
+                                  ShowTriggerLabel="false"
+                                  OpenUp="false"
+                                  OnPick="OnFallbackChatEffortPickedAsync" />
+                </div>
+            <p class="settings-page__copy">
+                Used when the session chat provider fails after retries (5 attempts); the session switches
+                to this model immediately, including the in-flight turn. Leave as None to disable.
+            </p>
+        </div>
+
+        <div class="settings-page__picker-group">
+            <div class="settings-page__picker-row">
                 <label>Turn summarizer model</label>
                 <label>Effort</label>
                 <ModelSlugPicker SelectedSlugId="_turnSummarizerSlugId"
@@ -229,12 +255,14 @@
     private string _automaticCodeReview = DysonAutomaticCodeReviewSetting.None;
     private string _automaticCodeReviewAction = DysonAutomaticCodeReviewSetting.ReportOnly;
     private Guid? _imageGenerationSlugId;
+    private Guid? _fallbackChatSlugId;
     private Guid? _turnSummarizerSlugId;
     private Guid? _webSearchSummarizerSlugId;
     private Guid? _exploreSlugId;
     private Guid? _droneSlugId;
     private Guid? _securityReviewSlugId;
     private Guid? _bugReviewSlugId;
+    private string _fallbackChatEffort = "";
     private string _turnSummarizerEffort = "";
     private string _webSearchSummarizerEffort = "";
     private string _exploreEffort = "";
@@ -266,6 +294,8 @@
 
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.ImageGenerationModelSlugId, v => _imageGenerationSlugId = v))
             return;
+        if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.FallbackChatModelSlugId, v => _fallbackChatSlugId = v))
+            return;
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.TurnSummarizerModelSlugId, v => _turnSummarizerSlugId = v))
             return;
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.WebSearchSummarizerModelSlugId, v => _webSearchSummarizerSlugId = v))
@@ -282,6 +312,8 @@
         if (!await TryLoadSlugModesAsync())
             return;
 
+        if (!await TryLoadEffortSettingAsync(_fallbackChatSlugId, DysonAppSettingKeys.FallbackChatReasoningEffort, v => _fallbackChatEffort = v))
+            return;
         if (!await TryLoadEffortSettingAsync(_turnSummarizerSlugId, DysonAppSettingKeys.TurnSummarizerReasoningEffort, v => _turnSummarizerEffort = v))
             return;
         if (!await TryLoadEffortSettingAsync(_webSearchSummarizerSlugId, DysonAppSettingKeys.WebSearchSummarizerReasoningEffort, v => _webSearchSummarizerEffort = v))
@@ -441,6 +473,23 @@
         DysonModelProviderEntity provider) =>
         OpenAiImageGenerationEligibility.IsEligible(slug, provider);
 
+    private static bool IsFallbackChatEligible(
+        DysonModelSlugEntity _,
+        DysonModelProviderEntity provider) =>
+        string.Equals(
+            DysonProviderKinds.EffectiveKind(provider.ProviderKind, provider.BaseUrl, provider.ApiKey),
+            DysonProviderKinds.OpenAICompatible,
+            StringComparison.Ordinal);
+
+    private Task OnFallbackChatSlugChangedAsync(Guid? id) =>
+        SaveSlugSettingAsync(
+            id,
+            _fallbackChatSlugId,
+            v => _fallbackChatSlugId = v,
+            v => _fallbackChatEffort = v,
+            DysonAppSettingKeys.FallbackChatModelSlugId,
+            DysonAppSettingKeys.FallbackChatReasoningEffort);
+
     private Task OnTurnSummarizerSlugChangedAsync(Guid? id) =>
         SaveSlugSettingAsync(
             id,
@@ -494,6 +543,9 @@
             v => _bugReviewEffort = v,
             DysonAppSettingKeys.BugReviewModelSlugId,
             DysonAppSettingKeys.BugReviewReasoningEffort);
+
+    private Task OnFallbackChatEffortPickedAsync(string? effort) =>
+        SaveEffortSettingAsync(effort, v => _fallbackChatEffort = v, DysonAppSettingKeys.FallbackChatReasoningEffort);
 
     private Task OnTurnSummarizerEffortPickedAsync(string? effort) =>
         SaveEffortSettingAsync(effort, v => _turnSummarizerEffort = v, DysonAppSettingKeys.TurnSummarizerReasoningEffort);

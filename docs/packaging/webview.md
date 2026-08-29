@@ -47,7 +47,7 @@ Agent browser chrome has a **Snip** button to the right of the address bar. Agen
 4. `IDysonBrowserControl.SnipCaptured` raises `DysonBrowserSnipPayload` (`ImageBytes`, empty `HtmlRef`, `FileName` = `browser-snip.jpg`, plus `Url`, raw scroll metrics, and `PercentDown` for the rubber-band top); HwndHost is shown again
 5. `DysonUiHost` compresses via `DysonUserImageFactory` and `QueuePendingImage` — the thumbnail appears in the composer. It also enqueues a consume-once prompt line (`DysonBrowserSnipCrop.FormatPromptLine`) that `Composer` appends: `Snip: {url} · {n}% down the page` (drops URL or percent when missing; omits the line if both are missing). The user still types/sends (no auto-send)
 
-`TakeScreenshotAsync` uses DevTools `Page.CaptureScreenshot` (optional `timeoutMs`, default **30s**, linked to the prompt cancellation token so cancel/timeout cannot hang forever). Under HwndHost this capture includes WebGPU/WebGL pixels.
+`TakeScreenshotAsync` uses DevTools `Page.CaptureScreenshot` (optional `timeoutMs`, default **60s**, linked to the prompt cancellation token so cancel/timeout cannot hang forever). JS evaluation uses the same linked-token race. Residual: CefSharp `EvaluateScriptAsync` may remain orphaned after timeout (cannot abort the renderer). Under HwndHost this capture includes WebGPU/WebGL pixels.
 
 **`HtmlRef` TODO:** `DysonBinaryAttachment.HtmlRef` / payload `HtmlRef` are reserved for a future feature that will resolve HTML elements intersecting the snip rectangle. Today they are always empty/null and are not sent on provider wire image parts.
 

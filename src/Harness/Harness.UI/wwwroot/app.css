@@ -18,6 +18,7 @@
   --accent-green: #3dbf7a;
   --accent-red: #e25b5b;
   --accent-purple: #9b7aef;
+  --accent-amber: #e09b58;
 }
 
 :root,
@@ -103,10 +104,20 @@
     0 0 16px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
+[data-accent="amber"] {
+  --accent: #e09b58;
+  --accent-soft: rgba(224, 155, 88, 0.16);
+  --accent-text: #f0c48a;
+  --accent-border: color-mix(in srgb, var(--accent) 45%, transparent);
+  --accent-glow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
+    0 0 16px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
 [data-theme="light"][data-accent="blue"] { --accent-text: #245ec4; }
 [data-theme="light"][data-accent="green"] { --accent-text: #1f7a4d; }
 [data-theme="light"][data-accent="red"] { --accent-text: #a83232; }
 [data-theme="light"][data-accent="purple"] { --accent-text: #6644c4; }
+[data-theme="light"][data-accent="amber"] { --accent-text: #8a4e14; }
 
 *,
 *::before,
@@ -6544,6 +6555,7 @@ code, .mono {
 .accent-dot.green { background: var(--accent-green); }
 .accent-dot.red { background: var(--accent-red); }
 .accent-dot.purple { background: var(--accent-purple); }
+.accent-dot.amber { background: var(--accent-amber); }
 
 /* Models */
 .models-panel {

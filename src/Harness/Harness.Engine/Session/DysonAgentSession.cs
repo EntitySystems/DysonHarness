@@ -22,6 +22,7 @@ public abstract class DysonAgentSession
     private CancellationTokenSource? _runCts;
     private readonly ConcurrentDictionary<Guid, DysonParentEvent> _pendingParentEvents = new();
     private readonly HashSet<int> _waitingOnSubagentIds = [];
+    private readonly HashSet<int> _waitConsumedCompletionSubagentIds = [];
     private readonly object _waitingOnGate = new();
     private readonly ConcurrentQueue<DysonAgentTurn> _pendingTurns = new();
     private readonly Stack<DysonAgentTurn> _inFlightPromptStack = new();
@@ -96,6 +97,41 @@ public abstract class DysonAgentSession
             lock (_waitingOnGate)
                 return _waitingOnSubagentIds.OrderBy(id => id).ToArray();
         }
+    }
+
+    /// <summary>
+    /// True after a successful <see cref="WaitForSubagentAsync"/> consumed this child's
+    /// Completed/Failed/Stopped cycle (timeout/cancel do not set this).
+    /// </summary>
+    public bool HasWaitConsumedCompletion(int subagentId)
+    {
+        lock (_waitingOnGate)
+            return _waitConsumedCompletionSubagentIds.Contains(subagentId);
+    }
+
+    /// <summary>
+    /// Host skip for SubagentReportProcessing auto-turns: currently waiting on this id,
+    /// or a successful Wait already consumed this completion cycle.
+    /// </summary>
+    public bool ShouldSuppressWaitedCompletionAutoTurn(int subagentId)
+    {
+        lock (_waitingOnGate)
+        {
+            return _waitingOnSubagentIds.Contains(subagentId)
+                || _waitConsumedCompletionSubagentIds.Contains(subagentId);
+        }
+    }
+
+    internal void MarkWaitConsumedCompletion(int subagentId)
+    {
+        lock (_waitingOnGate)
+            _waitConsumedCompletionSubagentIds.Add(subagentId);
+    }
+
+    internal void ClearWaitConsumedCompletion(int subagentId)
+    {
+        lock (_waitingOnGate)
+            _waitConsumedCompletionSubagentIds.Remove(subagentId);
     }
 
     /// <summary>True while this child is blocked in <see cref="TriggerParentEventAsync"/> awaiting a reply.</summary>
@@ -535,6 +571,13 @@ public abstract class DysonAgentSession
                     childStatus = child.Status.ToString(),
                     summary = child.LastReportSummary,
                 }));
+            }
+
+            if (terminal.Status is DysonSessionStatus.Completed
+                or DysonSessionStatus.Failed
+                or DysonSessionStatus.Stopped)
+            {
+                MarkWaitConsumedCompletion(subagentId);
             }
 
             return Result<string, string>.AsValue(JsonSerializer.Serialize(new
@@ -1384,8 +1427,10 @@ public abstract class DysonAgentSession
 
             Status = DysonSessionStatus.Active;
             _terminalTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            return true;
         }
+
+        Parent?.ClearWaitConsumedCompletion(Id);
+        return true;
     }
 
     /// <summary>Marks terminal status once; returns false if already terminal.</summary>

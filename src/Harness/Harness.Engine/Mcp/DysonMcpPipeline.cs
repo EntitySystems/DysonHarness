@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 
 namespace DysonHarness;
 
@@ -93,6 +94,7 @@ public sealed class DysonMcpPipeline
             Tools.Remove("RequestLongRunningShellCancellation");
             Tools.Remove("LongRunningShellInteract");
             Tools.Remove("SubscribeToLongRunningShellCompletion");
+            Tools.Remove("WaitForLongRunningShellCompletion");
             return;
         }
 
@@ -194,7 +196,7 @@ public sealed class DysonMcpPipeline
             "Start a background long-running shell in the session work directory. " +
             $"Available shells: {listed}. Returns longRunningShellId and the first ~1s of combined output. " +
             "Use ListLongRunningShells / ReadLongRunningShellTail / LongRunningShellInteract / " +
-            "SubscribeToLongRunningShellCompletion / RequestLongRunningShellCancellation / AbortLongRunningShell to manage it. " +
+            "WaitForLongRunningShellCompletion / SubscribeToLongRunningShellCompletion (parent-only) / RequestLongRunningShellCancellation / AbortLongRunningShell to manage it. " +
             "Not persisted across UI restart (orphans OS processes). Prefer ShellExecute for one-shot commands.";
         startDescription = AppendPythonNodeSnippetSentence(startDescription, names);
         if (planMode)
@@ -349,6 +351,7 @@ public sealed class DysonMcpPipeline
         {
             Name = "SubscribeToLongRunningShellCompletion",
             Description =
+                "Parent-only (root sessions). Subagents must use WaitForLongRunningShellCompletion. " +
                 "Subscribe the current session to a one-shot ShellExited harness turn when a long-running shell " +
                 "exits/aborts. Returns immediately (subscribed=true). If already terminal, fires once now. " +
                 "Optional includeTailMaxChars (default 8000) caps the auto-read tail in that turn.",
@@ -366,6 +369,31 @@ public sealed class DysonMcpPipeline
                     }
                   },
                   "required": ["longRunningShellId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "WaitForLongRunningShellCompletion",
+            Description =
+                "Block until the shell is Exited/Aborted or timeoutMs elapses. " +
+                "Already-terminal shells return immediately. Does not subscribe and does not queue ShellExited. " +
+                "Prompt cancel / tool cancellation aborts the wait. Available to root and subagents.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "longRunningShellId": {
+                      "type": "integer",
+                      "description": "Id returned by StartLongRunningShell."
+                    },
+                    "timeoutMs": {
+                      "type": "integer",
+                      "description": "Mandatory wait budget in milliseconds. Block until Exited/Aborted or this many ms. Must be > 0 (executor rejects <= 0)."
+                    }
+                  },
+                  "required": ["longRunningShellId", "timeoutMs"]
                 }
                 """,
         };
@@ -445,6 +473,7 @@ public sealed class DysonMcpPipeline
 
         Tools.Remove("AskQuestion");
         Tools.Remove("PromptUserDialog");
+        Tools.Remove("SubscribeToLongRunningShellCompletion");
 
         if (depth == 1)
         {
@@ -624,19 +653,25 @@ public sealed class DysonMcpPipeline
     /// </summary>
     public static IEnumerable<DysonMcpTool> CreateBrowserTools()
     {
+        const string TimeoutMsJson =
+            """
+            "timeoutMs": { "type": "integer", "description": "Optional timeout in milliseconds (default 60000)." }
+            """;
+
         yield return new DysonMcpTool
         {
             Name = "OpenBrowser",
             Description =
                 "Open a new agent browser window (Windows CefSharp WPF chrome). " +
                 "Optional url, width, height. Returns windowId and initial tabId.",
-            InputSchemaJson = """
+            InputSchemaJson = $$"""
                 {
                   "type": "object",
                   "properties": {
                     "url": { "type": "string", "description": "Optional initial URL." },
                     "width": { "type": "integer", "description": "Optional window width (default 1280)." },
-                    "height": { "type": "integer", "description": "Optional window height (default 800)." }
+                    "height": { "type": "integer", "description": "Optional window height (default 800)." },
+                    {{TimeoutMsJson}}
                   }
                 }
                 """,
@@ -646,10 +681,12 @@ public sealed class DysonMcpPipeline
         {
             Name = "ListBrowserWindows",
             Description = "List open agent browser windows (windowId).",
-            InputSchemaJson = """
+            InputSchemaJson = $$"""
                 {
                   "type": "object",
-                  "properties": {}
+                  "properties": {
+                    {{TimeoutMsJson}}
+                  }
                 }
                 """,
         };
@@ -658,11 +695,12 @@ public sealed class DysonMcpPipeline
         {
             Name = "CloseBrowser",
             Description = "Close an agent browser window by windowId.",
-            InputSchemaJson = """
+            InputSchemaJson = $$"""
                 {
                   "type": "object",
                   "properties": {
-                    "windowId": { "type": "string", "description": "Window id from OpenBrowser / ListBrowserWindows." }
+                    "windowId": { "type": "string", "description": "Window id from OpenBrowser / ListBrowserWindows." },
+                    {{TimeoutMsJson}}
                   },
                   "required": ["windowId"]
                 }
@@ -673,13 +711,14 @@ public sealed class DysonMcpPipeline
         {
             Name = "ResizeBrowser",
             Description = "Resize an agent browser window (ResizeWebView).",
-            InputSchemaJson = """
+            InputSchemaJson = $$"""
                 {
                   "type": "object",
                   "properties": {
                     "windowId": { "type": "string" },
                     "width": { "type": "integer" },
-                    "height": { "type": "integer" }
+                    "height": { "type": "integer" },
+                    {{TimeoutMsJson}}
                   },
                   "required": ["windowId", "width", "height"]
                 }
@@ -690,11 +729,12 @@ public sealed class DysonMcpPipeline
         {
             Name = "ListBrowserTabs",
             Description = "List tabs in a browser window.",
-            InputSchemaJson = """
+            InputSchemaJson = $$"""
                 {
                   "type": "object",
                   "properties": {
-                    "windowId": { "type": "string" }
+                    "windowId": { "type": "string" },
+                    {{TimeoutMsJson}}
                   },
                   "required": ["windowId"]
                 }
@@ -705,12 +745,13 @@ public sealed class DysonMcpPipeline
         {
             Name = "NewBrowserTab",
             Description = "Open a new tab in a browser window. Optional url.",
-            InputSchemaJson = """
+            InputSchemaJson = $$"""
                 {
                   "type": "object",
                   "properties": {
                     "windowId": { "type": "string" },
-                    "url": { "type": "string" }
+                    "url": { "type": "string" },
+                    {{TimeoutMsJson}}
                   },
                   "required": ["windowId"]
                 }
@@ -721,12 +762,13 @@ public sealed class DysonMcpPipeline
         {
             Name = "CloseBrowserTab",
             Description = "Close a tab. Closing the last tab closes the window.",
-            InputSchemaJson = """
+            InputSchemaJson = $$"""
                 {
                   "type": "object",
                   "properties": {
                     "windowId": { "type": "string" },
-                    "tabId": { "type": "string" }
+                    "tabId": { "type": "string" },
+                    {{TimeoutMsJson}}
                   },
                   "required": ["windowId", "tabId"]
                 }
@@ -737,12 +779,13 @@ public sealed class DysonMcpPipeline
         {
             Name = "ActivateBrowserTab",
             Description = "Activate (focus) a tab in a browser window.",
-            InputSchemaJson = """
+            InputSchemaJson = $$"""
                 {
                   "type": "object",
                   "properties": {
                     "windowId": { "type": "string" },
-                    "tabId": { "type": "string" }
+                    "tabId": { "type": "string" },
+                    {{TimeoutMsJson}}
                   },
                   "required": ["windowId", "tabId"]
                 }
@@ -1009,7 +1052,7 @@ public sealed class DysonMcpPipeline
             Name = "BrowserTakeScreenshot",
             Description =
                 "Capture a screenshot of the tab (JPEG multimodal attachment + short JSON ack; no base64 in Content). " +
-                "Optional timeoutMs (default 30000).",
+                "Optional timeoutMs (default 60000).",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1054,6 +1097,69 @@ public sealed class DysonMcpPipeline
                   "required": ["windowId", "tabId"]
                 }
                 """,
+        };
+    }
+
+    private const string BrowserTimeoutMsDescription =
+        "Optional timeout in milliseconds (default 60000).";
+
+    /// <summary>
+    /// Injects optional <c>timeoutMs</c> (default 60000) into every browser tool schema.
+    /// </summary>
+    private static DysonMcpTool EnsureOptionalBrowserTimeoutMs(DysonMcpTool tool)
+    {
+        using var doc = JsonDocument.Parse(tool.InputSchemaJson);
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
+        {
+            writer.WriteStartObject();
+            var wroteProperties = false;
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                if (prop.NameEquals("properties"))
+                {
+                    wroteProperties = true;
+                    writer.WritePropertyName("properties");
+                    writer.WriteStartObject();
+                    foreach (var p in prop.Value.EnumerateObject())
+                    {
+                        if (p.NameEquals("timeoutMs"))
+                            continue;
+                        p.WriteTo(writer);
+                    }
+
+                    writer.WritePropertyName("timeoutMs");
+                    writer.WriteStartObject();
+                    writer.WriteString("type", "integer");
+                    writer.WriteString("description", BrowserTimeoutMsDescription);
+                    writer.WriteEndObject();
+                    writer.WriteEndObject();
+                    continue;
+                }
+
+                prop.WriteTo(writer);
+            }
+
+            if (!wroteProperties)
+            {
+                writer.WritePropertyName("properties");
+                writer.WriteStartObject();
+                writer.WritePropertyName("timeoutMs");
+                writer.WriteStartObject();
+                writer.WriteString("type", "integer");
+                writer.WriteString("description", BrowserTimeoutMsDescription);
+                writer.WriteEndObject();
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndObject();
+        }
+
+        return new DysonMcpTool
+        {
+            Name = tool.Name,
+            Description = tool.Description,
+            InputSchemaJson = Encoding.UTF8.GetString(stream.ToArray()),
         };
     }
 
@@ -1177,7 +1283,7 @@ public sealed class DysonMcpPipeline
         if (browserControlAvailable)
         {
             foreach (var tool in CreateBrowserTools())
-                yield return tool;
+                yield return EnsureOptionalBrowserTimeoutMs(tool);
         }
 
         yield return new DysonMcpTool

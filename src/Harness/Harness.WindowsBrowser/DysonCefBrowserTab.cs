@@ -332,7 +332,7 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
         if (string.IsNullOrWhiteSpace(selector))
             return new VoidResult<string>("selector is required");
 
-        var timeout = timeoutMs is > 0 ? timeoutMs.Value : 15_000;
+        var timeout = timeoutMs is > 0 ? timeoutMs.Value : DysonBrowserDefaults.DefaultTimeoutMs;
         var sel = JsonSerializer.Serialize(selector);
         var deadline = Environment.TickCount64 + timeout;
         while (Environment.TickCount64 < deadline)
@@ -354,7 +354,7 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
         int? timeoutMs = null,
         CancellationToken cancellationToken = default)
     {
-        var timeout = timeoutMs is > 0 ? timeoutMs.Value : 30_000;
+        var timeout = timeoutMs is > 0 ? timeoutMs.Value : DysonBrowserDefaults.DefaultTimeoutMs;
         TaskCompletionSource tcs;
         lock (_navGate)
         {
@@ -380,18 +380,39 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
         if (string.IsNullOrWhiteSpace(code))
             return Result<string, string>.AsError("code is required");
 
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        linked.Token.ThrowIfCancellationRequested();
+
         try
         {
-            var response = await DysonCefStaHost.InvokeAsync(async () =>
+            // Race eval against linked CT — do not plumb CT into STA host (this change).
+            var evalTask = DysonCefStaHost.InvokeAsync(async () =>
             {
                 var r = await BrowserControl.EvaluateScriptAsync(code).ConfigureAwait(true);
                 return r;
-            }).ConfigureAwait(false);
+            });
+            var delayTask = Task.Delay(Timeout.Infinite, linked.Token);
+            var winner = await Task.WhenAny(evalTask, delayTask).ConfigureAwait(false);
+            if (winner != evalTask)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    cancellationToken.ThrowIfCancellationRequested();
+                return Result<string, string>.AsError("JavaScript evaluation timed out.");
+            }
 
+            var response = await evalTask.ConfigureAwait(false);
             if (!response.Success)
                 return Result<string, string>.AsError(response.Message ?? "JavaScript evaluation failed.");
 
             return Result<string, string>.AsValue(response.Result?.ToString() ?? "");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            return Result<string, string>.AsError("JavaScript evaluation timed out.");
         }
         catch (Exception ex)
         {
@@ -406,7 +427,7 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
         int? timeoutMs = null,
         CancellationToken cancellationToken = default)
     {
-        var timeout = timeoutMs is > 0 ? timeoutMs.Value : 30_000;
+        var timeout = timeoutMs is > 0 ? timeoutMs.Value : DysonBrowserDefaults.DefaultTimeoutMs;
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         linked.CancelAfter(timeout);
         linked.Token.ThrowIfCancellationRequested();

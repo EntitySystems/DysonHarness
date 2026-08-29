@@ -4,6 +4,20 @@ namespace DysonHarness;
 public static class DysonAppSettingKeys
 {
     /// <summary>
+    /// Guid string of the fallback chat model slug used after the session provider
+    /// exhausts inference retries (or on immediate 401/403). Empty / missing ⇒ disabled
+    /// (fail the turn after retries). Unlike other role pickers, empty does <em>not</em>
+    /// mean “use the session model”.
+    /// </summary>
+    public const string FallbackChatModelSlugId = "fallback_chat_model_slug_id";
+
+    /// <summary>
+    /// Reasoning-effort override for the fallback chat slug.
+    /// Empty / missing ⇒ the slug’s <c>DefaultReasoningEffort</c>.
+    /// </summary>
+    public const string FallbackChatReasoningEffort = "fallback_chat_reasoning_effort";
+
+    /// <summary>
     /// Guid string of the model slug used for web-search/fetch summarization.
     /// Empty / missing ⇒ use the session model.
     /// </summary>
@@ -107,7 +121,7 @@ public static class DysonAppSettingKeys
     public const string UiTheme = "ui_theme";
 
     /// <summary>
-    /// UI accent: <c>"blue"</c> / <c>"green"</c> / <c>"red"</c> / <c>"purple"</c>.
+    /// UI accent: <c>"blue"</c> / <c>"green"</c> / <c>"red"</c> / <c>"purple"</c> / <c>"amber"</c>.
     /// Missing ⇒ fall back to browser <c>localStorage</c> (<c>dyson-theme</c>), then blue.
     /// </summary>
     public const string UiAccent = "ui_accent";
