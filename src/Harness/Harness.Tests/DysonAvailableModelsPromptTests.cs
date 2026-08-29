@@ -8,7 +8,7 @@ namespace Harness.Tests;
 public class DysonAvailableModelsPromptTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         var providers = new List<DysonModelProviderEntity>
         {
@@ -68,8 +68,8 @@ public class DysonAvailableModelsPromptTests
         if (DysonAgentSystemPrompts.FormatAvailableModelsBlock(providers, DysonProviderKinds.Anthropic) is not null)
             throw new InvalidOperationException("Expected null block when no slugs match kind.");
 
-        if (DysonAgentSystemPrompts.BuildAvailableModelsBlockAsync(null, DysonProviderKinds.Demo)
-                .GetAwaiter().GetResult() is not null)
+        if (await DysonAgentSystemPrompts.BuildAvailableModelsBlockAsync(null, DysonProviderKinds.Demo)
+            is not null)
         {
             throw new InvalidOperationException("Null model store should skip the models block.");
         }
