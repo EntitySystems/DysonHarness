@@ -1,5 +1,18 @@
 @namespace Harness.UI.Components.Tools.Variants
 @using DysonHarness
+@inject DysonUiHost Host
+
+@if (!ArgsOnly && FileView is { } _)
+{
+    <div class="tool-expanded__toolbar">
+        <button type="button"
+                class="tool-path-link mono tool-expanded__view-file"
+                @onclick="ViewResultAsFile"
+                @onclick:stopPropagation="true">
+            View result as file
+        </button>
+    </div>
+}
 
 @switch (ToolName)
 {
@@ -110,4 +123,15 @@
     [Parameter] public IReadOnlyList<DysonGeneratedImageArtifact> GeneratedImageArtifacts { get; set; } = [];
     [Parameter] public bool IsError { get; set; }
     [Parameter] public bool ArgsOnly { get; set; }
+
+    private DysonToolCallUi.ViewAsFile? FileView =>
+        DysonToolCallUi.TryResolveViewAsFile(ToolName, CallId, ArgumentsJson, ResultContent);
+
+    private void ViewResultAsFile()
+    {
+        if (FileView is not { } file)
+            return;
+
+        Host.OpenFileViewerContent(file.DisplayPath, file.Content);
+    }
 }

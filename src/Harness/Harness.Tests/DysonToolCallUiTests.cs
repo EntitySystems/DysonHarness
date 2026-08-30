@@ -127,5 +127,55 @@ public class DysonToolCallUiTests
             throw new InvalidOperationException(
                 $"SubmitSubagentReport completed summary mismatch: {completedHandoff.Text}");
         }
+
+        var reportArgs = """{"summary":"# Report\n\nDone.","status":"completed"}""";
+        var reportResult = """{"ok":true}""";
+        var reportFile = DysonToolCallUi.TryResolveViewAsFile(
+            "SubmitSubagentReport",
+            "call-1",
+            reportArgs,
+            reportResult)
+            ?? throw new InvalidOperationException("SubmitSubagentReport must resolve a view-as-file payload.");
+        if (reportFile.DisplayPath != "tool-calls/SubmitSubagentReport-call-1.md"
+            || reportFile.Content != "# Report\n\nDone.")
+        {
+            throw new InvalidOperationException(
+                $"SubmitSubagentReport view-as-file must open arguments summary as markdown, got {reportFile.DisplayPath}: {reportFile.Content}");
+        }
+
+        var resultSummary = DysonToolCallUi.TryResolveViewAsFile(
+            "FreeSearch",
+            null,
+            """{"query":"x"}""",
+            """{"summary":"top hits"}""")
+            ?? throw new InvalidOperationException("Result summary must resolve.");
+        if (resultSummary.DisplayPath != "tool-calls/FreeSearch.md" || resultSummary.Content != "top hits")
+            throw new InvalidOperationException("Result-content summary must open as markdown without a call id suffix.");
+
+        var argsWin = DysonToolCallUi.TryResolveViewAsFile(
+            "CompleteTask",
+            "c2",
+            """{"summary":"from args"}""",
+            """{"summary":"from result"}""")
+            ?? throw new InvalidOperationException("CompleteTask must resolve.");
+        if (argsWin.Content != "from args")
+            throw new InvalidOperationException("Arguments summary must win over result summary.");
+
+        var rawResult = DysonToolCallUi.TryResolveViewAsFile(
+            "ShellExecute",
+            "s1",
+            """{"shell":"pwsh","command":"ls"}""",
+            "exitCode=0\n--- stdout ---\nok")
+            ?? throw new InvalidOperationException("Raw result must resolve.");
+        if (rawResult.DisplayPath != "tool-calls/ShellExecute-s1.json"
+            || rawResult.Content != "exitCode=0\n--- stdout ---\nok")
+        {
+            throw new InvalidOperationException("Tools without a summary field must fall back to raw result JSON.");
+        }
+
+        if (DysonToolCallUi.TryResolveViewAsFile("ReadFile", null, """{"path":"a"}""", null) is not null)
+            throw new InvalidOperationException("No summary and no result must be null.");
+        if (DysonToolCallUi.TryResolveViewAsFile("X", null, """{"summary":"   "}""", null) is not null)
+            throw new InvalidOperationException("Whitespace-only summary must be ignored.");
     }
 }
