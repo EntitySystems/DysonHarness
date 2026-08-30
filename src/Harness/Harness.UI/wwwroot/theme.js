@@ -73,6 +73,46 @@ window.dysonWorkdir = {
   }
 };
 
+/**
+ * Boot readiness. Server-side hydrate finishing does not mean the page can service
+ * clicks: on a cold client the main thread is still busy loading and running scripts,
+ * so events queue behind that work and the shell feels dead. Resolves once the main
+ * thread goes idle (or after maxWaitMs) so the splash can cover the whole dead window.
+ */
+window.dysonBoot = {
+  waitUntilResponsive: function (maxWaitMs) {
+    var cap = typeof maxWaitMs === "number" && maxWaitMs > 0 ? maxWaitMs : 10000;
+    return new Promise(function (resolve) {
+      var done = false;
+      var finish = function () {
+        if (done)
+          return;
+        done = true;
+        resolve(true);
+      };
+
+      var timer = setTimeout(finish, cap);
+      var settle = function () {
+        clearTimeout(timer);
+        finish();
+      };
+
+      if (typeof window.requestIdleCallback === "function") {
+        // timeout keeps this honest if the thread never reports a real idle period.
+        window.requestIdleCallback(settle, { timeout: cap });
+        return;
+      }
+
+      // Two rAFs: the first lands in the current frame, the second after it is painted.
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          setTimeout(settle, 0);
+        });
+      });
+    });
+  }
+};
+
 /** Prevent textarea default for overlay nav keys while data-slash-open is set. */
 window.dysonComposer = {
   attachSlashGuard: function (el) {
