@@ -313,7 +313,7 @@ public class DysonUiHostRuntimeDelegationTests
         var session = host.Session ?? throw new InvalidOperationException("Expected focused session.");
 
         var notifies = 0;
-        host.Changed += () => Interlocked.Increment(ref notifies);
+        host.Changed += _ => Interlocked.Increment(ref notifies);
 
         await host.DisposeAsync();
         var afterDispose = Volatile.Read(ref notifies);
@@ -567,7 +567,7 @@ public class DysonUiHostRuntimeDelegationTests
         Assert.Null(afterTurn.LatestTurnStepTitle);
 
         var notifies = 0;
-        host.Changed += () => Interlocked.Increment(ref notifies);
+        host.Changed += _ => Interlocked.Increment(ref notifies);
         var before = Volatile.Read(ref notifies);
 
         turn.AppendReasoningRound(

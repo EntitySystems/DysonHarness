@@ -120,6 +120,20 @@ public sealed class DysonAgentTurn
     /// <summary>Raised when streaming preview or finalized assistant/reasoning text changes.</summary>
     public event EventHandler? AssistantTextChanged;
 
+    // ponytail: two nested 75ms coalesce windows (this engine-level one + DysonUiHost's circuit-level
+    // one) is a deliberate ceiling, not an oversight — see rules_engine_ui.md. Upgrade path: drop the
+    // host-level window once every host relies on this engine-level one.
+    // DysonAgentTurn is not IDisposable and has no explicit end-of-life hook, so we do not give the
+    // coalescer one either. A coalesced delta can leave at most one pending 75ms trailing timer; every
+    // terminal call below cancels it via Flush(). If a turn is ever abandoned without reaching a
+    // terminal call, that lone timer self-fires within 75ms and is done — never "forever".
+    private readonly DysonNotifyCoalescer _assistantTextCoalescer;
+
+    public DysonAgentTurn()
+    {
+        _assistantTextCoalescer = new DysonNotifyCoalescer(_ => AssistantTextChanged?.Invoke(this, EventArgs.Empty));
+    }
+
     /// <summary>Source tool calls for this turn (stage + name + args).</summary>
     public List<DysonToolCall> ToolCalls { get; } = [];
 
@@ -408,8 +422,9 @@ public sealed class DysonAgentTurn
                 ReasoningText = DysonReasoningLogSerializer.JoinThoughtTexts(_reasoningLog);
         }
 
+        // Settles one tool-loop round (not a per-SSE-delta stream) — flush so the round's text lands immediately.
         if (added)
-            NotifyAssistantTextChanged();
+            FlushAssistantTextChanged();
     }
 
     /// <summary>
@@ -578,7 +593,7 @@ public sealed class DysonAgentTurn
             IsStreaming = false;
         }
 
-        NotifyAssistantTextChanged();
+        FlushAssistantTextChanged();
     }
 
     /// <summary>
@@ -600,7 +615,7 @@ public sealed class DysonAgentTurn
             IsStreaming = false;
         }
 
-        NotifyAssistantTextChanged();
+        FlushAssistantTextChanged();
     }
 
     /// <summary>Append a reasoning / thinking delta and mark reasoning as streaming.</summary>
@@ -631,7 +646,7 @@ public sealed class DysonAgentTurn
             IsReasoningStreaming = false;
         }
 
-        NotifyAssistantTextChanged();
+        FlushAssistantTextChanged();
     }
 
     /// <summary>
@@ -649,8 +664,12 @@ public sealed class DysonAgentTurn
             IsReasoningStreaming = false;
         }
 
-        NotifyAssistantTextChanged();
+        FlushAssistantTextChanged();
     }
 
-    private void NotifyAssistantTextChanged() => AssistantTextChanged?.Invoke(this, EventArgs.Empty);
+    /// <summary>Streaming-delta path: coalesced (≤~13/s) so a provider token firehose cannot flood the host.</summary>
+    private void NotifyAssistantTextChanged() => _assistantTextCoalescer.Notify();
+
+    /// <summary>Terminal/settle path: bypasses the coalesce window so the final text lands immediately.</summary>
+    private void FlushAssistantTextChanged() => _assistantTextCoalescer.Flush();
 }

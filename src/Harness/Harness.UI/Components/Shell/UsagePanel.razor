@@ -87,8 +87,11 @@
         await RefreshAsync();
     }
 
-    private void OnHostChanged() => _ = InvokeAsync(async () =>
+    private void OnHostChanged(DysonHostChangeKind kind) => _ = InvokeAsync(async () =>
     {
+        if ((kind & DysonHostChangeKind.Busy) == 0)
+            return;
+
         var busy = Host.IsBusy;
         var becameIdle = _wasBusy && !busy;
         _wasBusy = busy;

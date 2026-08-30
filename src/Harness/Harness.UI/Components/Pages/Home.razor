@@ -83,9 +83,8 @@
                 }
                 else
                 {
-                    @foreach (var line in Host.Session.SnapshotLog(40).Reverse())
+                    @foreach (var row in _sessionLogRows)
                     {
-                        var row = DysonSessionLogDisplay.Parse(line);
                         var levelClass = row.Level switch
                         {
                             DysonSessionLogLevel.Error => "error",
@@ -118,6 +117,7 @@
     private int? _lastReportedPromptTokens;
     private string _selectedAgentMode = DysonAgentModes.Work;
     private string? _lastSyncedSessionMode;
+    private IReadOnlyList<DysonSessionLogRow> _sessionLogRows = [];
     private Guid? _activeWorkDirectoryId;
     private string? _gitBranch;
     private bool _workdirHydrated;
@@ -139,6 +139,7 @@
         SyncSelectedSlugFromSession();
         SyncReasoningEffortFromHost();
         SyncContextTokensFromHost();
+        RefreshSessionLogRows();
 
         if (_selectedSlugId is null)
         {
@@ -222,13 +223,15 @@
         StateHasChanged();
     }
 
-    private void OnHostChanged() => _ = InvokeAsync(() =>
+    private void OnHostChanged(DysonHostChangeKind kind) => _ = InvokeAsync(() =>
     {
+        _ = kind;
         try
         {
             SyncSelectedSlugFromSession();
             SyncReasoningEffortFromHost();
             SyncContextTokensFromHost();
+            RefreshSessionLogRows();
             // Model/effort/token Notify must not clobber a composer mode that is not yet applied.
             SyncSelectedAgentModeIfSessionModeChanged();
             _sessions = OverlayLiveTitle(_sessions);
@@ -294,6 +297,13 @@
         _maxTargetContextTokens = Host.SessionMaxTargetContextTokens;
         _outgoingContextTokens = Host.SessionOutgoingContextTokens;
         _lastReportedPromptTokens = Host.SessionLastReportedPromptTokens;
+    }
+
+    private void RefreshSessionLogRows()
+    {
+        _sessionLogRows = Host.Session is null
+            ? []
+            : Host.Session.SnapshotLog(40).Reverse().Select(DysonSessionLogDisplay.Parse).ToList();
     }
 
     private void SyncSelectedAgentModeIfSessionModeChanged()

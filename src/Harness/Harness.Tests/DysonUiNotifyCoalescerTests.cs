@@ -1,4 +1,4 @@
-using Harness.UI.Demo;
+using DysonHarness;
 
 namespace Harness.Tests;
 
@@ -8,8 +8,8 @@ public class DysonUiNotifyCoalescerTests
     public void Notify_fires_immediately_on_leading_edge()
     {
         var count = 0;
-        using var coalescer = new DysonUiNotifyCoalescer(
-            () => Interlocked.Increment(ref count),
+        using var coalescer = new DysonNotifyCoalescer(
+            _ => Interlocked.Increment(ref count),
             HangDelay);
 
         coalescer.Notify();
@@ -21,8 +21,8 @@ public class DysonUiNotifyCoalescerTests
     {
         var count = 0;
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var coalescer = new DysonUiNotifyCoalescer(
-            () => Interlocked.Increment(ref count),
+        using var coalescer = new DysonNotifyCoalescer(
+            _ => Interlocked.Increment(ref count),
             (_, ct) => gate.Task.WaitAsync(ct));
 
         coalescer.Notify();
@@ -40,8 +40,8 @@ public class DysonUiNotifyCoalescerTests
     {
         var count = 0;
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var coalescer = new DysonUiNotifyCoalescer(
-            () => Interlocked.Increment(ref count),
+        using var coalescer = new DysonNotifyCoalescer(
+            _ => Interlocked.Increment(ref count),
             (_, ct) => gate.Task.WaitAsync(ct));
 
         coalescer.Notify();
@@ -60,8 +60,8 @@ public class DysonUiNotifyCoalescerTests
     {
         var count = 0;
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var coalescer = new DysonUiNotifyCoalescer(
-            () => Interlocked.Increment(ref count),
+        var coalescer = new DysonNotifyCoalescer(
+            _ => Interlocked.Increment(ref count),
             (_, ct) => gate.Task.WaitAsync(ct));
 
         coalescer.Notify();

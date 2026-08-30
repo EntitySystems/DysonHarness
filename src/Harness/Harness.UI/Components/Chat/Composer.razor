@@ -369,9 +369,18 @@
         }
     }
 
-    private void OnHostChanged() => _ = InvokeAsync(async () =>
+    private const DysonHostChangeKind HostChangeFilter =
+        DysonHostChangeKind.Catalogs
+        | DysonHostChangeKind.Busy
+        | DysonHostChangeKind.Error
+        | DysonHostChangeKind.Transcript;
+
+    private void OnHostChanged(DysonHostChangeKind kind) => _ = InvokeAsync(async () =>
     {
         DrainPendingSnipPromptLines();
+        if ((kind & HostChangeFilter) == 0)
+            return;
+
         var skillRev = Host.SkillCatalogRevision;
         var pluginRev = Host.PluginCatalogRevision;
         var workdir = Host.CatalogWorkDirectoryId;

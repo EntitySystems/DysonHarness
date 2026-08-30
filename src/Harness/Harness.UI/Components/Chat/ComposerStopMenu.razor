@@ -23,7 +23,15 @@
 
     protected override void OnInitialized() => Host.Changed += OnHostChanged;
 
-    private void OnHostChanged() => _ = InvokeAsync(StateHasChanged);
+    private const DysonHostChangeKind HostChangeFilter =
+        DysonHostChangeKind.Busy | DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Transcript;
+
+    private void OnHostChanged(DysonHostChangeKind kind)
+    {
+        if ((kind & HostChangeFilter) == 0)
+            return;
+        _ = InvokeAsync(StateHasChanged);
+    }
 
     private Task StopAll()
     {

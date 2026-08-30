@@ -80,4 +80,19 @@ public class MarkdownRendererTests
         Assert.Contains("other markdown", other.Value, StringComparison.Ordinal);
         Assert.NotSame(first.Value, other.Value);
     }
+
+    [Fact]
+    public void ToHtml_eviction_on_overflow_is_transparent_to_callers()
+    {
+        const string earlyMarkdown = "eviction-probe-early markdown **entry**";
+        var earlyHtml = MarkdownRenderer.ToHtml(earlyMarkdown).Value;
+
+        // Push more than the 64-entry cache capacity through so the early entry is evicted.
+        for (var i = 0; i < 80; i++)
+            MarkdownRenderer.ToHtml($"eviction-probe-filler-{i} markdown *{i}*");
+
+        var rerendered = MarkdownRenderer.ToHtml(earlyMarkdown).Value;
+
+        Assert.Equal(earlyHtml, rerendered);
+    }
 }
