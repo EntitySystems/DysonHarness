@@ -6,7 +6,7 @@
     <span class="list-item__meta mono">
         @Slug.Slug
         @(Slug.IsDefault ? " · default" : "")
-        @if (IsManaged)
+        @if (IsManaged && !IsDirectManaged)
         {
             <text> · @(Slug.IsEnabled ? "enabled" : "disabled")</text>
         }
@@ -76,9 +76,16 @@
             {
                 <button type="button" class="btn btn--xs" @onclick="OnSetDefault">Default</button>
             }
-            <button type="button" class="btn btn-ghost btn--xs" @onclick="OnToggleEnabled">
-                @(Slug.IsEnabled ? "Disable" : "Enable")
-            </button>
+            @if (IsDirectManaged)
+            {
+                <button type="button" class="btn btn-ghost btn--xs" @onclick="OnRemoveSlug">Remove</button>
+            }
+            else
+            {
+                <button type="button" class="btn btn-ghost btn--xs" @onclick="OnToggleEnabled">
+                    @(Slug.IsEnabled ? "Disable" : "Enable")
+                </button>
+            }
         </div>
     }
 </div>
@@ -86,6 +93,7 @@
 @code {
     [Parameter] public DysonModelSlugEntity Slug { get; set; } = default!;
     [Parameter] public bool IsManaged { get; set; }
+    [Parameter] public bool IsDirectManaged { get; set; }
     [Parameter] public bool ContextStepBusy { get; set; }
 
     [Parameter] public EventCallback OnSetDefault { get; set; }

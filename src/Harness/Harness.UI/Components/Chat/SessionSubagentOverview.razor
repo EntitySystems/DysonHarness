@@ -43,8 +43,13 @@
         RefreshChildren();
     }
 
-    private void OnHostChanged() => _ = InvokeAsync(() =>
+    private const DysonHostChangeKind HostChangeFilter =
+        DysonHostChangeKind.Busy | DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Transcript;
+
+    private void OnHostChanged(DysonHostChangeKind kind) => _ = InvokeAsync(() =>
     {
+        if ((kind & HostChangeFilter) == 0)
+            return;
         RefreshChildren();
         StateHasChanged();
     });

@@ -33,6 +33,10 @@ public abstract class DysonAgentSession
     // ponytail: shared UI+MCP claim set; upgrade to per-turn CancellationToken if hang recovery is needed
     private readonly ConcurrentDictionary<Guid, byte> _summarizingTurnIds = new();
     private readonly SemaphoreSlim _summarizeGate = new(1, 1);
+    private int _transcriptGeneration;
+    private int _cachedOutgoingContextTokens;
+    private int _cachedOutgoingContextTokensGeneration = -1;
+    private int _outgoingContextTokensRefreshInFlight;
 
     protected DysonAgentSession(
         string agentMode,
@@ -191,9 +195,15 @@ public abstract class DysonAgentSession
     public bool TryBeginSummarizeTurn(Guid turnId) =>
         turnId != Guid.Empty && _summarizingTurnIds.TryAdd(turnId, 0);
 
-    /// <summary>Releases a summarization claim (no-op if not claimed).</summary>
-    public void EndSummarizeTurn(Guid turnId) =>
-        _summarizingTurnIds.TryRemove(turnId, out _);
+    /// <summary>
+    /// Releases a summarization claim (no-op if not claimed) and bumps <see cref="TranscriptGeneration"/>
+    /// when a claim was actually held — an attempted summarize may have changed a turn's context summary.
+    /// </summary>
+    public void EndSummarizeTurn(Guid turnId)
+    {
+        if (_summarizingTurnIds.TryRemove(turnId, out _))
+            BumpTranscriptGeneration();
+    }
 
     /// <summary>Single-flight gate for host/MCP summarize pipelines on this session.</summary>
     public Task EnterSummarizeGateAsync(CancellationToken cancellationToken = default) =>
@@ -1163,9 +1173,92 @@ public abstract class DysonAgentSession
 
     /// <summary>
     /// Estimated tokens for the outbound Completions/Responses payload (idle: no in-flight rounds).
+    /// Uncached, authoritative, synchronous — rebuilds the full provider payload every call. Callers on a
+    /// UI render path must use <see cref="CachedOutgoingContextTokens"/> / <see cref="RefreshOutgoingContextTokensAsync"/>
+    /// instead; this stays the ground truth used by <see cref="DysonDropContextFlow.EvaluateInject"/> and tests.
     /// </summary>
     public int EstimateOutgoingContextTokens() =>
         DysonOutgoingContextTokens.Count(this, TokenCounter);
+
+    /// <summary>
+    /// Monotonic counter bumped whenever the outgoing transcript materially changes: a turn is added,
+    /// history is cleared/rebuilt (restore), a turn is summarized, or context is optimized. Streaming
+    /// deltas never bump this — a streaming preview is not part of the outgoing provider payload, so
+    /// bumping there would defeat <see cref="RefreshOutgoingContextTokensAsync"/>.
+    /// </summary>
+    public int TranscriptGeneration => Volatile.Read(ref _transcriptGeneration);
+
+    /// <summary>
+    /// Bumps <see cref="TranscriptGeneration"/>. Call after any mutation that changes the outgoing
+    /// provider payload (turn add/clear/rebuild, drop/restore/summarize a turn, context-optimize).
+    /// Public so other engine-owned mutation sites (e.g. drop/restore-context tool handling) can invalidate
+    /// the cache; UI hosts must not call this directly.
+    /// </summary>
+    public void BumpTranscriptGeneration() => Interlocked.Increment(ref _transcriptGeneration);
+
+    /// <summary>
+    /// Last value computed by <see cref="RefreshOutgoingContextTokensAsync"/> (0 before the first compute).
+    /// A plain field read — safe to call from a UI render path.
+    /// </summary>
+    public int CachedOutgoingContextTokens => Volatile.Read(ref _cachedOutgoingContextTokens);
+
+    /// <summary>
+    /// Recomputes <see cref="CachedOutgoingContextTokens"/> on the thread pool when <see cref="TranscriptGeneration"/>
+    /// has moved since the last successful compute; a cheap no-op otherwise. Concurrent callers coalesce into a
+    /// single computation via an <see cref="Interlocked"/> in-flight guard (losing callers return
+    /// <see langword="false"/> immediately instead of piling up N full payload builds); if the generation moves
+    /// again while a compute is already running, that compute loops to pick up the new generation so the cache is
+    /// never left permanently stale. Returns <see langword="true"/> when the cached value changed — hosts can use
+    /// that to decide whether a re-render is worth it instead of polling every frame.
+    /// ponytail: on an estimator exception the last known value is kept and the exception is swallowed — an
+    /// unobserved thread-pool exception must not crash the host, and a stale readout is a UI polish issue, not a
+    /// correctness one. Ceiling: the readout is stale for at most one refresh hop and deliberately does not track
+    /// streaming deltas (upgrade path: incremental per-turn accounting if a whole-transcript recompute ever
+    /// becomes visible at turn boundaries).
+    /// </summary>
+    public async Task<bool> RefreshOutgoingContextTokensAsync()
+    {
+        if (TranscriptGeneration == Volatile.Read(ref _cachedOutgoingContextTokensGeneration))
+            return false;
+
+        if (Interlocked.CompareExchange(ref _outgoingContextTokensRefreshInFlight, 1, 0) != 0)
+            return false;
+
+        try
+        {
+            var changed = false;
+            while (true)
+            {
+                var generationToCompute = TranscriptGeneration;
+                int computed;
+                try
+                {
+                    computed = await Task.Run(EstimateOutgoingContextTokens).ConfigureAwait(false);
+                }
+                catch
+                {
+                    break;
+                }
+
+                if (computed != Volatile.Read(ref _cachedOutgoingContextTokens))
+                {
+                    Volatile.Write(ref _cachedOutgoingContextTokens, computed);
+                    changed = true;
+                }
+
+                Volatile.Write(ref _cachedOutgoingContextTokensGeneration, generationToCompute);
+
+                if (generationToCompute == TranscriptGeneration)
+                    break;
+            }
+
+            return changed;
+        }
+        finally
+        {
+            Volatile.Write(ref _outgoingContextTokensRefreshInFlight, 0);
+        }
+    }
 
     private void RaiseParentEventsChanged() => ParentEventsChanged?.Invoke(this, EventArgs.Empty);
 
@@ -1879,6 +1972,7 @@ public abstract class DysonAgentSession
     {
         ArgumentNullException.ThrowIfNull(turn);
         TurnHistory.Add(turn);
+        BumpTranscriptGeneration();
         TurnAdded?.Invoke(this, turn);
     }
 
@@ -1932,6 +2026,8 @@ public abstract class DysonAgentSession
                 "Tool call did not complete (cancelled or interrupted).");
             TurnHistory.Add(turn);
         }
+
+        BumpTranscriptGeneration();
 
         while (_logLines.TryDequeue(out _))
         {
@@ -2446,7 +2542,9 @@ public abstract class DysonAgentSession
         if (!ContextOptimizer.ShouldOptimize(TurnHistory, TokenCounter))
             return VoidResult<string>.Success;
 
-        return ContextOptimizer.Optimize(TurnHistory, TokenCounter);
+        var result = ContextOptimizer.Optimize(TurnHistory, TokenCounter);
+        BumpTranscriptGeneration();
+        return result;
     }
 
     public abstract Task<VoidResult<string>> LoadFunctionalContextAsync(

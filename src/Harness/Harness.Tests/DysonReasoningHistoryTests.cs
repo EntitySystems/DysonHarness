@@ -15,6 +15,7 @@ public class DysonReasoningHistoryTests
         AssertPersistRestoreAndLegacySynthesize();
         AssertTranscriptOmitsReasoning();
         AssertExpandCollapseHelper();
+        AssertLatestStepTitleResolver();
         AssertReasoningLogContentionSmoke();
     }
 
@@ -245,6 +246,97 @@ public class DysonReasoningHistoryTests
             throw new InvalidOperationException("Committed Thought should collapse while live reasoning is the latest slot.");
         if (!DysonReasoningHistoryUi.ShouldExpandSegment(1, 2, hasAssistantBody: false, isReasoningStreaming: true))
             throw new InvalidOperationException("Live reasoning slot should expand while streaming.");
+    }
+
+    private static void AssertLatestStepTitleResolver()
+    {
+        if (DysonReasoningHistoryUi.TryGetLatestStepTitle(null) is not null)
+            throw new InvalidOperationException("Null turn must yield no step title.");
+
+        var empty = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        if (DysonReasoningHistoryUi.TryGetLatestStepTitle(empty) is not null)
+            throw new InvalidOperationException("Turn with no step must yield no title.");
+
+        var oneThought = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        oneThought.AppendReasoningRound(0, "plain thought", null, includeInterimText: false);
+        ExpectStep(oneThought, "Thinking", "single Thought fallback");
+
+        var twoThoughts = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        twoThoughts.AppendReasoningRound(0, "first", null, includeInterimText: false);
+        twoThoughts.AppendReasoningRound(1, "second", null, includeInterimText: false);
+        ExpectStep(twoThoughts, "Thinking 2", "multiple Thought ordinal");
+
+        var h1Thought = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        h1Thought.AppendReasoningRound(
+            0,
+            "# Loading required topic files\n\nbody stays hidden",
+            null,
+            includeInterimText: false);
+        ExpectStep(h1Thought, "Loading required topic files", "Thought H1 title");
+
+        var h1Interim = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        h1Interim.AppendReasoningRound(
+            0,
+            "thought",
+            "# Checking host wiring\n\ninterim body",
+            includeInterimText: true);
+        ExpectStep(h1Interim, "Checking host wiring", "InterimText H1 title");
+
+        var twoNotes = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        twoNotes.AppendReasoningRound(0, "t0", "note a", includeInterimText: true);
+        twoNotes.AppendReasoningRound(1, "t1", "note b", includeInterimText: true);
+        ExpectStep(twoNotes, "Note 2", "multiple InterimText ordinal");
+
+        var liveFirst = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        liveFirst.AppendReasoningDelta("SECRET_PREVIEW_TOKEN");
+        ExpectStep(liveFirst, "Thinking", "live thinking with no committed thoughts");
+        if (DysonReasoningHistoryUi.TryGetLatestStepTitle(liveFirst)!
+            .Contains("SECRET_PREVIEW_TOKEN", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Live step title must not expose reasoning preview.");
+        }
+
+        var liveNext = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        liveNext.AppendReasoningRound(0, "committed", null, includeInterimText: false);
+        liveNext.AppendReasoningDelta("more SECRET_PREVIEW_TOKEN");
+        ExpectStep(liveNext, "Thinking 2", "live trailing Thinking N");
+
+        var liveSplit = DysonReasoningHistoryUi.SplitSegmentTitle(
+            "# Loading required topic files\n\nbody",
+            "Thinking");
+        if (liveSplit.Title != "Loading required topic files"
+            || !liveSplit.Body.Contains("body", StringComparison.Ordinal)
+            || liveSplit.Body.Contains("# Loading", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"SplitSegmentTitle must parse H1 and remainder body, got title='{liveSplit.Title}' body='{liveSplit.Body}'.");
+        }
+
+        var legacy = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal, ReasoningText = "legacy blob" };
+        ExpectStep(legacy, "Thinking", "legacy ReasoningText fallback");
+
+        var titled = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            AgentTitle = "Report accepted",
+        };
+        titled.AppendReasoningRound(
+            0,
+            "# Loading required topic files\n\nbody",
+            "note",
+            includeInterimText: true);
+        titled.AppendReasoningDelta("still streaming");
+        ExpectStep(titled, "Report accepted", "AgentTitle precedence");
+    }
+
+    private static void ExpectStep(DysonAgentTurn turn, string expected, string caseName)
+    {
+        var actual = DysonReasoningHistoryUi.TryGetLatestStepTitle(turn);
+        if (!string.Equals(actual, expected, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{caseName}: expected '{expected}', got '{actual ?? "<null>"}'.");
+        }
     }
 
     private sealed class StubProvider : DysonAgentProvider;

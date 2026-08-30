@@ -10,12 +10,12 @@ namespace Harness.Tests;
 public class DysonPromptUserDialogTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertParseAndFormat();
         AssertLayerGating();
-        AssertSessionPendingAndRespond().GetAwaiter().GetResult();
-        AssertMutualExclusionWithAsk().GetAwaiter().GetResult();
+        await AssertSessionPendingAndRespond();
+        await AssertMutualExclusionWithAsk();
     }
 
     private static void AssertParseAndFormat()

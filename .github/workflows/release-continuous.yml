@@ -42,10 +42,10 @@ jobs:
     needs: version
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "10.0.x"
 
@@ -75,10 +75,10 @@ jobs:
       CHANNEL: ${{ needs.version.outputs.channel }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "10.0.x"
 
@@ -146,7 +146,7 @@ jobs:
           Write-Host "Copied MSI to artifacts/$($msi.Name)"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: DysonHarness-${{ env.VERSION }}-${{ matrix.rid }}
           path: artifacts/DysonHarness-${{ env.VERSION }}-${{ matrix.rid }}.*
@@ -166,10 +166,10 @@ jobs:
     steps:
       # gh release create needs a git checkout to create/move the tag.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: DysonHarness-${{ env.VERSION }}-*
           path: release-assets

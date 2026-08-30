@@ -1,4 +1,5 @@
 @page "/"
+@using System.Diagnostics
 @using DysonHarness
 @using Harness.UI.Components.Chat
 @using Harness.UI.Components.Files
@@ -83,9 +84,8 @@
                 }
                 else
                 {
-                    @foreach (var line in Host.Session.SnapshotLog(40).Reverse())
+                    @foreach (var row in _sessionLogRows)
                     {
-                        var row = DysonSessionLogDisplay.Parse(line);
                         var levelClass = row.Level switch
                         {
                             DysonSessionLogLevel.Error => "error",
@@ -106,8 +106,12 @@
 <FileViewerOverlay />
 <SkillViewerOverlay />
 <PromptUserDialogModal />
+<SplashScreen Visible="!_booted" />
 
 @code {
+    /// <summary>Cap on how long the boot splash waits for the client to report idle.</summary>
+    private const int ClientReadyMaxWaitMs = 10000;
+
     private IReadOnlyList<DysonSessionSummary> _sessions = [];
     private string? _listError;
     private string? _activeTitle;
@@ -118,9 +122,13 @@
     private int? _lastReportedPromptTokens;
     private string _selectedAgentMode = DysonAgentModes.Work;
     private string? _lastSyncedSessionMode;
+    private IReadOnlyList<DysonSessionLogRow> _sessionLogRows = [];
     private Guid? _activeWorkDirectoryId;
     private string? _gitBranch;
     private bool _workdirHydrated;
+    private bool _booted;
+    private Guid? _pendingBootWorkDirectoryId;
+    private string? _pendingBootWorkDirectoryPath;
     private WorkDirectorySwitcher? _workdirSwitcher;
     private DotNetObjectReference<DysonUiHost>? _chatLinksRef;
 
@@ -139,6 +147,7 @@
         SyncSelectedSlugFromSession();
         SyncReasoningEffortFromHost();
         SyncContextTokensFromHost();
+        RefreshSessionLogRows();
 
         if (_selectedSlugId is null)
         {
@@ -156,10 +165,63 @@
             await InstallChatExternalLinksAsync();
         }
 
+        // Prerender is a separate component instance. Hydrating it runs git/DB work
+        // with no browser, then the interactive circuit hydrates again and waits on
+        // a dispatcher that is already busy. Splash stays up until interactive boot.
+        if (!RendererInfo.IsInteractive)
+            return;
+
         if (!_workdirHydrated)
         {
             _workdirHydrated = true;
-            await HydrateWorkDirectoryAsync();
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                await HydrateWorkDirectoryAsync();
+            }
+            catch (Exception ex)
+            {
+                Host.ReportError($"Failed to load work directories: {ex.Message}");
+            }
+            finally
+            {
+                // Server-side hydrate being done is not the same as the page being usable:
+                // on a cold client the browser main thread is still busy, so clicks queue
+                // behind script work. Hold the splash until the client reports idle.
+                await WaitForClientResponsiveAsync();
+
+                _booted = true;
+                // Queue a fresh render batch: a bare StateHasChanged() inside the
+                // after-render phase marks the component dirty without dispatching,
+                // so the splash would linger until some other event re-rendered Home.
+                await InvokeAsync(StateHasChanged);
+
+                Logger.LogInformation("Work directory hydrate completed in {ElapsedMs}ms.", sw.ElapsedMilliseconds);
+
+                if (_pendingBootWorkDirectoryId is Guid pendingBoot)
+                {
+                    var pendingPath = _pendingBootWorkDirectoryPath;
+                    _pendingBootWorkDirectoryId = null;
+                    _pendingBootWorkDirectoryPath = null;
+                    _ = CompleteBootMetadataAsync(pendingBoot, pendingPath);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Waits for the browser main thread to report an idle slice (capped), so the splash
+    /// covers the cold-client window where the shell renders but cannot service input.
+    /// </summary>
+    private async Task WaitForClientResponsiveAsync()
+    {
+        try
+        {
+            await Js.InvokeAsync<bool>("dysonBoot.waitUntilResponsive", ClientReadyMaxWaitMs);
+        }
+        catch (Exception)
+        {
+            // Circuit gone, prerender, or JS not ready — never pin the splash on this.
         }
     }
 
@@ -190,9 +252,8 @@
                 {
                     _activeWorkDirectoryId = id;
                     Host.SetComposerWorkDirectoryId(id);
-                    await WorkDirs.TouchOpenedAsync(id);
-                    await WorkDirectoryService.RefreshGitOriginAsync(id);
-                    await RefreshGitBranchAsync(get.Value.AbsolutePath);
+                    _pendingBootWorkDirectoryId = id;
+                    _pendingBootWorkDirectoryPath = get.Value.AbsolutePath;
                     await RefreshSessionsAsync();
                     StateHasChanged();
                     return;
@@ -222,13 +283,31 @@
         StateHasChanged();
     }
 
-    private void OnHostChanged() => _ = InvokeAsync(() =>
+    private async Task CompleteBootMetadataAsync(Guid id, string? absolutePath)
     {
+        try
+        {
+            _ = await WorkDirs.TouchOpenedAsync(id);
+            _ = await WorkDirectoryService.RefreshGitOriginAsync(id);
+            if (!string.IsNullOrWhiteSpace(absolutePath))
+                await RefreshGitBranchAsync(absolutePath);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch
+        {
+            // Bookkeeping only; never surface as an unobserved task exception.
+        }
+    }
+
+    private void OnHostChanged(DysonHostChangeKind kind) => _ = InvokeAsync(() =>
+    {
+        _ = kind;
         try
         {
             SyncSelectedSlugFromSession();
             SyncReasoningEffortFromHost();
             SyncContextTokensFromHost();
+            RefreshSessionLogRows();
             // Model/effort/token Notify must not clobber a composer mode that is not yet applied.
             SyncSelectedAgentModeIfSessionModeChanged();
             _sessions = OverlayLiveTitle(_sessions);
@@ -294,6 +373,13 @@
         _maxTargetContextTokens = Host.SessionMaxTargetContextTokens;
         _outgoingContextTokens = Host.SessionOutgoingContextTokens;
         _lastReportedPromptTokens = Host.SessionLastReportedPromptTokens;
+    }
+
+    private void RefreshSessionLogRows()
+    {
+        _sessionLogRows = Host.Session is null
+            ? []
+            : Host.Session.SnapshotLog(40).Reverse().Select(DysonSessionLogDisplay.Parse).ToList();
     }
 
     private void SyncSelectedAgentModeIfSessionModeChanged()
@@ -378,12 +464,13 @@
             return;
         }
 
-        var fs = await DysonWorkspaceFileSystems
-            .CreateLocalAsync(absolutePath)
-            .ConfigureAwait(false);
-        var branch = fs.IsError
+        var fs = await DysonWorkspaceFileSystems.CreateLocalAsync(absolutePath);
+
+        // DysonGitInfo spawns git and blocks on WaitForExit plus a sync pipe drain
+        // (GetResult). Running that on the Blazor sync context deadlocks the circuit.
+        var branch = await Task.Run(() => fs.IsError
             ? DysonGitInfo.TryGetBranch(absolutePath)
-            : DysonGitInfo.TryGetBranch(fs.Value);
+            : DysonGitInfo.TryGetBranch(fs.Value));
         _gitBranch = branch.IsSuccess ? branch.Value : null;
     }
 

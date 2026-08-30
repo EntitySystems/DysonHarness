@@ -552,7 +552,8 @@ public sealed class DysonModelRepository(
                 if (writeGate is not null)
                     return new VoidResult<string>(writeGate);
 
-                if (!string.IsNullOrWhiteSpace(existing.Provider?.ManagedSource))
+                if (!string.IsNullOrWhiteSpace(existing.Provider?.ManagedSource)
+                    && !AllowsManagedSlugRemove(existing.Provider.ManagedSource))
                 {
                     return new VoidResult<string>(
                         $"Slug belongs to managed provider ({existing.Provider.ManagedSource}) and cannot be removed.");
@@ -1042,4 +1043,9 @@ public sealed class DysonModelRepository(
 
     private static string? NormalizeReasoningEffort(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    // Must match DysonManagedSources.OpenRouter / OrcaRouter (Engine; LocalDb cannot reference Engine).
+    private static bool AllowsManagedSlugRemove(string managedSource) =>
+        string.Equals(managedSource, "openrouter", StringComparison.Ordinal)
+        || string.Equals(managedSource, "orcarouter", StringComparison.Ordinal);
 }

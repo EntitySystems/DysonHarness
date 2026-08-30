@@ -71,7 +71,7 @@
     }
 
     <div class="btn-row provider-card__actions">
-        @if (IsOpenRouter)
+        @if (IsDirectManaged)
         {
             <button type="button" class="btn btn-primary btn--sm" @onclick="OnBrowseModels">Browse models</button>
             <button type="button" class="btn btn--sm" @onclick="OnUpdateApiKey">Update API key</button>
@@ -118,7 +118,7 @@
             @if (Provider.Slugs.Count == 0)
             {
                 <div class="list-item__meta">
-                    @(IsOpenRouter
+                    @(IsDirectManaged
                         ? "No slugs yet — Browse models to enable some."
                         : IsManaged
                             ? "No slugs yet — Connect then Verify / Refresh models."
@@ -131,6 +131,7 @@
                 {
                     <SlugRow Slug="slug"
                              IsManaged="IsManaged"
+                             IsDirectManaged="IsDirectManaged"
                              ContextStepBusy="ContextStepBusySlugId == slug.Id"
                              OnSetDefault="() => OnSetDefault.InvokeAsync(slug)"
                              OnToggleEnabled="() => OnToggleEnabled.InvokeAsync(slug)"
@@ -161,8 +162,8 @@
     /// <summary>CLIProxy OAuth chrome (Connect / Verify / missing binary).</summary>
     public bool IsCliProxy => DysonManagedSources.IsCliProxy(Provider.ManagedSource);
 
-    /// <summary>Direct OpenRouter API-key managed provider.</summary>
-    public bool IsOpenRouter => DysonManagedSources.IsOpenRouter(Provider.ManagedSource);
+    /// <summary>Direct API-key managed provider (OpenRouter / OrcaRouter).</summary>
+    public bool IsDirectManaged => DysonManagedSources.IsDirectManaged(Provider.ManagedSource);
 
     /// <summary>False blocks Connect / Verify (CLIProxyAPI binary missing).</summary>
     [Parameter] public bool CliProxyInstalled { get; set; }

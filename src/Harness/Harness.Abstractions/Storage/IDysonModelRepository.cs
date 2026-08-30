@@ -85,6 +85,10 @@ public interface IDysonModelRepository
         DysonModelSlugEntity slug,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Remove a slug. Direct-managed (<c>openrouter</c> / <c>orcarouter</c>) slugs may be deleted;
+    /// CLIProxy managed slugs are rejected.
+    /// </summary>
     Task<VoidResult<string>> RemoveSlugAsync(
         Guid id,
         CancellationToken cancellationToken = default);

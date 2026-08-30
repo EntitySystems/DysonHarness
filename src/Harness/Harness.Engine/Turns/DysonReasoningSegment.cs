@@ -110,4 +110,125 @@ public static class DysonReasoningHistoryUi
 
         return segmentOrdinal == segmentCount - 1;
     }
+
+    /// <summary>
+    /// True while a non-empty reasoning preview is streaming (the live trailing
+    /// <c>Thinking N</c> slot in thinking history).
+    /// </summary>
+    public static bool IsLiveReasoningStreaming(DysonAgentTurn turn)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+        return turn.IsReasoningStreaming && !string.IsNullOrEmpty(turn.ReasoningStreamingPreview);
+    }
+
+    /// <summary>
+    /// Display title for a reasoning segment: Markdown H1 when present, otherwise
+    /// <paramref name="fallback"/>. Body is the remainder after the H1 line, or the
+    /// full text when there is no title. Presentation-only; never mutates the turn.
+    /// </summary>
+    public static (string Title, string Body) SplitSegmentTitle(string text, string fallback)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(fallback);
+
+        var parsed = DysonAgentTurn.TryParseAgentTitle(text);
+        if (parsed.IsSuccess && !string.IsNullOrWhiteSpace(parsed.Value.Title))
+            return (parsed.Value.Title!, parsed.Value.Body);
+
+        return (fallback, text);
+    }
+
+    /// <summary>
+    /// Thought fallback matching TurnBlock ordinals: <c>Thinking</c> for a single
+    /// committed thought with no live slot; <c>Thinking N</c> when multiple thoughts
+    /// exist or a live trailing thought is streaming.
+    /// </summary>
+    public static string ThoughtFallback(int thoughtOrdinal, int thoughtCount, bool liveStreaming)
+        => thoughtCount > 1 || liveStreaming
+            ? $"Thinking {thoughtOrdinal + 1}"
+            : "Thinking";
+
+    /// <summary>
+    /// Interim-text fallback matching TurnBlock ordinals: <c>Note</c> or <c>Note N</c>.
+    /// </summary>
+    public static string InterimFallback(int interimOrdinal, int interimCount)
+        => interimCount > 1
+            ? $"Note {interimOrdinal + 1}"
+            : "Note";
+
+    /// <summary>Live trailing thought label: <c>Thinking</c> or next <c>Thinking N</c>.</summary>
+    public static string LiveThoughtTitle(int thoughtCount)
+        => thoughtCount > 0 ? $"Thinking {thoughtCount + 1}" : "Thinking";
+
+    /// <summary>
+    /// Latest safe visible step label for a turn (parent-card / thinking-history titles).
+    /// Precedence: finalized <see cref="DysonAgentTurn.AgentTitle"/>; live
+    /// <c>Thinking</c>/<c>Thinking N</c> while reasoning streams (never the preview body);
+    /// last non-empty <see cref="DysonAgentTurn.ReasoningLog"/> segment (H1 or ordinal fallback);
+    /// legacy <see cref="DysonAgentTurn.ReasoningText"/> as <c>Thinking</c> (or its H1);
+    /// otherwise null. Read-only; does not persist or inject reasoning.
+    /// </summary>
+    public static string? TryGetLatestStepTitle(DysonAgentTurn? turn)
+    {
+        if (turn is null)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(turn.AgentTitle))
+            return turn.AgentTitle;
+
+        var log = turn.ReasoningLog;
+        var liveStreaming = IsLiveReasoningStreaming(turn);
+        var thoughtCount = 0;
+        var interimCount = 0;
+        foreach (var segment in log)
+        {
+            if (segment.Kind == DysonReasoningSegmentKind.Thought)
+                thoughtCount++;
+            else if (segment.Kind == DysonReasoningSegmentKind.InterimText
+                     && !string.IsNullOrWhiteSpace(segment.Text))
+                interimCount++;
+        }
+
+        if (liveStreaming)
+            return LiveThoughtTitle(thoughtCount);
+
+        DysonReasoningSegment? last = null;
+        var lastThoughtOrdinal = -1;
+        var lastInterimOrdinal = -1;
+        var thoughtOrdinal = 0;
+        var interimOrdinal = 0;
+        foreach (var segment in log)
+        {
+            if (segment.Kind == DysonReasoningSegmentKind.Thought)
+            {
+                if (!string.IsNullOrWhiteSpace(segment.Text))
+                {
+                    last = segment;
+                    lastThoughtOrdinal = thoughtOrdinal;
+                }
+
+                thoughtOrdinal++;
+            }
+            else if (segment.Kind == DysonReasoningSegmentKind.InterimText
+                     && !string.IsNullOrWhiteSpace(segment.Text))
+            {
+                last = segment;
+                lastInterimOrdinal = interimOrdinal;
+                interimOrdinal++;
+            }
+        }
+
+        if (last is not null)
+        {
+            var fallback = last.Kind == DysonReasoningSegmentKind.Thought
+                ? ThoughtFallback(lastThoughtOrdinal, thoughtCount, liveStreaming: false)
+                : InterimFallback(lastInterimOrdinal, interimCount);
+            return SplitSegmentTitle(last.Text, fallback).Title;
+        }
+
+        if (!string.IsNullOrWhiteSpace(turn.ReasoningText))
+            return SplitSegmentTitle(turn.ReasoningText, "Thinking").Title;
+
+        return null;
+    }
 }

@@ -8,12 +8,12 @@ namespace Harness.Tests;
 public class DysonCliProxyAssetResolverTests
 {
     [Theory]
-    [InlineData("7.2.102", "windows", Architecture.X64, "CLIProxyAPI_7.2.102_windows_amd64.zip")]
-    [InlineData("7.2.102", "windows", Architecture.Arm64, "CLIProxyAPI_7.2.102_windows_aarch64.zip")]
-    [InlineData("7.2.102", "linux", Architecture.X64, "CLIProxyAPI_7.2.102_linux_amd64.tar.gz")]
-    [InlineData("7.2.102", "linux", Architecture.Arm64, "CLIProxyAPI_7.2.102_linux_aarch64.tar.gz")]
-    [InlineData("7.2.102", "darwin", Architecture.X64, "CLIProxyAPI_7.2.102_darwin_amd64.tar.gz")]
-    [InlineData("7.2.102", "darwin", Architecture.Arm64, "CLIProxyAPI_7.2.102_darwin_aarch64.tar.gz")]
+    [InlineData("7.2.145", "windows", Architecture.X64, "CLIProxyAPI_7.2.145_windows_amd64.zip")]
+    [InlineData("7.2.145", "windows", Architecture.Arm64, "CLIProxyAPI_7.2.145_windows_aarch64.zip")]
+    [InlineData("7.2.145", "linux", Architecture.X64, "CLIProxyAPI_7.2.145_linux_amd64.tar.gz")]
+    [InlineData("7.2.145", "linux", Architecture.Arm64, "CLIProxyAPI_7.2.145_linux_aarch64.tar.gz")]
+    [InlineData("7.2.145", "darwin", Architecture.X64, "CLIProxyAPI_7.2.145_darwin_amd64.tar.gz")]
+    [InlineData("7.2.145", "darwin", Architecture.Arm64, "CLIProxyAPI_7.2.145_darwin_aarch64.tar.gz")]
     public void ResolveAssetFileName_maps_os_arch(string version, string os, Architecture arch, string expected)
     {
         var platform = os switch
@@ -32,9 +32,9 @@ public class DysonCliProxyAssetResolverTests
     public void ResolveDownloadUrl_uses_pinned_download_base()
     {
         var url = DysonCliProxyAssetResolver.ResolveDownloadUrl(
-            "7.2.102", OSPlatform.Windows, Architecture.X64);
+            "7.2.145", OSPlatform.Windows, Architecture.X64);
         Assert.Equal(
-            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.102/CLIProxyAPI_7.2.102_windows_amd64.zip",
+            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.145/CLIProxyAPI_7.2.145_windows_amd64.zip",
             url);
     }
 }
@@ -44,16 +44,16 @@ public class DysonThirdPartyResourcesTests
     [Fact]
     public void CliProxyApi_parses_tag_and_version_from_release_url()
     {
-        Assert.Equal("v7.2.102", DysonThirdPartyResources.CliProxyApi.Tag);
-        Assert.Equal("7.2.102", DysonThirdPartyResources.CliProxyApi.Version);
+        Assert.Equal("v7.2.145", DysonThirdPartyResources.CliProxyApi.Tag);
+        Assert.Equal("7.2.145", DysonThirdPartyResources.CliProxyApi.Version);
         Assert.Equal(
-            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.102/",
+            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.145/",
             DysonThirdPartyResources.CliProxyApi.DownloadBaseUrl);
     }
 
     [Theory]
-    [InlineData("https://github.com/router-for-me/CLIProxyAPI/releases/tag/v7.2.102", "v7.2.102")]
-    [InlineData("https://github.com/router-for-me/CLIProxyAPI/releases/tag/v7.2.102/", "v7.2.102")]
+    [InlineData("https://github.com/router-for-me/CLIProxyAPI/releases/tag/v7.2.145", "v7.2.145")]
+    [InlineData("https://github.com/router-for-me/CLIProxyAPI/releases/tag/v7.2.145/", "v7.2.145")]
     [InlineData("https://example.com/releases/tag/1.0.0", "1.0.0")]
     public void ParseTag_reads_final_path_segment(string url, string expected)
     {
@@ -377,6 +377,7 @@ public class DysonManagedSourcesTests
     [InlineData("cliproxy-codex", true)]
     [InlineData("cliproxy-grok", true)]
     [InlineData("openrouter", false)]
+    [InlineData("orcarouter", false)]
     [InlineData(null, false)]
     [InlineData("", false)]
     [InlineData("   ", false)]
@@ -387,11 +388,120 @@ public class DysonManagedSourcesTests
 
     [Theory]
     [InlineData("openrouter", true)]
+    [InlineData("orcarouter", false)]
     [InlineData("cliproxy-codex", false)]
     [InlineData(null, false)]
     [InlineData("", false)]
     public void IsOpenRouter_matches_const(string? source, bool expected)
     {
         Assert.Equal(expected, DysonManagedSources.IsOpenRouter(source));
+    }
+
+    [Theory]
+    [InlineData("orcarouter", true)]
+    [InlineData("openrouter", false)]
+    [InlineData("cliproxy-codex", false)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    public void IsOrcaRouter_matches_const(string? source, bool expected)
+    {
+        Assert.Equal(expected, DysonManagedSources.IsOrcaRouter(source));
+    }
+
+    [Theory]
+    [InlineData("openrouter", true)]
+    [InlineData("orcarouter", true)]
+    [InlineData("cliproxy-codex", false)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    public void IsDirectManaged_matches_openrouter_or_orcarouter(string? source, bool expected)
+    {
+        Assert.Equal(expected, DysonManagedSources.IsDirectManaged(source));
+    }
+}
+
+public class DysonCliProxyPathsPruneTests
+{
+    [Fact]
+    public void PruneObsoleteVersionDirectories_deletes_old_pin_keeps_shared_state()
+    {
+        var root = Directory.CreateTempSubdirectory();
+        try
+        {
+            var pin = DysonThirdPartyResources.CliProxyApi.Version;
+            var oldDir = Directory.CreateDirectory(Path.Combine(root.FullName, "7.2.102"));
+            File.WriteAllText(Path.Combine(oldDir.FullName, "stale.bin"), "old");
+            var pinDir = Directory.CreateDirectory(Path.Combine(root.FullName, pin));
+            File.WriteAllText(Path.Combine(pinDir.FullName, DysonCliProxyPaths.ExecutableFileName), "pin");
+            var auths = Directory.CreateDirectory(Path.Combine(root.FullName, DysonCliProxyPaths.AuthsDirectoryName));
+            File.WriteAllText(Path.Combine(auths.FullName, "codex-oauth.json"), "{}");
+            var config = Path.Combine(root.FullName, DysonCliProxyPaths.ConfigFileName);
+            var keys = Path.Combine(root.FullName, DysonCliProxyPaths.KeysFileName);
+            File.WriteAllText(config, "host: \"127.0.0.1\"");
+            File.WriteAllText(keys, "{}");
+            Directory.CreateDirectory(Path.Combine(root.FullName, "not-a-version"));
+
+            DysonCliProxyPaths.PruneObsoleteVersionDirectories(root.FullName, pin);
+
+            Assert.False(Directory.Exists(oldDir.FullName));
+            Assert.True(Directory.Exists(pinDir.FullName));
+            Assert.True(File.Exists(Path.Combine(pinDir.FullName, DysonCliProxyPaths.ExecutableFileName)));
+            Assert.True(Directory.Exists(auths.FullName));
+            Assert.True(File.Exists(Path.Combine(auths.FullName, "codex-oauth.json")));
+            Assert.True(File.Exists(config));
+            Assert.True(File.Exists(keys));
+            Assert.True(Directory.Exists(Path.Combine(root.FullName, "not-a-version")));
+        }
+        finally
+        {
+            try { root.Delete(recursive: true); }
+            catch { /* best-effort temp cleanup */ }
+        }
+    }
+}
+
+public class DysonCliProxyDownloaderForceTests
+{
+    [Fact]
+    public async Task EnsureInstalledAsync_force_true_deletes_pin_dir_without_network()
+    {
+        var root = Directory.CreateTempSubdirectory();
+        try
+        {
+            var pin = DysonThirdPartyResources.CliProxyApi.Version;
+            var pinDir = Directory.CreateDirectory(Path.Combine(root.FullName, pin));
+            File.WriteAllText(Path.Combine(pinDir.FullName, DysonCliProxyPaths.ExecutableFileName), "old-binary");
+            var auths = Directory.CreateDirectory(Path.Combine(root.FullName, DysonCliProxyPaths.AuthsDirectoryName));
+            File.WriteAllText(Path.Combine(auths.FullName, "codex-oauth.json"), "{}");
+            File.WriteAllText(Path.Combine(root.FullName, DysonCliProxyPaths.ConfigFileName), "keep-config");
+            File.WriteAllText(Path.Combine(root.FullName, DysonCliProxyPaths.KeysFileName), "{}");
+
+            using var http = new HttpClient(new FailImmediatelyHandler());
+            var downloader = new DysonCliProxyDownloader(http);
+            var result = await downloader.EnsureInstalledAsync(root.FullName, force: true);
+
+            Assert.True(result.IsError);
+            Assert.False(Directory.Exists(pinDir.FullName));
+            Assert.True(Directory.Exists(auths.FullName));
+            Assert.True(File.Exists(Path.Combine(auths.FullName, "codex-oauth.json")));
+            Assert.Equal("keep-config", File.ReadAllText(Path.Combine(root.FullName, DysonCliProxyPaths.ConfigFileName)));
+            Assert.True(File.Exists(Path.Combine(root.FullName, DysonCliProxyPaths.KeysFileName)));
+        }
+        finally
+        {
+            try { root.Delete(recursive: true); }
+            catch { /* best-effort temp cleanup */ }
+        }
+    }
+
+    private sealed class FailImmediatelyHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            {
+                Content = new StringContent("no network"),
+            });
     }
 }

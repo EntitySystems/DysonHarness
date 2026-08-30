@@ -121,6 +121,11 @@ public sealed class DysonWorkDirectoryRepository(
             await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return Result<Guid, string>.AsValue(entity.Id);
         }
+        catch (Exception ex) when (DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return Result<Guid, string>.AsError(
+                $"Work directory create timed out (database busy): {ex.Message}");
+        }
         catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return Result<Guid, string>.AsError($"Failed to create work directory: {ex.Message}");
@@ -144,6 +149,11 @@ public sealed class DysonWorkDirectoryRepository(
                 ? Result<DysonWorkDirectoryEntity, string>.AsError($"Work directory '{id}' not found.")
                 : Result<DysonWorkDirectoryEntity, string>.AsValue(entity);
         }
+        catch (Exception ex) when (DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return Result<DysonWorkDirectoryEntity, string>.AsError(
+                $"Work directory load timed out (database busy): {ex.Message}");
+        }
         catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return Result<DysonWorkDirectoryEntity, string>.AsError(
@@ -166,6 +176,11 @@ public sealed class DysonWorkDirectoryRepository(
                 .ConfigureAwait(false);
 
             return Result<IReadOnlyList<DysonWorkDirectoryEntity>, string>.AsValue(list);
+        }
+        catch (Exception ex) when (DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return Result<IReadOnlyList<DysonWorkDirectoryEntity>, string>.AsError(
+                $"Work directory list timed out (database busy): {ex.Message}");
         }
         catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
@@ -192,6 +207,11 @@ public sealed class DysonWorkDirectoryRepository(
             entity.LastOpenedUtc = DateTime.UtcNow;
             await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return new VoidResult<string>(
+                $"Work directory timestamp update timed out (database busy): {ex.Message}");
         }
         catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
@@ -220,6 +240,11 @@ public sealed class DysonWorkDirectoryRepository(
             entity.GitProvider = gitProvider;
             await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return new VoidResult<string>(
+                $"Git metadata update timed out (database busy): {ex.Message}");
         }
         catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
@@ -255,6 +280,11 @@ public sealed class DysonWorkDirectoryRepository(
             db.WorkDirectories.Remove(entity);
             await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return new VoidResult<string>(
+                $"Work directory delete timed out (database busy): {ex.Message}");
         }
         catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {

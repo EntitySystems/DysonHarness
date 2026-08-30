@@ -64,7 +64,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly ConcurrentDictionary<Guid, DysonTaskLifecycleKind> _lastTaskLifecycleActionBySession = new();
     private readonly ConcurrentDictionary<Guid, EventHandler<DysonToolCallStatusChangedEventArgs>> _toolHandlers = new();
     private readonly ConcurrentDictionary<Guid, EventHandler> _textHandlers = new();
-    private readonly DysonUiNotifyCoalescer _notifyCoalescer;
+    private readonly DysonNotifyCoalescer _notifyCoalescer;
     private readonly ConcurrentDictionary<Guid, Guid?> _parentSessionIdByChild = new();
     private readonly List<DysonSubagentEventUiItem> _subagentEventUi = [];
     private readonly object _subagentEventUiGate = new();
@@ -140,7 +140,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pluginMcpResolver = pluginMcpResolver ?? throw new ArgumentNullException(nameof(pluginMcpResolver));
         _pluginLifecycle = pluginLifecycle ?? throw new ArgumentNullException(nameof(pluginLifecycle));
         _theme = theme ?? throw new ArgumentNullException(nameof(theme));
-        _notifyCoalescer = new DysonUiNotifyCoalescer(InvokeChanged);
+        _notifyCoalescer = new DysonNotifyCoalescer(InvokeChanged);
         _theme.Changed += OnThemeChanged;
         _runtimeAttachment = runtimeAttachment;
         _usageAnalytics = usageAnalytics;
@@ -154,7 +154,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonLongRunningShellRegistry.Changed += OnLongRunningShellRegistryChanged;
     }
 
-    private void OnLongRunningShellRegistryChanged() => Notify();
+    private void OnLongRunningShellRegistryChanged() => Notify(DysonHostChangeKind.SessionGraph);
 
     private void OnPluginCatalogChanged(object? sender, DysonPluginCatalogChangedEventArgs args) =>
         _ = RefreshPluginMcpHostsAsync(args.Scope, args.WorkDirectoryId);
@@ -212,7 +212,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             LastError = $"Plugin MCP refresh failed: {ex.Message}";
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
     }
 
     private static IReadOnlySet<string> BuildPluginMcpReservedNames(DysonAgentSessionConfig config)
@@ -240,7 +240,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         lock (_pendingSnipPromptLinesGate)
             _pendingSnipPromptLines.Add(line);
-        Notify();
+        Notify(DysonHostChangeKind.Transcript);
     }
 
     /// <summary>
@@ -301,7 +301,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return VoidResult<string>.Success;
 
         LastError = attached.Error;
-        Notify();
+        Notify(DysonHostChangeKind.Error);
         return new VoidResult<string>(attached.Error);
     }
 
@@ -325,8 +325,19 @@ public sealed class DysonUiHost : IAsyncDisposable
             AdoptRuntimeOwnedFollowUp(session);
         }
 
-        Notify();
+        Notify(MapRuntimeChangeKind(change.Kind));
     }
+
+    private static DysonHostChangeKind MapRuntimeChangeKind(DysonRuntimeChangeKind kind) =>
+        kind switch
+        {
+            DysonRuntimeChangeKind.SessionGraph => DysonHostChangeKind.SessionGraph,
+            DysonRuntimeChangeKind.Busy => DysonHostChangeKind.Busy,
+            DysonRuntimeChangeKind.Queue => DysonHostChangeKind.Busy,
+            DysonRuntimeChangeKind.Error => DysonHostChangeKind.Error,
+            DysonRuntimeChangeKind.Recovery => DysonHostChangeKind.All,
+            _ => DysonHostChangeKind.All,
+        };
 
     private bool TryGetAttachedRuntime(out DysonSessionRuntime runtime)
     {
@@ -413,14 +424,14 @@ public sealed class DysonUiHost : IAsyncDisposable
     public void ClearLastError()
     {
         LastError = null;
-        Notify();
+        Notify(DysonHostChangeKind.Error);
     }
 
     /// <summary>Sets <see cref="LastError"/> for composer / host UI toasts.</summary>
     public void ReportError(string message)
     {
         LastError = string.IsNullOrWhiteSpace(message) ? "Unexpected error." : message.Trim();
-        Notify();
+        Notify(DysonHostChangeKind.Error);
     }
 
     /// <summary>
@@ -446,9 +457,13 @@ public sealed class DysonUiHost : IAsyncDisposable
                 _pendingMaxTargetContextTokens,
                 _pendingSlugDefaultMaxTargetContextTokens);
 
-    /// <summary>Estimated outgoing context tokens for the focused session (0 when none).</summary>
+    /// <summary>
+    /// Cached estimated outgoing context tokens for the focused session (0 before the first compute).
+    /// Cheap field read — safe on the render path. Refreshed off-thread at turn boundaries via
+    /// <see cref="RefreshCachedOutgoingContextTokensAsync"/>; never recomputes synchronously here.
+    /// </summary>
     public int SessionOutgoingContextTokens =>
-        _session?.EstimateOutgoingContextTokens() ?? 0;
+        _session?.CachedOutgoingContextTokens ?? 0;
 
     /// <summary>Last provider-reported prompt/input tokens (optional secondary).</summary>
     public int? SessionLastReportedPromptTokens =>
@@ -583,7 +598,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
     }
 
-    public event Action? Changed;
+    public event Action<DysonHostChangeKind>? Changed;
 
     /// <summary>Pending AskQuestion / askQuestion parent-event UI (null when idle).</summary>
     public DysonAskUiState? PendingAskUi => _pendingAskUi;
@@ -603,7 +618,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (_composerWorkDirectoryId == workDirectoryId)
             return;
         _composerWorkDirectoryId = workDirectoryId;
-        Notify();
+        Notify(DysonHostChangeKind.Catalogs);
     }
 
     /// <summary>
@@ -625,14 +640,14 @@ public sealed class DysonUiHost : IAsyncDisposable
     public void NotifySkillCatalogChanged()
     {
         SkillCatalogRevision++;
-        Notify();
+        Notify(DysonHostChangeKind.Catalogs);
     }
 
     /// <summary>Signals a committed plugin lifecycle change to catalog-aware UI.</summary>
     public void NotifyPluginCatalogChanged()
     {
         PluginCatalogRevision++;
-        Notify();
+        Notify(DysonHostChangeKind.Catalogs);
     }
 
     /// <summary>The app-data mode used for global plugin installation paths.</summary>
@@ -656,7 +671,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         lock (_pendingSkillsGate)
             _pendingSkillNames.Add(skillName.Trim());
-        Notify();
+        Notify(DysonHostChangeKind.Transcript);
     }
 
     /// <summary>Remove the first queued pending skill matching <paramref name="name"/>.</summary>
@@ -675,7 +690,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             _pendingSkillNames.RemoveAt(index);
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.Transcript);
     }
 
     /// <summary>Clear all skills queued for the next prompt.</summary>
@@ -688,7 +703,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             _pendingSkillNames.Clear();
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.Transcript);
     }
 
     /// <summary>Compressed images queued to attach on the next <see cref="PromptAsync"/>.</summary>
@@ -710,7 +725,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (!attachment.IsImage)
         {
             LastError = "Only image attachments are supported.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -723,7 +738,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (_pendingImages.Count >= DysonUserImageFactory.MaxPendingImages)
             {
                 LastError = $"At most {DysonUserImageFactory.MaxPendingImages} images can be attached.";
-                Notify();
+                Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
                 return new VoidResult<string>(LastError);
             }
 
@@ -738,7 +753,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         LastError = null;
-        Notify();
+        Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
         return VoidResult<string>.Success;
     }
 
@@ -758,7 +773,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (created.IsError)
         {
             LastError = created.Error;
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(created.Error);
         }
 
@@ -767,7 +782,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (_pendingImages.Count >= DysonUserImageFactory.MaxPendingImages)
             {
                 LastError = $"At most {DysonUserImageFactory.MaxPendingImages} images can be attached.";
-                Notify();
+                Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
                 return new VoidResult<string>(LastError);
             }
         }
@@ -777,7 +792,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (_pendingFilePaths.Count >= DysonComposerUploads.MaxPendingFiles)
             {
                 LastError = $"At most {DysonComposerUploads.MaxPendingFiles} files can be attached.";
-                Notify();
+                Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
                 return new VoidResult<string>(LastError);
             }
         }
@@ -786,7 +801,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (root is null)
         {
             LastError = "Select a work directory before attaching files.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -796,7 +811,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (fsResult.IsError)
         {
             LastError = fsResult.Error;
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(fsResult.Error);
         }
 
@@ -821,7 +836,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         catch (FormatException ex)
         {
             LastError = $"Could not decode compressed image: {ex.Message}";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -829,7 +844,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (written.IsError)
         {
             LastError = written.Error;
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(written.Error);
         }
 
@@ -839,7 +854,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         QueuePendingFilePath(written.Value);
         LastError = null;
-        Notify();
+        Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
         return VoidResult<string>.Success;
     }
 
@@ -853,7 +868,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (created.IsError)
         {
             LastError = created.Error;
-            Notify();
+            Notify(DysonHostChangeKind.Error);
             return Task.FromResult(new VoidResult<string>(created.Error));
         }
 
@@ -865,7 +880,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         catch (FormatException ex)
         {
             LastError = $"Could not decode compressed image: {ex.Message}";
-            Notify();
+            Notify(DysonHostChangeKind.Error);
             return Task.FromResult(new VoidResult<string>(LastError));
         }
 
@@ -894,7 +909,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (attachedPath is not null)
             RemovePendingFilePath(attachedPath);
 
-        Notify();
+        Notify(DysonHostChangeKind.Transcript);
     }
 
     /// <summary>Clear all images queued for the next prompt.</summary>
@@ -907,7 +922,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             _pendingImages.Clear();
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.Transcript);
     }
 
     /// <summary>Workspace-relative file paths queued to attach on the next <see cref="PromptAsync"/>.</summary>
@@ -932,14 +947,14 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (_pendingFilePaths.Count >= DysonComposerUploads.MaxPendingFiles)
             {
                 LastError = $"At most {DysonComposerUploads.MaxPendingFiles} files can be attached.";
-                Notify();
+                Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
                 return;
             }
 
             _pendingFilePaths.Add(normalized);
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
     }
 
     /// <summary>Remove the first queued pending file path matching <paramref name="relativePath"/>.</summary>
@@ -958,7 +973,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             _pendingFilePaths.RemoveAt(index);
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.Transcript);
     }
 
     /// <summary>Clear all file paths queued for the next prompt.</summary>
@@ -971,7 +986,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             _pendingFilePaths.Clear();
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.Transcript);
     }
 
     /// <summary>
@@ -993,7 +1008,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         if (removed > 0)
-            Notify();
+            Notify(DysonHostChangeKind.Transcript);
         return removed;
     }
 
@@ -1008,7 +1023,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (root is null)
         {
             LastError = "Select a work directory before clearing composer uploads.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return Result<int, string>.AsError(LastError);
         }
 
@@ -1018,7 +1033,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (fsResult.IsError)
         {
             LastError = fsResult.Error;
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return Result<int, string>.AsError(fsResult.Error);
         }
 
@@ -1026,13 +1041,13 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (cleared.IsError)
         {
             LastError = cleared.Error;
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return Result<int, string>.AsError(cleared.Error);
         }
 
         RemovePendingFilePathsUnderComposerUploads();
         LastError = null;
-        Notify();
+        Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
         return Result<int, string>.AsValue(cleared.Value);
     }
 
@@ -1052,7 +1067,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (_pendingFilePaths.Count >= DysonComposerUploads.MaxPendingFiles)
             {
                 LastError = $"At most {DysonComposerUploads.MaxPendingFiles} files can be attached.";
-                Notify();
+                Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
                 return new VoidResult<string>(LastError);
             }
         }
@@ -1061,7 +1076,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (root is null)
         {
             LastError = "Select a work directory before attaching files.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -1071,7 +1086,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (fsResult.IsError)
         {
             LastError = fsResult.Error;
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(fsResult.Error);
         }
 
@@ -1079,13 +1094,13 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (written.IsError)
         {
             LastError = written.Error;
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(written.Error);
         }
 
         QueuePendingFilePath(written.Value);
         LastError = null;
-        Notify();
+        Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
         return VoidResult<string>.Success;
     }
 
@@ -1214,7 +1229,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (_browserControl is null)
         {
             LastError = "Browser control is not available.";
-            Notify();
+            Notify(DysonHostChangeKind.Error);
             return;
         }
 
@@ -1229,14 +1244,14 @@ public sealed class DysonUiHost : IAsyncDisposable
                 Trace.WriteLine(opened.Exception);
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.Error);
     }
 
     public void OpenLongRunningShellsModal()
     {
         LongRunningShellsModalOpen = true;
         SelectedLongRunningShellId = null;
-        Notify();
+        Notify(DysonHostChangeKind.SessionGraph);
     }
 
     public void CloseLongRunningShellsModal()
@@ -1245,13 +1260,13 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
         LongRunningShellsModalOpen = false;
         SelectedLongRunningShellId = null;
-        Notify();
+        Notify(DysonHostChangeKind.SessionGraph);
     }
 
     public void SelectLongRunningShell(int? id)
     {
         SelectedLongRunningShellId = id;
-        Notify();
+        Notify(DysonHostChangeKind.SessionGraph);
     }
 
     public async Task<string> ReadSelectedLongRunningShellTailAsync(
@@ -1277,7 +1292,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _ = await DysonLongRunningShellRegistry
             .AbortAsync(wd, id, timeoutMs: 10_000, cancellationToken)
             .ConfigureAwait(true);
-        Notify();
+        Notify(DysonHostChangeKind.SessionGraph);
     }
 
     /// <summary>
@@ -1636,7 +1651,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         RevokeFileViewerPreview(_fileViewer);
         _fileViewer = state;
-        Notify();
+        Notify(DysonHostChangeKind.Overlay);
     }
 
     private void RevokeFileViewerPreview(DysonFileViewerState? viewer)
@@ -1849,7 +1864,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
         RevokeFileViewerPreview(_fileViewer);
         _fileViewer = null;
-        Notify();
+        Notify(DysonHostChangeKind.Overlay);
     }
 
     public void OpenSkillViewer(DysonContextFileEntry entry)
@@ -1861,7 +1876,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             ResolvedPath = entry.ResolvedPath,
             Markdown = entry.MarkdownContent,
         };
-        Notify();
+        Notify(DysonHostChangeKind.Overlay);
     }
 
     public void CloseSkillViewer()
@@ -1869,7 +1884,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (_skillViewer is null)
             return;
         _skillViewer = null;
-        Notify();
+        Notify(DysonHostChangeKind.Overlay);
     }
 
     private async Task<string?> TryResolveActiveWorkRootAsync(CancellationToken cancellationToken)
@@ -1929,7 +1944,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             _toolPanelWidthPercent = ClampToolPanelWidthPercent(parsed);
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.All);
     }
 
     /// <summary>
@@ -1955,7 +1970,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     public Task FlushToolPanelWidthSaveAsync(CancellationToken cancellationToken = default)
     {
         CancelToolPanelWidthSaveTimer();
-        Notify();
+        Notify(DysonHostChangeKind.All);
         return PersistToolPanelWidthAsync(cancellationToken);
     }
 
@@ -2074,11 +2089,11 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (runtimeDeleted.IsError)
             {
                 LastError = runtimeDeleted.Error;
-                Notify();
+                Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
                 return runtimeDeleted;
             }
 
-            Notify();
+            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
             return VoidResult<string>.Success;
         }
 
@@ -2089,11 +2104,11 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (deleted.IsError)
         {
             LastError = deleted.Error;
-            Notify();
+            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
             return deleted;
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
         return VoidResult<string>.Success;
     }
 
@@ -2160,7 +2175,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (workDirectoryId is null || workDirectoryId == Guid.Empty)
         {
             LastError = "Select a work directory before creating a session.";
-            Notify();
+            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -2169,7 +2184,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (workDir.IsError)
         {
             LastError = workDir.Error;
-            Notify();
+            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
             return new VoidResult<string>(workDir.Error);
         }
 
@@ -2181,7 +2196,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (providerResult.IsError)
         {
             LastError = providerResult.Error;
-            Notify();
+            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
             return new VoidResult<string>(providerResult.Error);
         }
 
@@ -2215,7 +2230,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             {
                 await ReleaseMcpForConfigAsync(config).ConfigureAwait(false);
                 LastError = created.Error;
-                Notify();
+                Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
                 return new VoidResult<string>(created.Error);
             }
 
@@ -2244,7 +2259,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 if (created.IsError)
                 {
                     LastError = created.Error;
-                    Notify();
+                    Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
                     return new VoidResult<string>(created.Error);
                 }
 
@@ -2274,7 +2289,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 {
                     await ReleaseMcpForConfigAsync(config).ConfigureAwait(false);
                     LastError = created.Error;
-                    Notify();
+                    Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
                     return new VoidResult<string>(created.Error);
                 }
 
@@ -2303,7 +2318,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pendingSlugDefaultMaxTargetContextTokens = null;
 
         await ApplyCurrentUiThemeToLiveSessionsAsync(cancellationToken).ConfigureAwait(false);
-        Notify();
+        Notify(DysonHostChangeKind.SessionGraph);
         return VoidResult<string>.Success;
     }
 
@@ -2327,20 +2342,20 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (string.IsNullOrWhiteSpace(agentMode))
         {
             LastError = "Agent mode is required.";
-            Notify();
+            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
         if (_session is null)
         {
-            Notify();
+            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
             return VoidResult<string>.Success;
         }
 
         if (IsBusy)
         {
             LastError = "Cannot switch agent mode while a prompt is in flight.";
-            Notify();
+            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -2362,26 +2377,26 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (string.IsNullOrWhiteSpace(message))
         {
             LastError = "Display info message is required.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return Task.FromResult(new VoidResult<string>(LastError));
         }
 
         if (_session is null)
         {
             LastError = "No active session.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return Task.FromResult(new VoidResult<string>(LastError));
         }
 
         if (IsBusy)
         {
             LastError = "Cannot append display info while a prompt is in flight.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return Task.FromResult(new VoidResult<string>(LastError));
         }
 
         _session.AppendDisplayInfoTurn(message);
-        Notify();
+        Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
         return Task.FromResult(VoidResult<string>.Success);
     }
 
@@ -2399,21 +2414,21 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (pending is null)
         {
             LastError = "No pending plan to build.";
-            Notify();
+            Notify(DysonHostChangeKind.All);
             return new VoidResult<string>(LastError);
         }
 
         if (IsBusy)
         {
             LastError = "Cannot build plan while a prompt is in flight.";
-            Notify();
+            Notify(DysonHostChangeKind.All);
             return new VoidResult<string>(LastError);
         }
 
         if (_session is null)
         {
             LastError = "No active session.";
-            Notify();
+            Notify(DysonHostChangeKind.All);
             return new VoidResult<string>(LastError);
         }
 
@@ -2429,7 +2444,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (_session is null)
         {
             LastError = "No active session.";
-            Notify();
+            Notify(DysonHostChangeKind.All);
             return new VoidResult<string>(LastError);
         }
 
@@ -2443,7 +2458,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (result.IsError)
             LastError = result.Error;
 
-        Notify();
+        Notify(DysonHostChangeKind.All);
         return result;
     }
 
@@ -2520,7 +2535,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (applied.IsError)
         {
             LastError = applied.Error;
-            Notify();
+            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return applied;
         }
 
@@ -2541,7 +2556,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (persist.IsError)
             {
                 LastError = persist.Error;
-                Notify();
+                Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
                 return persist;
             }
         }
@@ -2555,7 +2570,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             _ = DrainAutoTurnsAsync(_session.PersistenceId);
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Transcript);
         return VoidResult<string>.Success;
     }
 
@@ -2578,14 +2593,14 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (switchSlug.IsError)
             {
                 LastError = switchSlug.Error;
-                Notify();
+                Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
                 return new VoidResult<string>(switchSlug.Error);
             }
 
             if (!switchSlug.Value.IsEnabled)
             {
                 LastError = "That model slug is disabled. Enable it in Settings → Models first.";
-                Notify();
+                Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
                 return new VoidResult<string>(LastError);
             }
         }
@@ -2597,7 +2612,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (pending.IsError)
             {
                 LastError = pending.Error;
-                Notify();
+                Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
                 return new VoidResult<string>(pending.Error);
             }
 
@@ -2606,14 +2621,14 @@ public sealed class DysonUiHost : IAsyncDisposable
             _pendingSlugDefaultMaxTargetContextTokens =
                 pending.Value.OpenAi?.DefaultMaxTargetContextTokens
                 ?? pending.Value.Demo?.DefaultMaxTargetContextTokens;
-            Notify();
+            Notify(DysonHostChangeKind.Catalogs);
             return VoidResult<string>.Success;
         }
 
         // Leftover picker callbacks re-apply the current slug; do not swap or stash a no-op.
         if (SessionProviderSlugId(_session.Provider) == modelSlugId)
         {
-            Notify();
+            Notify(DysonHostChangeKind.Catalogs);
             return VoidResult<string>.Success;
         }
 
@@ -2624,7 +2639,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (deferred.IsError)
             {
                 LastError = deferred.Error;
-                Notify();
+                Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
                 return new VoidResult<string>(deferred.Error);
             }
 
@@ -2633,12 +2648,12 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (!string.Equals(busyCurrentKind, busyNextKind, StringComparison.Ordinal))
             {
                 LastError = "Start a new session to switch provider kind";
-                Notify();
+                Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
                 return new VoidResult<string>(LastError);
             }
 
             _pendingSessionModelSlugIds[_session.PersistenceId] = modelSlugId;
-            Notify();
+            Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
             return VoidResult<string>.Success;
         }
 
@@ -2660,7 +2675,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (SessionProviderSlugId(session.Provider) == modelSlugId)
         {
-            Notify();
+            Notify(DysonHostChangeKind.Catalogs);
             return VoidResult<string>.Success;
         }
 
@@ -2670,7 +2685,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (providerResult.IsError)
         {
             LastError = providerResult.Error;
-            Notify();
+            Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
             return new VoidResult<string>(providerResult.Error);
         }
 
@@ -2679,7 +2694,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (!string.Equals(currentKind, nextKind, StringComparison.Ordinal))
         {
             LastError = "Start a new session to switch provider kind";
-            Notify();
+            Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -2727,13 +2742,13 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (persist.IsError)
             {
                 LastError = persist.Error;
-                Notify();
+                Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
                 return new VoidResult<string>(persist.Error);
             }
         }
 
         _pendingReasoningEffort = effort;
-        Notify();
+        Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
         return VoidResult<string>.Success;
     }
 
@@ -2790,14 +2805,14 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (_session is null)
         {
             _pendingReasoningEffort = stored;
-            Notify();
+            Notify(DysonHostChangeKind.Catalogs);
             return VoidResult<string>.Success;
         }
 
         if (IsBusy)
         {
             LastError = "Cannot change reasoning effort while a prompt is in flight.";
-            Notify();
+            Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -2825,12 +2840,12 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (persist.IsError)
             {
                 LastError = persist.Error;
-                Notify();
+                Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
                 return new VoidResult<string>(persist.Error);
             }
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
         return VoidResult<string>.Success;
     }
 
@@ -2849,14 +2864,14 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (_session is null)
         {
             _pendingMaxTargetContextTokens = normalized;
-            Notify();
+            Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
             return VoidResult<string>.Success;
         }
 
         if (IsBusy)
         {
             LastError = "Cannot change max target context while a prompt is in flight.";
-            Notify();
+            Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -2876,12 +2891,12 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (persist.IsError)
             {
                 LastError = persist.Error;
-                Notify();
+                Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
                 return new VoidResult<string>(persist.Error);
             }
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
         return VoidResult<string>.Success;
     }
 
@@ -2909,7 +2924,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (_sessionsById.TryGetValue(sessionId, out var live))
         {
             FocusSession(live, ResolveStoredParentId(live));
-            Notify();
+            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
             return VoidResult<string>.Success;
         }
 
@@ -2921,7 +2936,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (parent is null && runtime.TryGetParentSessionId(sessionId, out var runtimeParent))
                 parent = runtimeParent;
             FocusSession(retained, parent);
-            Notify();
+            Notify(DysonHostChangeKind.SessionGraph);
             return VoidResult<string>.Success;
         }
 
@@ -2949,7 +2964,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (session is null)
         {
             LastError = "Session not found.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -2957,7 +2972,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (turn is null)
         {
             LastError = "Turn not found.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -2966,13 +2981,13 @@ public sealed class DysonUiHost : IAsyncDisposable
             && session.Turns[^1].Id == turnId)
         {
             LastError = "Cannot drop the in-flight turn.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
         if (turn.IsExcludedFromContext)
         {
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return VoidResult<string>.Success;
         }
 
@@ -2991,12 +3006,12 @@ public sealed class DysonUiHost : IAsyncDisposable
             {
                 turn.IsExcludedFromContext = false;
                 LastError = upserted.Error;
-                Notify();
+                Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
                 return upserted;
             }
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
         return VoidResult<string>.Success;
     }
 
@@ -3015,14 +3030,14 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (turnIds is null || turnIds.Count == 0)
         {
             LastError = "turnIds required.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
         if (string.IsNullOrWhiteSpace(reason))
         {
             LastError = "reason required.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -3036,7 +3051,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (session is null)
         {
             LastError = "Session not found.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -3045,7 +3060,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (provider is null)
         {
             LastError = "No OpenAI-compatible provider available for turn summarization.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -3065,7 +3080,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     && IsSessionBusy(session.PersistenceId))
                 {
                     LastError = "Cannot summarize the in-flight turn.";
-                    Notify();
+                    Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
                     return new VoidResult<string>(LastError);
                 }
 
@@ -3073,7 +3088,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 if (turn is null)
                 {
                     LastError = $"Turn not found: {turnId:D}";
-                    Notify();
+                    Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
                     return new VoidResult<string>(LastError);
                 }
 
@@ -3089,7 +3104,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 if (!session.TryBeginSummarizeTurn(turnId))
                     continue;
 
-                Notify();
+                Notify(DysonHostChangeKind.Transcript);
                 try
                 {
                     // Re-check after claim: another pipeline may have finished while we waited.
@@ -3112,17 +3127,17 @@ public sealed class DysonUiHost : IAsyncDisposable
                         if (upserted.IsError)
                         {
                             LastError = upserted.Error;
-                            Notify();
+                            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
                             return upserted;
                         }
                     }
 
-                    Notify();
+                    Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
                 }
                 finally
                 {
                     session.EndSummarizeTurn(turnId);
-                    Notify();
+                    Notify(DysonHostChangeKind.Transcript);
                 }
             }
 
@@ -3133,7 +3148,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             session.ExitSummarizeGate();
             if (!session.HasAnySummarizingTurn && session.PersistenceId != Guid.Empty)
                 _ = DrainQueuedPromptsAsync(session.PersistenceId);
-            Notify();
+            Notify(DysonHostChangeKind.Transcript);
         }
     }
 
@@ -3157,21 +3172,21 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (session is null)
         {
             LastError = "Session not found.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Busy | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
         if (session.PersistenceId == Guid.Empty)
         {
             LastError = "Session is not persisted.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Busy | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
         if (session.Turns.Count == 0)
         {
             LastError = "Session has no turns to summarize.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Busy | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -3182,12 +3197,12 @@ public sealed class DysonUiHost : IAsyncDisposable
             var queued = EnqueuePrompt(persistId, turn);
             if (queued.IsError)
             {
-                Notify();
+                Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Busy);
                 return queued;
             }
 
             LastError = null;
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Busy | DysonHostChangeKind.Error);
             return VoidResult<string>.Success;
         }
 
@@ -3200,7 +3215,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (result.IsError)
             LastError = result.Error;
 
-        Notify();
+        Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Busy | DysonHostChangeKind.Error);
         return result;
     }
 
@@ -3228,7 +3243,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (session is null)
         {
             LastError = "Session not found.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -3236,13 +3251,13 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (turn is null)
         {
             LastError = "Turn not found.";
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
         if (!turn.IsExcludedFromContext)
         {
-            Notify();
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return VoidResult<string>.Success;
         }
 
@@ -3260,12 +3275,12 @@ public sealed class DysonUiHost : IAsyncDisposable
             {
                 turn.IsExcludedFromContext = true;
                 LastError = upserted.Error;
-                Notify();
+                Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
                 return upserted;
             }
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
         return VoidResult<string>.Success;
     }
 
@@ -3284,7 +3299,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (_session is null)
         {
             LastError = "No active session.";
-            Notify();
+            Notify(DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -3292,7 +3307,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (parentId is null)
         {
             LastError = "Active session has no parent.";
-            Notify();
+            Notify(DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -3332,7 +3347,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             PersistenceId = persistenceId,
             RuntimeId = session.Id,
             Title = session.DisplayTitle,
-            LatestTurnAgentTitle = latest?.AgentTitle,
+            LatestTurnStepTitle = DysonReasoningHistoryUi.TryGetLatestStepTitle(latest),
             ModelLabel = modelLabel,
             AgentMode = session.Mode,
             IsRunning = DysonSubagentHostLogic.IsRunning(session.Status, latest),
@@ -3390,7 +3405,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             await StopAllDescendantsAsync(focused).ConfigureAwait(false);
 
         DiscardPendingReports(id);
-        Notify();
+        Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.SessionGraph);
     }
 
     /// <summary>Removes one queued prompt by id for the focused session (no-op if missing).</summary>
@@ -3408,7 +3423,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return;
 
             RemoveHostQueuedPrompt(sessionId, queuedId);
-            Notify();
+            Notify(DysonHostChangeKind.Busy);
             return;
         }
 
@@ -3425,7 +3440,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 _promptQueues.Remove(sessionId);
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.Busy);
     }
 
     private void ClearPromptQueue(Guid sessionId)
@@ -3505,7 +3520,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (_session is null)
         {
             LastError = "No active session.";
-            Notify();
+            Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -3520,7 +3535,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (string.IsNullOrWhiteSpace(prompt) && !hasPendingImages && !hasPendingFiles)
         {
             LastError = "Prompt is empty.";
-            Notify();
+            Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -3528,7 +3543,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (session.PersistenceId == Guid.Empty)
         {
             LastError = "Session is not persisted.";
-            Notify();
+            Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
 
@@ -3538,7 +3553,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (IsBusy)
             {
                 LastError = "Cannot switch agent mode while a prompt is in flight.";
-                Notify();
+                Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
                 return new VoidResult<string>(LastError);
             }
 
@@ -3557,7 +3572,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (turnBuild.IsError)
         {
             LastError = turnBuild.Error;
-            Notify();
+            Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(turnBuild.Error);
         }
 
@@ -3571,12 +3586,12 @@ public sealed class DysonUiHost : IAsyncDisposable
             var queued = EnqueuePrompt(sessionId, built.Turn, built.FilePaths);
             if (queued.IsError)
             {
-                Notify();
+                Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript);
                 return queued;
             }
 
             LastError = null;
-            Notify();
+            Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return VoidResult<string>.Success;
         }
 
@@ -3589,7 +3604,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (result.IsError)
             LastError = result.Error;
 
-        Notify();
+        Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
         return result;
     }
 
@@ -3681,7 +3696,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (loaded.IsError)
         {
             LastError = loaded.Error;
-            Notify();
+            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
             return new VoidResult<string>(loaded.Error);
         }
 
@@ -3696,14 +3711,14 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (linked.IsError)
             {
                 LastError = linked.Error;
-                Notify();
+                Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
                 return linked;
             }
         }
 
         FocusSession(session, parentSessionId);
         await HydrateDirectChildrenAsync(session, cancellationToken).ConfigureAwait(false);
-        Notify();
+        Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
         return VoidResult<string>.Success;
     }
 
@@ -4415,6 +4430,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         SyncSubagentEventUiFromSession(session);
         if (IsRuntimeOwned(session))
             AdoptRuntimeOwnedFollowUp(session);
+        // Session load/switch is a boundary, not a streaming delta: refresh the cached readout.
+        _ = RefreshCachedOutgoingContextTokensAsync(session);
     }
 
     private void ClearFocus()
@@ -4725,12 +4742,15 @@ public sealed class DysonUiHost : IAsyncDisposable
             // Final handoff / clear: flush immediately so Markdig replaces preview without coalesce lag.
             if (!turn.IsStreaming && !turn.IsReasoningStreaming)
             {
-                FlushNotify();
+                FlushNotify(DysonHostChangeKind.Transcript);
                 // Background child PromptAsync bypasses host — persist completion when streaming ends.
                 _ = PersistTurnCompletedIfNeededAsync(turn);
+                // Turn boundary, not a streaming delta: refresh the cached outgoing-context estimate.
+                if (FindSessionOwningTurn(turn) is { } owner)
+                    _ = RefreshCachedOutgoingContextTokensAsync(owner);
             }
             else
-                Notify();
+                Notify(DysonHostChangeKind.Streaming);
         };
         if (_textHandlers.TryAdd(turn.Id, textHandler))
             turn.AssistantTextChanged += textHandler;
@@ -4757,7 +4777,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         EnsureRegistered(child);
         // PersistenceId is assigned after SubagentSpawned in CreateChildAsync — refresh on a short poll.
         _ = EnsureChildRegistryKeyAsync(child);
-        Notify();
+        Notify(DysonHostChangeKind.SessionGraph);
     }
 
     private async Task EnsureChildRegistryKeyAsync(DysonAgentSession child)
@@ -4776,7 +4796,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     MarkRuntimeOwned(child);
                 }
 
-                Notify();
+                Notify(DysonHostChangeKind.SessionGraph);
                 return;
             }
 
@@ -4803,7 +4823,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             UpsertSubagentEventUi(parent, interrupt);
             MaybeOpenAskUiForEvent(parent, interrupt);
             MaybeOpenUserDialogUiForEvent(parent, interrupt);
-            Notify();
+            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Overlay | DysonHostChangeKind.Busy);
 
             // Ask / Dialog UI only when kind+payload parse; otherwise enqueue a parent auto-turn.
             if (!DysonSubagentHostLogic.RequiresParentAutoTurn(interrupt.EventKind, interrupt.Payload))
@@ -4830,7 +4850,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 parent.PersistenceId,
                 _ => new ConcurrentQueue<DysonAgentInterrupt>());
             shellQueue.Enqueue(interrupt);
-            Notify();
+            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Overlay | DysonHostChangeKind.Busy);
             _ = DrainAutoTurnsAsync(parent.PersistenceId);
             return;
         }
@@ -4841,7 +4861,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         // Wait-consumed / BugReview: cards still update; do not enqueue SubagentReportProcessing.
         if (DysonSubagentHostLogic.ShouldSuppressCompletionAutoTurn(parent, interrupt))
         {
-            Notify();
+            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Overlay | DysonHostChangeKind.Busy);
             return;
         }
 
@@ -4852,7 +4872,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             parent.PersistenceId,
             _ => new ConcurrentQueue<DysonAgentInterrupt>());
         queue.Enqueue(interrupt);
-        Notify();
+        Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Overlay | DysonHostChangeKind.Busy);
 
         // Plan mode: buffer for BeginBuildPlan (or flush on mode leave). Keep SubagentEvent drains.
         if (DysonSubagentReportPrompt.ShouldDrainCompletionAutoTurn(parent.Mode))
@@ -4866,14 +4886,14 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (session.PersistenceId != ActiveSessionId)
         {
-            Notify();
+            Notify(DysonHostChangeKind.Overlay | DysonHostChangeKind.SessionGraph);
             return;
         }
 
         SyncAskUiFromSession(session);
         SyncUserDialogUiFromSession(session);
         SyncSubagentEventUiFromSession(session);
-        Notify();
+        Notify(DysonHostChangeKind.Overlay | DysonHostChangeKind.SessionGraph);
     }
 
     private void OnTaskLifecycle(object? sender, DysonTaskLifecycleEventArgs e)
@@ -5002,7 +5022,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                         _lastTaskLifecycleActionBySession.TryRemove(sessionId, out _);
                         if (ActiveSessionId == sessionId)
                             LastError = started.Error;
-                        Notify();
+                        Notify(DysonHostChangeKind.All);
                     }
 
                     break;
@@ -5015,7 +5035,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     if (setting.IsError)
                     {
                         LastError = $"Automatic code review setting could not be resolved: {setting.Error}";
-                        Notify();
+                        Notify(DysonHostChangeKind.All);
                         return;
                     }
 
@@ -5032,7 +5052,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                         var finalized = await FinalizeTaskLifecycleAsync(session).ConfigureAwait(false);
                         if (finalized.IsError)
                             LastError = finalized.Error;
-                        Notify();
+                        Notify(DysonHostChangeKind.All);
                         return;
                     }
 
@@ -5042,7 +5062,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     if (actionSetting.IsError)
                     {
                         LastError = $"Automatic code review action could not be resolved: {actionSetting.Error}";
-                        Notify();
+                        Notify(DysonHostChangeKind.All);
                         return;
                     }
 
@@ -5059,7 +5079,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     var finalization = await FinalizeTaskLifecycleAsync(session).ConfigureAwait(false);
                     if (finalization.IsError)
                         LastError = finalization.Error;
-                    Notify();
+                    Notify(DysonHostChangeKind.All);
                     return;
 
                 default:
@@ -5069,7 +5089,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         catch (Exception ex)
         {
             LastError = $"Task lifecycle processing failed: {ex.Message}";
-            Notify();
+            Notify(DysonHostChangeKind.All);
             return;
         }
         finally
@@ -5077,7 +5097,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             gate.Release();
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.All);
         _ = DrainQueuedPromptsAsync(sessionId);
     }
 
@@ -5370,12 +5390,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (result.IsSuccess)
         {
             _pendingAskUi = null;
-            Notify();
+            Notify(DysonHostChangeKind.Overlay);
         }
         else
         {
             LastError = result.Error;
-            Notify();
+            Notify(DysonHostChangeKind.Overlay | DysonHostChangeKind.Error);
         }
 
         return result;
@@ -5438,12 +5458,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (result.IsSuccess)
         {
             _pendingUserDialogUi = null;
-            Notify();
+            Notify(DysonHostChangeKind.Overlay);
         }
         else
         {
             LastError = result.Error;
-            Notify();
+            Notify(DysonHostChangeKind.Overlay | DysonHostChangeKind.Error);
         }
 
         return result;
@@ -5585,7 +5605,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     if (eventResult.IsError)
                     {
                         LastError = eventResult.Error;
-                        Notify();
+                        Notify(DysonHostChangeKind.Error);
                         break;
                     }
 
@@ -5602,7 +5622,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     if (shellResult.IsError)
                     {
                         LastError = shellResult.Error;
-                        Notify();
+                        Notify(DysonHostChangeKind.Error);
                         break;
                     }
 
@@ -5619,7 +5639,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 if (result.IsError)
                 {
                     LastError = result.Error;
-                    Notify();
+                    Notify(DysonHostChangeKind.Error);
                     break;
                 }
             }
@@ -5732,7 +5752,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             }
 
             _busySessions[sessionId] = 0;
-            Notify();
+            Notify(DysonHostChangeKind.Busy);
 
             try
             {
@@ -5779,7 +5799,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 promptGate.Release();
                 if (!_disposed)
                     EvaluateTaskLifecycle(session);
-                Notify();
+                Notify(DysonHostChangeKind.Busy);
             }
         }
         finally
@@ -5807,7 +5827,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (IsUserStopped(sessionId))
             return new VoidResult<string>("Prompt was cancelled.");
 
-        Notify();
+        Notify(DysonHostChangeKind.Busy);
         try
         {
             // Circuit/disposal tokens must not cancel a retained runtime prompt.
@@ -5840,7 +5860,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             }
 
             if (!_disposed)
-                Notify();
+                Notify(DysonHostChangeKind.Busy);
         }
     }
 
@@ -6109,7 +6129,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (!next.Turn.AllowEnqueue)
         {
             _lastTaskLifecycleActionBySession.TryRemove(sessionId, out _);
-            Notify();
+            Notify(DysonHostChangeKind.Busy);
             await DrainQueuedPromptsAsync(sessionId).ConfigureAwait(false);
             return;
         }
@@ -6117,7 +6137,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (next.Turn.Kind != DysonAgentTurnKind.TaskEndReflect)
             DropQueuedTaskEndReflect(sessionId);
 
-        Notify();
+        Notify(DysonHostChangeKind.Busy);
         var result = await PromptHarnessTurnOnSessionAsync(
                 session,
                 next.Turn,
@@ -6128,7 +6148,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (result.IsError && ActiveSessionId == sessionId)
             LastError = result.Error;
 
-        Notify();
+        Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Error);
     }
 
     private async Task<VoidResult<string>> PromptHarnessTurnOnSessionAsync(
@@ -6266,7 +6286,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         HookTurn(turn);
         if (!IsRuntimeOwned(session))
             _ = PersistTurnStartedAsync(session, turn);
-        Notify();
+        Notify(DysonHostChangeKind.Transcript);
     }
 
     private void OnLogAppended(object? sender, string line)
@@ -6286,7 +6306,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             _ = PersistAsync(() => _sessions.AppendLogAsync(entry), CancellationToken.None);
         }
 
-        Notify();
+        Notify(DysonHostChangeKind.Transcript);
     }
 
     private void OnSessionRenamed(object? sender, DysonSessionRenamedEventArgs args)
@@ -6294,7 +6314,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (sender is DysonAgentSession session)
             RefreshRegistryKey(session);
 
-        Notify();
+        Notify(DysonHostChangeKind.SessionGraph);
     }
 
     private void OnTodosChanged(object? sender, EventArgs e)
@@ -6302,7 +6322,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (sender is DysonAgentSession session)
             RefreshRegistryKey(session);
 
-        Notify();
+        Notify(DysonHostChangeKind.Transcript);
     }
 
     private async Task PersistTurnStartedAsync(DysonAgentSession session, DysonAgentTurn turn)
@@ -6323,7 +6343,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         await PersistAsync(() => _sessions.AppendLogAsync(started), CancellationToken.None)
             .ConfigureAwait(false);
 
-        Notify();
+        Notify(DysonHostChangeKind.Transcript);
     }
 
     private async Task OnToolStatusAsync(
@@ -6336,7 +6356,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (IsRuntimeOwned(session))
         {
-            Notify();
+            Notify(DysonHostChangeKind.Transcript);
             return;
         }
 
@@ -6358,7 +6378,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         await PersistAsync(() => _sessions.UpsertTurnAsync(entity), CancellationToken.None)
             .ConfigureAwait(false);
 
-        Notify();
+        Notify(DysonHostChangeKind.Transcript);
     }
 
     private DysonAgentSession? FindSessionOwningTurn(DysonAgentTurn turn)
@@ -6476,25 +6496,48 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
     }
 
-    private void Notify()
+    /// <summary>
+    /// Refreshes <see cref="DysonAgentSession.CachedOutgoingContextTokens"/> off the circuit thread
+    /// at turn boundaries (and session load/switch) — never per streaming delta. Notifies only when
+    /// the cached value actually changed. <see cref="DysonAgentSession.RefreshOutgoingContextTokensAsync"/>
+    /// already swallows estimator failures internally; this wrapper also guards <see cref="Notify"/>.
+    /// </summary>
+    private async Task RefreshCachedOutgoingContextTokensAsync(DysonAgentSession session)
     {
-        if (_disposed)
-            return;
-        _notifyCoalescer.Notify();
+        try
+        {
+            var changed = await session.RefreshOutgoingContextTokensAsync().ConfigureAwait(false);
+            if (changed && !_disposed)
+                Notify(DysonHostChangeKind.Transcript);
+        }
+        catch
+        {
+            // ponytail: swallow — a stale outgoing-token readout is UI polish, not correctness;
+            // a background refresh must never crash the host. Ceiling: no retry/backoff.
+        }
     }
 
-    private void FlushNotify()
+    private void Notify(DysonHostChangeKind kind)
     {
         if (_disposed)
             return;
+        _notifyCoalescer.Notify(kind);
+    }
+
+    private void FlushNotify(DysonHostChangeKind kind)
+    {
+        if (_disposed)
+            return;
+        // OR the kind into the pending mask, then flush immediately (Markdig stream-end handoff).
+        _notifyCoalescer.Notify(kind);
         _notifyCoalescer.Flush();
     }
 
-    private void InvokeChanged()
+    private void InvokeChanged(DysonHostChangeKind kind)
     {
         if (_disposed)
             return;
-        Changed?.Invoke();
+        Changed?.Invoke(kind);
     }
 
     public async ValueTask DisposeAsync()

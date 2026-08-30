@@ -21,15 +21,15 @@ public static class DysonComposerUploads
             return mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
 
         var ext = Path.GetExtension(fileName);
-        return ext.Equals(".png", StringComparison.OrdinalIgnoreCase)
-            || ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
-            || ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase)
-            || ext.Equals(".gif", StringComparison.OrdinalIgnoreCase)
-            || ext.Equals(".webp", StringComparison.OrdinalIgnoreCase)
-            || ext.Equals(".bmp", StringComparison.OrdinalIgnoreCase)
-            || ext.Equals(".tif", StringComparison.OrdinalIgnoreCase)
-            || ext.Equals(".tiff", StringComparison.OrdinalIgnoreCase)
-            || ext.Equals(".ico", StringComparison.OrdinalIgnoreCase);
+        return string.Equals(ext, ".png", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".jpg", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".jpeg", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".gif", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".webp", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".bmp", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".tif", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".tiff", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".ico", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -38,21 +38,21 @@ public static class DysonComposerUploads
     public static string ImageContentTypeFromFileName(string? fileName)
     {
         var ext = Path.GetExtension(fileName);
-        if (ext.Equals(".png", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(ext, ".png", StringComparison.OrdinalIgnoreCase))
             return "image/png";
-        if (ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
-            || ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(ext, ".jpg", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".jpeg", StringComparison.OrdinalIgnoreCase))
             return "image/jpeg";
-        if (ext.Equals(".gif", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(ext, ".gif", StringComparison.OrdinalIgnoreCase))
             return "image/gif";
-        if (ext.Equals(".webp", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(ext, ".webp", StringComparison.OrdinalIgnoreCase))
             return "image/webp";
-        if (ext.Equals(".bmp", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(ext, ".bmp", StringComparison.OrdinalIgnoreCase))
             return "image/bmp";
-        if (ext.Equals(".tif", StringComparison.OrdinalIgnoreCase)
-            || ext.Equals(".tiff", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(ext, ".tif", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".tiff", StringComparison.OrdinalIgnoreCase))
             return "image/tiff";
-        if (ext.Equals(".ico", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(ext, ".ico", StringComparison.OrdinalIgnoreCase))
             return "image/x-icon";
         return "application/octet-stream";
     }

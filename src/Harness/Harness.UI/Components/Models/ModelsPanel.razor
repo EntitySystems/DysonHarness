@@ -28,6 +28,9 @@
         <button type="button" class="btn btn-ghost btn--sm" disabled="@_busy" @onclick="ResetCliProxyAsync">
             Reset CLI proxy
         </button>
+        <button type="button" class="btn btn-ghost btn--sm" disabled="@_busy" @onclick="ReinstallCliProxyAsync">
+            Reinstall CLI proxy
+        </button>
     </div>
 
     <div class="models-panel__managed" style="margin:10px 0 12px;padding:8px 0;border-bottom:1px solid var(--border, #333);">
@@ -44,7 +47,7 @@
             </div>
         }
 
-        @if (_downloadProgress is { } prog && _importingSource is not null)
+        @if (_downloadProgress is { } prog && _connectingSource is null && _verifyingSource is null)
         {
             <div style="margin:6px 0 10px;">
                 <div class="list-item__meta mono" style="margin-bottom:4px;">
@@ -83,7 +86,7 @@
             }
         </div>
         <div class="list-item__meta" style="margin:8px 0 8px;">
-            OpenRouter is a direct API-key provider (not CLIProxy). Import stores the key; use Browse models to enable slugs.
+            OpenRouter and OrcaRouter are direct API-key providers (not CLIProxy). Import stores the key; use Browse models to enable slugs.
         </div>
         <div class="btn-row" style="margin:0 0 8px;flex-wrap:wrap;gap:6px;">
             @foreach (var direct in ManagedCatalog.Direct)
@@ -93,7 +96,7 @@
                 <button type="button"
                         class="btn btn--sm"
                         disabled="@(already || _busy)"
-                        @onclick="() => OpenOpenRouterImport(direct)">
+                        @onclick="() => OpenDirectImport(direct)">
                     @(already ? $"Imported: {direct.DisplayName}" : $"Import {direct.DisplayName}")
                 </button>
             }
@@ -129,8 +132,8 @@
                               OnVerify="() => VerifyManagedAsync(p)"
                               OnDisconnect="() => DisconnectManagedAsync(p)"
                               OnDelete="() => ConfirmDeleteProviderAsync(p)"
-                              OnBrowseModels="() => OpenOpenRouterBrowse(p)"
-                              OnUpdateApiKey="() => OpenOpenRouterUpdateKey(p)"
+                              OnBrowseModels="() => OpenDirectBrowse(p)"
+                              OnUpdateApiKey="() => OpenDirectUpdateKey(p)"
                               OnEditProvider="() => OpenEditProviderModal(p)"
                               OnDeleteProvider="() => ConfirmDeleteProviderAsync(p)"
                               OnAddSlug="() => OpenAddSlugModal(p.Id)"
@@ -156,16 +159,16 @@
                OnClose="CloseSlugModal"
                OnSubmit="OnSlugFormSubmitAsync" />
 
-<OpenRouterApiKeyModal IsOpen="_openRouterKeyOpen"
-                       Title="@_openRouterKeyTitle"
-                       OnClose="CloseOpenRouterKeyModal"
-                       OnSubmit="OnOpenRouterKeySubmitAsync" />
+<OpenRouterApiKeyModal IsOpen="_directKeyOpen"
+                       Title="@_directKeyTitle"
+                       OnClose="CloseDirectKeyModal"
+                       OnSubmit="OnDirectKeySubmitAsync" />
 
-<OpenRouterModelsModal IsOpen="_openRouterModelsOpen"
-                       Provider="_openRouterBrowseProvider"
-                       Direct="_openRouterDirect"
-                       OnClose="CloseOpenRouterModelsModal"
-                       OnChanged="OnOpenRouterModelsChangedAsync" />
+<OpenRouterModelsModal IsOpen="_directModelsOpen"
+                       Provider="_directBrowseProvider"
+                       Direct="_directProvider"
+                       OnClose="CloseDirectModelsModal"
+                       OnChanged="OnDirectModelsChangedAsync" />
 
 @code {
     private List<DysonModelProviderEntity> _providers = [];
@@ -194,13 +197,13 @@
     private Guid? _addSlugProviderId;
     private DysonModelSlugEntity? _editingSlug;
 
-    // OpenRouter direct-managed import / key / browse.
-    private IManagedInferenceProvider? _openRouterDirect;
-    private bool _openRouterKeyOpen;
-    private bool _openRouterKeyIsUpdate;
-    private string _openRouterKeyTitle = "Import OpenRouter";
-    private bool _openRouterModelsOpen;
-    private DysonModelProviderEntity? _openRouterBrowseProvider;
+    // Direct-managed import / key / browse (OpenRouter, OrcaRouter).
+    private IManagedInferenceProvider? _directProvider;
+    private bool _directKeyOpen;
+    private bool _directKeyIsUpdate;
+    private string _directKeyTitle = "Import provider";
+    private bool _directModelsOpen;
+    private DysonModelProviderEntity? _directBrowseProvider;
 
     [Parameter] public EventCallback OnChanged { get; set; }
 
@@ -477,15 +480,15 @@
         return Task.CompletedTask;
     }
 
-    private void OpenOpenRouterImport(IManagedInferenceProvider direct)
+    private void OpenDirectImport(IManagedInferenceProvider direct)
     {
-        _openRouterDirect = direct;
-        _openRouterKeyIsUpdate = false;
-        _openRouterKeyTitle = $"Import {direct.DisplayName}";
-        _openRouterKeyOpen = true;
+        _directProvider = direct;
+        _directKeyIsUpdate = false;
+        _directKeyTitle = $"Import {direct.DisplayName}";
+        _directKeyOpen = true;
     }
 
-    private void OpenOpenRouterUpdateKey(DysonModelProviderEntity provider)
+    private void OpenDirectUpdateKey(DysonModelProviderEntity provider)
     {
         var direct = ManagedCatalog.FindDirectBySource(provider.ManagedSource);
         if (direct is null)
@@ -494,19 +497,19 @@
             return;
         }
 
-        _openRouterDirect = direct;
-        _openRouterKeyIsUpdate = true;
-        _openRouterKeyTitle = $"Update {direct.DisplayName} API key";
-        _openRouterKeyOpen = true;
+        _directProvider = direct;
+        _directKeyIsUpdate = true;
+        _directKeyTitle = $"Update {direct.DisplayName} API key";
+        _directKeyOpen = true;
     }
 
-    private void CloseOpenRouterKeyModal() => _openRouterKeyOpen = false;
+    private void CloseDirectKeyModal() => _directKeyOpen = false;
 
-    private async Task OnOpenRouterKeySubmitAsync(string apiKey)
+    private async Task OnDirectKeySubmitAsync(string apiKey)
     {
-        if (_openRouterDirect is null)
+        if (_directProvider is null)
         {
-            _error = "OpenRouter provider is not available.";
+            _error = "Direct managed provider is not available.";
             return;
         }
 
@@ -515,30 +518,30 @@
         _busy = true;
         try
         {
-            if (_openRouterKeyIsUpdate)
+            if (_directKeyIsUpdate)
             {
-                var update = await _openRouterDirect.UpdateApiKeyAsync(apiKey);
+                var update = await _directProvider.UpdateApiKeyAsync(apiKey);
                 if (update.IsError)
                 {
                     _error = update.Error;
                     return;
                 }
 
-                _status = $"{_openRouterDirect.DisplayName} API key updated.";
+                _status = $"{_directProvider.DisplayName} API key updated.";
             }
             else
             {
-                var import = await _openRouterDirect.ImportAsync(apiKey);
+                var import = await _directProvider.ImportAsync(apiKey);
                 if (import.IsError)
                 {
                     _error = import.Error;
                     return;
                 }
 
-                _status = $"Imported {_openRouterDirect.DisplayName}. Browse models to enable slugs.";
+                _status = $"Imported {_directProvider.DisplayName}. Browse models to enable slugs.";
             }
 
-            _openRouterKeyOpen = false;
+            _directKeyOpen = false;
             await RefreshAsync();
             await OnChanged.InvokeAsync();
         }
@@ -548,7 +551,7 @@
         }
     }
 
-    private void OpenOpenRouterBrowse(DysonModelProviderEntity provider)
+    private void OpenDirectBrowse(DysonModelProviderEntity provider)
     {
         var direct = ManagedCatalog.FindDirectBySource(provider.ManagedSource);
         if (direct is null)
@@ -557,18 +560,18 @@
             return;
         }
 
-        _openRouterDirect = direct;
-        _openRouterBrowseProvider = provider;
-        _openRouterModelsOpen = true;
+        _directProvider = direct;
+        _directBrowseProvider = provider;
+        _directModelsOpen = true;
     }
 
-    private void CloseOpenRouterModelsModal() => _openRouterModelsOpen = false;
+    private void CloseDirectModelsModal() => _directModelsOpen = false;
 
-    private async Task OnOpenRouterModelsChangedAsync()
+    private async Task OnDirectModelsChangedAsync()
     {
         await RefreshAsync();
-        if (_openRouterBrowseProvider is { } current)
-            _openRouterBrowseProvider = _providers.FirstOrDefault(p => p.Id == current.Id) ?? current;
+        if (_directBrowseProvider is { } current)
+            _directBrowseProvider = _providers.FirstOrDefault(p => p.Id == current.Id) ?? current;
         await OnChanged.InvokeAsync();
     }
 
@@ -987,6 +990,44 @@
             }
 
             _status = "CLI proxy restarted with fresh config. Use Connect / Verify to re-sync managed providers.";
+            _cliProxyInstalled = CliProxy.IsInstalled;
+            await RefreshAsync();
+            await OnChanged.InvokeAsync();
+        }
+        finally
+        {
+            _busy = false;
+            _downloadProgress = null;
+        }
+    }
+
+    private async Task ReinstallCliProxyAsync()
+    {
+        var pin = DysonThirdPartyResources.CliProxyApi.Tag;
+        var confirmed = await ConfirmDialog.ConfirmAsync(
+            title: "Reinstall CLI proxy",
+            message: $"Re-download pinned {pin}, restart the local process, and keep signed-in OAuth sessions? In-flight requests will fail.",
+            confirmLabel: "Reinstall",
+            cancelLabel: "Cancel",
+            danger: false);
+        if (!confirmed)
+            return;
+
+        _error = null;
+        _status = null;
+        _busy = true;
+        _downloadProgress = null;
+        try
+        {
+            var reinstall = await CliProxy.ReinstallAndRestartAsync(CreateDownloadProgress());
+            if (reinstall.IsError)
+            {
+                _error = reinstall.Error;
+                _cliProxyInstalled = CliProxy.IsInstalled;
+                return;
+            }
+
+            _status = $"CLI proxy {pin} reinstalled and restarted. Signed-in OAuth sessions were kept.";
             _cliProxyInstalled = CliProxy.IsInstalled;
             await RefreshAsync();
             await OnChanged.InvokeAsync();

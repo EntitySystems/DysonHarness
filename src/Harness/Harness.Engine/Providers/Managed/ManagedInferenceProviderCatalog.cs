@@ -17,12 +17,16 @@ public sealed class ManagedInferenceProviderCatalog
             new ManagedKimiInferenceProvider(host, http, models, subjectSettings),
             new ManagedClaudeInferenceProvider(host, http, models, subjectSettings),
         ];
-        Direct = [new OpenRouterManagedInferenceProvider(http, models)];
+        Direct =
+        [
+            new OpenRouterManagedInferenceProvider(http, models),
+            new OrcaRouterManagedInferenceProvider(http, models),
+        ];
     }
 
     public IReadOnlyList<ManagedInferenceProviderBase> All { get; }
 
-    /// <summary>Direct API-key managed providers (OpenRouter); not in <see cref="All"/>.</summary>
+    /// <summary>Direct API-key managed providers (OpenRouter, OrcaRouter); not in <see cref="All"/>.</summary>
     public IReadOnlyList<IManagedInferenceProvider> Direct { get; }
 
     public ManagedInferenceProviderBase? FindBySource(string? managedSource)

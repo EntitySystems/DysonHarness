@@ -16,7 +16,7 @@
              @onclick:stopPropagation="true"
              @onkeydown="OnModalKeyDown">
             <div class="model-slug-modal__header">
-                <h3 id="openrouter-models-modal-title">Browse OpenRouter models</h3>
+                <h3 id="openrouter-models-modal-title">Browse @(Direct?.DisplayName ?? "models")</h3>
                 <button type="button"
                         class="btn btn-ghost model-slug-modal__close"
                         disabled="@_toggleBusy"
@@ -138,7 +138,7 @@
 
         if (Direct is null || Provider is null)
         {
-            _error = "OpenRouter provider is not available.";
+            _error = "Direct managed provider is not available.";
             return;
         }
 
@@ -202,10 +202,10 @@
             }
             else if (_persisted.TryGetValue(model.Slug, out var row))
             {
-                var set = await ModelStore.SetSlugEnabledAsync(row.Id, false);
-                if (set.IsError)
+                var del = await ModelStore.RemoveSlugAsync(row.Id);
+                if (del.IsError)
                 {
-                    _error = set.Error;
+                    _error = del.Error;
                     return;
                 }
             }

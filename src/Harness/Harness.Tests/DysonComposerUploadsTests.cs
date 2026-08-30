@@ -33,11 +33,16 @@ public class DysonComposerUploadsTests
             throw new InvalidOperationException("Null MIME + .jpeg must look like image.");
         if (DysonComposerUploads.LooksLikeImage("", "notes.pdf"))
             throw new InvalidOperationException(".pdf must not look like image.");
+        if (DysonComposerUploads.LooksLikeImage(null, null)
+            || DysonComposerUploads.LooksLikeImage("", "no-extension"))
+            throw new InvalidOperationException("Null/empty extension must not look like image.");
 
         if (DysonComposerUploads.ImageContentTypeFromFileName("shot.PNG") != "image/png"
             || DysonComposerUploads.ImageContentTypeFromFileName("photo.jpeg") != "image/jpeg"
             || DysonComposerUploads.ImageContentTypeFromFileName("a.webp") != "image/webp"
-            || DysonComposerUploads.ImageContentTypeFromFileName("notes.pdf") != "application/octet-stream")
+            || DysonComposerUploads.ImageContentTypeFromFileName("notes.pdf") != "application/octet-stream"
+            || DysonComposerUploads.ImageContentTypeFromFileName(null) != "application/octet-stream"
+            || DysonComposerUploads.ImageContentTypeFromFileName("no-extension") != "application/octet-stream")
         {
             throw new InvalidOperationException("ImageContentTypeFromFileName mismatch.");
         }

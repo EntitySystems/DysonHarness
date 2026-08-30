@@ -13,16 +13,16 @@ namespace Harness.Tests;
 public class DysonParentEventTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertLayerGating();
         AssertReparentRestoresChildTools();
         AssertFormatter();
-        AssertDeadlockAndRespondWhileWaiting().GetAwaiter().GetResult();
-        AssertInterruptCancelsEventWait().GetAwaiter().GetResult();
-        AssertNonInterruptFailsWhileWaiting().GetAwaiter().GetResult();
-        AssertInjectAfterCompletedReportWaitsForSecond().GetAwaiter().GetResult();
-        AssertWaitConsumeMarker().GetAwaiter().GetResult();
+        await AssertDeadlockAndRespondWhileWaiting();
+        await AssertInterruptCancelsEventWait();
+        await AssertNonInterruptFailsWhileWaiting();
+        await AssertInjectAfterCompletedReportWaitsForSecond();
+        await AssertWaitConsumeMarker();
     }
 
     private static void AssertLayerGating()
