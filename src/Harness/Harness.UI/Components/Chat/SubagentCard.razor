@@ -8,26 +8,27 @@
     var icon = ResolveModeIcon(_state?.AgentMode);
     <button type="button"
             class="subagent-card"
-            title="Open subagent session"
+            title="@CardAccessibleName"
+            aria-label="@CardAccessibleName"
             @onclick="NavigateAsync">
         <span class="subagent-card__icon @icon.ColorClass"
               style="--subagent-mode-icon: url('@icon.Url')"
               aria-hidden="true"></span>
         <div class="subagent-card__text">
             <div class="subagent-card__title">
-                <span>@(_state?.Title ?? "Subagent")</span>
+                <span class="subagent-card__name">@(_state?.Title ?? "Subagent")</span>
                 @if (_state is { RuntimeId: > 0 })
                 {
                     <span class="subagent-card__id mono">#@_state.RuntimeId</span>
+                }
+                @if (!string.IsNullOrWhiteSpace(_state?.LatestTurnStepTitle))
+                {
+                    <span class="subagent-card__step">@_state.LatestTurnStepTitle</span>
                 }
             </div>
             @if (!string.IsNullOrWhiteSpace(_state?.ModelLabel))
             {
                 <div class="subagent-card__model">@_state.ModelLabel</div>
-            }
-            @if (!string.IsNullOrWhiteSpace(_state?.LatestTurnAgentTitle))
-            {
-                <div class="subagent-card__turn">@_state.LatestTurnAgentTitle</div>
             }
         </div>
         @if (_state?.IsRunning == true)
@@ -44,6 +45,19 @@
     [Parameter] public EventCallback AfterNavigate { get; set; }
 
     private DysonSubagentCardState? _state;
+
+    private string CardAccessibleName
+    {
+        get
+        {
+            var name = string.IsNullOrWhiteSpace(_state?.Title) ? "Subagent" : _state.Title.Trim();
+            if (_state is { RuntimeId: > 0 })
+                name += $" #{_state.RuntimeId}";
+            if (!string.IsNullOrWhiteSpace(_state?.LatestTurnStepTitle))
+                name += $" {_state.LatestTurnStepTitle.Trim()}";
+            return name;
+        }
+    }
 
     protected override void OnParametersSet() => RefreshState();
 

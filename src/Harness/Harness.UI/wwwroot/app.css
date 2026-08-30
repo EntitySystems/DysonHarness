@@ -2953,6 +2953,7 @@ code, .mono {
   align-items: center;
   gap: 10px;
   width: 100%;
+  min-width: 0;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -2970,7 +2971,7 @@ code, .mono {
 }
 
 .subagent-card__icon {
-  flex-shrink: 0;
+  flex: 0 0 auto;
   width: 18px;
   height: 18px;
   align-self: flex-start;
@@ -2997,26 +2998,41 @@ code, .mono {
 }
 
 .subagent-card__text {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
 }
 
 .subagent-card__title {
   display: flex;
   align-items: baseline;
   gap: 6px;
+  min-width: 0;
   font-size: 13px;
   font-weight: 600;
   line-height: 1.35;
-  white-space: nowrap;
+}
+
+.subagent-card__name,
+.subagent-card__step {
+  min-width: 0;
+  flex: 1 1 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .subagent-card__id {
-  flex-shrink: 0;
+  flex: 0 0 auto;
   font-size: 11px;
   font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.subagent-card__step {
+  font-weight: 400;
+  font-size: 12px;
   color: var(--text-muted);
 }
 
@@ -3029,17 +3045,8 @@ code, .mono {
   text-overflow: ellipsis;
 }
 
-.subagent-card__turn {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .subagent-card__spinner {
-  flex-shrink: 0;
+  flex: 0 0 auto;
   width: 14px;
   height: 14px;
   border: 2px solid var(--border-strong);

@@ -168,18 +168,16 @@
                                 var interimCount = Turn.ReasoningLog.Count(s =>
                                     s.Kind == DysonReasoningSegmentKind.InterimText
                                     && !string.IsNullOrWhiteSpace(s.Text));
-                                var liveStreaming = Turn.IsReasoningStreaming
-                                    && !string.IsNullOrEmpty(Turn.ReasoningStreamingPreview);
+                                var liveStreaming = DysonReasoningHistoryUi.IsLiveReasoningStreaming(Turn);
                             }
                             @foreach (var segment in Turn.ReasoningLog)
                             {
                                 if (segment.Kind == DysonReasoningSegmentKind.Thought)
                                 {
                                     var key = $"t:{thoughtOrdinal}";
-                                    var fallback = thoughtCount > 1 || liveStreaming
-                                        ? $"Thinking {thoughtOrdinal + 1}"
-                                        : "Thinking";
-                                    var (title, body) = SplitSegmentTitle(segment.Text, fallback);
+                                    var fallback = DysonReasoningHistoryUi.ThoughtFallback(
+                                        thoughtOrdinal, thoughtCount, liveStreaming);
+                                    var (title, body) = DysonReasoningHistoryUi.SplitSegmentTitle(segment.Text, fallback);
                                     <div class="turn-block__reasoning" @key="@($"{Turn.Id}:{key}")">
                                         <button type="button"
                                                 class="turn-block__reasoning-summary"
@@ -200,10 +198,9 @@
                                          && !string.IsNullOrWhiteSpace(segment.Text))
                                 {
                                     var key = $"i:{interimOrdinal}";
-                                    var fallback = interimCount > 1
-                                        ? $"Note {interimOrdinal + 1}"
-                                        : "Note";
-                                    var (title, body) = SplitSegmentTitle(segment.Text, fallback);
+                                    var fallback = DysonReasoningHistoryUi.InterimFallback(
+                                        interimOrdinal, interimCount);
+                                    var (title, body) = DysonReasoningHistoryUi.SplitSegmentTitle(segment.Text, fallback);
                                     <div class="turn-block__reasoning turn-block__reasoning--interim" @key="@($"{Turn.Id}:{key}")">
                                         <button type="button"
                                                 class="turn-block__reasoning-summary"
@@ -225,7 +222,7 @@
                             @if (liveStreaming)
                             {
                                 const string liveKey = "live";
-                                var liveTitle = thoughtCount > 0 ? $"Thinking {thoughtCount + 1}" : "Thinking";
+                                var liveTitle = DysonReasoningHistoryUi.LiveThoughtTitle(thoughtCount);
                                 <div class="turn-block__reasoning turn-block__reasoning--live" @key="@($"{Turn.Id}:{liveKey}")">
                                     <button type="button"
                                             class="turn-block__reasoning-summary"
@@ -247,7 +244,8 @@
                             {
                                 @* Legacy blob without ReasoningLog (should be rare after restore synthesis). *@
                                 const string legacyKey = "legacy";
-                                var (legacyTitle, legacyBody) = SplitSegmentTitle(Turn.ReasoningText, "Thinking");
+                                var (legacyTitle, legacyBody) = DysonReasoningHistoryUi.SplitSegmentTitle(
+                                    Turn.ReasoningText, "Thinking");
                                 <div class="turn-block__reasoning" @key="@($"{Turn.Id}:{legacyKey}")">
                                     <button type="button"
                                             class="turn-block__reasoning-summary"
@@ -496,8 +494,7 @@
 
     private string BuildExpandPolicyFingerprint()
     {
-        var liveStreaming = Turn.IsReasoningStreaming
-            && !string.IsNullOrEmpty(Turn.ReasoningStreamingPreview);
+        var liveStreaming = DysonReasoningHistoryUi.IsLiveReasoningStreaming(Turn);
         // Lengths only — preview growth must not clear user toggles every token.
         var parts = new List<string>(Turn.ReasoningLog.Count + 3)
         {
@@ -536,8 +533,7 @@
             }
         }
 
-        var liveStreaming = Turn.IsReasoningStreaming
-            && !string.IsNullOrEmpty(Turn.ReasoningStreamingPreview);
+        var liveStreaming = DysonReasoningHistoryUi.IsLiveReasoningStreaming(Turn);
         var expandSlotCount = liveStreaming ? keys.Count + 1 : keys.Count;
         var hasAssistantBody = HasAssistantBody;
 
@@ -574,15 +570,6 @@
     {
         if (!_expandedKeys.Remove(key))
             _expandedKeys.Add(key);
-    }
-
-    private static (string Title, string Body) SplitSegmentTitle(string text, string fallback)
-    {
-        var parsed = DysonAgentTurn.TryParseAgentTitle(text);
-        if (parsed.IsSuccess && !string.IsNullOrWhiteSpace(parsed.Value.Title))
-            return (parsed.Value.Title!, parsed.Value.Body);
-
-        return (fallback, text);
     }
 
     private Task HandleCancelAsync() => CanCancel ? OnCancel.InvokeAsync() : Task.CompletedTask;

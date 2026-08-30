@@ -9,10 +9,9 @@
     <div @ref="_turnsEl"
          class="chat-panel__turns">
         @{
-            var timeline = BuildTimeline();
             var lastTurnId = Turns.Count > 0 ? Turns[^1].Id : (Guid?)null;
         }
-        @if (timeline.Count == 0)
+        @if (_timeline.Count == 0)
         {
             @if (Host.Session is null)
             {
@@ -65,7 +64,7 @@
         }
         else
         {
-            @foreach (var item in timeline)
+            @foreach (var item in _timeline)
             {
                 if (item.Turn is { } turn)
                 {
@@ -111,6 +110,11 @@
     private int _lastTurnCount;
     private Guid? _firstTurnId;
     private readonly HashSet<Guid> _collapsedIds = [];
+    private List<(DysonAgentTurn? Turn, DysonSubagentEventUiItem? Event)> _timeline = [];
+    private int _lastEventCount = -1;
+    private bool _lastStreamingActive;
+    private int _renderVersion;
+    private int _lastScrolledRenderVersion = -1;
 
     private const string CreatePlanDisplayInfo = "Let's harness your ideas, tell me your goals";
     private const string AskQuestionDisplayInfo = "Ask me anything";
@@ -183,6 +187,23 @@
             _lastTurnCount = Turns.Count;
             RebuildCollapsedDefaults();
         }
+
+        // The timeline must stay fresh across more than identity changes: a focused subagent
+        // event arriving, or the latest turn actively streaming, both mutate what should render
+        // without changing Turns.Count. Be conservative — rebuild whenever any of these signals
+        // moved, and once more on the streaming->settled transition to pick up the final content.
+        var eventCount = FocusedSubagentEvents.Count();
+        var streamingActive = Turns.Count > 0 && (Turns[^1].IsStreaming || Turns[^1].IsReasoningStreaming);
+        var needsRebuild = identityChanged || eventCount != _lastEventCount || streamingActive || _lastStreamingActive;
+
+        _lastEventCount = eventCount;
+        _lastStreamingActive = streamingActive;
+
+        if (needsRebuild)
+        {
+            _timeline = BuildTimeline();
+            _renderVersion++;
+        }
     }
 
     private void RebuildCollapsedDefaults()
@@ -219,8 +240,12 @@
                 await Js.InvokeVoidAsync("dysonChat.setStick", _turnsEl, true);
             }
 
-            // JS owns stick; no-op when user has scrolled away.
-            await Js.InvokeVoidAsync("dysonChat.scrollToBottom", _turnsEl);
+            if (_renderVersion != _lastScrolledRenderVersion)
+            {
+                _lastScrolledRenderVersion = _renderVersion;
+                // JS owns stick; no-op when user has scrolled away.
+                await Js.InvokeVoidAsync("dysonChat.scrollToBottom", _turnsEl);
+            }
         }
         catch (JSException)
         {

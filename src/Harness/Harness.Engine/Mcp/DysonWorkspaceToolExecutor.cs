@@ -1388,6 +1388,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             }
 
             match.IsExcludedFromContext = true;
+            _session.BumpTranscriptGeneration();
             dropped.Add(id.ToString("D"));
             _session.AppendLog($"Turn {id:D} dropped, reason: {reason}");
 
@@ -1462,6 +1463,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             }
 
             match.IsExcludedFromContext = false;
+            _session.BumpTranscriptGeneration();
             restored.Add(id.ToString("D"));
             _session.AppendLog($"Turn {id:D} restored, reason: {reason}");
 

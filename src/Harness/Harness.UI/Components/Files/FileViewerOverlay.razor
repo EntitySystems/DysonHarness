@@ -259,7 +259,12 @@ else
         </div>
     };
 
-    private void OnHostChanged() => _ = InvokeAsync(StateHasChanged);
+    private void OnHostChanged(DysonHostChangeKind kind)
+    {
+        if ((kind & DysonHostChangeKind.Overlay) == 0)
+            return;
+        _ = InvokeAsync(StateHasChanged);
+    }
 
     private void ClearViewerState()
     {

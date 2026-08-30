@@ -313,7 +313,7 @@ public class DysonUiHostRuntimeDelegationTests
         var session = host.Session ?? throw new InvalidOperationException("Expected focused session.");
 
         var notifies = 0;
-        host.Changed += () => Interlocked.Increment(ref notifies);
+        host.Changed += _ => Interlocked.Increment(ref notifies);
 
         await host.DisposeAsync();
         var afterDispose = Volatile.Read(ref notifies);
@@ -534,6 +534,66 @@ public class DysonUiHostRuntimeDelegationTests
         Assert.False(host.IsBusy);
         Assert.False(host.IsSessionBusy(parentId));
         Assert.False(host.HasActiveSubagents(parentId));
+    }
+
+    [Fact]
+    public async Task GetSubagentCardState_updates_latest_step_and_child_text_raises_changed()
+    {
+        await using var harness = await HostHarness.CreateAsync(waiting: true);
+        await using var host = harness.CreateHost();
+
+        var started = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(started.IsSuccess, started.IsError ? started.Error : null);
+        var parent = host.Session ?? throw new InvalidOperationException("Expected focused session.");
+
+        var spawned = await parent.CreateChildAsync(DysonAgentModes.Explore, "hold child");
+        Assert.True(spawned.IsSuccess, spawned.IsError ? spawned.Error : null);
+        Assert.True(parent.TryGetSubagent(spawned.Value.SubagentId, out var child));
+        await harness.WaitingFactory!.ChildEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => child.PersistenceId != Guid.Empty
+                  && host.GetSubagentCardState(child.PersistenceId) is not null,
+            TimeSpan.FromSeconds(5));
+        CancelBackgroundRunForTests(child);
+
+        var empty = host.GetSubagentCardState(child.PersistenceId);
+        Assert.NotNull(empty);
+        Assert.Null(empty.LatestTurnStepTitle);
+
+        var turn = child.AppendDisplayInfoTurn("placeholder");
+        var afterTurn = host.GetSubagentCardState(child.PersistenceId);
+        Assert.NotNull(afterTurn);
+        Assert.Null(afterTurn.LatestTurnStepTitle);
+
+        var notifies = 0;
+        host.Changed += _ => Interlocked.Increment(ref notifies);
+        var before = Volatile.Read(ref notifies);
+
+        turn.AppendReasoningRound(
+            0,
+            "# Loading required topic files\n\nbody",
+            interimText: null,
+            includeInterimText: false);
+
+        Assert.True(Volatile.Read(ref notifies) > before);
+        var afterReasoning = host.GetSubagentCardState(child.PersistenceId);
+        Assert.NotNull(afterReasoning);
+        Assert.Equal("Loading required topic files", afterReasoning.LatestTurnStepTitle);
+
+        before = Volatile.Read(ref notifies);
+        turn.AppendReasoningDelta("private live reasoning");
+        await WaitUntilAsync(
+            () => Volatile.Read(ref notifies) > before,
+            TimeSpan.FromSeconds(2));
+        var whileStreaming = host.GetSubagentCardState(child.PersistenceId);
+        Assert.NotNull(whileStreaming);
+        Assert.Equal("Thinking 2", whileStreaming.LatestTurnStepTitle);
+
+        turn.AgentTitle = "Report accepted";
+        var afterTitle = host.GetSubagentCardState(child.PersistenceId);
+        Assert.NotNull(afterTitle);
+        Assert.Equal("Report accepted", afterTitle.LatestTurnStepTitle);
     }
 
     [Fact]

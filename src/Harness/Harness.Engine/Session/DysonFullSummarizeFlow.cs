@@ -94,6 +94,7 @@ public static class DysonFullSummarizeFlow
                 continue;
 
             turn.IsExcludedFromContext = true;
+            session.BumpTranscriptGeneration();
             session.AppendLog($"Turn {turn.Id:D} dropped, reason: Full summarize");
             dropped ??= [];
             dropped.Add(turn);

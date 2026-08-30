@@ -174,7 +174,11 @@ public sealed class DysonSubagentCardState
     /// <summary>Child session runtime id (<see cref="DysonAgentSession.Id"/>).</summary>
     public int RuntimeId { get; init; }
     public string? Title { get; init; }
-    public string? LatestTurnAgentTitle { get; init; }
+    /// <summary>
+    /// Latest visible thinking/step label for the child's current turn (Engine
+    /// <see cref="DysonReasoningHistoryUi.TryGetLatestStepTitle"/>). Presentation-only.
+    /// </summary>
+    public string? LatestTurnStepTitle { get; init; }
     public string? ModelLabel { get; init; }
     /// <summary>Child session agent mode (<see cref="DysonAgentSession.Mode"/>).</summary>
     public string? AgentMode { get; init; }
