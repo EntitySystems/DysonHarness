@@ -1,6 +1,6 @@
 # OpenRouter
 
-Direct OpenAI-compatible access to OpenRouter with a user-supplied API key and live model discovery. Dyson ships this as a **direct managed provider**, not through CLIProxy.
+Direct OpenAI-compatible access to OpenRouter with a user-supplied API key and live model discovery. Dyson ships this as a **direct managed provider**, not through CLIProxy. [OrcaRouter](orcarouter.md) is the other Direct catalog entry and shares the same import / browse / delete-slug UX.
 
 ## Product
 
@@ -34,7 +34,7 @@ The catalog is **enable-only persistence**, not a full catalog sync:
 1. Import creates the managed provider with an empty slug set (`syncSlugs: false`); all catalog models are off by default. A later Import or API-key update keeps existing slug rows. The Settings Import button is still disabled once an `openrouter` row exists.
 2. **Browse models** opens `OpenRouterModelsModal`, which searches the live catalog by display name or slug.
 3. Checking a model upserts that one slug and enables it.
-4. Unchecking a model disables its existing row but keeps the row, including user-specific effort and context settings.
+4. Unchecking a model **deletes** its slug row (`RemoveSlugAsync`), as does **Remove** on the provider card. Disable-without-delete remains CLIProxy-only.
 
 Dyson does not persist the full OpenRouter catalog. Catalog entries that the user never enables do not become `model_slugs` rows.
 
@@ -69,7 +69,7 @@ Catalog `reasoning` metadata supplies each model’s effort choices and default.
 | `Slug` | Live catalog `id`, persisted only when enabled |
 | `DefaultReasoningEffort` / `ReasoningModes` | Live reasoning metadata plus user selection |
 
-Updating the API key keeps existing slug rows intact. Browse-model enablement refreshes catalog metadata for the chosen slug; disabling retains the row.
+Updating the API key keeps existing slug rows intact. Browse-model enablement refreshes catalog metadata for the chosen slug; uncheck and card Remove delete the row.
 
 ## Gotchas
 

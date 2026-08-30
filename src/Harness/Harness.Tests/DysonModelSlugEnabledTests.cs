@@ -22,6 +22,7 @@ public class DysonModelSlugEnabledTests
         AssertFindSlugSkipsDisabled();
         AssertSetDefaultRejectsDisabled();
         AssertFormatAvailableModelsSkipsDisabled();
+        AssertRemoveSlugAllowsDirectManagedAndRejectsCliProxy();
     }
 
     private static void AssertUpsertMergePreservesIdAndIsEnabled()
@@ -608,4 +609,76 @@ public class DysonModelSlugEnabledTests
         }
     }
 
+    private static void AssertRemoveSlugAllowsDirectManagedAndRejectsCliProxy()
+    {
+        static void AssertRemoved(string source, string display, string baseUrl)
+        {
+            var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+            using var _keepAlive = conn;
+            var store = DysonTempDb.Models(accessor);
+
+            var upsert = store.UpsertManagedProviderAsync(
+                source,
+                display,
+                baseUrl,
+                "key",
+                DysonOpenAiApiModes.Completions,
+                [new ManagedSlugSpec("vendor/model", "vendor/model", null, [])]).GetAwaiter().GetResult();
+            if (upsert.IsError)
+                throw new InvalidOperationException(upsert.Error);
+
+            var listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+            if (listed.IsError)
+                throw new InvalidOperationException(listed.Error);
+
+            var slugId = listed.Value.Single(p => p.ManagedSource == source).Slugs.Single().Id;
+            var remove = store.RemoveSlugAsync(slugId).GetAwaiter().GetResult();
+            if (remove.IsError)
+                throw new InvalidOperationException($"{source} RemoveSlugAsync should succeed: {remove.Error}");
+
+            listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+            if (listed.IsError)
+                throw new InvalidOperationException(listed.Error);
+
+            if (listed.Value.Single(p => p.ManagedSource == source).Slugs.Count != 0)
+                throw new InvalidOperationException($"{source} RemoveSlugAsync must delete the slug row.");
+        }
+
+        AssertRemoved(
+            DysonManagedSources.OpenRouter,
+            "OpenRouter",
+            OpenRouterManagedInferenceProvider.ApiBaseUrl);
+        AssertRemoved(
+            DysonManagedSources.OrcaRouter,
+            "OrcaRouter",
+            OrcaRouterManagedInferenceProvider.ApiBaseUrl);
+
+        var cliproxyAccessor = DysonTempDb.OpenMemoryAccessor(out var cliproxyConn);
+        using var _keepCli = cliproxyConn;
+        var cliproxyStore = DysonTempDb.Models(cliproxyAccessor);
+        var cliproxy = cliproxyStore.UpsertManagedProviderAsync(
+            DysonManagedSources.CliProxyCodex,
+            "Codex",
+            "http://127.0.0.1:8317/v1",
+            "key",
+            DysonOpenAiApiModes.Responses,
+            [new ManagedSlugSpec("gpt-5", "GPT-5", "high", ["high"])]).GetAwaiter().GetResult();
+        if (cliproxy.IsError)
+            throw new InvalidOperationException(cliproxy.Error);
+
+        var cliproxyListed = cliproxyStore.ListProvidersAsync().GetAwaiter().GetResult();
+        if (cliproxyListed.IsError)
+            throw new InvalidOperationException(cliproxyListed.Error);
+
+        var cliproxySlugId = cliproxyListed.Value.Single().Slugs.Single().Id;
+        var cliproxyRemove = cliproxyStore.RemoveSlugAsync(cliproxySlugId).GetAwaiter().GetResult();
+        if (!cliproxyRemove.IsError)
+            throw new InvalidOperationException("RemoveSlugAsync must reject CLIProxy slugs.");
+        if (cliproxyRemove.Error is null
+            || !cliproxyRemove.Error.Contains("cannot be removed", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"CLIProxy RemoveSlugAsync error should mention cannot be removed, got '{cliproxyRemove.Error}'.");
+        }
+    }
 }

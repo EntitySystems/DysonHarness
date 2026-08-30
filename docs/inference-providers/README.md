@@ -9,6 +9,7 @@ Research date: **2026-07-27** (slugs and effort enums rot quickly; catalogs may 
 | Provider | Page |
 | -------- | ---- |
 | OpenRouter | [openrouter.md](openrouter.md) |
+| OrcaRouter | [orcarouter.md](orcarouter.md) |
 | Ollama | [ollama.md](ollama.md) |
 | Kimi Code | [kimi-code.md](kimi-code.md) |
 | Kimi (CLIProxy) | [kimi-cliproxy.md](kimi-cliproxy.md) |
@@ -24,7 +25,7 @@ Research date: **2026-07-27** (slugs and effort enums rot quickly; catalogs may 
 
 ### Direct managed (API key)
 
-[OpenRouter](openrouter.md) is a direct managed provider (`ManagedSource=openrouter`). Dyson stores the user-supplied Bearer API key on the provider row, calls `https://openrouter.ai/api/v1` directly, and lets the user browse the live text-model catalog and enable only selected models. It does not use CLIProxy, loopback port 8317, OAuth Connect/Verify, or a local managed binary.
+[OpenRouter](openrouter.md) and [OrcaRouter](orcarouter.md) are direct managed providers (`ManagedSource=openrouter` / `orcarouter`). Dyson stores the user-supplied Bearer API key on the provider row, calls the provider’s Completions base URL directly, and lets the user browse the live catalog and enable only selected models. Unchecking a model or using card **Remove** deletes the slug row. These paths do not use CLIProxy, loopback port 8317, OAuth Connect/Verify, or a local managed binary.
 
 ### Managed CLIProxy providers
 
@@ -41,13 +42,14 @@ Dyson can import **ChatGPT Codex**, **Grok Build**, **Antigravity**, **Kimi**, a
 
 ## Harness mapping
 
-Today: `ProviderKind=OpenAICompatible` with per-provider `BaseUrl` / `ApiKey` / `OpenAiApiMode`, and per-slug `Slug` + freeform `DefaultReasoningEffort` / `ReasoningModes` ([storage/models.md](../storage/models.md)). Non-empty effort → Completions top-level `"reasoning_effort"`, except OpenRouter Completions uses nested `"reasoning": { "effort": "…" }`; Responses also uses nested `reasoning.effort` ([engine/README.md](../engine/README.md)). Blank/null omits the field.
+Today: `ProviderKind=OpenAICompatible` with per-provider `BaseUrl` / `ApiKey` / `OpenAiApiMode`, and per-slug `Slug` + freeform `DefaultReasoningEffort` / `ReasoningModes` ([storage/models.md](../storage/models.md)). Non-empty effort → Completions top-level `"reasoning_effort"`, except OpenRouter Completions uses nested `"reasoning": { "effort": "…" }` (OrcaRouter stays on top-level `reasoning_effort`); Responses also uses nested `reasoning.effort` ([engine/README.md](../engine/README.md)). Blank/null omits the field.
 
 **Works today** with that path:
 
 | Provider | Fit |
 | -------- | --- |
-| [OpenRouter](openrouter.md) | Direct managed API-key provider; Completions with nested `reasoning.effort`; live text-model discovery with enable-only persistence |
+| [OpenRouter](openrouter.md) | Direct managed API-key provider; Completions with nested `reasoning.effort`; live text-model discovery; uncheck/card Remove deletes the slug |
+| [OrcaRouter](orcarouter.md) | Direct managed API-key provider; Completions with top-level `reasoning_effort`; live catalog browse; uncheck/card Remove deletes the slug |
 | [Ollama](ollama.md) | Completions + top-level `reasoning_effort` (`high` / `medium` / `low` / `max` / `none`); Responses mode would send nested `reasoning.effort` |
 | [Kimi Code](kimi-code.md) | Completions + K3 `low` / `high` / `max`; omit effort for K2.7 Code |
 | [Kimi (CLIProxy)](kimi-cliproxy.md) | Subscription via CLIProxy managed provider (`cliproxy-kimi`); local Responses |

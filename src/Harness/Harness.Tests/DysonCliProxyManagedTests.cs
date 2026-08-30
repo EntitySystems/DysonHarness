@@ -377,6 +377,7 @@ public class DysonManagedSourcesTests
     [InlineData("cliproxy-codex", true)]
     [InlineData("cliproxy-grok", true)]
     [InlineData("openrouter", false)]
+    [InlineData("orcarouter", false)]
     [InlineData(null, false)]
     [InlineData("", false)]
     [InlineData("   ", false)]
@@ -387,12 +388,35 @@ public class DysonManagedSourcesTests
 
     [Theory]
     [InlineData("openrouter", true)]
+    [InlineData("orcarouter", false)]
     [InlineData("cliproxy-codex", false)]
     [InlineData(null, false)]
     [InlineData("", false)]
     public void IsOpenRouter_matches_const(string? source, bool expected)
     {
         Assert.Equal(expected, DysonManagedSources.IsOpenRouter(source));
+    }
+
+    [Theory]
+    [InlineData("orcarouter", true)]
+    [InlineData("openrouter", false)]
+    [InlineData("cliproxy-codex", false)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    public void IsOrcaRouter_matches_const(string? source, bool expected)
+    {
+        Assert.Equal(expected, DysonManagedSources.IsOrcaRouter(source));
+    }
+
+    [Theory]
+    [InlineData("openrouter", true)]
+    [InlineData("orcarouter", true)]
+    [InlineData("cliproxy-codex", false)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    public void IsDirectManaged_matches_openrouter_or_orcarouter(string? source, bool expected)
+    {
+        Assert.Equal(expected, DysonManagedSources.IsDirectManaged(source));
     }
 }
 

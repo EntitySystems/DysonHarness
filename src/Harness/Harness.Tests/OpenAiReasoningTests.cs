@@ -248,6 +248,7 @@ public class OpenAiReasoningTests
         ExpectNested(BodyFor(MakeProvider(DysonManagedSources.OpenRouter, "high")), "high");
         ExpectTopLevel(BodyFor(MakeProvider(managedSource: null, "high")), "high");
         ExpectTopLevel(BodyFor(MakeProvider(DysonManagedSources.CliProxyCodex, "high")), "high");
+        ExpectTopLevel(BodyFor(MakeProvider(DysonManagedSources.OrcaRouter, "high")), "high");
         ExpectOmitted(BodyFor(MakeProvider(DysonManagedSources.OpenRouter, null)));
         ExpectOmitted(BodyFor(MakeProvider(DysonManagedSources.OpenRouter, "  ")));
         ExpectNested(BodyFor(MakeProvider(DysonManagedSources.OpenRouter, "none")), "none");
