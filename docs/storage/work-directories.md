@@ -57,12 +57,12 @@ One JSON file per server: `{workRoot}/.dyson/mcp/{serverId}.json` (Cursor/Claude
 
 ## `IDysonWorkDirectoryRepository`
 
-Result-pattern functional repository (current subject only; cross-subject get-by-id → error):
+Result-pattern functional repository (current subject only; cross-subject get-by-id → error). SQLite busy/locked contention on **every** method returns an error Result (never throws) after `DysonDbAccessor.SaveChangesAsync` retries are exhausted; other failures (not found, generic errors) still return error Results as before. This is defensive hardening for concurrent harness processes — measured boot reads/writes here are ~10-60ms and were never the app-boot bottleneck (see [ui/README.md](../ui/README.md#work-directories)).
 
 - `CreateAsync(absolutePath, name?)` — normalize path, require directory exists, unique path within subject
 - `GetAsync` / `ListAsync` (ordered by `LastOpenedUtc` desc)
-- `TouchOpenedAsync` — bump `LastOpenedUtc` when switching active
-- `UpdateGitMetadataAsync(id, gitOrigin, gitProvider)` — persist or clear classified origin (both values may be null)
+- `TouchOpenedAsync` — bump `LastOpenedUtc` when switching active. `LastOpenedUtc` is bookkeeping and a failed bump is tolerable.
+- `UpdateGitMetadataAsync(id, gitOrigin, gitProvider)` — persist or clear classified origin (both values may be null). Boot/activation (`RefreshGitOriginAsync`) is a write on the startup path; busy/locked must not throw.
 - `DeleteAsync` — removes registration only (not disk folder); **blocked** if any sessions still reference the id
 
 ## Git origin refresh (`DysonWorkDirectoryService`)
@@ -73,7 +73,7 @@ Refresh is **activation-only**, not every `GetAsync` (file tree, git rail, and s
 
 1. `WorkDirectorySwitcher.AddAsync` after successful `CreateAsync`
 2. `WorkDirectorySwitcher.SelectAsync` after successful `TouchOpenedAsync`
-3. `Home.HydrateWorkDirectoryAsync` after successful `TouchOpenedAsync` (stored-id path) and when activating the first `ListAsync` row
+3. `Home.CompleteBootMetadataAsync` — stored-id boot defers `TouchOpenedAsync`, `RefreshGitOriginAsync`, and `RefreshGitBranchAsync` until after the splash dismisses, so none of them are on the awaited boot path. The fallback `ListAsync` activation path still refreshes inline.
 4. `DysonUiAgentSessionRuntimeFactory.CreateRootAsync` / `LoadAsync` after a successful workdir `GetAsync`
 
 `GetGitProvider(entity | stored, origin)` maps the stored slug (`cursor-origin` → `CursorOrigin`); empty stored classifies from origin; else `None`.

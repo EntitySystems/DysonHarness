@@ -1,0 +1,16 @@
+@namespace Harness.UI.Components.Shell
+
+<div class="app-splash @(Visible ? null : "app-splash--hidden")"
+     role="status"
+     aria-live="polite"
+     aria-hidden="@(!Visible)"
+     data-nosnippet>
+    <div class="app-splash__inner">
+        <img class="app-splash__logo" src="dysonlogo.png" alt="DysonHarness" />
+        <div class="app-splash__label">Loading work directories…</div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+}

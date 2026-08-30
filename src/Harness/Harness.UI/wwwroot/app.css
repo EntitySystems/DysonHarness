@@ -391,6 +391,48 @@ code, .mono {
   color: var(--accent-text);
 }
 
+/* Splash — boot overlay until work directories are hydrated */
+.app-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-0);
+  opacity: 1;
+  transition: opacity 0.25s ease, visibility 0s linear 0.25s;
+}
+
+.app-splash--hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.app-splash__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.app-splash__logo {
+  width: 128px;
+  height: 128px;
+  animation: app-splash-pulse 2s ease-in-out infinite;
+}
+
+.app-splash__label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+@keyframes app-splash-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
 /* Settings shell */
 .settings-shell {
   display: grid;
@@ -6339,6 +6381,16 @@ code, .mono {
 
 .tool-command {
   color: var(--text);
+}
+
+.tool-expanded__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.tool-expanded__view-file {
+  font-size: 11px;
 }
 
 .tool-path-link {

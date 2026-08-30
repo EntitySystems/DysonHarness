@@ -19,6 +19,9 @@ public static class DysonToolCallUi
         public bool HasLineDelta => LinesAdded is not null || LinesRemoved is not null;
     }
 
+    /// <summary>In-memory file-viewer payload for an expanded tool-call result.</summary>
+    public readonly record struct ViewAsFile(string DisplayPath, string Content);
+
     public sealed class ShellExecuteParsed
     {
         public string? Shell { get; init; }
@@ -332,6 +335,31 @@ public static class DysonToolCallUi
         if (!TryParseObject(argumentsJson, out var root))
             return null;
         return GetPropString(root, propertyName);
+    }
+
+    /// <summary>
+    /// Prefer a <c>summary</c> string (arguments first, then result) as markdown;
+    /// otherwise the raw result as JSON. Null when there is nothing to open.
+    /// </summary>
+    public static ViewAsFile? TryResolveViewAsFile(
+        string? toolName,
+        string? callId,
+        string? argumentsJson,
+        string? resultContent)
+    {
+        var name = string.IsNullOrWhiteSpace(toolName) ? "tool" : toolName.Trim();
+        var suffix = string.IsNullOrWhiteSpace(callId) ? "" : $"-{callId.Trim()}";
+
+        var summary = GetString(argumentsJson, "summary");
+        if (string.IsNullOrWhiteSpace(summary))
+            summary = GetString(resultContent, "summary");
+        if (!string.IsNullOrWhiteSpace(summary))
+            return new($"tool-calls/{name}{suffix}.md", summary);
+
+        if (string.IsNullOrEmpty(resultContent))
+            return null;
+
+        return new($"tool-calls/{name}{suffix}.json", resultContent);
     }
 
     public static int? GetInt(string? argumentsJson, string propertyName)
