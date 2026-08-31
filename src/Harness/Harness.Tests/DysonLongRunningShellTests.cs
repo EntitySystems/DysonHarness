@@ -209,8 +209,8 @@ public class DysonLongRunningShellTests
                 throw new InvalidOperationException("CountRunning should be 2 after two starts.");
 
             var listed = DysonLongRunningShellRegistry.List(workDirId);
-            if (listed.Count != 2 || listed[0].Id != 1 || listed[1].Id != 2)
-                throw new InvalidOperationException("List after start must return both shells in id order.");
+            if (listed.Count != 2 || listed[0].Id != 2 || listed[1].Id != 1)
+                throw new InvalidOperationException("List after start must return both shells newest-id first.");
 
             var abort = DysonLongRunningShellRegistry
                 .AbortAsync(workDirId, a.Value.Id, timeoutMs: 10_000)
