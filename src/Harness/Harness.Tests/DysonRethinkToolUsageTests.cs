@@ -90,6 +90,22 @@ public class DysonRethinkToolUsageTests
             throw new InvalidOperationException(
                 "System prompt rethink blurb must note Explore budget 120 and no-rethink.");
         }
+
+        if (prompt.IndexOf(
+                "Each turn you may and are encouraged to issue multiple tool calls in a single turn",
+                StringComparison.Ordinal) < 0)
+        {
+            throw new InvalidOperationException(
+                "SharedPreamble must encourage multiple tool calls in a single turn.");
+        }
+
+        if (prompt.IndexOf(
+                "Independent reads, searches, and listings belong together in one round",
+                StringComparison.Ordinal) < 0)
+        {
+            throw new InvalidOperationException(
+                "SharedPreamble must say independent reads, searches, and listings belong together in one round.");
+        }
     }
 
     private static void AssertMaxToolRounds()

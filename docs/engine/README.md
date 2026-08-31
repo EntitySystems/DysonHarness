@@ -331,6 +331,8 @@ Out of scope for this MVP: news tools, CSDN/Juejin, Baidu/Sogou/Yandex scrapers,
 
 `DysonToolCallScheduler.RunStagedAsync` drives this; results append to `ResponseLog`.
 
+`SharedPreamble` (built-in modes) encourages multiple tool calls per turn and asks independent reads, searches, and listings to go out together in one round on the same stage.
+
 ### Turn timestamps
 
 `DysonAgentTurn` carries **`StartedUtc`** (set on live turn create; restored from `CreatedUtc`) and **`CompletedUtc`** (set when the host persists turn completion; null while streaming). Ordered **`ReasoningLog`** (`Thought` / `InterimText` per tool round) plus denormalized **`ReasoningText`** (Thought join) hold provider thinking for UI + DB reload — never injected into model transcripts. Restore synthesizes one Thought from legacy `ReasoningText` when the log is empty. UI shows timestamps as transcript chrome only — not injected into model messages. Display format in the UI: local wall clock `dd/MM/yyyy HH:mm`.
