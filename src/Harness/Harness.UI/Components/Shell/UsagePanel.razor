@@ -4,6 +4,7 @@
 @implements IDisposable
 @inject DysonUiHost Host
 @inject IDysonUsageAnalyticsRepository UsageAnalytics
+@inject DysonMessageBus Bus
 
 <div class="usage-panel">
     @if (!string.IsNullOrWhiteSpace(_emptyMessage))
@@ -70,10 +71,13 @@
     private Guid? _boundSessionId;
     private bool _loaded;
     private int _loadVersion;
+    private IDisposable? _hostSub;
 
     protected override void OnInitialized()
     {
-        Host.Changed += OnHostChanged;
+        var sub = Bus.Subscribe<DysonHostStateChangedEvent>(Host.BusScopeKey, OnHostChanged);
+        if (sub.IsSuccess)
+            _hostSub = sub.Value;
         _wasBusy = Host.IsBusy;
     }
 
@@ -87,9 +91,9 @@
         await RefreshAsync();
     }
 
-    private void OnHostChanged(DysonHostChangeKind kind) => _ = InvokeAsync(async () =>
+    private void OnHostChanged(DysonHostStateChangedEvent evt) => _ = InvokeAsync(async () =>
     {
-        if ((kind & DysonHostChangeKind.Busy) == 0)
+        if ((evt.Kind & DysonHostChangeKind.Busy) == 0)
             return;
 
         var busy = Host.IsBusy;
@@ -160,5 +164,9 @@
         </dl>
     };
 
-    public void Dispose() => Host.Changed -= OnHostChanged;
+    public void Dispose()
+    {
+        _hostSub?.Dispose();
+        _hostSub = null;
+    }
 }

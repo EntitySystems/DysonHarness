@@ -39,6 +39,9 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly SemaphoreSlim _persistGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, DysonAgentSession> _sessionsById = new();
     private readonly ConcurrentDictionary<DysonAgentSession, byte> _hookedSessions = new();
+    private readonly ConcurrentDictionary<DysonAgentSession, IDisposable> _sessionEventTokens = new();
+    private readonly DysonSessionEventPublisher? _sessionEvents;
+    private readonly bool _ownsBus;
     private readonly ConcurrentDictionary<DysonAgentSession, Guid> _customMcpRetainBySession = new();
     private readonly ConcurrentDictionary<DysonAgentSession, DysonPluginMcpHost> _pluginMcpHostBySession = new();
     private readonly ConcurrentDictionary<Guid, byte> _busySessions = new();
@@ -122,7 +125,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         ThemeService theme,
         IDysonBrowserControl? browserControl = null,
         DysonUiRuntimeAttachment? runtimeAttachment = null,
-        IDysonUsageAnalyticsRepository? usageAnalytics = null)
+        IDysonUsageAnalyticsRepository? usageAnalytics = null,
+        DysonMessageBus? bus = null,
+        DysonSessionEventPublisher? sessionEvents = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -140,7 +145,15 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pluginMcpResolver = pluginMcpResolver ?? throw new ArgumentNullException(nameof(pluginMcpResolver));
         _pluginLifecycle = pluginLifecycle ?? throw new ArgumentNullException(nameof(pluginLifecycle));
         _theme = theme ?? throw new ArgumentNullException(nameof(theme));
-        _notifyCoalescer = new DysonNotifyCoalescer(InvokeChanged);
+        Bus = bus ?? new DysonMessageBus();
+        _ownsBus = bus is null;
+        _sessionEvents = sessionEvents;
+        _notifyCoalescer = new DysonNotifyCoalescer(mask =>
+        {
+            if (_disposed)
+                return;
+            _ = Bus.Publish(BusScopeKey, new DysonHostStateChangedEvent(mask, ActiveSessionId));
+        });
         _theme.Changed += OnThemeChanged;
         _runtimeAttachment = runtimeAttachment;
         _usageAnalytics = usageAnalytics;
@@ -244,7 +257,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
-    /// Consume-once snip prompt lines for the composer. Host.Changed fires often, so callers drain.
+    /// Consume-once snip prompt lines for the composer. Host-scope bus events fire often, so callers drain.
     /// </summary>
     public IReadOnlyList<string> TakePendingSnipPromptLines()
     {
@@ -262,6 +275,9 @@ public sealed class DysonUiHost : IAsyncDisposable
     public DemoDysonEngine? Engine => _engine;
     public DysonAgentSession? Session => _session;
     public Guid? ActiveSessionId => _session?.PersistenceId is { } id && id != Guid.Empty ? id : null;
+    public Guid HostId { get; } = Guid.NewGuid();
+    public DysonMessageBus Bus { get; }
+    public string BusScopeKey => DysonBusScopes.Host(HostId);
 
     /// <summary>Parent persistence id for the focused session (live <see cref="DysonAgentSession.Parent"/> or DB).</summary>
     public Guid? ActiveParentSessionId
@@ -598,8 +614,6 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
     }
 
-    public event Action<DysonHostChangeKind>? Changed;
-
     /// <summary>Pending AskQuestion / askQuestion parent-event UI (null when idle).</summary>
     public DysonAskUiState? PendingAskUi => _pendingAskUi;
 
@@ -623,19 +637,19 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     /// <summary>
     /// Bumped by <see cref="NotifySkillCatalogChanged"/> so Composer can reload
-    /// <c>/skill-</c> suggestions without listing the catalog on every <see cref="Changed"/>.
+    /// <c>/skill-</c> suggestions without listing the catalog on every host-scope bus event.
     /// </summary>
     public int SkillCatalogRevision { get; private set; }
 
     /// <summary>
     /// Bumped by <see cref="NotifyPluginCatalogChanged"/> so Composer can reload
-    /// plugin commands without listing the catalog on every <see cref="Changed"/>.
+    /// plugin commands without listing the catalog on every host-scope bus event.
     /// </summary>
     public int PluginCatalogRevision { get; private set; }
 
     /// <summary>
     /// Signals that the on-disk skill catalog changed (e.g. after SkillSearchModal install)
-    /// so Composer can reload <c>/skill-</c> suggestions via <see cref="Changed"/>.
+    /// so Composer can reload <c>/skill-</c> suggestions via the host-scope bus.
     /// </summary>
     public void NotifySkillCatalogChanged()
     {
@@ -1949,7 +1963,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     /// <summary>
     /// Clamps and applies tools-column width in memory; debounces SQLite persist (~300ms).
-    /// Does not raise <see cref="Changed"/> — JS updates <c>--tools-col-width</c> live during drag;
+    /// Does not publish a host-scope bus event — JS updates <c>--tools-col-width</c> live during drag;
     /// call <see cref="FlushToolPanelWidthSaveAsync"/> on pointer-up to sync Blazor markup.
     /// </summary>
     public Task SetToolPanelWidthPercentAsync(double percent)
@@ -1966,7 +1980,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         return Task.CompletedTask;
     }
 
-    /// <summary>Cancels the debounce timer, raises <see cref="Changed"/>, and writes width to SQLite.</summary>
+    /// <summary>Cancels the debounce timer, publishes a host-scope bus event, and writes width to SQLite.</summary>
     public Task FlushToolPanelWidthSaveAsync(CancellationToken cancellationToken = default)
     {
         CancelToolPanelWidthSaveTimer();
@@ -4487,6 +4501,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         session.TodosChanged += OnTodosChanged;
         session.ParentEventsChanged += OnParentEventsChanged;
         session.TaskLifecycle += OnTaskLifecycle;
+        TryAttachSessionEvents(session);
 
         session.Config.CustomMcpHost?.AttachSession(session);
         if (session.Config.PluginMcpHost is { } pluginHost)
@@ -4651,8 +4666,25 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// Drops this circuit's session/turn UI handlers. Does not cancel runtime prompts
     /// or detach/release runtime-owned MCP leases.
     /// </summary>
+    private void TryAttachSessionEvents(DysonAgentSession session)
+    {
+        if (_sessionEvents is null)
+            return;
+
+        var attached = _sessionEvents.Attach(session);
+        if (attached.IsSuccess)
+            _sessionEventTokens[session] = attached.Value;
+    }
+
+    private void TryDisposeSessionEventToken(DysonAgentSession session)
+    {
+        if (_sessionEventTokens.TryRemove(session, out var token))
+            token.Dispose();
+    }
+
     private void DetachSessionUiHandlers(DysonAgentSession session)
     {
+        TryDisposeSessionEventToken(session);
         session.TurnAdded -= OnTurnAdded;
         session.LogAppended -= OnLogAppended;
         session.SessionRenamed -= OnSessionRenamed;
@@ -6533,13 +6565,6 @@ public sealed class DysonUiHost : IAsyncDisposable
         _notifyCoalescer.Flush();
     }
 
-    private void InvokeChanged(DysonHostChangeKind kind)
-    {
-        if (_disposed)
-            return;
-        Changed?.Invoke(kind);
-    }
-
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
@@ -6547,6 +6572,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         _disposed = true;
         _notifyCoalescer.Dispose();
+        if (_ownsBus)
+            Bus.Dispose();
         _theme.Changed -= OnThemeChanged;
         _pluginLifecycle.Changed -= OnPluginCatalogChanged;
         _pluginMcpGrants.Changed -= OnPluginMcpGrantChanged;

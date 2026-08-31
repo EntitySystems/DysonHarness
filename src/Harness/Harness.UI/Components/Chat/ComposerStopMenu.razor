@@ -2,6 +2,7 @@
 @using Harness.UI.Demo
 @implements IDisposable
 @inject DysonUiHost Host
+@inject DysonMessageBus Bus
 
 <div class="composer-stop">
     <button type="button"
@@ -20,15 +21,21 @@
 
 @code {
     private bool CanStop => Host.CanStopExecution();
+    private IDisposable? _hostSub;
 
-    protected override void OnInitialized() => Host.Changed += OnHostChanged;
+    protected override void OnInitialized()
+    {
+        var sub = Bus.Subscribe<DysonHostStateChangedEvent>(Host.BusScopeKey, OnHostChanged);
+        if (sub.IsSuccess)
+            _hostSub = sub.Value;
+    }
 
     private const DysonHostChangeKind HostChangeFilter =
         DysonHostChangeKind.Busy | DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Transcript;
 
-    private void OnHostChanged(DysonHostChangeKind kind)
+    private void OnHostChanged(DysonHostStateChangedEvent evt)
     {
-        if ((kind & HostChangeFilter) == 0)
+        if ((evt.Kind & HostChangeFilter) == 0)
             return;
         _ = InvokeAsync(StateHasChanged);
     }
@@ -40,5 +47,9 @@
         return Host.StopAllExecution();
     }
 
-    public void Dispose() => Host.Changed -= OnHostChanged;
+    public void Dispose()
+    {
+        _hostSub?.Dispose();
+        _hostSub = null;
+    }
 }

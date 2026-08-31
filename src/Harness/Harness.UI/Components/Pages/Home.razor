@@ -8,6 +8,7 @@
 @using Microsoft.Extensions.Logging
 @implements IAsyncDisposable
 @inject DysonUiHost Host
+@inject DysonMessageBus Bus
 @inject IDysonWorkDirectoryRepository WorkDirs
 @inject IDysonModelRepository ModelStore
 @inject DysonWorkDirectoryService WorkDirectoryService
@@ -131,10 +132,13 @@
     private string? _pendingBootWorkDirectoryPath;
     private WorkDirectorySwitcher? _workdirSwitcher;
     private DotNetObjectReference<DysonUiHost>? _chatLinksRef;
+    private IDisposable? _hostSub;
 
     protected override async Task OnInitializedAsync()
     {
-        Host.Changed += OnHostChanged;
+        var sub = Bus.Subscribe<DysonHostStateChangedEvent>(Host.BusScopeKey, OnHostChanged);
+        if (sub.IsSuccess)
+            _hostSub = sub.Value;
         Theme.Changed += OnThemeChanged;
 
         var attached = await Host.EnsureRuntimeAttachedAsync();
@@ -299,9 +303,9 @@
         }
     }
 
-    private void OnHostChanged(DysonHostChangeKind kind) => _ = InvokeAsync(() =>
+    private void OnHostChanged(DysonHostStateChangedEvent evt) => _ = InvokeAsync(() =>
     {
-        _ = kind;
+        _ = evt;
         try
         {
             SyncSelectedSlugFromSession();
@@ -626,7 +630,8 @@
 
     public async ValueTask DisposeAsync()
     {
-        Host.Changed -= OnHostChanged;
+        _hostSub?.Dispose();
+        _hostSub = null;
         Theme.Changed -= OnThemeChanged;
         try
         {

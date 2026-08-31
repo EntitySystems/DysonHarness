@@ -3,6 +3,7 @@
 @using Harness.UI.Demo
 @using Microsoft.AspNetCore.Components.Web
 @inject DysonUiHost Host
+@inject DysonMessageBus Bus
 @implements IDisposable
 
 @if (Host.PendingUserDialogUi is { } dialog)
@@ -48,14 +49,24 @@
 
 @code {
     private bool _busy;
+    private IDisposable? _hostSub;
 
-    protected override void OnInitialized() => Host.Changed += OnHostChanged;
-
-    public void Dispose() => Host.Changed -= OnHostChanged;
-
-    private void OnHostChanged(DysonHostChangeKind kind)
+    protected override void OnInitialized()
     {
-        if ((kind & DysonHostChangeKind.Overlay) == 0)
+        var sub = Bus.Subscribe<DysonHostStateChangedEvent>(Host.BusScopeKey, OnHostChanged);
+        if (sub.IsSuccess)
+            _hostSub = sub.Value;
+    }
+
+    public void Dispose()
+    {
+        _hostSub?.Dispose();
+        _hostSub = null;
+    }
+
+    private void OnHostChanged(DysonHostStateChangedEvent evt)
+    {
+        if ((evt.Kind & DysonHostChangeKind.Overlay) == 0)
             return;
         InvokeAsync(StateHasChanged);
     }
