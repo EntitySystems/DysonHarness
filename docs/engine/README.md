@@ -2,7 +2,7 @@
 
 Library: [`src/Harness/Harness.Engine`](../../src/Harness/Harness.Engine) (`net10.0`, namespace `DysonHarness`). Shared contracts and Result types live in [`Harness.Abstractions`](../../src/Harness/Harness.Abstractions).
 
-Source is organized by concern under folders (namespace stays `DysonHarness`): `App/`, `Session/`, `Turns/`, `Mcp/`, `Shell/`, `Runtimes/`, `Providers/OpenAi/`, `Storage/`, `Context/`, `Search/`, plus `Migrations/` unchanged. Generated `DysonBuildInfo` stays in the build intermediate output. `Result/` types moved to `Harness.Abstractions`.
+Source is organized by concern under folders (namespace stays `DysonHarness`): `App/`, `Session/`, `Turns/`, `Mcp/`, `Shell/`, `Runtimes/`, `Providers/OpenAi/`, `Storage/`, `Context/`, `Search/`, `Messaging/`, plus `Migrations/` unchanged. Generated `DysonBuildInfo` stays in the build intermediate output. `Result/` types moved to `Harness.Abstractions`.
 
 The engine is an abstract agent harness: `DysonEngine` exposes a root `DysonAgentSession`; sessions talk to an ephemeral `DysonAgentProvider` and run staged MCP-shaped tool calls. There is no concrete host in the engine itself — UI and demo hosts live elsewhere. Functional code belongs in Engine/Abstractions; UI hosts only attach — see [rules/rules_engine_ui.md](../../rules/rules_engine_ui.md).
 
@@ -108,6 +108,46 @@ Primary flow: `StartSubagent` is **non-blocking**; the child runs in the backgro
 Soft spawn / restore / inter-agent event coverage: `Harness.Tests` (`DysonSubagentSpawnGateTests`, `DysonSubagentRestoreTests`, `DysonParentEventTests`, `DysonPromptUserDialogTests`) — `dotnet test src/Harness/Harness.Tests/Harness.Tests.csproj`. Return shape: `DysonStartSubagentResult` (`subagentId`, `persistenceId`, `agentMode`, `title`, optional `modelSlug` / `modelLabel`). Kickoff failures (no `SubmitSubagentReport`) mark the child `Failed`, persist status + parent interrupt, and notify with a non-empty reason (PromptAsync error → last turn snippet → harness message; exceptions as `{Type}: {Message}`). A later successful `SubmitSubagentReport` can supersede that harness Failed (see tool row above).
 
 On parent resume the host hydrates direct DB children into `SubSessions` / `SubagentsById` via `RestoreRegisteredSubagent` (bumps next runtime id; does not raise `SubagentSpawned`).
+
+## Message bus
+
+Process-local typed pub/sub in `Harness.Engine/Messaging/`. `DysonMessageBus` is a sealed singleton (no `IDysonMessageBus`). Payloads implement the `IDysonMessageBusEvent` marker. The engine is the authority; hosts subscribe. UI `Publish` is allowed but discouraged.
+
+**Keys** (`DysonBusScopes`; free-form strings also accepted):
+
+| Helper | Shape |
+| ------ | ----- |
+| `Wildcard` | `*` — every key for that event type |
+| `Session(Guid)` | `session:{persistenceId:D}` |
+| `Subject(string)` | `subject:{subjectId}` |
+| `Host(Guid)` | `host:{hostId:D}` (per-circuit UI host) |
+
+**Delivery**
+
+- `Publish` / `PublishAsync` → `VoidResult<string>`; `Subscribe` → `Result<IDisposable, string>`.
+- Synchronous fan-out on the publisher thread over a snapshot list: exact key plus `DysonBusScopes.Wildcard`.
+- No replay, sticky last-value, dispatch queue, or per-key ordering.
+- Handler exceptions are logged and not thrown to the publisher. Sync `Publish` fire-and-forgets async handlers (failures logged); `PublishAsync` awaits them.
+- Dispose the subscription token (idempotent). Empty lists drop their dictionary entry so per-session keys do not leak.
+
+**Publish points**
+
+- `DysonSessionEventPublisher.Attach(root)` returns a Result token. Recursively hooks the tree and follows `SubagentSpawned`. Per-session refcount so runtime **and** UI can Attach the same tree without double-publishing. Dispose the token to decrement.
+- Status, spawn, and turn-added publish immediately. Activity (`DysonSubagentActivityChangedEvent`) uses a reused 75ms `DysonNotifyCoalescer` plus tuple dedupe `(title, LatestTurnStepTitle, isRunning)`.
+- `DysonAgentSession.StatusChanged` is the choke point: raised **outside** `_terminalGate` from `TryMarkTerminal` / `TryAcceptSubagentReport` / `TryReopenForNewParentTask` when status actually changes.
+- Host UI: `DysonUiHost` coalescer sink publishes `DysonHostStateChangedEvent` on `Host.BusScopeKey` (`DysonBusScopes.Host(HostId)`). This replaces `DysonUiHost.Changed` (deleted). If the bus is not injected, the host owns a private bus. `DysonSessionRuntime.Changed` / `DysonRuntimeChange` is unchanged (recovery/reattach).
+
+| Record | Key | Payload |
+| ------ | --- | ------- |
+| `DysonSubagentSpawnedEvent` | parent + child session | `ParentPersistenceId`, `ChildPersistenceId`, `RuntimeId`, `Title`, `AgentMode` |
+| `DysonSubagentStatusChangedEvent` | child + parent session | `PersistenceId`, `ParentPersistenceId`, `RuntimeId`, `Status`, `IsRunning`, `Summary` |
+| `DysonSubagentActivityChangedEvent` | session (+ parent) | `PersistenceId`, `RuntimeId`, `Title`, `LatestTurnStepTitle`, `IsRunning` |
+| `DysonSessionTurnAddedEvent` | session | `PersistenceId`, `TurnId`, `Kind` |
+| `DysonHostStateChangedEvent` | host | `DysonHostChangeKind` mask, optional `SessionId` |
+
+DI (`DysonUiWebHost`): `AddSingleton<DysonMessageBus>()` then `AddSingleton<DysonSessionEventPublisher>()` next to `DysonSessionRuntimeRegistry`. Runtime Attach on first `EnsureRegistered`; dispose token in UnhookSession. Host Attach tokens disposed in `DetachSessionUiHandlers`.
+
+Covered by `DysonMessageBusTests` + `DysonSessionEventPublisherTests` in `Harness.Tests` (`dotnet test src/Harness/Harness.Tests/Harness.Tests.csproj`). Host delegation tests subscribe on `host.Bus` / `host.BusScopeKey`.
 
 ## Plugin subsystem
 

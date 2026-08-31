@@ -4,6 +4,7 @@
 @implements IDisposable
 @inject DysonUiHost Host
 @inject DysonFileTreeService FileTree
+@inject DysonMessageBus Bus
 
 <div class="session-header">
     @if (Session is null)
@@ -192,15 +193,16 @@
 
     private string? _logText;
     private CancellationTokenSource? _pollCts;
-    private bool _hostHooked;
+    private IDisposable? _hostSub;
     private bool _toolsMenuOpen;
 
     private void ToggleRail() => Shell?.ToggleRail();
 
     protected override void OnInitialized()
     {
-        Host.Changed += OnHostChanged;
-        _hostHooked = true;
+        var sub = Bus.Subscribe<DysonHostStateChangedEvent>(Host.BusScopeKey, OnHostChanged);
+        if (sub.IsSuccess)
+            _hostSub = sub.Value;
     }
 
     protected override async Task OnParametersSetAsync()
@@ -212,9 +214,9 @@
     private const DysonHostChangeKind HostChangeFilter =
         DysonHostChangeKind.Busy | DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Transcript;
 
-    private void OnHostChanged(DysonHostChangeKind kind)
+    private void OnHostChanged(DysonHostStateChangedEvent evt)
     {
-        if ((kind & HostChangeFilter) == 0)
+        if ((evt.Kind & HostChangeFilter) == 0)
             return;
         _ = InvokeAsync(StateHasChanged);
     }
@@ -318,11 +320,8 @@
     public void Dispose()
     {
         StopPoll();
-        if (_hostHooked)
-        {
-            Host.Changed -= OnHostChanged;
-            _hostHooked = false;
-        }
+        _hostSub?.Dispose();
+        _hostSub = null;
     }
 
     private static string ShortCommand(string? command)

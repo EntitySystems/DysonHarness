@@ -8,6 +8,7 @@
 @implements IAsyncDisposable
 @inject IDysonModelRepository ModelStore
 @inject DysonUiHost Host
+@inject DysonMessageBus Bus
 @inject IJSRuntime Js
 
 <div class="composer">
@@ -239,6 +240,7 @@
     private int _skillCatalogRevision;
     private int _pluginCatalogRevision;
     private Guid? _catalogWorkDirectoryId;
+    private IDisposable? _hostSub;
 
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public Guid? SelectedSlugId { get; set; }
@@ -287,7 +289,12 @@
         }
     }
 
-    protected override void OnInitialized() => Host.Changed += OnHostChanged;
+    protected override void OnInitialized()
+    {
+        var sub = Bus.Subscribe<DysonHostStateChangedEvent>(Host.BusScopeKey, OnHostChanged);
+        if (sub.IsSuccess)
+            _hostSub = sub.Value;
+    }
 
     protected override void OnParametersSet()
     {
@@ -375,10 +382,10 @@
         | DysonHostChangeKind.Error
         | DysonHostChangeKind.Transcript;
 
-    private void OnHostChanged(DysonHostChangeKind kind) => _ = InvokeAsync(async () =>
+    private void OnHostChanged(DysonHostStateChangedEvent evt) => _ = InvokeAsync(async () =>
     {
         DrainPendingSnipPromptLines();
-        if ((kind & HostChangeFilter) == 0)
+        if ((evt.Kind & HostChangeFilter) == 0)
             return;
 
         var skillRev = Host.SkillCatalogRevision;
@@ -797,7 +804,8 @@
 
     public async ValueTask DisposeAsync()
     {
-        Host.Changed -= OnHostChanged;
+        _hostSub?.Dispose();
+        _hostSub = null;
         if (_imageCaptureBound)
         {
             try

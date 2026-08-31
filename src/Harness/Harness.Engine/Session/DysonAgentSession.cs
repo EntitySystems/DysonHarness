@@ -430,6 +430,9 @@ public abstract class DysonAgentSession
     /// <summary>Raised after <see cref="RegisterSubagent"/> (host session registry).</summary>
     public event EventHandler<DysonAgentSession>? SubagentSpawned;
 
+    /// <summary>Raised when <see cref="Status"/> actually changes (outside <c>_terminalGate</c>).</summary>
+    public event EventHandler<DysonSessionStatusChangedEventArgs>? StatusChanged;
+
     /// <summary>Raised when inbound parent events or root AskQuestion / PromptUserDialog pending state changes (UI).</summary>
     public event EventHandler? ParentEventsChanged;
 
@@ -1513,16 +1516,34 @@ public abstract class DysonAgentSession
     /// </summary>
     public bool TryReopenForNewParentTask()
     {
+        DysonSessionStatus previous = default;
+        DysonSessionStatus next = default;
+        string? summary = null;
+        var changed = false;
         lock (_terminalGate)
         {
             if (Status is not (DysonSessionStatus.Completed or DysonSessionStatus.Failed))
                 return false;
 
+            previous = Status;
             Status = DysonSessionStatus.Active;
+            next = Status;
+            summary = LastReportSummary;
             _terminalTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            changed = true;
         }
 
         Parent?.ClearWaitConsumedCompletion(Id);
+        if (changed)
+        {
+            StatusChanged?.Invoke(this, new DysonSessionStatusChangedEventArgs
+            {
+                PreviousStatus = previous,
+                Status = next,
+                Summary = summary,
+            });
+        }
+
         return true;
     }
 
@@ -1535,16 +1556,35 @@ public abstract class DysonAgentSession
             or DysonSessionStatus.Interrupted))
             throw new ArgumentOutOfRangeException(nameof(status), status, "Must be a terminal status.");
 
+        DysonSessionStatus previous = default;
+        DysonSessionStatus next = default;
+        string? raisedSummary = null;
+        var changed = false;
         lock (_terminalGate)
         {
             if (IsTerminal)
                 return false;
 
+            previous = Status;
             Status = status;
             LastReportSummary = summary;
             _terminalTcs.TrySetResult((status, summary));
-            return true;
+            next = Status;
+            raisedSummary = LastReportSummary;
+            changed = true;
         }
+
+        if (changed)
+        {
+            StatusChanged?.Invoke(this, new DysonSessionStatusChangedEventArgs
+            {
+                PreviousStatus = previous,
+                Status = next,
+                Summary = raisedSummary,
+            });
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -1557,6 +1597,10 @@ public abstract class DysonAgentSession
         if (status is not (DysonSessionStatus.Completed or DysonSessionStatus.Failed))
             throw new ArgumentOutOfRangeException(nameof(status), status, "Must be Completed or Failed.");
 
+        DysonSessionStatus previous = default;
+        DysonSessionStatus next = default;
+        string? raisedSummary = null;
+        var changed = false;
         lock (_terminalGate)
         {
             if (Status is DysonSessionStatus.Completed
@@ -1568,11 +1612,26 @@ public abstract class DysonAgentSession
             if (Status == DysonSessionStatus.Failed && status == DysonSessionStatus.Failed)
                 return false;
 
+            previous = Status;
             Status = status;
             LastReportSummary = summary;
             _terminalTcs.TrySetResult((status, summary));
-            return true;
+            next = Status;
+            raisedSummary = LastReportSummary;
+            changed = true;
         }
+
+        if (changed)
+        {
+            StatusChanged?.Invoke(this, new DysonSessionStatusChangedEventArgs
+            {
+                PreviousStatus = previous,
+                Status = next,
+                Summary = raisedSummary,
+            });
+        }
+
+        return true;
     }
 
     /// <summary>Stores the CTS used to cancel the background <see cref="PromptAsync"/> for StopSubagent.</summary>

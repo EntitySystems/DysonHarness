@@ -1,8 +1,7 @@
 @namespace Harness.UI.Components.Chat
 @using DysonHarness
-@using Harness.UI.Demo
 @implements IDisposable
-@inject DysonUiHost Host
+@inject DysonMessageBus Bus
 
 @if (_children.Count > 0)
 {
@@ -28,28 +27,53 @@
     private bool _open;
     private List<Guid> _children = [];
     private int _activeCount;
-
-    protected override void OnInitialized() => Host.Changed += OnHostChanged;
+    private IDisposable? _sub;
 
     protected override void OnParametersSet()
     {
         var sessionId = Session?.PersistenceId;
         if (sessionId != _boundSessionId)
         {
+            DisposeSubscriptions();
             _boundSessionId = sessionId;
             _open = false;
+            SubscribeIfNeeded();
         }
 
         RefreshChildren();
     }
 
-    private const DysonHostChangeKind HostChangeFilter =
-        DysonHostChangeKind.Busy | DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Transcript;
-
-    private void OnHostChanged(DysonHostChangeKind kind) => _ = InvokeAsync(() =>
+    private void SubscribeIfNeeded()
     {
-        if ((kind & HostChangeFilter) == 0)
+        if (Session is null || Session.PersistenceId == Guid.Empty)
             return;
+
+        var scope = DysonBusScopes.Session(Session.PersistenceId);
+        IDisposable? spawned = null;
+        IDisposable? status = null;
+
+        var spawnedSub = Bus.Subscribe<DysonSubagentSpawnedEvent>(scope, OnSpawned);
+        if (spawnedSub.IsSuccess)
+            spawned = spawnedSub.Value;
+
+        var statusSub = Bus.Subscribe<DysonSubagentStatusChangedEvent>(scope, OnStatus);
+        if (statusSub.IsSuccess)
+            status = statusSub.Value;
+
+        if (spawned is null && status is null)
+            return;
+
+        _sub = new CompositeDisposable(spawned, status);
+    }
+
+    private void OnSpawned(DysonSubagentSpawnedEvent evt) => _ = InvokeAsync(() =>
+    {
+        RefreshChildren();
+        StateHasChanged();
+    });
+
+    private void OnStatus(DysonSubagentStatusChangedEvent evt) => _ = InvokeAsync(() =>
+    {
         RefreshChildren();
         StateHasChanged();
     });
@@ -76,5 +100,29 @@
 
     private void Close() => _open = false;
 
-    public void Dispose() => Host.Changed -= OnHostChanged;
+    private void DisposeSubscriptions()
+    {
+        _sub?.Dispose();
+        _sub = null;
+    }
+
+    public void Dispose() => DisposeSubscriptions();
+
+    private sealed class CompositeDisposable : IDisposable
+    {
+        private readonly IDisposable? _first;
+        private readonly IDisposable? _second;
+
+        public CompositeDisposable(IDisposable? first, IDisposable? second)
+        {
+            _first = first;
+            _second = second;
+        }
+
+        public void Dispose()
+        {
+            _first?.Dispose();
+            _second?.Dispose();
+        }
+    }
 }

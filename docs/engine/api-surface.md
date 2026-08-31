@@ -9,7 +9,7 @@ Conceptual overview: [README.md](README.md).
 | Type | Notes |
 | ---- | ----- |
 | `DysonEngine` | Abstract; exposes `RootSession` |
-| `DysonAgentSession` | Abstract session: mode, prompt, MCP pipeline, subagents, interrupts, log, turns, optimizer hooks; `ApplyUiTheme` stores `Config.UiTheme` and rewrites that session’s visualization tool (no generation bump, no child walk); summarize claims (`TryBeginSummarizeTurn` / `EndSummarizeTurn` / `HasAnySummarizingTurn`) + single-flight `EnterSummarizeGateAsync` shared by host + MCP; `MaxSubmitSubagentReportFailuresPerTurn` (=2) + `TryAutoSubmitAfterRepeatedFailuresAsync` (2-strike auto-accept of the last parseable child report); `TranscriptGeneration` (monotonic, not bumped on streaming deltas); `CachedOutgoingContextTokens` (last computed, 0 until first refresh, render-safe field read); `RefreshOutgoingContextTokensAsync()` → `Task<bool>` (thread-pool, single-flight, true iff the cached value changed); `BumpTranscriptGeneration()` (engine mutation sites only); `EstimateOutgoingContextTokens` remains the uncached synchronous authoritative path (DropContext + tests) |
+| `DysonAgentSession` | Abstract session: mode, prompt, MCP pipeline, subagents, interrupts, log, turns, optimizer hooks; `StatusChanged` (`DysonSessionStatusChangedEventArgs`) raised outside `_terminalGate` when status actually changes (`TryMarkTerminal` / `TryAcceptSubagentReport` / `TryReopenForNewParentTask`); `ApplyUiTheme` stores `Config.UiTheme` and rewrites that session’s visualization tool (no generation bump, no child walk); summarize claims (`TryBeginSummarizeTurn` / `EndSummarizeTurn` / `HasAnySummarizingTurn`) + single-flight `EnterSummarizeGateAsync` shared by host + MCP; `MaxSubmitSubagentReportFailuresPerTurn` (=2) + `TryAutoSubmitAfterRepeatedFailuresAsync` (2-strike auto-accept of the last parseable child report); `TranscriptGeneration` (monotonic, not bumped on streaming deltas); `CachedOutgoingContextTokens` (last computed, 0 until first refresh, render-safe field read); `RefreshOutgoingContextTokensAsync()` → `Task<bool>` (thread-pool, single-flight, true iff the cached value changed); `BumpTranscriptGeneration()` (engine mutation sites only); `EstimateOutgoingContextTokens` remains the uncached synchronous authoritative path (DropContext + tests) |
 | `DysonSessionInactiveDelete` | Static `IsDead` + `SelectDeletableRootIds` — picks inactive roots with no live descendant from a flat workdir session list; when `liveActiveIds` is passed it is the sole liveness source (idle `Active` leftovers are deletable); without it, DB `Active` is live |
 | `DysonAgentProvider` | Abstract ephemeral model provider (no durable state) |
 | `OpenAiCompatibleAgentProvider` | OpenAI-compatible ephemeral provider (`BaseUrl`, `ApiKey`, `Slug`, `OpenAiApiMode`, optional `ManagedSource`, optional `ReasoningEffort`, …). CLIProxy BaseUrl/ApiKey rewrite is gated by `DysonManagedSources.IsCliProxy` (`cliproxy-` prefix), not by any non-null `ManagedSource`; direct OpenRouter / OrcaRouter keep stored URL/key. Completions normally send top-level `reasoning_effort`, while OpenRouter Completions sends nested `reasoning.effort` (OrcaRouter stays top-level); Responses sends nested `reasoning.effort` |
@@ -82,6 +82,7 @@ Conceptual overview: [README.md](README.md).
 ### Session members (high level)
 
 - Identity: `Id` (runtime int; root `0`)
+- Status: `Status`, `StatusChanged` (`EventHandler<DysonSessionStatusChangedEventArgs>`: `PreviousStatus`, `Status`, `Summary`) — raised outside `_terminalGate` from `TryMarkTerminal` / `TryAcceptSubagentReport` / `TryReopenForNewParentTask` when status actually changes
 - Persistence (when wired): `PersistenceId` (`Guid`), `DisplayTitle`, `Turns`, `TurnAdded`, `AddTurn`, `RestoreFromPersisted`
 - Todos: `Todos` (`IReadOnlyList<DysonSessionTodo>`), `TodosChanged`, `RestoreTodos`, `ListTodosAsync` / `CreateTodoAsync` / `UpdateTodoAsync` / `DeleteTodoAsync` / `ReplaceTodosAsync` (persist when `PersistenceId` set)
 - Rename: `RenameAsync(title)` → validates (trim, max 120) → sets `DisplayTitle` → raises `SessionRenamed` (`DysonSessionRenamedEventArgs`: `PersistenceId`, `Title`); host/tool executor persists `sessions.Title`
@@ -105,9 +106,28 @@ Process-lifetime, subject-scoped live graph. Circuit facades attach; they do not
 | `IDysonAgentSessionRuntimeFactory` / `DysonAgentSessionRuntimeCreateRequest` / `DysonAgentSessionRuntimeLease` | Create/resume `DysonAgentSession` plus factory resource leases (MCP hosts). Implementations must not take Razor, JS, or live theme services. Theme on create is a `DysonUiThemeSnapshot` value; the host may replace `Config.UiTheme` between turns. The UI host factory is demo-only today — OpenAI-compatible create/load return explicit Result errors (see UI README). |
 | `DysonUiRuntimeAttachment` | `Harness.UI` circuit-local attach/detach via current `IDysonSubjectContext` (registry-normalized); relays `Changed`. Dispose unsubscribes only — it does not cancel, recover, or dispose the retained runtime. |
 | `DysonRuntimeChange` / `DysonRuntimeChangeKind` | Low-information change (`SessionGraph`, `Busy`, `Queue`, `Error`, `Recovery`) so a reattached facade can refresh after missed signals |
-| `DysonNotifyCoalescer` | Public 75ms leading+trailing coalescer; `Notify(DysonHostChangeKind)` ORs a pending mask; parameterless `Notify` == `All`; `Flush` invokes immediately even on empty mask (deliberate). Facts: `DysonUiNotifyCoalescerTests` + `DysonNotifyCoalescerMaskTests`. |
-| `DysonHostChangeKind` | `[Flags]` `None` / `Streaming` / `Transcript` / `Busy` / `SessionGraph` / `Catalogs` / `Overlay` / `Error` / `All`. Hosts filter before re-render. |
+| `DysonNotifyCoalescer` | Public 75ms leading+trailing coalescer; `Notify(DysonHostChangeKind)` ORs a pending mask; parameterless `Notify` == `All`; `Flush` invokes immediately even on empty mask (deliberate). Host UI sink publishes `DysonHostStateChangedEvent` on `Host.BusScopeKey` (replaces deleted `DysonUiHost.Changed`). Session activity uses a reused instance in `DysonSessionEventPublisher`. Facts: `DysonUiNotifyCoalescerTests` + `DysonNotifyCoalescerMaskTests`. |
+| `DysonHostChangeKind` | `[Flags]` `None` / `Streaming` / `Transcript` / `Busy` / `SessionGraph` / `Catalogs` / `Overlay` / `Error` / `All`. Payload of `DysonHostStateChangedEvent`; hosts filter before re-render. |
 | `DysonSessionRecoveryService` / `DysonSessionRecoveryReport` | Process-restart sweep on first registry attach: finalize unfinished Active-session turns (Queued/Working tools fail with `IncompleteToolReason`; stamp `InterruptionReason` + `CompletedUtc`; append `TurnInterrupted`) and mark Active descendants `Interrupted`. Roots stay `Active`. No model/tool replay, no invented assistant text, no synthesized parent report. Idempotent. |
+
+## Message bus
+
+Process-local typed pub/sub (`Harness.Engine/Messaging/`). Sealed `DysonMessageBus` singleton (no `IDysonMessageBus`). Engine is the authority; hosts subscribe. Conceptual overview: [README.md](README.md)#message-bus. `DysonSessionRuntime.Changed` / `DysonRuntimeChange` is unchanged (bus rides beside it).
+
+| Type | Notes |
+| ---- | ----- |
+| `IDysonMessageBusEvent` | Marker for immutable event records |
+| `DysonMessageBus` | Sealed singleton. `Publish` / `PublishAsync` → `VoidResult<string>`; `Subscribe` → `Result<IDisposable, string>`. Sync fan-out on the publisher thread over snapshot lists; exact key + `DysonBusScopes.Wildcard`; no replay/queue; handler exceptions logged, not thrown. Idempotent tokens drop empty dictionary entries |
+| `DysonBusScopes` | `Wildcard` `*`; `Session(Guid)` → `session:{id:D}`; `Subject(string)`; `Host(Guid)` → `host:{id:D}` |
+| `DysonSessionEventPublisher` | `Attach(root)` Result token; recursive + `SubagentSpawned` follow-on; per-session refcount so runtime and UI can Attach the same tree. Status/spawn/turn publish immediately; activity via reused 75ms `DysonNotifyCoalescer` + `(title, LatestTurnStepTitle, isRunning)` dedupe |
+| `DysonSubagentSpawnedEvent` | Parent + child session keys: `ParentPersistenceId`, `ChildPersistenceId`, `RuntimeId`, `Title`, `AgentMode` |
+| `DysonSubagentStatusChangedEvent` | Child + parent session keys: `PersistenceId`, `ParentPersistenceId`, `RuntimeId`, `Status`, `IsRunning`, `Summary` |
+| `DysonSubagentActivityChangedEvent` | Session (+ parent) keys: `PersistenceId`, `RuntimeId`, `Title`, `LatestTurnStepTitle`, `IsRunning` |
+| `DysonSessionTurnAddedEvent` | Session key: `PersistenceId`, `TurnId`, `Kind` |
+| `DysonHostStateChangedEvent` | Host key: `Kind` (`DysonHostChangeKind` mask), optional `SessionId`. Replaces deleted `DysonUiHost.Changed` |
+| `DysonSessionStatusChangedEventArgs` | `PreviousStatus`, `Status`, `Summary` — payload of `DysonAgentSession.StatusChanged` |
+
+Covered by `DysonMessageBusTests` + `DysonSessionEventPublisherTests` in `Harness.Tests`. Host delegation tests subscribe on `host.Bus` / `host.BusScopeKey`.
 
 ## Modes & prompts
 

@@ -129,7 +129,7 @@ public static class DysonLongRunningShellRegistry
         return bucket.Shells.TryGetValue(id, out shell);
     }
 
-    /// <summary>All shells for a workdir (Running + exited), newest id last.</summary>
+    /// <summary>All shells for a workdir (Running + exited), newest id first.</summary>
     public static IReadOnlyList<DysonLongRunningShellInfo> List(Guid workDirectoryId)
     {
         if (!Buckets.TryGetValue(workDirectoryId, out var bucket))
@@ -137,7 +137,7 @@ public static class DysonLongRunningShellRegistry
 
         return bucket.Shells.Values
             .Select(s => s.ToInfo())
-            .OrderBy(s => s.Id)
+            .OrderByDescending(s => s.Id)
             .ToArray();
     }
 

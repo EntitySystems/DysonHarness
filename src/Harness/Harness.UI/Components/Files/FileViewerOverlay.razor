@@ -4,6 +4,7 @@
 @using Microsoft.AspNetCore.Components.Web
 @implements IDisposable
 @inject DysonUiHost Host
+@inject DysonMessageBus Bus
 
 @if (Host.FileViewer is { } viewer)
 {
@@ -213,7 +214,14 @@ else
         public string Text { get; set; } = "";
     }
 
-    protected override void OnInitialized() => Host.Changed += OnHostChanged;
+    private IDisposable? _hostSub;
+
+    protected override void OnInitialized()
+    {
+        var sub = Bus.Subscribe<DysonHostStateChangedEvent>(Host.BusScopeKey, OnHostChanged);
+        if (sub.IsSuccess)
+            _hostSub = sub.Value;
+    }
 
     protected override void OnParametersSet()
     {
@@ -259,9 +267,9 @@ else
         </div>
     };
 
-    private void OnHostChanged(DysonHostChangeKind kind)
+    private void OnHostChanged(DysonHostStateChangedEvent evt)
     {
-        if ((kind & DysonHostChangeKind.Overlay) == 0)
+        if ((evt.Kind & DysonHostChangeKind.Overlay) == 0)
             return;
         _ = InvokeAsync(StateHasChanged);
     }
@@ -619,5 +627,9 @@ else
         return css;
     }
 
-    public void Dispose() => Host.Changed -= OnHostChanged;
+    public void Dispose()
+    {
+        _hostSub?.Dispose();
+        _hostSub = null;
+    }
 }
