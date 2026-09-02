@@ -615,10 +615,12 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>Pending AskQuestion / askQuestion parent-event UI (null when idle).</summary>
-    public DysonAskUiState? PendingAskUi => _pendingAskUi;
+    public DysonAskUiState? PendingAskUi =>
+        _pendingAskUi ?? TryBuildAskUi(_session);
 
     /// <summary>Pending PromptUserDialog / promptUserDialog parent-event UI (null when idle).</summary>
-    public DysonUserDialogUiState? PendingUserDialogUi => _pendingUserDialogUi;
+    public DysonUserDialogUiState? PendingUserDialogUi =>
+        _pendingUserDialogUi ?? TryBuildUserDialogUi(_session);
 
     /// <summary>Open file viewer overlay (null when closed).</summary>
     public DysonFileViewerState? FileViewer => _fileViewer;
@@ -5265,21 +5267,20 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
     }
 
-    private void SyncAskUiFromSession(DysonAgentSession session)
+    private static DysonAskUiState? TryBuildAskUi(DysonAgentSession? session)
     {
-        if (session.PersistenceId != ActiveSessionId)
-            return;
+        if (session is null)
+            return null;
 
         // Root AskQuestion
         if (session.Parent is null && session.PendingAskQuestions is { Count: > 0 } questions)
         {
-            _pendingAskUi = new DysonAskUiState
+            return new DysonAskUiState
             {
                 Source = DysonAskUiSource.RootAskQuestion,
                 SessionPersistenceId = session.PersistenceId,
                 Questions = questions,
             };
-            return;
         }
 
         // Parent-event askQuestion with valid questions JSON (Ask UI path)
@@ -5290,7 +5291,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (!DysonSubagentHostLogic.TryBuildAskUi(evt.Kind, evt.Payload, out var askQuestions))
                 continue;
 
-            _pendingAskUi = new DysonAskUiState
+            return new DysonAskUiState
             {
                 Source = DysonAskUiSource.ParentEventAskQuestion,
                 SessionPersistenceId = session.PersistenceId,
@@ -5298,26 +5299,24 @@ public sealed class DysonUiHost : IAsyncDisposable
                 SubagentId = evt.SubagentId,
                 Questions = askQuestions,
             };
-            return;
         }
 
-        _pendingAskUi = null;
+        return null;
     }
 
-    private void SyncUserDialogUiFromSession(DysonAgentSession session)
+    private static DysonUserDialogUiState? TryBuildUserDialogUi(DysonAgentSession? session)
     {
-        if (session.PersistenceId != ActiveSessionId)
-            return;
+        if (session is null)
+            return null;
 
         if (session.Parent is null && session.PendingUserDialog is { } rootDialog)
         {
-            _pendingUserDialogUi = new DysonUserDialogUiState
+            return new DysonUserDialogUiState
             {
                 Source = DysonUserDialogUiSource.RootPromptUserDialog,
                 SessionPersistenceId = session.PersistenceId,
                 Dialog = rootDialog,
             };
-            return;
         }
 
         foreach (var evt in session.PendingOrRecentParentEvents)
@@ -5327,7 +5326,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (!DysonSubagentHostLogic.TryBuildUserDialogUi(evt.Kind, evt.Payload, out var dialog))
                 continue;
 
-            _pendingUserDialogUi = new DysonUserDialogUiState
+            return new DysonUserDialogUiState
             {
                 Source = DysonUserDialogUiSource.ParentEventPromptUserDialog,
                 SessionPersistenceId = session.PersistenceId,
@@ -5335,10 +5334,25 @@ public sealed class DysonUiHost : IAsyncDisposable
                 SubagentId = evt.SubagentId,
                 Dialog = dialog,
             };
-            return;
         }
 
-        _pendingUserDialogUi = null;
+        return null;
+    }
+
+    private void SyncAskUiFromSession(DysonAgentSession session)
+    {
+        if (session.PersistenceId != ActiveSessionId)
+            return;
+
+        _pendingAskUi = TryBuildAskUi(session);
+    }
+
+    private void SyncUserDialogUiFromSession(DysonAgentSession session)
+    {
+        if (session.PersistenceId != ActiveSessionId)
+            return;
+
+        _pendingUserDialogUi = TryBuildUserDialogUi(session);
     }
 
     private void MaybeOpenAskUiForEvent(DysonAgentSession parent, DysonAgentInterrupt interrupt)
@@ -5378,7 +5392,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// <summary>Submit answers for the pending Ask UI (root AskQuestion or askQuestion parent event).</summary>
     public Result<string, string> SubmitAskUiAnswers(IReadOnlyList<DysonAskQuestionAnswer> answers)
     {
-        var ask = _pendingAskUi;
+        var ask = PendingAskUi;
         if (ask is null)
             return Result<string, string>.AsError("No pending AskQuestion UI.");
 
@@ -5436,7 +5450,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// <summary>Submit chosen action for pending PromptUserDialog UI (root or parent-event).</summary>
     public Result<string, string> SubmitUserDialogAction(string actionLabel, bool skipped)
     {
-        var dialog = _pendingUserDialogUi;
+        var dialog = PendingUserDialogUi;
         if (dialog is null)
             return Result<string, string>.AsError("No pending PromptUserDialog UI.");
 

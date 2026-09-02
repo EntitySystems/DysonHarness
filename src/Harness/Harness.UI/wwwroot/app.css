@@ -1586,6 +1586,9 @@ code, .mono {
   justify-content: center;
   padding: 24px;
   background: var(--overlay);
+  /* Overlay chips sit in a pointer-events:none cluster; display:contents
+     promotes this backdrop into that cluster, so restore hit-testing. */
+  pointer-events: auto;
 }
 
 .prompt-user-dialog {

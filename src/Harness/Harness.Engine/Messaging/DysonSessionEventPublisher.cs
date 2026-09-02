@@ -1,7 +1,7 @@
 namespace DysonHarness;
 
 /// <summary>
-/// Hooks a live session tree onto <see cref="DysonMessageBus"/> (status, spawn, turns, coalesced activity).
+/// Hooks a live session tree onto <see cref="DysonMessageBus"/> (status, spawn, turns, parent-events, coalesced activity).
 /// </summary>
 public sealed class DysonSessionEventPublisher(DysonMessageBus bus) : IDisposable
 {
@@ -75,11 +75,13 @@ public sealed class DysonSessionEventPublisher(DysonMessageBus bus) : IDisposabl
             StatusHandler = (_, e) => OnStatusChanged(session, e),
             SpawnHandler = (_, child) => OnSubagentSpawned(session, child),
             TurnAddedHandler = (_, turn) => OnTurnAdded(session, turn),
+            ParentEventsHandler = (_, _) => OnParentEventsChanged(session),
         };
         state.Coalescer = new DysonNotifyCoalescer(_ => PublishActivity(session));
         session.StatusChanged += state.StatusHandler;
         session.SubagentSpawned += state.SpawnHandler;
         session.TurnAdded += state.TurnAddedHandler;
+        session.ParentEventsChanged += state.ParentEventsHandler;
         return state;
     }
 
@@ -136,6 +138,40 @@ public sealed class DysonSessionEventPublisher(DysonMessageBus bus) : IDisposabl
         _bus.Publish(DysonBusScopes.Session(persistenceId), evt);
         if (parentPersistenceId is { } parentId && parentId != Guid.Empty)
             _bus.Publish(DysonBusScopes.Session(parentId), evt);
+    }
+
+    private void OnParentEventsChanged(DysonAgentSession session)
+    {
+        Guid persistenceId;
+        bool hasPendingAsk;
+        bool hasPendingUserDialog;
+        lock (_gate)
+        {
+            if (_disposed || !_hooks.ContainsKey(session))
+                return;
+
+            persistenceId = session.PersistenceId;
+            hasPendingAsk = session.PendingAskQuestions is { Count: > 0 }
+                || HasPendingParentEventKind(session, DysonAskQuestion.AskQuestionKind);
+            hasPendingUserDialog = session.PendingUserDialog is not null
+                || HasPendingParentEventKind(session, DysonPromptUserDialog.PromptUserDialogKind);
+        }
+
+        _bus.Publish(
+            DysonBusScopes.Session(persistenceId),
+            new DysonParentEventsChangedEvent(persistenceId, hasPendingAsk, hasPendingUserDialog));
+    }
+
+    private static bool HasPendingParentEventKind(DysonAgentSession session, string kind)
+    {
+        foreach (var evt in session.PendingOrRecentParentEvents)
+        {
+            if (evt.Status == DysonParentEventStatus.Pending
+                && string.Equals(evt.Kind, kind, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     private void OnTurnAdded(DysonAgentSession session, DysonAgentTurn turn)
@@ -252,6 +288,7 @@ public sealed class DysonSessionEventPublisher(DysonMessageBus bus) : IDisposabl
         session.StatusChanged -= state.StatusHandler;
         session.SubagentSpawned -= state.SpawnHandler;
         session.TurnAdded -= state.TurnAddedHandler;
+        session.ParentEventsChanged -= state.ParentEventsHandler;
         foreach (var (turn, handler) in state.TurnTextHandlers)
             turn.AssistantTextChanged -= handler;
 
@@ -265,6 +302,7 @@ public sealed class DysonSessionEventPublisher(DysonMessageBus bus) : IDisposabl
         public required EventHandler<DysonSessionStatusChangedEventArgs> StatusHandler;
         public required EventHandler<DysonAgentSession> SpawnHandler;
         public required EventHandler<DysonAgentTurn> TurnAddedHandler;
+        public required EventHandler ParentEventsHandler;
         public DysonNotifyCoalescer Coalescer = null!;
         public readonly Dictionary<DysonAgentTurn, EventHandler> TurnTextHandlers = new();
         public (string Title, string? LatestTurnStepTitle, bool IsRunning)? LastActivity;

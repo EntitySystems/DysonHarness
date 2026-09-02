@@ -1,3 +1,4 @@
+using System.Reflection;
 using DysonHarness;
 
 namespace Harness.Tests;
@@ -268,6 +269,111 @@ public class DysonSessionEventPublisherTests
         Assert.True(result.IsError);
     }
 
+    [Fact]
+    public async Task AskQuestion_publishes_parent_events_changed_on_session_key_only()
+    {
+        using var bus = new DysonMessageBus();
+        using var publisher = new DysonSessionEventPublisher(bus);
+        var sessionId = Guid.NewGuid();
+        var session = CreateSession(sessionId, "root");
+        using var attach = Attach(publisher, session);
+
+        var events = new List<DysonParentEventsChangedEvent>();
+        var other = new List<DysonParentEventsChangedEvent>();
+        Assert.True(bus.Subscribe<DysonParentEventsChangedEvent>(
+            DysonBusScopes.Session(sessionId), events.Add).IsSuccess);
+        Assert.True(bus.Subscribe<DysonParentEventsChangedEvent>(
+            DysonBusScopes.Session(Guid.NewGuid()), other.Add).IsSuccess);
+
+        var ask = session.AskQuestionAsync(
+            """{"questions":[{"prompt":"Name?","options":["Ada","Grace"]}]}""",
+            CancellationToken.None);
+        await WaitUntilAsync(() => events.Count > 0, TimeSpan.FromMilliseconds(200));
+
+        Assert.Single(events);
+        Assert.Equal(sessionId, events[0].PersistenceId);
+        Assert.True(events[0].HasPendingAsk);
+        Assert.False(events[0].HasPendingUserDialog);
+        Assert.Empty(other);
+
+        var respond = session.RespondToAskQuestion("A1 - Ada");
+        Assert.True(respond.IsSuccess, respond.IsError ? respond.Error : "");
+        await WaitUntilAsync(() => events.Count >= 2, TimeSpan.FromMilliseconds(200));
+        await ask.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(sessionId, events[^1].PersistenceId);
+        Assert.False(events[^1].HasPendingAsk);
+        Assert.False(events[^1].HasPendingUserDialog);
+        Assert.Empty(other);
+    }
+
+    [Fact]
+    public async Task PromptUserDialog_publishes_parent_events_changed_on_session_key_only()
+    {
+        using var bus = new DysonMessageBus();
+        using var publisher = new DysonSessionEventPublisher(bus);
+        var sessionId = Guid.NewGuid();
+        var session = CreateSession(sessionId, "root");
+        using var attach = Attach(publisher, session);
+
+        var events = new List<DysonParentEventsChangedEvent>();
+        var other = new List<DysonParentEventsChangedEvent>();
+        Assert.True(bus.Subscribe<DysonParentEventsChangedEvent>(
+            DysonBusScopes.Session(sessionId), events.Add).IsSuccess);
+        Assert.True(bus.Subscribe<DysonParentEventsChangedEvent>(
+            DysonBusScopes.Session(Guid.NewGuid()), other.Add).IsSuccess);
+
+        var dialog = session.PromptUserDialogAsync(
+            """
+            {
+              "title": "Ship?",
+              "description": "Ready to publish?",
+              "actions": [{ "label": "Publish", "primary": true }, { "label": "Hold" }]
+            }
+            """,
+            CancellationToken.None);
+        await WaitUntilAsync(() => events.Count > 0, TimeSpan.FromMilliseconds(200));
+
+        Assert.Single(events);
+        Assert.Equal(sessionId, events[0].PersistenceId);
+        Assert.False(events[0].HasPendingAsk);
+        Assert.True(events[0].HasPendingUserDialog);
+        Assert.Empty(other);
+
+        var respond = session.RespondToPromptUserDialog(
+            DysonPromptUserDialog.FormatResult("Publish", skipped: false));
+        Assert.True(respond.IsSuccess, respond.IsError ? respond.Error : "");
+        await WaitUntilAsync(() => events.Count >= 2, TimeSpan.FromMilliseconds(200));
+        await dialog.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(sessionId, events[^1].PersistenceId);
+        Assert.False(events[^1].HasPendingAsk);
+        Assert.False(events[^1].HasPendingUserDialog);
+        Assert.Empty(other);
+    }
+
+    [Fact]
+    public void Attach_token_dispose_stops_parent_events_changed()
+    {
+        using var bus = new DysonMessageBus();
+        using var publisher = new DysonSessionEventPublisher(bus);
+        var sessionId = Guid.NewGuid();
+        var session = CreateSession(sessionId, "root");
+        var token = Attach(publisher, session);
+
+        var events = new List<DysonParentEventsChangedEvent>();
+        Assert.True(bus.Subscribe<DysonParentEventsChangedEvent>(
+            DysonBusScopes.Session(sessionId), events.Add).IsSuccess);
+
+        RaiseParentEventsChanged(session);
+        Assert.Single(events);
+
+        token.Dispose();
+        events.Clear();
+        RaiseParentEventsChanged(session);
+        Assert.Empty(events);
+    }
+
     private static (StubSession Parent, StubSession Child) AttachParentChild(
         DysonSessionEventPublisher publisher,
         DysonMessageBus bus,
@@ -311,6 +417,15 @@ public class DysonSessionEventPublisherTests
         session.SetPersistenceIdForTest(persistenceId);
         session.SetDisplayTitleForTest(title);
         return session;
+    }
+
+    private static void RaiseParentEventsChanged(DysonAgentSession session)
+    {
+        var method = typeof(DysonAgentSession).GetMethod(
+            "RaiseParentEventsChanged",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        method.Invoke(session, null);
     }
 
     private static void AssertStatus(

@@ -12,7 +12,7 @@
 @inject IJSRuntime Js
 
 <div class="composer">
-    <AskQuestionPopover Ask="Ask" OnSubmit="OnAskSubmit" />
+    <AskQuestionPopover Ask="Host.PendingAskUi" OnSubmit="OnAskSubmit" />
     <PlanReadyPopover Pending="Host.PendingPlanReady" />
     <SkillSearchModal @ref="_skillSearch" />
     <PluginModal @ref="_pluginModal" />
@@ -241,6 +241,8 @@
     private int _pluginCatalogRevision;
     private Guid? _catalogWorkDirectoryId;
     private IDisposable? _hostSub;
+    private IDisposable? _parentEventsSub;
+    private Guid? _boundSessionId;
 
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public Guid? SelectedSlugId { get; set; }
@@ -294,6 +296,8 @@
         var sub = Bus.Subscribe<DysonHostStateChangedEvent>(Host.BusScopeKey, OnHostChanged);
         if (sub.IsSuccess)
             _hostSub = sub.Value;
+
+        RebindParentEventsIfNeeded();
     }
 
     protected override void OnParametersSet()
@@ -385,8 +389,17 @@
     private void OnHostChanged(DysonHostStateChangedEvent evt) => _ = InvokeAsync(async () =>
     {
         DrainPendingSnipPromptLines();
+
+        var sessionGraph = (evt.Kind & DysonHostChangeKind.SessionGraph) != 0;
+        if (sessionGraph)
+            RebindParentEventsIfNeeded();
+
         if ((evt.Kind & HostChangeFilter) == 0)
+        {
+            if (sessionGraph)
+                StateHasChanged();
             return;
+        }
 
         var skillRev = Host.SkillCatalogRevision;
         var pluginRev = Host.PluginCatalogRevision;
@@ -409,6 +422,37 @@
 
         StateHasChanged();
     });
+
+    private void DisposeParentEvents()
+    {
+        _parentEventsSub?.Dispose();
+        _parentEventsSub = null;
+    }
+
+    private void RebindParentEventsIfNeeded()
+    {
+        var sessionId = Host.ActiveSessionId;
+        if (sessionId == _boundSessionId)
+            return;
+
+        DisposeParentEvents();
+        _boundSessionId = sessionId;
+        if (sessionId is not Guid id || id == Guid.Empty)
+            return;
+
+        var sub = Bus.Subscribe<DysonParentEventsChangedEvent>(
+            DysonBusScopes.Session(id),
+            OnParentEventsChanged);
+        if (sub.IsSuccess)
+            _parentEventsSub = sub.Value;
+    }
+
+    private void OnParentEventsChanged(DysonParentEventsChangedEvent evt)
+    {
+        if (evt.PersistenceId != Host.ActiveSessionId)
+            return;
+        _ = InvokeAsync(StateHasChanged);
+    }
 
     private void DrainPendingSnipPromptLines()
     {
@@ -806,6 +850,7 @@
     {
         _hostSub?.Dispose();
         _hostSub = null;
+        DisposeParentEvents();
         if (_imageCaptureBound)
         {
             try
