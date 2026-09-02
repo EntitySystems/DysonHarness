@@ -27,6 +27,11 @@ public sealed record DysonSessionTurnAddedEvent(
     Guid TurnId,
     DysonAgentTurnKind Kind) : IDysonMessageBusEvent;
 
+public sealed record DysonParentEventsChangedEvent(
+    Guid PersistenceId,
+    bool HasPendingAsk,
+    bool HasPendingUserDialog) : IDysonMessageBusEvent;
+
 public sealed record DysonHostStateChangedEvent(
     DysonHostChangeKind Kind,
     Guid? SessionId) : IDysonMessageBusEvent;

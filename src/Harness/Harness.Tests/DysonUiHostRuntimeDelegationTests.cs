@@ -693,6 +693,70 @@ public class DysonUiHostRuntimeDelegationTests
         Assert.True(dialog.IsSuccess, dialog.IsError ? dialog.Error : null);
     }
 
+    [Fact]
+    public async Task PendingAskUi_falls_back_to_TryBuild_when_cache_cleared()
+    {
+        await using var harness = await HostHarness.CreateAsync();
+        await using var host = harness.CreateHost();
+
+        var started = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(started.IsSuccess, started.IsError ? started.Error : null);
+        var session = host.Session ?? throw new InvalidOperationException("Expected focused session.");
+
+        var askTask = session.AskQuestionAsync(
+            """{"questions":[{"prompt":"Name?","options":["Ada","Grace"]}]}""",
+            CancellationToken.None);
+        await WaitUntilAsync(() => host.PendingAskUi is not null, TimeSpan.FromSeconds(2));
+        Assert.NotNull(host.PendingAskUi);
+
+        ClearPendingAskUiCache(host);
+        Assert.NotNull(host.PendingAskUi);
+        Assert.Equal(session.PersistenceId, host.PendingAskUi.SessionPersistenceId);
+        Assert.Equal(DysonAskUiSource.RootAskQuestion, host.PendingAskUi.Source);
+
+        var answers = new[]
+        {
+            new DysonAskQuestionAnswer { Selected = ["Ada"] },
+        };
+        var respond = host.SubmitAskUiAnswers(answers);
+        Assert.True(respond.IsSuccess, respond.IsError ? respond.Error : null);
+        await askTask.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public async Task PendingUserDialogUi_falls_back_to_TryBuild_when_cache_cleared()
+    {
+        await using var harness = await HostHarness.CreateAsync();
+        await using var host = harness.CreateHost();
+
+        var started = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(started.IsSuccess, started.IsError ? started.Error : null);
+        var session = host.Session ?? throw new InvalidOperationException("Expected focused session.");
+
+        var dialogTask = session.PromptUserDialogAsync(
+            """
+            {
+              "title": "Ship?",
+              "description": "Ready to publish?",
+              "actions": [{ "label": "Publish", "primary": true }, { "label": "Hold" }]
+            }
+            """,
+            CancellationToken.None);
+        await WaitUntilAsync(() => host.PendingUserDialogUi is not null, TimeSpan.FromSeconds(2));
+        Assert.NotNull(host.PendingUserDialogUi);
+
+        ClearPendingUserDialogUiCache(host);
+        Assert.NotNull(host.PendingUserDialogUi);
+        Assert.Equal(session.PersistenceId, host.PendingUserDialogUi.SessionPersistenceId);
+        Assert.Equal(DysonUserDialogUiSource.RootPromptUserDialog, host.PendingUserDialogUi.Source);
+
+        var respond = host.SubmitUserDialogAction("Publish", skipped: false);
+        Assert.True(respond.IsSuccess, respond.IsError ? respond.Error : null);
+        await dialogTask.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
     private static void CancelBackgroundRunForTests(DysonAgentSession session)
     {
         var method = typeof(DysonAgentSession).GetMethod(
@@ -708,6 +772,14 @@ public class DysonUiHostRuntimeDelegationTests
         while (DateTime.UtcNow < deadline && !predicate())
             await Task.Delay(10);
     }
+
+    private static void ClearPendingAskUiCache(DysonUiHost host) =>
+        typeof(DysonUiHost).GetField("_pendingAskUi", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(host, null);
+
+    private static void ClearPendingUserDialogUiCache(DysonUiHost host) =>
+        typeof(DysonUiHost).GetField("_pendingUserDialogUi", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(host, null);
 
     private static void RaiseParentEventsChanged(DysonAgentSession session)
     {

@@ -119,11 +119,12 @@ Process-local typed pub/sub (`Harness.Engine/Messaging/`). Sealed `DysonMessageB
 | `IDysonMessageBusEvent` | Marker for immutable event records |
 | `DysonMessageBus` | Sealed singleton. `Publish` / `PublishAsync` → `VoidResult<string>`; `Subscribe` → `Result<IDisposable, string>`. Sync fan-out on the publisher thread over snapshot lists; exact key + `DysonBusScopes.Wildcard`; no replay/queue; handler exceptions logged, not thrown. Idempotent tokens drop empty dictionary entries |
 | `DysonBusScopes` | `Wildcard` `*`; `Session(Guid)` → `session:{id:D}`; `Subject(string)`; `Host(Guid)` → `host:{id:D}` |
-| `DysonSessionEventPublisher` | `Attach(root)` Result token; recursive + `SubagentSpawned` follow-on; per-session refcount so runtime and UI can Attach the same tree. Status/spawn/turn publish immediately; activity via reused 75ms `DysonNotifyCoalescer` + `(title, LatestTurnStepTitle, isRunning)` dedupe |
+| `DysonSessionEventPublisher` | `Attach(root)` Result token; recursive + `SubagentSpawned` follow-on; per-session refcount so runtime and UI can Attach the same tree. Status/spawn/turn/`ParentEventsChanged` publish immediately; activity via reused 75ms `DysonNotifyCoalescer` + `(title, LatestTurnStepTitle, isRunning)` dedupe. Hooks `DysonAgentSession.ParentEventsChanged` (publisher is the only bus writer; CLR event remains the choke) |
 | `DysonSubagentSpawnedEvent` | Parent + child session keys: `ParentPersistenceId`, `ChildPersistenceId`, `RuntimeId`, `Title`, `AgentMode` |
 | `DysonSubagentStatusChangedEvent` | Child + parent session keys: `PersistenceId`, `ParentPersistenceId`, `RuntimeId`, `Status`, `IsRunning`, `Summary` |
 | `DysonSubagentActivityChangedEvent` | Session (+ parent) keys: `PersistenceId`, `RuntimeId`, `Title`, `LatestTurnStepTitle`, `IsRunning` |
 | `DysonSessionTurnAddedEvent` | Session key: `PersistenceId`, `TurnId`, `Kind` |
+| `DysonParentEventsChangedEvent` | Session key **only** (no parent fan-out): `PersistenceId`, `HasPendingAsk`, `HasPendingUserDialog`. Flags are snapshots, not question/dialog JSON |
 | `DysonHostStateChangedEvent` | Host key: `Kind` (`DysonHostChangeKind` mask), optional `SessionId`. Replaces deleted `DysonUiHost.Changed` |
 | `DysonSessionStatusChangedEventArgs` | `PreviousStatus`, `Status`, `Summary` — payload of `DysonAgentSession.StatusChanged` |
 

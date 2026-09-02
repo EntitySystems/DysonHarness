@@ -22,7 +22,7 @@ public static class DysonAgentSystemPrompts
         - StartSubagent.modelSlug must be omitted unless the user explicitly requests a particular subagent model slug, so configured system defaults or parent-model inheritance apply.
 
         Tool calls:
-        - Each turn you may and are encouraged to issue multiple tool calls in a single turn when that advances the task.
+        - Each turn you may and are encouraged to issue multiple tool calls in a single turn when that advances the task. Independent reads, searches, and listings belong together in one round (same stage).
         - Every tool call includes a stage integer: lower stages run first; calls with the same stage run concurrently; after a stage finishes, the next stage runs; then the turn ends.
         - Prefer batching independent reads/searches on the same stage; use later stages for dependent writes or follow-ups.
         - When context grows noisy or the plan is unclear, call ExpandThoughtProcess to reformulate before continuing. Calling it ends the current turn; the harness runs an ExpandThoughtProcess turn, then auto-continues with a Normal turn. Prefer SummarizeTurns (with reason) when older turns still have useful facts but are verbose; DropTurnContext (with reason) is for true noise only; RestoreTurnContext can undo a drop when needed.

@@ -133,8 +133,9 @@ Process-local typed pub/sub in `Harness.Engine/Messaging/`. `DysonMessageBus` is
 **Publish points**
 
 - `DysonSessionEventPublisher.Attach(root)` returns a Result token. Recursively hooks the tree and follows `SubagentSpawned`. Per-session refcount so runtime **and** UI can Attach the same tree without double-publishing. Dispose the token to decrement.
-- Status, spawn, and turn-added publish immediately. Activity (`DysonSubagentActivityChangedEvent`) uses a reused 75ms `DysonNotifyCoalescer` plus tuple dedupe `(title, LatestTurnStepTitle, isRunning)`.
+- Status, spawn, turn-added, and `ParentEventsChanged` publish immediately (not coalesced). Activity (`DysonSubagentActivityChangedEvent`) uses a reused 75ms `DysonNotifyCoalescer` plus tuple dedupe `(title, LatestTurnStepTitle, isRunning)`.
 - `DysonAgentSession.StatusChanged` is the choke point: raised **outside** `_terminalGate` from `TryMarkTerminal` / `TryAcceptSubagentReport` / `TryReopenForNewParentTask` when status actually changes.
+- `DysonAgentSession.ParentEventsChanged` is the choke for Ask/Dialog pending flags. The publisher is the only bus writer; it hooks that CLR event and does not invent a second source. Flags are snapshots (`HasPendingAsk` / `HasPendingUserDialog`), not question/dialog JSON.
 - Host UI: `DysonUiHost` coalescer sink publishes `DysonHostStateChangedEvent` on `Host.BusScopeKey` (`DysonBusScopes.Host(HostId)`). This replaces `DysonUiHost.Changed` (deleted). If the bus is not injected, the host owns a private bus. `DysonSessionRuntime.Changed` / `DysonRuntimeChange` is unchanged (recovery/reattach).
 
 | Record | Key | Payload |
@@ -143,6 +144,7 @@ Process-local typed pub/sub in `Harness.Engine/Messaging/`. `DysonMessageBus` is
 | `DysonSubagentStatusChangedEvent` | child + parent session | `PersistenceId`, `ParentPersistenceId`, `RuntimeId`, `Status`, `IsRunning`, `Summary` |
 | `DysonSubagentActivityChangedEvent` | session (+ parent) | `PersistenceId`, `RuntimeId`, `Title`, `LatestTurnStepTitle`, `IsRunning` |
 | `DysonSessionTurnAddedEvent` | session | `PersistenceId`, `TurnId`, `Kind` |
+| `DysonParentEventsChangedEvent` | session key **only** (no parent fan-out) | `PersistenceId`, `HasPendingAsk`, `HasPendingUserDialog` |
 | `DysonHostStateChangedEvent` | host | `DysonHostChangeKind` mask, optional `SessionId` |
 
 DI (`DysonUiWebHost`): `AddSingleton<DysonMessageBus>()` then `AddSingleton<DysonSessionEventPublisher>()` next to `DysonSessionRuntimeRegistry`. Runtime Attach on first `EnsureRegistered`; dispose token in UnhookSession. Host Attach tokens disposed in `DetachSessionUiHandlers`.
@@ -330,6 +332,8 @@ Out of scope for this MVP: news tools, CSDN/Juejin, Baidu/Sogou/Yandex scrapers,
 4. UI binds `DysonAgentTurn.ToolCallStatusChanged` and `TrackedToolCalls`.
 
 `DysonToolCallScheduler.RunStagedAsync` drives this; results append to `ResponseLog`.
+
+`SharedPreamble` (built-in modes) encourages multiple tool calls per turn and asks independent reads, searches, and listings to go out together in one round on the same stage.
 
 ### Turn timestamps
 
