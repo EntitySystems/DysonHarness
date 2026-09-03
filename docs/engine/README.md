@@ -253,6 +253,14 @@ Workspace file reads return at most **32KiB** (~<20K tokens). Larger requested s
 - Binary/image → error, use `LoadBinary`.
 - Implemented via `IDysonWorkspaceFileSystem.ReadLineSliceAsync` (never full-file `ReadAllText` for this tool).
 
+### Grep
+
+Workspace text search uses **.NET** `System.Text.RegularExpressions` — not a literal substring, and not ripgrep / PCRE / JavaScript. Matches are **per line**. An invalid pattern returns error `Invalid regex: …`.
+
+- `glob` is **filename-only** (`*` / `?`, matched against the file name, not the path). Put the directory in `path` and the name pattern in `glob`. `**` and path globs like `**/*.cs` do **not** work.
+- Default `maxMatches` is **100**. Results are also capped at **48KiB** / **400** chars per line.
+- Text-only: never returns binary/image bytes. Binary/image hits are path-only lines. Skips `.git` / `bin` / `obj` / `node_modules` / `.vs` and similar.
+
 ### ShellExecute
 
 - Session config `AvailableShells` is an `IReadOnlyList<DysonConfiguredShellSpec>` (`Name` + `ExecutablePath` + optional `FixedArgs`). Empty ⇒ `ShellExecute` and all long-running shell tools are omitted. The UI host loads **enabled** rows from `configured_shells` (`IDysonConfiguredShellRepository.EnsureDefaultsAsync` + `ListEnabledSpecsAsync`) on new/resume.

@@ -27,9 +27,19 @@ public class DysonGrepLoadBinaryTests
         var pipeline = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess);
         if (!pipeline.Tools.TryGetValue("Grep", out var grep)
             || !grep.Description.Contains("Text-only", StringComparison.Ordinal)
-            || !grep.Description.Contains("LoadBinary", StringComparison.Ordinal))
+            || !grep.Description.Contains("LoadBinary", StringComparison.Ordinal)
+            || !grep.Description.Contains("System.Text.RegularExpressions", StringComparison.Ordinal))
         {
-            throw new InvalidOperationException("Grep catalog must describe text-only + LoadBinary.");
+            throw new InvalidOperationException(
+                "Grep catalog must describe text-only + LoadBinary + System.Text.RegularExpressions.");
+        }
+
+        if (!grep.InputSchemaJson.Contains("Not a literal", StringComparison.Ordinal)
+            || !grep.InputSchemaJson.Contains("filename-only", StringComparison.Ordinal)
+            || !grep.InputSchemaJson.Contains("default 100", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Grep InputSchemaJson must contain Not a literal, filename-only, and default 100.");
         }
 
         if (!pipeline.Tools.TryGetValue("LoadBinary", out var load)
