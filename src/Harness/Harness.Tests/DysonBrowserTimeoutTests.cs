@@ -11,11 +11,11 @@ namespace Harness.Tests;
 public class DysonBrowserTimeoutTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertCatalogHasTimeoutMs();
-        AssertHungJavaScriptTimesOut();
-        AssertCallerCancelIsCancelledNotTimeout();
+        await AssertHungJavaScriptTimesOut();
+        await AssertCallerCancelIsCancelledNotTimeout();
     }
 
     private static void AssertCatalogHasTimeoutMs()
@@ -47,7 +47,7 @@ public class DysonBrowserTimeoutTests
         }
     }
 
-    private static void AssertHungJavaScriptTimesOut()
+    private static async Task AssertHungJavaScriptTimesOut()
     {
         var config = new DysonAgentSessionConfig { BrowserControl = new HangControl() };
         var session = new StubSession(config);
@@ -55,7 +55,7 @@ public class DysonBrowserTimeoutTests
         Directory.CreateDirectory(root);
         try
         {
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
             var call = new DysonToolCall
             {
                 CallId = "js1",
@@ -64,7 +64,7 @@ public class DysonBrowserTimeoutTests
                 ArgumentsJson = """{"windowId":"win1","tabId":"tab1","code":"1","timeoutMs":50}""",
             };
             var sw = Stopwatch.StartNew();
-            var result = executor.ExecuteAsync(call).GetAwaiter().GetResult();
+            var result = await executor.ExecuteAsync(call);
             if (!result.IsError
                 || result.Content is null
                 || !result.Content.Contains("timed out", StringComparison.OrdinalIgnoreCase))
@@ -89,7 +89,7 @@ public class DysonBrowserTimeoutTests
         }
     }
 
-    private static void AssertCallerCancelIsCancelledNotTimeout()
+    private static async Task AssertCallerCancelIsCancelledNotTimeout()
     {
         var config = new DysonAgentSessionConfig { BrowserControl = new HangControl() };
         var session = new StubSession(config);
@@ -97,7 +97,7 @@ public class DysonBrowserTimeoutTests
         Directory.CreateDirectory(root);
         try
         {
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
             var call = new DysonToolCall
             {
                 CallId = "js2",
@@ -107,7 +107,7 @@ public class DysonBrowserTimeoutTests
             };
             using var cts = new CancellationTokenSource();
             cts.Cancel();
-            var result = executor.ExecuteAsync(call, cts.Token).GetAwaiter().GetResult();
+            var result = await executor.ExecuteAsync(call, cts.Token);
             if (!result.IsError
                 || result.Content is null
                 || !result.Content.Contains("cancelled", StringComparison.OrdinalIgnoreCase)

@@ -13,13 +13,13 @@ namespace Harness.Tests;
 public class DysonGrepLoadBinaryTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertCatalog();
         AssertMimeMap();
-        AssertGrepTextAndBinaryPaths();
-        AssertLoadBinaryAttachmentAndTranscript();
-        AssertLoadBinaryNormalizesIcoAndBmpToPng();
+        await AssertGrepTextAndBinaryPaths();
+        await AssertLoadBinaryAttachmentAndTranscript();
+        await AssertLoadBinaryNormalizesIcoAndBmpToPng();
     }
 
     private static void AssertCatalog()
@@ -50,7 +50,7 @@ public class DysonGrepLoadBinaryTests
             throw new InvalidOperationException("Unknown extension must be octet-stream.");
     }
 
-    private static void AssertGrepTextAndBinaryPaths()
+    private static async Task AssertGrepTextAndBinaryPaths()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-grep-lb-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -64,7 +64,7 @@ public class DysonGrepLoadBinaryTests
             File.WriteAllText(Path.Combine(root, "bin", "secret.txt"), "alpha must not appear from bin");
 
             var session = new StubSession();
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
             var call = new DysonToolCall
             {
                 CallId = "grep1",
@@ -112,7 +112,7 @@ public class DysonGrepLoadBinaryTests
         }
     }
 
-    private static void AssertLoadBinaryAttachmentAndTranscript()
+    private static async Task AssertLoadBinaryAttachmentAndTranscript()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-loadbin-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -123,7 +123,7 @@ public class DysonGrepLoadBinaryTests
             File.WriteAllBytes(Path.Combine(root, fileName), bytes);
 
             var session = new StubSession();
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
             var call = new DysonToolCall
             {
                 CallId = "lb1",
@@ -273,7 +273,7 @@ public class DysonGrepLoadBinaryTests
         }
     }
 
-    private static void AssertLoadBinaryNormalizesIcoAndBmpToPng()
+    private static async Task AssertLoadBinaryNormalizesIcoAndBmpToPng()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-loadbin-norm-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -302,7 +302,7 @@ public class DysonGrepLoadBinaryTests
             File.WriteAllBytes(Path.Combine(root, "keep.png"), pngPassthrough);
 
             var session = new StubSession();
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
 
             var icoResult = executor.ExecuteAsync(new DysonToolCall
             {

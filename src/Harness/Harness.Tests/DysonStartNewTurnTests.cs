@@ -8,19 +8,19 @@ namespace Harness.Tests;
 public class DysonStartNewTurnTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        AssertEnqueuesNormalAndEndsTurn();
-        AssertMissingPromptInstructionsFails();
+        await AssertEnqueuesNormalAndEndsTurn();
+        await AssertMissingPromptInstructionsFails();
         AssertSharedPreambleMentionsStartNewTurn();
     }
 
-    private static void AssertEnqueuesNormalAndEndsTurn()
+    private static async Task AssertEnqueuesNormalAndEndsTurn()
     {
         var session = new StubSession(DysonAgentModes.Work);
         session.ConfigureRootForTest();
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
 
         session.AddTurnForTest(new DysonAgentTurn
         {
@@ -60,12 +60,12 @@ public class DysonStartNewTurnTests
         }
     }
 
-    private static void AssertMissingPromptInstructionsFails()
+    private static async Task AssertMissingPromptInstructionsFails()
     {
         var session = new StubSession(DysonAgentModes.Work);
         session.ConfigureRootForTest();
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
 
         var missing = executor.ExecuteAsync(new DysonToolCall
         {

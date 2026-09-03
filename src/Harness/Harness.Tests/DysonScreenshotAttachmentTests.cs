@@ -13,11 +13,11 @@ namespace Harness.Tests;
 public class DysonScreenshotAttachmentTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertCatalog();
         AssertImageCompress();
-        AssertScreenshotExecutorAndOneShotTranscript();
+        await AssertScreenshotExecutorAndOneShotTranscript();
         AssertParallelToolRoundKeepsToolMessagesConsecutive();
         AssertScreenshotUiSummary();
     }
@@ -107,7 +107,7 @@ public class DysonScreenshotAttachmentTests
             throw new InvalidOperationException("Small images must not be upscaled.");
     }
 
-    private static void AssertScreenshotExecutorAndOneShotTranscript()
+    private static async Task AssertScreenshotExecutorAndOneShotTranscript()
     {
         byte[] png;
         using (var image = new MagickImage(MagickColors.Green, 800, 600))
@@ -126,7 +126,7 @@ public class DysonScreenshotAttachmentTests
         Directory.CreateDirectory(root);
         try
         {
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
             var call = new DysonToolCall
             {
                 CallId = "shot1",

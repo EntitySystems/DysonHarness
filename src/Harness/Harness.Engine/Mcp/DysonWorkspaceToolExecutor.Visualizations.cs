@@ -9,7 +9,7 @@ public sealed partial class DysonWorkspaceToolExecutor
     private const int HtmlVisualizationMaxTotalBytes = 512 * 1024;
     private const int HtmlVisualizationMaxPerSession = 20;
 
-    private Task<DysonToolCallResult> RenderHtmlVisualizationAsync(
+    private async Task<DysonToolCallResult> RenderHtmlVisualizationAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
@@ -20,30 +20,36 @@ public sealed partial class DysonWorkspaceToolExecutor
             var root = document.RootElement;
             var titleResult = RequireString(root, "title");
             if (titleResult.IsError)
-                return Task.FromResult(Error(call, "RenderHtmlVisualization: " + titleResult.Error));
+                return Error(call, "RenderHtmlVisualization: " + titleResult.Error);
 
             var title = titleResult.Value.Trim();
             if (title.Length > 120)
-                return Task.FromResult(Error(call, "RenderHtmlVisualization: title must be at most 120 characters."));
+                return Error(call, "RenderHtmlVisualization: title must be at most 120 characters.");
 
-            var html = ResolveVisualizationAsset(root, "html", [".html", ".htm"], allowEmpty: false);
+            var html = await ResolveVisualizationAssetAsync(
+                    root, "html", [".html", ".htm"], allowEmpty: false, cancellationToken)
+                .ConfigureAwait(false);
             if (html.IsError)
-                return Task.FromResult(Error(call, html.Error));
-            var css = ResolveVisualizationAsset(root, "css", [".css"], allowEmpty: true);
+                return Error(call, html.Error);
+            var css = await ResolveVisualizationAssetAsync(
+                    root, "css", [".css"], allowEmpty: true, cancellationToken)
+                .ConfigureAwait(false);
             if (css.IsError)
-                return Task.FromResult(Error(call, css.Error));
-            var javascript = ResolveVisualizationAsset(root, "js", [".js", ".mjs"], allowEmpty: true);
+                return Error(call, css.Error);
+            var javascript = await ResolveVisualizationAssetAsync(
+                    root, "js", [".js", ".mjs"], allowEmpty: true, cancellationToken)
+                .ConfigureAwait(false);
             if (javascript.IsError)
-                return Task.FromResult(Error(call, javascript.Error));
+                return Error(call, javascript.Error);
 
             var totalBytes = Encoding.UTF8.GetByteCount(html.Value)
                 + Encoding.UTF8.GetByteCount(css.Value)
                 + Encoding.UTF8.GetByteCount(javascript.Value);
             if (totalBytes > HtmlVisualizationMaxTotalBytes)
             {
-                return Task.FromResult(Error(
+                return Error(
                     call,
-                    "RenderHtmlVisualization: total resolved source exceeds the 512 KiB UTF-8 limit."));
+                    "RenderHtmlVisualization: total resolved source exceeds the 512 KiB UTF-8 limit.");
             }
 
             var visualizationCount = _session.Turns
@@ -51,9 +57,9 @@ public sealed partial class DysonWorkspaceToolExecutor
                 .Count(tracked => tracked.Result is { IsError: false, HtmlVisualization: not null });
             if (visualizationCount >= HtmlVisualizationMaxPerSession)
             {
-                return Task.FromResult(Error(
+                return Error(
                     call,
-                    "RenderHtmlVisualization: this session already has the maximum of 20 successful visualizations."));
+                    "RenderHtmlVisualization: this session already has the maximum of 20 successful visualizations.");
             }
 
             var visualization = new DysonHtmlVisualization
@@ -70,19 +76,20 @@ public sealed partial class DysonWorkspaceToolExecutor
                 title = visualization.Title,
                 rendered = true,
             });
-            return Task.FromResult(Ok(call, acknowledgement, htmlVisualization: visualization));
+            return Ok(call, acknowledgement, htmlVisualization: visualization);
         }
         catch (JsonException)
         {
-            return Task.FromResult(Error(call, "RenderHtmlVisualization: invalid JSON arguments."));
+            return Error(call, "RenderHtmlVisualization: invalid JSON arguments.");
         }
     }
 
-    private Result<string, string> ResolveVisualizationAsset(
+    private async Task<Result<string, string>> ResolveVisualizationAssetAsync(
         JsonElement root,
         string propertyName,
         IReadOnlyCollection<string> permittedExtensions,
-        bool allowEmpty)
+        bool allowEmpty,
+        CancellationToken cancellationToken)
     {
         if (!root.TryGetProperty(propertyName, out var asset) || asset.ValueKind != JsonValueKind.Object)
             return Result<string, string>.AsError($"RenderHtmlVisualization: '{propertyName}' must be an object.");
@@ -135,7 +142,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 $"RenderHtmlVisualization: '{propertyName}.tempFile' cannot include a symlink or reparse point.");
         }
 
-        var length = _fs.GetFileLength(path);
+        var length = await _fs.GetFileLengthAsync(path, cancellationToken).ConfigureAwait(false);
         if (length.IsError)
             return Result<string, string>.AsError(length.Error);
         if (length.Value > HtmlVisualizationMaxAssetBytes)
@@ -144,7 +151,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 $"RenderHtmlVisualization: '{propertyName}.tempFile' exceeds the 256 KiB UTF-8 limit.");
         }
 
-        var read = _fs.ReadAllText(path);
+        var read = await _fs.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
         if (read.IsError)
             return Result<string, string>.AsError(read.Error);
         if (!allowEmpty && string.IsNullOrWhiteSpace(read.Value))

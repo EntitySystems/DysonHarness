@@ -8,17 +8,17 @@ namespace Harness.Tests;
 public class DysonLongRunningShellTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertCatalogGate();
         AssertShellExitedPromptAndTrim();
         AssertOutcomeMapping();
         AssertIdAllocationListAndAbort();
-        AssertStartIncludesEarlyOutput();
-        AssertSubscribeRootOnly();
-        AssertWaitForTimeoutValidation();
-        AssertWaitForAlreadyExitedImmediate();
-        AssertWaitForLiveTimeoutAndShortCommand();
+        await AssertStartIncludesEarlyOutput();
+        await AssertSubscribeRootOnly();
+        await AssertWaitForTimeoutValidation();
+        await AssertWaitForAlreadyExitedImmediate();
+        await AssertWaitForLiveTimeoutAndShortCommand();
     }
 
     private static void AssertCatalogGate()
@@ -240,7 +240,7 @@ public class DysonLongRunningShellTests
         }
     }
 
-    private static void AssertStartIncludesEarlyOutput()
+    private static async Task AssertStartIncludesEarlyOutput()
     {
         if (!OperatingSystem.IsWindows())
             return;
@@ -254,7 +254,7 @@ public class DysonLongRunningShellTests
         {
             var session = new StubSession();
             using var http = new HttpClient();
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, cwd, http, store: null, workDirId);
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, cwd, http, store: null, workDirId);
             var call = new DysonToolCall
             {
                 CallId = "lrs-start-tail",
@@ -293,7 +293,7 @@ public class DysonLongRunningShellTests
         }
     }
 
-    private static void AssertSubscribeRootOnly()
+    private static async Task AssertSubscribeRootOnly()
     {
         var workDirId = Guid.NewGuid();
         var cwd = Path.GetTempPath();
@@ -306,7 +306,7 @@ public class DysonLongRunningShellTests
         child.McpPipeline.Tools[subscribe.Name] = subscribe;
 
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(child, cwd, http, store: null, workDirId);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(child, cwd, http, store: null, workDirId);
         var result = executor.ExecuteAsync(new DysonToolCall
         {
             CallId = "sub-root",
@@ -323,13 +323,13 @@ public class DysonLongRunningShellTests
         }
     }
 
-    private static void AssertWaitForTimeoutValidation()
+    private static async Task AssertWaitForTimeoutValidation()
     {
         var workDirId = Guid.NewGuid();
         var cwd = Path.GetTempPath();
         var session = new StubSession();
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, cwd, http, store: null, workDirId);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, cwd, http, store: null, workDirId);
         try
         {
             foreach (var args in new[]
@@ -356,7 +356,7 @@ public class DysonLongRunningShellTests
         }
     }
 
-    private static void AssertWaitForAlreadyExitedImmediate()
+    private static async Task AssertWaitForAlreadyExitedImmediate()
     {
         if (!OperatingSystem.IsWindows())
             return;
@@ -365,7 +365,7 @@ public class DysonLongRunningShellTests
         var cwd = Path.GetTempPath();
         var session = new StubSession();
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, cwd, http, store: null, workDirId);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, cwd, http, store: null, workDirId);
         try
         {
             var started = DysonLongRunningShellRegistry
@@ -386,7 +386,7 @@ public class DysonLongRunningShellTests
         }
     }
 
-    private static void AssertWaitForLiveTimeoutAndShortCommand()
+    private static async Task AssertWaitForLiveTimeoutAndShortCommand()
     {
         if (!OperatingSystem.IsWindows())
             return;
@@ -395,7 +395,7 @@ public class DysonLongRunningShellTests
         var cwd = Path.GetTempPath();
         var session = new StubSession();
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, cwd, http, store: null, workDirId);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, cwd, http, store: null, workDirId);
         try
         {
             var live = DysonLongRunningShellRegistry

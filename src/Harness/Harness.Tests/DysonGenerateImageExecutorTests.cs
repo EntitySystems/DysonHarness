@@ -17,7 +17,7 @@ public sealed class DysonGenerateImageExecutorTests
         {
             var unavailableSession = new StubSession(new DysonAgentSessionConfig());
             Assert.False(unavailableSession.McpPipeline.Tools.ContainsKey("GenerateImage"));
-            var unavailable = DysonWorkspaceTestFs.CreateExecutor(
+            var unavailable = await DysonWorkspaceTestFs.CreateExecutorAsync(
                 unavailableSession,
                 root,
                 new HttpClient(new StubHandler(_ => throw new InvalidOperationException("No HTTP expected."))));
@@ -35,7 +35,7 @@ public sealed class DysonGenerateImageExecutorTests
             Assert.Contains("no image-generation provider", noConfigResult.Content, StringComparison.Ordinal);
 
             var called = false;
-            var configured = DysonWorkspaceTestFs.CreateExecutor(
+            var configured = await DysonWorkspaceTestFs.CreateExecutorAsync(
                 new StubSession(new DysonAgentSessionConfig { ImageGenerationProvider = DirectProvider() }),
                 root,
                 new HttpClient(new StubHandler(_ =>
@@ -80,7 +80,7 @@ public sealed class DysonGenerateImageExecutorTests
 
                 return Json(HttpStatusCode.OK, $$"""{"data":[{"b64_json":"{{firstBase64}}"},{"b64_json":"{{secondBase64}}"}]}""");
             }));
-            var executor = DysonWorkspaceTestFs.CreateExecutor(
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(
                 new StubSession(new DysonAgentSessionConfig { ImageGenerationProvider = DirectProvider() }),
                 root,
                 http);
@@ -137,7 +137,7 @@ public sealed class DysonGenerateImageExecutorTests
         {
             using var http = new HttpClient(new StubHandler(_ =>
                 Json(HttpStatusCode.BadRequest, "{\"error\":{\"message\":\"invalid request\"}}")));
-            var executor = DysonWorkspaceTestFs.CreateExecutor(
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(
                 new StubSession(new DysonAgentSessionConfig { ImageGenerationProvider = DirectProvider() }),
                 root,
                 http);

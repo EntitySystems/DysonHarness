@@ -8,35 +8,35 @@ namespace Harness.Tests;
 public class DysonSkillLoaderTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        AssertCatalogIncludesJdsl();
-        AssertIncludedBeatsDysonSkills();
-        AssertDysonSkillsAndLiteral();
-        AssertLoadIndexOnlyVsFull();
-        AssertMissingAndPathEscape();
-        AssertLoadSkillToolAttachesAndTranscript();
+        await AssertCatalogIncludesJdsl();
+        await AssertIncludedBeatsDysonSkills();
+        await AssertDysonSkillsAndLiteral();
+        await AssertLoadIndexOnlyVsFull();
+        await AssertMissingAndPathEscape();
+        await AssertLoadSkillToolAttachesAndTranscript();
         AssertContextFilesPersistenceRoundTrip();
         AssertLegacySkillsUsedJsonWithoutKindRestoresAsSkill();
     }
 
     [Fact]
-    public void ContextFiles_preload_transcript_schema_and_prompts()
+    public async Task ContextFiles_preload_transcript_schema_and_prompts()
     {
-        AssertContextFileHelperAttachesAndTranscript();
-        AssertContextFileHelperMissingAndBlankPathsError();
+        await AssertContextFileHelperAttachesAndTranscript();
+        await AssertContextFileHelperMissingAndBlankPathsError();
         AssertStartSubagentContextFilesCatalog();
         AssertContextFilesPromptGuidance();
     }
 
-    private static void AssertCatalogIncludesJdsl()
+    private static async Task AssertCatalogIncludesJdsl()
     {
-        var catalog = DysonSkillLoader.ListCatalog(fs: null);
+        var catalog = await DysonSkillLoader.ListCatalogAsync(fs: null);
         if (!catalog.Any(e => string.Equals(e.Name, "JDSL", StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("Included catalog must list JDSL.");
     }
 
-    private static void AssertIncludedBeatsDysonSkills()
+    private static async Task AssertIncludedBeatsDysonSkills()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-skill-inc-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(root, ".dyson", "skills", "JDSL"));
@@ -46,8 +46,8 @@ public class DysonSkillLoaderTests
                 Path.Combine(root, ".dyson", "skills", "JDSL", "SKILL.md"),
                 "# shadow JDSL — must not win over included");
 
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
-            var loaded = DysonSkillLoader.ResolveAndLoad("JDSL", loadIndexOnly: true, fs);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
+            var loaded = await DysonSkillLoader.ResolveAndLoadAsync("JDSL", loadIndexOnly: true, fs);
             if (loaded.IsError)
                 throw new InvalidOperationException(loaded.Error);
             if (loaded.Value.Source != DysonSkillSource.Included)
@@ -63,7 +63,7 @@ public class DysonSkillLoaderTests
         }
     }
 
-    private static void AssertDysonSkillsAndLiteral()
+    private static async Task AssertDysonSkillsAndLiteral()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-skill-path-" + Guid.NewGuid().ToString("N"));
         var skillDir = Path.Combine(root, ".dyson", "skills", "angular-skill");
@@ -75,9 +75,9 @@ public class DysonSkillLoaderTests
             File.WriteAllText(Path.Combine(skillDir, "extra.md"), "# Angular extra");
             File.WriteAllText(Path.Combine(root, "docs", "custom", "guide.md"), "# Literal guide");
 
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
 
-            var dyson = DysonSkillLoader.ResolveAndLoad("angular-skill", loadIndexOnly: true, fs);
+            var dyson = await DysonSkillLoader.ResolveAndLoadAsync("angular-skill", loadIndexOnly: true, fs);
             if (dyson.IsError)
                 throw new InvalidOperationException(dyson.Error);
             if (dyson.Value.Source != DysonSkillSource.DysonSkills)
@@ -87,7 +87,7 @@ public class DysonSkillLoaderTests
             if (dyson.Value.Markdown.Contains("Angular extra", StringComparison.Ordinal))
                 throw new InvalidOperationException("loadIndexOnly should omit extra.md.");
 
-            var literal = DysonSkillLoader.ResolveAndLoad("docs/custom/guide.md", loadIndexOnly: true, fs);
+            var literal = await DysonSkillLoader.ResolveAndLoadAsync("docs/custom/guide.md", loadIndexOnly: true, fs);
             if (literal.IsError)
                 throw new InvalidOperationException(literal.Error);
             if (literal.Value.Source != DysonSkillSource.Literal)
@@ -95,7 +95,7 @@ public class DysonSkillLoaderTests
             if (!literal.Value.Markdown.Contains("Literal guide", StringComparison.Ordinal))
                 throw new InvalidOperationException("Literal file body mismatch.");
 
-            var catalog = DysonSkillLoader.ListCatalog(fs);
+            var catalog = await DysonSkillLoader.ListCatalogAsync(fs);
             if (!catalog.Any(e => e.Name == "angular-skill" && e.Source == DysonSkillSource.DysonSkills))
                 throw new InvalidOperationException("Catalog must include .dyson/skills/angular-skill.");
         }
@@ -105,7 +105,7 @@ public class DysonSkillLoaderTests
         }
     }
 
-    private static void AssertLoadIndexOnlyVsFull()
+    private static async Task AssertLoadIndexOnlyVsFull()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-skill-full-" + Guid.NewGuid().ToString("N"));
         var skillDir = Path.Combine(root, ".dyson", "skills", "multi");
@@ -116,12 +116,12 @@ public class DysonSkillLoaderTests
             File.WriteAllText(Path.Combine(skillDir, "b.md"), "# B file");
             File.WriteAllText(Path.Combine(skillDir, "a.md"), "# A file");
 
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
-            var index = DysonSkillLoader.ResolveAndLoad("multi", loadIndexOnly: true, fs);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
+            var index = await DysonSkillLoader.ResolveAndLoadAsync("multi", loadIndexOnly: true, fs);
             if (index.IsError || index.Value.Markdown.Contains("A file", StringComparison.Ordinal))
                 throw new InvalidOperationException("Index-only must be SKILL.md only.");
 
-            var full = DysonSkillLoader.ResolveAndLoad("multi", loadIndexOnly: false, fs);
+            var full = await DysonSkillLoader.ResolveAndLoadAsync("multi", loadIndexOnly: false, fs);
             if (full.IsError)
                 throw new InvalidOperationException(full.Error);
             if (!full.Value.Markdown.Contains("Entry", StringComparison.Ordinal)
@@ -144,18 +144,18 @@ public class DysonSkillLoaderTests
         }
     }
 
-    private static void AssertMissingAndPathEscape()
+    private static async Task AssertMissingAndPathEscape()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-skill-miss-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
-            var missing = DysonSkillLoader.ResolveAndLoad("no-such-skill-zzz", loadIndexOnly: true, fs);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
+            var missing = await DysonSkillLoader.ResolveAndLoadAsync("no-such-skill-zzz", loadIndexOnly: true, fs);
             if (!missing.IsError)
                 throw new InvalidOperationException("Missing skill must error.");
 
-            var escape = DysonSkillLoader.ResolveAndLoad("../outside.md", loadIndexOnly: true, fs);
+            var escape = await DysonSkillLoader.ResolveAndLoadAsync("../outside.md", loadIndexOnly: true, fs);
             if (!escape.IsError)
                 throw new InvalidOperationException("Path escape must be blocked via workspace FS.");
         }
@@ -165,7 +165,7 @@ public class DysonSkillLoaderTests
         }
     }
 
-    private static void AssertLoadSkillToolAttachesAndTranscript()
+    private static async Task AssertLoadSkillToolAttachesAndTranscript()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-skill-tool-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -191,7 +191,7 @@ public class DysonSkillLoaderTests
             };
             session.AddTurnForTest(turn);
 
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
             var call = new DysonToolCall
             {
                 CallId = "skill1",
@@ -200,7 +200,7 @@ public class DysonSkillLoaderTests
                 ArgumentsJson = """{"name":"JDSL","loadIndexOnly":true}""",
             };
 
-            var result = executor.ExecuteAsync(call).GetAwaiter().GetResult();
+            var result = await executor.ExecuteAsync(call);
             if (result.IsError)
                 throw new InvalidOperationException($"LoadSkill failed: {result.Content}");
             if (turn.ContextFiles.Count != 1
@@ -284,7 +284,7 @@ public class DysonSkillLoaderTests
         }
     }
 
-    private static void AssertContextFileHelperAttachesAndTranscript()
+    private static async Task AssertContextFileHelperAttachesAndTranscript()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-ctx-file-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(root, "docs"));
@@ -301,9 +301,7 @@ public class DysonSkillLoaderTests
             };
             session.AddTurnForTest(turn);
 
-            var attached = session.AttachContextFilesForTest(turn, ["docs/guide.md"], root)
-                .GetAwaiter()
-                .GetResult();
+            var attached = await session.AttachContextFilesForTest(turn, ["docs/guide.md"], root);
             if (attached.IsError)
                 throw new InvalidOperationException($"Attach context file failed: {attached.Error}");
             if (turn.ContextFiles.Count != 1
@@ -334,7 +332,7 @@ public class DysonSkillLoaderTests
         }
     }
 
-    private static void AssertContextFileHelperMissingAndBlankPathsError()
+    private static async Task AssertContextFileHelperMissingAndBlankPathsError()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-ctx-miss-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -348,15 +346,11 @@ public class DysonSkillLoaderTests
                 StartedUtc = DateTime.UtcNow,
             };
 
-            var missing = session.AttachContextFilesForTest(turn, ["docs/no-such.md"], root)
-                .GetAwaiter()
-                .GetResult();
+            var missing = await session.AttachContextFilesForTest(turn, ["docs/no-such.md"], root);
             if (!missing.IsError)
                 throw new InvalidOperationException("Missing context file path must error.");
 
-            var blank = session.AttachContextFilesForTest(turn, ["  "], root)
-                .GetAwaiter()
-                .GetResult();
+            var blank = await session.AttachContextFilesForTest(turn, ["  "], root);
             if (!blank.IsError)
                 throw new InvalidOperationException("Blank contextFiles path must error.");
         }

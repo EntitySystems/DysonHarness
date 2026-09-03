@@ -19,7 +19,7 @@ public class DysonFileTreeServiceTests
         await File.WriteAllTextAsync(Path.Combine(nm, "index.js"), "module.exports = {};");
 
         using var service = new DysonFileTreeService(new NoOpScopeFactory());
-        var activate = service.SetActive(Guid.NewGuid(), root);
+        var activate = await service.SetActiveAsync(Guid.NewGuid(), root);
         Assert.True(activate.IsSuccess, activate.IsError ? activate.Error : null);
 
         var state = await WaitForAsync(
@@ -64,7 +64,7 @@ public class DysonFileTreeServiceTests
         await File.WriteAllTextAsync(Path.Combine(root, "old-name", "a.txt"), "x");
 
         using var service = new DysonFileTreeService(new NoOpScopeFactory());
-        var activate = service.SetActive(Guid.NewGuid(), root);
+        var activate = await service.SetActiveAsync(Guid.NewGuid(), root);
         Assert.True(activate.IsSuccess, activate.IsError ? activate.Error : null);
 
         var state = await WaitForAsync(
@@ -73,7 +73,7 @@ public class DysonFileTreeServiceTests
         Assert.NotNull(state);
         Assert.Contains(state.Root.Children, c => c.IsDirectory && c.Name == "old-name");
 
-        var moved = state.FileSystem.Move("old-name", "new-name");
+        var moved = await state.FileSystem.MoveAsync("old-name", "new-name");
         Assert.True(moved.IsSuccess, moved.IsError ? moved.Error : null);
 
         await WaitForAsync(
@@ -113,7 +113,7 @@ public class DysonFileTreeServiceTests
         throw new TimeoutException("Timed out waiting for file tree state.");
     }
 
-    /// <summary>SetActive(path) never opens a scope; factory is unused.</summary>
+    /// <summary>SetActiveAsync(path) never opens a scope; factory is unused.</summary>
     private sealed class NoOpScopeFactory : IServiceScopeFactory
     {
         public IServiceScope CreateScope() => throw new NotSupportedException();

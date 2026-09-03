@@ -6,7 +6,7 @@ namespace Harness.Tests;
 public sealed class DysonCustomMcpTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertMcpActiveDefaults();
         AssertNameSanitize();
@@ -15,7 +15,7 @@ public sealed class DysonCustomMcpTests
         AssertConfigLoaderRoundTrip();
         AssertRepositoryUpsertRoundTrip();
         AssertMcpActiveOffStripsTools();
-        AssertExecutorRejectsWhenInactive();
+        await AssertExecutorRejectsWhenInactive();
         AssertPromptUpdaterDebounceCompletes();
     }
 
@@ -242,7 +242,7 @@ public sealed class DysonCustomMcpTests
         }
     }
 
-    private static void AssertExecutorRejectsWhenInactive()
+    private static async Task AssertExecutorRejectsWhenInactive()
     {
         var root = Path.Combine(Path.GetTempPath(), $"dyson-mcp-exec-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -262,14 +262,14 @@ public sealed class DysonCustomMcpTests
             };
 
             using var http = new HttpClient();
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, http, workDirectoryId: workDirId);
-            var result = executor.ExecuteAsync(new DysonToolCall
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, http, workDirectoryId: workDirId);
+            var result = await executor.ExecuteAsync(new DysonToolCall
             {
                 CallId = "c1",
                 ToolName = "srv__tool",
                 Stage = 0,
                 ArgumentsJson = "{}",
-            }).GetAwaiter().GetResult();
+            });
 
             if (!result.IsError
                 || result.Content.IndexOf("disabled", StringComparison.OrdinalIgnoreCase) < 0)
@@ -278,7 +278,7 @@ public sealed class DysonCustomMcpTests
                     $"Expected disabled custom MCP error, got: {result.Content}");
             }
 
-            host.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            await host.DisposeAsync();
         }
         finally
         {

@@ -6,7 +6,7 @@ namespace DysonHarness;
 public sealed partial class DysonWorkspaceToolExecutor
 {
     private const int GeneratedImageNameAllocationAttempts = 10_000;
-    private static readonly object GeneratedImageWriteGate = new();
+    private static readonly SemaphoreSlim GeneratedImageWriteGate = new(1, 1);
 
     private async Task<DysonToolCallResult> GenerateImageAsync(
         DysonToolCall call,
@@ -45,7 +45,9 @@ public sealed partial class DysonWorkspaceToolExecutor
             normalizedImages.Add(normalized.Value);
         }
 
-        var directoryCreated = _fs.CreateDirectory(DysonGeneratedImageArtifact.RelativeDirectory);
+        var directoryCreated = await _fs
+            .CreateDirectoryAsync(DysonGeneratedImageArtifact.RelativeDirectory, cancellationToken)
+            .ConfigureAwait(false);
         if (directoryCreated.IsError)
             return Error(call, $"GenerateImage: could not create artifact directory: {directoryCreated.Error}");
 
@@ -53,12 +55,14 @@ public sealed partial class DysonWorkspaceToolExecutor
         var artifacts = new List<DysonGeneratedImageArtifact>(normalizedImages.Count);
         // The filesystem API does not offer create-new semantics. Serialize allocation plus write so
         // concurrent executor calls in this process cannot overwrite a same-millisecond candidate.
-        lock (GeneratedImageWriteGate)
+        await GeneratedImageWriteGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
             for (var index = 0; index < normalizedImages.Count; index++)
             {
                 var normalized = normalizedImages[index];
-                var path = AllocateGeneratedImagePath(timestamp, index + 1);
+                var path = await AllocateGeneratedImagePathAsync(timestamp, index + 1, cancellationToken)
+                    .ConfigureAwait(false);
                 if (path.IsError)
                     return Error(call, $"GenerateImage: {path.Error}");
 
@@ -75,12 +79,17 @@ public sealed partial class DysonWorkspaceToolExecutor
                 if (artifact.IsError)
                     return Error(call, $"GenerateImage: {artifact.Error}");
 
-                var written = _fs.WriteAllBytes(path.Value, normalized.Bytes);
+                var written = await _fs.WriteAllBytesAsync(path.Value, normalized.Bytes, cancellationToken)
+                    .ConfigureAwait(false);
                 if (written.IsError)
                     return Error(call, $"GenerateImage: could not write {path.Value}: {written.Error}");
 
                 artifacts.Add(artifact.Value);
             }
+        }
+        finally
+        {
+            GeneratedImageWriteGate.Release();
         }
 
         var acknowledgement = JsonSerializer.Serialize(new
@@ -191,7 +200,10 @@ public sealed partial class DysonWorkspaceToolExecutor
         return Result<string?, string>.AsValue(value.GetString());
     }
 
-    private Result<string, string> AllocateGeneratedImagePath(string timestamp, int startingOrdinal)
+    private async Task<Result<string, string>> AllocateGeneratedImagePathAsync(
+        string timestamp,
+        int startingOrdinal,
+        CancellationToken cancellationToken)
     {
         for (var ordinal = startingOrdinal;
              ordinal < startingOrdinal + GeneratedImageNameAllocationAttempts;
@@ -199,7 +211,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         {
             var relativePath =
                 $"{DysonGeneratedImageArtifact.RelativeDirectory}/{timestamp}-{ordinal:D2}.png";
-            var exists = _fs.FileExists(relativePath);
+            var exists = await _fs.FileExistsAsync(relativePath, cancellationToken).ConfigureAwait(false);
             if (exists.IsError)
                 return Result<string, string>.AsError(exists.Error);
             if (!exists.Value)

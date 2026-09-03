@@ -341,7 +341,7 @@
             return;
         }
 
-        var loaded = DysonOpenRules.TryLoad(created.Value);
+        var loaded = await DysonOpenRules.TryLoadAsync(created.Value).ConfigureAwait(true);
         if (loaded.IsError)
         {
             _error = loaded.Error;
@@ -372,7 +372,7 @@
             return;
         }
 
-        var initialized = DysonOpenRules.InitializeOrRead(created.Value);
+        var initialized = await DysonOpenRules.InitializeOrReadAsync(created.Value).ConfigureAwait(true);
         if (initialized.IsError)
         {
             _error = initialized.Error;
@@ -401,7 +401,9 @@
             return;
         }
 
-        var set = DysonOpenRules.SetEntryMode(created.Value, entry.Path, isSkill, value);
+        var set = await DysonOpenRules
+            .SetEntryModeAsync(created.Value, entry.Path, isSkill, value)
+            .ConfigureAwait(true);
         if (set.IsError)
         {
             _error = set.Error;

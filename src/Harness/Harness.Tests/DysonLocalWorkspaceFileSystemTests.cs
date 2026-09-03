@@ -17,7 +17,7 @@ public class DysonLocalWorkspaceFileSystemTests
             Assert.Null(fs.SubjectId);
             Assert.Equal(Path.GetFullPath(root), fs.NativeRootPath);
 
-            var before = fs.ReadAllText("a.txt");
+            var before = await fs.ReadAllTextAsync("a.txt");
             Assert.True(before.IsError);
             Assert.Contains("not initialized", before.Error, StringComparison.OrdinalIgnoreCase);
 
@@ -52,18 +52,18 @@ public class DysonLocalWorkspaceFileSystemTests
             Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
             var fs = created.Value;
 
-            var escape = fs.ReadAllText("../outside.txt");
+            var escape = await fs.ReadAllTextAsync("../outside.txt");
             Assert.True(escape.IsError);
             Assert.Contains("escapes", escape.Error, StringComparison.OrdinalIgnoreCase);
 
-            var write = fs.WriteAllText("sub/hello.txt", "hello-world");
+            var write = await fs.WriteAllTextAsync("sub/hello.txt", "hello-world");
             Assert.True(write.IsSuccess, write.IsError ? write.Error : null);
 
-            var read = fs.ReadAllText("sub/hello.txt");
+            var read = await fs.ReadAllTextAsync("sub/hello.txt");
             Assert.True(read.IsSuccess, read.IsError ? read.Error : null);
             Assert.Equal("hello-world", read.Value);
 
-            var entries = fs.EnumerateEntries(".");
+            var entries = await fs.EnumerateEntriesAsync(".");
             Assert.True(entries.IsSuccess, entries.IsError ? entries.Error : null);
             Assert.Contains(entries.Value, e => e.IsDirectory && e.Name == "sub");
 
@@ -104,7 +104,7 @@ public class DysonLocalWorkspaceFileSystemTests
 
             // Brief settle so the OS watcher attaches before the write.
             await Task.Delay(100);
-            var write = fs.WriteAllText("watched.txt", "ping");
+            var write = await fs.WriteAllTextAsync("watched.txt", "ping");
             Assert.True(write.IsSuccess, write.IsError ? write.Error : null);
 
             var completed = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(5)));
@@ -128,32 +128,32 @@ public class DysonLocalWorkspaceFileSystemTests
             Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
             var fs = created.Value;
 
-            Assert.True(fs.CreateDirectory("alpha").IsSuccess);
-            Assert.True(fs.WriteAllText("alpha/note.txt", "hi").IsSuccess);
-            Assert.True(fs.CreateDirectory("beta").IsSuccess);
+            Assert.True((await fs.CreateDirectoryAsync("alpha")).IsSuccess);
+            Assert.True((await fs.WriteAllTextAsync("alpha/note.txt", "hi")).IsSuccess);
+            Assert.True((await fs.CreateDirectoryAsync("beta")).IsSuccess);
 
-            var renamed = fs.Move("alpha", "gamma");
+            var renamed = await fs.MoveAsync("alpha", "gamma");
             Assert.True(renamed.IsSuccess, renamed.IsError ? renamed.Error : null);
-            Assert.True(fs.DirectoryExists("gamma").Value);
-            Assert.False(fs.DirectoryExists("alpha").Value);
-            Assert.Equal("hi", fs.ReadAllText("gamma/note.txt").Value);
+            Assert.True((await fs.DirectoryExistsAsync("gamma")).Value);
+            Assert.False((await fs.DirectoryExistsAsync("alpha")).Value);
+            Assert.Equal("hi", (await fs.ReadAllTextAsync("gamma/note.txt")).Value);
 
-            var collision = fs.Move("gamma", "beta");
+            var collision = await fs.MoveAsync("gamma", "beta");
             Assert.True(collision.IsError);
             Assert.Contains("already exists", collision.Error, StringComparison.OrdinalIgnoreCase);
 
-            var intoSelf = fs.Move("gamma", "gamma/nested");
+            var intoSelf = await fs.MoveAsync("gamma", "gamma/nested");
             Assert.True(intoSelf.IsError);
             Assert.Contains("into itself", intoSelf.Error, StringComparison.OrdinalIgnoreCase);
 
-            var escape = fs.Move("gamma", "../outside");
+            var escape = await fs.MoveAsync("gamma", "../outside");
             Assert.True(escape.IsError);
             Assert.Contains("escapes", escape.Error, StringComparison.OrdinalIgnoreCase);
 
-            var fileMove = fs.Move("gamma/note.txt", "beta/note.txt");
+            var fileMove = await fs.MoveAsync("gamma/note.txt", "beta/note.txt");
             Assert.True(fileMove.IsSuccess, fileMove.IsError ? fileMove.Error : null);
-            Assert.True(fs.FileExists("beta/note.txt").Value);
-            Assert.False(fs.FileExists("gamma/note.txt").Value);
+            Assert.True((await fs.FileExistsAsync("beta/note.txt")).Value);
+            Assert.False((await fs.FileExistsAsync("gamma/note.txt")).Value);
         }
         finally
         {
@@ -172,9 +172,9 @@ public class DysonLocalWorkspaceFileSystemTests
             var fs = created.Value;
 
             var body = string.Join('\n', Enumerable.Range(1, 20).Select(i => $"line-{i}"));
-            Assert.True(fs.WriteAllText("lines.txt", body).IsSuccess);
+            Assert.True((await fs.WriteAllTextAsync("lines.txt", body)).IsSuccess);
 
-            var slice = fs.ReadLineSlice("lines.txt", startLine: 10, maxLines: 3, maxChars: 1_000_000, maxLineChars: 1_000_000);
+            var slice = await fs.ReadLineSliceAsync("lines.txt", startLine: 10, maxLines: 3, maxChars: 1_000_000, maxLineChars: 1_000_000);
             Assert.True(slice.IsSuccess, slice.IsError ? slice.Error : null);
             Assert.Equal(3, slice.Value.Lines.Count);
             Assert.Equal(10, slice.Value.StartLine);
@@ -203,9 +203,9 @@ public class DysonLocalWorkspaceFileSystemTests
             var fs = created.Value;
 
             var body = string.Join('\n', Enumerable.Repeat("xx", 10));
-            Assert.True(fs.WriteAllText("short.txt", body).IsSuccess);
+            Assert.True((await fs.WriteAllTextAsync("short.txt", body)).IsSuccess);
 
-            var slice = fs.ReadLineSlice("short.txt", startLine: 1, maxLines: 20, maxChars: 5, maxLineChars: 1000);
+            var slice = await fs.ReadLineSliceAsync("short.txt", startLine: 1, maxLines: 20, maxChars: 5, maxLineChars: 1000);
             Assert.True(slice.IsSuccess, slice.IsError ? slice.Error : null);
             Assert.True(slice.Value.Truncated);
             Assert.False(slice.Value.Tailed);
@@ -232,9 +232,9 @@ public class DysonLocalWorkspaceFileSystemTests
             var fs = created.Value;
 
             var body = string.Join('\n', Enumerable.Range(1, 10).Select(i => $"line-{i}"));
-            Assert.True(fs.WriteAllText("tail.txt", body).IsSuccess);
+            Assert.True((await fs.WriteAllTextAsync("tail.txt", body)).IsSuccess);
 
-            var slice = fs.ReadLineSlice("tail.txt", startLine: -2, maxLines: null, maxChars: 1_000_000, maxLineChars: 1_000_000);
+            var slice = await fs.ReadLineSliceAsync("tail.txt", startLine: -2, maxLines: null, maxChars: 1_000_000, maxLineChars: 1_000_000);
             Assert.True(slice.IsSuccess, slice.IsError ? slice.Error : null);
             Assert.True(slice.Value.Tailed);
             Assert.False(slice.Value.Truncated);
@@ -260,10 +260,10 @@ public class DysonLocalWorkspaceFileSystemTests
             Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
             var fs = created.Value;
 
-            Assert.True(fs.WriteAllText("giant.txt", new string('A', 200_000)).IsSuccess);
+            Assert.True((await fs.WriteAllTextAsync("giant.txt", new string('A', 200_000))).IsSuccess);
 
             var sw = Stopwatch.StartNew();
-            var slice = fs.ReadLineSlice("giant.txt", startLine: 1, maxLines: 10, maxChars: 1_000_000, maxLineChars: 8192);
+            var slice = await fs.ReadLineSliceAsync("giant.txt", startLine: 1, maxLines: 10, maxChars: 1_000_000, maxLineChars: 8192);
             sw.Stop();
 
             Assert.True(slice.IsSuccess, slice.IsError ? slice.Error : null);
@@ -291,7 +291,7 @@ public class DysonLocalWorkspaceFileSystemTests
             Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
             var fs = created.Value;
 
-            var slice = fs.ReadLineSlice("missing.txt", startLine: 1, maxLines: 10, maxChars: 1000, maxLineChars: 1000);
+            var slice = await fs.ReadLineSliceAsync("missing.txt", startLine: 1, maxLines: 10, maxChars: 1000, maxLineChars: 1000);
             Assert.True(slice.IsError);
             Assert.Contains("not found", slice.Error, StringComparison.OrdinalIgnoreCase);
         }

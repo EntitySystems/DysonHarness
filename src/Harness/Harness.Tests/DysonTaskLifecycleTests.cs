@@ -105,11 +105,11 @@ public class DysonTaskLifecycleTests
     private const int FullSummarizeValue = 16;
 
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertAppendOnlyKindContract();
         AssertLegacySettingKeysRemainReadable();
-        AssertCompletionChainStillStopsAtReportSummaryEnqueue();
+        await AssertCompletionChainStillStopsAtReportSummaryEnqueue();
         AssertBugReviewDefaultUsesOmittedModelSlug();
         AssertHasActiveDescendantIsHostAuthority();
 
@@ -165,7 +165,7 @@ public class DysonTaskLifecycleTests
         }
     }
 
-    private static void AssertCompletionChainStillStopsAtReportSummaryEnqueue()
+    private static async Task AssertCompletionChainStillStopsAtReportSummaryEnqueue()
     {
         // CompleteTask → confirm → ConfirmTaskComplete still only enqueues ReportSummary.
         // Host terminal persist must move to the lifecycle evaluator (CodeReviewReady /
@@ -174,15 +174,15 @@ public class DysonTaskLifecycleTests
         session.ConfigureRootForTest();
         session.AddTurnForTest(DysonTaskCompletionFlow.CreateCompletionConfirmTurn("prior"));
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
 
-        var result = executor.ExecuteAsync(new DysonToolCall
+        var result = await executor.ExecuteAsync(new DysonToolCall
         {
             CallId = "lc-confirm",
             ToolName = "ConfirmTaskComplete",
             Stage = 0,
             ArgumentsJson = """{"rationale":"verified"}""",
-        }).GetAwaiter().GetResult();
+        });
 
         if (result.IsError)
             throw new InvalidOperationException("ConfirmTaskComplete should succeed: " + result.Content);

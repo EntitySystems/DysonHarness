@@ -7,11 +7,11 @@ namespace Harness.Tests;
 public class DysonHtmlVisualizationTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertCatalogAndThemeGuidance();
         AssertLiveThemeInterpolation();
-        AssertCreateFileAndRenderExecutor();
+        await AssertCreateFileAndRenderExecutor();
         AssertVisualizationPersistence();
     }
 
@@ -84,20 +84,20 @@ public class DysonHtmlVisualizationTests
             throw new InvalidOperationException("ApplyVisualizationTheme must no-op when the tool is omitted.");
     }
 
-    private static void AssertCreateFileAndRenderExecutor()
+    private static async Task AssertCreateFileAndRenderExecutor()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-html-visualization-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
             var session = new StubSession(new DysonAgentSessionConfig());
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
 
-            var normal = Execute(executor, "CreateFile", "{\"path\":\"normal.txt\",\"content\":\"normal\"}");
+            var normal = await ExecuteAsync(executor, "CreateFile", "{\"path\":\"normal.txt\",\"content\":\"normal\"}");
             if (normal.IsError || normal.Content != "Created normal.txt (6 chars).")
                 throw new InvalidOperationException("Normal CreateFile behavior must remain unchanged.");
 
-            var temporary = Execute(executor, "CreateFile", "{\"path\":\"chart.html\",\"content\":\"<main>from-file</main>\",\"isTempFile\":true}");
+            var temporary = await ExecuteAsync(executor, "CreateFile", "{\"path\":\"chart.html\",\"content\":\"<main>from-file</main>\",\"isTempFile\":true}");
             if (temporary.IsError)
                 throw new InvalidOperationException("Temp CreateFile failed: " + temporary.Content);
 
@@ -110,11 +110,11 @@ public class DysonHtmlVisualizationTests
                 throw new InvalidOperationException("Temporary CreateFile must return its exact generated relative path.");
             }
 
-            var invalidTemp = Execute(executor, "CreateFile", "{\"path\":\"dir/chart.html\",\"content\":\"x\",\"isTempFile\":true}");
+            var invalidTemp = await ExecuteAsync(executor, "CreateFile", "{\"path\":\"dir/chart.html\",\"content\":\"x\",\"isTempFile\":true}");
             if (!invalidTemp.IsError)
                 throw new InvalidOperationException("Temp CreateFile must reject directory components.");
 
-            var rendered = Execute(executor, "RenderHtmlVisualization", $$"""
+            var rendered = await ExecuteAsync(executor, "RenderHtmlVisualization", $$"""
                 {
                   "title":"Quarterly revenue",
                   "html":{"tempFile":"{{tempPath}}"},
@@ -129,7 +129,7 @@ public class DysonHtmlVisualizationTests
                 throw new InvalidOperationException("RenderHtmlVisualization must attach a typed visualization and short acknowledgement.");
             }
 
-            var rejected = Execute(executor, "RenderHtmlVisualization", """
+            var rejected = await ExecuteAsync(executor, "RenderHtmlVisualization", """
                 {"title":"bad","html":{"content":"<main>x</main>","tempFile":".dyson/temp/nope.html"},"css":{"content":""},"js":{"content":""}}
                 """);
             if (!rejected.IsError)
@@ -182,7 +182,7 @@ public class DysonHtmlVisualizationTests
         }
     }
 
-    private static DysonToolCallResult Execute(
+    private static Task<DysonToolCallResult> ExecuteAsync(
         DysonWorkspaceToolExecutor executor,
         string toolName,
         string argumentsJson) =>
@@ -192,7 +192,7 @@ public class DysonHtmlVisualizationTests
             ToolName = toolName,
             Stage = 1,
             ArgumentsJson = argumentsJson,
-        }).GetAwaiter().GetResult();
+        });
 
     private sealed class StubProvider : DysonAgentProvider;
 

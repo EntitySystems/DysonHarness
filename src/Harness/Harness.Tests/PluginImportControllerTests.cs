@@ -72,13 +72,13 @@ public class PluginImportControllerTests
     }
 
     [Fact]
-    public void Selected_scope_forms_service_target_and_confirmation_gates_install()
+    public async Task Selected_scope_forms_service_target_and_confirmation_gates_install()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-plugin-ui-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
             var workDirectoryId = Guid.NewGuid();
             var target = DysonPluginInstallTarget.ForProject(workDirectoryId, fs);
             Assert.True(target.IsSuccess, target.IsError ? target.Error : null);
