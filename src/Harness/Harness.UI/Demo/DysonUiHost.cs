@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using DysonHarness;
 using Harness.UI.Theme;
+using Harness.UI.Markdown;
 using Microsoft.JSInterop;
 
 namespace Harness.UI.Demo;
@@ -856,7 +857,9 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(LastError);
         }
 
-        var written = DysonComposerUploads.Write(fsResult.Value, attachment.FileName, jpegBytes);
+        var written = await DysonComposerUploads
+            .WriteAsync(fsResult.Value, attachment.FileName, jpegBytes, cancellationToken)
+            .ConfigureAwait(false);
         if (written.IsError)
         {
             LastError = written.Error;
@@ -1053,7 +1056,9 @@ public sealed class DysonUiHost : IAsyncDisposable
             return Result<int, string>.AsError(fsResult.Error);
         }
 
-        var cleared = DysonComposerUploads.ClearAll(fsResult.Value);
+        var cleared = await DysonComposerUploads
+            .ClearAllAsync(fsResult.Value, cancellationToken)
+            .ConfigureAwait(false);
         if (cleared.IsError)
         {
             LastError = cleared.Error;
@@ -1106,7 +1111,9 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(fsResult.Error);
         }
 
-        var written = DysonComposerUploads.Write(fsResult.Value, fileName, bytes);
+        var written = await DysonComposerUploads
+            .WriteAsync(fsResult.Value, fileName, bytes, cancellationToken)
+            .ConfigureAwait(false);
         if (written.IsError)
         {
             LastError = written.Error;
@@ -1130,15 +1137,34 @@ public sealed class DysonUiHost : IAsyncDisposable
                 cancellationToken)
             .ConfigureAwait(false);
         if (root is null)
-            return DysonSkillLoader.ListCatalog(fs: null, pluginContributions: contributions);
+        {
+            return await DysonSkillLoader
+                .ListCatalogAsync(
+                    fs: null,
+                    cancellationToken: cancellationToken,
+                    pluginContributions: contributions)
+                .ConfigureAwait(false);
+        }
 
         var fsResult = await DysonWorkspaceFileSystems
             .CreateLocalAsync(root, cancellationToken)
             .ConfigureAwait(false);
         if (fsResult.IsError)
-            return DysonSkillLoader.ListCatalog(fs: null, pluginContributions: contributions);
+        {
+            return await DysonSkillLoader
+                .ListCatalogAsync(
+                    fs: null,
+                    cancellationToken: cancellationToken,
+                    pluginContributions: contributions)
+                .ConfigureAwait(false);
+        }
 
-        return DysonSkillLoader.ListCatalog(fsResult.Value, pluginContributions: contributions);
+        return await DysonSkillLoader
+            .ListCatalogAsync(
+                fsResult.Value,
+                cancellationToken: cancellationToken,
+                pluginContributions: contributions)
+            .ConfigureAwait(false);
     }
 
     /// <summary>Explicit plugin command catalog for the focused session or pre-session composer work directory.</summary>
@@ -1351,7 +1377,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (fsResult.IsError)
             return Result<DysonGeneratedImagePreview, string>.AsError(fsResult.Error);
 
-        var fileLength = fsResult.Value.GetFileLength(safeArtifact.Value.RelativePath);
+        var fileLength = await fsResult.Value
+            .GetFileLengthAsync(safeArtifact.Value.RelativePath, cancellationToken)
+            .ConfigureAwait(true);
         if (fileLength.IsError)
             return Result<DysonGeneratedImagePreview, string>.AsError(fileLength.Error);
 
@@ -1362,7 +1390,9 @@ public sealed class DysonUiHost : IAsyncDisposable
                 "Generated image file length does not match its persisted metadata.");
         }
 
-        var bytes = fsResult.Value.ReadAllBytes(safeArtifact.Value.RelativePath);
+        var bytes = await fsResult.Value
+            .ReadAllBytesAsync(safeArtifact.Value.RelativePath, cancellationToken)
+            .ConfigureAwait(true);
         if (bytes.IsError)
             return Result<DysonGeneratedImagePreview, string>.AsError(bytes.Error);
 
@@ -1428,6 +1458,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 Title = Path.GetFileName(relativePath) ?? relativePath,
                 Content = "",
                 IsMarkdown = false,
+                CanOpenInDefaultEditor = false,
+                MarkdownBlocks = [],
                 Error = "No active work directory to read the file.",
                 Actions = actionList,
             });
@@ -1459,6 +1491,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 Content = "",
                 IsMarkdown = IsMarkdownPath(path),
                 AbsolutePath = absolutePath,
+                CanOpenInDefaultEditor = false,
+                MarkdownBlocks = [],
                 Error = fsResult.Error,
                 Actions = actionList,
             });
@@ -1477,7 +1511,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (isPdf)
         {
-            var bytes = fs.ReadAllBytes(path);
+            var bytes = await fs.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(true);
             if (bytes.IsError)
             {
                 SetFileViewer(new DysonFileViewerState
@@ -1488,6 +1522,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                     IsMarkdown = false,
                     IsPdf = true,
                     AbsolutePath = absolutePath,
+                    CanOpenInDefaultEditor = false,
+                    MarkdownBlocks = [],
                     Error = bytes.Error,
                     Actions = actionList,
                 });
@@ -1505,6 +1541,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                     IsMarkdown = false,
                     IsPdf = true,
                     AbsolutePath = absolutePath,
+                    CanOpenInDefaultEditor = false,
+                    MarkdownBlocks = [],
                     Error = "File extension is .pdf but contents are not a PDF.",
                     Actions = actionList,
                 });
@@ -1522,6 +1560,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 PdfPreviewId = previewId,
                 PdfPreviewUrl = DysonFilePreviewStore.UrlFor(previewId),
                 AbsolutePath = absolutePath,
+                CanOpenInDefaultEditor = absolutePath is not null,
+                MarkdownBlocks = [],
                 Actions = actionList,
             });
             return;
@@ -1529,7 +1569,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (isImage)
         {
-            var bytes = fs.ReadAllBytes(path);
+            var bytes = await fs.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(true);
             if (bytes.IsError)
             {
                 SetFileViewer(new DysonFileViewerState
@@ -1540,6 +1580,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                     IsMarkdown = false,
                     IsImage = true,
                     AbsolutePath = absolutePath,
+                    CanOpenInDefaultEditor = false,
+                    MarkdownBlocks = [],
                     Error = bytes.Error,
                     Actions = actionList,
                 });
@@ -1558,13 +1600,15 @@ public sealed class DysonUiHost : IAsyncDisposable
                 ImagePreviewId = previewId,
                 ImagePreviewUrl = DysonFilePreviewStore.UrlFor(previewId),
                 AbsolutePath = absolutePath,
+                CanOpenInDefaultEditor = absolutePath is not null,
+                MarkdownBlocks = [],
                 Actions = actionList,
             });
             return;
         }
 
         var fm = new DysonFileManager(fs);
-        var read = fm.ReadText(path);
+        var read = await fm.ReadTextAsync(path, cancellationToken).ConfigureAwait(true);
         if (read.IsError)
         {
             SetFileViewer(new DysonFileViewerState
@@ -1574,6 +1618,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 Content = "",
                 IsMarkdown = isMd,
                 AbsolutePath = absolutePath,
+                CanOpenInDefaultEditor = false,
+                MarkdownBlocks = [],
                 Error = read.Error,
                 Actions = actionList,
             });
@@ -1582,6 +1628,15 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         var gitDiffAnnotations = await TryGetGitDiffAnnotationsAsync(fs, path, cancellationToken)
             .ConfigureAwait(true);
+        IReadOnlyList<DysonFileViewerMarkdownBlock> markdownBlocks = [];
+        if (isMd)
+        {
+            markdownBlocks = await Task.Run(
+                    () => DysonFileViewerMarkdown.Build(read.Value),
+                    cancellationToken)
+                .ConfigureAwait(true);
+        }
+
         SetFileViewer(new DysonFileViewerState
         {
             RelativePath = path,
@@ -1589,6 +1644,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             Content = read.Value,
             IsMarkdown = isMd,
             AbsolutePath = absolutePath,
+            CanOpenInDefaultEditor = absolutePath is not null,
+            MarkdownBlocks = markdownBlocks,
             Actions = actionList,
             GitDiffAnnotations = gitDiffAnnotations,
         });
@@ -1608,13 +1665,16 @@ public sealed class DysonUiHost : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(content);
 
         var path = relativePath.Trim().Replace('\\', '/');
+        var isMd = IsMarkdownPath(path);
         SetFileViewer(new DysonFileViewerState
         {
             RelativePath = path,
             Title = Path.GetFileName(path) ?? path,
             Content = content,
-            IsMarkdown = IsMarkdownPath(path),
+            IsMarkdown = isMd,
             AbsolutePath = null,
+            CanOpenInDefaultEditor = false,
+            MarkdownBlocks = isMd ? DysonFileViewerMarkdown.Build(content) : [],
             Actions = NormalizeFileViewerActions(actions),
         });
     }
@@ -1683,7 +1743,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         actions is { Count: > 0 } ? actions : [];
 
     /// <summary>
-    /// Optional Git hunks for a workspace text file. Runs off the Blazor sync context.
+    /// Optional Git hunks for a workspace text file. Offloads git WaitForExit (still sync in
+    /// <see cref="DysonGitInfo"/>) so the Blazor circuit does not stall while the overlay opens.
     /// API errors and unavailable metadata become an empty list so readable files still open.
     /// </summary>
     private static async Task<IReadOnlyList<DysonGitDiffAnnotation>> TryGetGitDiffAnnotationsAsync(
@@ -1692,7 +1753,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var result = await Task.Run(
-                () => DysonGitInfo.TryGetFileDiffAnnotations(fs, relativePath),
+                () => DysonGitInfo.TryGetFileDiffAnnotationsAsync(fs, relativePath, cancellationToken),
                 cancellationToken)
             .ConfigureAwait(true);
         return result.IsSuccess ? result.Value : [];
@@ -3687,11 +3748,14 @@ public sealed class DysonUiHost : IAsyncDisposable
         foreach (var name in pendingSkills)
         {
             // Slash picks always load index-only; agent can LoadSkill(false) for full dir later.
-            var loaded = DysonSkillLoader.ResolveAndLoad(
-                name,
-                loadIndexOnly: true,
-                fs,
-                pluginContributions: _session?.Config.PluginContributions);
+            var loaded = await DysonSkillLoader
+                .ResolveAndLoadAsync(
+                    name,
+                    loadIndexOnly: true,
+                    fs,
+                    cancellationToken: cancellationToken,
+                    pluginContributions: _session?.Config.PluginContributions)
+                .ConfigureAwait(false);
             if (loaded.IsError)
                 return Result<BuiltUserTurn, string>.AsError(loaded.Error);
             turn.AttachContextFile(loaded.Value, DysonContextFileKind.Skill);

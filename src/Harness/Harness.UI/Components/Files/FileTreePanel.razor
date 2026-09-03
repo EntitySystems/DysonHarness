@@ -239,8 +239,9 @@
         if (node is { IsExpanded: true })
             FileTree.Collapse(node);
 
+        var fileSystem = FileTree.Active.FileSystem;
         _renameCommitting = true;
-        var moved = FileTree.Active.FileSystem.Move(sourceRel, destRel);
+        var moved = await fileSystem.MoveAsync(sourceRel, destRel);
         _renameCommitting = false;
         CancelRename();
 
@@ -253,8 +254,6 @@
         {
             _status = null;
         }
-
-        await Task.CompletedTask;
     }
 
     private void OpenInFileManager()

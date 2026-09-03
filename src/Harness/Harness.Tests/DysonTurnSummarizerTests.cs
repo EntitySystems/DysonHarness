@@ -245,7 +245,7 @@ public class DysonTurnSummarizerTests
         var provider = CreateOpenAiProvider();
         var session = new StubSession(DysonAgentModes.Work, provider);
         session.ConfigureRootForTest();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
 
         var older = new DysonAgentTurn
         {
@@ -384,7 +384,7 @@ public class DysonTurnSummarizerTests
         var provider = CreateOpenAiProvider();
         var session = new StubSession(DysonAgentModes.Work, provider);
         session.ConfigureRootForTest();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
 
         var already = new DysonAgentTurn
         {

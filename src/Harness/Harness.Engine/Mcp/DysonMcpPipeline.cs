@@ -2062,7 +2062,8 @@ public sealed class DysonMcpPipeline
         {
             Name = "Grep",
             Description =
-                "Search text file contents by regex/pattern with optional path and glob filters. " +
+                "Search text file contents with a .NET regex (System.Text.RegularExpressions; not a literal substring, not ripgrep/PCRE/JavaScript). " +
+                "Matches each line independently. Optional path and filename glob. " +
                 "Text-only: never returns binary/image bytes. Skips .git/bin/obj/node_modules/.vs and similar. " +
                 "Binary/image hits are path-only lines (binary\\t… / image\\t…) when the relative path matches; " +
                 "use LoadBinary to inspect those files.",
@@ -2070,11 +2071,11 @@ public sealed class DysonMcpPipeline
                 {
                   "type": "object",
                   "properties": {
-                    "pattern": { "type": "string", "description": "Regex or literal search pattern." },
-                    "path": { "type": "string", "description": "Optional directory or file to search under." },
-                    "glob": { "type": "string", "description": "Optional glob filter (e.g. *.cs)." },
+                    "pattern": { "type": "string", "description": ".NET regex (System.Text.RegularExpressions). Not a literal and not a glob — do not pass **/* here. Invalid patterns return error \"Invalid regex: …\"." },
+                    "path": { "type": "string", "description": "Optional directory or file to search under (default .)." },
+                    "glob": { "type": "string", "description": "Optional filename-only filter (* and ?; e.g. *.cs). Matched against the file name, not the path. ** and path globs like **/*.cs do not work — put the directory in path and the name pattern in glob." },
                     "caseInsensitive": { "type": "boolean", "description": "Case-insensitive search when true." },
-                    "maxMatches": { "type": "integer", "description": "Optional cap on matches returned." }
+                    "maxMatches": { "type": "integer", "description": "Optional cap on matches returned (default 100)." }
                   },
                   "required": ["pattern"]
                 }

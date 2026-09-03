@@ -11,31 +11,31 @@ namespace Harness.Tests;
 public class DysonSessionTodoTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertStatusRoundTrip();
-        AssertTaskCodeUniqueness().GetAwaiter().GetResult();
-        AssertSubmitSubagentReportTodoGate().GetAwaiter().GetResult();
-        AssertSubmitSubagentReportFailedSupersede().GetAwaiter().GetResult();
-        AssertSubmitSubagentReportRejectsRetryAfterCompleted().GetAwaiter().GetResult();
-        AssertSubmitSubagentReportRejectsFailedRetry().GetAwaiter().GetResult();
-        AssertSubmitSubagentReportReopenForNewParentTask().GetAwaiter().GetResult();
-        AssertSubmitSubagentReportBeginInFlightPromptReopenAfterCompleted().GetAwaiter().GetResult();
-        AssertSubmitSubagentReportSameTurnRetryRejected().GetAwaiter().GetResult();
-        AssertSubmitSubagentReportBeginInFlightPromptReopenFailedToFailed().GetAwaiter().GetResult();
+        await AssertTaskCodeUniqueness();
+        await AssertSubmitSubagentReportTodoGate();
+        await AssertSubmitSubagentReportFailedSupersede();
+        await AssertSubmitSubagentReportRejectsRetryAfterCompleted();
+        await AssertSubmitSubagentReportRejectsFailedRetry();
+        await AssertSubmitSubagentReportReopenForNewParentTask();
+        await AssertSubmitSubagentReportBeginInFlightPromptReopenAfterCompleted();
+        await AssertSubmitSubagentReportSameTurnRetryRejected();
+        await AssertSubmitSubagentReportBeginInFlightPromptReopenFailedToFailed();
         AssertSubmitSubagentReportBeginInFlightPromptDoesNotReopenStopped();
-        AssertSubmitSubagentReportBeginInFlightPromptRootNoOp().GetAwaiter().GetResult();
-        AssertSubmitSubagentReportSuccessContentEndTurnHint().GetAwaiter().GetResult();
-        AssertSubmitSubagentReportEndsCurrentTurn().GetAwaiter().GetResult();
+        await AssertSubmitSubagentReportBeginInFlightPromptRootNoOp();
+        await AssertSubmitSubagentReportSuccessContentEndTurnHint();
+        await AssertSubmitSubagentReportEndsCurrentTurn();
         AssertSubmitSubagentReportCatalogWording();
         AssertSubmitSubagentReportRootCatalogOmit();
-        AssertSubmitSubagentReportAutoSubmitOneFailure().GetAwaiter().GetResult();
-        AssertSubmitSubagentReportAutoSubmitTwoFailuresCompleted().GetAwaiter().GetResult();
-        AssertSubmitSubagentReportAutoSubmitTwoFailuresFailed().GetAwaiter().GetResult();
-        AssertSubmitSubagentReportAutoSubmitUnparseable().GetAwaiter().GetResult();
-        AssertSubmitSubagentReportAutoSubmitPerTurn().GetAwaiter().GetResult();
-        AssertSubmitSubagentReportAutoSubmitExecutorPathUnchanged().GetAwaiter().GetResult();
-        AssertSubmitSubagentReportAutoSubmitReopen().GetAwaiter().GetResult();
+        await AssertSubmitSubagentReportAutoSubmitOneFailure();
+        await AssertSubmitSubagentReportAutoSubmitTwoFailuresCompleted();
+        await AssertSubmitSubagentReportAutoSubmitTwoFailuresFailed();
+        await AssertSubmitSubagentReportAutoSubmitUnparseable();
+        await AssertSubmitSubagentReportAutoSubmitPerTurn();
+        await AssertSubmitSubagentReportAutoSubmitExecutorPathUnchanged();
+        await AssertSubmitSubagentReportAutoSubmitReopen();
     }
 
     private static void AssertStatusRoundTrip()
@@ -428,7 +428,7 @@ public class DysonSessionTodoTests
         var child = new StubSession();
         parent.RegisterForTest(child);
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(child, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(child, Path.GetTempPath(), http);
 
         var result = await executor.ExecuteAsync(new DysonToolCall
         {
@@ -486,7 +486,7 @@ public class DysonSessionTodoTests
         failedParent.ConfigureRootForTest();
         var failedChild = new StubSession();
         failedParent.RegisterForTest(failedChild);
-        var failedExecutor = DysonWorkspaceTestFs.CreateExecutor(failedChild, Path.GetTempPath(), http);
+        var failedExecutor = await DysonWorkspaceTestFs.CreateExecutorAsync(failedChild, Path.GetTempPath(), http);
         var failedResult = await failedExecutor.ExecuteAsync(new DysonToolCall
         {
             CallId = "r3",
@@ -988,7 +988,7 @@ public class DysonSessionTodoTests
             throw new InvalidOperationException($"Expected pending todo ok, got: {pending.Error}");
 
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(child, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(child, Path.GetTempPath(), http);
         const string args = """{"summary":"findings here"}""";
 
         var first = await executor.ExecuteAsync(new DysonToolCall

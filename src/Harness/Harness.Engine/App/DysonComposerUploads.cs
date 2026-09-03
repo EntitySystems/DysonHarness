@@ -90,10 +90,11 @@ public static class DysonComposerUploads
     /// Ensures the upload dir exists, writes <paramref name="bytes"/> under a sanitized unique name,
     /// and returns the workspace-relative path (forward slashes).
     /// </summary>
-    public static Result<string, string> Write(
+    public static async Task<Result<string, string>> WriteAsync(
         IDysonWorkspaceFileSystem fs,
         string? fileName,
-        byte[] bytes)
+        byte[] bytes,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(fs);
         ArgumentNullException.ThrowIfNull(bytes);
@@ -103,12 +104,15 @@ public static class DysonComposerUploads
         if (bytes.Length > MaxRawBytes)
             return Result<string, string>.AsError("File is too large (max 25 MB).");
 
-        var ensureDir = fs.CreateDirectory(RelativeDirectory);
+        var ensureDir = await fs.CreateDirectoryAsync(RelativeDirectory, cancellationToken)
+            .ConfigureAwait(false);
         if (ensureDir.IsError)
             return Result<string, string>.AsError(ensureDir.Error);
 
-        var relative = AllocateRelativePath(fs, fileName);
-        var written = fs.WriteAllBytes(relative, bytes);
+        var relative = await AllocateRelativePathAsync(fs, fileName, cancellationToken)
+            .ConfigureAwait(false);
+        var written = await fs.WriteAllBytesAsync(relative, bytes, cancellationToken)
+            .ConfigureAwait(false);
         if (written.IsError)
             return Result<string, string>.AsError(written.Error);
 
@@ -119,23 +123,28 @@ public static class DysonComposerUploads
     /// Deletes all files and subdirectories under <see cref="RelativeDirectory"/>, keeping the folder.
     /// Creates the directory if missing. Returns the number of direct children removed.
     /// </summary>
-    public static Result<int, string> ClearAll(IDysonWorkspaceFileSystem fs)
+    public static async Task<Result<int, string>> ClearAllAsync(
+        IDysonWorkspaceFileSystem fs,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(fs);
 
-        var exists = fs.DirectoryExists(RelativeDirectory);
+        var exists = await fs.DirectoryExistsAsync(RelativeDirectory, cancellationToken)
+            .ConfigureAwait(false);
         if (exists.IsError)
             return Result<int, string>.AsError(exists.Error);
 
         if (!exists.Value)
         {
-            var created = fs.CreateDirectory(RelativeDirectory);
+            var created = await fs.CreateDirectoryAsync(RelativeDirectory, cancellationToken)
+                .ConfigureAwait(false);
             if (created.IsError)
                 return Result<int, string>.AsError(created.Error);
             return Result<int, string>.AsValue(0);
         }
 
-        var entries = fs.EnumerateEntries(RelativeDirectory);
+        var entries = await fs.EnumerateEntriesAsync(RelativeDirectory, cancellationToken)
+            .ConfigureAwait(false);
         if (entries.IsError)
             return Result<int, string>.AsError(entries.Error);
 
@@ -147,8 +156,10 @@ public static class DysonComposerUploads
 
             var child = $"{RelativeDirectory}/{entry.Name}";
             var removed = entry.IsDirectory
-                ? fs.DeleteDirectory(child, recursive: true)
-                : fs.DeleteFile(child);
+                ? await fs.DeleteDirectoryAsync(child, recursive: true, cancellationToken)
+                    .ConfigureAwait(false)
+                : await fs.DeleteFileAsync(child, cancellationToken)
+                    .ConfigureAwait(false);
             if (removed.IsError)
                 return Result<int, string>.AsError(removed.Error);
 
@@ -158,11 +169,14 @@ public static class DysonComposerUploads
         return Result<int, string>.AsValue(deleted);
     }
 
-    private static string AllocateRelativePath(IDysonWorkspaceFileSystem fs, string? fileName)
+    private static async Task<string> AllocateRelativePathAsync(
+        IDysonWorkspaceFileSystem fs,
+        string? fileName,
+        CancellationToken cancellationToken)
     {
         var safeName = SanitizeFileName(fileName);
         var relative = $"{RelativeDirectory}/{safeName}";
-        var exists = fs.FileExists(relative);
+        var exists = await fs.FileExistsAsync(relative, cancellationToken).ConfigureAwait(false);
         if (exists.IsError || !exists.Value)
             return relative;
 
@@ -171,7 +185,7 @@ public static class DysonComposerUploads
         for (var i = 1; i < 10_000; i++)
         {
             relative = $"{RelativeDirectory}/{stem}-{i}{ext}";
-            exists = fs.FileExists(relative);
+            exists = await fs.FileExistsAsync(relative, cancellationToken).ConfigureAwait(false);
             if (exists.IsError || !exists.Value)
                 return relative;
         }

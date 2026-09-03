@@ -155,7 +155,9 @@ public sealed class SkillsShSkillExplorerProvider(HttpClient http) : IDysonSkill
         if (zip.IsError)
             return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(zip.Error);
 
-        var extracted = DysonSkillPackageInstall.ExtractZipToSkillDir(zip.Value, safe.Value, fs);
+        var extracted = await DysonSkillPackageInstall
+            .ExtractZipToSkillDirAsync(zip.Value, safe.Value, fs, cancellationToken)
+            .ConfigureAwait(false);
         if (extracted.IsError)
             return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(extracted.Error);
 

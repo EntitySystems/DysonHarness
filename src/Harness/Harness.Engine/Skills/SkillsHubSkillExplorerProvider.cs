@@ -194,7 +194,9 @@ public sealed class SkillsHubSkillExplorerProvider(HttpClient http) : IDysonSkil
         if (folder.IsError)
             return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(folder.Error);
 
-        var written = DysonSkillPackageInstall.WriteSkillMarkdown(markdown.Content, folder.Value, fs);
+        var written = await DysonSkillPackageInstall
+            .WriteSkillMarkdownAsync(markdown.Content, folder.Value, fs, cancellationToken)
+            .ConfigureAwait(false);
         if (written.IsError)
             return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(written.Error);
 

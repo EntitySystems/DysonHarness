@@ -12,13 +12,13 @@ namespace Harness.Tests;
 public class DysonConvertImageTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertCatalogAndFormatMap();
-        AssertSvgToIco();
-        AssertJpegQualityShrinks();
-        AssertOverwriteSemantics();
-        AssertValidation();
+        await AssertSvgToIco();
+        await AssertJpegQualityShrinks();
+        await AssertOverwriteSemantics();
+        await AssertValidation();
     }
 
     private static void AssertCatalogAndFormatMap()
@@ -51,7 +51,7 @@ public class DysonConvertImageTests
             throw new InvalidOperationException(".ico must hint MagickFormat.Ico.");
     }
 
-    private static void AssertSvgToIco()
+    private static async Task AssertSvgToIco()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-cimg-svg-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -65,7 +65,7 @@ public class DysonConvertImageTests
             File.WriteAllText(Path.Combine(root, "icon.svg"), svg, Encoding.UTF8);
 
             var session = new StubSession();
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
             var result = executor.ExecuteAsync(new DysonToolCall
             {
                 CallId = "cimg-svg",
@@ -105,7 +105,7 @@ public class DysonConvertImageTests
         }
     }
 
-    private static void AssertJpegQualityShrinks()
+    private static async Task AssertJpegQualityShrinks()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-cimg-jpg-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -124,7 +124,7 @@ public class DysonConvertImageTests
             File.WriteAllBytes(Path.Combine(root, "photo.jpg"), largeJpeg);
 
             var session = new StubSession();
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
             var result = executor.ExecuteAsync(new DysonToolCall
             {
                 CallId = "cimg-jpg",
@@ -154,7 +154,7 @@ public class DysonConvertImageTests
         }
     }
 
-    private static void AssertOverwriteSemantics()
+    private static async Task AssertOverwriteSemantics()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-cimg-ow-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -171,7 +171,7 @@ public class DysonConvertImageTests
             File.WriteAllBytes(Path.Combine(root, "out.webp"), [0x00, 0x01]);
 
             var session = new StubSession();
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
 
             var blocked = executor.ExecuteAsync(new DysonToolCall
             {
@@ -207,7 +207,7 @@ public class DysonConvertImageTests
         }
     }
 
-    private static void AssertValidation()
+    private static async Task AssertValidation()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-cimg-val-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -230,7 +230,7 @@ public class DysonConvertImageTests
             }
 
             var session = new StubSession();
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
 
             var badQuality = executor.ExecuteAsync(new DysonToolCall
             {

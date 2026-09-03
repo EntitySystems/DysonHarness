@@ -161,19 +161,23 @@ public static class DysonOpenRules
     /// <c>{ Root: AGENTS.md, Rules: [], Skills: [] }</c> when <c>AGENTS.md</c> exists;
     /// otherwise returns null (no open-rules block).
     /// </summary>
-    public static Result<DysonOpenRulesConfig?, string> TryLoad(IDysonWorkspaceFileSystem fs)
+    public static async Task<Result<DysonOpenRulesConfig?, string>> TryLoadAsync(
+        IDysonWorkspaceFileSystem fs,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(fs);
         if (!fs.IsInitialized)
             return Result<DysonOpenRulesConfig?, string>.AsError("Workspace filesystem is not initialized.");
 
-        var manifestExists = fs.FileExists(ManifestFileName);
+        var manifestExists = await fs.FileExistsAsync(ManifestFileName, cancellationToken)
+            .ConfigureAwait(false);
         if (manifestExists.IsError)
             return Result<DysonOpenRulesConfig?, string>.AsError(manifestExists.Error);
 
         if (!manifestExists.Value)
         {
-            var agentsExists = fs.FileExists(DefaultRootPath);
+            var agentsExists = await fs.FileExistsAsync(DefaultRootPath, cancellationToken)
+                .ConfigureAwait(false);
             if (agentsExists.IsError)
                 return Result<DysonOpenRulesConfig?, string>.AsError(agentsExists.Error);
             if (!agentsExists.Value)
@@ -189,7 +193,8 @@ public static class DysonOpenRules
             });
         }
 
-        var text = fs.ReadAllText(ManifestFileName);
+        var text = await fs.ReadAllTextAsync(ManifestFileName, cancellationToken)
+            .ConfigureAwait(false);
         if (text.IsError)
             return Result<DysonOpenRulesConfig?, string>.AsError(text.Error);
 
@@ -209,14 +214,17 @@ public static class DysonOpenRules
             ? DefaultRootPath
             : NormalizePath(doc.Root);
 
-        var rootExistsResult = fs.FileExists(rootPath);
+        var rootExistsResult = await fs.FileExistsAsync(rootPath, cancellationToken)
+            .ConfigureAwait(false);
         var rootExists = !rootExistsResult.IsError && rootExistsResult.Value;
 
-        var rules = ResolveEntries(fs, doc.Rules, isSkill: false);
+        var rules = await ResolveEntriesAsync(fs, doc.Rules, isSkill: false, cancellationToken)
+            .ConfigureAwait(false);
         if (rules.IsError)
             return Result<DysonOpenRulesConfig?, string>.AsError(rules.Error);
 
-        var skills = ResolveEntries(fs, doc.Skills, isSkill: true);
+        var skills = await ResolveEntriesAsync(fs, doc.Skills, isSkill: true, cancellationToken)
+            .ConfigureAwait(false);
         if (skills.IsError)
             return Result<DysonOpenRulesConfig?, string>.AsError(skills.Error);
 
@@ -255,27 +263,31 @@ public static class DysonOpenRules
     /// If <c>openrules.json</c> exists, returns its contents (<paramref name="created"/> false).
     /// If missing, writes the default document and returns it (<paramref name="created"/> true).
     /// </summary>
-    public static Result<(string Json, bool Created), string> InitializeOrRead(
-        IDysonWorkspaceFileSystem fs)
+    public static async Task<Result<(string Json, bool Created), string>> InitializeOrReadAsync(
+        IDysonWorkspaceFileSystem fs,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(fs);
         if (!fs.IsInitialized)
             return Result<(string, bool), string>.AsError("Workspace filesystem is not initialized.");
 
-        var exists = fs.FileExists(ManifestFileName);
+        var exists = await fs.FileExistsAsync(ManifestFileName, cancellationToken)
+            .ConfigureAwait(false);
         if (exists.IsError)
             return Result<(string, bool), string>.AsError(exists.Error);
 
         if (exists.Value)
         {
-            var text = fs.ReadAllText(ManifestFileName);
+            var text = await fs.ReadAllTextAsync(ManifestFileName, cancellationToken)
+                .ConfigureAwait(false);
             if (text.IsError)
                 return Result<(string, bool), string>.AsError(text.Error);
             return Result<(string, bool), string>.AsValue((text.Value, false));
         }
 
         var json = JsonSerializer.Serialize(CreateDefaultDocument(), JsonOptions);
-        var write = fs.WriteAllText(ManifestFileName, json);
+        var write = await fs.WriteAllTextAsync(ManifestFileName, json, cancellationToken)
+            .ConfigureAwait(false);
         if (write.IsError)
             return Result<(string, bool), string>.AsError(write.Error);
 
@@ -287,10 +299,11 @@ public static class DysonOpenRules
     /// Creates <c>openrules.json</c> from <see cref="CreateDefaultDocument"/> when missing.
     /// Returns true when a row was added; false when already referenced.
     /// </summary>
-    public static Result<bool, string> EnsureAgentOptionalSkill(
+    public static async Task<Result<bool, string>> EnsureAgentOptionalSkillAsync(
         IDysonWorkspaceFileSystem fs,
         string skillMarkdownRelativePath,
-        string? description = null)
+        string? description = null,
+        CancellationToken cancellationToken = default)
     {
         // ponytail: DTO round-trip drops comments/unknown properties. Same serializer as
         // InitializeOrRead. Upgrade path: JsonNode merge.
@@ -320,7 +333,8 @@ public static class DysonOpenRules
         if (resolved.IsError)
             return Result<bool, string>.AsError(resolved.Error);
 
-        var loaded = TryReadManifestDocument(fs, createIfMissing: true);
+        var loaded = await TryReadManifestDocumentAsync(fs, createIfMissing: true, cancellationToken)
+            .ConfigureAwait(false);
         if (loaded.IsError)
             return Result<bool, string>.AsError(loaded.Error);
 
@@ -339,18 +353,19 @@ public static class DysonOpenRules
             Description = desc,
         });
 
-        return WriteManifest(fs, doc, value: true);
+        return await WriteManifestAsync(fs, doc, value: true, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Sets Mode on an existing Rules or Skills row. Does not create <c>openrules.json</c>.
     /// Returns true when Mode changed; false when already that mode.
     /// </summary>
-    public static Result<bool, string> SetEntryMode(
+    public static async Task<Result<bool, string>> SetEntryModeAsync(
         IDysonWorkspaceFileSystem fs,
         string path,
         bool isSkill,
-        string mode)
+        string mode,
+        CancellationToken cancellationToken = default)
     {
         // ponytail: DTO round-trip drops comments/unknown properties. Same serializer as
         // InitializeOrRead. Upgrade path: JsonNode merge.
@@ -366,7 +381,8 @@ public static class DysonOpenRules
                 $"'{DysonOpenRulesModes.AgentOptional}'.");
         }
 
-        var loaded = TryReadManifestDocument(fs, createIfMissing: false);
+        var loaded = await TryReadManifestDocumentAsync(fs, createIfMissing: false, cancellationToken)
+            .ConfigureAwait(false);
         if (loaded.IsError)
             return Result<bool, string>.AsError(loaded.Error);
 
@@ -388,7 +404,7 @@ public static class DysonOpenRules
             return Result<bool, string>.AsValue(false);
 
         entry.Mode = canonical;
-        return WriteManifest(fs, doc, value: true);
+        return await WriteManifestAsync(fs, doc, value: true, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -436,30 +452,6 @@ public static class DysonOpenRules
     }
 
     /// <summary>
-    /// Builds the AutoInclude open-rules markdown block for the session system prompt.
-    /// Local files only for URL entries (emits a short unfetched note). Prefer
-    /// <see cref="BuildSystemPromptBlockAsync(IDysonWorkspaceFileSystem, string?, CancellationToken)"/>.
-    /// </summary>
-    public static string? BuildSystemPromptBlock(
-        IDysonWorkspaceFileSystem fs,
-        string? providerId = null)
-    {
-        ArgumentNullException.ThrowIfNull(fs);
-        if (!fs.IsInitialized)
-            return null;
-
-        var loaded = TryLoad(fs);
-        if (loaded.IsError || loaded.Value is null)
-            return null;
-
-        return BuildSystemPromptBlockCore(
-            loaded.Value,
-            fs,
-            providerId,
-            urlBodyLoader: null);
-    }
-
-    /// <summary>
     /// Async AutoInclude block: fetches http(s) Path bodies; local files via FS.
     /// </summary>
     public static async Task<string?> BuildSystemPromptBlockAsync(
@@ -471,7 +463,7 @@ public static class DysonOpenRules
         if (!fs.IsInitialized)
             return null;
 
-        var loaded = TryLoad(fs);
+        var loaded = await TryLoadAsync(fs, cancellationToken).ConfigureAwait(false);
         if (loaded.IsError || loaded.Value is null)
             return null;
 
@@ -519,11 +511,12 @@ public static class DysonOpenRules
     }
 
     /// <summary>AgentOptional Rules + Skills for skill catalog / LoadSkill resolve.</summary>
-    public static IReadOnlyList<DysonOpenRulesResolvedEntry> ListAgentOptional(
+    public static async Task<IReadOnlyList<DysonOpenRulesResolvedEntry>> ListAgentOptionalAsync(
         IDysonWorkspaceFileSystem fs,
-        string? providerId = null)
+        string? providerId = null,
+        CancellationToken cancellationToken = default)
     {
-        var loaded = TryLoad(fs);
+        var loaded = await TryLoadAsync(fs, cancellationToken).ConfigureAwait(false);
         if (loaded.IsError || loaded.Value is null)
             return [];
 
@@ -541,13 +534,15 @@ public static class DysonOpenRules
     /// JSON summary for <c>GetOpenRulesConfig</c> (no file bodies). Returns all manifest rows
     /// (no provider filter). Missing manifest notes the implicit Root default when applicable.
     /// </summary>
-    public static string FormatConfigSummaryJson(IDysonWorkspaceFileSystem fs)
+    public static async Task<string> FormatConfigSummaryJsonAsync(
+        IDysonWorkspaceFileSystem fs,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(fs);
         if (!fs.IsInitialized)
             return """{"error":"Workspace filesystem is not initialized."}""";
 
-        var loaded = TryLoad(fs);
+        var loaded = await TryLoadAsync(fs, cancellationToken).ConfigureAwait(false);
         if (loaded.IsError)
         {
             return JsonSerializer.Serialize(new { error = loaded.Error }, JsonOptions);
@@ -754,7 +749,7 @@ public static class DysonOpenRules
                 urlBodies[entry.Path + "\0error"] = fetched.Error;
         }
 
-        return BuildSystemPromptBlockCore(
+        return await BuildSystemPromptBlockCoreAsync(
             config,
             fs,
             providerId,
@@ -767,14 +762,16 @@ public static class DysonOpenRules
                     ? e
                     : "URL body unavailable";
                 return Result<string, string>.AsError(err);
-            });
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
-    private static string? BuildSystemPromptBlockCore(
+    private static async Task<string?> BuildSystemPromptBlockCoreAsync(
         DysonOpenRulesConfig config,
         IDysonWorkspaceFileSystem fs,
         string? providerId,
-        Func<string, Result<string, string>>? urlBodyLoader)
+        Func<string, Result<string, string>>? urlBodyLoader,
+        CancellationToken cancellationToken)
     {
         var id = string.IsNullOrWhiteSpace(providerId)
             ? DysonOpenRulesProviders.Dyson
@@ -790,41 +787,44 @@ public static class DysonOpenRules
         sb.AppendLine();
 
         var remaining = MaxTotalChars;
-        AppendFileSection(
+        remaining = await AppendFileSectionAsync(
             sb,
-            ref remaining,
+            remaining,
             header: $"[OpenRules Manifest: {ManifestFileName}]",
             path: ManifestFileName,
             description: null,
             fs,
             exists: config.ManifestPresent,
             isUrl: false,
-            urlBodyLoader);
+            urlBodyLoader,
+            cancellationToken).ConfigureAwait(false);
 
-        AppendFileSection(
+        remaining = await AppendFileSectionAsync(
             sb,
-            ref remaining,
+            remaining,
             header: $"[OpenRules Root: {config.RootPath}]",
             path: config.RootPath,
             description: null,
             fs,
             exists: config.RootExists,
             isUrl: false,
-            urlBodyLoader);
+            urlBodyLoader,
+            cancellationToken).ConfigureAwait(false);
 
         foreach (var entry in config.Rules.Where(e =>
                      DysonOpenRulesModes.IsAutoInclude(e.Mode) && AppliesToProvider(e, id)))
         {
-            AppendFileSection(
+            remaining = await AppendFileSectionAsync(
                 sb,
-                ref remaining,
+                remaining,
                 header: $"[OpenRules AutoInclude Rule: {entry.Path}]",
                 path: entry.Path,
                 description: entry.Description,
                 fs,
                 exists: entry.Exists,
                 isUrl: entry.IsUrl,
-                urlBodyLoader);
+                urlBodyLoader,
+                cancellationToken).ConfigureAwait(false);
             if (remaining <= 0)
                 break;
         }
@@ -832,16 +832,17 @@ public static class DysonOpenRules
         foreach (var entry in config.Skills.Where(e =>
                      DysonOpenRulesModes.IsAutoInclude(e.Mode) && AppliesToProvider(e, id)))
         {
-            AppendFileSection(
+            remaining = await AppendFileSectionAsync(
                 sb,
-                ref remaining,
+                remaining,
                 header: $"[OpenRules AutoInclude Skill: {entry.Path}]",
                 path: entry.Path,
                 description: entry.Description,
                 fs,
                 exists: entry.Exists,
                 isUrl: entry.IsUrl,
-                urlBodyLoader);
+                urlBodyLoader,
+                cancellationToken).ConfigureAwait(false);
             if (remaining <= 0)
                 break;
         }
@@ -868,10 +869,11 @@ public static class DysonOpenRules
             Providers = e.Providers is { Count: > 0 } ? e.Providers : null,
         };
 
-    private static Result<IReadOnlyList<DysonOpenRulesResolvedEntry>, string> ResolveEntries(
+    private static async Task<Result<IReadOnlyList<DysonOpenRulesResolvedEntry>, string>> ResolveEntriesAsync(
         IDysonWorkspaceFileSystem fs,
         List<DysonOpenRulesEntryDto>? entries,
-        bool isSkill)
+        bool isSkill,
+        CancellationToken cancellationToken)
     {
         if (entries is null || entries.Count == 0)
             return Result<IReadOnlyList<DysonOpenRulesResolvedEntry>, string>.AsValue([]);
@@ -901,13 +903,15 @@ public static class DysonOpenRules
             else
             {
                 exists = false;
-                var existsFile = fs.FileExists(path);
+                var existsFile = await fs.FileExistsAsync(path, cancellationToken)
+                    .ConfigureAwait(false);
                 if (!existsFile.IsError)
                 {
                     exists = existsFile.Value;
                     if (!exists)
                     {
-                        var existsDir = fs.DirectoryExists(path);
+                        var existsDir = await fs.DirectoryExistsAsync(path, cancellationToken)
+                            .ConfigureAwait(false);
                         if (!existsDir.IsError)
                             exists = existsDir.Value;
                     }
@@ -943,19 +947,20 @@ public static class DysonOpenRules
         return Result<IReadOnlyList<DysonOpenRulesResolvedEntry>, string>.AsValue(list);
     }
 
-    private static void AppendFileSection(
+    private static async Task<int> AppendFileSectionAsync(
         StringBuilder sb,
-        ref int remaining,
+        int remaining,
         string header,
         string path,
         string? description,
         IDysonWorkspaceFileSystem fs,
         bool exists,
         bool isUrl,
-        Func<string, Result<string, string>>? urlBodyLoader)
+        Func<string, Result<string, string>>? urlBodyLoader,
+        CancellationToken cancellationToken)
     {
         if (remaining <= 0)
-            return;
+            return remaining;
 
         sb.AppendLine(header);
         if (!string.IsNullOrWhiteSpace(description))
@@ -966,8 +971,7 @@ public static class DysonOpenRules
             var warn = $"(missing: {path})";
             sb.AppendLine(warn);
             sb.AppendLine();
-            remaining -= header.Length + warn.Length + 8;
-            return;
+            return remaining - header.Length - warn.Length - 8;
         }
 
         string body;
@@ -975,11 +979,10 @@ public static class DysonOpenRules
         {
             if (urlBodyLoader is null)
             {
-                var warn = $"(url not fetched in sync path: {path})";
+                var warn = $"(unreadable url: {path} — URL body unavailable)";
                 sb.AppendLine(warn);
                 sb.AppendLine();
-                remaining -= header.Length + warn.Length + 8;
-                return;
+                return remaining - header.Length - warn.Length - 8;
             }
 
             var fetched = urlBodyLoader(path);
@@ -988,22 +991,20 @@ public static class DysonOpenRules
                 var warn = $"(unreadable url: {path} — {fetched.Error})";
                 sb.AppendLine(warn);
                 sb.AppendLine();
-                remaining -= header.Length + warn.Length + 8;
-                return;
+                return remaining - header.Length - warn.Length - 8;
             }
 
             body = fetched.Value;
         }
         else
         {
-            var text = fs.ReadAllText(path);
+            var text = await fs.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
             if (text.IsError)
             {
                 var warn = $"(unreadable: {path} — {text.Error})";
                 sb.AppendLine(warn);
                 sb.AppendLine();
-                remaining -= header.Length + warn.Length + 8;
-                return;
+                return remaining - header.Length - warn.Length - 8;
             }
 
             body = text.Value;
@@ -1016,14 +1017,15 @@ public static class DysonOpenRules
 
         sb.AppendLine(body.TrimEnd());
         sb.AppendLine();
-        remaining -= header.Length + body.Length + 8;
+        return remaining - header.Length - body.Length - 8;
     }
 
-    private static Result<DysonOpenRulesDocumentDto, string> TryReadManifestDocument(
+    private static async Task<Result<DysonOpenRulesDocumentDto, string>> TryReadManifestDocumentAsync(
         IDysonWorkspaceFileSystem fs,
-        bool createIfMissing)
+        bool createIfMissing,
+        CancellationToken cancellationToken)
     {
-        var exists = fs.FileExists(ManifestFileName);
+        var exists = await fs.FileExistsAsync(ManifestFileName, cancellationToken).ConfigureAwait(false);
         if (exists.IsError)
             return Result<DysonOpenRulesDocumentDto, string>.AsError(exists.Error);
 
@@ -1034,7 +1036,7 @@ public static class DysonOpenRules
             return Result<DysonOpenRulesDocumentDto, string>.AsValue(CreateDefaultDocument());
         }
 
-        var text = fs.ReadAllText(ManifestFileName);
+        var text = await fs.ReadAllTextAsync(ManifestFileName, cancellationToken).ConfigureAwait(false);
         if (text.IsError)
             return Result<DysonOpenRulesDocumentDto, string>.AsError(text.Error);
 
@@ -1051,13 +1053,15 @@ public static class DysonOpenRules
         }
     }
 
-    private static Result<bool, string> WriteManifest(
+    private static async Task<Result<bool, string>> WriteManifestAsync(
         IDysonWorkspaceFileSystem fs,
         DysonOpenRulesDocumentDto doc,
-        bool value)
+        bool value,
+        CancellationToken cancellationToken)
     {
         var json = JsonSerializer.Serialize(doc, JsonOptions);
-        var write = fs.WriteAllText(ManifestFileName, json);
+        var write = await fs.WriteAllTextAsync(ManifestFileName, json, cancellationToken)
+            .ConfigureAwait(false);
         if (write.IsError)
             return Result<bool, string>.AsError(write.Error);
         return Result<bool, string>.AsValue(value);

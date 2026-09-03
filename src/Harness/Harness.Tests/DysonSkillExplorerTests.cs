@@ -204,17 +204,17 @@ public class DysonSkillExplorerTests
         Directory.CreateDirectory(root);
         try
         {
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
             var installed = await provider.DownloadAsync("memory-curator", fs);
             Assert.True(installed.IsSuccess, installed.IsError ? installed.Error : null);
             var installedPath = Assert.IsType<DysonSkillExplorerDownloadOutcome.Installed>(installed.Value);
             Assert.Equal(".dyson/skills/memory-curator", installedPath.RelativePath.Replace('\\', '/'));
 
-            var skillMd = fs.ReadAllText(".dyson/skills/memory-curator/SKILL.md");
+            var skillMd = await fs.ReadAllTextAsync(".dyson/skills/memory-curator/SKILL.md");
             Assert.True(skillMd.IsSuccess, skillMd.IsError ? skillMd.Error : null);
             Assert.Contains("Hello.", skillMd.Value, StringComparison.Ordinal);
 
-            var notes = fs.ReadAllText(".dyson/skills/memory-curator/notes.md");
+            var notes = await fs.ReadAllTextAsync(".dyson/skills/memory-curator/notes.md");
             Assert.True(notes.IsSuccess, notes.IsError ? notes.Error : null);
             Assert.Equal("extra", notes.Value);
 
@@ -230,7 +230,7 @@ public class DysonSkillExplorerTests
             };
             var again = await provider.DownloadAsync("memory-curator", fs);
             Assert.True(again.IsSuccess, again.IsError ? again.Error : null);
-            var v2 = fs.ReadAllText(".dyson/skills/memory-curator/SKILL.md");
+            var v2 = await fs.ReadAllTextAsync(".dyson/skills/memory-curator/SKILL.md");
             Assert.True(v2.IsSuccess, v2.IsError ? v2.Error : null);
             Assert.Equal("# v2", v2.Value.Trim());
         }
@@ -270,7 +270,7 @@ public class DysonSkillExplorerTests
         Directory.CreateDirectory(root);
         try
         {
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
             var downloaded = await explorer.DownloadAsync(
                 SkillsDirectorySkillExplorerProvider.ProviderId,
                 slug,
@@ -279,15 +279,15 @@ public class DysonSkillExplorerTests
             var installed = Assert.IsType<DysonSkillExplorerDownloadOutcome.Installed>(downloaded.Value);
             Assert.Equal($".dyson/skills/{slug}", installed.RelativePath.Replace('\\', '/'));
 
-            var skillMd = fs.ReadAllText($".dyson/skills/{slug}/SKILL.md");
+            var skillMd = await fs.ReadAllTextAsync($".dyson/skills/{slug}/SKILL.md");
             Assert.True(skillMd.IsSuccess, skillMd.IsError ? skillMd.Error : null);
             Assert.Contains("Hello.", skillMd.Value, StringComparison.Ordinal);
 
-            var manifestExists = fs.FileExists("openrules.json");
+            var manifestExists = await fs.FileExistsAsync("openrules.json");
             Assert.True(manifestExists.IsSuccess);
             Assert.True(manifestExists.Value);
 
-            var json = fs.ReadAllText("openrules.json");
+            var json = await fs.ReadAllTextAsync("openrules.json");
             Assert.True(json.IsSuccess, json.IsError ? json.Error : null);
             Assert.Contains(
                 $""""Path": ".dyson/skills/{slug}/SKILL.md"""",
@@ -344,7 +344,7 @@ public class DysonSkillExplorerTests
     }
 
     [Fact]
-    public void ExtractZip_strips_single_root_and_rejects_traversal()
+    public async Task ExtractZip_strips_single_root_and_rejects_traversal()
     {
         var good = BuildSkillZip("pkg", "# ok", null, null);
         using var goodMs = new MemoryStream(good);
@@ -355,12 +355,12 @@ public class DysonSkillExplorerTests
         Directory.CreateDirectory(root);
         try
         {
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
-            var extracted = DysonSkillPackageInstall.ExtractZipToSkillDir(good, "pkg", fs);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
+            var extracted = await DysonSkillPackageInstall.ExtractZipToSkillDirAsync(good, "pkg", fs);
             Assert.True(extracted.IsSuccess, extracted.IsError ? extracted.Error : null);
 
             var evilBytes = BuildZipWithEntry("../escape/SKILL.md", "# no");
-            var evil = DysonSkillPackageInstall.ExtractZipToSkillDir(evilBytes, "evil", fs);
+            var evil = await DysonSkillPackageInstall.ExtractZipToSkillDirAsync(evilBytes, "evil", fs);
             Assert.True(evil.IsError);
             Assert.Contains("unsafe", evil.Error, StringComparison.OrdinalIgnoreCase);
         }
@@ -520,7 +520,7 @@ public class DysonSkillExplorerTests
         Directory.CreateDirectory(root);
         try
         {
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
             var installed = await provider.DownloadAsync("ivangdavila/git", fs);
             Assert.True(installed.IsSuccess, installed.IsError ? installed.Error : null);
             var installedPath = Assert.IsType<DysonSkillExplorerDownloadOutcome.Installed>(installed.Value);
@@ -646,7 +646,7 @@ public class DysonSkillExplorerTests
         Directory.CreateDirectory(root);
         try
         {
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
 
             var ambiguous = await provider.DownloadAsync("skill-vetter", fs);
             Assert.True(ambiguous.IsSuccess, ambiguous.IsError ? ambiguous.Error : null);
@@ -755,12 +755,12 @@ public class DysonSkillExplorerTests
         Directory.CreateDirectory(root);
         try
         {
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
             var installed = await provider.DownloadAsync("acme/git", fs);
             Assert.True(installed.IsSuccess, installed.IsError ? installed.Error : null);
             Assert.IsType<DysonSkillExplorerDownloadOutcome.Installed>(installed.Value);
 
-            var skillMd = fs.ReadAllText(".dyson/skills/acme-git/SKILL.md");
+            var skillMd = await fs.ReadAllTextAsync(".dyson/skills/acme-git/SKILL.md");
             Assert.True(skillMd.IsSuccess, skillMd.IsError ? skillMd.Error : null);
             Assert.Contains("Git handoff", skillMd.Value, StringComparison.Ordinal);
         }
@@ -906,17 +906,17 @@ public class DysonSkillExplorerTests
         Directory.CreateDirectory(root);
         try
         {
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
             var installed = await provider.DownloadAsync("anthropics/skills/pdf", fs);
             Assert.True(installed.IsSuccess, installed.IsError ? installed.Error : null);
             var installedPath = Assert.IsType<DysonSkillExplorerDownloadOutcome.Installed>(installed.Value);
             Assert.Equal(".dyson/skills/anthropics-skills-pdf", installedPath.RelativePath.Replace('\\', '/'));
 
-            var skillMd = fs.ReadAllText(".dyson/skills/anthropics-skills-pdf/SKILL.md");
+            var skillMd = await fs.ReadAllTextAsync(".dyson/skills/anthropics-skills-pdf/SKILL.md");
             Assert.True(skillMd.IsSuccess, skillMd.IsError ? skillMd.Error : null);
             Assert.Contains("From skills.sh", skillMd.Value, StringComparison.Ordinal);
 
-            var decoy = fs.FileExists(".dyson/skills/anthropics-skills-pdf/skills/xlsx/SKILL.md");
+            var decoy = await fs.FileExistsAsync(".dyson/skills/anthropics-skills-pdf/skills/xlsx/SKILL.md");
             Assert.True(decoy.IsSuccess);
             Assert.False(decoy.Value);
         }
@@ -950,7 +950,7 @@ public class DysonSkillExplorerTests
     }
 
     [Fact]
-    public void PackageInstall_sanitizes_composite_slug_and_writes_markdown()
+    public async Task PackageInstall_sanitizes_composite_slug_and_writes_markdown()
     {
         var composite = DysonSkillPackageInstall.SanitizeFolderSlug("owner/repo/my-skill");
         Assert.True(composite.IsSuccess, composite.IsError ? composite.Error : null);
@@ -967,12 +967,12 @@ public class DysonSkillExplorerTests
         Directory.CreateDirectory(root);
         try
         {
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
-            var written = DysonSkillPackageInstall.WriteSkillMarkdown("# hub skill\n", "owner-repo-my-skill", fs);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
+            var written = await DysonSkillPackageInstall.WriteSkillMarkdownAsync("# hub skill\n", "owner-repo-my-skill", fs);
             Assert.True(written.IsSuccess, written.IsError ? written.Error : null);
             Assert.Equal(".dyson/skills/owner-repo-my-skill", written.Value.Replace('\\', '/'));
 
-            var text = fs.ReadAllText(".dyson/skills/owner-repo-my-skill/SKILL.md");
+            var text = await fs.ReadAllTextAsync(".dyson/skills/owner-repo-my-skill/SKILL.md");
             Assert.True(text.IsSuccess, text.IsError ? text.Error : null);
             Assert.Contains("hub skill", text.Value, StringComparison.Ordinal);
 

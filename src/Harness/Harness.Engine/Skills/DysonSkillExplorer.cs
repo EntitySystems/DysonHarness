@@ -86,11 +86,13 @@ public sealed class DysonSkillExplorer : IDysonSkillExplorer
         var relativeDir = installed.RelativePath.TrimEnd('/', '\\').Replace('\\', '/');
         var skillMd = relativeDir + "/SKILL.md";
         var description = Path.GetFileName(relativeDir);
-        var skillText = fs.ReadAllText(skillMd);
+        var skillText = await fs.ReadAllTextAsync(skillMd, cancellationToken).ConfigureAwait(false);
         if (skillText.IsSuccess)
             description = TryReadFirstAtxHeading(skillText.Value) ?? description;
 
-        var registered = DysonOpenRules.EnsureAgentOptionalSkill(fs, skillMd, description);
+        var registered = await DysonOpenRules
+            .EnsureAgentOptionalSkillAsync(fs, skillMd, description, cancellationToken)
+            .ConfigureAwait(false);
         if (registered.IsError)
         {
             return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(

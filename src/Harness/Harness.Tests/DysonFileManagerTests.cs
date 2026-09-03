@@ -7,10 +7,10 @@ namespace Harness.Tests;
 public class DysonFileManagerTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertSanitizeSlug();
-        AssertWriteNewPlanNamingAndSandbox();
+        await AssertWriteNewPlanNamingAndSandbox();
     }
 
     private static void AssertSanitizeSlug()
@@ -24,15 +24,15 @@ public class DysonFileManagerTests
         }
     }
 
-    private static void AssertWriteNewPlanNamingAndSandbox()
+    private static async Task AssertWriteNewPlanNamingAndSandbox()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-fm-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
-            var fm = new DysonFileManager(DysonWorkspaceTestFs.CreateLocal(root));
+            var fm = new DysonFileManager(await DysonWorkspaceTestFs.CreateLocalAsync(root));
             var markdown = "# Test plan\n\nDo the thing.\n";
-            var written = fm.WriteNewPlan("My Cool Plan", markdown);
+            var written = await fm.WriteNewPlanAsync("My Cool Plan", markdown);
             if (written.IsError)
                 throw new InvalidOperationException(written.Error);
 
@@ -48,13 +48,13 @@ public class DysonFileManagerTests
             if (!File.Exists(abs))
                 throw new InvalidOperationException("Plan file was not written.");
 
-            var read = fm.ReadText(rel);
+            var read = await fm.ReadTextAsync(rel);
             if (read.IsError || read.Value != markdown)
-                throw new InvalidOperationException("ReadText round-trip failed.");
+                throw new InvalidOperationException("ReadTextAsync round-trip failed.");
 
-            var escape = fm.ReadText("../outside.txt");
+            var escape = await fm.ReadTextAsync("../outside.txt");
             if (escape.IsSuccess)
-                throw new InvalidOperationException("Expected path-escape ReadText to fail.");
+                throw new InvalidOperationException("Expected path-escape ReadTextAsync to fail.");
         }
         finally
         {

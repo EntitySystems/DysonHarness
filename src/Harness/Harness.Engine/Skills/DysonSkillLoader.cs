@@ -47,49 +47,11 @@ public static class DysonSkillLoader
     private static readonly Lazy<IReadOnlyList<IncludedSkill>> IncludedSkills = new(DiscoverIncluded);
 
     /// <summary>
+    /// Async resolve/load (fetches openrules http(s) AgentOptional Path bodies when needed).
     /// Resolve order: included (<c>Resources/Skills</c>) → <c>.dyson/skills/{name}</c> →
     /// literal work-relative path → openrules AgentOptional (by path / stem / catalog name).
     /// AutoInclude openrules entries are system-prompt only (not listed here).
     /// OpenRules URL Paths require <see cref="ResolveAndLoadAsync"/>.
-    /// </summary>
-    public static Result<DysonLoadedSkill, string> ResolveAndLoad(
-        string name,
-        bool loadIndexOnly,
-        IDysonWorkspaceFileSystem? fs,
-        string? providerId = null,
-        DysonPluginContributionSet? pluginContributions = null)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-            return Result<DysonLoadedSkill, string>.AsError("Skill name is required.");
-
-        var trimmed = name.Trim().Replace('\\', '/');
-        var early = TryResolveBeforeOpenRules(trimmed, loadIndexOnly, fs);
-        if (early.IsError)
-            return Result<DysonLoadedSkill, string>.AsError(early.Error);
-        if (early.Value is not null)
-            return Result<DysonLoadedSkill, string>.AsValue(early.Value);
-
-        if (fs is not null && fs.IsInitialized)
-        {
-            var openRules = TryLoadOpenRulesAgentOptionalSync(trimmed, loadIndexOnly, fs, providerId);
-            if (openRules.IsError)
-                return Result<DysonLoadedSkill, string>.AsError(openRules.Error);
-            if (openRules.Value is not null)
-                return Result<DysonLoadedSkill, string>.AsValue(openRules.Value);
-        }
-
-        var plugin = TryLoadPluginSkill(trimmed, loadIndexOnly, pluginContributions);
-        if (plugin.IsError)
-            return Result<DysonLoadedSkill, string>.AsError(plugin.Error);
-        if (plugin.Value is not null)
-            return Result<DysonLoadedSkill, string>.AsValue(plugin.Value);
-
-        return Result<DysonLoadedSkill, string>.AsError(
-            $"Skill '{trimmed}' not found (included → .dyson/skills → literal → openrules AgentOptional → plugin).");
-    }
-
-    /// <summary>
-    /// Async resolve/load (fetches openrules http(s) AgentOptional Path bodies when needed).
     /// </summary>
     public static Task<Result<DysonLoadedSkill, string>> ResolveAndLoadAsync(
         string name,
@@ -114,7 +76,8 @@ public static class DysonSkillLoader
             return Result<DysonLoadedSkill, string>.AsError("Skill name is required.");
 
         var trimmed = name.Trim().Replace('\\', '/');
-        var early = TryResolveBeforeOpenRules(trimmed, loadIndexOnly, fs);
+        var early = await TryResolveBeforeOpenRulesAsync(trimmed, loadIndexOnly, fs, cancellationToken)
+            .ConfigureAwait(false);
         if (early.IsError)
             return Result<DysonLoadedSkill, string>.AsError(early.Error);
         if (early.Value is not null)
@@ -144,10 +107,11 @@ public static class DysonSkillLoader
     /// <summary>
     /// Included → .dyson/skills → literal. Null value means fall through to openrules.
     /// </summary>
-    private static Result<DysonLoadedSkill?, string> TryResolveBeforeOpenRules(
+    private static async Task<Result<DysonLoadedSkill?, string>> TryResolveBeforeOpenRulesAsync(
         string trimmed,
         bool loadIndexOnly,
-        IDysonWorkspaceFileSystem? fs)
+        IDysonWorkspaceFileSystem? fs,
+        CancellationToken cancellationToken)
     {
         var included = TryLoadIncluded(trimmed, loadIndexOnly);
         if (included is not null)
@@ -156,13 +120,15 @@ public static class DysonSkillLoader
         if (fs is null || !fs.IsInitialized)
             return Result<DysonLoadedSkill?, string>.AsValue(null);
 
-        var dyson = TryLoadDysonSkills(trimmed, loadIndexOnly, fs);
+        var dyson = await TryLoadDysonSkillsAsync(trimmed, loadIndexOnly, fs, cancellationToken)
+            .ConfigureAwait(false);
         if (dyson.IsError)
             return Result<DysonLoadedSkill?, string>.AsError(dyson.Error);
         if (dyson.Value is not null)
             return Result<DysonLoadedSkill?, string>.AsValue(dyson.Value);
 
-        var literal = TryLoadLiteral(trimmed, loadIndexOnly, fs);
+        var literal = await TryLoadLiteralAsync(trimmed, loadIndexOnly, fs, cancellationToken)
+            .ConfigureAwait(false);
         if (literal.IsError)
             return Result<DysonLoadedSkill?, string>.AsError(literal.Error);
         if (literal.Value is not null)
@@ -175,9 +141,10 @@ public static class DysonSkillLoader
     /// Included names plus <c>.dyson/skills/*</c> plus openrules <c>AgentOptional</c> entries
     /// when <paramref name="fs"/> is set (provider-filtered; default dyson).
     /// </summary>
-    public static IReadOnlyList<DysonSkillCatalogEntry> ListCatalog(
+    public static async Task<IReadOnlyList<DysonSkillCatalogEntry>> ListCatalogAsync(
         IDysonWorkspaceFileSystem? fs,
         string? providerId = null,
+        CancellationToken cancellationToken = default,
         DysonPluginContributionSet? pluginContributions = null)
     {
         var list = new List<DysonSkillCatalogEntry>();
@@ -196,7 +163,8 @@ public static class DysonSkillLoader
             return list;
         }
 
-        var entries = fs.EnumerateEntries(DysonSkillsRelativeDir);
+        var entries = await fs.EnumerateEntriesAsync(DysonSkillsRelativeDir, cancellationToken)
+            .ConfigureAwait(false);
         if (!entries.IsError)
         {
             foreach (var entry in entries.Value.OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase))
@@ -217,15 +185,18 @@ public static class DysonSkillLoader
             }
         }
 
-        foreach (var optional in DysonOpenRules.ListAgentOptional(fs, providerId))
+        var optional = await DysonOpenRules
+            .ListAgentOptionalAsync(fs, providerId, cancellationToken)
+            .ConfigureAwait(false);
+        foreach (var entry in optional)
         {
-            var name = DysonOpenRules.CatalogNameFor(optional);
+            var name = DysonOpenRules.CatalogNameFor(entry);
             if (string.IsNullOrWhiteSpace(name) || !seen.Add(name))
                 continue;
 
             list.Add(new DysonSkillCatalogEntry(
                 name,
-                DysonOpenRules.CatalogDisplayNameFor(optional),
+                DysonOpenRules.CatalogDisplayNameFor(entry),
                 DysonSkillSource.OpenRules));
         }
 
@@ -273,26 +244,6 @@ public static class DysonSkillLoader
         }
     }
 
-    private static Result<DysonLoadedSkill?, string> TryLoadOpenRulesAgentOptionalSync(
-        string name,
-        bool loadIndexOnly,
-        IDysonWorkspaceFileSystem fs,
-        string? providerId)
-    {
-        var match = DysonOpenRules.ListAgentOptional(fs, providerId)
-            .FirstOrDefault(e => DysonOpenRules.MatchesAgentOptionalName(e, name));
-        if (match is null)
-            return Result<DysonLoadedSkill?, string>.AsValue(null);
-
-        if (match.IsUrl)
-        {
-            return Result<DysonLoadedSkill?, string>.AsError(
-                $"OpenRules AgentOptional URL requires async LoadSkill: {match.Path}");
-        }
-
-        return FinishOpenRulesLocalLoad(match, loadIndexOnly, fs);
-    }
-
     private static async Task<Result<DysonLoadedSkill?, string>> TryLoadOpenRulesAgentOptionalAsync(
         string name,
         bool loadIndexOnly,
@@ -300,8 +251,10 @@ public static class DysonSkillLoader
         string? providerId,
         CancellationToken cancellationToken)
     {
-        var match = DysonOpenRules.ListAgentOptional(fs, providerId)
-            .FirstOrDefault(e => DysonOpenRules.MatchesAgentOptionalName(e, name));
+        var optional = await DysonOpenRules
+            .ListAgentOptionalAsync(fs, providerId, cancellationToken)
+            .ConfigureAwait(false);
+        var match = optional.FirstOrDefault(e => DysonOpenRules.MatchesAgentOptionalName(e, name));
         if (match is null)
             return Result<DysonLoadedSkill?, string>.AsValue(null);
 
@@ -328,21 +281,25 @@ public static class DysonSkillLoader
             });
         }
 
-        return FinishOpenRulesLocalLoad(match, loadIndexOnly, fs);
+        return await FinishOpenRulesLocalLoadAsync(match, loadIndexOnly, fs, cancellationToken)
+            .ConfigureAwait(false);
     }
 
-    private static Result<DysonLoadedSkill?, string> FinishOpenRulesLocalLoad(
+    private static async Task<Result<DysonLoadedSkill?, string>> FinishOpenRulesLocalLoadAsync(
         DysonOpenRulesResolvedEntry match,
         bool loadIndexOnly,
-        IDysonWorkspaceFileSystem fs)
+        IDysonWorkspaceFileSystem fs,
+        CancellationToken cancellationToken)
     {
         // Reuse path loader; for single files loadIndexOnly is ignored (same as Literal).
-        var loaded = LoadPathCandidate(
-            match.Path,
-            Path.GetFileNameWithoutExtension(match.Path.TrimEnd('/')),
-            loadIndexOnly,
-            fs,
-            DysonSkillSource.OpenRules);
+        var loaded = await LoadPathCandidateAsync(
+                match.Path,
+                Path.GetFileNameWithoutExtension(match.Path.TrimEnd('/')),
+                loadIndexOnly,
+                fs,
+                DysonSkillSource.OpenRules,
+                cancellationToken)
+            .ConfigureAwait(false);
         if (loaded.IsError)
             return Result<DysonLoadedSkill?, string>.AsError(loaded.Error);
         if (loaded.Value is null)
@@ -398,35 +355,45 @@ public static class DysonSkillLoader
         return false;
     }
 
-    private static Result<DysonLoadedSkill?, string> TryLoadDysonSkills(
+    private static Task<Result<DysonLoadedSkill?, string>> TryLoadDysonSkillsAsync(
         string name,
         bool loadIndexOnly,
-        IDysonWorkspaceFileSystem fs)
+        IDysonWorkspaceFileSystem fs,
+        CancellationToken cancellationToken)
     {
         var relativeBase = $"{DysonSkillsRelativeDir}/{name.Trim('/')}";
-        return LoadPathCandidate(relativeBase, name, loadIndexOnly, fs, DysonSkillSource.DysonSkills);
+        return LoadPathCandidateAsync(
+            relativeBase, name, loadIndexOnly, fs, DysonSkillSource.DysonSkills, cancellationToken);
     }
 
-    private static Result<DysonLoadedSkill?, string> TryLoadLiteral(
+    private static Task<Result<DysonLoadedSkill?, string>> TryLoadLiteralAsync(
         string name,
         bool loadIndexOnly,
-        IDysonWorkspaceFileSystem fs) =>
-        LoadPathCandidate(name, Path.GetFileNameWithoutExtension(name.TrimEnd('/')), loadIndexOnly, fs, DysonSkillSource.Literal);
+        IDysonWorkspaceFileSystem fs,
+        CancellationToken cancellationToken) =>
+        LoadPathCandidateAsync(
+            name,
+            Path.GetFileNameWithoutExtension(name.TrimEnd('/')),
+            loadIndexOnly,
+            fs,
+            DysonSkillSource.Literal,
+            cancellationToken);
 
-    private static Result<DysonLoadedSkill?, string> LoadPathCandidate(
+    private static async Task<Result<DysonLoadedSkill?, string>> LoadPathCandidateAsync(
         string relativePath,
         string idHint,
         bool loadIndexOnly,
         IDysonWorkspaceFileSystem fs,
-        DysonSkillSource source)
+        DysonSkillSource source,
+        CancellationToken cancellationToken)
     {
-        var fileExists = fs.FileExists(relativePath);
+        var fileExists = await fs.FileExistsAsync(relativePath, cancellationToken).ConfigureAwait(false);
         if (fileExists.IsError)
             return Result<DysonLoadedSkill?, string>.AsError(fileExists.Error);
 
         if (fileExists.Value)
         {
-            var text = fs.ReadAllText(relativePath);
+            var text = await fs.ReadAllTextAsync(relativePath, cancellationToken).ConfigureAwait(false);
             if (text.IsError)
                 return Result<DysonLoadedSkill?, string>.AsError(text.Error);
 
@@ -448,13 +415,13 @@ public static class DysonSkillLoader
             });
         }
 
-        var dirExists = fs.DirectoryExists(relativePath);
+        var dirExists = await fs.DirectoryExistsAsync(relativePath, cancellationToken).ConfigureAwait(false);
         if (dirExists.IsError)
             return Result<DysonLoadedSkill?, string>.AsError(dirExists.Error);
         if (!dirExists.Value)
             return Result<DysonLoadedSkill?, string>.AsValue(null);
 
-        var mdFiles = ListMarkdownFiles(fs, relativePath);
+        var mdFiles = await ListMarkdownFilesAsync(fs, relativePath, cancellationToken).ConfigureAwait(false);
         if (mdFiles.IsError)
             return Result<DysonLoadedSkill?, string>.AsError(mdFiles.Error);
         if (mdFiles.Value.Count == 0)
@@ -467,14 +434,16 @@ public static class DysonSkillLoader
         string markdown;
         if (loadIndexOnly)
         {
-            var text = fs.ReadAllText(entry.AbsoluteNativePath);
+            var text = await fs.ReadAllTextAsync(entry.AbsoluteNativePath, cancellationToken)
+                .ConfigureAwait(false);
             if (text.IsError)
                 return Result<DysonLoadedSkill?, string>.AsError(text.Error);
             markdown = text.Value;
         }
         else
         {
-            var concat = ConcatDirectoryMarkdown(fs, entry, mdFiles.Value);
+            var concat = await ConcatDirectoryMarkdownAsync(fs, entry, mdFiles.Value, cancellationToken)
+                .ConfigureAwait(false);
             if (concat.IsError)
                 return Result<DysonLoadedSkill?, string>.AsError(concat.Error);
             markdown = concat.Value;
@@ -499,11 +468,13 @@ public static class DysonSkillLoader
 
     private sealed record MdFile(string AbsoluteNativePath, string RelativeDisplay, string FileName);
 
-    private static Result<IReadOnlyList<MdFile>, string> ListMarkdownFiles(
+    private static async Task<Result<IReadOnlyList<MdFile>, string>> ListMarkdownFilesAsync(
         IDysonWorkspaceFileSystem fs,
-        string directoryPath)
+        string directoryPath,
+        CancellationToken cancellationToken)
     {
-        var files = fs.EnumerateFiles(directoryPath, "*.md", recursive: true);
+        var files = await fs.EnumerateFilesAsync(directoryPath, "*.md", recursive: true, cancellationToken)
+            .ConfigureAwait(false);
         if (files.IsError)
             return Result<IReadOnlyList<MdFile>, string>.AsError(files.Error);
 
@@ -532,10 +503,11 @@ public static class DysonSkillLoader
             .First();
     }
 
-    private static Result<string, string> ConcatDirectoryMarkdown(
+    private static async Task<Result<string, string>> ConcatDirectoryMarkdownAsync(
         IDysonWorkspaceFileSystem fs,
         MdFile entry,
-        IReadOnlyList<MdFile> all)
+        IReadOnlyList<MdFile> all,
+        CancellationToken cancellationToken)
     {
         var sb = new StringBuilder();
         var ordered = new List<MdFile> { entry };
@@ -545,7 +517,8 @@ public static class DysonSkillLoader
 
         foreach (var file in ordered)
         {
-            var text = fs.ReadAllText(file.AbsoluteNativePath);
+            var text = await fs.ReadAllTextAsync(file.AbsoluteNativePath, cancellationToken)
+                .ConfigureAwait(false);
             if (text.IsError)
                 return Result<string, string>.AsError(text.Error);
 

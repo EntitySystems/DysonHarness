@@ -28,57 +28,90 @@ public interface IDysonWorkspaceFileSystem
     /// <summary>Workspace-relative path with forward slashes (empty string for the root).</summary>
     Result<string, string> GetRelativePath(string path);
 
-    Result<bool, string> FileExists(string path);
+    Task<Result<bool, string>> FileExistsAsync(
+        string path,
+        CancellationToken cancellationToken = default);
 
-    Result<bool, string> DirectoryExists(string path);
+    Task<Result<bool, string>> DirectoryExistsAsync(
+        string path,
+        CancellationToken cancellationToken = default);
 
-    Result<long, string> GetFileLength(string path);
+    Task<Result<long, string>> GetFileLengthAsync(
+        string path,
+        CancellationToken cancellationToken = default);
 
-    Result<string, string> ReadAllText(string path);
+    Task<Result<string, string>> ReadAllTextAsync(
+        string path,
+        CancellationToken cancellationToken = default);
 
-    Result<byte[], string> ReadAllBytes(string path);
+    Task<Result<byte[], string>> ReadAllBytesAsync(
+        string path,
+        CancellationToken cancellationToken = default);
 
     /// <summary>Reads up to <paramref name="maxBytes"/> from the start of the file.</summary>
-    Result<byte[], string> ReadFileHead(string path, int maxBytes);
+    Task<Result<byte[], string>> ReadFileHeadAsync(
+        string path,
+        int maxBytes,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Streams a 1-based line window without loading the rest of the file.
     /// Negative <paramref name="startLine"/> tails from EOF. <c>0</c> is treated as <c>1</c>.
     /// </summary>
-    Result<DysonWorkspaceLineSlice, string> ReadLineSlice(
+    Task<Result<DysonWorkspaceLineSlice, string>> ReadLineSliceAsync(
         string path,
         int startLine,
         int? maxLines,
         int maxChars,
-        int maxLineChars);
+        int maxLineChars,
+        CancellationToken cancellationToken = default);
 
-    VoidResult<string> WriteAllText(string path, string contents);
+    Task<VoidResult<string>> WriteAllTextAsync(
+        string path,
+        string contents,
+        CancellationToken cancellationToken = default);
 
-    VoidResult<string> WriteAllBytes(string path, byte[] contents);
+    Task<VoidResult<string>> WriteAllBytesAsync(
+        string path,
+        byte[] contents,
+        CancellationToken cancellationToken = default);
 
-    VoidResult<string> CreateDirectory(string path);
+    Task<VoidResult<string>> CreateDirectoryAsync(
+        string path,
+        CancellationToken cancellationToken = default);
 
     /// <summary>Shallow listing of direct children (name + is-directory).</summary>
-    Result<IReadOnlyList<DysonWorkspaceEntry>, string> EnumerateEntries(string path);
+    Task<Result<IReadOnlyList<DysonWorkspaceEntry>, string>> EnumerateEntriesAsync(
+        string path,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Enumerates file paths under <paramref name="directoryPath"/> matching
     /// <paramref name="searchPattern"/> (e.g. <c>*.cs</c>). Returns absolute native paths.
     /// </summary>
-    Result<IReadOnlyList<string>, string> EnumerateFiles(
+    Task<Result<IReadOnlyList<string>, string>> EnumerateFilesAsync(
         string directoryPath,
         string searchPattern = "*",
-        bool recursive = false);
+        bool recursive = false,
+        CancellationToken cancellationToken = default);
 
-    VoidResult<string> DeleteFile(string path);
+    Task<VoidResult<string>> DeleteFileAsync(
+        string path,
+        CancellationToken cancellationToken = default);
 
-    VoidResult<string> DeleteDirectory(string path, bool recursive = false);
+    Task<VoidResult<string>> DeleteDirectoryAsync(
+        string path,
+        bool recursive = false,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Moves or renames a file or directory within the sandbox.
     /// Destination must not already exist; directory sources cannot move into themselves.
     /// </summary>
-    VoidResult<string> Move(string sourceRelativePath, string destinationRelativePath);
+    Task<VoidResult<string>> MoveAsync(
+        string sourceRelativePath,
+        string destinationRelativePath,
+        CancellationToken cancellationToken = default);
 
     /// <summary>Creates a watcher for this initialized FS (does not start it).</summary>
     Result<IDysonWorkspaceChangeWatcher, string> CreateWatcher();

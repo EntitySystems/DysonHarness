@@ -167,7 +167,9 @@ public sealed partial class DysonPluginPackageService : IDysonPluginPackageServi
                 replacedInstallation = existing.Value;
             }
 
-            var roots = DysonPluginPaths.EnsureScopeRoots(request.Target);
+            var roots = await DysonPluginPaths
+                .EnsureScopeRootsAsync(request.Target, cancellationToken)
+                .ConfigureAwait(false);
             if (roots.IsError)
                 return Result<DysonPluginInstallResult, string>.AsError(roots.Error);
             var contentId = GetVersionOrContentId(reparsed.Value, checksum.Value);

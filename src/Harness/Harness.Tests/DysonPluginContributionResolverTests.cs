@@ -5,7 +5,7 @@ namespace Harness.Tests;
 public class DysonPluginContributionResolverTests
 {
     [Fact]
-    public void Plugin_skills_are_metadata_first_and_load_index_or_full_from_package()
+    public async Task Plugin_skills_are_metadata_first_and_load_index_or_full_from_package()
     {
         using var fixture = new PluginFixture("alpha");
         fixture.Write("skills/demo/SKILL.md", "# Entry");
@@ -15,19 +15,21 @@ public class DysonPluginContributionResolverTests
         var skill = Assert.Single(set.Skills);
         Assert.Equal("alpha:demo", skill.StableId);
 
-        var catalog = DysonSkillLoader.ListCatalog(fs: null, pluginContributions: set);
+        var catalog = await DysonSkillLoader.ListCatalogAsync(fs: null, pluginContributions: set);
         var catalogEntry = Assert.Single(catalog, entry => entry.Source == DysonSkillSource.Plugin);
         Assert.Equal("alpha:demo", catalogEntry.Name);
         Assert.Equal("alpha", catalogEntry.PluginId);
 
-        var index = DysonSkillLoader.ResolveAndLoad(skill.StableId, loadIndexOnly: true, fs: null, pluginContributions: set);
+        var index = await DysonSkillLoader.ResolveAndLoadAsync(
+            skill.StableId, loadIndexOnly: true, fs: null, pluginContributions: set);
         Assert.True(index.IsSuccess, index.IsError ? index.Error : null);
         Assert.Equal(DysonSkillSource.Plugin, index.Value.Source);
         Assert.Equal("alpha", index.Value.PluginId);
         Assert.Contains("# Entry", index.Value.Markdown, StringComparison.Ordinal);
         Assert.DoesNotContain("# Extra", index.Value.Markdown, StringComparison.Ordinal);
 
-        var full = DysonSkillLoader.ResolveAndLoad(skill.StableId, loadIndexOnly: false, fs: null, pluginContributions: set);
+        var full = await DysonSkillLoader.ResolveAndLoadAsync(
+            skill.StableId, loadIndexOnly: false, fs: null, pluginContributions: set);
         Assert.True(full.IsSuccess, full.IsError ? full.Error : null);
         Assert.Contains("# Entry", full.Value.Markdown, StringComparison.Ordinal);
         Assert.Contains("# Extra", full.Value.Markdown, StringComparison.Ordinal);
@@ -35,7 +37,7 @@ public class DysonPluginContributionResolverTests
     }
 
     [Fact]
-    public void Full_plugin_skill_load_rejects_nested_reparse_points()
+    public async Task Full_plugin_skill_load_rejects_nested_reparse_points()
     {
         using var fixture = new PluginFixture("linked-skill");
         fixture.Write("skills/demo/SKILL.md", "# Entry");
@@ -55,7 +57,7 @@ public class DysonPluginContributionResolverTests
             }
 
             var set = Resolve(fixture, Skill("demo", "skills/demo/SKILL.md"));
-            var loaded = DysonSkillLoader.ResolveAndLoad(
+            var loaded = await DysonSkillLoader.ResolveAndLoadAsync(
                 "linked-skill:demo",
                 loadIndexOnly: false,
                 fs: null,

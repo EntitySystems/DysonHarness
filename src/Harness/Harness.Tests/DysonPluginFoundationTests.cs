@@ -33,7 +33,7 @@ public class DysonPluginFoundationTests
                 Path.GetFullPath(Path.Combine(root, ".dyson", "plugin-data", "example.plugin")),
                 resolved.Value.PluginDataRoot);
 
-            var ensured = DysonPluginPaths.EnsureScopeRoots(target.Value);
+            var ensured = await DysonPluginPaths.EnsureScopeRootsAsync(target.Value);
             Assert.True(ensured.IsSuccess, ensured.IsError ? ensured.Error : null);
             Assert.True(Directory.Exists(Path.Combine(root, ".dyson", "plugins")));
             Assert.True(Directory.Exists(Path.Combine(root, ".dyson", "plugin-data")));

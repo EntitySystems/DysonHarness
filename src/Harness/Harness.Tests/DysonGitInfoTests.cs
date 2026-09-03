@@ -264,7 +264,7 @@ public class DysonGitInfoTests
     }
 
     [Fact]
-    public void TryGetFileDiffAnnotations_added_and_modified_hunks()
+    public async Task TryGetFileDiffAnnotations_added_and_modified_hunks()
     {
         var root = CreateTempDir();
         try
@@ -275,8 +275,8 @@ public class DysonGitInfoTests
             RunGitOrThrow(root, ["commit", "-m", "init"]);
             WriteAllLf(Path.Combine(root, "src", "file.txt"), "keep\nnew\nkeep2\ninserted\n");
 
-            var result = DysonGitInfo.TryGetFileDiffAnnotations(
-                DysonWorkspaceTestFs.CreateLocal(root),
+            var result = await DysonGitInfo.TryGetFileDiffAnnotationsAsync(
+                await DysonWorkspaceTestFs.CreateLocalAsync(root),
                 "src/file.txt");
 
             Assert.True(result.IsSuccess, result.IsError ? result.Error : null);
@@ -294,7 +294,7 @@ public class DysonGitInfoTests
     }
 
     [Fact]
-    public void TryGetFileDiffAnnotations_deleted_ranges()
+    public async Task TryGetFileDiffAnnotations_deleted_ranges()
     {
         var root = CreateTempDir();
         try
@@ -305,8 +305,8 @@ public class DysonGitInfoTests
             RunGitOrThrow(root, ["commit", "-m", "init"]);
             WriteAllLf(Path.Combine(root, "file.txt"), "one\nfour\nfive\n");
 
-            var result = DysonGitInfo.TryGetFileDiffAnnotations(
-                DysonWorkspaceTestFs.CreateLocal(root),
+            var result = await DysonGitInfo.TryGetFileDiffAnnotationsAsync(
+                await DysonWorkspaceTestFs.CreateLocalAsync(root),
                 "file.txt");
 
             Assert.True(result.IsSuccess, result.IsError ? result.Error : null);
@@ -321,7 +321,7 @@ public class DysonGitInfoTests
     }
 
     [Fact]
-    public void TryGetFileDiffAnnotations_untracked_is_full_file_added()
+    public async Task TryGetFileDiffAnnotations_untracked_is_full_file_added()
     {
         var root = CreateTempDir();
         try
@@ -332,8 +332,8 @@ public class DysonGitInfoTests
             RunGitOrThrow(root, ["commit", "-m", "init"]);
             WriteAllLf(Path.Combine(root, "src", "new.txt"), "alpha\nbravo\ncharlie\n");
 
-            var result = DysonGitInfo.TryGetFileDiffAnnotations(
-                DysonWorkspaceTestFs.CreateLocal(root),
+            var result = await DysonGitInfo.TryGetFileDiffAnnotationsAsync(
+                await DysonWorkspaceTestFs.CreateLocalAsync(root),
                 "src/new.txt");
 
             Assert.True(result.IsSuccess, result.IsError ? result.Error : null);
@@ -348,7 +348,7 @@ public class DysonGitInfoTests
     }
 
     [Fact]
-    public void TryGetFileDiffAnnotations_staged_plus_unstaged_is_net_vs_head()
+    public async Task TryGetFileDiffAnnotations_staged_plus_unstaged_is_net_vs_head()
     {
         var root = CreateTempDir();
         try
@@ -361,8 +361,8 @@ public class DysonGitInfoTests
             RunGitOrThrow(root, ["add", "file.txt"]);
             WriteAllLf(Path.Combine(root, "file.txt"), "alpha\nBRAVO\ncharlie\ndelta\n");
 
-            var result = DysonGitInfo.TryGetFileDiffAnnotations(
-                DysonWorkspaceTestFs.CreateLocal(root),
+            var result = await DysonGitInfo.TryGetFileDiffAnnotationsAsync(
+                await DysonWorkspaceTestFs.CreateLocalAsync(root),
                 "file.txt");
 
             Assert.True(result.IsSuccess, result.IsError ? result.Error : null);
@@ -380,7 +380,7 @@ public class DysonGitInfoTests
     }
 
     [Fact]
-    public void TryGetFileDiffAnnotations_unchanged_is_empty()
+    public async Task TryGetFileDiffAnnotations_unchanged_is_empty()
     {
         var root = CreateTempDir();
         try
@@ -390,8 +390,8 @@ public class DysonGitInfoTests
             RunGitOrThrow(root, ["add", "-A"]);
             RunGitOrThrow(root, ["commit", "-m", "init"]);
 
-            var result = DysonGitInfo.TryGetFileDiffAnnotations(
-                DysonWorkspaceTestFs.CreateLocal(root),
+            var result = await DysonGitInfo.TryGetFileDiffAnnotationsAsync(
+                await DysonWorkspaceTestFs.CreateLocalAsync(root),
                 "file.txt");
 
             Assert.True(result.IsSuccess, result.IsError ? result.Error : null);
@@ -447,7 +447,7 @@ public class DysonGitInfoTests
     }
 
     [Fact]
-    public void TryGetFileDiffAnnotations_unborn_repo_new_file_is_added()
+    public async Task TryGetFileDiffAnnotations_unborn_repo_new_file_is_added()
     {
         var root = CreateTempDir();
         try
@@ -455,8 +455,8 @@ public class DysonGitInfoTests
             GitInit(root);
             WriteAllLf(Path.Combine(root, "fresh.txt"), "one\ntwo\n");
 
-            var untracked = DysonGitInfo.TryGetFileDiffAnnotations(
-                DysonWorkspaceTestFs.CreateLocal(root),
+            var untracked = await DysonGitInfo.TryGetFileDiffAnnotationsAsync(
+                await DysonWorkspaceTestFs.CreateLocalAsync(root),
                 "fresh.txt");
             Assert.True(untracked.IsSuccess, untracked.IsError ? untracked.Error : null);
             Assert.Equal(
@@ -464,8 +464,8 @@ public class DysonGitInfoTests
                 untracked.Value);
 
             RunGitOrThrow(root, ["add", "fresh.txt"]);
-            var staged = DysonGitInfo.TryGetFileDiffAnnotations(
-                DysonWorkspaceTestFs.CreateLocal(root),
+            var staged = await DysonGitInfo.TryGetFileDiffAnnotationsAsync(
+                await DysonWorkspaceTestFs.CreateLocalAsync(root),
                 "fresh.txt");
             Assert.True(staged.IsSuccess, staged.IsError ? staged.Error : null);
             Assert.Equal(
@@ -479,14 +479,14 @@ public class DysonGitInfoTests
     }
 
     [Fact]
-    public void TryGetFileDiffAnnotations_non_repo_is_empty()
+    public async Task TryGetFileDiffAnnotations_non_repo_is_empty()
     {
         var root = CreateTempDir();
         try
         {
             WriteAllLf(Path.Combine(root, "file.txt"), "hello\n");
-            var result = DysonGitInfo.TryGetFileDiffAnnotations(
-                DysonWorkspaceTestFs.CreateLocal(root),
+            var result = await DysonGitInfo.TryGetFileDiffAnnotationsAsync(
+                await DysonWorkspaceTestFs.CreateLocalAsync(root),
                 "file.txt");
 
             Assert.True(result.IsSuccess, result.IsError ? result.Error : null);
@@ -499,19 +499,19 @@ public class DysonGitInfoTests
     }
 
     [Fact]
-    public void TryGetFileDiffAnnotations_invalid_path_is_error()
+    public async Task TryGetFileDiffAnnotations_invalid_path_is_error()
     {
         var root = CreateTempDir();
         try
         {
             GitInit(root);
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
 
-            var empty = DysonGitInfo.TryGetFileDiffAnnotations(fs, "   ");
+            var empty = await DysonGitInfo.TryGetFileDiffAnnotationsAsync(fs, "   ");
             Assert.True(empty.IsError);
             Assert.Contains("empty", empty.Error, StringComparison.OrdinalIgnoreCase);
 
-            var escape = DysonGitInfo.TryGetFileDiffAnnotations(fs, "../secret.txt");
+            var escape = await DysonGitInfo.TryGetFileDiffAnnotationsAsync(fs, "../secret.txt");
             Assert.True(escape.IsError);
             Assert.Contains("escapes", escape.Error, StringComparison.OrdinalIgnoreCase);
         }

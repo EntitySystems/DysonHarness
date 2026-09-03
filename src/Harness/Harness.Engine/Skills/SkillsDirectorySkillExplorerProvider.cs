@@ -150,7 +150,9 @@ public sealed class SkillsDirectorySkillExplorerProvider(HttpClient http) : IDys
         if (zip.IsError)
             return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(zip.Error);
 
-        var extracted = DysonSkillPackageInstall.ExtractZipToSkillDir(zip.Value, validated.Value, fs);
+        var extracted = await DysonSkillPackageInstall
+            .ExtractZipToSkillDirAsync(zip.Value, validated.Value, fs, cancellationToken)
+            .ConfigureAwait(false);
         if (extracted.IsError)
             return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(extracted.Error);
 

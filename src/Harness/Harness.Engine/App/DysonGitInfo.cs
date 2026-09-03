@@ -280,9 +280,10 @@ public static class DysonGitInfo
     /// are a single <see cref="DysonGitDiffAnnotationKind.Added"/> span of all logical source
     /// lines. Unchanged tracked files return an empty list.
     /// </summary>
-    public static Result<IReadOnlyList<DysonGitDiffAnnotation>, string> TryGetFileDiffAnnotations(
+    public static async Task<Result<IReadOnlyList<DysonGitDiffAnnotation>, string>> TryGetFileDiffAnnotationsAsync(
         IDysonWorkspaceFileSystem workspaceFileSystem,
-        string relativePath)
+        string relativePath,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(workspaceFileSystem);
 
@@ -321,7 +322,11 @@ public static class DysonGitInfo
         var hasHead = HasComparableHead(repo.Value);
 
         if (isUntracked || (!hasHead && isNewlyAdded))
-            return TryCreateFullFileAddedAnnotation(workspaceFileSystem, relativePath);
+        {
+            return await TryCreateFullFileAddedAnnotationAsync(
+                    workspaceFileSystem, relativePath, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         if (!hasHead)
             return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue([]);
@@ -436,18 +441,21 @@ public static class DysonGitInfo
         return annotations;
     }
 
-    private static Result<IReadOnlyList<DysonGitDiffAnnotation>, string> TryCreateFullFileAddedAnnotation(
+    private static async Task<Result<IReadOnlyList<DysonGitDiffAnnotation>, string>> TryCreateFullFileAddedAnnotationAsync(
         IDysonWorkspaceFileSystem workspaceFileSystem,
-        string relativePath)
+        string relativePath,
+        CancellationToken cancellationToken)
     {
-        var exists = workspaceFileSystem.FileExists(relativePath);
+        var exists = await workspaceFileSystem.FileExistsAsync(relativePath, cancellationToken)
+            .ConfigureAwait(false);
         if (exists.IsError)
             return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsError(exists.Error);
 
         if (!exists.Value)
             return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue([]);
 
-        var text = workspaceFileSystem.ReadAllText(relativePath);
+        var text = await workspaceFileSystem.ReadAllTextAsync(relativePath, cancellationToken)
+            .ConfigureAwait(false);
         if (text.IsError)
             return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsError(text.Error);
 
