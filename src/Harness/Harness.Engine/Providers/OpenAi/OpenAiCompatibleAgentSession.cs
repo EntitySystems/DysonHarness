@@ -1106,14 +1106,24 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     }
 
     /// <summary>
-    /// Backoff between transient stream retries (ms). 4 delays ⇒ 5 attempts total.
+    /// Backoff between transient stream retries (ms). 10 delays ⇒ 11 attempts total.
     /// Tests may replace with zeros; restore defaults afterward.
     /// </summary>
-    internal static int[] TransientRetryBackoffMs { get; set; } = [2000, 5000, 10000, 10000];
+    internal static int[] TransientRetryBackoffMs { get; set; } =
+        [2000, 5000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000];
+
+    /// <summary>Max 429 retries (independent of <see cref="TransientRetryBackoffMs"/>).</summary>
+    internal const int Transient429MaxRetries = 2;
 
     /// <summary>
-    /// Consumes one inference stream round, reopening the request on transient 429/502/503/504
-    /// (fixed backoff). Clears streaming/reasoning previews before each retry.
+    /// Delay between 429 retries (ms). Tests may replace with zero; restore default afterward.
+    /// </summary>
+    internal static int Transient429RetryDelayMs { get; set; } = 10_000;
+
+    /// <summary>
+    /// Consumes one inference stream round, retrying transient OpenAI errors except 401/403/cancel.
+    /// 429 is capped at <see cref="Transient429MaxRetries"/> retries of <see cref="Transient429RetryDelayMs"/>;
+    /// other transients use <see cref="TransientRetryBackoffMs"/>. Clears streaming/reasoning previews before each retry.
     /// </summary>
     private async Task<Result<OpenAiModelReply, string>> ConsumeStreamWithTransientRetryAsync(
         Func<IAsyncEnumerable<Result<OpenAiStreamChunk, string>>> streamFactory,
@@ -1124,31 +1134,46 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         ArgumentNullException.ThrowIfNull(turn);
 
         var delays = TransientRetryBackoffMs;
-        var maxAttempts = delays.Length + 1;
+        var generalRetries = 0;
+        var rateLimitRetries = 0;
         string? lastError = null;
 
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        while (true)
         {
-            if (attempt > 0)
-            {
-                var delayMs = delays[attempt - 1];
-                AppendLog(FormatTransientRetryLog(lastError, attempt, delays.Length, delayMs));
-                turn.ClearStreamingPreview();
-                turn.ClearReasoningPreview();
-                await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
-            }
-
             var result = await ConsumeStreamAsync(streamFactory(), turn, cancellationToken)
                 .ConfigureAwait(false);
             if (!result.IsError)
                 return result;
 
             lastError = result.Error;
-            if (!OpenAiCompatibleHttp.IsTransientServerError(lastError) || attempt == maxAttempts - 1)
+            if (!OpenAiCompatibleHttp.IsTransientServerError(lastError))
                 return result;
-        }
 
-        return Result<OpenAiModelReply, string>.AsError(lastError ?? "OpenAI request failed.");
+            int delayMs, retryN, retryDenom;
+            if (OpenAiCompatibleHttp.IsRateLimitError(lastError))
+            {
+                if (rateLimitRetries >= Transient429MaxRetries)
+                    return result;
+                delayMs = Transient429RetryDelayMs;
+                rateLimitRetries++;
+                retryN = rateLimitRetries;
+                retryDenom = Transient429MaxRetries;
+            }
+            else
+            {
+                if (generalRetries >= delays.Length)
+                    return result;
+                delayMs = delays[generalRetries];
+                generalRetries++;
+                retryN = generalRetries;
+                retryDenom = delays.Length;
+            }
+
+            AppendLog(FormatTransientRetryLog(lastError, retryN, retryDenom, delayMs));
+            turn.ClearStreamingPreview();
+            turn.ClearReasoningPreview();
+            await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task<bool> TryApplyChatFallbackAsync(

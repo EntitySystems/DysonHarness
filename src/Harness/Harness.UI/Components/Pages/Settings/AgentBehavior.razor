@@ -93,7 +93,7 @@
                                   OnPick="OnFallbackChatEffortPickedAsync" />
                 </div>
             <p class="settings-page__copy">
-                Used when the session chat provider fails after retries (5 attempts); the session switches
+                Used when the session chat provider fails after 10 retries (11 attempts; 429 after 2×10s); the session switches
                 to this model immediately, including the in-flight turn. Leave as None to disable.
             </p>
         </div>

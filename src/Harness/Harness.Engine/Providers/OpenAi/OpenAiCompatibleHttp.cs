@@ -109,6 +109,38 @@ public static class OpenAiCompatibleHttp
     }
 
     /// <summary>
+    /// Parses a 3-digit HTTP status from an <c>OpenAI API NNN</c> error prefix.
+    /// The digit run must be exactly three characters (or followed by a non-digit).
+    /// </summary>
+    public static bool TryGetHttpStatus(string? error, out int code)
+    {
+        code = 0;
+        if (string.IsNullOrEmpty(error))
+            return false;
+
+        const string apiPrefix = "OpenAI API ";
+        if (!error.StartsWith(apiPrefix, StringComparison.Ordinal))
+            return false;
+
+        var rest = error.AsSpan(apiPrefix.Length);
+        if (rest.Length >= 3
+            && char.IsDigit(rest[0])
+            && char.IsDigit(rest[1])
+            && char.IsDigit(rest[2])
+            && (rest.Length == 3 || !char.IsDigit(rest[3])))
+        {
+            code = (rest[0] - '0') * 100 + (rest[1] - '0') * 10 + (rest[2] - '0');
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>True when the error is an <c>OpenAI API 429</c> status.</summary>
+    public static bool IsRateLimitError(string? error) =>
+        TryGetHttpStatus(error, out var code) && code == 429;
+
+    /// <summary>
     /// True when an OpenAI stream/endpoint error should auto-retry on a fresh request.
     /// Retries known OpenAI error shapes (HTTP statuses, transport, stream read, incomplete SSE,
     /// Responses stream errors) except <c>401</c>/<c>403</c> and cancellations.
@@ -124,17 +156,10 @@ public static class OpenAiCompatibleHttp
         const string apiPrefix = "OpenAI API ";
         if (error.StartsWith(apiPrefix, StringComparison.Ordinal))
         {
-            var rest = error.AsSpan(apiPrefix.Length);
-            if (rest.Length >= 3
-                && char.IsDigit(rest[0])
-                && char.IsDigit(rest[1])
-                && char.IsDigit(rest[2])
-                && (rest.Length == 3 || !char.IsDigit(rest[3])))
-            {
-                var code = (rest[0] - '0') * 100 + (rest[1] - '0') * 10 + (rest[2] - '0');
+            if (TryGetHttpStatus(error, out var code))
                 return code is not (401 or 403);
-            }
 
+            var rest = error.AsSpan(apiPrefix.Length);
             return rest.StartsWith("HTTP error", StringComparison.Ordinal)
                 || rest.StartsWith("stream read failed", StringComparison.Ordinal)
                 || rest.StartsWith("request failed", StringComparison.Ordinal)
