@@ -218,6 +218,15 @@ public abstract class DysonAgentSession
 
     public string SystemPrompt { get; private set; }
 
+    /// <summary>Composer worktree checkbox. Live; persisted via session meta.</summary>
+    public bool WorktreeEnabled { get; set; }
+
+    /// <summary>Absolute path of the session git worktree; null until created.</summary>
+    public string? WorktreeAbsolutePath { get; set; }
+
+    /// <summary>Worktree branch name (e.g. <c>dyson/{8-hex}</c>); null until created.</summary>
+    public string? WorktreeBranch { get; set; }
+
     /// <summary>
     /// Bumped by <see cref="ApplyAgentMode"/> so OpenAI <c>prompt_cache_key</c> invalidates
     /// after a mid-session system-prompt rebuild (cache loss is intentional).
@@ -269,6 +278,24 @@ public abstract class DysonAgentSession
             modelSlugId: ResolveModelSlugId());
         SystemPromptGeneration++;
         AppendLog($"mode → {Mode} (system prompt + toolset rebuilt)");
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Rebuilds <see cref="SystemPrompt"/> from current <see cref="Mode"/> + suffix + plugin
+    /// block without changing mode or the tool catalog. Bumps <see cref="SystemPromptGeneration"/>.
+    /// </summary>
+    public VoidResult<string> ReplaceSystemPromptSuffix(string? systemPromptSuffix)
+    {
+        var prompt = DysonAgentSystemPrompts.ForMode(Mode, Config.CustomAgents);
+        if (prompt.IsError)
+            return new VoidResult<string>(prompt.Error);
+
+        SystemPrompt = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+            prompt.Value,
+            systemPromptSuffix,
+            DysonAgentSystemPrompts.BuildPluginInstructionBlock(Config))!;
+        SystemPromptGeneration++;
         return VoidResult<string>.Success;
     }
 
@@ -2054,6 +2081,9 @@ public abstract class DysonAgentSession
         DisplayTitle = state.Session.Title;
         Status = state.Session.Status;
         MaxTargetContextTokens = state.Session.MaxTargetContextTokens;
+        WorktreeEnabled = state.Session.WorktreeEnabled;
+        WorktreeAbsolutePath = state.Session.WorktreeAbsolutePath;
+        WorktreeBranch = state.Session.WorktreeBranch;
         if (IsTerminal)
             _terminalTcs.TrySetResult((Status, LastReportSummary));
 
@@ -2565,6 +2595,59 @@ public abstract class DysonAgentSession
         };
         AddTurn(turn);
         return turn;
+    }
+
+    /// <summary>
+    /// Appends an incomplete UI-only <see cref="DysonAgentTurnKind.WorktreeCreating"/> turn
+    /// (spinner until <see cref="CompleteWorktreeCreatingTurn"/> /
+    /// <see cref="FailWorktreeCreatingTurn"/>). No inference.
+    /// </summary>
+    public DysonAgentTurn BeginWorktreeCreatingTurn()
+    {
+        const string title = "Creating worktree…";
+        var turn = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.WorktreeCreating,
+            AgentTitle = title,
+            AssistantText = title,
+            StartedUtc = DateTime.UtcNow,
+            CompletedUtc = null,
+        };
+        AddTurn(turn);
+        return turn;
+    }
+
+    /// <summary>
+    /// Marks a <see cref="DysonAgentTurnKind.WorktreeCreating"/> turn complete with a ready banner.
+    /// </summary>
+    public void CompleteWorktreeCreatingTurn(DysonAgentTurn turn, string path, string branch)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentException.ThrowIfNullOrWhiteSpace(branch);
+        RequireWorktreeCreatingTurn(turn);
+        turn.CompletedUtc = DateTime.UtcNow;
+        turn.AssistantText = $"Worktree ready — `{branch.Trim()}` at `{path.Trim()}`";
+        BumpTranscriptGeneration();
+    }
+
+    /// <summary>
+    /// Marks a <see cref="DysonAgentTurnKind.WorktreeCreating"/> turn complete with the error text.
+    /// </summary>
+    public void FailWorktreeCreatingTurn(DysonAgentTurn turn, string error)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+        ArgumentException.ThrowIfNullOrWhiteSpace(error);
+        RequireWorktreeCreatingTurn(turn);
+        turn.CompletedUtc = DateTime.UtcNow;
+        turn.AssistantText = error.Trim();
+        BumpTranscriptGeneration();
+    }
+
+    private static void RequireWorktreeCreatingTurn(DysonAgentTurn turn)
+    {
+        if (turn.Kind != DysonAgentTurnKind.WorktreeCreating)
+            throw new ArgumentException("Turn must be WorktreeCreating.", nameof(turn));
     }
 
     /// <summary>

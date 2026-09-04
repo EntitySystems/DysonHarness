@@ -1269,9 +1269,9 @@ public sealed partial class DysonWorkspaceToolExecutor
                     continue;
                 }
 
-                if (match.Kind == DysonAgentTurnKind.DisplayInfo)
+                if (match.Kind is DysonAgentTurnKind.DisplayInfo or DysonAgentTurnKind.WorktreeCreating)
                 {
-                    skipped.Add($"{id:D}: display-info turns are not summarized");
+                    skipped.Add($"{id:D}: chrome turns are not summarized");
                     continue;
                 }
 
@@ -2727,7 +2727,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (_workDirectoryId == Guid.Empty)
             return Error(call, "Work directory id is required for long-running shells.");
 
-        var list = DysonLongRunningShellRegistry.List(_workDirectoryId);
+        var list = DysonLongRunningShellRegistry.List(_workDirectoryId, WorkRoot);
         if (list.Count == 0)
             return Ok(call, "[]");
 

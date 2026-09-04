@@ -85,6 +85,9 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly List<string> _pendingSnipPromptLines = [];
     private readonly object _pendingSnipPromptLinesGate = new();
     private Guid? _composerWorkDirectoryId;
+    private bool _activeWorkDirectoryIsGitRepo;
+    private string _worktreeDisabledReason = "Select a work directory.";
+    private bool _forkWorktreeDefault;
 
     private DemoDysonEngine? _engine;
     private DysonAgentSession? _session;
@@ -636,6 +639,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
         _composerWorkDirectoryId = workDirectoryId;
         Notify(DysonHostChangeKind.Catalogs);
+        _ = RefreshWorktreeComposerStateThenNotifyAsync();
     }
 
     /// <summary>
@@ -1244,6 +1248,36 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// <summary>Work directory used for catalog views, including a pre-session composer selection.</summary>
     public Guid? CatalogWorkDirectoryId => ActiveWorkDirectoryId ?? _composerWorkDirectoryId;
 
+    /// <summary>True when the active work directory is a git repository.</summary>
+    public bool WorktreeCheckboxEnabled => _activeWorkDirectoryIsGitRepo;
+
+    /// <summary>Tooltip for the composer Worktree checkbox (why disabled, or lock hint).</summary>
+    public string WorktreeCheckboxTitle =>
+        !_activeWorkDirectoryIsGitRepo
+            ? _worktreeDisabledReason
+            : WorktreeLocked
+                ? $"Worktree locked on {(_session?.WorktreeBranch ?? "branch")} — merge or remove to unlock"
+                : "Fork a private git worktree for this session on the first Work-mode send";
+
+    /// <summary>True after a worktree checkout exists; checkbox stays checked and cannot uncheck.</summary>
+    public bool WorktreeLocked => !string.IsNullOrWhiteSpace(_session?.WorktreeAbsolutePath);
+
+    /// <summary>
+    /// Checked from focused session <see cref="DysonAgentSession.WorktreeEnabled"/>,
+    /// else workdir <c>forkWorktree</c>, else false. Locked checkouts stay checked.
+    /// </summary>
+    public bool WorktreeChecked =>
+        WorktreeLocked || (_session?.WorktreeEnabled ?? _forkWorktreeDefault);
+
+    /// <summary>Focused session worktree branch, if bound.</summary>
+    public string? WorktreeBranch => _session?.WorktreeBranch;
+
+    /// <summary>
+    /// Effective workspace root of the focused session (worktree if bound).
+    /// Null when no session is focused.
+    /// </summary>
+    public string? FocusedSessionWorkRootPath => SessionWorkDirectoryPath(_session);
+
     /// <summary>True when a process-wide browser control is registered (Windows CefSharp).</summary>
     public bool IsBrowserControlAvailable => _browserControl is not null;
 
@@ -1253,17 +1287,30 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// <summary>Selected shell id in the shells modal (null = list view).</summary>
     public int? SelectedLongRunningShellId { get; private set; }
 
-    /// <summary>Running long-running shell count for the active workdir (badge).</summary>
-    public int LongRunningShellRunningCount =>
-        ActiveWorkDirectoryId is Guid wd
-            ? DysonLongRunningShellRegistry.CountRunning(wd)
-            : 0;
+    /// <summary>Running long-running shell count for the focused session path, else the workdir.</summary>
+    public int LongRunningShellRunningCount
+    {
+        get
+        {
+            if (ActiveWorkDirectoryId is not Guid wd)
+                return 0;
+            var path = FocusedSessionWorkRootPath;
+            return string.IsNullOrWhiteSpace(path)
+                ? DysonLongRunningShellRegistry.CountRunning(wd)
+                : DysonLongRunningShellRegistry.CountRunning(wd, path);
+        }
+    }
 
-    /// <summary>All long-running shells for the active workdir (Running + exited).</summary>
-    public IReadOnlyList<DysonLongRunningShellInfo> ListLongRunningShells() =>
-        ActiveWorkDirectoryId is Guid wd
+    /// <summary>Long-running shells for the focused session path, else the whole workdir.</summary>
+    public IReadOnlyList<DysonLongRunningShellInfo> ListLongRunningShells()
+    {
+        if (ActiveWorkDirectoryId is not Guid wd)
+            return [];
+        var path = FocusedSessionWorkRootPath;
+        return string.IsNullOrWhiteSpace(path)
             ? DysonLongRunningShellRegistry.List(wd)
-            : [];
+            : DysonLongRunningShellRegistry.List(wd, path);
+    }
 
     /// <summary>Opens a CefSharp browser window (default blank page). Maps failures to <see cref="LastError"/>.</summary>
     public async Task OpenBrowserAsync(CancellationToken cancellationToken = default)
@@ -1966,6 +2013,10 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private async Task<string?> TryResolveActiveWorkRootAsync(CancellationToken cancellationToken)
     {
+        var sessionPath = SessionWorkDirectoryPath(_session);
+        if (!string.IsNullOrWhiteSpace(sessionPath))
+            return sessionPath;
+
         var workDirectoryId = ActiveWorkDirectoryId;
         if (workDirectoryId is null)
             return null;
@@ -2280,6 +2331,13 @@ public sealed class DysonUiHost : IAsyncDisposable
         var pendingEffort = _pendingReasoningEffort;
         _pendingReasoningEffort = null;
 
+        var forkWorktree = false;
+        var forkCfg = await _workDirectoryConfigurations
+            .GetAsync(workDirectoryId.Value, cancellationToken)
+            .ConfigureAwait(false);
+        if (forkCfg.IsSuccess)
+            forkWorktree = DysonWorkDirectoryConfig.TryGetForkWorktree(forkCfg.Value);
+
         var kind = providerResult.Value.Kind;
         if (string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
         {
@@ -2301,6 +2359,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 models: _models,
                 usageAnalytics: _usageAnalytics,
                 workDirectoryName: workDir.Value.Name,
+                worktreeEnabled: forkWorktree,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (created.IsError)
@@ -2360,6 +2419,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     config: config,
                     models: _models,
                     workDirectoryAbsolutePath: workDir.Value.AbsolutePath,
+                    worktreeEnabled: forkWorktree,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 if (created.IsError)
@@ -2437,6 +2497,179 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         return await ApplyAgentModeCoreAsync(agentMode.Trim(), cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Refreshes git-repo + workdir <c>forkWorktree</c> cache used by the composer checkbox.
+    /// </summary>
+    public async Task RefreshWorktreeComposerStateAsync(CancellationToken cancellationToken = default)
+    {
+        var id = CatalogWorkDirectoryId;
+        if (id is not Guid wd || wd == Guid.Empty)
+        {
+            _activeWorkDirectoryIsGitRepo = false;
+            _worktreeDisabledReason = "Select a work directory.";
+            _forkWorktreeDefault = false;
+            return;
+        }
+
+        var dir = await _workDirectories.GetAsync(wd, cancellationToken).ConfigureAwait(false);
+        if (dir.IsError)
+        {
+            _activeWorkDirectoryIsGitRepo = false;
+            _worktreeDisabledReason = dir.Error;
+            _forkWorktreeDefault = false;
+            return;
+        }
+
+        var repo = DysonGitInfo.TryFindRootMostRepo(dir.Value.AbsolutePath);
+        _activeWorkDirectoryIsGitRepo = repo.IsSuccess;
+        _worktreeDisabledReason = repo.IsError
+            ? (string.Equals(repo.Error, "No git repository.", StringComparison.Ordinal)
+                ? "Not a git repository"
+                : repo.Error)
+            : "";
+
+        var cfg = await _workDirectoryConfigurations.GetAsync(wd, cancellationToken)
+            .ConfigureAwait(false);
+        _forkWorktreeDefault = cfg.IsSuccess && DysonWorkDirectoryConfig.TryGetForkWorktree(cfg.Value);
+    }
+
+    /// <summary>
+    /// Persist the Worktree checkbox. Always upserts workdir <c>forkWorktree</c>.
+    /// With a focused session, also writes session meta and rebuilds the worktree prompt suffix.
+    /// Does not create a worktree. Locked checkouts ignore uncheck.
+    /// </summary>
+    public async Task<VoidResult<string>> SetWorktreeEnabledAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+
+        var registered = await TryGetRegisteredWorkDirectoryAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (registered.IsError)
+            return FailWorktree(registered.Error);
+
+        var cfg = await _workDirectoryConfigurations.GetAsync(registered.Value.Id, cancellationToken)
+            .ConfigureAwait(false);
+        if (cfg.IsError)
+            return FailWorktree(cfg.Error);
+
+        var upsert = await _workDirectoryConfigurations.UpsertAsync(
+                registered.Value.Id,
+                DysonWorkDirectoryConfig.WithForkWorktree(cfg.Value, enabled),
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (upsert.IsError)
+            return FailWorktree(upsert.Error);
+
+        _forkWorktreeDefault = enabled;
+
+        if (_session is null)
+        {
+            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Catalogs);
+            return VoidResult<string>.Success;
+        }
+
+        if (WorktreeLocked && !enabled)
+            return FailWorktree("Worktree is locked until merge or remove.");
+
+        if (IsBusy)
+            return FailWorktree("Cannot change worktree while a prompt is in flight.");
+
+        _session.WorktreeEnabled = enabled;
+
+        var rebuilt = await RebuildFocusedSessionWorktreePromptAsync(
+                registered.Value.AbsolutePath, cancellationToken)
+            .ConfigureAwait(false);
+        if (rebuilt.IsError)
+            return FailWorktree(rebuilt.Error);
+
+        if (_session.PersistenceId != Guid.Empty)
+        {
+            var persist = await _sessions.UpdateSessionMetaAsync(
+                    new DysonSessionMetaUpdate
+                    {
+                        SessionId = _session.PersistenceId,
+                        UpdateWorktreeEnabled = true,
+                        WorktreeEnabled = enabled,
+                        SystemPromptSnapshot = _session.SystemPrompt,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (persist.IsError)
+                return FailWorktree(persist.Error);
+        }
+
+        Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Catalogs);
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Merge the session worktree branch into the registered checkout, then remove the worktree.
+    /// Conflicts keep the checkout (delete stays blocked).
+    /// </summary>
+    public async Task<VoidResult<string>> MergeSessionWorktreeAsync(
+        bool forceRemoveIfDirty,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+
+        if (_session is null)
+            return FailWorktree("No active session.");
+        if (IsBusy)
+            return FailWorktree("Cannot merge worktree while a prompt is in flight.");
+
+        var path = _session.WorktreeAbsolutePath;
+        var branch = _session.WorktreeBranch;
+        if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(branch))
+            return FailWorktree("No worktree to merge.");
+
+        var registered = await TryGetRegisteredWorkDirectoryAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (registered.IsError)
+            return FailWorktree(registered.Error);
+
+        var merge = DysonSessionWorktree.Merge(
+            registered.Value.AbsolutePath, path, branch, forceRemoveIfDirty);
+        if (merge.IsError)
+            return FailWorktree(merge.Error);
+
+        return await ClearBoundWorktreeAsync(registered.Value.AbsolutePath, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Remove the session worktree checkout. Leaves the <c>dyson/…</c> branch.
+    /// A dirty tree fails unless <paramref name="force"/> is true.
+    /// </summary>
+    public async Task<VoidResult<string>> RemoveSessionWorktreeAsync(
+        bool force,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+
+        if (_session is null)
+            return FailWorktree("No active session.");
+        if (IsBusy)
+            return FailWorktree("Cannot remove worktree while a prompt is in flight.");
+
+        var path = _session.WorktreeAbsolutePath;
+        if (string.IsNullOrWhiteSpace(path))
+            return FailWorktree("No worktree to remove.");
+
+        var registered = await TryGetRegisteredWorkDirectoryAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (registered.IsError)
+            return FailWorktree(registered.Error);
+
+        var removed = DysonSessionWorktree.Remove(registered.Value.AbsolutePath, path, force);
+        if (removed.IsError)
+            return FailWorktree(removed.Error);
+
+        return await ClearBoundWorktreeAsync(registered.Value.AbsolutePath, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -2528,8 +2761,17 @@ public sealed class DysonUiHost : IAsyncDisposable
         var path = pending.Path;
         var result = await ExecutePromptOnSessionAsync(
                 _session,
-                (session, token) => session.PromptBeginBuildPlanAsync(
-                    path, reportBlocks, cancellationToken: token),
+                async (session, token) =>
+                {
+                    var ensure = await EnsureSessionWorktreeIfNeededAsync(session, token)
+                        .ConfigureAwait(false);
+                    if (ensure.IsError)
+                        return ensure;
+
+                    return await session.PromptBeginBuildPlanAsync(
+                            path, reportBlocks, cancellationToken: token)
+                        .ConfigureAwait(false);
+                },
                 cancellationToken)
             .ConfigureAwait(false);
         if (result.IsError)
@@ -2586,27 +2828,25 @@ public sealed class DysonUiHost : IAsyncDisposable
                 _models, providerKind, cancellationToken)
             .ConfigureAwait(false);
 
-        string? workPath = null;
+        string? registeredPath = null;
         if (ActiveWorkDirectoryId is Guid wdId)
         {
             var wd = await _workDirectories.GetAsync(wdId, cancellationToken).ConfigureAwait(false);
             if (!wd.IsError)
-                workPath = wd.Value.AbsolutePath;
-        }
-        else
-        {
-            workPath = _session switch
-            {
-                OpenAiCompatibleAgentSession oai => oai.WorkDirectoryPath,
-                DemoDysonAgentSession demo => demo.WorkDirectoryPath,
-                _ => null,
-            };
+                registeredPath = wd.Value.AbsolutePath;
         }
 
+        var effectivePath = SessionWorkDirectoryPath(_session) ?? registeredPath;
         var openRulesBlock = await DysonOpenRules
-            .BuildSystemPromptBlockAsync(workPath, cancellationToken)
+            .BuildSystemPromptBlockAsync(effectivePath, cancellationToken)
             .ConfigureAwait(false);
-        var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(modelsBlock, openRulesBlock);
+        var worktreeBlock = DysonAgentSystemPrompts.BuildWorktreePromptBlock(
+            _session.WorktreeEnabled,
+            _session.WorktreeAbsolutePath,
+            _session.WorktreeBranch,
+            registeredPath ?? effectivePath ?? "");
+        var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+            modelsBlock, openRulesBlock, worktreeBlock);
 
         var applied = _session.ApplyAgentMode(agentMode, suffix);
         if (applied.IsError)
@@ -3172,7 +3412,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 if (turn.IsExcludedFromContext)
                     continue;
 
-                if (turn.Kind == DysonAgentTurnKind.DisplayInfo)
+                if (turn.Kind is DysonAgentTurnKind.DisplayInfo or DysonAgentTurnKind.WorktreeCreating)
                     continue;
 
                 if (DysonTurnSummarizer.HasSummary(turn))
@@ -3906,6 +4146,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (providerResult.IsError)
             return Result<LoadedSession, string>.AsError(providerResult.Error);
 
+        string? registeredPath = null;
         string? workPath = null;
         string workDirectoryName = "";
         if (full.Value.Session.WorkDirectoryId is Guid wdId)
@@ -3914,8 +4155,34 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (wd.IsError)
                 return Result<LoadedSession, string>.AsError(wd.Error);
 
-            workPath = wd.Value.AbsolutePath;
+            registeredPath = wd.Value.AbsolutePath;
+            workPath = registeredPath;
             workDirectoryName = wd.Value.Name;
+            if (!string.IsNullOrWhiteSpace(full.Value.Session.WorktreeAbsolutePath))
+            {
+                if (Directory.Exists(full.Value.Session.WorktreeAbsolutePath))
+                {
+                    workPath = full.Value.Session.WorktreeAbsolutePath;
+                }
+                else
+                {
+                    var clear = await _sessions.UpdateSessionMetaAsync(
+                            new DysonSessionMetaUpdate
+                            {
+                                SessionId = sessionId,
+                                UpdateWorktreeLocation = true,
+                                WorktreeAbsolutePath = null,
+                                WorktreeBranch = null,
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    if (clear.IsError)
+                        return Result<LoadedSession, string>.AsError(clear.Error);
+
+                    full.Value.Session.WorktreeAbsolutePath = null;
+                    full.Value.Session.WorktreeBranch = null;
+                }
+            }
         }
 
         DysonUiThemeSnapshot? inheritedUiTheme = null;
@@ -3943,7 +4210,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     full.Value.Session.AgentMode,
                     full.Value.Session.McpAccessMode,
                     workDirectoryId: full.Value.Session.WorkDirectoryId,
-                    workRoot: workPath,
+                    workRoot: registeredPath,
                     uiTheme: inheritedUiTheme,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -3958,6 +4225,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 appendResumeLog: appendResumeLog,
                 usageAnalytics: _usageAnalytics,
                 workDirectoryName: workDirectoryName,
+                registeredWorkDirectoryAbsolutePath: registeredPath,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (loaded.IsError)
@@ -3991,7 +4259,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     full.Value.Session.AgentMode,
                     full.Value.Session.McpAccessMode,
                     workDirectoryId: full.Value.Session.WorkDirectoryId,
-                    workRoot: workPath,
+                    workRoot: registeredPath,
                     uiTheme: inheritedUiTheme,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -4004,6 +4272,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 models: _models,
                 appendResumeLog: appendResumeLog,
                 workDirectoryAbsolutePath: workPath,
+                registeredWorkDirectoryAbsolutePath: registeredPath,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (demoLoaded.IsError)
@@ -4496,6 +4765,253 @@ public sealed class DysonUiHost : IAsyncDisposable
                 DysonProviderKinds.Demo,
                 new DemoDysonAgentProvider(slug, reasoningEffort),
                 null));
+    }
+
+    private async Task RefreshWorktreeComposerStateThenNotifyAsync()
+    {
+        await RefreshWorktreeComposerStateAsync().ConfigureAwait(false);
+        Notify(DysonHostChangeKind.Catalogs);
+    }
+
+    private VoidResult<string> FailWorktree(string message)
+    {
+        LastError = message;
+        Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
+        return new VoidResult<string>(message);
+    }
+
+    private async Task<Result<(Guid Id, string AbsolutePath), string>> TryGetRegisteredWorkDirectoryAsync(
+        CancellationToken cancellationToken)
+    {
+        var id = ActiveWorkDirectoryId ?? _composerWorkDirectoryId;
+        if (id is not Guid wd || wd == Guid.Empty)
+            return Result<(Guid, string), string>.AsError("Select a work directory.");
+
+        var get = await _workDirectories.GetAsync(wd, cancellationToken).ConfigureAwait(false);
+        if (get.IsError)
+            return Result<(Guid, string), string>.AsError(get.Error);
+
+        return Result<(Guid, string), string>.AsValue((wd, get.Value.AbsolutePath));
+    }
+
+    private async Task<VoidResult<string>> RebuildFocusedSessionWorktreePromptAsync(
+        string registeredAbsolutePath,
+        CancellationToken cancellationToken)
+    {
+        if (_session is null)
+            return VoidResult<string>.Success;
+
+        return await RebuildSessionSystemPromptSuffixAsync(
+                _session, registeredAbsolutePath, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<VoidResult<string>> RebuildSessionSystemPromptSuffixAsync(
+        DysonAgentSession session,
+        string registeredAbsolutePath,
+        CancellationToken cancellationToken)
+    {
+        var providerKind = session.Provider switch
+        {
+            OpenAiCompatibleAgentProvider oai => DysonProviderKinds.EffectiveKind(
+                oai.ProviderKind, oai.BaseUrl, oai.ApiKey),
+            DemoDysonAgentProvider demo => DysonProviderKinds.EffectiveKind(
+                demo.ProviderKind, demo.BaseUrl, demo.ApiKey),
+            _ => SessionProviderKind(session.Provider),
+        };
+
+        var effectivePath = SessionWorkDirectoryPath(session) ?? registeredAbsolutePath;
+        var modelsBlock = await DysonAgentSystemPrompts.BuildAvailableModelsBlockAsync(
+                _models, providerKind, cancellationToken)
+            .ConfigureAwait(false);
+        var openRulesBlock = await DysonOpenRules
+            .BuildSystemPromptBlockAsync(effectivePath, cancellationToken)
+            .ConfigureAwait(false);
+        var worktreeBlock = DysonAgentSystemPrompts.BuildWorktreePromptBlock(
+            session.WorktreeEnabled,
+            session.WorktreeAbsolutePath,
+            session.WorktreeBranch,
+            registeredAbsolutePath);
+        var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+            modelsBlock, openRulesBlock, worktreeBlock);
+        return session.ReplaceSystemPromptSuffix(suffix);
+    }
+
+    private static string? SessionWorkDirectoryPath(DysonAgentSession? session) => session switch
+    {
+        DemoDysonAgentSession demo => demo.WorkDirectoryPath,
+        OpenAiCompatibleAgentSession openAi => openAi.WorkDirectoryPath,
+        _ => null,
+    };
+
+    private static Guid SessionWorkDirectoryId(DysonAgentSession session) => session switch
+    {
+        DemoDysonAgentSession demo => demo.WorkDirectoryId,
+        OpenAiCompatibleAgentSession openAi => openAi.WorkDirectoryId,
+        _ => Guid.Empty,
+    };
+
+    private static void RebindSessionWorkDirectory(DysonAgentSession session, string absolutePath)
+    {
+        switch (session)
+        {
+            case DemoDysonAgentSession demo:
+                demo.RebindWorkDirectoryPath(absolutePath);
+                break;
+            case OpenAiCompatibleAgentSession openAi:
+                openAi.RebindWorkDirectoryPath(absolutePath);
+                break;
+        }
+    }
+
+    private void RebindFocusedSessionWorkDirectory(string absolutePath)
+    {
+        if (_session is not null)
+            RebindSessionWorkDirectory(_session, absolutePath);
+    }
+
+    /// <summary>
+    /// Forks a git worktree on the first Work-mode mutating send for a root session.
+    /// Children, Plan/Ask/Review, and already-bound sessions are no-ops.
+    /// </summary>
+    private async Task<VoidResult<string>> EnsureSessionWorktreeIfNeededAsync(
+        DysonAgentSession session,
+        CancellationToken cancellationToken)
+    {
+        if (session.Parent is not null
+            || !session.WorktreeEnabled
+            || !string.IsNullOrWhiteSpace(session.WorktreeAbsolutePath)
+            || !string.Equals(session.Mode, DysonAgentModes.Work, StringComparison.OrdinalIgnoreCase))
+        {
+            return VoidResult<string>.Success;
+        }
+
+        var workDirectoryId = SessionWorkDirectoryId(session);
+        if (workDirectoryId == Guid.Empty)
+            return new VoidResult<string>("Work directory is required.");
+
+        var wd = await _workDirectories.GetAsync(workDirectoryId, cancellationToken)
+            .ConfigureAwait(false);
+        if (wd.IsError)
+            return new VoidResult<string>(wd.Error);
+
+        var registered = wd.Value.AbsolutePath;
+        var turn = session.BeginWorktreeCreatingTurn();
+        Notify(DysonHostChangeKind.Transcript);
+
+        var ensured = DysonSessionWorktree.Ensure(registered, session.PersistenceId);
+        if (ensured.IsError)
+        {
+            session.FailWorktreeCreatingTurn(turn, ensured.Error);
+            await PersistWorktreeCreatingTurnAsync(session, turn, cancellationToken)
+                .ConfigureAwait(false);
+            Notify(DysonHostChangeKind.Transcript);
+            return new VoidResult<string>(ensured.Error);
+        }
+
+        session.WorktreeAbsolutePath = ensured.Value.AbsolutePath;
+        session.WorktreeBranch = ensured.Value.Branch;
+        RebindSessionWorkDirectory(session, ensured.Value.AbsolutePath);
+
+        var rebuilt = await RebuildSessionSystemPromptSuffixAsync(
+                session, registered, cancellationToken)
+            .ConfigureAwait(false);
+        if (rebuilt.IsError)
+        {
+            session.FailWorktreeCreatingTurn(turn, rebuilt.Error);
+            await PersistWorktreeCreatingTurnAsync(session, turn, cancellationToken)
+                .ConfigureAwait(false);
+            Notify(DysonHostChangeKind.Transcript);
+            return rebuilt;
+        }
+
+        if (session.PersistenceId != Guid.Empty)
+        {
+            var persist = await _sessions.UpdateSessionMetaAsync(
+                    new DysonSessionMetaUpdate
+                    {
+                        SessionId = session.PersistenceId,
+                        UpdateWorktreeLocation = true,
+                        WorktreeAbsolutePath = session.WorktreeAbsolutePath,
+                        WorktreeBranch = session.WorktreeBranch,
+                        SystemPromptSnapshot = session.SystemPrompt,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (persist.IsError)
+            {
+                session.FailWorktreeCreatingTurn(turn, persist.Error);
+                await PersistWorktreeCreatingTurnAsync(session, turn, cancellationToken)
+                    .ConfigureAwait(false);
+                Notify(DysonHostChangeKind.Transcript);
+                return persist;
+            }
+        }
+
+        session.CompleteWorktreeCreatingTurn(
+            turn, ensured.Value.AbsolutePath, ensured.Value.Branch);
+        await PersistWorktreeCreatingTurnAsync(session, turn, cancellationToken)
+            .ConfigureAwait(false);
+        Notify(DysonHostChangeKind.Transcript);
+        return VoidResult<string>.Success;
+    }
+
+    private async Task PersistWorktreeCreatingTurnAsync(
+        DysonAgentSession session,
+        DysonAgentTurn turn,
+        CancellationToken cancellationToken)
+    {
+        if (session.PersistenceId == Guid.Empty)
+            return;
+
+        var sequence = IndexOfTurn(session, turn);
+        var entity = DysonTurnPersistence.ToEntity(
+            turn,
+            session.PersistenceId,
+            sequence,
+            completedUtc: turn.CompletedUtc);
+        await PersistAsync(
+                () => _sessions.UpsertTurnAsync(entity, cancellationToken),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<VoidResult<string>> ClearBoundWorktreeAsync(
+        string registeredAbsolutePath,
+        CancellationToken cancellationToken)
+    {
+        if (_session is null)
+            return FailWorktree("No active session.");
+
+        _session.WorktreeAbsolutePath = null;
+        _session.WorktreeBranch = null;
+        RebindFocusedSessionWorkDirectory(registeredAbsolutePath);
+
+        var rebuilt = await RebuildFocusedSessionWorktreePromptAsync(
+                registeredAbsolutePath, cancellationToken)
+            .ConfigureAwait(false);
+        if (rebuilt.IsError)
+            return FailWorktree(rebuilt.Error);
+
+        if (_session.PersistenceId != Guid.Empty)
+        {
+            var persist = await _sessions.UpdateSessionMetaAsync(
+                    new DysonSessionMetaUpdate
+                    {
+                        SessionId = _session.PersistenceId,
+                        UpdateWorktreeLocation = true,
+                        WorktreeAbsolutePath = null,
+                        WorktreeBranch = null,
+                        SystemPromptSnapshot = _session.SystemPrompt,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (persist.IsError)
+                return FailWorktree(persist.Error);
+        }
+
+        Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Catalogs);
+        return VoidResult<string>.Success;
     }
 
     private void FocusSession(DysonAgentSession session, Guid? parentSessionId)
@@ -6276,6 +6792,11 @@ public sealed class DysonUiHost : IAsyncDisposable
                 {
                     if (turn.Kind is DysonAgentTurnKind.Normal or DysonAgentTurnKind.InitializeSession)
                     {
+                        var ensure = await EnsureSessionWorktreeIfNeededAsync(s, token)
+                            .ConfigureAwait(false);
+                        if (ensure.IsError)
+                            return ensure;
+
                         var userLog = DysonSessionLogPayload.CreateEntry(
                             s.PersistenceId,
                             DysonSessionLogKind.UserPrompt,

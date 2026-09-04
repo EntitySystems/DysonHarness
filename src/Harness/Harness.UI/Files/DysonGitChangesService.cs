@@ -13,7 +13,7 @@ public sealed class DysonGitChangesService : IDisposable
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly DysonFileTreeService _fileTree;
-    private readonly Dictionary<Guid, DysonGitChangesState> _cache = new();
+    private readonly Dictionary<DysonWorkspaceRootKey, DysonGitChangesState> _cache = new();
     private readonly object _gate = new();
     private Timer? _debounceTimer;
     private CancellationTokenSource? _refreshCts;
@@ -50,26 +50,32 @@ public sealed class DysonGitChangesService : IDisposable
         }
 
         var id = workDirectoryId.Value;
-        DysonGitChangesState state;
-        lock (_gate)
+        string absolutePath;
+        await using (var scope = _scopeFactory.CreateAsyncScope())
         {
-            if (!_cache.TryGetValue(id, out state!))
-            {
-                state = new DysonGitChangesState(id);
-                _cache[id] = state;
-            }
+            DysonCloudSubjectScope.TryBind(scope.ServiceProvider, subjectId);
+            var store = scope.ServiceProvider.GetRequiredService<IDysonWorkDirectoryRepository>();
+            var get = await store.GetAsync(id, cancellationToken).ConfigureAwait(false);
+            if (get.IsError)
+                return VoidResult<string>.AsError(get.Error);
 
-            if (!string.IsNullOrWhiteSpace(subjectId))
-                state.SubjectId = subjectId;
-            Active = state;
+            absolutePath = get.Value.AbsolutePath;
         }
 
-        Notify();
-        await RefreshAsync(state, cancellationToken).ConfigureAwait(false);
-        return VoidResult<string>.Success;
+        var activated = await SetActiveAsync(id, absolutePath, cancellationToken).ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(subjectId))
+        {
+            lock (_gate)
+            {
+                if (Active is { } state)
+                    state.SubjectId = subjectId;
+            }
+        }
+
+        return activated;
     }
 
-    /// <summary>Activate by known absolute path (skips store lookup). Used by tests.</summary>
+    /// <summary>Activate a specific workspace root (registered checkout or session worktree).</summary>
     public async Task<VoidResult<string>> SetActiveAsync(
         Guid workDirectoryId,
         string absolutePath,
@@ -78,19 +84,20 @@ public sealed class DysonGitChangesService : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentException.ThrowIfNullOrWhiteSpace(absolutePath);
 
+        var key = DysonWorkspaceRootKey.From(workDirectoryId, absolutePath);
         DysonGitChangesState state;
         lock (_gate)
         {
-            if (!_cache.TryGetValue(workDirectoryId, out state!))
+            if (!_cache.TryGetValue(key, out state!))
             {
                 state = new DysonGitChangesState(workDirectoryId);
-                _cache[workDirectoryId] = state;
+                _cache[key] = state;
             }
 
+            state.WorkAbsolutePath = Path.GetFullPath(absolutePath.Trim());
             Active = state;
         }
 
-        state.WorkAbsolutePath = Path.GetFullPath(absolutePath.Trim());
         Notify();
         await RefreshAsync(state, cancellationToken).ConfigureAwait(false);
         return VoidResult<string>.Success;
@@ -185,20 +192,22 @@ public sealed class DysonGitChangesService : IDisposable
                 state.WorkAbsolutePath = get.Value.AbsolutePath;
             }
 
-            // Prefer the active file-tree FS native root when it matches this workdir.
+            // Prefer the active file-tree FS native root when it matches this workdir + path.
             var nativeRoot = state.WorkAbsolutePath;
             var tree = _fileTree.Active;
-            if (tree is not null
+            var treeMatches = tree is not null
                 && tree.WorkDirectoryId == state.WorkDirectoryId
-                && !string.IsNullOrWhiteSpace(tree.FileSystem.NativeRootPath))
+                && DysonWorkspaceRootKey.SamePath(tree.AbsolutePath, state.WorkAbsolutePath)
+                && !string.IsNullOrWhiteSpace(tree.FileSystem.NativeRootPath);
+            if (treeMatches)
             {
-                nativeRoot = tree.FileSystem.NativeRootPath;
+                nativeRoot = tree!.FileSystem.NativeRootPath;
                 state.WorkAbsolutePath = nativeRoot;
             }
 
             var root = await Task.Run(
-                    () => tree is not null && tree.WorkDirectoryId == state.WorkDirectoryId
-                        ? DysonGitInfo.TryFindRootMostRepo(tree.FileSystem)
+                    () => treeMatches
+                        ? DysonGitInfo.TryFindRootMostRepo(tree!.FileSystem)
                         : DysonGitInfo.TryFindRootMostRepo(nativeRoot),
                     ct)
                 .ConfigureAwait(false);

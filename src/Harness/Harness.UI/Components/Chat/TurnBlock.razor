@@ -34,6 +34,10 @@
         <div class="turn-block__header-main">
             <div class="turn-block__title-row">
                 <div class="turn-block__title">@(Turn.AgentTitle ?? DysonAgentTurnKindDisplay.GetDisplayName(Turn.Kind))</div>
+                @if (Turn.Kind == DysonAgentTurnKind.WorktreeCreating && Turn.CompletedUtc is null)
+                {
+                    <span class="turn-block__spinner" aria-hidden="true"></span>
+                }
                 @if (Turn.IsExcludedFromContext)
                 {
                     <span class="turn-block__dropped-badge">Dropped</span>
@@ -146,6 +150,19 @@
         {
             <div class="turn-block__display-info">@MarkdownRenderer.ToHtml(Turn.AssistantText)</div>
         }
+        else if (Turn.Kind == DysonAgentTurnKind.WorktreeCreating)
+        {
+            <div class="turn-block__display-info">
+                @if (Turn.CompletedUtc is null)
+                {
+                    <span class="turn-block__spinner" aria-hidden="true"></span>
+                }
+                @if (!string.IsNullOrWhiteSpace(Turn.AssistantText))
+                {
+                    @MarkdownRenderer.ToHtml(Turn.AssistantText)
+                }
+            </div>
+        }
         else if (IsHarnessInstructionTurn && !string.IsNullOrWhiteSpace(Turn.Instruction))
         {
             <div class="turn-block__instruction">@MarkdownRenderer.ToHtml(Turn.Instruction)</div>
@@ -153,6 +170,7 @@
 
         @if (Turn.Kind != DysonAgentTurnKind.DisplayInfo
              && Turn.Kind != DysonAgentTurnKind.ModeSwitch
+             && Turn.Kind != DysonAgentTurnKind.WorktreeCreating
              && (HasAssistantBody || HasReasoning || HasTools || HasVisualizations || HasGeneratedImages || ShowThinkingIdleDots))
         {
             <div @ref="_contentEl" class="turn-block__content">
@@ -402,7 +420,8 @@
         !IsUserTurn
         && Turn.Kind != DysonAgentTurnKind.PlanResult
         && Turn.Kind != DysonAgentTurnKind.DisplayInfo
-        && Turn.Kind != DysonAgentTurnKind.ModeSwitch;
+        && Turn.Kind != DysonAgentTurnKind.ModeSwitch
+        && Turn.Kind != DysonAgentTurnKind.WorktreeCreating;
 
     private bool CanCancel => Host.CanStopExecution() && IsLatestTurn && OnCancel.HasDelegate;
 
@@ -596,6 +615,7 @@
     private bool CanSummarizeTurn =>
         !Turn.IsExcludedFromContext
         && Turn.Kind != DysonAgentTurnKind.DisplayInfo
+        && Turn.Kind != DysonAgentTurnKind.WorktreeCreating
         && !IsSummarizing
         && !(SessionBusy && IsLatestTurn);
 

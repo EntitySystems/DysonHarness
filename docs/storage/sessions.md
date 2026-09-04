@@ -19,13 +19,16 @@ Contracts: `IDysonSessionRepository` in `Harness.Abstractions`. Implementation: 
 | `ReasoningEffort` | Session-scoped `reasoning_effort` override; null = fall back to slug `DefaultReasoningEffort` on resolve; empty = omit from request |
 | `MaxTargetContextTokens` | Session max target context; null = inherit slug `DefaultMaxTargetContextTokens` / harness 100K; `0` = Off (no DropContext inject) |
 | `WorkDirectoryId` | Guid? FK to `work_directories` (`SetNull` on delete; required for new sessions) |
+| `WorktreeEnabled` | bool, default `false` — composer **Worktree** checkbox (copied from workdir `forkWorktree` on create). Not a second `work_directories` row. |
+| `WorktreeAbsolutePath` | string? — absolute git worktree checkout; null until created. Clearing after merge/remove is allowed. |
+| `WorktreeBranch` | string? — e.g. `dyson/{8-hex of session id}`; null until created |
 | `McpAccessMode` | enum |
 | `Status` | `Active`=0 / `Completed`=1 / `Stopped`=2 / `Failed`=3 / `Interrupted`=4 (child terminal after process-restart recovery; roots stay `Active`; `Completed`/`Failed` children may return to `Active` when a new child turn starts — `BeginInFlightPrompt` / host `ShellExited` / `PromptHarnessTurnAsync` as well as parent `TriggerSubagentEvent`. In-memory reopen is `TryReopenForNewParentTask` at `BeginInFlightPrompt`; durable `Active` persist remains `TriggerSubagentEvent`’s persist helper. Do not reopen `Stopped`/`Interrupted`) |
 | `Title` | Optional UI title (agent `RenameSession` / first prompt); mirrored live as `DysonAgentSession.DisplayTitle` |
 | `SystemPromptSnapshot` | Prompt at create time; updated on mid-session `ApplyAgentMode` |
 | `CreatedUtc`, `UpdatedUtc`, `LastActivityUtc` | `DateTime` UTC |
 
-Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work directories: [work-directories.md](work-directories.md). Child rows (`turns`, `session_logs`, `session_todos`) stay parent-scoped (no redundant `SubjectId`). Repository visibility: current subject only; cross-subject get-by-id → error.
+Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work directories: [work-directories.md](work-directories.md). Session git worktrees persist **on the session row** (`WorktreeEnabled` / `WorktreeAbsolutePath` / `WorktreeBranch`); they are never extra `work_directories` rows and do not mutate `work_directories.AbsolutePath`. Child rows (`turns`, `session_logs`, `session_todos`) stay parent-scoped (no redundant `SubjectId`). Repository visibility: current subject only; cross-subject get-by-id → error.
 
 ### `turns`
 
@@ -34,7 +37,7 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `Id` | Guid PK — also `DysonAgentTurn.Id` |
 | `SessionId` | Guid FK |
 | `Sequence` | Order within session |
-| `Kind` | `DysonAgentTurnKind` (`PlanResult` = 6, `BeginBuildPlan` = 7, `SubagentReportProcessing` = 8, `ShellExited` = 9, `RethinkToolUsage` = 10, `DisplayInfo` = 11 — UI-only chrome, omitted from provider transcripts; `ModeSwitch` = 12 — mode boundary, completed immediately, included in provider transcripts as a short harness user message; modes in `Instruction` as `From→To`; `DropContext` = 13; `TaskEndReflect` = 14; `BugReview` = 15; `FullSummarize` = 16 — agent-authored session summary; after completion earlier turns are excluded from later transcripts) |
+| `Kind` | `DysonAgentTurnKind` (`PlanResult` = 6, `BeginBuildPlan` = 7, `SubagentReportProcessing` = 8, `ShellExited` = 9, `RethinkToolUsage` = 10, `DisplayInfo` = 11 — UI-only chrome, omitted from provider transcripts; `ModeSwitch` = 12 — mode boundary, completed immediately, included in provider transcripts as a short harness user message; modes in `Instruction` as `From→To`; `DropContext` = 13; `TaskEndReflect` = 14; `BugReview` = 15; `FullSummarize` = 16 — agent-authored session summary; after completion earlier turns are excluded from later transcripts; `WorktreeCreating` = 17 — UI-only chrome while forking a session git worktree; starts incomplete (`CompletedUtc` null) so the UI can spin; omitted from provider transcripts like `DisplayInfo`, not like `ModeSwitch`) |
 | `AgentTitle` | Parsed H1 / plan title |
 | `PlanRelativePath` | Workspace-relative plan path for `PlanResult` / `BeginBuildPlan` (e.g. `.dyson/plans/…`); null otherwise |
 | `Instruction` | Harness-injected instruction |
@@ -124,7 +127,7 @@ Task<VoidResult<string>> DeleteTodoAsync(Guid sessionId, string taskCode, Cancel
 Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ReplaceTodosAsync(Guid sessionId, IReadOnlyList<DysonSessionTodoReplaceItem> items, CancellationToken ct = default);
 ```
 
-`ListSessionsAsync` optionally filters by `WorkDirectoryId` (within the current subject). `ListChildSessionsAsync` returns direct children of a parent ordered by `RuntimeId`. `DysonSessionCreateRequest` / summaries include `WorkDirectoryId`. `DysonSessionMetaUpdate` can patch status/title/model/effort and, on mid-session mode switch, `AgentMode` + `SystemPromptSnapshot`.
+`ListSessionsAsync` optionally filters by `WorkDirectoryId` (within the current subject). `ListChildSessionsAsync` returns direct children of a parent ordered by `RuntimeId`. `DysonSessionCreateRequest` / summaries include `WorkDirectoryId`. Create also copies `WorktreeEnabled` (and optional path/branch, usually null until the first Work fork). `DysonSessionSummary` exposes `WorktreeEnabled` and `HasWorktree` (true when `WorktreeAbsolutePath` is non-empty) so the session list can disable delete without a second query. `DysonSessionMetaUpdate` can patch status/title/model/effort and, on mid-session mode switch, `AgentMode` + `SystemPromptSnapshot`. Worktree patches: `UpdateWorktreeEnabled` writes `WorktreeEnabled`; `UpdateWorktreeLocation` writes both `WorktreeAbsolutePath` and `WorktreeBranch` (nulls clear the location after merge/remove).
 
 `GetFullSessionAsync` returns session row + all turns (ordered) + all log entries (ordered by `Sequence`) + todos (ordered by `Sequence`).
 
@@ -132,7 +135,7 @@ Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ReplaceTodosAsync(Guid ses
 
 `ListActiveDescendantSessionsAsync` is the complementary subject-filtered recovery scan: current-subject sessions with `Status == Active` and a non-null `ParentSessionId` (any depth). Roots are never returned. After a process restart these descendants cannot resume their in-process runtime even when every turn is already complete; recovery marks them `Interrupted`. Cross-subject rows are never returned. Circuit disconnect in a still-running process does not use these scans.
 
-`DeleteSessionAsync` removes the session and descendant subagent sessions (`ParentSessionId` is Restrict, so children are deleted deepest-first). Turns, session logs, and todos cascade. Bulk inactive delete is host-side (`DysonUiHost.DeleteInactiveSessionsAsync` + `DysonSessionInactiveDelete` + existing `DeleteSessionAsync`), not a new repository API. The host overlay protects the current session and busy sessions; idle `Active` leftovers are deletable.
+`DeleteSessionAsync` removes the session and descendant subagent sessions (`ParentSessionId` is Restrict, so children are deleted deepest-first). Turns, session logs, and todos cascade. When `WorktreeAbsolutePath` is set, delete **errors** with the exact message `Merge or delete this session's worktree before deleting the session.` Enabled-without-path (`WorktreeEnabled` true, path null) still deletes. There is no auto-`git worktree remove` on session delete. Bulk inactive delete is host-side (`DysonUiHost.DeleteInactiveSessionsAsync` + `DysonSessionInactiveDelete` + existing `DeleteSessionAsync`), not a new repository API. The host overlay protects the current session and busy sessions; idle `Active` leftovers are deletable. `DysonSessionInactiveDelete.SelectDeletableRootIds` **skips** roots with `HasWorktree` so header “delete inactive” cannot wipe a live checkout.
 
 Todo CRUD rejects duplicate `TaskCode` (create) / missing code (update/delete). `UpdateTodoAsync` patches optional `DisplayName` / `Status`; `Comments` replaces the full list; `AppendComment` appends one string after any replace. `ReplaceTodosAsync` clears then inserts the seed set (used by `StartSubagent` child seed); duplicate codes in the set fail.
 
@@ -152,6 +155,8 @@ Aggregate DTO: session entity + `IReadOnlyList` turns + `IReadOnlyList` log entr
 Demo path: `DemoDysonAgentSession.LoadAsync(sessionRepository, sessionId, provider)` (also used by the retained-scope runtime factory).
 OpenAI-compatible path: `OpenAiCompatibleAgentSession.LoadAsync(sessionRepository, sessionId, provider, http, workDirectoryAbsolutePath)` (still host-owned; the runtime factory returns an explicit Result error for OpenAI create/load).
 
+**Worktree on resume/load:** if `WorktreeAbsolutePath` is set and that directory still exists, the host/factory binds the live session to that path (tools, shells, openrules). If the column is set but the folder is gone, load **clears** `WorktreeAbsolutePath` / `WorktreeBranch` (`UpdateWorktreeLocation` with nulls) and falls back to the registered work-directory `AbsolutePath`. `WorktreeEnabled` is kept. Process-restart recovery already finalizes an incomplete `WorktreeCreating` turn (`CompletedUtc` + `InterruptionReason`); the next Work send retries ensure if the path is still null.
+
 Same-process circuit reconnect is not this cold path: `DysonUiRuntimeAttachment` reattaches the retained `DysonSessionRuntime` and does not rerun recovery or rebuild the live graph from SQLite.
 
 ## Process-restart recovery
@@ -167,7 +172,7 @@ The sweep is idempotent. Counts land on `DysonSessionRecoveryReport` (`Unfinishe
 
 ## Subagents
 
-Parent FK (`ParentSessionId`) links the graph. `CreateChildAsync` persists the child with `ParentSessionId = parent.PersistenceId`, allocates runtime id ≥ 1, optionally seeds the child todo list (`ReplaceTodosAsync` / in-memory hydrate from optional `initialTodos`), and starts a background prompt. Child status updates via `UpdateSessionMetaAsync` on `SubmitSubagentReport` / stop / fail. A `Completed` or `Failed` child can return to `Active` when a new child turn starts (`BeginInFlightPrompt` — host `ShellExited` / other `PromptHarnessTurnAsync` as well as parent `TriggerSubagentEvent`). `BeginInFlightPrompt` reopen is in-memory (`TryReopenForNewParentTask`). Durable `Active` persist remains `TriggerSubagentEvent` (persist via `UpdateSessionMetaAsync` + `SessionStatusChanged` before kickoff). Do not reopen `Stopped`/`Interrupted`.
+Parent FK (`ParentSessionId`) links the graph. `CreateChildAsync` persists the child with `ParentSessionId = parent.PersistenceId`, allocates runtime id ≥ 1, optionally seeds the child todo list (`ReplaceTodosAsync` / in-memory hydrate from optional `initialTodos`), and starts a background prompt. Children inherit the parent’s `WorktreeEnabled` **and** path/branch (same checkout). They never call `DysonSessionWorktree.Ensure`. Child status updates via `UpdateSessionMetaAsync` on `SubmitSubagentReport` / stop / fail. A `Completed` or `Failed` child can return to `Active` when a new child turn starts (`BeginInFlightPrompt` — host `ShellExited` / other `PromptHarnessTurnAsync` as well as parent `TriggerSubagentEvent`). `BeginInFlightPrompt` reopen is in-memory (`TryReopenForNewParentTask`). Durable `Active` persist remains `TriggerSubagentEvent` (persist via `UpdateSessionMetaAsync` + `SessionStatusChanged` before kickoff). Do not reopen `Stopped`/`Interrupted`.
 
 Subagents are **session-owned**: the live graph (`SubSessions` / `SubagentsById`) is rebuilt from DB children on parent load (not only from the spawning turn’s tool cards). `ListChildSessionsAsync` returns direct children ordered by `RuntimeId`. Grandchildren hydrate when that child session is opened.
 

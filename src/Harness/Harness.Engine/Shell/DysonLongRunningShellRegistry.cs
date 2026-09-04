@@ -130,18 +130,42 @@ public static class DysonLongRunningShellRegistry
     }
 
     /// <summary>All shells for a workdir (Running + exited), newest id first.</summary>
-    public static IReadOnlyList<DysonLongRunningShellInfo> List(Guid workDirectoryId)
+    public static IReadOnlyList<DysonLongRunningShellInfo> List(Guid workDirectoryId) =>
+        ListCore(workDirectoryId, workingDirectory: null);
+
+    /// <summary>Shells for a workdir whose <see cref="DysonLongRunningShellInfo.WorkingDirectory"/> matches.</summary>
+    public static IReadOnlyList<DysonLongRunningShellInfo> List(Guid workDirectoryId, string workingDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
+        return ListCore(workDirectoryId, workingDirectory);
+    }
+
+    public static int CountRunning(Guid workDirectoryId) =>
+        CountRunningCore(workDirectoryId, workingDirectory: null);
+
+    /// <summary>Running/cancel-requested count for a workdir, limited to one working directory.</summary>
+    public static int CountRunning(Guid workDirectoryId, string workingDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
+        return CountRunningCore(workDirectoryId, workingDirectory);
+    }
+
+    private static IReadOnlyList<DysonLongRunningShellInfo> ListCore(Guid workDirectoryId, string? workingDirectory)
     {
         if (!Buckets.TryGetValue(workDirectoryId, out var bucket))
             return [];
 
-        return bucket.Shells.Values
+        IEnumerable<DysonLongRunningShell> shells = bucket.Shells.Values;
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+            shells = shells.Where(s => SameWorkingDirectory(s.WorkingDirectory, workingDirectory));
+
+        return shells
             .Select(s => s.ToInfo())
             .OrderByDescending(s => s.Id)
             .ToArray();
     }
 
-    public static int CountRunning(Guid workDirectoryId)
+    private static int CountRunningCore(Guid workDirectoryId, string? workingDirectory)
     {
         if (!Buckets.TryGetValue(workDirectoryId, out var bucket))
             return 0;
@@ -149,11 +173,47 @@ public static class DysonLongRunningShellRegistry
         var n = 0;
         foreach (var s in bucket.Shells.Values)
         {
-            if (s.Status is DysonLongRunningShellStatus.Running or DysonLongRunningShellStatus.CancelRequested)
-                n++;
+            if (s.Status is not (DysonLongRunningShellStatus.Running or DysonLongRunningShellStatus.CancelRequested))
+                continue;
+            if (!string.IsNullOrWhiteSpace(workingDirectory)
+                && !SameWorkingDirectory(s.WorkingDirectory, workingDirectory))
+            {
+                continue;
+            }
+
+            n++;
         }
 
         return n;
+    }
+
+    /// <summary>Normalized full-path compare (OrdinalIgnoreCase on Windows).</summary>
+    public static bool SameWorkingDirectory(string? a, string? b)
+    {
+        if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b))
+            return false;
+
+        try
+        {
+            var na = NormalizeWorkingDirectory(a);
+            var nb = NormalizeWorkingDirectory(b);
+            return string.Equals(
+                na,
+                nb,
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static string NormalizeWorkingDirectory(string path)
+    {
+        var full = Path.GetFullPath(path.Trim());
+        if (full.Length > 1)
+            full = full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return full;
     }
 
     public static async Task<Result<DysonLongRunningShellTail, string>> ReadTailAsync(

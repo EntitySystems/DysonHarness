@@ -20,6 +20,15 @@ public sealed class DysonSessionCreateRequest
     public string? Title { get; init; }
     public required string SystemPromptSnapshot { get; init; }
     public DysonSessionStatus Status { get; init; } = DysonSessionStatus.Active;
+
+    /// <summary>Composer worktree checkbox. Default false; usually no path yet on create.</summary>
+    public bool WorktreeEnabled { get; init; }
+
+    /// <summary>Absolute worktree path; usually null on create.</summary>
+    public string? WorktreeAbsolutePath { get; init; }
+
+    /// <summary>Worktree branch; usually null on create.</summary>
+    public string? WorktreeBranch { get; init; }
 }
 
 public sealed class DysonSessionMetaUpdate
@@ -46,6 +55,21 @@ public sealed class DysonSessionMetaUpdate
 
     /// <summary>When set, updates persisted <c>SystemPromptSnapshot</c>.</summary>
     public string? SystemPromptSnapshot { get; init; }
+
+    /// <summary>When true, write <see cref="WorktreeEnabled"/>.</summary>
+    public bool UpdateWorktreeEnabled { get; init; }
+
+    public bool WorktreeEnabled { get; init; }
+
+    /// <summary>
+    /// When true, write both <see cref="WorktreeAbsolutePath"/> and <see cref="WorktreeBranch"/>
+    /// (null path/branch clears after merge/remove).
+    /// </summary>
+    public bool UpdateWorktreeLocation { get; init; }
+
+    public string? WorktreeAbsolutePath { get; init; }
+
+    public string? WorktreeBranch { get; init; }
 }
 
 public sealed class DysonSessionSummary
@@ -64,6 +88,12 @@ public sealed class DysonSessionSummary
 
     /// <summary>UTC.</summary>
     public DateTime LastActivityUtc { get; init; }
+
+    /// <summary>Composer worktree checkbox.</summary>
+    public bool WorktreeEnabled { get; init; }
+
+    /// <summary>True when <c>WorktreeAbsolutePath</c> is non-empty (session list delete guard).</summary>
+    public bool HasWorktree { get; init; }
 }
 
 public sealed class DysonPersistedSession

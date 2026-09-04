@@ -97,6 +97,7 @@
 
 @code {
     private Guid? _boundWorkDirectoryId;
+    private string? _boundWorkRootPath;
     private DysonFileTreeNode? _contextMenuNode;
     private double _contextMenuX;
     private double _contextMenuY;
@@ -106,6 +107,7 @@
     private string? _status;
 
     [Parameter] public Guid? ActiveWorkDirectoryId { get; set; }
+    [Parameter] public string? ActiveWorkRootPath { get; set; }
 
     private static string OpenInFileManagerLabel =>
         OperatingSystem.IsWindows()
@@ -122,14 +124,22 @@
 
     protected override async Task OnParametersSetAsync()
     {
-        if (_boundWorkDirectoryId == ActiveWorkDirectoryId)
+        if (_boundWorkDirectoryId == ActiveWorkDirectoryId
+            && ((_boundWorkRootPath is null && ActiveWorkRootPath is null)
+                || DysonWorkspaceRootKey.SamePath(_boundWorkRootPath, ActiveWorkRootPath)))
+        {
             return;
+        }
 
         _boundWorkDirectoryId = ActiveWorkDirectoryId;
+        _boundWorkRootPath = ActiveWorkRootPath;
         CloseContextMenu();
         CancelRename();
         _status = null;
-        await FileTree.SetActiveAsync(ActiveWorkDirectoryId, Subject.SubjectId);
+        if (ActiveWorkDirectoryId is Guid id && !string.IsNullOrWhiteSpace(ActiveWorkRootPath))
+            await FileTree.SetActiveAsync(id, ActiveWorkRootPath);
+        else
+            await FileTree.SetActiveAsync(ActiveWorkDirectoryId, Subject.SubjectId);
     }
 
     public void Dispose() => FileTree.Changed -= OnTreeChanged;

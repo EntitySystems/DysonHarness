@@ -44,6 +44,15 @@ public sealed class DysonSessionEntity
     public string? Title { get; set; }
     public string SystemPromptSnapshot { get; set; } = "";
 
+    /// <summary>Composer worktree checkbox. Default false; existing rows stay false.</summary>
+    public bool WorktreeEnabled { get; set; }
+
+    /// <summary>Absolute path of the session git worktree; null until created.</summary>
+    public string? WorktreeAbsolutePath { get; set; }
+
+    /// <summary>Worktree branch name (e.g. <c>dyson/{8-hex}</c>); null until created.</summary>
+    public string? WorktreeBranch { get; set; }
+
     /// <summary>UTC.</summary>
     public DateTime CreatedUtc { get; set; }
 

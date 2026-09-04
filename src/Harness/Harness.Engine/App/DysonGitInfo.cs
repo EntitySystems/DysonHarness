@@ -15,12 +15,18 @@ public enum DysonGitChangeKind
 /// <summary>One path from <c>git status --porcelain</c>.</summary>
 public sealed record DysonGitStatusEntry(string Path, DysonGitChangeKind Kind);
 
+/// <summary>One checkout from <c>git worktree list --porcelain</c>.</summary>
+public sealed record DysonGitWorktreeEntry(string Path, string Head, string? Branch);
+
 /// <summary>
 /// Reads git metadata for a workspace path (runtime, not harness build-time branch).
 /// </summary>
 public static class DysonGitInfo
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>Mutating worktree / merge commands can take longer than status reads.</summary>
+    private static readonly TimeSpan WorktreeCommandTimeout = TimeSpan.FromSeconds(30);
 
     private static readonly Regex UnifiedHunkHeader = new(
         @"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@",
@@ -270,6 +276,145 @@ public static class DysonGitInfo
         }
 
         return Result<IReadOnlyList<DysonGitStatusEntry>, string>.AsValue(ParsePorcelain(stdout));
+    }
+
+    /// <summary>
+    /// Runs <c>git worktree add -b {branch} {path} HEAD</c> from <paramref name="repoRoot"/>.
+    /// </summary>
+    public static Result<string, string> TryAddWorktree(
+        string repoRoot,
+        string worktreeAbsolutePath,
+        string branchName)
+    {
+        var root = TryResolveExistingDirectory(repoRoot);
+        if (root.IsError)
+            return Result<string, string>.AsError(root.Error);
+
+        if (string.IsNullOrWhiteSpace(worktreeAbsolutePath))
+            return Result<string, string>.AsError("Path is empty.");
+
+        if (string.IsNullOrWhiteSpace(branchName))
+            return Result<string, string>.AsError("Branch name is empty.");
+
+        string fullWorktree;
+        try
+        {
+            fullWorktree = Path.GetFullPath(worktreeAbsolutePath.Trim());
+        }
+        catch (Exception ex)
+        {
+            return Result<string, string>.AsError($"Invalid path: {ex.Message}");
+        }
+
+        var run = RunGit(
+            root.Value,
+            ["worktree", "add", "-b", branchName.Trim(), fullWorktree, "HEAD"],
+            WorktreeCommandTimeout);
+        if (run.IsError)
+            return Result<string, string>.AsError(run.Error);
+
+        var (exitCode, _, stderr) = run.Value;
+        if (exitCode != 0)
+        {
+            return Result<string, string>.AsError(
+                string.IsNullOrWhiteSpace(stderr) ? "git worktree add failed." : stderr.Trim());
+        }
+
+        return Result<string, string>.AsValue(fullWorktree);
+    }
+
+    /// <summary>
+    /// Runs <c>git worktree remove</c> (with <c>--force</c> when <paramref name="force"/> is true).
+    /// </summary>
+    public static VoidResult<string> TryRemoveWorktree(
+        string repoRoot,
+        string worktreeAbsolutePath,
+        bool force = false)
+    {
+        var root = TryResolveExistingDirectory(repoRoot);
+        if (root.IsError)
+            return VoidResult<string>.AsError(root.Error);
+
+        if (string.IsNullOrWhiteSpace(worktreeAbsolutePath))
+            return VoidResult<string>.AsError("Path is empty.");
+
+        string fullWorktree;
+        try
+        {
+            fullWorktree = Path.GetFullPath(worktreeAbsolutePath.Trim());
+        }
+        catch (Exception ex)
+        {
+            return VoidResult<string>.AsError($"Invalid path: {ex.Message}");
+        }
+
+        string[] args = force
+            ? ["worktree", "remove", "--force", fullWorktree]
+            : ["worktree", "remove", fullWorktree];
+
+        var run = RunGit(root.Value, args, WorktreeCommandTimeout);
+        if (run.IsError)
+            return VoidResult<string>.AsError(run.Error);
+
+        var (exitCode, _, stderr) = run.Value;
+        if (exitCode != 0)
+        {
+            return VoidResult<string>.AsError(
+                string.IsNullOrWhiteSpace(stderr) ? "git worktree remove failed." : stderr.Trim());
+        }
+
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Runs <c>git worktree list --porcelain</c> and parses path, HEAD, and branch
+    /// (null when detached).
+    /// </summary>
+    public static Result<IReadOnlyList<DysonGitWorktreeEntry>, string> TryListWorktrees(string repoRoot)
+    {
+        var root = TryResolveExistingDirectory(repoRoot);
+        if (root.IsError)
+            return Result<IReadOnlyList<DysonGitWorktreeEntry>, string>.AsError(root.Error);
+
+        var run = RunGit(root.Value, ["worktree", "list", "--porcelain"], WorktreeCommandTimeout);
+        if (run.IsError)
+            return Result<IReadOnlyList<DysonGitWorktreeEntry>, string>.AsError(run.Error);
+
+        var (exitCode, stdout, stderr) = run.Value;
+        if (exitCode != 0)
+        {
+            return Result<IReadOnlyList<DysonGitWorktreeEntry>, string>.AsError(
+                string.IsNullOrWhiteSpace(stderr) ? "git worktree list failed." : stderr.Trim());
+        }
+
+        return Result<IReadOnlyList<DysonGitWorktreeEntry>, string>.AsValue(ParseWorktreePorcelain(stdout));
+    }
+
+    /// <summary>
+    /// Runs <c>git merge --no-edit {branch}</c> in <paramref name="repoRoot"/>.
+    /// Conflicts and other non-zero exits are Result errors (stderr).
+    /// </summary>
+    public static VoidResult<string> TryMergeBranch(string repoRoot, string branchName)
+    {
+        var root = TryResolveExistingDirectory(repoRoot);
+        if (root.IsError)
+            return VoidResult<string>.AsError(root.Error);
+
+        if (string.IsNullOrWhiteSpace(branchName))
+            return VoidResult<string>.AsError("Branch name is empty.");
+
+        var run = RunGit(root.Value, ["merge", "--no-edit", branchName.Trim()], WorktreeCommandTimeout);
+        if (run.IsError)
+            return VoidResult<string>.AsError(run.Error);
+
+        var (exitCode, _, stderr) = run.Value;
+        if (exitCode != 0)
+        {
+            return VoidResult<string>.AsError(
+                string.IsNullOrWhiteSpace(stderr) ? "git merge failed." : stderr.Trim());
+        }
+
+        return VoidResult<string>.Success;
     }
 
     /// <summary>
@@ -527,6 +672,94 @@ public static class DysonGitInfo
         {
             return Result<string, string>.AsError($"Invalid path: {ex.Message}");
         }
+    }
+
+    private static Result<string, string> TryResolveExistingDirectory(string absolutePath)
+    {
+        if (string.IsNullOrWhiteSpace(absolutePath))
+            return Result<string, string>.AsError("Path is empty.");
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(absolutePath.Trim());
+        }
+        catch (Exception ex)
+        {
+            return Result<string, string>.AsError($"Invalid path: {ex.Message}");
+        }
+
+        if (!Directory.Exists(fullPath))
+            return Result<string, string>.AsError("Directory does not exist.");
+
+        return Result<string, string>.AsValue(fullPath);
+    }
+
+    /// <summary>Parse <c>git worktree list --porcelain</c>. Internal for unit tests.</summary>
+    internal static IReadOnlyList<DysonGitWorktreeEntry> ParseWorktreePorcelain(string stdout)
+    {
+        if (string.IsNullOrEmpty(stdout))
+            return [];
+
+        var entries = new List<DysonGitWorktreeEntry>();
+        string? path = null;
+        string? head = null;
+        string? branch = null;
+        var detached = false;
+
+        void Flush()
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return;
+
+            entries.Add(new DysonGitWorktreeEntry(path, head ?? "", detached ? null : branch));
+            path = null;
+            head = null;
+            branch = null;
+            detached = false;
+        }
+
+        foreach (var rawLine in stdout.Replace("\r\n", "\n").Split('\n'))
+        {
+            var line = rawLine.TrimEnd();
+            if (line.Length == 0)
+            {
+                Flush();
+                continue;
+            }
+
+            if (line.StartsWith("worktree ", StringComparison.Ordinal))
+            {
+                Flush();
+                path = line["worktree ".Length..];
+                continue;
+            }
+
+            if (line.StartsWith("HEAD ", StringComparison.Ordinal))
+            {
+                head = line["HEAD ".Length..];
+                continue;
+            }
+
+            if (line.StartsWith("branch ", StringComparison.Ordinal))
+            {
+                var refName = line["branch ".Length..];
+                const string heads = "refs/heads/";
+                branch = refName.StartsWith(heads, StringComparison.Ordinal)
+                    ? refName[heads.Length..]
+                    : refName;
+                continue;
+            }
+
+            if (line.Equals("detached", StringComparison.Ordinal))
+            {
+                detached = true;
+                branch = null;
+            }
+        }
+
+        Flush();
+        return entries;
     }
 
     /// <summary>

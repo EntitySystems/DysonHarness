@@ -259,6 +259,17 @@ public class DysonPlanResultTests
         {
             throw new InvalidOperationException("PromptCacheKey must include system-prompt generation.");
         }
+
+        var replaced = session.ReplaceSystemPromptSuffix("worktree-block");
+        if (replaced.IsError
+            || session.Mode != DysonAgentModes.Plan
+            || session.SystemPromptGeneration != 2
+            || !session.SystemPrompt.Contains("worktree-block", StringComparison.Ordinal)
+            || session.SystemPrompt.Contains("models-block", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "ReplaceSystemPromptSuffix must rebuild prompt, keep mode, and bump generation.");
+        }
     }
 
     private static void AssertPlanReadyPending()

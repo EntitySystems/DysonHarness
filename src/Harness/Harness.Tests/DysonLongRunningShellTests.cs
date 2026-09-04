@@ -14,6 +14,7 @@ public class DysonLongRunningShellTests
         AssertShellExitedPromptAndTrim();
         AssertOutcomeMapping();
         AssertIdAllocationListAndAbort();
+        await AssertListAndCountFilterByWorkingDirectory();
         await AssertStartIncludesEarlyOutput();
         await AssertSubscribeRootOnly();
         await AssertWaitForTimeoutValidation();
@@ -237,6 +238,85 @@ public class DysonLongRunningShellTests
         finally
         {
             DysonLongRunningShellRegistry.ClearForTests(workDirId);
+        }
+    }
+
+    private static async Task AssertListAndCountFilterByWorkingDirectory()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var workDirId = Guid.NewGuid();
+        var dirA = Path.Combine(Path.GetTempPath(), "dyson-lrs-a-" + workDirId.ToString("N"));
+        var dirB = Path.Combine(Path.GetTempPath(), "dyson-lrs-b-" + workDirId.ToString("N"));
+        Directory.CreateDirectory(dirA);
+        Directory.CreateDirectory(dirB);
+
+        try
+        {
+            var a = DysonLongRunningShellRegistry
+                .StartAsync(workDirId, "Cmd", "cmd.exe", "ping -n 30 127.0.0.1 >nul", dirA)
+                .GetAwaiter()
+                .GetResult();
+            if (a.IsError)
+                throw new InvalidOperationException($"Start A failed: {a.Error}");
+
+            var b = DysonLongRunningShellRegistry
+                .StartAsync(workDirId, "Cmd", "cmd.exe", "ping -n 30 127.0.0.1 >nul", dirB)
+                .GetAwaiter()
+                .GetResult();
+            if (b.IsError)
+                throw new InvalidOperationException($"Start B failed: {b.Error}");
+
+            var unfiltered = DysonLongRunningShellRegistry.List(workDirId);
+            if (unfiltered.Count != 2)
+                throw new InvalidOperationException($"Unfiltered List should be 2, got {unfiltered.Count}.");
+            if (DysonLongRunningShellRegistry.CountRunning(workDirId) != 2)
+                throw new InvalidOperationException("Unfiltered CountRunning should be 2.");
+
+            var filtered = DysonLongRunningShellRegistry.List(workDirId, dirA);
+            if (filtered.Count != 1 || filtered[0].Id != a.Value.Id)
+                throw new InvalidOperationException("Filtered List should return only the matching cwd shell.");
+            if (DysonLongRunningShellRegistry.CountRunning(workDirId, dirA) != 1)
+                throw new InvalidOperationException("Filtered CountRunning should be 1.");
+            if (DysonLongRunningShellRegistry.CountRunning(workDirId, dirB) != 1)
+                throw new InvalidOperationException("Filtered CountRunning for B should be 1.");
+
+            var session = new StubSession();
+            using var http = new HttpClient();
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, dirA, http, store: null, workDirId);
+            var listed = executor.ExecuteAsync(new DysonToolCall
+            {
+                CallId = "lrs-list-filter",
+                ToolName = "ListLongRunningShells",
+                Stage = 0,
+                ArgumentsJson = "{}",
+            }).GetAwaiter().GetResult();
+            if (listed.IsError)
+                throw new InvalidOperationException($"ListLongRunningShells failed: {listed.Content}");
+            if (!listed.Content.Contains($"\"id\":{a.Value.Id}", StringComparison.Ordinal)
+                || listed.Content.Contains($"\"id\":{b.Value.Id}", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Executor ListLongRunningShells must be scoped to NativeRootPath. Got:\n" + listed.Content);
+            }
+        }
+        finally
+        {
+            try
+            {
+                foreach (var info in DysonLongRunningShellRegistry.List(workDirId))
+                    _ = DysonLongRunningShellRegistry.AbortAsync(workDirId, info.Id, timeoutMs: 10_000)
+                        .GetAwaiter().GetResult();
+            }
+            catch
+            {
+                // best-effort
+            }
+
+            DysonLongRunningShellRegistry.ClearForTests(workDirId);
+            try { Directory.Delete(dirA, recursive: true); } catch { /* ignore */ }
+            try { Directory.Delete(dirB, recursive: true); } catch { /* ignore */ }
         }
     }
 

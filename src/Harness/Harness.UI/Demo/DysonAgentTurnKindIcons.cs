@@ -24,6 +24,7 @@ public static class DysonAgentTurnKindIcons
         DysonAgentTurnKind.TaskEndReflect => "icons/turns/expand.svg",
         DysonAgentTurnKind.BugReview => "icons/agent-modes/bug-review.svg",
         DysonAgentTurnKind.FullSummarize => "icons/turns/report.svg",
+        DysonAgentTurnKind.WorktreeCreating => "icons/turns/initialize.svg",
         _ => "icons/turns/normal.svg",
     };
 }

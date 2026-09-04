@@ -6,6 +6,7 @@ namespace DysonHarness;
 public static class DysonWorkDirectoryConfig
 {
     public const string McpActiveKey = "mcpActive";
+    public const string ForkWorktreeKey = "forkWorktree";
 
     /// <summary>Default document when no DB row exists (MCP on by default).</summary>
     public static JsonObject CreateDefault() =>
@@ -37,6 +38,35 @@ public static class DysonWorkDirectoryConfig
     {
         var obj = config as JsonObject ?? config?.DeepClone() as JsonObject ?? CreateDefault();
         obj[McpActiveKey] = mcpActive;
+        return obj;
+    }
+
+    /// <summary>
+    /// Reads <c>forkWorktree</c>. Missing key, null document, or non-boolean ⇒ <c>false</c>
+    /// (opt-in only via explicit <c>true</c>).
+    /// </summary>
+    public static bool TryGetForkWorktree(JsonNode? config)
+    {
+        if (config is null)
+            return false;
+
+        var node = config[ForkWorktreeKey];
+        if (node is null)
+            return false;
+
+        return node.GetValueKind() switch
+        {
+            System.Text.Json.JsonValueKind.True => true,
+            System.Text.Json.JsonValueKind.False => false,
+            _ => false,
+        };
+    }
+
+    /// <summary>Sets <c>forkWorktree</c> on a mutable object (creates object if needed).</summary>
+    public static JsonObject WithForkWorktree(JsonNode? config, bool forkWorktree)
+    {
+        var obj = config as JsonObject ?? config?.DeepClone() as JsonObject ?? CreateDefault();
+        obj[ForkWorktreeKey] = forkWorktree;
         return obj;
     }
 }

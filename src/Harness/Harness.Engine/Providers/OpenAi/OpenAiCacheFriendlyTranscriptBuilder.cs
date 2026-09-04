@@ -270,7 +270,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 break;
 
             var turn = turns[i];
-            if (turn.IsExcludedFromContext || turn.Kind == DysonAgentTurnKind.DisplayInfo)
+            if (turn.IsExcludedFromContext
+                || turn.Kind is DysonAgentTurnKind.DisplayInfo or DysonAgentTurnKind.WorktreeCreating)
                 continue;
 
             if (turn.Kind == DysonAgentTurnKind.ModeSwitch)
@@ -373,7 +374,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         for (var i = 0; i < turns.Count; i++)
         {
             var turn = turns[i];
-            if (turn.IsExcludedFromContext || turn.Kind == DysonAgentTurnKind.DisplayInfo)
+            if (turn.IsExcludedFromContext
+                || turn.Kind is DysonAgentTurnKind.DisplayInfo or DysonAgentTurnKind.WorktreeCreating)
                 continue;
 
             if (turn.Kind == DysonAgentTurnKind.ModeSwitch)
@@ -809,11 +811,12 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     }
 
     /// <summary>
-    /// DisplayInfo / ModeSwitch / PlanResult occupy list slots but are not eligible
+    /// DisplayInfo / WorktreeCreating / ModeSwitch / PlanResult occupy list slots but are not eligible
     /// prompt turns (same set as <see cref="FindIncompleteCurrentIndex"/>).
     /// </summary>
     private static bool IsTranscriptChromeKind(DysonAgentTurnKind kind) =>
         kind is DysonAgentTurnKind.DisplayInfo
+            or DysonAgentTurnKind.WorktreeCreating
             or DysonAgentTurnKind.ModeSwitch
             or DysonAgentTurnKind.PlanResult;
 
@@ -838,7 +841,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
     /// <summary>
     /// True for the first incomplete Normal/InitializeSession prompt in the current Plan stint.
-    /// ModeSwitch is inspected (To=Plan starts a stint); DisplayInfo / PlanResult are skipped.
+    /// ModeSwitch is inspected (To=Plan starts a stint); DisplayInfo / WorktreeCreating / PlanResult are skipped.
     /// </summary>
     private static bool ShouldAppendPlanFirstTurnMandate(
         DysonAgentSession session,
@@ -857,7 +860,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         for (var i = currentIndex - 1; i >= 0; i--)
         {
             var prior = turns[i];
-            if (prior.Kind is DysonAgentTurnKind.DisplayInfo or DysonAgentTurnKind.PlanResult)
+            if (prior.Kind is DysonAgentTurnKind.DisplayInfo
+                or DysonAgentTurnKind.WorktreeCreating
+                or DysonAgentTurnKind.PlanResult)
                 continue;
 
             if (prior.Kind == DysonAgentTurnKind.ModeSwitch

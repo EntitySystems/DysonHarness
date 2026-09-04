@@ -117,13 +117,14 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
     private readonly IDysonSessionRepository? _store;
     private readonly HttpClient _http;
-    private readonly string _workDirectoryPath;
+    private string _workDirectoryPath;
     private Guid _workDirectoryId;
     private readonly OpenAiCompletionsClient _completions;
     private readonly OpenAiResponsesClient _responses;
     private readonly IDysonModelRepository? _models;
     private readonly IDysonUsageAnalyticsRepository? _usageAnalytics;
     private readonly string _workDirectoryName;
+    private readonly string _registeredWorkDirectoryPath;
     // ponytail: one hop per prompt; Explore recap shares this so a main-loop hop is not repeated
     private bool _fallbackAppliedThisTurn;
 
@@ -138,12 +139,16 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         IDysonModelRepository? models = null,
         string? systemPromptSuffix = null,
         IDysonUsageAnalyticsRepository? usageAnalytics = null,
-        string workDirectoryName = "")
+        string workDirectoryName = "",
+        string? registeredWorkDirectoryAbsolutePath = null)
         : base(agentMode, config, provider, systemPromptSuffix)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         ArgumentException.ThrowIfNullOrWhiteSpace(workDirectoryAbsolutePath);
         _workDirectoryPath = Path.GetFullPath(workDirectoryAbsolutePath);
+        _registeredWorkDirectoryPath = string.IsNullOrWhiteSpace(registeredWorkDirectoryAbsolutePath)
+            ? _workDirectoryPath
+            : Path.GetFullPath(registeredWorkDirectoryAbsolutePath);
         _store = store;
         SessionStore = store;
         _workDirectoryId = workDirectoryId;
@@ -160,6 +165,13 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
     public Guid WorkDirectoryId => _workDirectoryId;
 
+    /// <summary>Rebinds native workspace root (registered checkout vs session worktree).</summary>
+    public void RebindWorkDirectoryPath(string absolutePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(absolutePath);
+        _workDirectoryPath = Path.GetFullPath(absolutePath);
+    }
+
     public static async Task<Result<OpenAiCompatibleAgentSession, string>> CreateAsync(
         IDysonSessionRepository store,
         OpenAiCompatibleAgentProvider provider,
@@ -172,6 +184,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         IDysonModelRepository? models = null,
         IDysonUsageAnalyticsRepository? usageAnalytics = null,
         string workDirectoryName = "",
+        bool worktreeEnabled = false,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -184,12 +197,19 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         config ??= new DysonAgentSessionConfig();
         var providerKind = DysonProviderKinds.EffectiveKind(
             provider.ProviderKind, provider.BaseUrl, provider.ApiKey);
-        var suffix = await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
-                models, providerKind, workDirectoryAbsolutePath, cancellationToken)
-            .ConfigureAwait(false);
+        var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+            await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                    models, providerKind, workDirectoryAbsolutePath, cancellationToken)
+                .ConfigureAwait(false),
+            DysonAgentSystemPrompts.BuildWorktreePromptBlock(
+                worktreeEnabled,
+                worktreeAbsolutePath: null,
+                worktreeBranch: null,
+                workDirectoryAbsolutePath));
         var session = new OpenAiCompatibleAgentSession(
             agentMode, config, provider, http, workDirectoryAbsolutePath, store, workDirectoryId, models,
             suffix, usageAnalytics, workDirectoryName);
+        session.WorktreeEnabled = worktreeEnabled;
         session.ConfigureRootInterAgentTools();
         session.SlugDefaultMaxTargetContextTokens = provider.DefaultMaxTargetContextTokens;
         var initialTitle = title ?? "New session";
@@ -208,6 +228,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 Title = initialTitle,
                 SystemPromptSnapshot = session.SystemPrompt,
                 Status = DysonSessionStatus.Active,
+                WorktreeEnabled = worktreeEnabled,
             },
             cancellationToken).ConfigureAwait(false);
 
@@ -239,6 +260,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         bool appendResumeLog = true,
         IDysonUsageAnalyticsRepository? usageAnalytics = null,
         string workDirectoryName = "",
+        string? registeredWorkDirectoryAbsolutePath = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -255,11 +277,18 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             McpAccessMode = state.Session.McpAccessMode,
         };
 
+        var registered = registeredWorkDirectoryAbsolutePath ?? workDirectoryAbsolutePath;
         var providerKind = DysonProviderKinds.EffectiveKind(
             provider.ProviderKind, provider.BaseUrl, provider.ApiKey);
-        var suffix = await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
-                models, providerKind, workDirectoryAbsolutePath, cancellationToken)
-            .ConfigureAwait(false);
+        var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+            await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                    models, providerKind, workDirectoryAbsolutePath, cancellationToken)
+                .ConfigureAwait(false),
+            DysonAgentSystemPrompts.BuildWorktreePromptBlock(
+                state.Session.WorktreeEnabled,
+                state.Session.WorktreeAbsolutePath,
+                state.Session.WorktreeBranch,
+                registered));
         var session = new OpenAiCompatibleAgentSession(
             state.Session.AgentMode,
             config,
@@ -271,7 +300,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             models,
             suffix,
             usageAnalytics,
-            workDirectoryName);
+            workDirectoryName,
+            registeredWorkDirectoryAbsolutePath: registered);
         session.RestoreFromPersisted(state);
         session.SlugDefaultMaxTargetContextTokens = provider.DefaultMaxTargetContextTokens;
         if (state.Session.ParentSessionId is null)
@@ -338,9 +368,12 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         var providerKind = DysonProviderKinds.EffectiveKind(
             childProvider.ProviderKind, childProvider.BaseUrl, childProvider.ApiKey);
-        var suffix = await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
-                _models, providerKind, _workDirectoryPath, cancellationToken)
-            .ConfigureAwait(false);
+        var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+            await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                    _models, providerKind, _workDirectoryPath, cancellationToken)
+                .ConfigureAwait(false),
+            DysonAgentSystemPrompts.BuildWorktreePromptBlock(
+                WorktreeEnabled, WorktreeAbsolutePath, WorktreeBranch, _registeredWorkDirectoryPath));
 
         var child = new OpenAiCompatibleAgentSession(
             agentMode,
@@ -353,7 +386,11 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             _models,
             suffix,
             _usageAnalytics,
-            _workDirectoryName);
+            _workDirectoryName,
+            registeredWorkDirectoryAbsolutePath: _registeredWorkDirectoryPath);
+        child.WorktreeEnabled = WorktreeEnabled;
+        child.WorktreeAbsolutePath = WorktreeAbsolutePath;
+        child.WorktreeBranch = WorktreeBranch;
 
         RegisterSubagent(child);
 
@@ -375,6 +412,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 Title = title,
                 SystemPromptSnapshot = child.SystemPrompt,
                 Status = DysonSessionStatus.Active,
+                WorktreeEnabled = WorktreeEnabled,
+                WorktreeAbsolutePath = WorktreeAbsolutePath,
+                WorktreeBranch = WorktreeBranch,
             },
             cancellationToken).ConfigureAwait(false);
 
@@ -1106,14 +1146,24 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     }
 
     /// <summary>
-    /// Backoff between transient stream retries (ms). 4 delays ⇒ 5 attempts total.
+    /// Backoff between transient stream retries (ms). 10 delays ⇒ 11 attempts total.
     /// Tests may replace with zeros; restore defaults afterward.
     /// </summary>
-    internal static int[] TransientRetryBackoffMs { get; set; } = [2000, 5000, 10000, 10000];
+    internal static int[] TransientRetryBackoffMs { get; set; } =
+        [2000, 5000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000];
+
+    /// <summary>Max 429 retries (independent of <see cref="TransientRetryBackoffMs"/>).</summary>
+    internal const int Transient429MaxRetries = 2;
 
     /// <summary>
-    /// Consumes one inference stream round, reopening the request on transient 429/502/503/504
-    /// (fixed backoff). Clears streaming/reasoning previews before each retry.
+    /// Delay between 429 retries (ms). Tests may replace with zero; restore default afterward.
+    /// </summary>
+    internal static int Transient429RetryDelayMs { get; set; } = 10_000;
+
+    /// <summary>
+    /// Consumes one inference stream round, retrying transient OpenAI errors except 401/403/cancel.
+    /// 429 is capped at <see cref="Transient429MaxRetries"/> retries of <see cref="Transient429RetryDelayMs"/>;
+    /// other transients use <see cref="TransientRetryBackoffMs"/>. Clears streaming/reasoning previews before each retry.
     /// </summary>
     private async Task<Result<OpenAiModelReply, string>> ConsumeStreamWithTransientRetryAsync(
         Func<IAsyncEnumerable<Result<OpenAiStreamChunk, string>>> streamFactory,
@@ -1124,31 +1174,46 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         ArgumentNullException.ThrowIfNull(turn);
 
         var delays = TransientRetryBackoffMs;
-        var maxAttempts = delays.Length + 1;
+        var generalRetries = 0;
+        var rateLimitRetries = 0;
         string? lastError = null;
 
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        while (true)
         {
-            if (attempt > 0)
-            {
-                var delayMs = delays[attempt - 1];
-                AppendLog(FormatTransientRetryLog(lastError, attempt, delays.Length, delayMs));
-                turn.ClearStreamingPreview();
-                turn.ClearReasoningPreview();
-                await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
-            }
-
             var result = await ConsumeStreamAsync(streamFactory(), turn, cancellationToken)
                 .ConfigureAwait(false);
             if (!result.IsError)
                 return result;
 
             lastError = result.Error;
-            if (!OpenAiCompatibleHttp.IsTransientServerError(lastError) || attempt == maxAttempts - 1)
+            if (!OpenAiCompatibleHttp.IsTransientServerError(lastError))
                 return result;
-        }
 
-        return Result<OpenAiModelReply, string>.AsError(lastError ?? "OpenAI request failed.");
+            int delayMs, retryN, retryDenom;
+            if (OpenAiCompatibleHttp.IsRateLimitError(lastError))
+            {
+                if (rateLimitRetries >= Transient429MaxRetries)
+                    return result;
+                delayMs = Transient429RetryDelayMs;
+                rateLimitRetries++;
+                retryN = rateLimitRetries;
+                retryDenom = Transient429MaxRetries;
+            }
+            else
+            {
+                if (generalRetries >= delays.Length)
+                    return result;
+                delayMs = delays[generalRetries];
+                generalRetries++;
+                retryN = generalRetries;
+                retryDenom = delays.Length;
+            }
+
+            AppendLog(FormatTransientRetryLog(lastError, retryN, retryDenom, delayMs));
+            turn.ClearStreamingPreview();
+            turn.ClearReasoningPreview();
+            await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task<bool> TryApplyChatFallbackAsync(
