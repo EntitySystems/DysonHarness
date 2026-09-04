@@ -8,12 +8,12 @@ namespace Harness.Tests;
 public class DysonCliProxyAssetResolverTests
 {
     [Theory]
-    [InlineData("7.2.145", "windows", Architecture.X64, "CLIProxyAPI_7.2.145_windows_amd64.zip")]
-    [InlineData("7.2.145", "windows", Architecture.Arm64, "CLIProxyAPI_7.2.145_windows_aarch64.zip")]
-    [InlineData("7.2.145", "linux", Architecture.X64, "CLIProxyAPI_7.2.145_linux_amd64.tar.gz")]
-    [InlineData("7.2.145", "linux", Architecture.Arm64, "CLIProxyAPI_7.2.145_linux_aarch64.tar.gz")]
-    [InlineData("7.2.145", "darwin", Architecture.X64, "CLIProxyAPI_7.2.145_darwin_amd64.tar.gz")]
-    [InlineData("7.2.145", "darwin", Architecture.Arm64, "CLIProxyAPI_7.2.145_darwin_aarch64.tar.gz")]
+    [InlineData("7.2.149", "windows", Architecture.X64, "CLIProxyAPI_7.2.149_windows_amd64.zip")]
+    [InlineData("7.2.149", "windows", Architecture.Arm64, "CLIProxyAPI_7.2.149_windows_aarch64.zip")]
+    [InlineData("7.2.149", "linux", Architecture.X64, "CLIProxyAPI_7.2.149_linux_amd64.tar.gz")]
+    [InlineData("7.2.149", "linux", Architecture.Arm64, "CLIProxyAPI_7.2.149_linux_aarch64.tar.gz")]
+    [InlineData("7.2.149", "darwin", Architecture.X64, "CLIProxyAPI_7.2.149_darwin_amd64.tar.gz")]
+    [InlineData("7.2.149", "darwin", Architecture.Arm64, "CLIProxyAPI_7.2.149_darwin_aarch64.tar.gz")]
     public void ResolveAssetFileName_maps_os_arch(string version, string os, Architecture arch, string expected)
     {
         var platform = os switch
@@ -32,9 +32,9 @@ public class DysonCliProxyAssetResolverTests
     public void ResolveDownloadUrl_uses_pinned_download_base()
     {
         var url = DysonCliProxyAssetResolver.ResolveDownloadUrl(
-            "7.2.145", OSPlatform.Windows, Architecture.X64);
+            "7.2.149", OSPlatform.Windows, Architecture.X64);
         Assert.Equal(
-            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.145/CLIProxyAPI_7.2.145_windows_amd64.zip",
+            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.149/CLIProxyAPI_7.2.149_windows_amd64.zip",
             url);
     }
 }
@@ -44,10 +44,10 @@ public class DysonThirdPartyResourcesTests
     [Fact]
     public void CliProxyApi_parses_tag_and_version_from_release_url()
     {
-        Assert.Equal("v7.2.145", DysonThirdPartyResources.CliProxyApi.Tag);
-        Assert.Equal("7.2.145", DysonThirdPartyResources.CliProxyApi.Version);
+        Assert.Equal("v7.2.149", DysonThirdPartyResources.CliProxyApi.Tag);
+        Assert.Equal("7.2.149", DysonThirdPartyResources.CliProxyApi.Version);
         Assert.Equal(
-            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.145/",
+            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.149/",
             DysonThirdPartyResources.CliProxyApi.DownloadBaseUrl);
     }
 

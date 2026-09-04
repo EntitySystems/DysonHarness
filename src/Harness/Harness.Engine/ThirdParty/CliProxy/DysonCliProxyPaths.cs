@@ -70,7 +70,7 @@ public static class DysonCliProxyPaths
 
     internal static bool LooksLikeVersionFolderName(ReadOnlySpan<char> name)
     {
-        // 7.2.145 — three numeric segments, nothing else.
+        // 7.2.149 — three numeric segments, nothing else.
         var dots = 0;
         var segmentLength = 0;
         foreach (var c in name)
