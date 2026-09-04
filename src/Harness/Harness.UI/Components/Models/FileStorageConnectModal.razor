@@ -1,0 +1,187 @@
+@namespace Harness.UI.Components.Models
+@using DysonHarness
+@using Harness.UI.Demo
+@using Harness.UI.Services
+@using Microsoft.AspNetCore.Components.Web
+@inject FileStorageConnectService Connect
+@inject DysonUiHost Host
+@implements IDisposable
+
+@if (Connect.IsOpen)
+{
+    <div class="confirm-dialog-backdrop"
+         role="presentation"
+         @onclick="CancelAsync">
+        <div class="confirm-dialog"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="file-storage-connect-modal-title"
+             style="max-width:480px;width:100%;"
+             @onclick:stopPropagation="true"
+             @onkeydown="OnKeyDown">
+            <div class="confirm-dialog__header">
+                <h3 id="file-storage-connect-modal-title">Must connect S3 bucket</h3>
+            </div>
+            <div class="confirm-dialog__body">
+                @if (!string.IsNullOrEmpty(_error))
+                {
+                    <div class="error-banner" style="margin:0 0 8px;">@_error</div>
+                }
+
+                <p class="confirm-dialog__message">
+                    Images need an S3-compatible bucket so the model gets a URL instead of a huge base64 payload.
+                </p>
+
+                <div class="field">
+                    <label>URL</label>
+                    <input class="field"
+                           @bind="_endpointUrl"
+                           type="url"
+                           autocomplete="off"
+                           placeholder="https://s3.example.com/bucket"
+                           disabled="@_busy" />
+                </div>
+                <div class="field">
+                    <label>Access key ID</label>
+                    <input class="field"
+                           @bind="_accessKeyId"
+                           type="text"
+                           autocomplete="off"
+                           disabled="@_busy" />
+                </div>
+                <div class="field">
+                    <label>Secret</label>
+                    <input class="field"
+                           @bind="_secretAccessKey"
+                           type="password"
+                           autocomplete="off"
+                           disabled="@_busy" />
+                </div>
+            </div>
+            <div class="confirm-dialog__actions">
+                <button type="button"
+                        class="btn btn-ghost btn--sm"
+                        disabled="@_busy"
+                        @onclick="CancelAsync">
+                    Cancel
+                </button>
+                <button type="button"
+                        class="btn btn-primary btn--sm"
+                        disabled="@_busy"
+                        @onclick="SubmitAsync">
+                    Submit
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private string _endpointUrl = "";
+    private string _accessKeyId = "";
+    private string _secretAccessKey = "";
+    private string? _error;
+    private bool _busy;
+    private bool _initializedForOpen;
+
+    protected override void OnInitialized() => Connect.Changed += OnConnectChanged;
+
+    public void Dispose() => Connect.Changed -= OnConnectChanged;
+
+    private void OnConnectChanged() => _ = InvokeAsync(() =>
+    {
+        ResetWhenOpened();
+        StateHasChanged();
+    });
+
+    protected override void OnParametersSet() => ResetWhenOpened();
+
+    private void ResetWhenOpened()
+    {
+        if (Connect.IsOpen && !_initializedForOpen)
+        {
+            _initializedForOpen = true;
+            _error = null;
+            _busy = false;
+            _endpointUrl = "";
+            _accessKeyId = "";
+            _secretAccessKey = "";
+        }
+        else if (!Connect.IsOpen)
+        {
+            _initializedForOpen = false;
+        }
+    }
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape" && !_busy)
+            _ = CancelAsync();
+    }
+
+    private Task CancelAsync()
+    {
+        if (_busy)
+            return Task.CompletedTask;
+
+        Host.CancelFileStorageConnect();
+        Connect.Cancel();
+        return Task.CompletedTask;
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (_busy)
+            return;
+
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_endpointUrl)
+            || string.IsNullOrWhiteSpace(_accessKeyId)
+            || string.IsNullOrWhiteSpace(_secretAccessKey))
+        {
+            _error = "URL, access key ID, and secret are required.";
+            return;
+        }
+
+        var settings = new DysonS3FileStorageSettings
+        {
+            EndpointUrl = _endpointUrl.Trim(),
+            AccessKeyId = _accessKeyId.Trim(),
+            SecretAccessKey = _secretAccessKey.Trim(),
+        };
+
+        _busy = true;
+        try
+        {
+            var created = DysonS3FileStorage.TryCreate(settings);
+            if (created.IsError)
+            {
+                _error = created.Error;
+                return;
+            }
+
+            using (created.Value)
+            {
+                var ping = await created.Value.PingAsync().ConfigureAwait(true);
+                if (ping.IsError)
+                {
+                    _error = ping.Error;
+                    return;
+                }
+            }
+
+            var applied = await Host.ApplyFileStorageSettingsAsync(settings).ConfigureAwait(true);
+            if (applied.IsError)
+            {
+                _error = applied.Error;
+                return;
+            }
+
+            Connect.Complete();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

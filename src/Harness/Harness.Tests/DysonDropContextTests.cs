@@ -311,6 +311,15 @@ public class DysonDropContextTests
         var n = DysonOutgoingContextTokens.CountStringLeaf(dataUrl, counter);
         if (n != DysonOutgoingContextTokens.ImagePlaceholderTokenCount)
             throw new InvalidOperationException("data: URLs must use image placeholder token count.");
+
+        var httpsUrl = "https://s3.example.com/dyson/shot.jpg?X-Amz-Signature=abc";
+        var httpsCount = DysonOutgoingContextTokens.CountStringLeaf(httpsUrl, counter);
+        if (httpsCount == DysonOutgoingContextTokens.ImagePlaceholderTokenCount
+            || httpsCount != counter.CountTokens(httpsUrl))
+        {
+            throw new InvalidOperationException(
+                "https:// presigned URLs must use normal string token counts, not the data-URL stub.");
+        }
     }
 
     private static DysonAgentTurn Normal(string instruction) =>

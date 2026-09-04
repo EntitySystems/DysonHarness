@@ -213,6 +213,41 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
     }
 
     [Fact]
+    public async Task BuildAsync_hydrates_file_storage_from_setting_json()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var json = DysonS3FileStorageSettings.Serialize(new DysonS3FileStorageSettings
+        {
+            EndpointUrl = "https://s3.example.com/my-bucket",
+            AccessKeyId = "ak",
+            SecretAccessKey = "secret",
+        });
+        Assert.False(string.IsNullOrWhiteSpace(json));
+        var saved = await harness.Settings.SetSettingAsync(DysonAppSettingKeys.FileStorageS3, json);
+        Assert.True(saved.IsSuccess, saved.IsError ? saved.Error : null);
+
+        await using (var hydrated = (await harness.Builder.BuildAsync(new DysonUiAgentSessionRuntimeConfigRequest
+        {
+            AgentMode = DysonAgentModes.Work,
+        })).Value)
+        {
+            Assert.NotNull(hydrated.Config.FileStorage);
+            Assert.Equal("my-bucket", hydrated.Config.FileStorage.Endpoint.Bucket);
+            hydrated.Config.FileStorage.Dispose();
+            hydrated.Config.FileStorage = null;
+        }
+
+        var cleared = await harness.Settings.SetSettingAsync(DysonAppSettingKeys.FileStorageS3, null);
+        Assert.True(cleared.IsSuccess, cleared.IsError ? cleared.Error : null);
+
+        await using var missing = (await harness.Builder.BuildAsync(new DysonUiAgentSessionRuntimeConfigRequest
+        {
+            AgentMode = DysonAgentModes.Work,
+        })).Value;
+        Assert.Null(missing.Config.FileStorage);
+    }
+
+    [Fact]
     public async Task BuildAsync_hydrates_provider_reasoning_effort_from_settings_or_slug_default()
     {
         await using var harness = await Harness.CreateAsync();

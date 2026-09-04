@@ -85,7 +85,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         {
             for (var i = 0; i < inFlightRounds.Count; i++)
             {
-                // One-shot vision: only the unanswered (last) round keeps BinaryAttachment parts.
+                // Data-URL / Files / non-image: last unanswered round only.
+                // RemoteUrl images re-emit on every in-flight round (and history).
                 AppendToolRoundCompletions(
                     messages,
                     inFlightRounds[i],
@@ -346,7 +347,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                     ["tool_calls"] = toolCalls,
                 });
 
-                // History turns already have assistant output — ack only, no multimodal re-emit.
+                // History: data-URL / Files stay off; RemoteUrl images still re-emit.
                 AppendPairedToolResultsCompletions(
                     messages,
                     turn.ToolCalls,
@@ -537,13 +538,11 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             });
         }
 
-        if (!includeBinaryAttachments)
-            return;
-
         foreach (var call in calls)
         {
             if (byCallId.TryGetValue(call.CallId, out var result)
-                && result is { IsError: false, BinaryAttachment: { } attachment })
+                && result is { IsError: false, BinaryAttachment: { } attachment }
+                && ShouldEmitBinaryAttachment(attachment, includeBinaryAttachments))
             {
                 AppendCompletionsBinaryAttachment(messages, attachment);
             }
@@ -569,13 +568,11 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             });
         }
 
-        if (!includeBinaryAttachments)
-            return;
-
         foreach (var call in calls)
         {
             if (byCallId.TryGetValue(call.CallId, out var result)
-                && result is { IsError: false, BinaryAttachment: { } attachment })
+                && result is { IsError: false, BinaryAttachment: { } attachment }
+                && ShouldEmitBinaryAttachment(attachment, includeBinaryAttachments))
             {
                 AppendResponsesBinaryAttachment(input, attachment);
             }
@@ -583,15 +580,24 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     }
 
     /// <summary>
+    /// RemoteUrl images emit on every rebuild (in-flight + history). Data-URL / Files / non-image
+    /// stay last-unanswered-round only (<paramref name="includeBinaryAttachments"/>).
+    /// </summary>
+    private static bool ShouldEmitBinaryAttachment(
+        DysonBinaryAttachment attachment,
+        bool includeBinaryAttachments) =>
+        (attachment.IsImage && !string.IsNullOrWhiteSpace(attachment.RemoteUrl))
+        || includeBinaryAttachments;
+
+    /// <summary>
     /// Completions: short tool ack already emitted; follow with a user multimodal message.
-    /// Images: nested <c>image_url: { url, detail }</c> data URL (no <c>filename</c>, no <c>file_id</c>).
-    /// Non-images: <c>file.filename</c> + <c>file_data</c>.
+    /// Images: nested <c>image_url: { url, detail }</c> (RemoteUrl HTTPS or data URL; no
+    /// <c>filename</c>, no <c>file_id</c>). Non-images: <c>file.filename</c> + <c>file_data</c>.
     /// </summary>
     private static void AppendCompletionsBinaryAttachment(
         JsonArray messages,
         DysonBinaryAttachment attachment)
     {
-        var dataUrl = BuildDataUrl(attachment);
         var parts = new JsonArray
         {
             new JsonObject
@@ -608,7 +614,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 ["type"] = "image_url",
                 ["image_url"] = new JsonObject
                 {
-                    ["url"] = dataUrl,
+                    ["url"] = BuildImageUrl(attachment),
                     ["detail"] = "auto",
                 },
             });
@@ -621,7 +627,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 ["file"] = new JsonObject
                 {
                     ["filename"] = attachment.FileName,
-                    ["file_data"] = dataUrl,
+                    ["file_data"] = BuildDataUrl(attachment),
                 },
             });
         }
@@ -635,7 +641,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
     /// <summary>
     /// Responses: follow function_call_output with input_image / input_file.
-    /// Prefer <c>file_id</c> when present; else data URL / file_data. Never <c>filename</c> on images.
+    /// Images with RemoteUrl use <c>image_url</c> (HTTPS) and skip <c>file_id</c>.
+    /// Else prefer <c>file_id</c> when present; else data URL / file_data. Never <c>filename</c> on images.
     /// </summary>
     private static void AppendResponsesBinaryAttachment(
         JsonArray input,
@@ -651,26 +658,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         };
 
         if (attachment.IsImage)
-        {
-            if (!string.IsNullOrEmpty(attachment.FileId))
-            {
-                parts.Add(new JsonObject
-                {
-                    ["type"] = "input_image",
-                    ["file_id"] = attachment.FileId,
-                    ["detail"] = "auto",
-                });
-            }
-            else
-            {
-                parts.Add(new JsonObject
-                {
-                    ["type"] = "input_image",
-                    ["image_url"] = BuildDataUrl(attachment),
-                    ["detail"] = "auto",
-                });
-            }
-        }
+            AppendResponsesInputImage(parts, attachment);
         else if (!string.IsNullOrEmpty(attachment.FileId))
         {
             parts.Add(new JsonObject
@@ -694,6 +682,47 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             ["role"] = "user",
             ["content"] = parts,
         });
+    }
+
+    private static void AppendResponsesInputImage(JsonArray parts, DysonBinaryAttachment attachment)
+    {
+        if (!string.IsNullOrWhiteSpace(attachment.RemoteUrl))
+        {
+            parts.Add(new JsonObject
+            {
+                ["type"] = "input_image",
+                ["image_url"] = BuildImageUrl(attachment),
+                ["detail"] = "auto",
+            });
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(attachment.FileId))
+        {
+            parts.Add(new JsonObject
+            {
+                ["type"] = "input_image",
+                ["file_id"] = attachment.FileId,
+                ["detail"] = "auto",
+            });
+            return;
+        }
+
+        parts.Add(new JsonObject
+        {
+            ["type"] = "input_image",
+            ["image_url"] = BuildDataUrl(attachment),
+            ["detail"] = "auto",
+        });
+    }
+
+    /// <summary>HTTPS RemoteUrl when set; otherwise a data URL. Images only.</summary>
+    private static string BuildImageUrl(DysonBinaryAttachment attachment)
+    {
+        if (!string.IsNullOrWhiteSpace(attachment.RemoteUrl))
+            return attachment.RemoteUrl.Trim();
+
+        return BuildDataUrl(attachment);
     }
 
     private static string BuildDataUrl(DysonBinaryAttachment attachment) =>
@@ -911,7 +940,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 ["type"] = "image_url",
                 ["image_url"] = new JsonObject
                 {
-                    ["url"] = BuildDataUrl(image),
+                    ["url"] = BuildImageUrl(image),
                     ["detail"] = "auto",
                 },
             });
@@ -944,26 +973,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         };
 
         foreach (var image in turn.UserImages)
-        {
-            if (!string.IsNullOrEmpty(image.FileId))
-            {
-                parts.Add(new JsonObject
-                {
-                    ["type"] = "input_image",
-                    ["file_id"] = image.FileId,
-                    ["detail"] = "auto",
-                });
-            }
-            else
-            {
-                parts.Add(new JsonObject
-                {
-                    ["type"] = "input_image",
-                    ["image_url"] = BuildDataUrl(image),
-                    ["detail"] = "auto",
-                });
-            }
-        }
+            AppendResponsesInputImage(parts, image);
 
         return parts;
     }

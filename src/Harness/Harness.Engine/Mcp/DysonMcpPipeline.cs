@@ -1052,6 +1052,7 @@ public sealed class DysonMcpPipeline
             Name = "BrowserTakeScreenshot",
             Description =
                 "Capture a screenshot of the tab (JPEG multimodal attachment + short JSON ack; no base64 in Content). " +
+                "Requires FileStorage (presigned HTTPS URL); unconfigured returns file_storage_required. " +
                 "Optional timeoutMs (default 60000).",
             InputSchemaJson = """
                 {
@@ -2089,6 +2090,7 @@ public sealed class DysonMcpPipeline
                 "Load a binary or image file from the work directory into the next provider request. " +
                 "Tool result Content is a short JSON ack (path, fileName, extension, mimeType, byteLength) — no base64. " +
                 "Bytes are attached with the original filename+extension for Completions/Responses multimodal parts. " +
+                "Images require FileStorage (presigned HTTPS URL); unconfigured returns file_storage_required. " +
                 "Use after Grep returns binary\\t / image\\t path lines. Max size 5 MB.",
             InputSchemaJson = """
                 {

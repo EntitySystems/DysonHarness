@@ -147,6 +147,7 @@ public static class DysonUiWebHost
         builder.Services.AddSingleton<DysonFilePreviewStore>();
         builder.Services.AddScoped<ThemeService>();
         builder.Services.AddScoped<ConfirmDialogService>();
+        builder.Services.AddScoped<FileStorageConnectService>();
         builder.Services.AddSingleton<DysonFileTreeService>();
         builder.Services.AddSingleton<DysonGitChangesService>();
         builder.Services.AddHttpClient(DysonGitHubReleaseClient.HttpClientName, client =>

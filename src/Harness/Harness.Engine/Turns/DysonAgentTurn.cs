@@ -428,7 +428,8 @@ public sealed class DysonAgentTurn
     }
 
     /// <summary>
-    /// Drops multimodal payloads after the model has seen them (ack <see cref="DysonToolCallResult.Content"/> kept).
+    /// After the model has seen them: keep slim RemoteUrl image attachments (JPEG bytes dropped),
+    /// otherwise drop the attachment (ack <see cref="DysonToolCallResult.Content"/> kept).
     /// </summary>
     public void ClearBinaryAttachments()
     {
@@ -463,13 +464,13 @@ public sealed class DysonAgentTurn
         }
 
         foreach (var result in results)
-            ResponseLog.Enqueue(result.WithoutBinaryAttachment());
+            ResponseLog.Enqueue(result.ForPersistence());
 
         foreach (var tracked in _tracked)
         {
             if (tracked.Result?.BinaryAttachment is null)
                 continue;
-            tracked.ReplaceResult(tracked.Result.WithoutBinaryAttachment());
+            tracked.ReplaceResult(tracked.Result.ForPersistence());
         }
     }
 
@@ -599,7 +600,8 @@ public sealed class DysonAgentTurn
     /// <summary>
     /// End streaming after <see cref="AssistantText"/> has been set.
     /// Clears preview and raises one change so UI can hand off to Markdig.
-    /// Also drops one-shot multimodal attachments once the turn has assistant output.
+    /// Image attachments with a RemoteUrl stay slim (bytes dropped); others are cleared
+    /// (legacy one-shot vision) once the turn has assistant output.
     /// </summary>
     public void FinishStreaming()
     {
