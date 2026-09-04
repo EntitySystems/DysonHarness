@@ -2239,7 +2239,40 @@ public sealed partial class DysonWorkspaceToolExecutor
                 convertedToMimeType = "image/png",
             };
 
-        return Ok(call, JsonSerializer.Serialize(ackPayload), attachment);
+        return await AttachVisionOrRequireStorageAsync(
+                call,
+                attachment,
+                JsonSerializer.Serialize(ackPayload),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Non-image attachments (dll etc.) pass through. Images require
+    /// <see cref="DysonAgentSessionConfig.FileStorage"/> and a successful
+    /// <see cref="DysonS3FileStorage.EnsureRemoteUrlAsync"/> before the
+    /// BinaryAttachment is returned — no data-URL fallback.
+    /// </summary>
+    private async Task<DysonToolCallResult> AttachVisionOrRequireStorageAsync(
+        DysonToolCall call,
+        DysonBinaryAttachment attachment,
+        string ackJson,
+        CancellationToken cancellationToken)
+    {
+        if (!attachment.IsImage)
+            return Ok(call, ackJson, attachment);
+
+        var storage = _session.Config.FileStorage;
+        if (storage is null)
+            return Error(call, DysonS3FileStorage.NotConfiguredMessage);
+
+        var uploaded = await storage
+            .EnsureRemoteUrlAsync(attachment, cancellationToken)
+            .ConfigureAwait(false);
+        if (uploaded.IsError)
+            return Error(call, uploaded.Error);
+
+        return Ok(call, ackJson, attachment);
     }
 
     private async Task<DysonToolCallResult> ConvertImageAsync(

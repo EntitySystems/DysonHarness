@@ -90,6 +90,14 @@ public class DysonAgentSessionConfig
     public OpenAiCompatibleAgentProvider? ImageGenerationProvider { get; set; }
 
     /// <summary>
+    /// Optional S3-compatible image store (presigned HTTPS vision URLs).
+    /// Null ⇒ composer/tool image paths require a connect-bucket step.
+    /// Host-owned: the UI may assign the same instance onto live sessions after modal success.
+    /// Do not dispose from the session unless the host is tearing down the last user.
+    /// </summary>
+    public DysonS3FileStorage? FileStorage { get; set; }
+
+    /// <summary>
     /// Settings default provider for Explore / Drone / Security Review / Bug Review; other modes ⇒ null (inherit).
     /// </summary>
     public DysonAgentProvider? TryGetSubagentDefaultProvider(string? agentMode)

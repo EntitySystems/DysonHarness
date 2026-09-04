@@ -45,7 +45,7 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `ReasoningText` | Denormalized join of Thought segments only (UI / reload / search; not replayed into transcripts) |
 | `ReasoningLogJson` | Ordered Thought + InterimText JSON for thinking history (UI + DB only; omitted from transcripts). Empty/null with legacy `ReasoningText` → restore synthesizes one Thought |
 | `SkillsUsedJson` | Context files attached this turn (slash `/skill-` or `LoadSkill` skills, or StartSubagent `contextFiles`); JSON array of `DysonContextFileEntry` including `kind`. Injected into provider transcripts as separate `[Skill: …]` or `[File: relative/path]` user messages |
-| `UserImagesJson` | User-attached composer images this turn; JSON array of `DysonBinaryAttachment` fields (no `FileId`). Re-emitted as multimodal Completions/Responses parts on restore |
+| `UserImagesJson` | User-attached composer images this turn; JSON array of `DysonBinaryAttachment` fields (no `FileId`; includes `base64Data` for thumbs plus optional `remoteUrl` / `objectKey` / `remoteUrlExpiresUtc`). Re-emitted as multimodal Completions/Responses parts on restore |
 | `ToolStateJson` | Full snapshot of tool calls + results (restore fidelity) |
 | `ToolHistoryOptimized` | bool |
 | `CompactToolHistory` | string? |

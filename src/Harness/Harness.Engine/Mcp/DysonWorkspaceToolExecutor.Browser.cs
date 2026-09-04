@@ -446,7 +446,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         return result.IsError ? Error(call, result.Error) : Ok(call, result.Value);
     }
 
-    private static async Task<DysonToolCallResult> BrowserTakeScreenshotAsync(
+    private async Task<DysonToolCallResult> BrowserTakeScreenshotAsync(
         DysonToolCall call,
         IDysonBrowserControl control,
         JsonElement root,
@@ -480,7 +480,8 @@ public sealed partial class DysonWorkspaceToolExecutor
             windowId,
             tabId,
         });
-        return Ok(call, ack, attachment);
+        return await AttachVisionOrRequireStorageAsync(call, attachment, ack, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static async Task<DysonToolCallResult> BrowserReadConsoleLogAsync(

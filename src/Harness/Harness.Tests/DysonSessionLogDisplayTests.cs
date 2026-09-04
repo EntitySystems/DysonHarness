@@ -22,6 +22,8 @@ public class DysonSessionLogDisplayTests
         AssertRow("GET /v1/files 404 not found", DysonSessionLogLevel.Error, "error");
         AssertRow("Unhandled exception in provider", DysonSessionLogLevel.Error, "error");
         AssertRow("fatal: provider unavailable", DysonSessionLogLevel.Error, "error");
+        AssertRow("OpenAI API 400 Bad Request: {\"error\":\"x\"}", DysonSessionLogLevel.Error, "error");
+        AssertRow("OpenAI transient 503 — retry 1/10 after 2s", DysonSessionLogLevel.Warn, "warn");
     }
 
     [Fact]

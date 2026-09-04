@@ -18,6 +18,8 @@ public class OpenAiTransientRetryTests
         AssertRetrySucceedsAfterTwo503s();
         AssertRetrySucceedsAfterStreamReadFail();
         AssertRetryExhaustionPreserves503();
+        Assert400FailsWithoutRetry();
+        AssertApiHttpErrorBodyClip();
         AssertFallbackHopsAfterEleven503s();
         AssertFallbackHopsOn401WithoutRetries();
         AssertFallbackSameSlugIdDoesNotHop();
@@ -97,7 +99,8 @@ public class OpenAiTransientRetryTests
         Expect("OpenAI API 429 Too Many Requests: rate", true);
         Expect("OpenAI API 502 Bad Gateway: x", true);
         Expect("OpenAI API 504 Gateway Timeout: x", true);
-        Expect("OpenAI API 400 Bad Request: no", true);
+        Expect("OpenAI API 400 Bad Request: no", false);
+        Expect("OpenAI API 404 Not Found: no", false);
         Expect("OpenAI API 500 Internal Server Error: x", true);
         Expect("OpenAI API 401 Unauthorized: no", false);
         Expect("OpenAI API 403 Forbidden: no", false);
@@ -254,11 +257,84 @@ public class OpenAiTransientRetryTests
             {
                 throw new InvalidOperationException("Expected retry 10/10 log before exhaustion.\n" + logs);
             }
+
+            if (!logs.Contains("OpenAI API 503", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Expected SnapshotLog to contain full OpenAI API 503 after exhaustion.\n" + logs);
+            }
         }
         finally
         {
             RestoreRetryDelays(priorBackoff, prior429Delay);
             TryDelete(workDir);
+        }
+    }
+
+    private static void Assert400FailsWithoutRetry()
+    {
+        var (priorBackoff, prior429Delay) = UseZeroRetryDelays();
+        var workDir = Path.Combine(Path.GetTempPath(), "dyson-400-noretry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            const string body = """{"error":{"message":"fable-shape"}}""";
+            var handler = new SequencingHandler(
+            [
+                () => Status(HttpStatusCode.BadRequest, body),
+            ]);
+            using var http = new HttpClient(handler);
+            var session = CreateSession(http, workDir);
+
+            var result = session.PromptAsync("ping").GetAwaiter().GetResult();
+            if (!result.IsError)
+                throw new InvalidOperationException("Expected failure on HTTP 400.");
+
+            if (result.Error is null
+                || !result.Error.StartsWith("OpenAI API 400", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Expected error starting with OpenAI API 400; got '{result.Error ?? "null"}'.");
+            }
+
+            if (handler.PostCount != 1)
+            {
+                throw new InvalidOperationException(
+                    $"Expected 1 Completions post (no retry on 400), got {handler.PostCount}.");
+            }
+
+            var logs = string.Join('\n', session.SnapshotLog());
+            if (!logs.Contains("OpenAI API 400", StringComparison.Ordinal)
+                || !logs.Contains("fable-shape", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Expected SnapshotLog to contain OpenAI API 400 and JSON body fable-shape.\n" + logs);
+            }
+        }
+        finally
+        {
+            RestoreRetryDelays(priorBackoff, prior429Delay);
+            TryDelete(workDir);
+        }
+    }
+
+    private static void AssertApiHttpErrorBodyClip()
+    {
+        var intact = OpenAiCompatibleHttp.FormatApiHttpError(400, "Bad Request", "short-body");
+        if (intact != "OpenAI API 400 Bad Request: short-body")
+        {
+            throw new InvalidOperationException(
+                $"Expected intact body under cap; got '{intact}'.");
+        }
+
+        var over = new string('x', OpenAiCompatibleHttp.HttpErrorBodyMaxChars + 3);
+        var clipped = OpenAiCompatibleHttp.FormatApiHttpError(400, "Bad Request", over);
+        if (!clipped.EndsWith('…')
+            || clipped.Contains(over, StringComparison.Ordinal)
+            || !clipped.Contains(over[..OpenAiCompatibleHttp.HttpErrorBodyMaxChars], StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Expected 32 KiB clip with ellipsis; got length {clipped.Length}.");
         }
     }
 

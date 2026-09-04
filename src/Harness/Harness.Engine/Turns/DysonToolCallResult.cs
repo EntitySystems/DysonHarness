@@ -32,6 +32,18 @@ public sealed class DysonBinaryAttachment
     /// </summary>
     public string? HtmlRef { get; init; }
 
+    /// <summary>
+    /// Stable presigned HTTPS GET URL for vision wire parts. When set, transcript builders
+    /// prefer this over a data-URL / Files upload.
+    /// </summary>
+    public string? RemoteUrl { get; set; }
+
+    /// <summary>S3 object key for the uploaded bytes (prefix + guid + file name).</summary>
+    public string? ObjectKey { get; set; }
+
+    /// <summary>UTC expiry of <see cref="RemoteUrl"/> (presigned GET lifetime).</summary>
+    public DateTime? RemoteUrlExpiresUtc { get; set; }
+
     public bool IsImage =>
         MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
 }
@@ -47,7 +59,9 @@ public sealed class DysonToolCallResult
     /// <summary>
     /// When set (LoadBinary / BrowserTakeScreenshot), transcript builders emit a follow-up
     /// multimodal user/input part; filename stays in a text label (and on non-image file parts).
-    /// Not inlined into <see cref="Content"/>. Cleared after the turn finalizes (one-shot vision).
+    /// Not inlined into <see cref="Content"/>. After the turn finalizes, image attachments
+    /// with <see cref="DysonBinaryAttachment.RemoteUrl"/> are kept slim (no local bytes);
+    /// otherwise the attachment is cleared (legacy one-shot vision).
     /// </summary>
     public DysonBinaryAttachment? BinaryAttachment { get; init; }
 
@@ -79,6 +93,57 @@ public sealed class DysonToolCallResult
                 EndsCurrentTurn = EndsCurrentTurn,
                 CompletedAt = CompletedAt,
             };
+
+    /// <summary>
+    /// Copy with a slim <see cref="BinaryAttachment"/>: metadata + RemoteUrl fields kept,
+    /// <see cref="DysonBinaryAttachment.Base64Data"/> emptied so SQLite stays small.
+    /// </summary>
+    public DysonToolCallResult WithoutLocalBytes()
+    {
+        if (BinaryAttachment is null)
+            return this;
+
+        var source = BinaryAttachment;
+        return new DysonToolCallResult
+        {
+            CallId = CallId,
+            ToolName = ToolName,
+            Stage = Stage,
+            IsError = IsError,
+            Content = Content,
+            BinaryAttachment = new DysonBinaryAttachment
+            {
+                FileName = source.FileName,
+                Extension = source.Extension,
+                MimeType = source.MimeType,
+                Base64Data = "",
+                FileId = source.FileId,
+                HtmlRef = source.HtmlRef,
+                RemoteUrl = source.RemoteUrl,
+                ObjectKey = source.ObjectKey,
+                RemoteUrlExpiresUtc = source.RemoteUrlExpiresUtc,
+            },
+            HtmlVisualization = HtmlVisualization,
+            GeneratedImageArtifacts = GeneratedImageArtifacts,
+            EndsCurrentTurn = EndsCurrentTurn,
+            CompletedAt = CompletedAt,
+        };
+    }
+
+    /// <summary>
+    /// Persist image attachments that have a RemoteUrl without JPEG bytes;
+    /// otherwise drop the attachment (legacy one-shot vision).
+    /// </summary>
+    public DysonToolCallResult ForPersistence()
+    {
+        if (BinaryAttachment is { IsImage: true } attachment
+            && !string.IsNullOrWhiteSpace(attachment.RemoteUrl))
+        {
+            return WithoutLocalBytes();
+        }
+
+        return WithoutBinaryAttachment();
+    }
 
     /// <summary>
     /// When true (and not <see cref="IsError"/>), the tool loop soft-closes the calling turn

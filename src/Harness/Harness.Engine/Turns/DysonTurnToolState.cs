@@ -46,7 +46,7 @@ public static class DysonTurnToolStateSerializer
     {
         ArgumentNullException.ThrowIfNull(turn);
 
-        // Completed turns: drop BinaryAttachment so SQLite stays small (ack JSON remains).
+        // Completed turns: slim RemoteUrl images (drop JPEG bytes) or strip the attachment (legacy).
         var stripAttachments = !string.IsNullOrEmpty(turn.AssistantText);
         if (stripAttachments)
             turn.ClearBinaryAttachments();
@@ -63,14 +63,14 @@ public static class DysonTurnToolStateSerializer
                     Result = t.Result is null
                         ? null
                         : stripAttachments
-                            ? t.Result.WithoutBinaryAttachment()
+                            ? t.Result.ForPersistence()
                             : t.Result,
                 }),
             ],
             ResponseLog =
             [
                 .. turn.ResponseLog.Select(r =>
-                    stripAttachments ? r.WithoutBinaryAttachment() : r),
+                    stripAttachments ? r.ForPersistence() : r),
             ],
         };
 

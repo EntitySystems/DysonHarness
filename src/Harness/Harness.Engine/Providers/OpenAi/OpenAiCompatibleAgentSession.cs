@@ -694,6 +694,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                         }
                         else
                         {
+                            await EnsureRemoteUrlsForVisionAsync(inFlight, cancellationToken)
+                                .ConfigureAwait(false);
                             await EnsureResponsesVisionFileIdsAsync(inFlight, cancellationToken)
                                 .ConfigureAwait(false);
                             built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
@@ -718,6 +720,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                         {
                             AppendLog("Responses: missing tool call for output — retrying with full item replay");
                             previousResponseId = null;
+                            await EnsureRemoteUrlsForVisionAsync(inFlight, cancellationToken)
+                                .ConfigureAwait(false);
                             await EnsureResponsesVisionFileIdsAsync(inFlight, cancellationToken)
                                 .ConfigureAwait(false);
                             var retryBuilt = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
@@ -738,6 +742,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                         return streamed;
                     }
 
+                    await EnsureRemoteUrlsForVisionAsync(inFlight, cancellationToken)
+                        .ConfigureAwait(false);
                     var completionsBuilt = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
                         this,
                         currentUserPrompt: harnessFollowUp,
@@ -936,6 +942,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         {
             if (recapUseResponses)
             {
+                await EnsureRemoteUrlsForVisionAsync(inFlight, cancellationToken)
+                    .ConfigureAwait(false);
                 await EnsureResponsesVisionFileIdsAsync(inFlight, cancellationToken)
                     .ConfigureAwait(false);
                 var built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
@@ -951,6 +959,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     cancellationToken).ConfigureAwait(false);
             }
 
+            await EnsureRemoteUrlsForVisionAsync(inFlight, cancellationToken)
+                .ConfigureAwait(false);
             var completionsBuilt = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
                 this,
                 currentUserPrompt: DysonRethinkToolUsageFlow.ExploreBudgetRecapInstruction,
@@ -1074,8 +1084,59 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     }
 
     /// <summary>
-    /// Responses vision: upload turn <see cref="DysonAgentTurn.UserImages"/> plus one-shot
+    /// Upload in-context UserImages and every image BinaryAttachment (in-flight + completed
+    /// history) when <see cref="DysonAgentSessionConfig.FileStorage"/> is set. No-op when
+    /// RemoteUrl is still valid. Failures are logged; data-URL remains a last-resort for
+    /// images that still have local bytes.
+    /// </summary>
+    private async Task EnsureRemoteUrlsForVisionAsync(
+        IReadOnlyList<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound> inFlight,
+        CancellationToken cancellationToken)
+    {
+        var storage = Config.FileStorage;
+        if (storage is null)
+            return;
+
+        foreach (var historyTurn in Turns)
+        {
+            if (historyTurn.IsExcludedFromContext)
+                continue;
+
+            foreach (var image in historyTurn.UserImages)
+                await EnsureOneRemoteUrlAsync(storage, image, cancellationToken).ConfigureAwait(false);
+
+            foreach (var result in historyTurn.ResponseLog)
+            {
+                if (result.BinaryAttachment is { IsImage: true } attachment)
+                    await EnsureOneRemoteUrlAsync(storage, attachment, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        foreach (var round in inFlight)
+        {
+            foreach (var result in round.Results)
+            {
+                if (result.BinaryAttachment is { IsImage: true } attachment)
+                    await EnsureOneRemoteUrlAsync(storage, attachment, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task EnsureOneRemoteUrlAsync(
+        DysonS3FileStorage storage,
+        DysonBinaryAttachment image,
+        CancellationToken cancellationToken)
+    {
+        var ensured = await storage.EnsureRemoteUrlAsync(image, cancellationToken).ConfigureAwait(false);
+        if (ensured.IsError)
+            AppendLog($"File storage: {ensured.Error}");
+    }
+
+    /// <summary>
+    /// Responses vision: upload in-context <see cref="DysonAgentTurn.UserImages"/> plus one-shot
     /// tool BinaryAttachment on the last in-flight round (data-URL fallback on failure).
+    /// Images that already have <see cref="DysonBinaryAttachment.RemoteUrl"/> skip Files API.
+    /// Non-image Files uploads are unchanged.
     /// </summary>
     private async Task EnsureResponsesVisionFileIdsAsync(
         IReadOnlyList<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound> inFlight,
@@ -1087,7 +1148,11 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             if (turn.IsExcludedFromContext)
                 continue;
             foreach (var image in turn.UserImages)
+            {
+                if (SkipResponsesFilesUpload(image))
+                    continue;
                 images.Add(image);
+            }
         }
 
         if (images.Count > 0)
@@ -1110,13 +1175,29 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
     private Task EnsureResponsesBinaryFileIdsAsync(
         IReadOnlyList<DysonToolCallResult> results,
-        CancellationToken cancellationToken) =>
-        OpenAiFilesClient.EnsureBinaryFileIdsAsync(
+        CancellationToken cancellationToken)
+    {
+        var needingUpload = new List<DysonBinaryAttachment>();
+        foreach (var result in results)
+        {
+            if (result.IsError || result.BinaryAttachment is null)
+                continue;
+            if (SkipResponsesFilesUpload(result.BinaryAttachment))
+                continue;
+            needingUpload.Add(result.BinaryAttachment);
+        }
+
+        return OpenAiFilesClient.EnsureBinaryFileIdsAsync(
             _http,
             OpenAiProvider,
-            results,
+            needingUpload,
             note => AppendLog(note),
             cancellationToken);
+    }
+
+    /// <summary>Images with a RemoteUrl go on the wire as HTTPS; skip Files API for those.</summary>
+    private static bool SkipResponsesFilesUpload(DysonBinaryAttachment attachment) =>
+        attachment.IsImage && !string.IsNullOrWhiteSpace(attachment.RemoteUrl);
 
     private static void AppendPathsToLastUser(
         System.Text.Json.Nodes.JsonArray messagesOrInput,
@@ -1161,7 +1242,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     internal static int Transient429RetryDelayMs { get; set; } = 10_000;
 
     /// <summary>
-    /// Consumes one inference stream round, retrying transient OpenAI errors except 401/403/cancel.
+    /// Consumes one inference stream round, retrying transient OpenAI errors except 401/403/cancel
+    /// and 4xx other than 429. Session log records <c>lastError</c> on failure and on first retry
+    /// for still-retryable errors (compact countdown lines remain for 5xx/429).
     /// 429 is capped at <see cref="Transient429MaxRetries"/> retries of <see cref="Transient429RetryDelayMs"/>;
     /// other transients use <see cref="TransientRetryBackoffMs"/>. Clears streaming/reasoning previews before each retry.
     /// </summary>
@@ -1178,6 +1261,12 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         var rateLimitRetries = 0;
         string? lastError = null;
 
+        void AppendLastErrorIfAny()
+        {
+            if (!string.IsNullOrEmpty(lastError))
+                AppendLog(lastError);
+        }
+
         while (true)
         {
             var result = await ConsumeStreamAsync(streamFactory(), turn, cancellationToken)
@@ -1187,13 +1276,19 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
             lastError = result.Error;
             if (!OpenAiCompatibleHttp.IsTransientServerError(lastError))
+            {
+                AppendLastErrorIfAny();
                 return result;
+            }
 
             int delayMs, retryN, retryDenom;
             if (OpenAiCompatibleHttp.IsRateLimitError(lastError))
             {
                 if (rateLimitRetries >= Transient429MaxRetries)
+                {
+                    AppendLastErrorIfAny();
                     return result;
+                }
                 delayMs = Transient429RetryDelayMs;
                 rateLimitRetries++;
                 retryN = rateLimitRetries;
@@ -1202,7 +1297,10 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             else
             {
                 if (generalRetries >= delays.Length)
+                {
+                    AppendLastErrorIfAny();
                     return result;
+                }
                 delayMs = delays[generalRetries];
                 generalRetries++;
                 retryN = generalRetries;
@@ -1210,6 +1308,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             }
 
             AppendLog(FormatTransientRetryLog(lastError, retryN, retryDenom, delayMs));
+            if (retryN == 1)
+                AppendLastErrorIfAny();
             turn.ClearStreamingPreview();
             turn.ClearReasoningPreview();
             await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);

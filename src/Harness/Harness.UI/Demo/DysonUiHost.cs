@@ -4,6 +4,7 @@ using System.Globalization;
 using DysonHarness;
 using Harness.UI.Theme;
 using Harness.UI.Markdown;
+using Harness.UI.Services;
 using Microsoft.JSInterop;
 
 namespace Harness.UI.Demo;
@@ -80,6 +81,10 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly object _pendingSkillsGate = new();
     private readonly List<PendingComposerImage> _pendingImages = [];
     private readonly object _pendingImagesGate = new();
+    private readonly List<HeldComposerImage> _heldComposerImages = [];
+    private readonly object _heldComposerImagesGate = new();
+    private DysonS3FileStorage? _fileStorage;
+    private readonly FileStorageConnectService? _fileStorageConnect;
     private readonly List<string> _pendingFilePaths = [];
     private readonly object _pendingFilesGate = new();
     private readonly List<string> _pendingSnipPromptLines = [];
@@ -131,7 +136,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonUiRuntimeAttachment? runtimeAttachment = null,
         IDysonUsageAnalyticsRepository? usageAnalytics = null,
         DysonMessageBus? bus = null,
-        DysonSessionEventPublisher? sessionEvents = null)
+        DysonSessionEventPublisher? sessionEvents = null,
+        FileStorageConnectService? fileStorageConnect = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -166,6 +172,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pluginLifecycle.Changed += OnPluginCatalogChanged;
         _pluginMcpGrants.Changed += OnPluginMcpGrantChanged;
         _browserControl = browserControl;
+        _fileStorageConnect = fileStorageConnect;
         if (_browserControl is not null)
             _browserControl.SnipCaptured += OnBrowserSnipCaptured;
         DysonLongRunningShellRegistry.Changed += OnLongRunningShellRegistryChanged;
@@ -303,7 +310,16 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
     }
 
-    public string? LastError { get; private set; }
+    private string? _lastError;
+    public string? LastError
+    {
+        get => _lastError;
+        private set
+        {
+            _lastError = value;
+            MaybeOpenFileStorageConnect(value);
+        }
+    }
 
     /// <summary>
     /// Attaches this circuit facade to its subject's retained runtime. Demo create/resume/load
@@ -770,7 +786,10 @@ public sealed class DysonUiHost : IAsyncDisposable
                 attachment.Base64Data,
                 attachment.Extension,
                 attachment.HtmlRef,
-                path));
+                path,
+                attachment.RemoteUrl,
+                attachment.ObjectKey,
+                attachment.RemoteUrlExpiresUtc));
         }
 
         LastError = null;
@@ -798,42 +817,17 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(created.Error);
         }
 
+        var pendingCount = 0;
         lock (_pendingImagesGate)
+            pendingCount = _pendingImages.Count;
+        lock (_heldComposerImagesGate)
         {
-            if (_pendingImages.Count >= DysonUserImageFactory.MaxPendingImages)
+            if (pendingCount + _heldComposerImages.Count >= DysonUserImageFactory.MaxPendingImages)
             {
                 LastError = $"At most {DysonUserImageFactory.MaxPendingImages} images can be attached.";
                 Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
                 return new VoidResult<string>(LastError);
             }
-        }
-
-        lock (_pendingFilesGate)
-        {
-            if (_pendingFilePaths.Count >= DysonComposerUploads.MaxPendingFiles)
-            {
-                LastError = $"At most {DysonComposerUploads.MaxPendingFiles} files can be attached.";
-                Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
-                return new VoidResult<string>(LastError);
-            }
-        }
-
-        var root = await TryResolveCatalogWorkRootAsync(cancellationToken).ConfigureAwait(false);
-        if (root is null)
-        {
-            LastError = "Select a work directory before attaching files.";
-            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
-            return new VoidResult<string>(LastError);
-        }
-
-        var fsResult = await DysonWorkspaceFileSystems
-            .CreateLocalAsync(root, cancellationToken)
-            .ConfigureAwait(false);
-        if (fsResult.IsError)
-        {
-            LastError = fsResult.Error;
-            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
-            return new VoidResult<string>(fsResult.Error);
         }
 
         var attachment = created.Value;
@@ -859,6 +853,55 @@ public sealed class DysonUiHost : IAsyncDisposable
             LastError = $"Could not decode compressed image: {ex.Message}";
             Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
+        }
+
+        var storage = await TryGetFileStorageAsync(cancellationToken).ConfigureAwait(false);
+        if (storage is null)
+        {
+            lock (_heldComposerImagesGate)
+                _heldComposerImages.Add(new HeldComposerImage(attachment.FileName, jpegBytes, attachment.HtmlRef));
+            _fileStorageConnect?.RequestOpen();
+            LastError = null;
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
+            return VoidResult<string>.Success;
+        }
+
+        lock (_pendingFilesGate)
+        {
+            if (_pendingFilePaths.Count >= DysonComposerUploads.MaxPendingFiles)
+            {
+                LastError = $"At most {DysonComposerUploads.MaxPendingFiles} files can be attached.";
+                Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
+                return new VoidResult<string>(LastError);
+            }
+        }
+
+        var uploaded = await storage
+            .EnsureRemoteUrlAsync(attachment, cancellationToken)
+            .ConfigureAwait(false);
+        if (uploaded.IsError)
+        {
+            LastError = uploaded.Error;
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
+            return new VoidResult<string>(uploaded.Error);
+        }
+
+        var root = await TryResolveCatalogWorkRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root is null)
+        {
+            LastError = "Select a work directory before attaching files.";
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
+            return new VoidResult<string>(LastError);
+        }
+
+        var fsResult = await DysonWorkspaceFileSystems
+            .CreateLocalAsync(root, cancellationToken)
+            .ConfigureAwait(false);
+        if (fsResult.IsError)
+        {
+            LastError = fsResult.Error;
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
+            return new VoidResult<string>(fsResult.Error);
         }
 
         var written = await DysonComposerUploads
@@ -946,6 +989,58 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         Notify(DysonHostChangeKind.Transcript);
+    }
+
+    /// <summary>Cancel the connect modal: drop held composer images (text-only continues).</summary>
+    public void CancelFileStorageConnect()
+    {
+        ClearHeldComposerImages();
+    }
+
+    /// <summary>
+    /// Persist S3 settings, assign one host-owned client onto live sessions, and drain held images.
+    /// </summary>
+    public async Task<VoidResult<string>> ApplyFileStorageSettingsAsync(
+        DysonS3FileStorageSettings settings,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var json = DysonS3FileStorageSettings.Serialize(settings);
+        if (string.IsNullOrWhiteSpace(json))
+            return new VoidResult<string>("File storage settings are incomplete.");
+
+        var saved = await _appSettings
+            .SetSettingAsync(DysonAppSettingKeys.FileStorageS3, json, cancellationToken)
+            .ConfigureAwait(false);
+        if (saved.IsError)
+            return saved;
+
+        var created = DysonS3FileStorage.TryCreate(settings);
+        if (created.IsError)
+            return new VoidResult<string>(created.Error);
+
+        AssignFileStorageToLiveSessions(created.Value);
+        await DrainHeldComposerImagesAsync(cancellationToken).ConfigureAwait(false);
+        LastError = null;
+        Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error | DysonHostChangeKind.Catalogs);
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>Delete <c>file_storage_s3</c> and null <see cref="DysonAgentSessionConfig.FileStorage"/> on live sessions.</summary>
+    public async Task<VoidResult<string>> DisconnectFileStorageAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var deleted = await _appSettings
+            .SetSettingAsync(DysonAppSettingKeys.FileStorageS3, null, cancellationToken)
+            .ConfigureAwait(false);
+        if (deleted.IsError)
+            return deleted;
+
+        AssignFileStorageToLiveSessions(null);
+        LastError = null;
+        Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error | DysonHostChangeKind.Catalogs);
+        return VoidResult<string>.Success;
     }
 
     /// <summary>Workspace-relative file paths queued to attach on the next <see cref="PromptAsync"/>.</summary>
@@ -3967,6 +4062,9 @@ public sealed class DysonUiHost : IAsyncDisposable
                 MimeType = pending.MimeType,
                 Base64Data = pending.Base64Data,
                 HtmlRef = pending.HtmlRef,
+                RemoteUrl = pending.RemoteUrl,
+                ObjectKey = pending.ObjectKey,
+                RemoteUrlExpiresUtc = pending.RemoteUrlExpiresUtc,
             });
         }
 
@@ -4561,6 +4659,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             }
         }
 
+        await TryHydrateFileStorageAsync(config, cancellationToken).ConfigureAwait(false);
         await TryHydrateImageGenerationProviderSettingAsync(
                 p => config.ImageGenerationProvider = p,
                 cancellationToken)
@@ -4609,6 +4708,105 @@ public sealed class DysonUiHost : IAsyncDisposable
             .ConfigureAwait(false);
 
         return config;
+    }
+
+    private async Task TryHydrateFileStorageAsync(
+        DysonAgentSessionConfig config,
+        CancellationToken cancellationToken)
+    {
+        var storage = await TryGetFileStorageAsync(cancellationToken).ConfigureAwait(false);
+        if (storage is not null)
+            config.FileStorage = storage;
+    }
+
+    private async Task<DysonS3FileStorage?> TryGetFileStorageAsync(CancellationToken cancellationToken)
+    {
+        if (_fileStorage is not null)
+            return _fileStorage;
+
+        if (_session?.Config.FileStorage is { } live)
+        {
+            _fileStorage = live;
+            return live;
+        }
+
+        var setting = await _appSettings
+            .GetSettingAsync(DysonAppSettingKeys.FileStorageS3, cancellationToken)
+            .ConfigureAwait(false);
+        if (setting.IsError || string.IsNullOrWhiteSpace(setting.Value))
+            return null;
+
+        var created = DysonS3FileStorage.TryCreateFromJson(setting.Value);
+        if (created.IsError)
+            return null;
+
+        _fileStorage = created.Value;
+        return _fileStorage;
+    }
+
+    private void AssignFileStorageToLiveSessions(DysonS3FileStorage? next)
+    {
+        var previous = new HashSet<DysonS3FileStorage>(ReferenceEqualityComparer.Instance);
+        if (_fileStorage is not null)
+            previous.Add(_fileStorage);
+
+        var seen = new HashSet<DysonAgentSession>(ReferenceEqualityComparer.Instance);
+        void Apply(DysonAgentSession session)
+        {
+            if (!seen.Add(session))
+                return;
+            if (session.Config.FileStorage is { } existing)
+                previous.Add(existing);
+            session.Config.FileStorage = next;
+        }
+
+        if (_session is not null)
+            Apply(_session);
+        foreach (var session in _sessionsById.Values)
+            Apply(session);
+
+        _fileStorage = next;
+        foreach (var old in previous)
+        {
+            if (!ReferenceEquals(old, next))
+                old.Dispose();
+        }
+    }
+
+    private void MaybeOpenFileStorageConnect(string? message)
+    {
+        if (string.IsNullOrEmpty(message))
+            return;
+        if (message.Contains(DysonS3FileStorage.FileStorageRequiredToken, StringComparison.Ordinal))
+            _fileStorageConnect?.RequestOpen();
+    }
+
+    private void ClearHeldComposerImages()
+    {
+        lock (_heldComposerImagesGate)
+            _heldComposerImages.Clear();
+    }
+
+    private async Task DrainHeldComposerImagesAsync(CancellationToken cancellationToken)
+    {
+        List<HeldComposerImage> held;
+        lock (_heldComposerImagesGate)
+        {
+            held = [.. _heldComposerImages];
+            _heldComposerImages.Clear();
+        }
+
+        foreach (var item in held)
+        {
+            var queued = await QueuePendingImageFromBytesAsync(
+                    item.FileName,
+                    item.JpegBytes,
+                    item.HtmlRef,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (queued.IsError)
+                return;
+        }
     }
 
     private async Task TryHydrateImageGenerationProviderSettingAsync(
@@ -6981,6 +7179,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonAgentTurn turn,
         DysonToolCallStatusChangedEventArgs args)
     {
+        if (args.Tracked.Result is { } result
+            && (args.NewStatus == DysonToolCallStatus.Failed || result.IsError))
+        {
+            MaybeOpenFileStorageConnect(result.Content);
+        }
+
         var session = FindSessionOwningTurn(turn);
         if (session is null || session.PersistenceId == Guid.Empty)
             return;
@@ -7188,6 +7392,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonLongRunningShellRegistry.Changed -= OnLongRunningShellRegistryChanged;
         _pluginLifecycle.Changed -= OnPluginCatalogChanged;
         _pluginMcpGrants.Changed -= OnPluginMcpGrantChanged;
+        AssignFileStorageToLiveSessions(null);
         UnhookAllSessions();
         // Circuit-local shadow/legacy queues only. Runtime FIFO stays with the retained runtime.
         lock (_promptQueueGate)
@@ -7212,7 +7417,12 @@ public sealed record PendingComposerImage(
     /// Workspace-relative path dual-written under <c>.dyson/composer-uploads</c>
     /// (also queued in <see cref="DysonUiHost.PendingFilePaths"/>; Composer hides the path chip).
     /// </summary>
-    string? AttachedRelativePath = null)
+    string? AttachedRelativePath = null,
+    string? RemoteUrl = null,
+    string? ObjectKey = null,
+    DateTime? RemoteUrlExpiresUtc = null)
 {
     public string DataUrl => $"data:{MimeType};base64,{Base64Data}";
 }
+
+internal sealed record HeldComposerImage(string? FileName, byte[] JpegBytes, string? HtmlRef);

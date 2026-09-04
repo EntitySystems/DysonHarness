@@ -140,10 +140,23 @@ public static class OpenAiCompatibleHttp
     public static bool IsRateLimitError(string? error) =>
         TryGetHttpStatus(error, out var code) && code == 429;
 
+    internal const int HttpErrorBodyMaxChars = 32_768;
+
+    /// <summary>
+    /// Completions/Responses HTTP error string: <c>OpenAI API {status} {reason}: {body}</c>,
+    /// body clipped at <see cref="HttpErrorBodyMaxChars"/>.
+    /// </summary>
+    public static string FormatApiHttpError(int statusCode, string? reasonPhrase, string? body)
+    {
+        var text = body ?? "";
+        var snippet = text.Length > HttpErrorBodyMaxChars ? text[..HttpErrorBodyMaxChars] + "…" : text;
+        return $"OpenAI API {statusCode} {reasonPhrase}: {snippet}";
+    }
+
     /// <summary>
     /// True when an OpenAI stream/endpoint error should auto-retry on a fresh request.
-    /// Retries known OpenAI error shapes (HTTP statuses, transport, stream read, incomplete SSE,
-    /// Responses stream errors) except <c>401</c>/<c>403</c> and cancellations.
+    /// Retries 5xx, 429, transport, stream read, incomplete SSE, and Responses stream errors.
+    /// Other 4xx (including 401/403) and cancellations are not retried.
     /// </summary>
     public static bool IsTransientServerError(string? error)
     {
@@ -157,7 +170,7 @@ public static class OpenAiCompatibleHttp
         if (error.StartsWith(apiPrefix, StringComparison.Ordinal))
         {
             if (TryGetHttpStatus(error, out var code))
-                return code is not (401 or 403);
+                return code is >= 500 or 429;
 
             var rest = error.AsSpan(apiPrefix.Length);
             return rest.StartsWith("HTTP error", StringComparison.Ordinal)
@@ -310,9 +323,8 @@ public static class OpenAiCompatibleHttp
             var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
-                var snippet = text.Length > 800 ? text[..800] + "…" : text;
                 return Result<JsonObject, string>.AsError(
-                    $"OpenAI API {(int)response.StatusCode} {response.ReasonPhrase}: {snippet}");
+                    FormatApiHttpError((int)response.StatusCode, response.ReasonPhrase, text));
             }
 
             JsonNode? parsed;
@@ -560,9 +572,8 @@ public static class OpenAiCompatibleHttp
             if (!response.IsSuccessStatusCode)
             {
                 var errorText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-                var snippet = errorText.Length > 800 ? errorText[..800] + "…" : errorText;
                 yield return Result<string, string>.AsError(
-                    $"OpenAI API {(int)response.StatusCode} {response.ReasonPhrase}: {snippet}");
+                    FormatApiHttpError((int)response.StatusCode, response.ReasonPhrase, errorText));
                 yield break;
             }
 

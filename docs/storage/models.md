@@ -132,6 +132,7 @@ Known keys (`DysonAppSettingKeys`):
 - `end_of_task_auto_review` — **legacy** `"true"` / `"false"` (obsolete once `automatic_code_review` is written). Kept readable so first settings-page load can map false/missing → `none` and true + `self_review_intensity` → `low`/`medium`. Missing / other ⇒ off.
 - `self_review_intensity` — **legacy** `"low"` / `"medium"` / `"high"` (obsolete once `automatic_code_review` is written). Missing / other ⇒ `"medium"`. Used only for the one-shot compatibility map.
 - `cliproxy_api_key` / `cliproxy_management_key` / `cliproxy_port` — mirrors of the hard-coded `DysonCliProxyHost` constants (`DefaultApiKey` / `DefaultManagementKey` / `DefaultPort`) when a managed provider connects. Sidecar `keys.json` and these DB rows are not the authority.
+- `file_storage_s3` — JSON `{"endpointUrl","accessKeyId","secretAccessKey"}` for the subject-scoped S3-compatible image bucket. Empty/whitespace deletes the row. Hydrated onto `DysonAgentSessionConfig.FileStorage` at session create/resume. Secret is plaintext in SQLite (same as model API keys). Edited via Settings → File storage.
 
 `DysonToolPolicyStore` depends on `IDysonSubjectSettingsRepository` for the tool-policy document.
 
