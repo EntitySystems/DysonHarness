@@ -1161,7 +1161,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     internal static int Transient429RetryDelayMs { get; set; } = 10_000;
 
     /// <summary>
-    /// Consumes one inference stream round, retrying transient OpenAI errors except 401/403/cancel.
+    /// Consumes one inference stream round, retrying transient OpenAI errors except 401/403/cancel
+    /// and 4xx other than 429. Session log records <c>lastError</c> on failure and on first retry
+    /// for still-retryable errors (compact countdown lines remain for 5xx/429).
     /// 429 is capped at <see cref="Transient429MaxRetries"/> retries of <see cref="Transient429RetryDelayMs"/>;
     /// other transients use <see cref="TransientRetryBackoffMs"/>. Clears streaming/reasoning previews before each retry.
     /// </summary>
@@ -1178,6 +1180,12 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         var rateLimitRetries = 0;
         string? lastError = null;
 
+        void AppendLastErrorIfAny()
+        {
+            if (!string.IsNullOrEmpty(lastError))
+                AppendLog(lastError);
+        }
+
         while (true)
         {
             var result = await ConsumeStreamAsync(streamFactory(), turn, cancellationToken)
@@ -1187,13 +1195,19 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
             lastError = result.Error;
             if (!OpenAiCompatibleHttp.IsTransientServerError(lastError))
+            {
+                AppendLastErrorIfAny();
                 return result;
+            }
 
             int delayMs, retryN, retryDenom;
             if (OpenAiCompatibleHttp.IsRateLimitError(lastError))
             {
                 if (rateLimitRetries >= Transient429MaxRetries)
+                {
+                    AppendLastErrorIfAny();
                     return result;
+                }
                 delayMs = Transient429RetryDelayMs;
                 rateLimitRetries++;
                 retryN = rateLimitRetries;
@@ -1202,7 +1216,10 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             else
             {
                 if (generalRetries >= delays.Length)
+                {
+                    AppendLastErrorIfAny();
                     return result;
+                }
                 delayMs = delays[generalRetries];
                 generalRetries++;
                 retryN = generalRetries;
@@ -1210,6 +1227,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             }
 
             AppendLog(FormatTransientRetryLog(lastError, retryN, retryDenom, delayMs));
+            if (retryN == 1)
+                AppendLastErrorIfAny();
             turn.ClearStreamingPreview();
             turn.ClearReasoningPreview();
             await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
