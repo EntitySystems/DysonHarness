@@ -23,8 +23,8 @@ public static class DysonSessionInitialization
     /// <summary>
     /// True when the 1-based turn index is a rename-review slot (1, 9, 17, …).
     /// Equivalent to <c>TurnHistory.Count % 8 == 0</c> before adding the new turn.
-    /// Caller must pass a chrome-skipped 1-based index (DisplayInfo / ModeSwitch / PlanResult
-    /// omitted); <see cref="OpenAiCacheFriendlyTranscriptBuilder"/> does this.
+    /// Caller must pass a chrome-skipped 1-based index (DisplayInfo / WorktreeCreating /
+    /// ModeSwitch / PlanResult omitted); <see cref="OpenAiCacheFriendlyTranscriptBuilder"/> does this.
     /// Formula and interval are unchanged.
     /// </summary>
     public static bool IsRenameReviewTurn(int oneBasedTurnIndex) =>

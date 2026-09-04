@@ -138,7 +138,8 @@ public static class DysonDropContextFlow
         for (var i = 0; i < cutoff; i++)
         {
             var turn = turns[i];
-            if (!turn.IsExcludedFromContext && turn.Kind != DysonAgentTurnKind.DisplayInfo)
+            if (!turn.IsExcludedFromContext
+                && turn.Kind is not (DysonAgentTurnKind.DisplayInfo or DysonAgentTurnKind.WorktreeCreating))
                 return true;
         }
 

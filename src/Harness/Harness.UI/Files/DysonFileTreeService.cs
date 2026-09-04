@@ -10,7 +10,7 @@ namespace Harness.UI.Files;
 public sealed class DysonFileTreeService : IDisposable
 {
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly Dictionary<Guid, DysonFileTreeState> _cache = new();
+    private readonly Dictionary<DysonWorkspaceRootKey, DysonFileTreeState> _cache = new();
     private readonly object _gate = new();
     private bool _disposed;
 
@@ -24,7 +24,8 @@ public sealed class DysonFileTreeService : IDisposable
     public event Action? Changed;
 
     /// <summary>
-    /// Switch the active tree. Cached workdirs are reused (expand/load state preserved).
+    /// Switch the active tree using the registered work-directory path.
+    /// Cached roots are reused (expand/load state preserved).
     /// Watchers for inactive caches stay alive until process shutdown.
     /// </summary>
     public async Task<VoidResult<string>> SetActiveAsync(
@@ -43,16 +44,6 @@ public sealed class DysonFileTreeService : IDisposable
         }
 
         var id = workDirectoryId.Value;
-        lock (_gate)
-        {
-            if (_cache.TryGetValue(id, out var cached))
-            {
-                Active = cached;
-                Notify();
-                return VoidResult<string>.Success;
-            }
-        }
-
         string absolutePath;
         await using (var scope = _scopeFactory.CreateAsyncScope())
         {
@@ -65,7 +56,7 @@ public sealed class DysonFileTreeService : IDisposable
             absolutePath = get.Value.AbsolutePath;
         }
 
-        return await ActivateNewAsync(id, absolutePath, cancellationToken);
+        return await SetActiveAsync(id, absolutePath, cancellationToken);
     }
 
     /// <summary>Activate by known absolute path (skips store lookup). Used by tests.</summary>
@@ -77,9 +68,10 @@ public sealed class DysonFileTreeService : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentException.ThrowIfNullOrWhiteSpace(absolutePath);
 
+        var key = DysonWorkspaceRootKey.From(workDirectoryId, absolutePath);
         lock (_gate)
         {
-            if (_cache.TryGetValue(workDirectoryId, out var cached))
+            if (_cache.TryGetValue(key, out var cached))
             {
                 Active = cached;
                 Notify();
@@ -208,9 +200,10 @@ public sealed class DysonFileTreeService : IDisposable
             return VoidResult<string>.AsError(fsResult.Error);
 
         var state = new DysonFileTreeState(id, fsResult.Value, Notify);
+        var key = DysonWorkspaceRootKey.From(id, absolutePath);
         lock (_gate)
         {
-            if (_cache.TryGetValue(id, out var raced))
+            if (_cache.TryGetValue(key, out var raced))
             {
                 state.Dispose();
                 Active = raced;
@@ -218,7 +211,7 @@ public sealed class DysonFileTreeService : IDisposable
                 return VoidResult<string>.Success;
             }
 
-            _cache[id] = state;
+            _cache[key] = state;
             Active = state;
         }
 

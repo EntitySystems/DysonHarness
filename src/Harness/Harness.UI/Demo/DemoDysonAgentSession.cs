@@ -8,7 +8,8 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
     private readonly IDysonSessionRepository? _store;
     private readonly IDysonModelRepository? _models;
     private Guid _workDirectoryId;
-    private readonly string? _workDirectoryPath;
+    private string? _workDirectoryPath;
+    private readonly string? _registeredWorkDirectoryPath;
 
     public DemoDysonAgentSession(
         string agentMode,
@@ -18,7 +19,8 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         Guid workDirectoryId = default,
         IDysonModelRepository? models = null,
         string? systemPromptSuffix = null,
-        string? workDirectoryAbsolutePath = null)
+        string? workDirectoryAbsolutePath = null,
+        string? registeredWorkDirectoryAbsolutePath = null)
         : base(agentMode, config, provider, systemPromptSuffix)
     {
         _store = store;
@@ -28,11 +30,21 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         _workDirectoryPath = string.IsNullOrWhiteSpace(workDirectoryAbsolutePath)
             ? null
             : Path.GetFullPath(workDirectoryAbsolutePath);
+        _registeredWorkDirectoryPath = string.IsNullOrWhiteSpace(registeredWorkDirectoryAbsolutePath)
+            ? _workDirectoryPath
+            : Path.GetFullPath(registeredWorkDirectoryAbsolutePath);
     }
 
     public Guid WorkDirectoryId => _workDirectoryId;
 
     public string? WorkDirectoryPath => _workDirectoryPath;
+
+    /// <summary>Rebinds native workspace root (registered checkout vs session worktree).</summary>
+    public void RebindWorkDirectoryPath(string absolutePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(absolutePath);
+        _workDirectoryPath = Path.GetFullPath(absolutePath);
+    }
 
     /// <summary>
     /// Creates a new persisted root session and assigns <see cref="DysonAgentSession.PersistenceId"/>.
@@ -46,6 +58,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         string? title = null,
         IDysonModelRepository? models = null,
         string? workDirectoryAbsolutePath = null,
+        bool worktreeEnabled = false,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -57,12 +70,19 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         config ??= new DysonAgentSessionConfig();
         var providerKind = DysonProviderKinds.EffectiveKind(
             provider.ProviderKind, provider.BaseUrl, provider.ApiKey);
-        var suffix = await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
-                models, providerKind, workDirectoryAbsolutePath, cancellationToken)
-            .ConfigureAwait(false);
+        var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+            await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                    models, providerKind, workDirectoryAbsolutePath, cancellationToken)
+                .ConfigureAwait(false),
+            DysonAgentSystemPrompts.BuildWorktreePromptBlock(
+                worktreeEnabled,
+                worktreeAbsolutePath: null,
+                worktreeBranch: null,
+                workDirectoryAbsolutePath ?? ""));
         var session = new DemoDysonAgentSession(
             agentMode, config, provider, store, workDirectoryId, models, suffix,
             workDirectoryAbsolutePath);
+        session.WorktreeEnabled = worktreeEnabled;
         session.ConfigureRootInterAgentTools();
         session.SlugDefaultMaxTargetContextTokens = provider.DefaultMaxTargetContextTokens;
         var initialTitle = title ?? "New session";
@@ -81,6 +101,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                 Title = initialTitle,
                 SystemPromptSnapshot = session.SystemPrompt,
                 Status = DysonSessionStatus.Active,
+                WorktreeEnabled = worktreeEnabled,
             },
             cancellationToken).ConfigureAwait(false);
 
@@ -112,6 +133,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         IDysonModelRepository? models = null,
         bool appendResumeLog = true,
         string? workDirectoryAbsolutePath = null,
+        string? registeredWorkDirectoryAbsolutePath = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -127,11 +149,18 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             McpAccessMode = state.Session.McpAccessMode,
         };
 
+        var registered = registeredWorkDirectoryAbsolutePath ?? workDirectoryAbsolutePath ?? "";
         var providerKind = DysonProviderKinds.EffectiveKind(
             provider.ProviderKind, provider.BaseUrl, provider.ApiKey);
-        var suffix = await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
-                models, providerKind, workDirectoryAbsolutePath, cancellationToken)
-            .ConfigureAwait(false);
+        var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+            await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                    models, providerKind, workDirectoryAbsolutePath, cancellationToken)
+                .ConfigureAwait(false),
+            DysonAgentSystemPrompts.BuildWorktreePromptBlock(
+                state.Session.WorktreeEnabled,
+                state.Session.WorktreeAbsolutePath,
+                state.Session.WorktreeBranch,
+                registered));
         var session = new DemoDysonAgentSession(
             state.Session.AgentMode,
             config,
@@ -140,7 +169,8 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             state.Session.WorkDirectoryId ?? Guid.Empty,
             models,
             suffix,
-            workDirectoryAbsolutePath);
+            workDirectoryAbsolutePath,
+            registeredWorkDirectoryAbsolutePath: registeredWorkDirectoryAbsolutePath ?? workDirectoryAbsolutePath);
         session.RestoreFromPersisted(state);
         session.SlugDefaultMaxTargetContextTokens = provider.DefaultMaxTargetContextTokens;
         if (state.Session.ParentSessionId is null)
@@ -208,13 +238,21 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         var providerKind = childProvider is DemoDysonAgentProvider demoKind
             ? DysonProviderKinds.EffectiveKind(demoKind.ProviderKind, demoKind.BaseUrl, demoKind.ApiKey)
             : DysonProviderKinds.Demo;
-        var suffix = await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
-                _models, providerKind, _workDirectoryPath, cancellationToken)
-            .ConfigureAwait(false);
+        var registered = _registeredWorkDirectoryPath ?? _workDirectoryPath ?? "";
+        var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+            await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                    _models, providerKind, _workDirectoryPath, cancellationToken)
+                .ConfigureAwait(false),
+            DysonAgentSystemPrompts.BuildWorktreePromptBlock(
+                WorktreeEnabled, WorktreeAbsolutePath, WorktreeBranch, registered));
 
         var child = new DemoDysonAgentSession(
             agentMode, Config, childProvider, _store, _workDirectoryId, _models, suffix,
-            _workDirectoryPath);
+            _workDirectoryPath,
+            registeredWorkDirectoryAbsolutePath: _registeredWorkDirectoryPath);
+        child.WorktreeEnabled = WorktreeEnabled;
+        child.WorktreeAbsolutePath = WorktreeAbsolutePath;
+        child.WorktreeBranch = WorktreeBranch;
         RegisterSubagent(child);
 
         var title = TitleFromTask(task);
@@ -240,6 +278,9 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                 Title = title,
                 SystemPromptSnapshot = child.SystemPrompt,
                 Status = DysonSessionStatus.Active,
+                WorktreeEnabled = WorktreeEnabled,
+                WorktreeAbsolutePath = WorktreeAbsolutePath,
+                WorktreeBranch = WorktreeBranch,
             },
             cancellationToken).ConfigureAwait(false);
 

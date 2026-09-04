@@ -224,6 +224,9 @@ public sealed class DysonSessionRepository(
                 Status = request.Status,
                 Title = request.Title,
                 SystemPromptSnapshot = request.SystemPromptSnapshot,
+                WorktreeEnabled = request.WorktreeEnabled,
+                WorktreeAbsolutePath = request.WorktreeAbsolutePath,
+                WorktreeBranch = request.WorktreeBranch,
                 CreatedUtc = now,
                 UpdatedUtc = now,
                 LastActivityUtc = now,
@@ -282,6 +285,15 @@ public sealed class DysonSessionRepository(
 
             if (update.SystemPromptSnapshot is not null)
                 entity.SystemPromptSnapshot = update.SystemPromptSnapshot;
+
+            if (update.UpdateWorktreeEnabled)
+                entity.WorktreeEnabled = update.WorktreeEnabled;
+
+            if (update.UpdateWorktreeLocation)
+            {
+                entity.WorktreeAbsolutePath = update.WorktreeAbsolutePath;
+                entity.WorktreeBranch = update.WorktreeBranch;
+            }
 
             var now = DateTime.UtcNow;
             entity.UpdatedUtc = now;
@@ -430,6 +442,8 @@ public sealed class DysonSessionRepository(
                     WorkDirectoryId = s.WorkDirectoryId,
                     CreatedUtc = s.CreatedUtc,
                     LastActivityUtc = s.LastActivityUtc,
+                    WorktreeEnabled = s.WorktreeEnabled,
+                    HasWorktree = s.WorktreeAbsolutePath != null && s.WorktreeAbsolutePath != "",
                 })
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -467,6 +481,8 @@ public sealed class DysonSessionRepository(
                     WorkDirectoryId = s.WorkDirectoryId,
                     CreatedUtc = s.CreatedUtc,
                     LastActivityUtc = s.LastActivityUtc,
+                    WorktreeEnabled = s.WorktreeEnabled,
+                    HasWorktree = s.WorktreeAbsolutePath != null && s.WorktreeAbsolutePath != "",
                 })
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -633,6 +649,8 @@ public sealed class DysonSessionRepository(
                     WorkDirectoryId = s.WorkDirectoryId,
                     CreatedUtc = s.CreatedUtc,
                     LastActivityUtc = s.LastActivityUtc,
+                    WorktreeEnabled = s.WorktreeEnabled,
+                    HasWorktree = s.WorktreeAbsolutePath != null && s.WorktreeAbsolutePath != "",
                 })
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -660,6 +678,12 @@ public sealed class DysonSessionRepository(
 
             if (root is null)
                 return new VoidResult<string>($"Session '{sessionId}' not found.");
+
+            if (!string.IsNullOrEmpty(root.WorktreeAbsolutePath))
+            {
+                return new VoidResult<string>(
+                    "Merge or delete this session's worktree before deleting the session.");
+            }
 
             var ordered = new List<Guid>();
             var pending = new Queue<Guid>();

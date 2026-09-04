@@ -117,13 +117,14 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
     private readonly IDysonSessionRepository? _store;
     private readonly HttpClient _http;
-    private readonly string _workDirectoryPath;
+    private string _workDirectoryPath;
     private Guid _workDirectoryId;
     private readonly OpenAiCompletionsClient _completions;
     private readonly OpenAiResponsesClient _responses;
     private readonly IDysonModelRepository? _models;
     private readonly IDysonUsageAnalyticsRepository? _usageAnalytics;
     private readonly string _workDirectoryName;
+    private readonly string _registeredWorkDirectoryPath;
     // ponytail: one hop per prompt; Explore recap shares this so a main-loop hop is not repeated
     private bool _fallbackAppliedThisTurn;
 
@@ -138,12 +139,16 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         IDysonModelRepository? models = null,
         string? systemPromptSuffix = null,
         IDysonUsageAnalyticsRepository? usageAnalytics = null,
-        string workDirectoryName = "")
+        string workDirectoryName = "",
+        string? registeredWorkDirectoryAbsolutePath = null)
         : base(agentMode, config, provider, systemPromptSuffix)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         ArgumentException.ThrowIfNullOrWhiteSpace(workDirectoryAbsolutePath);
         _workDirectoryPath = Path.GetFullPath(workDirectoryAbsolutePath);
+        _registeredWorkDirectoryPath = string.IsNullOrWhiteSpace(registeredWorkDirectoryAbsolutePath)
+            ? _workDirectoryPath
+            : Path.GetFullPath(registeredWorkDirectoryAbsolutePath);
         _store = store;
         SessionStore = store;
         _workDirectoryId = workDirectoryId;
@@ -160,6 +165,13 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
     public Guid WorkDirectoryId => _workDirectoryId;
 
+    /// <summary>Rebinds native workspace root (registered checkout vs session worktree).</summary>
+    public void RebindWorkDirectoryPath(string absolutePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(absolutePath);
+        _workDirectoryPath = Path.GetFullPath(absolutePath);
+    }
+
     public static async Task<Result<OpenAiCompatibleAgentSession, string>> CreateAsync(
         IDysonSessionRepository store,
         OpenAiCompatibleAgentProvider provider,
@@ -172,6 +184,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         IDysonModelRepository? models = null,
         IDysonUsageAnalyticsRepository? usageAnalytics = null,
         string workDirectoryName = "",
+        bool worktreeEnabled = false,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -184,12 +197,19 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         config ??= new DysonAgentSessionConfig();
         var providerKind = DysonProviderKinds.EffectiveKind(
             provider.ProviderKind, provider.BaseUrl, provider.ApiKey);
-        var suffix = await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
-                models, providerKind, workDirectoryAbsolutePath, cancellationToken)
-            .ConfigureAwait(false);
+        var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+            await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                    models, providerKind, workDirectoryAbsolutePath, cancellationToken)
+                .ConfigureAwait(false),
+            DysonAgentSystemPrompts.BuildWorktreePromptBlock(
+                worktreeEnabled,
+                worktreeAbsolutePath: null,
+                worktreeBranch: null,
+                workDirectoryAbsolutePath));
         var session = new OpenAiCompatibleAgentSession(
             agentMode, config, provider, http, workDirectoryAbsolutePath, store, workDirectoryId, models,
             suffix, usageAnalytics, workDirectoryName);
+        session.WorktreeEnabled = worktreeEnabled;
         session.ConfigureRootInterAgentTools();
         session.SlugDefaultMaxTargetContextTokens = provider.DefaultMaxTargetContextTokens;
         var initialTitle = title ?? "New session";
@@ -208,6 +228,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 Title = initialTitle,
                 SystemPromptSnapshot = session.SystemPrompt,
                 Status = DysonSessionStatus.Active,
+                WorktreeEnabled = worktreeEnabled,
             },
             cancellationToken).ConfigureAwait(false);
 
@@ -239,6 +260,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         bool appendResumeLog = true,
         IDysonUsageAnalyticsRepository? usageAnalytics = null,
         string workDirectoryName = "",
+        string? registeredWorkDirectoryAbsolutePath = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -255,11 +277,18 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             McpAccessMode = state.Session.McpAccessMode,
         };
 
+        var registered = registeredWorkDirectoryAbsolutePath ?? workDirectoryAbsolutePath;
         var providerKind = DysonProviderKinds.EffectiveKind(
             provider.ProviderKind, provider.BaseUrl, provider.ApiKey);
-        var suffix = await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
-                models, providerKind, workDirectoryAbsolutePath, cancellationToken)
-            .ConfigureAwait(false);
+        var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+            await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                    models, providerKind, workDirectoryAbsolutePath, cancellationToken)
+                .ConfigureAwait(false),
+            DysonAgentSystemPrompts.BuildWorktreePromptBlock(
+                state.Session.WorktreeEnabled,
+                state.Session.WorktreeAbsolutePath,
+                state.Session.WorktreeBranch,
+                registered));
         var session = new OpenAiCompatibleAgentSession(
             state.Session.AgentMode,
             config,
@@ -271,7 +300,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             models,
             suffix,
             usageAnalytics,
-            workDirectoryName);
+            workDirectoryName,
+            registeredWorkDirectoryAbsolutePath: registered);
         session.RestoreFromPersisted(state);
         session.SlugDefaultMaxTargetContextTokens = provider.DefaultMaxTargetContextTokens;
         if (state.Session.ParentSessionId is null)
@@ -338,9 +368,12 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         var providerKind = DysonProviderKinds.EffectiveKind(
             childProvider.ProviderKind, childProvider.BaseUrl, childProvider.ApiKey);
-        var suffix = await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
-                _models, providerKind, _workDirectoryPath, cancellationToken)
-            .ConfigureAwait(false);
+        var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+            await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                    _models, providerKind, _workDirectoryPath, cancellationToken)
+                .ConfigureAwait(false),
+            DysonAgentSystemPrompts.BuildWorktreePromptBlock(
+                WorktreeEnabled, WorktreeAbsolutePath, WorktreeBranch, _registeredWorkDirectoryPath));
 
         var child = new OpenAiCompatibleAgentSession(
             agentMode,
@@ -353,7 +386,11 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             _models,
             suffix,
             _usageAnalytics,
-            _workDirectoryName);
+            _workDirectoryName,
+            registeredWorkDirectoryAbsolutePath: _registeredWorkDirectoryPath);
+        child.WorktreeEnabled = WorktreeEnabled;
+        child.WorktreeAbsolutePath = WorktreeAbsolutePath;
+        child.WorktreeBranch = WorktreeBranch;
 
         RegisterSubagent(child);
 
@@ -375,6 +412,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 Title = title,
                 SystemPromptSnapshot = child.SystemPrompt,
                 Status = DysonSessionStatus.Active,
+                WorktreeEnabled = WorktreeEnabled,
+                WorktreeAbsolutePath = WorktreeAbsolutePath,
+                WorktreeBranch = WorktreeBranch,
             },
             cancellationToken).ConfigureAwait(false);
 

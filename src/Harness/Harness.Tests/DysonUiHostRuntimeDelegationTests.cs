@@ -984,6 +984,7 @@ public class DysonUiHostRuntimeDelegationTests
                     sessions,
                     models,
                     workDirectories,
+                    workDirectoryConfigurations,
                     new DysonWorkDirectoryService(workDirectories),
                     configBuilder);
             }

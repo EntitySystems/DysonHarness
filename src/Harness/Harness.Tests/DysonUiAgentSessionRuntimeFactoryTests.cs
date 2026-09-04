@@ -205,6 +205,112 @@ public class DysonUiAgentSessionRuntimeFactoryTests
     }
 
     [Fact]
+    public async Task CreateRootAsync_forkWorktree_true_persists_enabled_without_path()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var seeded = await harness.SeedDemoCatalogAsync();
+        var upsert = await harness.WorkDirectoryConfigurations.UpsertAsync(
+            seeded.WorkDirectoryId,
+            DysonWorkDirectoryConfig.WithForkWorktree(null, true));
+        Assert.True(upsert.IsSuccess, upsert.IsError ? upsert.Error : null);
+
+        var created = await harness.Factory.CreateRootAsync(new DysonAgentSessionRuntimeCreateRequest
+        {
+            AgentMode = DysonAgentModes.Work,
+            WorkDirectoryId = seeded.WorkDirectoryId,
+            ModelSlugId = seeded.SlugId,
+        });
+
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+        await using var lease = created.Value;
+        var session = Assert.IsType<DemoDysonAgentSession>(lease.Session);
+        Assert.True(session.WorktreeEnabled);
+        Assert.Null(session.WorktreeAbsolutePath);
+        Assert.Null(session.WorktreeBranch);
+        Assert.Equal(Path.GetFullPath(seeded.WorkRoot), session.WorkDirectoryPath);
+        var persisted = (await harness.Sessions.GetFullSessionAsync(session.PersistenceId)).Value.Session;
+        Assert.True(persisted.WorktreeEnabled);
+        Assert.Null(persisted.WorktreeAbsolutePath);
+        Assert.Null(persisted.WorktreeBranch);
+        Assert.Contains(
+            DysonAgentSystemPrompts.WorktreeEnabledNotCreatedPromptBlock,
+            session.SystemPrompt,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LoadAsync_existing_worktree_directory_uses_that_path()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var seeded = await harness.SeedDemoSessionAsync();
+        var worktree = Path.Combine(Path.GetTempPath(), $"dyson-factory-wt-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktree);
+        try
+        {
+            var meta = await harness.Sessions.UpdateSessionMetaAsync(new DysonSessionMetaUpdate
+            {
+                SessionId = seeded.SessionId,
+                UpdateWorktreeEnabled = true,
+                WorktreeEnabled = true,
+                UpdateWorktreeLocation = true,
+                WorktreeAbsolutePath = worktree,
+                WorktreeBranch = "dyson/abcd1234",
+            });
+            Assert.True(meta.IsSuccess, meta.IsError ? meta.Error : null);
+
+            await using var lease = (await harness.Factory.LoadAsync(seeded.SessionId)).Value;
+            var session = Assert.IsType<DemoDysonAgentSession>(lease.Session);
+            Assert.True(session.WorktreeEnabled);
+            Assert.Equal(Path.GetFullPath(worktree), session.WorkDirectoryPath);
+            Assert.Equal(Path.GetFullPath(worktree), session.WorktreeAbsolutePath);
+            Assert.Equal("dyson/abcd1234", session.WorktreeBranch);
+            Assert.Contains("Git worktree (bound):", session.SystemPrompt, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(worktree, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    [Fact]
+    public async Task LoadAsync_missing_worktree_folder_clears_columns_and_uses_registered_path()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var seeded = await harness.SeedDemoSessionAsync();
+        var missing = Path.Combine(Path.GetTempPath(), $"dyson-factory-wt-gone-{Guid.NewGuid():N}");
+        var meta = await harness.Sessions.UpdateSessionMetaAsync(new DysonSessionMetaUpdate
+        {
+            SessionId = seeded.SessionId,
+            UpdateWorktreeEnabled = true,
+            WorktreeEnabled = true,
+            UpdateWorktreeLocation = true,
+            WorktreeAbsolutePath = missing,
+            WorktreeBranch = "dyson/deadbeef",
+        });
+        Assert.True(meta.IsSuccess, meta.IsError ? meta.Error : null);
+
+        await using var lease = (await harness.Factory.LoadAsync(seeded.SessionId)).Value;
+        var session = Assert.IsType<DemoDysonAgentSession>(lease.Session);
+        Assert.True(session.WorktreeEnabled);
+        Assert.Null(session.WorktreeAbsolutePath);
+        Assert.Null(session.WorktreeBranch);
+        Assert.Equal(Path.GetFullPath(seeded.WorkRoot), session.WorkDirectoryPath);
+        var persisted = (await harness.Sessions.GetFullSessionAsync(seeded.SessionId)).Value.Session;
+        Assert.Null(persisted.WorktreeAbsolutePath);
+        Assert.Null(persisted.WorktreeBranch);
+        Assert.Contains(
+            DysonAgentSystemPrompts.WorktreeEnabledNotCreatedPromptBlock,
+            session.SystemPrompt,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task LoadAsync_subject_B_cannot_see_subject_A_session()
     {
         await using var harness = await Harness.CreateAsync();
@@ -237,6 +343,7 @@ public class DysonUiAgentSessionRuntimeFactoryTests
             IDysonSessionRepository sessions,
             IDysonModelRepository models,
             IDysonWorkDirectoryRepository workDirectories,
+            IDysonWorkDirectoryConfigurationRepository workDirectoryConfigurations,
             string workRoot)
         {
             _connection = connection;
@@ -245,6 +352,7 @@ public class DysonUiAgentSessionRuntimeFactoryTests
             Sessions = sessions;
             Models = models;
             WorkDirectories = workDirectories;
+            WorkDirectoryConfigurations = workDirectoryConfigurations;
             _workRoot = workRoot;
         }
 
@@ -253,6 +361,7 @@ public class DysonUiAgentSessionRuntimeFactoryTests
         public IDysonSessionRepository Sessions { get; }
         public IDysonModelRepository Models { get; }
         public IDysonWorkDirectoryRepository WorkDirectories { get; }
+        public IDysonWorkDirectoryConfigurationRepository WorkDirectoryConfigurations { get; }
 
         public static Task<Harness> CreateAsync()
         {
@@ -261,11 +370,20 @@ public class DysonUiAgentSessionRuntimeFactoryTests
             var sessions = DysonTempDb.Sessions(accessor, subject);
             var models = DysonTempDb.Models(accessor, subject);
             var workDirectories = DysonTempDb.WorkDirectories(accessor, subject);
+            var workDirectoryConfigurations = DysonTempDb.WorkDirectoryConfigurations(accessor, subject);
             var workRoot = Path.Combine(Path.GetTempPath(), $"dyson-factory-{Guid.NewGuid():N}");
             Directory.CreateDirectory(workRoot);
             var factory = CreateFactory(accessor, subject, sessions, models, workDirectories);
             return Task.FromResult(
-                new Harness(connection, accessor, factory, sessions, models, workDirectories, workRoot));
+                new Harness(
+                    connection,
+                    accessor,
+                    factory,
+                    sessions,
+                    models,
+                    workDirectories,
+                    workDirectoryConfigurations,
+                    workRoot));
         }
 
         internal static DysonUiAgentSessionRuntimeFactory CreateFactory(
@@ -298,6 +416,7 @@ public class DysonUiAgentSessionRuntimeFactoryTests
                 sessions,
                 models,
                 workDirectories,
+                workDirectoryConfigurations,
                 new DysonWorkDirectoryService(workDirectories),
                 configBuilder);
         }

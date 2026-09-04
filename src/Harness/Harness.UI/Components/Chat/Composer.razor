@@ -4,12 +4,14 @@
 @using Harness.UI.Components.Skills
 @using Harness.UI.Components.Plugins
 @using Harness.UI.Demo
+@using Harness.UI.Services
 @using Microsoft.AspNetCore.Components.Forms
 @implements IAsyncDisposable
 @inject IDysonModelRepository ModelStore
 @inject DysonUiHost Host
 @inject DysonMessageBus Bus
 @inject IJSRuntime Js
+@inject ConfirmDialogService ConfirmDialog
 
 <div class="composer">
     <AskQuestionPopover Ask="Host.PendingAskUi" OnSubmit="OnAskSubmit" />
@@ -176,6 +178,31 @@
                                           OnPick="OnEffortPickedAsync" />
                     <AgentModePicker SelectedMode="@SelectedAgentMode"
                                      SelectedModeChanged="SelectedAgentModeChanged" />
+                    <label class="composer-chip composer-worktree @(WorktreeCheckboxDisabled ? "is-muted" : null)"
+                           title="@Host.WorktreeCheckboxTitle">
+                        <input type="checkbox"
+                               checked="@Host.WorktreeChecked"
+                               disabled="@WorktreeCheckboxDisabled"
+                               @onchange="OnWorktreeChangedAsync" />
+                        <span>Worktree</span>
+                    </label>
+                    @if (Host.WorktreeLocked)
+                    {
+                        <button type="button"
+                                class="btn btn--xs"
+                                disabled="@Disabled"
+                                title="Merge the session branch into the registered checkout, then remove the worktree"
+                                @onclick="OnMergeWorktreeAsync">
+                            Merge
+                        </button>
+                        <button type="button"
+                                class="btn btn--xs btn-ghost"
+                                disabled="@Disabled"
+                                title="Discard this session worktree"
+                                @onclick="OnRemoveWorktreeAsync">
+                            Remove
+                        </button>
+                    }
                 </div>
                 <div class="composer__actions">
                     <ComposerStopMenu />
@@ -341,6 +368,7 @@
         await RefreshModelsAsync();
         await RefreshSkillsAsync();
         await RefreshPluginCommandsAsync();
+        await Host.RefreshWorktreeComposerStateAsync();
         _skillCatalogRevision = Host.SkillCatalogRevision;
         _pluginCatalogRevision = Host.PluginCatalogRevision;
         _catalogWorkDirectoryId = Host.CatalogWorkDirectoryId;
@@ -393,6 +421,9 @@
         var sessionGraph = (evt.Kind & DysonHostChangeKind.SessionGraph) != 0;
         if (sessionGraph)
             RebindParentEventsIfNeeded();
+
+        if (sessionGraph || (evt.Kind & DysonHostChangeKind.Catalogs) != 0)
+            await Host.RefreshWorktreeComposerStateAsync();
 
         if ((evt.Kind & HostChangeFilter) == 0)
         {

@@ -67,8 +67,9 @@
                     </button>
                     <button type="button"
                             class="btn btn-ghost btn-icon list-item__delete"
-                            title="Delete session"
+                            title="@(session.HasWorktree ? "Merge or delete this session's worktree before deleting the session." : "Delete session")"
                             aria-label="Delete @title"
+                            disabled="@session.HasWorktree"
                             @onclick="() => OnDeleteClickAsync(session.Id, title)"
                             @onclick:stopPropagation="true">
                         <img src="icons/trash.svg" alt="" />
@@ -93,6 +94,7 @@
         Sessions.Any(s =>
             s.ParentSessionId is null
             && s.Id != ActiveSessionId
+            && !s.HasWorktree
             && (DysonSessionInactiveDelete.IsDead(s.Status)
                 || (!Host.IsSessionBusy(s.Id) && !Host.HasActiveSubagents(s.Id))));
 

@@ -5034,6 +5034,20 @@ code, .mono {
   border-style: dashed;
 }
 
+.composer-worktree {
+  max-width: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.composer-worktree input {
+  margin: 0;
+}
+
+.composer-worktree.is-muted {
+  cursor: default;
+}
+
 .agent-mode-picker {
   display: inline-flex;
   min-width: 0;

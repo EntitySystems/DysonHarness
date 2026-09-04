@@ -41,6 +41,8 @@ v1 keys:
 
 Missing row ⇒ treat as `{ "mcpActive": true }` (opt-out via settings). Helpers: `DysonWorkDirectoryConfig.TryGetMcpActive` / `WithMcpActive`.
 
+`forkWorktree` (bool) is the per-workdir default for the composer **Worktree** checkbox. Missing key, null document, or non-boolean ⇒ **false** (opt-in only via explicit `true`). Helpers: `TryGetForkWorktree` / `WithForkWorktree`. `CreateDefault` stays `{ "mcpActive": true }` only — it does not write `forkWorktree`. The composer checkbox upserts this key on the **active** work directory (last value = default for **new** sessions on that workdir). New session create copies it into `sessions.WorktreeEnabled`. Do not store this default in `app_settings` (a git default must not leak onto a non-git workdir).
+
 ### `IDysonWorkDirectoryConfigurationRepository`
 
 - `GetAsync(workDirectoryId)` — stored doc or default (does not materialize)
@@ -84,7 +86,25 @@ Refresh is **activation-only**, not every `GetAsync` (file tree, git rail, and s
 
 ## Git branch (UI)
 
-`DysonGitInfo.TryGetBranch` accepts a native absolute path or an initialized `IDysonWorkspaceFileSystem` (uses `NativeRootPath`). Runs `git -C path rev-parse --abbrev-ref HEAD` (≈2s timeout). Used for the composer branch chip; unrelated to build-time `DysonBuildInfo.BranchName`.
+`DysonGitInfo.TryGetBranch` accepts a native absolute path or an initialized `IDysonWorkspaceFileSystem` (uses `NativeRootPath`). Runs `git -C path rev-parse --abbrev-ref HEAD` (≈2s timeout). Used for the composer branch chip; unrelated to build-time `DysonBuildInfo.BranchName`. When a session is focused, the chip (and the Files / Git rails) follow that session’s workspace root — the bound worktree path if set, otherwise the registered `AbsolutePath` — not only the work-directory row.
+
+## Session git worktrees
+
+A session may fork a **private git worktree** of the registered checkout. Project identity stays on `sessions.WorkDirectoryId` (sidebar, session list filter, MCP master switch, plugins). The session workspace root used by tools, shells, file tree, git rail, and the branch chip is `WorktreeAbsolutePath ?? registered AbsolutePath`.
+
+Do **not** register the worktree as another `work_directories` row. Do **not** mutate `work_directories.AbsolutePath`.
+
+Layout (engine `DysonSessionWorktree.Ensure` / `Merge` / `Remove`):
+
+- Path: sibling `{parentOfRepo}/{repoName}.dyson-worktrees/{sessionId:N}` (git refuses a worktree inside the main tree)
+- Branch: `dyson/{first 8 hex of sessionId:N}` from `HEAD`
+- Untracked harness copy (dest-missing only): `openrules.json`, `AGENTS.md`, `.dyson/mcp/`, `.dyson/skills/`. Do not copy `.dyson/plans` or `.dyson/temp`.
+
+Created only on the first **Work**-mode mutating start (`DysonUiHost.PromptAsync` user prompt, or `BuildPendingPlanAsync` before BeginBuildPlan) when the root has `WorktreeEnabled` and no path yet. Plan / Ask / Review never create one. Empty “Start new session” does not leave orphan checkouts. If enabled but the workdir is not a git repo, that send fails with the exact error `Worktree is enabled but this work directory is not a git repository.`
+
+Custom MCP host stays **workdir-id** keyed (one `.dyson/mcp` config / refcount). Tool cwd is the session filesystem (`NativeRootPath` — worktree when bound).
+
+v1 does **not** auto-remove the checkout on session delete. Merge or Remove first (composer, while locked). Persistence and delete guards: [sessions.md](sessions.md). Git helpers: [engine api-surface](../engine/api-surface.md)#git.
 
 ## Workspace filesystem
 

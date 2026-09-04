@@ -11,6 +11,7 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
     IDysonSessionRepository sessions,
     IDysonModelRepository models,
     IDysonWorkDirectoryRepository workDirectories,
+    IDysonWorkDirectoryConfigurationRepository workDirectoryConfigurations,
     DysonWorkDirectoryService workDirectoryService,
     DysonUiAgentSessionRuntimeConfigBuilder configBuilder)
     : IDysonAgentSessionRuntimeFactory
@@ -21,6 +22,8 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
         models ?? throw new ArgumentNullException(nameof(models));
     private readonly IDysonWorkDirectoryRepository _workDirectories =
         workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
+    private readonly IDysonWorkDirectoryConfigurationRepository _workDirectoryConfigurations =
+        workDirectoryConfigurations ?? throw new ArgumentNullException(nameof(workDirectoryConfigurations));
     private readonly DysonWorkDirectoryService _workDirectoryService =
         workDirectoryService ?? throw new ArgumentNullException(nameof(workDirectoryService));
     private readonly DysonUiAgentSessionRuntimeConfigBuilder _configBuilder =
@@ -71,6 +74,13 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
         if (builtConfig.IsError)
             return Result<DysonAgentSessionRuntimeLease, string>.AsError(builtConfig.Error);
 
+        var forkWorktree = false;
+        var cfg = await _workDirectoryConfigurations
+            .GetAsync(request.WorkDirectoryId, cancellationToken)
+            .ConfigureAwait(false);
+        if (cfg.IsSuccess)
+            forkWorktree = DysonWorkDirectoryConfig.TryGetForkWorktree(cfg.Value);
+
         var configLease = builtConfig.Value;
         var created = await DemoDysonAgentSession.CreateAsync(
                 _sessions,
@@ -80,6 +90,7 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
                 config: configLease.Config,
                 models: _models,
                 workDirectoryAbsolutePath: workDirectory.Value.AbsolutePath,
+                worktreeEnabled: forkWorktree,
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
         if (created.IsError)
@@ -137,6 +148,7 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
         if (provider.IsError)
             return Result<DysonAgentSessionRuntimeLease, string>.AsError(provider.Error);
 
+        string? registeredPath = null;
         string? workPath = null;
         if (persisted.WorkDirectoryId is Guid workDirectoryId && workDirectoryId != Guid.Empty)
         {
@@ -150,7 +162,30 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
                 .RefreshGitOriginAsync(workDirectoryId, cancellationToken)
                 .ConfigureAwait(false);
 
-            workPath = workDirectory.Value.AbsolutePath;
+            registeredPath = workDirectory.Value.AbsolutePath;
+            workPath = registeredPath;
+            if (!string.IsNullOrWhiteSpace(persisted.WorktreeAbsolutePath))
+            {
+                if (Directory.Exists(persisted.WorktreeAbsolutePath))
+                {
+                    workPath = persisted.WorktreeAbsolutePath;
+                }
+                else
+                {
+                    var clear = await _sessions.UpdateSessionMetaAsync(
+                            new DysonSessionMetaUpdate
+                            {
+                                SessionId = sessionId,
+                                UpdateWorktreeLocation = true,
+                                WorktreeAbsolutePath = null,
+                                WorktreeBranch = null,
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    if (clear.IsError)
+                        return Result<DysonAgentSessionRuntimeLease, string>.AsError(clear.Error);
+                }
+            }
         }
 
         var builtConfig = await _configBuilder.BuildAsync(
@@ -159,7 +194,7 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
                     AgentMode = persisted.AgentMode,
                     McpAccessMode = persisted.McpAccessMode,
                     WorkDirectoryId = persisted.WorkDirectoryId,
-                    WorkRoot = workPath,
+                    WorkRoot = registeredPath,
                 },
                 cancellationToken)
             .ConfigureAwait(false);
@@ -175,6 +210,7 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
                 models: _models,
                 appendResumeLog: true,
                 workDirectoryAbsolutePath: workPath,
+                registeredWorkDirectoryAbsolutePath: registeredPath,
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
         if (loaded.IsError)

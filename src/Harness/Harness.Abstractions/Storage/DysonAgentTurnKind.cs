@@ -41,6 +41,11 @@ public enum DysonAgentTurnKind
     /// earlier turn from future provider transcripts and keeps this turn as the remaining context.
     /// </summary>
     FullSummarize = 16,
+    /// <summary>
+    /// UI-only chrome for forking a session git worktree. Starts incomplete so the UI can
+    /// spin until git finishes; omitted from provider transcripts (like DisplayInfo, unlike ModeSwitch).
+    /// </summary>
+    WorktreeCreating = 17,
 }
 
 public static class DysonAgentTurnKindRules

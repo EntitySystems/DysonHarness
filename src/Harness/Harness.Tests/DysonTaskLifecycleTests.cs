@@ -103,6 +103,7 @@ public class DysonTaskLifecycleTests
     private const int TaskEndReflectValue = 14;
     private const int BugReviewValue = 15;
     private const int FullSummarizeValue = 16;
+    private const int WorktreeCreatingValue = 17;
 
     [Fact]
     public async Task Run()
@@ -142,16 +143,16 @@ public class DysonTaskLifecycleTests
             || (int)DysonAgentTurnKind.DropContext != LastPreLifecycleKindValue)
         {
             throw new InvalidOperationException(
-                "DysonAgentTurnKind values 0–13 must stay stable; append TaskEndReflect=14, BugReview=15, FullSummarize=16.");
+                "DysonAgentTurnKind values 0–13 must stay stable; append TaskEndReflect=14, BugReview=15, FullSummarize=16, WorktreeCreating=17.");
         }
 
         var max = Enum.GetValues<DysonAgentTurnKind>().Select(k => (int)k).Max();
         if (max < LastPreLifecycleKindValue)
             throw new InvalidOperationException("DysonAgentTurnKind lost DropContext=13.");
-        if (max > FullSummarizeValue)
+        if (max > WorktreeCreatingValue)
         {
             throw new InvalidOperationException(
-                $"Unexpected DysonAgentTurnKind value {max}; expected append-only through FullSummarize=16.");
+                $"Unexpected DysonAgentTurnKind value {max}; expected append-only through WorktreeCreating=17.");
         }
     }
 
