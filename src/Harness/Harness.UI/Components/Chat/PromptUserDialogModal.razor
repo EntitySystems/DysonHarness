@@ -3,6 +3,7 @@
 @using Harness.UI.Demo
 @using Microsoft.AspNetCore.Components.Web
 @inject DysonUiHost Host
+@inject DysonMessageBus Bus
 @implements IDisposable
 
 @if (Host.PendingUserDialogUi is { } dialog)
@@ -48,16 +49,64 @@
 
 @code {
     private bool _busy;
+    private Guid? _boundSessionId;
+    private IDisposable? _hostSub;
+    private IDisposable? _parentEventsSub;
 
-    protected override void OnInitialized() => Host.Changed += OnHostChanged;
-
-    public void Dispose() => Host.Changed -= OnHostChanged;
-
-    private void OnHostChanged(DysonHostChangeKind kind)
+    protected override void OnInitialized()
     {
-        if ((kind & DysonHostChangeKind.Overlay) == 0)
+        var sub = Bus.Subscribe<DysonHostStateChangedEvent>(Host.BusScopeKey, OnHostChanged);
+        if (sub.IsSuccess)
+            _hostSub = sub.Value;
+
+        RebindParentEventsIfNeeded();
+    }
+
+    public void Dispose()
+    {
+        _hostSub?.Dispose();
+        _hostSub = null;
+        DisposeParentEvents();
+    }
+
+    private void DisposeParentEvents()
+    {
+        _parentEventsSub?.Dispose();
+        _parentEventsSub = null;
+    }
+
+    private void OnHostChanged(DysonHostStateChangedEvent evt)
+    {
+        if ((evt.Kind & DysonHostChangeKind.SessionGraph) == 0)
             return;
-        InvokeAsync(StateHasChanged);
+
+        RebindParentEventsIfNeeded();
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void RebindParentEventsIfNeeded()
+    {
+        var sessionId = Host.ActiveSessionId;
+        if (sessionId == _boundSessionId)
+            return;
+
+        DisposeParentEvents();
+        _boundSessionId = sessionId;
+        if (sessionId is not Guid id || id == Guid.Empty)
+            return;
+
+        var sub = Bus.Subscribe<DysonParentEventsChangedEvent>(
+            DysonBusScopes.Session(id),
+            OnParentEventsChanged);
+        if (sub.IsSuccess)
+            _parentEventsSub = sub.Value;
+    }
+
+    private void OnParentEventsChanged(DysonParentEventsChangedEvent evt)
+    {
+        if (evt.PersistenceId != Host.ActiveSessionId)
+            return;
+        _ = InvokeAsync(StateHasChanged);
     }
 
     private void OnKeyDown(KeyboardEventArgs e)

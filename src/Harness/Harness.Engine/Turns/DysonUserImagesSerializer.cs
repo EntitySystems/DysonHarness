@@ -30,6 +30,9 @@ public static class DysonUserImagesSerializer
                 MimeType = image.MimeType,
                 Base64Data = image.Base64Data,
                 HtmlRef = string.IsNullOrWhiteSpace(image.HtmlRef) ? null : image.HtmlRef.Trim(),
+                RemoteUrl = string.IsNullOrWhiteSpace(image.RemoteUrl) ? null : image.RemoteUrl.Trim(),
+                ObjectKey = string.IsNullOrWhiteSpace(image.ObjectKey) ? null : image.ObjectKey.Trim(),
+                RemoteUrlExpiresUtc = image.RemoteUrlExpiresUtc,
             });
         }
 
@@ -62,6 +65,11 @@ public static class DysonUserImagesSerializer
                 MimeType = item.MimeType.Trim(),
                 Base64Data = item.Base64Data.Trim(),
                 HtmlRef = string.IsNullOrWhiteSpace(item.HtmlRef) ? null : item.HtmlRef.Trim(),
+                RemoteUrl = string.IsNullOrWhiteSpace(item.RemoteUrl) ? null : item.RemoteUrl.Trim(),
+                ObjectKey = string.IsNullOrWhiteSpace(item.ObjectKey) ? null : item.ObjectKey.Trim(),
+                RemoteUrlExpiresUtc = item.RemoteUrlExpiresUtc is { } expires
+                    ? DateTime.SpecifyKind(expires, DateTimeKind.Utc)
+                    : null,
             });
         }
 
@@ -75,5 +83,8 @@ public static class DysonUserImagesSerializer
         public string MimeType { get; set; } = "";
         public string Base64Data { get; set; } = "";
         public string? HtmlRef { get; set; }
+        public string? RemoteUrl { get; set; }
+        public string? ObjectKey { get; set; }
+        public DateTime? RemoteUrlExpiresUtc { get; set; }
     }
 }

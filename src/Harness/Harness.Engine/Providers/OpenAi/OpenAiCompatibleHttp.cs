@@ -109,9 +109,54 @@ public static class OpenAiCompatibleHttp
     }
 
     /// <summary>
+    /// Parses a 3-digit HTTP status from an <c>OpenAI API NNN</c> error prefix.
+    /// The digit run must be exactly three characters (or followed by a non-digit).
+    /// </summary>
+    public static bool TryGetHttpStatus(string? error, out int code)
+    {
+        code = 0;
+        if (string.IsNullOrEmpty(error))
+            return false;
+
+        const string apiPrefix = "OpenAI API ";
+        if (!error.StartsWith(apiPrefix, StringComparison.Ordinal))
+            return false;
+
+        var rest = error.AsSpan(apiPrefix.Length);
+        if (rest.Length >= 3
+            && char.IsDigit(rest[0])
+            && char.IsDigit(rest[1])
+            && char.IsDigit(rest[2])
+            && (rest.Length == 3 || !char.IsDigit(rest[3])))
+        {
+            code = (rest[0] - '0') * 100 + (rest[1] - '0') * 10 + (rest[2] - '0');
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>True when the error is an <c>OpenAI API 429</c> status.</summary>
+    public static bool IsRateLimitError(string? error) =>
+        TryGetHttpStatus(error, out var code) && code == 429;
+
+    internal const int HttpErrorBodyMaxChars = 32_768;
+
+    /// <summary>
+    /// Completions/Responses HTTP error string: <c>OpenAI API {status} {reason}: {body}</c>,
+    /// body clipped at <see cref="HttpErrorBodyMaxChars"/>.
+    /// </summary>
+    public static string FormatApiHttpError(int statusCode, string? reasonPhrase, string? body)
+    {
+        var text = body ?? "";
+        var snippet = text.Length > HttpErrorBodyMaxChars ? text[..HttpErrorBodyMaxChars] + "…" : text;
+        return $"OpenAI API {statusCode} {reasonPhrase}: {snippet}";
+    }
+
+    /// <summary>
     /// True when an OpenAI stream/endpoint error should auto-retry on a fresh request.
-    /// Retries known OpenAI error shapes (HTTP statuses, transport, stream read, incomplete SSE,
-    /// Responses stream errors) except <c>401</c>/<c>403</c> and cancellations.
+    /// Retries 5xx, 429, transport, stream read, incomplete SSE, and Responses stream errors.
+    /// Other 4xx (including 401/403) and cancellations are not retried.
     /// </summary>
     public static bool IsTransientServerError(string? error)
     {
@@ -124,17 +169,10 @@ public static class OpenAiCompatibleHttp
         const string apiPrefix = "OpenAI API ";
         if (error.StartsWith(apiPrefix, StringComparison.Ordinal))
         {
-            var rest = error.AsSpan(apiPrefix.Length);
-            if (rest.Length >= 3
-                && char.IsDigit(rest[0])
-                && char.IsDigit(rest[1])
-                && char.IsDigit(rest[2])
-                && (rest.Length == 3 || !char.IsDigit(rest[3])))
-            {
-                var code = (rest[0] - '0') * 100 + (rest[1] - '0') * 10 + (rest[2] - '0');
-                return code is not (401 or 403);
-            }
+            if (TryGetHttpStatus(error, out var code))
+                return code is >= 500 or 429;
 
+            var rest = error.AsSpan(apiPrefix.Length);
             return rest.StartsWith("HTTP error", StringComparison.Ordinal)
                 || rest.StartsWith("stream read failed", StringComparison.Ordinal)
                 || rest.StartsWith("request failed", StringComparison.Ordinal)
@@ -285,9 +323,8 @@ public static class OpenAiCompatibleHttp
             var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
-                var snippet = text.Length > 800 ? text[..800] + "…" : text;
                 return Result<JsonObject, string>.AsError(
-                    $"OpenAI API {(int)response.StatusCode} {response.ReasonPhrase}: {snippet}");
+                    FormatApiHttpError((int)response.StatusCode, response.ReasonPhrase, text));
             }
 
             JsonNode? parsed;
@@ -535,9 +572,8 @@ public static class OpenAiCompatibleHttp
             if (!response.IsSuccessStatusCode)
             {
                 var errorText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-                var snippet = errorText.Length > 800 ? errorText[..800] + "…" : errorText;
                 yield return Result<string, string>.AsError(
-                    $"OpenAI API {(int)response.StatusCode} {response.ReasonPhrase}: {snippet}");
+                    FormatApiHttpError((int)response.StatusCode, response.ReasonPhrase, errorText));
                 yield break;
             }
 

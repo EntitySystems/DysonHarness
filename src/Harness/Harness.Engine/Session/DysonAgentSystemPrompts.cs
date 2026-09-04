@@ -22,7 +22,7 @@ public static class DysonAgentSystemPrompts
         - StartSubagent.modelSlug must be omitted unless the user explicitly requests a particular subagent model slug, so configured system defaults or parent-model inheritance apply.
 
         Tool calls:
-        - Each turn you may and are encouraged to issue multiple tool calls in a single turn when that advances the task.
+        - Each turn you may and are encouraged to issue multiple tool calls in a single turn when that advances the task. Independent reads, searches, and listings belong together in one round (same stage).
         - Every tool call includes a stage integer: lower stages run first; calls with the same stage run concurrently; after a stage finishes, the next stage runs; then the turn ends.
         - Prefer batching independent reads/searches on the same stage; use later stages for dependent writes or follow-ups.
         - When context grows noisy or the plan is unclear, call ExpandThoughtProcess to reformulate before continuing. Calling it ends the current turn; the harness runs an ExpandThoughtProcess turn, then auto-continues with a Normal turn. Prefer SummarizeTurns (with reason) when older turns still have useful facts but are verbose; DropTurnContext (with reason) is for true noise only; RestoreTurnContext can undo a drop when needed.
@@ -72,7 +72,7 @@ public static class DysonAgentSystemPrompts
 
     /// <summary>
     /// Prepended at API/transcript time on the first incomplete Plan-stint user turn
-    /// (skips ModeSwitch / DisplayInfo / PlanResult; not stored on
+    /// (skips ModeSwitch / DisplayInfo / WorktreeCreating / PlanResult; not stored on
     /// <see cref="DysonAgentTurn.Instruction"/>).
     /// </summary>
     public const string PlanFirstTurnMandate = """
@@ -320,6 +320,49 @@ public static class DysonAgentSystemPrompts
             .Select(p => p!.Trim())
             .ToArray();
         return nonEmpty.Length == 0 ? null : string.Join("\n\n", nonEmpty);
+    }
+
+    /// <summary>
+    /// Worktree checkbox on, checkout not forked yet (Plan/Ask/Review, and Work before first Work turn).
+    /// </summary>
+    public const string WorktreeEnabledNotCreatedPromptBlock = """
+        Git worktree (enabled, not created yet):
+        - The harness will fork a private git worktree on the first Work-mode user message, or when the user begins building a plan. Plan, Ask, and Review stay on the registered work directory.
+        - Do not run `git worktree add` / `git worktree remove` yourself.
+        - Plan: SubmitPlan still writes under the registered work directory `.dyson/plans/`. Implementation after Begin build happens in the worktree, not in this checkout.
+        - Do not mutate product files in Plan/Ask. Other sessions on this project keep using the main tree.
+        """;
+
+    /// <summary>
+    /// Suffix block for a session with Worktree enabled. Null when disabled.
+    /// Host joins this via <see cref="JoinSystemPromptSuffix"/>; create/load callers stay unchanged.
+    /// </summary>
+    public static string? BuildWorktreePromptBlock(
+        bool enabled,
+        string? worktreeAbsolutePath,
+        string? worktreeBranch,
+        string registeredAbsolutePath)
+    {
+        if (!enabled)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(worktreeAbsolutePath)
+            || string.IsNullOrWhiteSpace(worktreeBranch))
+        {
+            return WorktreeEnabledNotCreatedPromptBlock;
+        }
+
+        return $"""
+            Git worktree (bound):
+            - This session (and its subagents) is bound to a private git worktree.
+            - Native root: {worktreeAbsolutePath}
+            - Branch: {worktreeBranch}
+            - Registered project root (other sessions): {registeredAbsolutePath}
+            - All ReadFile / WriteFile / Grep / ShellExecute / long-running shells use the worktree root. Do not edit files under the registered project root.
+            - Do not `git checkout` another branch in this worktree, and do not `git worktree remove`, unless the user explicitly asks.
+            - Other sessions do not see this checkout’s uncommitted files. Do not assume they exist on the main tree.
+            - The user must merge or delete this worktree before the session can be deleted. Merge only if asked: merge `{worktreeBranch}` into the registered checkout, then leave worktree removal to the harness.
+            """;
     }
 
     /// <summary>

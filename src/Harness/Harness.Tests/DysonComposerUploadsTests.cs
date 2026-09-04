@@ -10,15 +10,15 @@ namespace Harness.Tests;
 public class DysonComposerUploadsTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        AssertWriteUnderComposerUploads();
-        AssertDedupeSuffix();
-        AssertRejectsEmptyAndOversized();
+        await AssertWriteUnderComposerUploadsAsync();
+        await AssertDedupeSuffixAsync();
+        await AssertRejectsEmptyAndOversizedAsync();
         AssertLooksLikeImage();
         AssertComposerUploadsPathHelpers();
-        AssertImageDualWriteUnderComposerUploads();
-        AssertClearAllEmptiesDirectory();
+        await AssertImageDualWriteUnderComposerUploadsAsync();
+        await AssertClearAllEmptiesDirectoryAsync();
     }
 
     private static void AssertLooksLikeImage()
@@ -68,15 +68,15 @@ public class DysonComposerUploadsTests
         }
     }
 
-    private static void AssertWriteUnderComposerUploads()
+    private static async Task AssertWriteUnderComposerUploadsAsync()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-upload-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
-            var fs = CreateFs(root);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
             var bytes = "hello notes"u8.ToArray();
-            var written = DysonComposerUploads.Write(fs, "My Notes.txt", bytes);
+            var written = await DysonComposerUploads.WriteAsync(fs, "My Notes.txt", bytes);
             if (written.IsError)
                 throw new InvalidOperationException(written.Error);
 
@@ -94,15 +94,15 @@ public class DysonComposerUploadsTests
         }
     }
 
-    private static void AssertDedupeSuffix()
+    private static async Task AssertDedupeSuffixAsync()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-upload-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
-            var fs = CreateFs(root);
-            var first = DysonComposerUploads.Write(fs, "report.pdf", [1, 2, 3]);
-            var second = DysonComposerUploads.Write(fs, "report.pdf", [4, 5, 6]);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
+            var first = await DysonComposerUploads.WriteAsync(fs, "report.pdf", [1, 2, 3]);
+            var second = await DysonComposerUploads.WriteAsync(fs, "report.pdf", [4, 5, 6]);
             if (first.IsError || second.IsError)
                 throw new InvalidOperationException(first.IsError ? first.Error : second.Error);
 
@@ -117,19 +117,19 @@ public class DysonComposerUploadsTests
         }
     }
 
-    private static void AssertRejectsEmptyAndOversized()
+    private static async Task AssertRejectsEmptyAndOversizedAsync()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-upload-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
-            var fs = CreateFs(root);
-            var empty = DysonComposerUploads.Write(fs, "empty.bin", []);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
+            var empty = await DysonComposerUploads.WriteAsync(fs, "empty.bin", []);
             if (!empty.IsError)
                 throw new InvalidOperationException("Empty file must fail.");
 
             var huge = new byte[DysonComposerUploads.MaxRawBytes + 1];
-            var oversized = DysonComposerUploads.Write(fs, "huge.bin", huge);
+            var oversized = await DysonComposerUploads.WriteAsync(fs, "huge.bin", huge);
             if (!oversized.IsError)
                 throw new InvalidOperationException("Oversized file must fail.");
         }
@@ -139,20 +139,20 @@ public class DysonComposerUploadsTests
         }
     }
 
-    private static void AssertImageDualWriteUnderComposerUploads()
+    private static async Task AssertImageDualWriteUnderComposerUploadsAsync()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-upload-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
-            var fs = CreateFs(root);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
             var pngBytes = TinyPng();
             var created = DysonUserImageFactory.CreateFromBytes("paste-shot.png", pngBytes);
             if (created.IsError)
                 throw new InvalidOperationException(created.Error);
 
             var jpegBytes = Convert.FromBase64String(created.Value.Base64Data);
-            var written = DysonComposerUploads.Write(fs, created.Value.FileName, jpegBytes);
+            var written = await DysonComposerUploads.WriteAsync(fs, created.Value.FileName, jpegBytes);
             if (written.IsError)
                 throw new InvalidOperationException(written.Error);
 
@@ -175,19 +175,19 @@ public class DysonComposerUploadsTests
         }
     }
 
-    private static void AssertClearAllEmptiesDirectory()
+    private static async Task AssertClearAllEmptiesDirectoryAsync()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-upload-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
-            var fs = CreateFs(root);
-            var a = DysonComposerUploads.Write(fs, "a.txt", "one"u8.ToArray());
-            var b = DysonComposerUploads.Write(fs, "b.txt", "two"u8.ToArray());
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
+            var a = await DysonComposerUploads.WriteAsync(fs, "a.txt", "one"u8.ToArray());
+            var b = await DysonComposerUploads.WriteAsync(fs, "b.txt", "two"u8.ToArray());
             if (a.IsError || b.IsError)
                 throw new InvalidOperationException(a.IsError ? a.Error : b.Error);
 
-            var cleared = DysonComposerUploads.ClearAll(fs);
+            var cleared = await DysonComposerUploads.ClearAllAsync(fs);
             if (cleared.IsError)
                 throw new InvalidOperationException(cleared.Error);
             if (cleared.Value != 2)
@@ -199,7 +199,7 @@ public class DysonComposerUploadsTests
             if (Directory.GetFileSystemEntries(dir).Length != 0)
                 throw new InvalidOperationException("ClearAll must empty the uploads folder.");
 
-            var again = DysonComposerUploads.ClearAll(fs);
+            var again = await DysonComposerUploads.ClearAllAsync(fs);
             if (again.IsError || again.Value != 0)
                 throw new InvalidOperationException("Second ClearAll on empty folder must return 0.");
         }
@@ -214,13 +214,5 @@ public class DysonComposerUploadsTests
         using var image = new MagickImage(MagickColors.Red, 8, 8);
         image.Format = MagickFormat.Png;
         return image.ToByteArray();
-    }
-
-    private static IDysonWorkspaceFileSystem CreateFs(string root)
-    {
-        var created = DysonWorkspaceFileSystems.CreateLocalAsync(root).GetAwaiter().GetResult();
-        if (created.IsError)
-            throw new InvalidOperationException(created.Error);
-        return created.Value;
     }
 }

@@ -12,6 +12,7 @@ public static class DysonWorkspaceFileSystems
         string absolutePath,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         ArgumentException.ThrowIfNullOrWhiteSpace(absolutePath);
 
         string fullPath;
@@ -24,7 +25,10 @@ public static class DysonWorkspaceFileSystems
             return Result<IDysonWorkspaceFileSystem, string>.AsError($"Invalid path: {ex.Message}");
         }
 
-        if (!Directory.Exists(fullPath))
+        var exists = await DysonLocalWorkspaceFileSystem
+            .RunIoAsync(() => Directory.Exists(fullPath), cancellationToken)
+            .ConfigureAwait(false);
+        if (!exists)
             return Result<IDysonWorkspaceFileSystem, string>.AsError("Directory does not exist.");
 
         var fs = new DysonLocalWorkspaceFileSystem(fullPath);

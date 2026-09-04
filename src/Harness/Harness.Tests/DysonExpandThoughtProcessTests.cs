@@ -9,12 +9,12 @@ namespace Harness.Tests;
 public class DysonExpandThoughtProcessTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertInstructionAndContinuation();
-        AssertExpandEnqueuesAndEndsTurn();
-        AssertExpandRecursionBlocked();
-        AssertDropAndRestoreTurnContext();
+        await AssertExpandEnqueuesAndEndsTurn();
+        await AssertExpandRecursionBlocked();
+        await AssertDropAndRestoreTurnContext();
         AssertTranscriptTurnIdAndOmitExcluded();
         AssertSoftCloseEndsCurrentTurn();
         AssertSoftClosePreservesModelContent();
@@ -60,12 +60,12 @@ public class DysonExpandThoughtProcessTests
         }
     }
 
-    private static void AssertExpandEnqueuesAndEndsTurn()
+    private static async Task AssertExpandEnqueuesAndEndsTurn()
     {
         var session = new StubSession(DysonAgentModes.Work);
         session.ConfigureRootForTest();
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
 
         session.AddTurnForTest(new DysonAgentTurn
         {
@@ -101,12 +101,12 @@ public class DysonExpandThoughtProcessTests
             throw new InvalidOperationException("Success JSON should note nextTurnKind.");
     }
 
-    private static void AssertExpandRecursionBlocked()
+    private static async Task AssertExpandRecursionBlocked()
     {
         var session = new StubSession(DysonAgentModes.Work);
         session.ConfigureRootForTest();
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
 
         session.AddTurnForTest(DysonExpandThoughtProcess.CreateTurn());
         if (!session.IsInExpandThoughtProcessPhase)
@@ -128,12 +128,12 @@ public class DysonExpandThoughtProcessTests
         }
     }
 
-    private static void AssertDropAndRestoreTurnContext()
+    private static async Task AssertDropAndRestoreTurnContext()
     {
         var session = new StubSession(DysonAgentModes.Work);
         session.ConfigureRootForTest();
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
 
         var noisy = new DysonAgentTurn
         {

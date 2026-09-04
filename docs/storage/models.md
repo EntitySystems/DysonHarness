@@ -113,7 +113,7 @@ Subject-scoped key/value (`DysonAppSettingEntity`). Callers use `IDysonSubjectSe
 Known keys (`DysonAppSettingKeys`):
 - `web_search_summarizer_model_slug_id` — Guid string of the model slug for web-search/fetch summarization; empty / missing ⇒ session model.
 - `web_search_summarizer_reasoning_effort` — optional reasoning-effort override for that slug; empty / missing ⇒ the slug’s `DefaultReasoningEffort`. Edited via Settings → Agent behavior. Changing the companion slug clears this key.
-- `fallback_chat_model_slug_id` — Guid string of the fallback chat model used after the session chat provider exhausts transient retries (5 attempts), or immediately on **401 / 403**. Empty / missing ⇒ hop **disabled** (fail the turn after retries). Unlike other Agent behavior pickers, empty does **not** mean “use session model”. Edited via Settings → Agent behavior; hydrated onto `DysonAgentSessionConfig.FallbackChatProvider` at session create/resume.
+- `fallback_chat_model_slug_id` — Guid string of the fallback chat model used after the session chat provider exhausts transient retries (11 attempts (10 retries); 429 after 2×10s), or immediately on **401 / 403**. Empty / missing ⇒ hop **disabled** (fail the turn after retries). Unlike other Agent behavior pickers, empty does **not** mean “use session model”. Edited via Settings → Agent behavior; hydrated onto `DysonAgentSessionConfig.FallbackChatProvider` at session create/resume.
 - `fallback_chat_reasoning_effort` — optional reasoning-effort override for the fallback chat slug; empty / missing ⇒ the slug’s `DefaultReasoningEffort`. Cleared when the companion slug changes.
 - `turn_summarizer_model_slug_id` — Guid string of the model slug for turn context summarization (`SummarizeTurns`); empty / missing ⇒ session model. Edited via Settings → Agent behavior.
 - `turn_summarizer_reasoning_effort` — optional reasoning-effort override for the turn summarizer slug; empty / missing ⇒ the slug’s `DefaultReasoningEffort`. Cleared when the companion slug changes.
@@ -132,6 +132,7 @@ Known keys (`DysonAppSettingKeys`):
 - `end_of_task_auto_review` — **legacy** `"true"` / `"false"` (obsolete once `automatic_code_review` is written). Kept readable so first settings-page load can map false/missing → `none` and true + `self_review_intensity` → `low`/`medium`. Missing / other ⇒ off.
 - `self_review_intensity` — **legacy** `"low"` / `"medium"` / `"high"` (obsolete once `automatic_code_review` is written). Missing / other ⇒ `"medium"`. Used only for the one-shot compatibility map.
 - `cliproxy_api_key` / `cliproxy_management_key` / `cliproxy_port` — mirrors of the hard-coded `DysonCliProxyHost` constants (`DefaultApiKey` / `DefaultManagementKey` / `DefaultPort`) when a managed provider connects. Sidecar `keys.json` and these DB rows are not the authority.
+- `file_storage_s3` — JSON `{"endpointUrl","accessKeyId","secretAccessKey"}` for the subject-scoped S3-compatible image bucket. Empty/whitespace deletes the row. Hydrated onto `DysonAgentSessionConfig.FileStorage` at session create/resume. Secret is plaintext in SQLite (same as model API keys). Edited via Settings → File storage.
 
 `DysonToolPolicyStore` depends on `IDysonSubjectSettingsRepository` for the tool-policy document.
 

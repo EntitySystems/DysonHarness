@@ -8,6 +8,7 @@
 @using Microsoft.Extensions.Logging
 @implements IAsyncDisposable
 @inject DysonUiHost Host
+@inject DysonMessageBus Bus
 @inject IDysonWorkDirectoryRepository WorkDirs
 @inject IDysonModelRepository ModelStore
 @inject DysonWorkDirectoryService WorkDirectoryService
@@ -74,7 +75,9 @@
         </div>
     </Main>
     <Rail>
-        <RailSidePanel ActiveWorkDirectoryId="_activeWorkDirectoryId" ActiveSessionId="Host.ActiveSessionId" />
+        <RailSidePanel ActiveWorkDirectoryId="_activeWorkDirectoryId"
+                       ActiveSessionId="Host.ActiveSessionId"
+                       ActiveWorkRootPath="_operatorWorkspacePath" />
         <div class="tool-panel" style="border-top:1px solid var(--border);">
             <div class="tool-panel__title">Session log</div>
             <div class="session-log">
@@ -124,6 +127,8 @@
     private string? _lastSyncedSessionMode;
     private IReadOnlyList<DysonSessionLogRow> _sessionLogRows = [];
     private Guid? _activeWorkDirectoryId;
+    private string? _registeredWorkDirectoryPath;
+    private string? _operatorWorkspacePath;
     private string? _gitBranch;
     private bool _workdirHydrated;
     private bool _booted;
@@ -131,10 +136,13 @@
     private string? _pendingBootWorkDirectoryPath;
     private WorkDirectorySwitcher? _workdirSwitcher;
     private DotNetObjectReference<DysonUiHost>? _chatLinksRef;
+    private IDisposable? _hostSub;
 
     protected override async Task OnInitializedAsync()
     {
-        Host.Changed += OnHostChanged;
+        var sub = Bus.Subscribe<DysonHostStateChangedEvent>(Host.BusScopeKey, OnHostChanged);
+        if (sub.IsSuccess)
+            _hostSub = sub.Value;
         Theme.Changed += OnThemeChanged;
 
         var attached = await Host.EnsureRuntimeAttachedAsync();
@@ -251,9 +259,11 @@
                 if (get.IsSuccess)
                 {
                     _activeWorkDirectoryId = id;
+                    _registeredWorkDirectoryPath = get.Value.AbsolutePath;
                     Host.SetComposerWorkDirectoryId(id);
                     _pendingBootWorkDirectoryId = id;
                     _pendingBootWorkDirectoryPath = get.Value.AbsolutePath;
+                    await ApplyOperatorWorkspaceAsync();
                     await RefreshSessionsAsync();
                     StateHasChanged();
                     return;
@@ -289,8 +299,7 @@
         {
             _ = await WorkDirs.TouchOpenedAsync(id);
             _ = await WorkDirectoryService.RefreshGitOriginAsync(id);
-            if (!string.IsNullOrWhiteSpace(absolutePath))
-                await RefreshGitBranchAsync(absolutePath);
+            await ApplyOperatorWorkspaceAsync();
             await InvokeAsync(StateHasChanged);
         }
         catch
@@ -299,9 +308,9 @@
         }
     }
 
-    private void OnHostChanged(DysonHostChangeKind kind) => _ = InvokeAsync(() =>
+    private void OnHostChanged(DysonHostStateChangedEvent evt) => _ = InvokeAsync(async () =>
     {
-        _ = kind;
+        _ = evt;
         try
         {
             SyncSelectedSlugFromSession();
@@ -312,6 +321,7 @@
             SyncSelectedAgentModeIfSessionModeChanged();
             _sessions = OverlayLiveTitle(_sessions);
             UpdateActiveTitle();
+            await ApplyOperatorWorkspaceAsync();
             StateHasChanged();
         }
         catch (Exception ex)
@@ -421,8 +431,9 @@
         else
         {
             _activeWorkDirectoryId = null;
+            _registeredWorkDirectoryPath = null;
             Host.SetComposerWorkDirectoryId(null);
-            await RefreshGitBranchAsync(null);
+            await ApplyOperatorWorkspaceAsync();
             await PersistWorkDirectoryAsync(null);
             await RefreshSessionsAsync();
         }
@@ -438,21 +449,63 @@
     private async Task SetActiveWorkDirectoryAsync(Guid id, string absolutePath)
     {
         _activeWorkDirectoryId = id;
+        _registeredWorkDirectoryPath = absolutePath;
         Host.SetComposerWorkDirectoryId(id);
 
-        var tree = await FileTree.SetActiveAsync(id, Subject.SubjectId);
-        var git = await GitChanges.SetActiveAsync(id, Subject.SubjectId);
-
-        await RefreshGitBranchAsync(absolutePath);
+        await ApplyOperatorWorkspaceAsync();
         await PersistWorkDirectoryAsync(id);
         await RefreshSessionsAsync();
+    }
+
+    private string? ResolveOperatorWorkspacePath()
+    {
+        if (_activeWorkDirectoryId is Guid id
+            && Host.ActiveWorkDirectoryId == id
+            && !string.IsNullOrWhiteSpace(Host.FocusedSessionWorkRootPath))
+        {
+            return Host.FocusedSessionWorkRootPath;
+        }
+
+        return _registeredWorkDirectoryPath;
+    }
+
+    private async Task ApplyOperatorWorkspaceAsync()
+    {
+        if (_activeWorkDirectoryId is not Guid id)
+        {
+            _operatorWorkspacePath = null;
+            await FileTree.SetActiveAsync(null, Subject.SubjectId);
+            await GitChanges.SetActiveAsync(null, Subject.SubjectId);
+            await RefreshGitBranchAsync(null);
+            return;
+        }
+
+        var path = ResolveOperatorWorkspacePath();
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        if (FileTree.Active is { } tree
+            && tree.WorkDirectoryId == id
+            && DysonWorkspaceRootKey.SamePath(tree.AbsolutePath, path)
+            && GitChanges.Active is { } git
+            && git.WorkDirectoryId == id
+            && DysonWorkspaceRootKey.SamePath(git.WorkAbsolutePath, path))
+        {
+            _operatorWorkspacePath = path;
+            return;
+        }
+
+        _operatorWorkspacePath = path;
+        var treeResult = await FileTree.SetActiveAsync(id, path);
+        var gitResult = await GitChanges.SetActiveAsync(id, path);
+        await RefreshGitBranchAsync(path);
 
         if (string.IsNullOrEmpty(_listError))
         {
-            if (tree.IsError)
-                _listError = tree.Error;
-            else if (git.IsError)
-                _listError = git.Error;
+            if (treeResult.IsError)
+                _listError = treeResult.Error;
+            else if (gitResult.IsError)
+                _listError = gitResult.Error;
         }
     }
 
@@ -626,7 +679,8 @@
 
     public async ValueTask DisposeAsync()
     {
-        Host.Changed -= OnHostChanged;
+        _hostSub?.Dispose();
+        _hostSub = null;
         Theme.Changed -= OnThemeChanged;
         try
         {

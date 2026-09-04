@@ -59,16 +59,16 @@ AgentOptional **bodies** are still not injected; their **rows** are visible in t
 
 Missing files / failed URL fetches become a short warning line (session create does not fail). Soft caps: **50 000** characters per file, **100 000** total for the block (`DysonOpenRules.MaxCharsPerFile` / `MaxTotalChars`). Content is a snapshot at create/load/mode change — not re-read every turn. `/skill-search` installs and workspace Mode flips do **not** rebuild a live session prompt.
 
-Composer `/skill-search` download (via `DysonSkillExplorer.DownloadAsync`) calls `DysonOpenRules.EnsureAgentOptionalSkill` so the installed `{workRoot}/.dyson/skills/{slug}/SKILL.md` is appended as an **AgentOptional** Skills row. Creates the default manifest if missing (same EntitySystems URL skill as `InitializeOpenRules`). Idempotent; does not change Mode of an existing row.
+Composer `/skill-search` download (via `DysonSkillExplorer.DownloadAsync`) calls `DysonOpenRules.EnsureAgentOptionalSkillAsync` so the installed `{workRoot}/.dyson/skills/{slug}/SKILL.md` is appended as an **AgentOptional** Skills row. Creates the default manifest if missing (same EntitySystems URL skill as `InitializeOpenRules`). Idempotent; does not change Mode of an existing row.
 
-Workspace settings (work-directory cog → `WorkDirectorySettingsModal`) lists Rules/Skills and writes Mode via `DysonOpenRules.SetEntryMode`. Root is always AutoInclude (read-only in the UI). Mode flips take effect on the next session create, load, or agent-mode switch.
+Workspace settings (work-directory cog → `WorkDirectorySettingsModal`) lists Rules/Skills and writes Mode via `DysonOpenRules.SetEntryModeAsync`. Root is always AutoInclude (read-only in the UI). Mode flips take effect on the next session create, load, or agent-mode switch.
 
 ## AgentOptional + catalog
 
 `AgentOptional` **bodies** are **not** injected into the system prompt (their rows still appear in the injected `openrules.json` file). They extend (provider-filtered):
 
 - MCP `LoadSkill` resolve order (after included → `.dyson/skills` → literal); URL Paths are fetched
-- Composer `/skill-` via `DysonSkillLoader.ListCatalog` (`DysonSkillSource.OpenRules`)
+- Composer `/skill-` via `DysonSkillLoader.ListCatalogAsync` (`DysonSkillSource.OpenRules`)
 
 Catalog / `/skill-` ids are **short names** (e.g. `csharp` for `skills/csharp/SKILL.md`, `openrules` for the EntitySystems GitHub `SKILL.md` URL, file stem for ordinary `.md` rules) — not full paths or URLs. Match by relative path, file stem, URL, short catalog id, or GitHub repo name when applicable. Single-file AgentOptional entries ignore `loadIndexOnly` (same as literal files).
 

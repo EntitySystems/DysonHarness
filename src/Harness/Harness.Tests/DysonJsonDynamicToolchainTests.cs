@@ -9,25 +9,25 @@ namespace Harness.Tests;
 public class DysonJsonDynamicToolchainTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertRejectFlatFunctionCall();
         AssertRejectMaxInterationsTypo();
         AssertRejectEntryArgumentsArray();
-        AssertSuccessBranchFlowFlags();
-        AssertFailureBranchHandled();
-        AssertUnhandledFailureIsProgramError();
-        AssertFromArgAndFromResultRefs();
-        AssertLoopIterationsAndConditionExit();
-        AssertSelfCallForbidden();
-        AssertUnknownToolFatal();
-        AssertNestingDepthCap();
+        await AssertSuccessBranchFlowFlags();
+        await AssertFailureBranchHandled();
+        await AssertUnhandledFailureIsProgramError();
+        await AssertFromArgAndFromResultRefs();
+        await AssertLoopIterationsAndConditionExit();
+        await AssertSelfCallForbidden();
+        await AssertUnknownToolFatal();
+        await AssertNestingDepthCap();
         AssertCatalogRegistration();
-        AssertReturnOutputSuccessStopsAndSkipsContinueWith();
-        AssertReturnOutputRejectsNonJdslNames();
-        AssertReturnOutputMissingOutputIsError();
-        AssertReturnOutputDoesNotCountAsNestedMcp();
-        AssertReturnOutputTranscriptSlim();
+        await AssertReturnOutputSuccessStopsAndSkipsContinueWith();
+        await AssertReturnOutputRejectsNonJdslNames();
+        await AssertReturnOutputMissingOutputIsError();
+        await AssertReturnOutputDoesNotCountAsNestedMcp();
+        await AssertReturnOutputTranscriptSlim();
     }
 
     private static void AssertRejectFlatFunctionCall()
@@ -80,9 +80,9 @@ public class DysonJsonDynamicToolchainTests
             throw new InvalidOperationException("Entry.Arguments array must fail to parse.");
     }
 
-    private static void AssertSuccessBranchFlowFlags()
+    private static async Task AssertSuccessBranchFlowFlags()
     {
-        var result = RunToolchain("""
+        var result = await RunToolchain("""
             {
               "program": {
                 "Entry": {
@@ -126,9 +126,9 @@ public class DysonJsonDynamicToolchainTests
             throw new InvalidOperationException("Expected 2 nested steps.");
     }
 
-    private static void AssertFailureBranchHandled()
+    private static async Task AssertFailureBranchHandled()
     {
-        var result = RunToolchain("""
+        var result = await RunToolchain("""
             {
               "program": {
                 "Entry": {
@@ -169,9 +169,9 @@ public class DysonJsonDynamicToolchainTests
         }
     }
 
-    private static void AssertUnhandledFailureIsProgramError()
+    private static async Task AssertUnhandledFailureIsProgramError()
     {
-        var result = RunToolchain("""
+        var result = await RunToolchain("""
             {
               "program": {
                 "Entry": {
@@ -194,9 +194,9 @@ public class DysonJsonDynamicToolchainTests
             throw new InvalidOperationException("Unhandled failure status should be error.");
     }
 
-    private static void AssertFromArgAndFromResultRefs()
+    private static async Task AssertFromArgAndFromResultRefs()
     {
-        var result = RunToolchain("""
+        var result = await RunToolchain("""
             {
               "program": {
                 "Entry": {
@@ -232,9 +232,9 @@ public class DysonJsonDynamicToolchainTests
         }
     }
 
-    private static void AssertLoopIterationsAndConditionExit()
+    private static async Task AssertLoopIterationsAndConditionExit()
     {
-        var loopOk = RunToolchain("""
+        var loopOk = await RunToolchain("""
             {
               "program": {
                 "Entry": {
@@ -279,7 +279,7 @@ public class DysonJsonDynamicToolchainTests
                 throw new InvalidOperationException("Expected 4 steps for 2 loop iterations.");
         }
 
-        var loopExit = RunToolchain("""
+        var loopExit = await RunToolchain("""
             {
               "program": {
                 "Entry": {
@@ -317,9 +317,9 @@ public class DysonJsonDynamicToolchainTests
         }
     }
 
-    private static void AssertSelfCallForbidden()
+    private static async Task AssertSelfCallForbidden()
     {
-        var result = RunToolchain("""
+        var result = await RunToolchain("""
             {
               "program": {
                 "Entry": {
@@ -351,9 +351,9 @@ public class DysonJsonDynamicToolchainTests
             throw new InvalidOperationException("Self-call error message missing: " + result.Content);
     }
 
-    private static void AssertUnknownToolFatal()
+    private static async Task AssertUnknownToolFatal()
     {
-        var result = RunToolchain("""
+        var result = await RunToolchain("""
             {
               "program": {
                 "Entry": {
@@ -369,7 +369,7 @@ public class DysonJsonDynamicToolchainTests
             throw new InvalidOperationException("Unknown tool must fail.");
     }
 
-    private static void AssertNestingDepthCap()
+    private static async Task AssertNestingDepthCap()
     {
         // Build OnSuccess chain deeper than MaxActionDepth (8).
         var node = """{ "FunctionCall": { "Function": "MCP:GetDateTime", "Arguments": { "timezone": "utc" } } }""";
@@ -386,7 +386,7 @@ public class DysonJsonDynamicToolchainTests
                 """;
         }
 
-        var result = RunToolchain($$"""
+        var result = await RunToolchain($$"""
             { "program": { "Entry": { "Actions": {{node}} } } }
             """);
 
@@ -407,9 +407,9 @@ public class DysonJsonDynamicToolchainTests
             throw new InvalidOperationException("Toolchain must be in default catalog.");
     }
 
-    private static void AssertReturnOutputSuccessStopsAndSkipsContinueWith()
+    private static async Task AssertReturnOutputSuccessStopsAndSkipsContinueWith()
     {
-        var result = RunToolchain("""
+        var result = await RunToolchain("""
             {
               "program": {
                 "Entry": {
@@ -461,11 +461,11 @@ public class DysonJsonDynamicToolchainTests
             throw new InvalidOperationException("ReturnOutput alone should log one step.");
     }
 
-    private static void AssertReturnOutputRejectsNonJdslNames()
+    private static async Task AssertReturnOutputRejectsNonJdslNames()
     {
         foreach (var name in new[] { "MCP:ReturnOutput", "ReturnOutput" })
         {
-            var result = RunToolchain($$"""
+            var result = await RunToolchain($$"""
                 {
                   "program": {
                     "Entry": {
@@ -493,9 +493,9 @@ public class DysonJsonDynamicToolchainTests
         }
     }
 
-    private static void AssertReturnOutputMissingOutputIsError()
+    private static async Task AssertReturnOutputMissingOutputIsError()
     {
-        var result = RunToolchain("""
+        var result = await RunToolchain("""
             {
               "program": {
                 "Entry": {
@@ -529,7 +529,7 @@ public class DysonJsonDynamicToolchainTests
         }
     }
 
-    private static void AssertReturnOutputDoesNotCountAsNestedMcp()
+    private static async Task AssertReturnOutputDoesNotCountAsNestedMcp()
     {
         var nestedCalls = 0;
         var session = new StubSession();
@@ -589,9 +589,9 @@ public class DysonJsonDynamicToolchainTests
         }
     }
 
-    private static void AssertReturnOutputTranscriptSlim()
+    private static async Task AssertReturnOutputTranscriptSlim()
     {
-        var result = RunToolchain("""
+        var result = await RunToolchain("""
             {
               "program": {
                 "Entry": {
@@ -628,7 +628,7 @@ public class DysonJsonDynamicToolchainTests
             throw new InvalidOperationException("Transcript slim should equal finalContent, got: " + modelFacing);
 
         // Non-returned JDSL envelopes must not slim.
-        var ordinary = RunToolchain("""
+        var ordinary = await RunToolchain("""
             {
               "program": {
                 "Entry": {
@@ -654,19 +654,19 @@ public class DysonJsonDynamicToolchainTests
         }
     }
 
-    private static DysonToolCallResult RunToolchain(string argumentsJson)
+    private static async Task<DysonToolCallResult> RunToolchain(string argumentsJson)
     {
         var session = new StubSession();
         session.ConfigureRootForTest();
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
-        return executor.ExecuteAsync(new DysonToolCall
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
+        return await executor.ExecuteAsync(new DysonToolCall
         {
             CallId = "jdsl1",
             ToolName = DysonJsonDynamicToolchainSchema.ToolName,
             Stage = 0,
             ArgumentsJson = argumentsJson,
-        }).GetAwaiter().GetResult();
+        });
     }
 
     private sealed class StubProvider : DysonAgentProvider;

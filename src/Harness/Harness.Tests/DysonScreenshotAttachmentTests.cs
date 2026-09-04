@@ -13,13 +13,138 @@ namespace Harness.Tests;
 public class DysonScreenshotAttachmentTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertCatalog();
         AssertImageCompress();
-        AssertScreenshotExecutorAndOneShotTranscript();
+        await AssertScreenshotExecutorAndOneShotTranscript();
         AssertParallelToolRoundKeepsToolMessagesConsecutive();
         AssertScreenshotUiSummary();
+    }
+
+    [Fact]
+    public void RemoteUrl_ReemitsHttpsOnLaterInFlightAndHistory()
+    {
+        const string remoteUrl = "https://s3.example.com/dyson/shot.jpg?X-Amz-Signature=abc";
+        var session = new StubSession();
+        var call = new DysonToolCall
+        {
+            CallId = "shot1",
+            ToolName = "BrowserTakeScreenshot",
+            Stage = 0,
+            ArgumentsJson = """{"windowId":"win1","tabId":"tab1"}""",
+        };
+        var result = new DysonToolCallResult
+        {
+            CallId = "shot1",
+            ToolName = "BrowserTakeScreenshot",
+            Stage = 0,
+            Content = """{"mimeType":"image/jpeg","byteLength":12,"width":8,"height":6,"windowId":"win1","tabId":"tab1"}""",
+            BinaryAttachment = new DysonBinaryAttachment
+            {
+                FileName = "screenshot.jpg",
+                Extension = ".jpg",
+                MimeType = "image/jpeg",
+                Base64Data = Convert.ToBase64String([0xFF, 0xD8, 0xFF, 0xD9]),
+                RemoteUrl = "  " + remoteUrl + "  ",
+                FileId = "file-should-not-win",
+            },
+        };
+
+        var completions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null,
+            inFlightRounds:
+            [
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
+            ]);
+        AssertCompletionsImageUrlEquals(completions.Messages, remoteUrl);
+
+        var responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null,
+            inFlightRounds:
+            [
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
+            ]);
+        AssertResponsesImageHttps(responses.Input, remoteUrl);
+
+        var laterCall = new DysonToolCall
+        {
+            CallId = "other1",
+            ToolName = "GetDateTime",
+            Stage = 1,
+            ArgumentsJson = "{}",
+        };
+        var laterResult = new DysonToolCallResult
+        {
+            CallId = "other1",
+            ToolName = "GetDateTime",
+            Stage = 1,
+            Content = """{"utc":"2026-01-01T00:00:00Z"}""",
+        };
+        var multiRound = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null,
+            inFlightRounds:
+            [
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([laterCall], [laterResult]),
+            ]);
+        AssertCompletionsImageUrlEquals(multiRound.Messages, remoteUrl);
+
+        var multiResponses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null,
+            inFlightRounds:
+            [
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([laterCall], [laterResult]),
+            ]);
+        AssertResponsesImageHttps(multiResponses.Input, remoteUrl);
+
+        var turn = new DysonAgentTurn
+        {
+            Instruction = "look",
+            Kind = DysonAgentTurnKind.Normal,
+            AssistantText = "Saw the page.",
+        };
+        turn.ToolCalls.Add(call);
+        turn.ResponseLog.Enqueue(result);
+        session.AddTurnForTest(turn);
+
+        var historyCompletions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null);
+        AssertCompletionsImageUrlEquals(historyCompletions.Messages, remoteUrl);
+
+        var historyResponses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null);
+        AssertResponsesImageHttps(historyResponses.Input, remoteUrl);
+
+        turn.FinishStreaming();
+        var persisted = turn.ResponseLog.LastOrDefault()
+            ?? throw new InvalidOperationException("Expected persisted screenshot result.");
+        if (persisted.BinaryAttachment is not { } slim
+            || string.IsNullOrWhiteSpace(slim.RemoteUrl)
+            || slim.Base64Data.Length != 0)
+        {
+            throw new InvalidOperationException(
+                "FinishStreaming must keep slim RemoteUrl attachment and drop JPEG bytes.");
+        }
+
+        var afterFinish = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null);
+        AssertCompletionsImageUrlEquals(afterFinish.Messages, remoteUrl);
     }
 
     /// <summary>
@@ -107,7 +232,7 @@ public class DysonScreenshotAttachmentTests
             throw new InvalidOperationException("Small images must not be upscaled.");
     }
 
-    private static void AssertScreenshotExecutorAndOneShotTranscript()
+    private static Task AssertScreenshotExecutorAndOneShotTranscript()
     {
         byte[] png;
         using (var image = new MagickImage(MagickColors.Green, 800, 600))
@@ -116,44 +241,51 @@ public class DysonScreenshotAttachmentTests
             png = image.ToByteArray();
         }
 
-        var config = new DysonAgentSessionConfig
+        var compressed = DysonImageCompress.ToJpegMaxEdge(png);
+        if (compressed.MimeType != "image/jpeg" || compressed.Bytes.Length == 0)
+            throw new InvalidOperationException("Screenshot transcript fixture must be JPEG.");
+
+        var session = new StubSession();
+        var call = new DysonToolCall
         {
-            BrowserControl = new StubBrowserControl("win1", "tab1", png),
+            CallId = "shot1",
+            ToolName = "BrowserTakeScreenshot",
+            Stage = 0,
+            ArgumentsJson = """{"windowId":"win1","tabId":"tab1"}""",
         };
-        var session = new StubSession(config);
-
-        var root = Path.Combine(Path.GetTempPath(), "dyson-shot-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        try
+        var jpegB64 = Convert.ToBase64String(compressed.Bytes);
+        var result = new DysonToolCallResult
         {
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
-            var call = new DysonToolCall
+            CallId = "shot1",
+            ToolName = "BrowserTakeScreenshot",
+            Stage = 0,
+            Content = JsonSerializer.Serialize(new
             {
-                CallId = "shot1",
-                ToolName = "BrowserTakeScreenshot",
-                Stage = 0,
-                ArgumentsJson = """{"windowId":"win1","tabId":"tab1"}""",
-            };
-
-            var result = executor.ExecuteAsync(call).GetAwaiter().GetResult();
-            if (result.IsError)
-                throw new InvalidOperationException($"BrowserTakeScreenshot failed: {result.Content}");
-
-            if (result.BinaryAttachment is null)
-                throw new InvalidOperationException("Screenshot must set BinaryAttachment.");
-
-            var att = result.BinaryAttachment;
-            if (att.MimeType != "image/jpeg"
-                || att.Extension != ".jpg"
-                || string.IsNullOrEmpty(att.Base64Data)
-                || result.Content.Contains(att.Base64Data, StringComparison.Ordinal)
-                || result.Content.Contains("\"base64\"", StringComparison.Ordinal))
+                mimeType = compressed.MimeType,
+                byteLength = compressed.Bytes.Length,
+                width = compressed.Width,
+                height = compressed.Height,
+                windowId = "win1",
+                tabId = "tab1",
+            }),
+            BinaryAttachment = new DysonBinaryAttachment
             {
-                throw new InvalidOperationException(
-                    "Screenshot Content must be short ack without base64; attachment is JPEG.");
-            }
+                FileName = "screenshot.jpg",
+                Extension = ".jpg",
+                MimeType = compressed.MimeType,
+                Base64Data = jpegB64,
+            },
+        };
 
-            using var ack = JsonDocument.Parse(result.Content);
+        if (result.Content.Contains(jpegB64, StringComparison.Ordinal)
+            || result.Content.Contains("\"base64\"", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Screenshot Content must be short ack without base64; attachment is JPEG.");
+        }
+
+        using (var ack = JsonDocument.Parse(result.Content))
+        {
             if (ack.RootElement.GetProperty("mimeType").GetString() != "image/jpeg"
                 || ack.RootElement.GetProperty("windowId").GetString() != "win1"
                 || ack.RootElement.GetProperty("tabId").GetString() != "tab1"
@@ -163,117 +295,108 @@ public class DysonScreenshotAttachmentTests
             {
                 throw new InvalidOperationException("Screenshot ack JSON metadata mismatch.");
             }
-
-            // First look (in-flight): multimodal parts present.
-            var completions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
-                session,
-                currentUserPrompt: null,
-                currentFilePaths: null,
-                inFlightRounds:
-                [
-                    new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
-                ]);
-            AssertCompletionsImageShape(completions.Messages, expectDataUrlPrefix: "data:image/jpeg;base64,");
-
-            var responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
-                session,
-                currentUserPrompt: null,
-                currentFilePaths: null,
-                inFlightRounds:
-                [
-                    new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
-                ]);
-            AssertResponsesImageDataUrlFallback(responses.Input, expectDataUrlPrefix: "data:image/jpeg;base64,");
-
-            // Mocked Files upload → Responses prefer file_id (no data URL).
-            AssertResponsesImageFileIdViaUpload(session, call, result);
-
-            // Later in-flight round: prior screenshot round must not re-emit the image.
-            var laterCall = new DysonToolCall
-            {
-                CallId = "other1",
-                ToolName = "GetDateTime",
-                Stage = 1,
-                ArgumentsJson = "{}",
-            };
-            var laterResult = new DysonToolCallResult
-            {
-                CallId = "other1",
-                ToolName = "GetDateTime",
-                Stage = 1,
-                Content = """{"utc":"2026-01-01T00:00:00Z"}""",
-            };
-            var multiRound = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
-                session,
-                currentUserPrompt: null,
-                currentFilePaths: null,
-                inFlightRounds:
-                [
-                    new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
-                    new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([laterCall], [laterResult]),
-                ]);
-            if (multiRound.Messages.ToJsonString().Contains("image_url", StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    "Prior screenshot round must not re-emit image_url after a later in-flight round.");
-            }
-
-            // History after assistant reply: ack only.
-            var turn = new DysonAgentTurn
-            {
-                Instruction = "look",
-                Kind = DysonAgentTurnKind.Normal,
-            };
-            turn.ToolCalls.Add(call);
-            turn.ResponseLog.Enqueue(result);
-            turn.AssistantText = "Saw the page.";
-            session.AddTurnForTest(turn);
-
-            var historyCompletions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
-                session,
-                currentUserPrompt: null,
-                currentFilePaths: null);
-            var historyJson = historyCompletions.Messages.ToJsonString();
-            if (historyJson.Contains("image_url", StringComparison.Ordinal)
-                || historyJson.Contains("data:image/jpeg;base64,", StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    "Completed history must not re-include multimodal image parts.");
-            }
-
-            if (!historyJson.Contains("image/jpeg", StringComparison.Ordinal)
-                || !historyJson.Contains("byteLength", StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    "Completed history must still include the short screenshot ack JSON.");
-            }
-
-            turn.FinishStreaming();
-            if (turn.ResponseLog.Any(r => r.BinaryAttachment is not null))
-            {
-                throw new InvalidOperationException(
-                    "FinishStreaming must clear BinaryAttachment after assistant text.");
-            }
-
-            var persisted = DysonTurnToolStateSerializer.CaptureFromTurn(turn);
-            if (persisted.Contains("base64Data", StringComparison.OrdinalIgnoreCase)
-                || persisted.Contains("BinaryAttachment", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException(
-                    "Persisted tool state must omit BinaryAttachment after turn complete.");
-            }
         }
-        finally
+
+        // First look (in-flight): multimodal parts present. Data-URL fallback (no RemoteUrl).
+        var completions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null,
+            inFlightRounds:
+            [
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
+            ]);
+        AssertCompletionsImageShape(completions.Messages, expectDataUrlPrefix: "data:image/jpeg;base64,");
+
+        var responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null,
+            inFlightRounds:
+            [
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
+            ]);
+        AssertResponsesImageDataUrlFallback(responses.Input, expectDataUrlPrefix: "data:image/jpeg;base64,");
+
+        // Mocked Files upload → Responses prefer file_id (no data URL).
+        AssertResponsesImageFileIdViaUpload(session, call, result);
+
+        // Later in-flight round: prior screenshot round must not re-emit the image.
+        var laterCall = new DysonToolCall
         {
-            try
-            {
-                Directory.Delete(root, recursive: true);
-            }
-            catch
-            {
-                // best-effort temp cleanup
-            }
+            CallId = "other1",
+            ToolName = "GetDateTime",
+            Stage = 1,
+            ArgumentsJson = "{}",
+        };
+        var laterResult = new DysonToolCallResult
+        {
+            CallId = "other1",
+            ToolName = "GetDateTime",
+            Stage = 1,
+            Content = """{"utc":"2026-01-01T00:00:00Z"}""",
+        };
+        var multiRound = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null,
+            inFlightRounds:
+            [
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([laterCall], [laterResult]),
+            ]);
+        if (multiRound.Messages.ToJsonString().Contains("image_url", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Prior screenshot round must not re-emit image_url after a later in-flight round.");
         }
+
+        // History after assistant reply: ack only.
+        var turn = new DysonAgentTurn
+        {
+            Instruction = "look",
+            Kind = DysonAgentTurnKind.Normal,
+        };
+        turn.ToolCalls.Add(call);
+        turn.ResponseLog.Enqueue(result);
+        turn.AssistantText = "Saw the page.";
+        session.AddTurnForTest(turn);
+
+        var historyCompletions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null);
+        var historyJson = historyCompletions.Messages.ToJsonString();
+        if (historyJson.Contains("image_url", StringComparison.Ordinal)
+            || historyJson.Contains("data:image/jpeg;base64,", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Completed history must not re-include multimodal image parts.");
+        }
+
+        if (!historyJson.Contains("image/jpeg", StringComparison.Ordinal)
+            || !historyJson.Contains("byteLength", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Completed history must still include the short screenshot ack JSON.");
+        }
+
+        turn.FinishStreaming();
+        if (turn.ResponseLog.Any(r => r.BinaryAttachment is not null))
+        {
+            throw new InvalidOperationException(
+                "FinishStreaming must clear BinaryAttachment after assistant text.");
+        }
+
+        var persisted = DysonTurnToolStateSerializer.CaptureFromTurn(turn);
+        if (persisted.Contains("base64Data", StringComparison.OrdinalIgnoreCase)
+            || persisted.Contains("BinaryAttachment", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "Persisted tool state must omit BinaryAttachment after turn complete.");
+        }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -530,6 +653,38 @@ public class DysonScreenshotAttachmentTests
 
         // Leave attachment without FileId so later history assertions stay on the data-URL path.
         attachment.FileId = null;
+    }
+
+    private static void AssertCompletionsImageUrlEquals(JsonArray messages, string expectedUrl)
+    {
+        AssertCompletionsImageShape(messages, expectDataUrlPrefix: expectedUrl);
+        var json = messages.ToJsonString();
+        if (json.Contains("data:image", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "RemoteUrl Completions wire must not include a data:image URL.");
+        }
+    }
+
+    private static void AssertResponsesImageHttps(JsonArray input, string expectedUrl)
+    {
+        var imagePart = FindResponsesInputImage(input)
+            ?? throw new InvalidOperationException("Responses must include an input_image part.");
+        if (imagePart["file_id"] is not null)
+            throw new InvalidOperationException("RemoteUrl Responses input_image must not set file_id.");
+        if (imagePart["image_url"]?.GetValue<string>() != expectedUrl
+            || imagePart["detail"]?.GetValue<string>() != "auto")
+        {
+            throw new InvalidOperationException(
+                $"Responses input_image.image_url must be the HTTPS RemoteUrl ({expectedUrl}).");
+        }
+
+        var json = input.ToJsonString();
+        if (json.Contains("data:image", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "RemoteUrl Responses wire must not include a data:image URL.");
+        }
     }
 
     private static JsonObject? FindResponsesInputImage(JsonArray input)

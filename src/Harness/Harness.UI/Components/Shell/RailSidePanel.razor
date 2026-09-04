@@ -33,7 +33,7 @@
     <div class="rail-tabs__body@(BodyModifierClass)" role="tabpanel">
         @if (_activeTab == RailTab.Files)
         {
-            <FileTreePanel ActiveWorkDirectoryId="ActiveWorkDirectoryId" />
+            <FileTreePanel ActiveWorkDirectoryId="ActiveWorkDirectoryId" ActiveWorkRootPath="ActiveWorkRootPath" />
         }
         else if (_activeTab == RailTab.Git)
         {
@@ -56,9 +56,11 @@
 
     private RailTab _activeTab = RailTab.Files;
     private Guid? _boundWorkDirectoryId;
+    private string? _boundWorkRootPath;
 
     [Parameter] public Guid? ActiveWorkDirectoryId { get; set; }
     [Parameter] public Guid? ActiveSessionId { get; set; }
+    [Parameter] public string? ActiveWorkRootPath { get; set; }
 
     private string? BodyModifierClass => _activeTab switch
     {
@@ -70,16 +72,41 @@
 
     protected override async Task OnParametersSetAsync()
     {
-        if (_boundWorkDirectoryId == ActiveWorkDirectoryId)
+        if (_boundWorkDirectoryId == ActiveWorkDirectoryId
+            && DysonWorkspaceRootKey.SamePath(_boundWorkRootPath, ActiveWorkRootPath)
+            && FileTree.Active?.WorkDirectoryId == ActiveWorkDirectoryId
+            && DysonWorkspaceRootKey.SamePath(FileTree.Active?.AbsolutePath, ActiveWorkRootPath))
+        {
             return;
+        }
 
         _boundWorkDirectoryId = ActiveWorkDirectoryId;
+        _boundWorkRootPath = ActiveWorkRootPath;
         // Always keep the workdir watcher + git status alive regardless of active tab.
-        // Home.SetActiveWorkDirectoryAsync already activates both; skip the duplicate refresh.
-        if (FileTree.Active?.WorkDirectoryId != ActiveWorkDirectoryId)
-            await FileTree.SetActiveAsync(ActiveWorkDirectoryId, Subject.SubjectId);
-        if (GitChanges.Active?.WorkDirectoryId != ActiveWorkDirectoryId)
-            await GitChanges.SetActiveAsync(ActiveWorkDirectoryId, Subject.SubjectId);
+        // Home already activates with the session path; skip the duplicate refresh when it matches.
+        if (ActiveWorkDirectoryId is Guid id && !string.IsNullOrWhiteSpace(ActiveWorkRootPath))
+        {
+            if (FileTree.Active is not { } tree
+                || tree.WorkDirectoryId != id
+                || !DysonWorkspaceRootKey.SamePath(tree.AbsolutePath, ActiveWorkRootPath))
+            {
+                await FileTree.SetActiveAsync(id, ActiveWorkRootPath);
+            }
+
+            if (GitChanges.Active is not { } git
+                || git.WorkDirectoryId != id
+                || !DysonWorkspaceRootKey.SamePath(git.WorkAbsolutePath, ActiveWorkRootPath))
+            {
+                await GitChanges.SetActiveAsync(id, ActiveWorkRootPath);
+            }
+        }
+        else
+        {
+            if (FileTree.Active?.WorkDirectoryId != ActiveWorkDirectoryId)
+                await FileTree.SetActiveAsync(ActiveWorkDirectoryId, Subject.SubjectId);
+            if (GitChanges.Active?.WorkDirectoryId != ActiveWorkDirectoryId)
+                await GitChanges.SetActiveAsync(ActiveWorkDirectoryId, Subject.SubjectId);
+        }
     }
 
     private void Select(RailTab tab) => _activeTab = tab;

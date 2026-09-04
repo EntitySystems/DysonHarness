@@ -24,6 +24,9 @@ public static class DysonSessionInactiveDelete
         List<Guid>? deletable = null;
         foreach (var root in children[null])
         {
+            if (root.HasWorktree)
+                continue;
+
             if (SubtreeHasLive(root, children, liveActiveIds))
                 continue;
 

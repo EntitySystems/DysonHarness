@@ -19,7 +19,7 @@ public class DysonFileTreeServiceTests
         await File.WriteAllTextAsync(Path.Combine(nm, "index.js"), "module.exports = {};");
 
         using var service = new DysonFileTreeService(new NoOpScopeFactory());
-        var activate = service.SetActive(Guid.NewGuid(), root);
+        var activate = await service.SetActiveAsync(Guid.NewGuid(), root);
         Assert.True(activate.IsSuccess, activate.IsError ? activate.Error : null);
 
         var state = await WaitForAsync(
@@ -57,6 +57,57 @@ public class DysonFileTreeServiceTests
     }
 
     [Fact]
+    public async Task SetActive_same_id_different_paths_does_not_reuse_tree()
+    {
+        var id = Guid.NewGuid();
+        var a = Path.Combine(Path.GetTempPath(), "dyson-ft-a-" + Guid.NewGuid().ToString("N"));
+        var b = Path.Combine(Path.GetTempPath(), "dyson-ft-b-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(a);
+        Directory.CreateDirectory(b);
+        await File.WriteAllTextAsync(Path.Combine(a, "only-a.txt"), "a");
+        await File.WriteAllTextAsync(Path.Combine(b, "only-b.txt"), "b");
+
+        using var service = new DysonFileTreeService(new NoOpScopeFactory());
+        try
+        {
+            var first = await service.SetActiveAsync(id, a);
+            Assert.True(first.IsSuccess, first.IsError ? first.Error : null);
+            // Root files load after SkeletonComplete (ShallowLoadChildrenAsync).
+            var stateA = await WaitForAsync(
+                () => service.Active is { Root.ChildrenLoaded: true } s
+                      && s.Root.Children.Any(c => c.Name == "only-a.txt")
+                    ? s
+                    : null,
+                TimeSpan.FromSeconds(5));
+            Assert.Contains(stateA.Root.Children, c => c.Name == "only-a.txt");
+            Assert.DoesNotContain(stateA.Root.Children, c => c.Name == "only-b.txt");
+
+            var second = await service.SetActiveAsync(id, b);
+            Assert.True(second.IsSuccess, second.IsError ? second.Error : null);
+            var stateB = await WaitForAsync(
+                () => service.Active is { Root.ChildrenLoaded: true } s
+                      && !ReferenceEquals(s, stateA)
+                      && s.Root.Children.Any(c => c.Name == "only-b.txt")
+                    ? s
+                    : null,
+                TimeSpan.FromSeconds(5));
+            Assert.False(ReferenceEquals(stateA, stateB));
+            Assert.Contains(stateB.Root.Children, c => c.Name == "only-b.txt");
+            Assert.DoesNotContain(stateB.Root.Children, c => c.Name == "only-a.txt");
+
+            var again = await service.SetActiveAsync(id, a);
+            Assert.True(again.IsSuccess, again.IsError ? again.Error : null);
+            Assert.Same(stateA, service.Active);
+            Assert.Contains(service.Active!.Root.Children, c => c.Name == "only-a.txt");
+        }
+        finally
+        {
+            try { Directory.Delete(a, recursive: true); } catch { /* watcher */ }
+            try { Directory.Delete(b, recursive: true); } catch { /* watcher */ }
+        }
+    }
+
+    [Fact]
     public async Task Watcher_updates_tree_after_directory_rename()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-ft-" + Guid.NewGuid().ToString("N"));
@@ -64,7 +115,7 @@ public class DysonFileTreeServiceTests
         await File.WriteAllTextAsync(Path.Combine(root, "old-name", "a.txt"), "x");
 
         using var service = new DysonFileTreeService(new NoOpScopeFactory());
-        var activate = service.SetActive(Guid.NewGuid(), root);
+        var activate = await service.SetActiveAsync(Guid.NewGuid(), root);
         Assert.True(activate.IsSuccess, activate.IsError ? activate.Error : null);
 
         var state = await WaitForAsync(
@@ -73,7 +124,7 @@ public class DysonFileTreeServiceTests
         Assert.NotNull(state);
         Assert.Contains(state.Root.Children, c => c.IsDirectory && c.Name == "old-name");
 
-        var moved = state.FileSystem.Move("old-name", "new-name");
+        var moved = await state.FileSystem.MoveAsync("old-name", "new-name");
         Assert.True(moved.IsSuccess, moved.IsError ? moved.Error : null);
 
         await WaitForAsync(
@@ -113,7 +164,7 @@ public class DysonFileTreeServiceTests
         throw new TimeoutException("Timed out waiting for file tree state.");
     }
 
-    /// <summary>SetActive(path) never opens a scope; factory is unused.</summary>
+    /// <summary>SetActiveAsync(path) never opens a scope; factory is unused.</summary>
     private sealed class NoOpScopeFactory : IServiceScopeFactory
     {
         public IServiceScope CreateScope() => throw new NotSupportedException();

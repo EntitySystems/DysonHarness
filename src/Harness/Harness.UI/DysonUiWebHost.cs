@@ -137,6 +137,8 @@ public static class DysonUiWebHost
 #endif
         builder.Services.AddSingleton<IDysonSessionRuntimeScopeFactory, DysonUiSessionRuntimeScopeFactory>();
         builder.Services.AddSingleton<DysonSessionRuntimeRegistry>();
+        builder.Services.AddSingleton<DysonMessageBus>();
+        builder.Services.AddSingleton<DysonSessionEventPublisher>();
         builder.Services.AddScoped<DysonUiRuntimeAttachment>();
         builder.Services.AddScoped<IDysonAgentSessionRuntimeFactory, DysonUiAgentSessionRuntimeFactory>();
         builder.Services.AddScoped<DysonUiAgentSessionRuntimeConfigBuilder>();
@@ -145,6 +147,7 @@ public static class DysonUiWebHost
         builder.Services.AddSingleton<DysonFilePreviewStore>();
         builder.Services.AddScoped<ThemeService>();
         builder.Services.AddScoped<ConfirmDialogService>();
+        builder.Services.AddScoped<FileStorageConnectService>();
         builder.Services.AddSingleton<DysonFileTreeService>();
         builder.Services.AddSingleton<DysonGitChangesService>();
         builder.Services.AddHttpClient(DysonGitHubReleaseClient.HttpClientName, client =>

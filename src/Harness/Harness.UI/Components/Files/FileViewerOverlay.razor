@@ -4,6 +4,7 @@
 @using Microsoft.AspNetCore.Components.Web
 @implements IDisposable
 @inject DysonUiHost Host
+@inject DysonMessageBus Bus
 
 @if (Host.FileViewer is { } viewer)
 {
@@ -22,7 +23,7 @@
                     <div class="file-viewer-modal__path mono">@viewer.RelativePath</div>
                 </div>
                 <div class="file-viewer-modal__actions">
-                    @if (CanOpenInDefaultEditor(viewer))
+                    @if (viewer.CanOpenInDefaultEditor)
                     {
                         <button type="button"
                                 class="btn btn-ghost file-viewer-modal__open-editor"
@@ -94,26 +95,26 @@
                     else if (viewer.IsMarkdown)
                     {
                         @* ponytail: selection is paragraph/heading/pre blocks only (split on blank lines), not AST-precise; upgrade to Markdig block walker when comments persist. *@
-                        var markdownBlocks = MarkdownBlocks(viewer.Content).ToArray();
+                        var markdownBlocks = viewer.MarkdownBlocks;
                         var markdownLastLine = CountLogicalSourceLines(viewer.Content);
                         var markdownGutters = BuildGitDiffGutters(viewer.GitDiffAnnotations, markdownLastLine);
                         <div class="file-viewer-modal__markdown turn-block__body">
-                            @for (var blockOrdinal = 0; blockOrdinal < markdownBlocks.Length; blockOrdinal++)
+                            @for (var blockOrdinal = 0; blockOrdinal < markdownBlocks.Count; blockOrdinal++)
                             {
-                                var (index, startLine, endLine, block) = markdownBlocks[blockOrdinal];
-                                var selected = _selectedBlock == index;
-                                var drafting = _draft is { } d && d.BlockIndex == index;
+                                var block = markdownBlocks[blockOrdinal];
+                                var selected = _selectedBlock == block.Index;
+                                var drafting = _draft is { } d && d.BlockIndex == block.Index;
                                 var deletionFrom = blockOrdinal == 0 ? 1 : markdownBlocks[blockOrdinal - 1].EndLine + 1;
-                                var deletionTo = blockOrdinal == markdownBlocks.Length - 1 ? markdownLastLine : endLine;
-                                var gutterClass = MarkdownGutterCssClass(markdownGutters, startLine, endLine, deletionFrom, deletionTo);
+                                var deletionTo = blockOrdinal == markdownBlocks.Count - 1 ? markdownLastLine : block.EndLine;
+                                var gutterClass = MarkdownGutterCssClass(markdownGutters, block.StartLine, block.EndLine, deletionFrom, deletionTo);
                                 <div class="file-viewer-block @(selected ? "is-selected" : null) @(drafting ? "is-drafting" : null) @gutterClass"
-                                     @onclick="@(() => SelectBlock(index))"
+                                     @onclick="@(() => SelectBlock(block.Index))"
                                      @onclick:stopPropagation="true">
-                                    @MarkdownRenderer.ToHtml(block)
+                                    @block.Html
                                     <button type="button"
                                             class="file-viewer-comment"
                                             title="Comment on this block"
-                                            @onclick="@(() => OpenDraft(index, block))"
+                                            @onclick="@(() => OpenDraft(block.Index, block.Source))"
                                             @onclick:stopPropagation="true">
                                         Comment
                                     </button>
@@ -213,7 +214,14 @@ else
         public string Text { get; set; } = "";
     }
 
-    protected override void OnInitialized() => Host.Changed += OnHostChanged;
+    private IDisposable? _hostSub;
+
+    protected override void OnInitialized()
+    {
+        var sub = Bus.Subscribe<DysonHostStateChangedEvent>(Host.BusScopeKey, OnHostChanged);
+        if (sub.IsSuccess)
+            _hostSub = sub.Value;
+    }
 
     protected override void OnParametersSet()
     {
@@ -259,9 +267,9 @@ else
         </div>
     };
 
-    private void OnHostChanged(DysonHostChangeKind kind)
+    private void OnHostChanged(DysonHostStateChangedEvent evt)
     {
-        if ((kind & DysonHostChangeKind.Overlay) == 0)
+        if ((evt.Kind & DysonHostChangeKind.Overlay) == 0)
             return;
         _ = InvokeAsync(StateHasChanged);
     }
@@ -301,13 +309,9 @@ else
         }
     }
 
-    private static bool CanOpenInDefaultEditor(DysonFileViewerState viewer) =>
-        !string.IsNullOrWhiteSpace(viewer.AbsolutePath)
-        && File.Exists(viewer.AbsolutePath);
-
     private void OpenInDefaultEditor()
     {
-        if (Host.FileViewer is not { AbsolutePath: { } path } || !File.Exists(path))
+        if (Host.FileViewer is not { CanOpenInDefaultEditor: true, AbsolutePath: { } path })
             return;
 
         Host.OpenFileInDefaultEditor(path);
@@ -457,33 +461,6 @@ else
         Deleted = 4,
     }
 
-    private static IEnumerable<(int Index, int StartLine, int EndLine, string Block)> MarkdownBlocks(string content)
-    {
-        if (string.IsNullOrEmpty(content))
-            yield break;
-
-        var normalized = content.Replace("\r\n", "\n");
-        var parts = normalized.Split("\n\n", StringSplitOptions.None);
-        var index = 0;
-        var pos = 0;
-        for (var p = 0; p < parts.Length; p++)
-        {
-            var part = parts[p];
-            var startLine = SourceLineAt(normalized, pos);
-            var endLine = part.Length == 0
-                ? startLine
-                : SourceLineAt(normalized, pos + part.Length - 1);
-            pos += part.Length;
-            if (p < parts.Length - 1)
-                pos += 2;
-
-            if (string.IsNullOrWhiteSpace(part))
-                continue;
-
-            yield return (index++, startLine, endLine, part);
-        }
-    }
-
     private static IEnumerable<(int Index, int SourceLine, string Line)> CodeLines(string content)
     {
         var lines = content.Replace("\r\n", "\n").Split('\n');
@@ -619,5 +596,9 @@ else
         return css;
     }
 
-    public void Dispose() => Host.Changed -= OnHostChanged;
+    public void Dispose()
+    {
+        _hostSub?.Dispose();
+        _hostSub = null;
+    }
 }

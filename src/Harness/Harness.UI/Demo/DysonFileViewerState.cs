@@ -1,4 +1,5 @@
 using DysonHarness;
+using Harness.UI.Markdown;
 
 namespace Harness.UI.Demo;
 
@@ -29,6 +30,13 @@ public sealed class DysonFileViewerState
     public string? ImagePreviewId { get; init; }
 
     public string? AbsolutePath { get; init; }
+
+    /// <summary>True when the overlay may show "Open in default editor" (resolved path; no render-time File.Exists).</summary>
+    public bool CanOpenInDefaultEditor { get; init; }
+
+    /// <summary>Precomputed markdown blocks (Html + Source). Empty when not markdown or on error.</summary>
+    public IReadOnlyList<DysonFileViewerMarkdownBlock> MarkdownBlocks { get; init; } = [];
+
     public string? Error { get; init; }
 
     /// <summary>Ordered footer CTAs (stable button order). Empty when none.</summary>

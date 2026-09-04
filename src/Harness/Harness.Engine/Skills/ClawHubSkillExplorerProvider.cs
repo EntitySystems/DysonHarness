@@ -184,10 +184,9 @@ public sealed class ClawHubSkillExplorerProvider(HttpClient http) : IDysonSkillE
                 new DysonSkillExplorerDownloadOutcome.Ambiguous(zip.Value.Matches));
         }
 
-        var extracted = DysonSkillPackageInstall.ExtractZipToSkillDir(
-            zip.Value.ZipBytes!,
-            folder.Value,
-            fs);
+        var extracted = await DysonSkillPackageInstall
+            .ExtractZipToSkillDirAsync(zip.Value.ZipBytes!, folder.Value, fs, cancellationToken)
+            .ConfigureAwait(false);
         if (extracted.IsError)
             return Result<DysonSkillExplorerDownloadOutcome, string>.AsError(extracted.Error);
 

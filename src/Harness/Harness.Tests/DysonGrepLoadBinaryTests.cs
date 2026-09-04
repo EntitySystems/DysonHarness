@@ -13,13 +13,14 @@ namespace Harness.Tests;
 public class DysonGrepLoadBinaryTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertCatalog();
         AssertMimeMap();
-        AssertGrepTextAndBinaryPaths();
-        AssertLoadBinaryAttachmentAndTranscript();
-        AssertLoadBinaryNormalizesIcoAndBmpToPng();
+        await AssertGrepTextAndBinaryPaths();
+        await AssertLoadBinaryAttachmentAndTranscript();
+        await AssertLoadBinaryNormalizesIcoAndBmpToPng();
+        AssertRemoteUrlLoadBinaryImageUsesHttpsAndReemits();
     }
 
     private static void AssertCatalog()
@@ -27,9 +28,19 @@ public class DysonGrepLoadBinaryTests
         var pipeline = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess);
         if (!pipeline.Tools.TryGetValue("Grep", out var grep)
             || !grep.Description.Contains("Text-only", StringComparison.Ordinal)
-            || !grep.Description.Contains("LoadBinary", StringComparison.Ordinal))
+            || !grep.Description.Contains("LoadBinary", StringComparison.Ordinal)
+            || !grep.Description.Contains("System.Text.RegularExpressions", StringComparison.Ordinal))
         {
-            throw new InvalidOperationException("Grep catalog must describe text-only + LoadBinary.");
+            throw new InvalidOperationException(
+                "Grep catalog must describe text-only + LoadBinary + System.Text.RegularExpressions.");
+        }
+
+        if (!grep.InputSchemaJson.Contains("Not a literal", StringComparison.Ordinal)
+            || !grep.InputSchemaJson.Contains("filename-only", StringComparison.Ordinal)
+            || !grep.InputSchemaJson.Contains("default 100", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Grep InputSchemaJson must contain Not a literal, filename-only, and default 100.");
         }
 
         if (!pipeline.Tools.TryGetValue("LoadBinary", out var load)
@@ -50,7 +61,7 @@ public class DysonGrepLoadBinaryTests
             throw new InvalidOperationException("Unknown extension must be octet-stream.");
     }
 
-    private static void AssertGrepTextAndBinaryPaths()
+    private static async Task AssertGrepTextAndBinaryPaths()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-grep-lb-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -64,7 +75,7 @@ public class DysonGrepLoadBinaryTests
             File.WriteAllText(Path.Combine(root, "bin", "secret.txt"), "alpha must not appear from bin");
 
             var session = new StubSession();
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
             var call = new DysonToolCall
             {
                 CallId = "grep1",
@@ -112,7 +123,7 @@ public class DysonGrepLoadBinaryTests
         }
     }
 
-    private static void AssertLoadBinaryAttachmentAndTranscript()
+    private static async Task AssertLoadBinaryAttachmentAndTranscript()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-loadbin-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -123,7 +134,7 @@ public class DysonGrepLoadBinaryTests
             File.WriteAllBytes(Path.Combine(root, fileName), bytes);
 
             var session = new StubSession();
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
             var call = new DysonToolCall
             {
                 CallId = "lb1",
@@ -132,14 +143,34 @@ public class DysonGrepLoadBinaryTests
                 ArgumentsJson = $$"""{"path":"{{fileName}}"}""",
             };
 
-            var result = executor.ExecuteAsync(call).GetAwaiter().GetResult();
-            if (result.IsError)
-                throw new InvalidOperationException($"LoadBinary failed: {result.Content}");
+            var gated = executor.ExecuteAsync(call).GetAwaiter().GetResult();
+            AssertImageLoadBinaryGated(gated);
 
-            if (result.BinaryAttachment is null)
-                throw new InvalidOperationException("LoadBinary must set BinaryAttachment.");
+            var pngB64 = Convert.ToBase64String(bytes);
+            var result = new DysonToolCallResult
+            {
+                CallId = "lb1",
+                ToolName = "LoadBinary",
+                Stage = 0,
+                Content = JsonSerializer.Serialize(new
+                {
+                    path = fileName,
+                    fileName,
+                    extension = ".png",
+                    mimeType = "image/png",
+                    byteLength = bytes.Length,
+                }),
+                BinaryAttachment = new DysonBinaryAttachment
+                {
+                    FileName = fileName,
+                    Extension = ".png",
+                    MimeType = "image/png",
+                    Base64Data = pngB64,
+                },
+            };
 
-            var att = result.BinaryAttachment;
+            var att = result.BinaryAttachment
+                ?? throw new InvalidOperationException("Hand-built LoadBinary attachment missing.");
             if (att.FileName != fileName
                 || !att.FileName.EndsWith(".png", StringComparison.Ordinal)
                 || att.Extension != ".png"
@@ -273,7 +304,7 @@ public class DysonGrepLoadBinaryTests
         }
     }
 
-    private static void AssertLoadBinaryNormalizesIcoAndBmpToPng()
+    private static async Task AssertLoadBinaryNormalizesIcoAndBmpToPng()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-loadbin-norm-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -302,7 +333,7 @@ public class DysonGrepLoadBinaryTests
             File.WriteAllBytes(Path.Combine(root, "keep.png"), pngPassthrough);
 
             var session = new StubSession();
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
 
             var icoResult = executor.ExecuteAsync(new DysonToolCall
             {
@@ -311,36 +342,7 @@ public class DysonGrepLoadBinaryTests
                 Stage = 0,
                 ArgumentsJson = """{"path":"favicon.ico"}""",
             }).GetAwaiter().GetResult();
-
-            if (icoResult.IsError)
-                throw new InvalidOperationException($"LoadBinary ICO failed: {icoResult.Content}");
-            if (icoResult.BinaryAttachment is null
-                || icoResult.BinaryAttachment.MimeType != "image/png"
-                || icoResult.BinaryAttachment.Extension != ".png"
-                || icoResult.BinaryAttachment.FileName != "favicon.png")
-            {
-                throw new InvalidOperationException(
-                    "LoadBinary must convert image/x-icon to favicon.png / image/png.");
-            }
-
-            using var icoAck = JsonDocument.Parse(icoResult.Content);
-            if (icoAck.RootElement.GetProperty("convertedFromMimeType").GetString() != "image/x-icon"
-                || icoAck.RootElement.GetProperty("convertedToMimeType").GetString() != "image/png"
-                || icoAck.RootElement.GetProperty("mimeType").GetString() != "image/png"
-                || icoAck.RootElement.GetProperty("fileName").GetString() != "favicon.png")
-            {
-                throw new InvalidOperationException("LoadBinary ICO ack must include conversion metadata.");
-            }
-
-            var attBytes = Convert.FromBase64String(icoResult.BinaryAttachment.Base64Data);
-            if (attBytes.Length < 4
-                || attBytes[0] != 0x89
-                || attBytes[1] != 0x50
-                || attBytes[2] != 0x4E
-                || attBytes[3] != 0x47)
-            {
-                throw new InvalidOperationException("Converted ICO attachment must be PNG bytes.");
-            }
+            AssertImageLoadBinaryGated(icoResult, "ICO conversion must finish before the FileStorage gate.");
 
             var bmpResult = executor.ExecuteAsync(new DysonToolCall
             {
@@ -349,18 +351,7 @@ public class DysonGrepLoadBinaryTests
                 Stage = 0,
                 ArgumentsJson = """{"path":"sprite.bmp"}""",
             }).GetAwaiter().GetResult();
-
-            if (bmpResult.IsError
-                || bmpResult.BinaryAttachment is null
-                || bmpResult.BinaryAttachment.MimeType != "image/png"
-                || bmpResult.BinaryAttachment.FileName != "sprite.png")
-            {
-                throw new InvalidOperationException("LoadBinary must convert BMP to sprite.png / image/png.");
-            }
-
-            using var bmpAck = JsonDocument.Parse(bmpResult.Content);
-            if (bmpAck.RootElement.GetProperty("convertedFromMimeType").GetString() != "image/bmp")
-                throw new InvalidOperationException("LoadBinary BMP ack must report convertedFromMimeType.");
+            AssertImageLoadBinaryGated(bmpResult, "BMP conversion must finish before the FileStorage gate.");
 
             var pngResult = executor.ExecuteAsync(new DysonToolCall
             {
@@ -369,17 +360,7 @@ public class DysonGrepLoadBinaryTests
                 Stage = 0,
                 ArgumentsJson = """{"path":"keep.png"}""",
             }).GetAwaiter().GetResult();
-
-            if (pngResult.IsError
-                || pngResult.BinaryAttachment is null
-                || pngResult.BinaryAttachment.FileName != "keep.png"
-                || pngResult.BinaryAttachment.MimeType != "image/png"
-                || pngResult.BinaryAttachment.Base64Data != Convert.ToBase64String(pngPassthrough)
-                || pngResult.Content.Contains("convertedFromMimeType", StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    "Allowlisted PNG LoadBinary must pass through without conversion metadata.");
-            }
+            AssertImageLoadBinaryGated(pngResult);
         }
         finally
         {
@@ -391,6 +372,116 @@ public class DysonGrepLoadBinaryTests
             {
                 // best-effort temp cleanup
             }
+        }
+    }
+
+    private static void AssertRemoteUrlLoadBinaryImageUsesHttpsAndReemits()
+    {
+        const string remoteUrl = "https://s3.example.com/dyson/ui-agent-shell.png?X-Amz-Signature=lb";
+        const string fileName = "ui-agent-shell.png";
+        var session = new StubSession();
+        var call = new DysonToolCall
+        {
+            CallId = "lb1",
+            ToolName = "LoadBinary",
+            Stage = 0,
+            ArgumentsJson = $$"""{"path":"{{fileName}}"}""",
+        };
+        var result = new DysonToolCallResult
+        {
+            CallId = "lb1",
+            ToolName = "LoadBinary",
+            Stage = 0,
+            Content = """{"fileName":"ui-agent-shell.png","extension":".png","mimeType":"image/png","byteLength":12}""",
+            BinaryAttachment = new DysonBinaryAttachment
+            {
+                FileName = fileName,
+                Extension = ".png",
+                MimeType = "image/png",
+                Base64Data = Convert.ToBase64String([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+                RemoteUrl = remoteUrl,
+                FileId = "file-should-not-win",
+            },
+        };
+
+        var completions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null,
+            inFlightRounds:
+            [
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
+            ]);
+        AssertCompletionsImageShape(completions.Messages, fileName, remoteUrl);
+        if (completions.Messages.ToJsonString().Contains("data:image", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "LoadBinary RemoteUrl Completions must not emit data:image.");
+        }
+
+        var responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null,
+            inFlightRounds:
+            [
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
+            ]);
+        var imagePart = FindResponsesPart(responses.Input, "input_image")
+            ?? throw new InvalidOperationException("Responses must include input_image for RemoteUrl LoadBinary.");
+        if (imagePart["image_url"]?.GetValue<string>() != remoteUrl
+            || imagePart["file_id"] is not null
+            || imagePart["detail"]?.GetValue<string>() != "auto"
+            || responses.Input.ToJsonString().Contains("data:image", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "LoadBinary RemoteUrl Responses must emit HTTPS image_url and no file_id.");
+        }
+
+        var laterCall = new DysonToolCall
+        {
+            CallId = "grep1",
+            ToolName = "Grep",
+            Stage = 1,
+            ArgumentsJson = """{"pattern":"alpha"}""",
+        };
+        var laterResult = new DysonToolCallResult
+        {
+            CallId = "grep1",
+            ToolName = "Grep",
+            Stage = 1,
+            Content = "note.txt:1:alpha",
+        };
+        var later = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null,
+            inFlightRounds:
+            [
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([laterCall], [laterResult]),
+            ]);
+        AssertCompletionsImageShape(later.Messages, fileName, remoteUrl);
+
+        var turn = new DysonAgentTurn
+        {
+            Instruction = "load the png",
+            Kind = DysonAgentTurnKind.Normal,
+            AssistantText = "Loaded.",
+        };
+        turn.ToolCalls.Add(call);
+        turn.ResponseLog.Enqueue(result);
+        session.AddTurnForTest(turn);
+
+        var history = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null);
+        AssertCompletionsImageShape(history.Messages, fileName, remoteUrl);
+        if (history.Messages.ToJsonString().Contains("data:image", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Completed history must re-emit LoadBinary RemoteUrl HTTPS, not data:image.");
         }
     }
 
@@ -687,6 +778,21 @@ public class DysonGrepLoadBinaryTests
         }
     }
 
+    private static void AssertImageLoadBinaryGated(DysonToolCallResult result, string? extra = null)
+    {
+        if (!result.IsError)
+            throw new InvalidOperationException(extra ?? "Image LoadBinary without FileStorage must error.");
+        if (result.BinaryAttachment is not null)
+            throw new InvalidOperationException("Gated LoadBinary must not set BinaryAttachment.");
+        if (result.Content.Contains("could not convert", StringComparison.Ordinal))
+            throw new InvalidOperationException(extra ?? "Image conversion failed before the FileStorage gate.");
+        if (!result.Content.Contains(DysonS3FileStorage.FileStorageRequiredToken, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Expected file_storage_required, got: {result.Content}");
+        }
+    }
+
     private sealed class StubProvider : DysonAgentProvider;
 
     private sealed class StubSession() : DysonAgentSession(
@@ -694,6 +800,8 @@ public class DysonGrepLoadBinaryTests
         new DysonAgentSessionConfig(),
         new StubProvider())
     {
+        public void AddTurnForTest(DysonAgentTurn turn) => AddTurn(turn);
+
         public override Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
             string agentMode,
             string task,

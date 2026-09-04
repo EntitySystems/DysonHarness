@@ -41,6 +41,8 @@ v1 keys:
 
 Missing row ⇒ treat as `{ "mcpActive": true }` (opt-out via settings). Helpers: `DysonWorkDirectoryConfig.TryGetMcpActive` / `WithMcpActive`.
 
+`forkWorktree` (bool) is the per-workdir default for the composer **Worktree** checkbox. Missing key, null document, or non-boolean ⇒ **false** (opt-in only via explicit `true`). Helpers: `TryGetForkWorktree` / `WithForkWorktree`. `CreateDefault` stays `{ "mcpActive": true }` only — it does not write `forkWorktree`. The composer checkbox upserts this key on the **active** work directory (last value = default for **new** sessions on that workdir). New session create copies it into `sessions.WorktreeEnabled`. Do not store this default in `app_settings` (a git default must not leak onto a non-git workdir).
+
 ### `IDysonWorkDirectoryConfigurationRepository`
 
 - `GetAsync(workDirectoryId)` — stored doc or default (does not materialize)
@@ -84,7 +86,25 @@ Refresh is **activation-only**, not every `GetAsync` (file tree, git rail, and s
 
 ## Git branch (UI)
 
-`DysonGitInfo.TryGetBranch` accepts a native absolute path or an initialized `IDysonWorkspaceFileSystem` (uses `NativeRootPath`). Runs `git -C path rev-parse --abbrev-ref HEAD` (≈2s timeout). Used for the composer branch chip; unrelated to build-time `DysonBuildInfo.BranchName`.
+`DysonGitInfo.TryGetBranch` accepts a native absolute path or an initialized `IDysonWorkspaceFileSystem` (uses `NativeRootPath`). Runs `git -C path rev-parse --abbrev-ref HEAD` (≈2s timeout). Used for the composer branch chip; unrelated to build-time `DysonBuildInfo.BranchName`. When a session is focused, the chip (and the Files / Git rails) follow that session’s workspace root — the bound worktree path if set, otherwise the registered `AbsolutePath` — not only the work-directory row.
+
+## Session git worktrees
+
+A session may fork a **private git worktree** of the registered checkout. Project identity stays on `sessions.WorkDirectoryId` (sidebar, session list filter, MCP master switch, plugins). The session workspace root used by tools, shells, file tree, git rail, and the branch chip is `WorktreeAbsolutePath ?? registered AbsolutePath`.
+
+Do **not** register the worktree as another `work_directories` row. Do **not** mutate `work_directories.AbsolutePath`.
+
+Layout (engine `DysonSessionWorktree.Ensure` / `Merge` / `Remove`):
+
+- Path: sibling `{parentOfRepo}/{repoName}.dyson-worktrees/{sessionId:N}` (git refuses a worktree inside the main tree)
+- Branch: `dyson/{first 8 hex of sessionId:N}` from `HEAD`
+- Untracked harness copy (dest-missing only): `openrules.json`, `AGENTS.md`, `.dyson/mcp/`, `.dyson/skills/`. Do not copy `.dyson/plans` or `.dyson/temp`.
+
+Created only on the first **Work**-mode mutating start (`DysonUiHost.PromptAsync` user prompt, or `BuildPendingPlanAsync` before BeginBuildPlan) when the root has `WorktreeEnabled` and no path yet. Plan / Ask / Review never create one. Empty “Start new session” does not leave orphan checkouts. If enabled but the workdir is not a git repo, that send fails with the exact error `Worktree is enabled but this work directory is not a git repository.`
+
+Custom MCP host stays **workdir-id** keyed (one `.dyson/mcp` config / refcount). Tool cwd is the session filesystem (`NativeRootPath` — worktree when bound).
+
+v1 does **not** auto-remove the checkout on session delete. Merge or Remove first (composer, while locked). Persistence and delete guards: [sessions.md](sessions.md). Git helpers: [engine api-surface](../engine/api-surface.md)#git.
 
 ## Workspace filesystem
 
@@ -94,7 +114,8 @@ Sandboxed IO for tools, FileManager, file tree, and viewers goes through `IDyson
 - `NativeRootPath` is always the host-visible root for shells, `git -C`, and `Process.WorkingDirectory` (local path, mapped drive, or UNC/SMB mount — including Azure Files mounts).
 - Prefer `DysonWorkspaceFileSystems.CreateLocalAsync(absolutePath)` — validates the directory exists, constructs `DysonLocalWorkspaceFileSystem`, and initializes with `"local_fs"`.
 - Live updates: `CreateWatcher()` → `IDysonWorkspaceChangeWatcher` (`FileSystemWatcher` on the native root today).
-- `Move(sourceRelativePath, destinationRelativePath)` renames/moves files or directories inside the sandbox (rejects escape, destination collision, and moving a directory into itself). The rail file tree uses this for folder rename from the folder context menu; watcher `Renamed` events refresh the tree.
+- I/O members are TAP (`FileExistsAsync`, `ReadAllTextAsync`, `WriteAllTextAsync`, `EnumerateEntriesAsync`, …). Path math (`ResolvePath` / `GetRelativePath`) and `CreateWatcher()` stay sync.
+- `MoveAsync(sourceRelativePath, destinationRelativePath)` renames/moves files or directories inside the sandbox (rejects escape, destination collision, and moving a directory into itself). The rail file tree uses this for folder rename from the folder context menu; watcher `Renamed` events refresh the tree.
 
 For Azure Files (and similar) on this product path: mount the share (credentials/lifecycle owned by the host), then use `CreateLocalAsync` over the mount path — not a separate byte-API backend. `work_directories.AbsolutePath` remains the native root string. Custom `IDysonWorkspaceFileSystem` implementations are for cloud hosts that need different storage semantics (see below).
 
@@ -116,7 +137,7 @@ Plan mode publishes markdown under `{workRoot}/.dyson/plans/{slug}-{hash}.md` vi
 
 `CreateFile(isTempFile: true)` creates visualization source artifacts under `{workRoot}/.dyson/temp/`. Temp mode accepts only a requested leaf name with an extension, sanitizes it, adds a cryptographically random 24-hex-character suffix before that extension, and returns the resulting workspace-relative path (for example, `.dyson/temp/chart-<random>.html`). The directory is git-ignored; files are bounded to 512 KiB UTF-8 each and are **not automatically cleaned up**. A later `RenderHtmlVisualization` call must use the exact returned path verbatim as its matching `tempFile`; it cannot infer or construct a temp path. There is no `CreateTempFile` MCP tool or automatic cleanup service.
 
-Agent skills may live under `{workRoot}/.dyson/skills/{name}/` (entry `SKILL.md` or first `*.md`). `LoadSkill` / composer `/skill-` resolve **included** embedded `Resources/Skills` first, then `.dyson/skills`, then a literal work-relative path, then **openrules.json `AgentOptional`** Rules/Skills (local or http(s) `Path`; optional `Providers` filter). See [docs/openrules/README.md](../openrules/README.md). Work-root `openrules.json` (or implicit `AGENTS.md`) injects the raw `openrules.json` file (or a `(missing: openrules.json)` warning when implicit Root still applies) **before** Root and provider-filtered `AutoInclude` bodies into the session system prompt on create/load/mode change. MCP **`InitializeOpenRules`** creates a default manifest (EntitySystems openrules `SKILL.md` URL, no `Providers`) when the file is missing. Workdir settings (`WorkDirectorySettingsModal`) can flip Mode on existing Rules/Skills rows (`AgentOptional` ↔ `AutoInclude`) via `DysonOpenRules.SetEntryMode`.
+Agent skills may live under `{workRoot}/.dyson/skills/{name}/` (entry `SKILL.md` or first `*.md`). `LoadSkill` / composer `/skill-` resolve **included** embedded `Resources/Skills` first, then `.dyson/skills`, then a literal work-relative path, then **openrules.json `AgentOptional`** Rules/Skills (local or http(s) `Path`; optional `Providers` filter). See [docs/openrules/README.md](../openrules/README.md). Work-root `openrules.json` (or implicit `AGENTS.md`) injects the raw `openrules.json` file (or a `(missing: openrules.json)` warning when implicit Root still applies) **before** Root and provider-filtered `AutoInclude` bodies into the session system prompt on create/load/mode change. MCP **`InitializeOpenRules`** creates a default manifest (EntitySystems openrules `SKILL.md` URL, no `Providers`) when the file is missing. Workdir settings (`WorkDirectorySettingsModal`) can flip Mode on existing Rules/Skills rows (`AgentOptional` ↔ `AutoInclude`) via `DysonOpenRules.SetEntryModeAsync`.
 
 Composer **`/skill-search`** (Skills Directory and other explorer providers) installs registry packages into the same `.dyson/skills/{slug}/` tree **and** appends an openrules.json AgentOptional Skills reference to the installed `SKILL.md` (creates the default manifest if missing) — see [docs/ui](../ui/README.md)#skill-search.
 
@@ -135,4 +156,4 @@ Current limitation: project package inspection/enablement/uninstall APIs exist i
 
 ## UI
 
-Sidebar `WorkDirectorySwitcher` lists registered dirs, persists active id in `localStorage` (`dyson-workdir`), filters `SessionList` by that id. Right-rail **Files** tree: right-click a **folder** for Rename (inline; calls workspace `Move`) or Open in Explorer / Finder / file manager (`DysonUiHost.OpenFolderInFileManager`). See [docs/ui/README.md](../ui/README.md).
+Sidebar `WorkDirectorySwitcher` lists registered dirs, persists active id in `localStorage` (`dyson-workdir`), filters `SessionList` by that id. Right-rail **Files** tree: right-click a **folder** for Rename (inline; `await` workspace `MoveAsync`) or Open in Explorer / Finder / file manager (`DysonUiHost.OpenFolderInFileManager`). See [docs/ui/README.md](../ui/README.md).

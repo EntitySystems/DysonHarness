@@ -28,6 +28,10 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
 
     public bool IsInitialized => _initialized;
 
+    // ponytail: ceiling = thread-pool offload of a sync syscall; upgrade = a future BCL/async FS API.
+    internal static Task<T> RunIoAsync<T>(Func<T> work, CancellationToken cancellationToken) =>
+        Task.Run(work, cancellationToken);
+
     public Task<VoidResult<string>> InitializeAsync(
         string subjectId,
         CancellationToken cancellationToken = default)
@@ -87,69 +91,98 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
         }
     }
 
-    public Result<bool, string> FileExists(string path)
+    public async Task<Result<bool, string>> FileExistsAsync(
+        string path,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var resolved = ResolvePath(path);
         if (resolved.IsError)
             return Result<bool, string>.AsError(resolved.Error);
 
-        try
+        return await RunIoAsync(() =>
         {
-            return Result<bool, string>.AsValue(File.Exists(resolved.Value));
-        }
-        catch (Exception ex)
-        {
-            return Result<bool, string>.AsError($"Failed to check file: {ex.Message}");
-        }
+            try
+            {
+                return Result<bool, string>.AsValue(File.Exists(resolved.Value));
+            }
+            catch (Exception ex)
+            {
+                return Result<bool, string>.AsError($"Failed to check file: {ex.Message}");
+            }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
-    public Result<bool, string> DirectoryExists(string path)
+    public async Task<Result<bool, string>> DirectoryExistsAsync(
+        string path,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var resolved = ResolvePath(path);
         if (resolved.IsError)
             return Result<bool, string>.AsError(resolved.Error);
 
-        try
+        return await RunIoAsync(() =>
         {
-            return Result<bool, string>.AsValue(Directory.Exists(resolved.Value));
-        }
-        catch (Exception ex)
-        {
-            return Result<bool, string>.AsError($"Failed to check directory: {ex.Message}");
-        }
+            try
+            {
+                return Result<bool, string>.AsValue(Directory.Exists(resolved.Value));
+            }
+            catch (Exception ex)
+            {
+                return Result<bool, string>.AsError($"Failed to check directory: {ex.Message}");
+            }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
-    public Result<long, string> GetFileLength(string path)
+    public async Task<Result<long, string>> GetFileLengthAsync(
+        string path,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var resolved = ResolvePath(path);
         if (resolved.IsError)
             return Result<long, string>.AsError(resolved.Error);
 
-        try
+        return await RunIoAsync(() =>
         {
-            if (!File.Exists(resolved.Value))
-                return Result<long, string>.AsError($"File not found: {path}");
+            try
+            {
+                if (!File.Exists(resolved.Value))
+                    return Result<long, string>.AsError($"File not found: {path}");
 
-            return Result<long, string>.AsValue(new FileInfo(resolved.Value).Length);
-        }
-        catch (Exception ex)
-        {
-            return Result<long, string>.AsError($"Failed to get file length: {ex.Message}");
-        }
+                return Result<long, string>.AsValue(new FileInfo(resolved.Value).Length);
+            }
+            catch (Exception ex)
+            {
+                return Result<long, string>.AsError($"Failed to get file length: {ex.Message}");
+            }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
-    public Result<string, string> ReadAllText(string path)
+    public async Task<Result<string, string>> ReadAllTextAsync(
+        string path,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var resolved = ResolvePath(path);
         if (resolved.IsError)
             return resolved;
 
         try
         {
-            if (!File.Exists(resolved.Value))
+            var exists = await RunIoAsync(() => File.Exists(resolved.Value), cancellationToken)
+                .ConfigureAwait(false);
+            if (!exists)
                 return Result<string, string>.AsError($"File not found: {path}");
 
-            return Result<string, string>.AsValue(File.ReadAllText(resolved.Value));
+            var text = await File.ReadAllTextAsync(resolved.Value, cancellationToken)
+                .ConfigureAwait(false);
+            return Result<string, string>.AsValue(text);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -157,18 +190,29 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
         }
     }
 
-    public Result<byte[], string> ReadAllBytes(string path)
+    public async Task<Result<byte[], string>> ReadAllBytesAsync(
+        string path,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var resolved = ResolvePath(path);
         if (resolved.IsError)
             return Result<byte[], string>.AsError(resolved.Error);
 
         try
         {
-            if (!File.Exists(resolved.Value))
+            var exists = await RunIoAsync(() => File.Exists(resolved.Value), cancellationToken)
+                .ConfigureAwait(false);
+            if (!exists)
                 return Result<byte[], string>.AsError($"File not found: {path}");
 
-            return Result<byte[], string>.AsValue(File.ReadAllBytes(resolved.Value));
+            var bytes = await File.ReadAllBytesAsync(resolved.Value, cancellationToken)
+                .ConfigureAwait(false);
+            return Result<byte[], string>.AsValue(bytes);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -176,8 +220,12 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
         }
     }
 
-    public Result<byte[], string> ReadFileHead(string path, int maxBytes)
+    public async Task<Result<byte[], string>> ReadFileHeadAsync(
+        string path,
+        int maxBytes,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (maxBytes < 0)
             return Result<byte[], string>.AsError("maxBytes must be non-negative.");
 
@@ -187,12 +235,23 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
 
         try
         {
-            if (!File.Exists(resolved.Value))
+            var exists = await RunIoAsync(() => File.Exists(resolved.Value), cancellationToken)
+                .ConfigureAwait(false);
+            if (!exists)
                 return Result<byte[], string>.AsError($"File not found: {path}");
 
-            using var stream = File.OpenRead(resolved.Value);
+            await using var stream = File.Open(
+                resolved.Value,
+                new FileStreamOptions
+                {
+                    Mode = FileMode.Open,
+                    Access = FileAccess.Read,
+                    Share = FileShare.Read,
+                    Options = FileOptions.Asynchronous
+                });
             var buf = new byte[maxBytes];
-            var read = stream.Read(buf, 0, buf.Length);
+            var read = await stream.ReadAsync(buf.AsMemory(0, buf.Length), cancellationToken)
+                .ConfigureAwait(false);
             if (read == buf.Length)
                 return Result<byte[], string>.AsValue(buf);
 
@@ -200,19 +259,25 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
             Buffer.BlockCopy(buf, 0, sliced, 0, read);
             return Result<byte[], string>.AsValue(sliced);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             return Result<byte[], string>.AsError($"Failed to read file: {ex.Message}");
         }
     }
 
-    public Result<DysonWorkspaceLineSlice, string> ReadLineSlice(
+    public async Task<Result<DysonWorkspaceLineSlice, string>> ReadLineSliceAsync(
         string path,
         int startLine,
         int? maxLines,
         int maxChars,
-        int maxLineChars)
+        int maxLineChars,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (maxLineChars < 1)
             return Result<DysonWorkspaceLineSlice, string>.AsError("maxLineChars must be at least 1.");
         if (maxChars < 1)
@@ -226,93 +291,107 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
 
         try
         {
-            if (!File.Exists(resolved.Value))
-                return Result<DysonWorkspaceLineSlice, string>.AsError($"File not found: {path}");
-
-            using var stream = new FileStream(
-                resolved.Value,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                bufferSize: 4096,
-                FileOptions.SequentialScan);
-            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-            var fileLength = stream.Length;
-            var tailed = startLine < 0;
-            var lines = new List<DysonWorkspaceLine>();
-            var rawChars = 0;
-            var truncated = false;
-            var lineNumber = 0;
-
-            if (tailed)
+            return await RunIoAsync(() =>
             {
-                var windowSize = startLine <= -int.MaxValue ? int.MaxValue : -startLine;
-                var window = new Queue<DysonWorkspaceLine>();
-                while (TryReadBoundedLine(reader, maxLineChars, capture: true, out var text, out var clipped))
+                try
                 {
-                    lineNumber++;
-                    if (window.Count == windowSize)
-                        window.Dequeue();
-                    window.Enqueue(new DysonWorkspaceLine(lineNumber, text, clipped));
-                }
+                    if (!File.Exists(resolved.Value))
+                        return Result<DysonWorkspaceLineSlice, string>.AsError($"File not found: {path}");
 
-                foreach (var line in window)
-                {
-                    if (maxLines is int ml && lines.Count >= ml)
-                    {
-                        truncated = true;
-                        break;
-                    }
+                    using var stream = new FileStream(
+                        resolved.Value,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.Read,
+                        bufferSize: 4096,
+                        FileOptions.SequentialScan);
+                    using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+                    var fileLength = stream.Length;
+                    var tailed = startLine < 0;
+                    var lines = new List<DysonWorkspaceLine>();
+                    var rawChars = 0;
+                    var truncated = false;
+                    var lineNumber = 0;
 
-                    if (rawChars + line.Text.Length > maxChars)
+                    if (tailed)
                     {
-                        if (lines.Count == 0)
+                        var windowSize = startLine <= -int.MaxValue ? int.MaxValue : -startLine;
+                        var window = new Queue<DysonWorkspaceLine>();
+                        while (TryReadBoundedLine(reader, maxLineChars, capture: true, out var text, out var clipped))
+                        {
+                            lineNumber++;
+                            if (window.Count == windowSize)
+                                window.Dequeue();
+                            window.Enqueue(new DysonWorkspaceLine(lineNumber, text, clipped));
+                        }
+
+                        foreach (var line in window)
+                        {
+                            if (maxLines is int ml && lines.Count >= ml)
+                            {
+                                truncated = true;
+                                break;
+                            }
+
+                            if (rawChars + line.Text.Length > maxChars)
+                            {
+                                if (lines.Count == 0)
+                                    lines.Add(line);
+                                truncated = true;
+                                break;
+                            }
+
                             lines.Add(line);
-                        truncated = true;
-                        break;
+                            rawChars += line.Text.Length;
+                        }
                     }
-
-                    lines.Add(line);
-                    rawChars += line.Text.Length;
-                }
-            }
-            else
-            {
-                var first = startLine == 0 ? 1 : startLine;
-                while (TryReadBoundedLine(
-                    reader,
-                    maxLineChars,
-                    capture: lineNumber + 1 >= first,
-                    out var text,
-                    out var clipped))
-                {
-                    lineNumber++;
-                    if (lineNumber < first)
-                        continue;
-
-                    if (rawChars + text.Length > maxChars)
+                    else
                     {
-                        if (lines.Count == 0)
+                        var first = startLine == 0 ? 1 : startLine;
+                        while (TryReadBoundedLine(
+                            reader,
+                            maxLineChars,
+                            capture: lineNumber + 1 >= first,
+                            out var text,
+                            out var clipped))
+                        {
+                            lineNumber++;
+                            if (lineNumber < first)
+                                continue;
+
+                            if (rawChars + text.Length > maxChars)
+                            {
+                                if (lines.Count == 0)
+                                    lines.Add(new DysonWorkspaceLine(lineNumber, text, clipped));
+                                truncated = true;
+                                break;
+                            }
+
                             lines.Add(new DysonWorkspaceLine(lineNumber, text, clipped));
-                        truncated = true;
-                        break;
+                            rawChars += text.Length;
+
+                            if (maxLines is int ml && lines.Count >= ml)
+                            {
+                                truncated = reader.Peek() >= 0;
+                                break;
+                            }
+                        }
                     }
 
-                    lines.Add(new DysonWorkspaceLine(lineNumber, text, clipped));
-                    rawChars += text.Length;
-
-                    if (maxLines is int ml && lines.Count >= ml)
-                    {
-                        truncated = reader.Peek() >= 0;
-                        break;
-                    }
+                    var start = lines.Count == 0 ? 0 : lines[0].LineNumber;
+                    var next = lines.Count == 0 ? lineNumber + 1 : lines[^1].LineNumber + 1;
+                    return Result<DysonWorkspaceLineSlice, string>.AsValue(
+                        new DysonWorkspaceLineSlice(lines, start, next, truncated, fileLength, tailed));
                 }
-            }
-
-            var start = lines.Count == 0 ? 0 : lines[0].LineNumber;
-            var next = lines.Count == 0 ? lineNumber + 1 : lines[^1].LineNumber + 1;
-            return Result<DysonWorkspaceLineSlice, string>.AsValue(
-                new DysonWorkspaceLineSlice(lines, start, next, truncated, fileLength, tailed));
+                catch (Exception ex)
+                {
+                    return Result<DysonWorkspaceLineSlice, string>.AsError($"Failed to read file: {ex.Message}");
+                }
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -320,8 +399,12 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
         }
     }
 
-    public VoidResult<string> WriteAllText(string path, string contents)
+    public async Task<VoidResult<string>> WriteAllTextAsync(
+        string path,
+        string contents,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(contents);
 
         var resolved = ResolvePath(path);
@@ -332,10 +415,18 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
         {
             var dir = Path.GetDirectoryName(resolved.Value);
             if (!string.IsNullOrEmpty(dir))
-                Directory.CreateDirectory(dir);
+            {
+                await RunIoAsync(() => Directory.CreateDirectory(dir), cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
-            File.WriteAllText(resolved.Value, contents);
+            await File.WriteAllTextAsync(resolved.Value, contents, cancellationToken)
+                .ConfigureAwait(false);
             return VoidResult<string>.Success;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -343,8 +434,12 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
         }
     }
 
-    public VoidResult<string> WriteAllBytes(string path, byte[] contents)
+    public async Task<VoidResult<string>> WriteAllBytesAsync(
+        string path,
+        byte[] contents,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(contents);
 
         var resolved = ResolvePath(path);
@@ -355,10 +450,18 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
         {
             var dir = Path.GetDirectoryName(resolved.Value);
             if (!string.IsNullOrEmpty(dir))
-                Directory.CreateDirectory(dir);
+            {
+                await RunIoAsync(() => Directory.CreateDirectory(dir), cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
-            File.WriteAllBytes(resolved.Value, contents);
+            await File.WriteAllBytesAsync(resolved.Value, contents, cancellationToken)
+                .ConfigureAwait(false);
             return VoidResult<string>.Success;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -366,123 +469,157 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
         }
     }
 
-    public VoidResult<string> CreateDirectory(string path)
+    public async Task<VoidResult<string>> CreateDirectoryAsync(
+        string path,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var resolved = ResolvePath(path);
         if (resolved.IsError)
             return VoidResult<string>.AsError(resolved.Error);
 
-        try
+        return await RunIoAsync(() =>
         {
-            Directory.CreateDirectory(resolved.Value);
-            return VoidResult<string>.Success;
-        }
-        catch (Exception ex)
-        {
-            return VoidResult<string>.AsError($"Failed to create directory: {ex.Message}", ex);
-        }
+            try
+            {
+                Directory.CreateDirectory(resolved.Value);
+                return VoidResult<string>.Success;
+            }
+            catch (Exception ex)
+            {
+                return VoidResult<string>.AsError($"Failed to create directory: {ex.Message}", ex);
+            }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
-    public Result<IReadOnlyList<DysonWorkspaceEntry>, string> EnumerateEntries(string path)
+    public async Task<Result<IReadOnlyList<DysonWorkspaceEntry>, string>> EnumerateEntriesAsync(
+        string path,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var resolved = ResolvePath(path);
         if (resolved.IsError)
             return Result<IReadOnlyList<DysonWorkspaceEntry>, string>.AsError(resolved.Error);
 
-        try
+        return await RunIoAsync(() =>
         {
-            if (!Directory.Exists(resolved.Value))
-                return Result<IReadOnlyList<DysonWorkspaceEntry>, string>.AsError(
-                    $"Directory not found: {path}");
-
-            var list = new List<DysonWorkspaceEntry>();
-            foreach (var entry in Directory.EnumerateFileSystemEntries(resolved.Value))
+            try
             {
-                var name = Path.GetFileName(entry);
-                if (string.IsNullOrEmpty(name))
-                    continue;
+                if (!Directory.Exists(resolved.Value))
+                    return Result<IReadOnlyList<DysonWorkspaceEntry>, string>.AsError(
+                        $"Directory not found: {path}");
 
-                list.Add(new DysonWorkspaceEntry(name, Directory.Exists(entry)));
+                var list = new List<DysonWorkspaceEntry>();
+                foreach (var entry in Directory.EnumerateFileSystemEntries(resolved.Value))
+                {
+                    var name = Path.GetFileName(entry);
+                    if (string.IsNullOrEmpty(name))
+                        continue;
+
+                    list.Add(new DysonWorkspaceEntry(name, Directory.Exists(entry)));
+                }
+
+                return Result<IReadOnlyList<DysonWorkspaceEntry>, string>.AsValue(list);
             }
-
-            return Result<IReadOnlyList<DysonWorkspaceEntry>, string>.AsValue(list);
-        }
-        catch (Exception ex)
-        {
-            return Result<IReadOnlyList<DysonWorkspaceEntry>, string>.AsError(
-                $"Failed to list directory: {ex.Message}");
-        }
+            catch (Exception ex)
+            {
+                return Result<IReadOnlyList<DysonWorkspaceEntry>, string>.AsError(
+                    $"Failed to list directory: {ex.Message}");
+            }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
-    public Result<IReadOnlyList<string>, string> EnumerateFiles(
+    public async Task<Result<IReadOnlyList<string>, string>> EnumerateFilesAsync(
         string directoryPath,
         string searchPattern = "*",
-        bool recursive = false)
+        bool recursive = false,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var resolved = ResolvePath(directoryPath);
         if (resolved.IsError)
             return Result<IReadOnlyList<string>, string>.AsError(resolved.Error);
 
         var pattern = string.IsNullOrWhiteSpace(searchPattern) ? "*" : searchPattern;
-        try
+        return await RunIoAsync(() =>
         {
-            if (!Directory.Exists(resolved.Value))
+            try
+            {
+                if (!Directory.Exists(resolved.Value))
+                    return Result<IReadOnlyList<string>, string>.AsError(
+                        $"Directory not found: {directoryPath}");
+
+                var option = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+                var files = Directory.EnumerateFiles(resolved.Value, pattern, option).ToList();
+                return Result<IReadOnlyList<string>, string>.AsValue(files);
+            }
+            catch (Exception ex)
+            {
                 return Result<IReadOnlyList<string>, string>.AsError(
-                    $"Directory not found: {directoryPath}");
-
-            var option = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-            var files = Directory.EnumerateFiles(resolved.Value, pattern, option).ToList();
-            return Result<IReadOnlyList<string>, string>.AsValue(files);
-        }
-        catch (Exception ex)
-        {
-            return Result<IReadOnlyList<string>, string>.AsError(
-                $"Failed to enumerate files: {ex.Message}");
-        }
+                    $"Failed to enumerate files: {ex.Message}");
+            }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
-    public VoidResult<string> DeleteFile(string path)
+    public async Task<VoidResult<string>> DeleteFileAsync(
+        string path,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var resolved = ResolvePath(path);
         if (resolved.IsError)
             return VoidResult<string>.AsError(resolved.Error);
 
-        try
+        return await RunIoAsync(() =>
         {
-            if (!File.Exists(resolved.Value))
-                return VoidResult<string>.AsError($"File not found: {path}");
+            try
+            {
+                if (!File.Exists(resolved.Value))
+                    return VoidResult<string>.AsError($"File not found: {path}");
 
-            File.Delete(resolved.Value);
-            return VoidResult<string>.Success;
-        }
-        catch (Exception ex)
-        {
-            return VoidResult<string>.AsError($"Failed to delete file: {ex.Message}", ex);
-        }
+                File.Delete(resolved.Value);
+                return VoidResult<string>.Success;
+            }
+            catch (Exception ex)
+            {
+                return VoidResult<string>.AsError($"Failed to delete file: {ex.Message}", ex);
+            }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
-    public VoidResult<string> DeleteDirectory(string path, bool recursive = false)
+    public async Task<VoidResult<string>> DeleteDirectoryAsync(
+        string path,
+        bool recursive = false,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var resolved = ResolvePath(path);
         if (resolved.IsError)
             return VoidResult<string>.AsError(resolved.Error);
 
-        try
+        return await RunIoAsync(() =>
         {
-            if (!Directory.Exists(resolved.Value))
-                return VoidResult<string>.AsError($"Directory not found: {path}");
+            try
+            {
+                if (!Directory.Exists(resolved.Value))
+                    return VoidResult<string>.AsError($"Directory not found: {path}");
 
-            Directory.Delete(resolved.Value, recursive);
-            return VoidResult<string>.Success;
-        }
-        catch (Exception ex)
-        {
-            return VoidResult<string>.AsError($"Failed to delete directory: {ex.Message}", ex);
-        }
+                Directory.Delete(resolved.Value, recursive);
+                return VoidResult<string>.Success;
+            }
+            catch (Exception ex)
+            {
+                return VoidResult<string>.AsError($"Failed to delete directory: {ex.Message}", ex);
+            }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
-    public VoidResult<string> Move(string sourceRelativePath, string destinationRelativePath)
+    public async Task<VoidResult<string>> MoveAsync(
+        string sourceRelativePath,
+        string destinationRelativePath,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var sourceResolved = ResolvePath(sourceRelativePath);
         if (sourceResolved.IsError)
             return VoidResult<string>.AsError(sourceResolved.Error);
@@ -497,47 +634,50 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
         if (string.Equals(source, dest, PathComparison))
             return VoidResult<string>.AsError("Source and destination are the same.");
 
-        var isDirectory = Directory.Exists(source);
-        var isFile = File.Exists(source);
-        if (!isDirectory && !isFile)
-            return VoidResult<string>.AsError($"Path not found: {sourceRelativePath}");
-
-        if (isDirectory)
+        return await RunIoAsync(() =>
         {
-            var sourcePrefix = source.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                               + Path.DirectorySeparatorChar;
-            if (dest.StartsWith(sourcePrefix, PathComparison))
-                return VoidResult<string>.AsError("Cannot move a directory into itself.");
-        }
+            var isDirectory = Directory.Exists(source);
+            var isFile = File.Exists(source);
+            if (!isDirectory && !isFile)
+                return VoidResult<string>.AsError($"Path not found: {sourceRelativePath}");
 
-        var destName = Path.GetFileName(dest.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        if (string.IsNullOrWhiteSpace(destName)
-            || destName is "." or ".."
-            || destName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
-        {
-            return VoidResult<string>.AsError("Invalid destination name.");
-        }
-
-        if (Directory.Exists(dest) || File.Exists(dest))
-            return VoidResult<string>.AsError($"Destination already exists: {destinationRelativePath}");
-
-        var destParent = Path.GetDirectoryName(dest);
-        if (!string.IsNullOrEmpty(destParent) && !Directory.Exists(destParent))
-            return VoidResult<string>.AsError($"Destination parent not found: {destinationRelativePath}");
-
-        try
-        {
             if (isDirectory)
-                Directory.Move(source, dest);
-            else
-                File.Move(source, dest);
+            {
+                var sourcePrefix = source.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                                   + Path.DirectorySeparatorChar;
+                if (dest.StartsWith(sourcePrefix, PathComparison))
+                    return VoidResult<string>.AsError("Cannot move a directory into itself.");
+            }
 
-            return VoidResult<string>.Success;
-        }
-        catch (Exception ex)
-        {
-            return VoidResult<string>.AsError($"Failed to move: {ex.Message}", ex);
-        }
+            var destName = Path.GetFileName(dest.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (string.IsNullOrWhiteSpace(destName)
+                || destName is "." or ".."
+                || destName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            {
+                return VoidResult<string>.AsError("Invalid destination name.");
+            }
+
+            if (Directory.Exists(dest) || File.Exists(dest))
+                return VoidResult<string>.AsError($"Destination already exists: {destinationRelativePath}");
+
+            var destParent = Path.GetDirectoryName(dest);
+            if (!string.IsNullOrEmpty(destParent) && !Directory.Exists(destParent))
+                return VoidResult<string>.AsError($"Destination parent not found: {destinationRelativePath}");
+
+            try
+            {
+                if (isDirectory)
+                    Directory.Move(source, dest);
+                else
+                    File.Move(source, dest);
+
+                return VoidResult<string>.Success;
+            }
+            catch (Exception ex)
+            {
+                return VoidResult<string>.AsError($"Failed to move: {ex.Message}", ex);
+            }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public Result<IDysonWorkspaceChangeWatcher, string> CreateWatcher()

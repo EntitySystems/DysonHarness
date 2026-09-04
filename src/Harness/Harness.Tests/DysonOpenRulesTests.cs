@@ -9,32 +9,32 @@ namespace Harness.Tests;
 public class DysonOpenRulesTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
-        AssertImplicitRootWhenManifestMissing();
-        AssertNoBlockWhenNoAgentsAndNoManifest();
-        AssertParseAndAutoIncludeBlock();
-        AssertMissingFileWarningDoesNotFail();
-        AssertAgentOptionalCatalogAndResolve();
-        AssertGetOpenRulesConfigShape();
-        AssertPathEscapeBlocked();
+        await AssertImplicitRootWhenManifestMissing();
+        await AssertNoBlockWhenNoAgentsAndNoManifest();
+        await AssertParseAndAutoIncludeBlock();
+        await AssertMissingFileWarningDoesNotFail();
+        await AssertAgentOptionalCatalogAndResolve();
+        await AssertGetOpenRulesConfigShape();
+        await AssertPathEscapeBlocked();
         AssertSharedPreambleMentionsOpenRules();
-        AssertProvidersFilter();
-        AssertUrlPathHelpers();
-        AssertInitializeOpenRules();
-        AssertEnsureAgentOptionalSkill();
-        AssertSetEntryMode();
+        await AssertProvidersFilter();
+        await AssertUrlPathHelpers();
+        await AssertInitializeOpenRules();
+        await AssertEnsureAgentOptionalSkill();
+        await AssertSetEntryMode();
     }
 
-    private static void AssertImplicitRootWhenManifestMissing()
+    private static async Task AssertImplicitRootWhenManifestMissing()
     {
         var root = TempRoot("implicit");
         try
         {
             File.WriteAllText(Path.Combine(root, "AGENTS.md"), "# Agents root\n");
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
 
-            var loaded = DysonOpenRules.TryLoad(fs);
+            var loaded = await DysonOpenRules.TryLoadAsync(fs);
             if (loaded.IsError || loaded.Value is null)
                 throw new InvalidOperationException("Expected implicit Root when AGENTS.md exists.");
             if (loaded.Value.ManifestPresent)
@@ -42,7 +42,7 @@ public class DysonOpenRulesTests
             if (!string.Equals(loaded.Value.RootPath, "AGENTS.md", StringComparison.Ordinal))
                 throw new InvalidOperationException("Default Root must be AGENTS.md.");
 
-            var block = DysonOpenRules.BuildSystemPromptBlock(fs);
+            var block = await DysonOpenRules.BuildSystemPromptBlockAsync(fs);
             if (block is null
                 || !block.Contains("[OpenRules Root: AGENTS.md]", StringComparison.Ordinal)
                 || !block.Contains("# Agents root", StringComparison.Ordinal)
@@ -58,19 +58,19 @@ public class DysonOpenRulesTests
         }
     }
 
-    private static void AssertNoBlockWhenNoAgentsAndNoManifest()
+    private static async Task AssertNoBlockWhenNoAgentsAndNoManifest()
     {
         var root = TempRoot("empty");
         try
         {
             Directory.CreateDirectory(root);
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
-            var loaded = DysonOpenRules.TryLoad(fs);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
+            var loaded = await DysonOpenRules.TryLoadAsync(fs);
             if (loaded.IsError)
                 throw new InvalidOperationException(loaded.Error);
             if (loaded.Value is not null)
                 throw new InvalidOperationException("Expected null config with no manifest and no AGENTS.md.");
-            if (DysonOpenRules.BuildSystemPromptBlock(fs) is not null)
+            if (await DysonOpenRules.BuildSystemPromptBlockAsync(fs) is not null)
                 throw new InvalidOperationException("Expected null system-prompt block.");
         }
         finally
@@ -79,7 +79,7 @@ public class DysonOpenRulesTests
         }
     }
 
-    private static void AssertParseAndAutoIncludeBlock()
+    private static async Task AssertParseAndAutoIncludeBlock()
     {
         var root = TempRoot("parse");
         try
@@ -101,14 +101,14 @@ public class DysonOpenRulesTests
                 }
                 """);
 
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
-            var loaded = DysonOpenRules.TryLoad(fs);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
+            var loaded = await DysonOpenRules.TryLoadAsync(fs);
             if (loaded.IsError || loaded.Value is null || !loaded.Value.ManifestPresent)
                 throw new InvalidOperationException("Expected parsed manifest.");
             if (loaded.Value.Rules.Count != 2)
                 throw new InvalidOperationException("Expected two rules.");
 
-            var block = DysonOpenRules.BuildSystemPromptBlock(fs);
+            var block = await DysonOpenRules.BuildSystemPromptBlockAsync(fs);
             if (block is null
                 || !block.Contains("# Master", StringComparison.Ordinal)
                 || !block.Contains("# Always rule", StringComparison.Ordinal)
@@ -124,7 +124,7 @@ public class DysonOpenRulesTests
             File.WriteAllText(
                 Path.Combine(root, "openrules.json"),
                 """{ "Root": "", "Rules": [], "Skills": [] }""");
-            var emptyRoot = DysonOpenRules.TryLoad(fs);
+            var emptyRoot = await DysonOpenRules.TryLoadAsync(fs);
             if (emptyRoot.IsError || emptyRoot.Value is null
                 || !string.Equals(emptyRoot.Value.RootPath, "AGENTS.md", StringComparison.Ordinal))
             {
@@ -137,7 +137,7 @@ public class DysonOpenRulesTests
         }
     }
 
-    private static void AssertMissingFileWarningDoesNotFail()
+    private static async Task AssertMissingFileWarningDoesNotFail()
     {
         var root = TempRoot("missing");
         try
@@ -155,8 +155,8 @@ public class DysonOpenRulesTests
                 }
                 """);
 
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
-            var block = DysonOpenRules.BuildSystemPromptBlock(fs);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
+            var block = await DysonOpenRules.BuildSystemPromptBlockAsync(fs);
             if (block is null
                 || !block.Contains("(missing: rules/gone.md)", StringComparison.Ordinal)
                 || !block.Contains("# Root ok", StringComparison.Ordinal)
@@ -173,7 +173,7 @@ public class DysonOpenRulesTests
         }
     }
 
-    private static void AssertAgentOptionalCatalogAndResolve()
+    private static async Task AssertAgentOptionalCatalogAndResolve()
     {
         var root = TempRoot("optional");
         try
@@ -199,8 +199,8 @@ public class DysonOpenRulesTests
                 """);
             File.WriteAllText(Path.Combine(root, "rules", "auto.md"), "# Auto\n");
 
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
-            var catalog = DysonSkillLoader.ListCatalog(fs);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
+            var catalog = await DysonSkillLoader.ListCatalogAsync(fs);
             if (!catalog.Any(e =>
                     e.Source == DysonSkillSource.OpenRules
                     && e.Name.Contains("rules_csharp", StringComparison.OrdinalIgnoreCase)
@@ -219,7 +219,7 @@ public class DysonOpenRulesTests
             if (catalog.Any(e => e.Name.Contains("auto.md", StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException("AutoInclude must not appear in skill catalog.");
 
-            var byPath = DysonSkillLoader.ResolveAndLoad("skills/csharp/SKILL.md", loadIndexOnly: true, fs);
+            var byPath = await DysonSkillLoader.ResolveAndLoadAsync("skills/csharp/SKILL.md", loadIndexOnly: true, fs);
             if (byPath.IsError
                 || !byPath.Value.Markdown.Contains("CSharp skill", StringComparison.Ordinal))
             {
@@ -227,7 +227,7 @@ public class DysonOpenRulesTests
             }
             // Literal resolve wins when the path exists; OpenRules is still in the catalog.
 
-            var byShort = DysonSkillLoader.ResolveAndLoad("csharp", loadIndexOnly: true, fs);
+            var byShort = await DysonSkillLoader.ResolveAndLoadAsync("csharp", loadIndexOnly: true, fs);
             if (byShort.IsError
                 || byShort.Value.Source != DysonSkillSource.OpenRules
                 || !byShort.Value.Markdown.Contains("CSharp skill", StringComparison.Ordinal))
@@ -235,7 +235,7 @@ public class DysonOpenRulesTests
                 throw new InvalidOperationException("Resolve by short catalog id csharp failed.");
             }
 
-            var byStem = DysonSkillLoader.ResolveAndLoad("rules_csharp", loadIndexOnly: true, fs);
+            var byStem = await DysonSkillLoader.ResolveAndLoadAsync("rules_csharp", loadIndexOnly: true, fs);
             if (byStem.IsError || byStem.Value.Source != DysonSkillSource.OpenRules
                 || !byStem.Value.Markdown.Contains("C# rules", StringComparison.Ordinal)
                 || byStem.Value.DisplayName != "C# rules")
@@ -243,7 +243,7 @@ public class DysonOpenRulesTests
                 throw new InvalidOperationException("Resolve by stem failed for openrules rule.");
             }
 
-            var byCatalogName = DysonSkillLoader.ResolveAndLoad(
+            var byCatalogName = await DysonSkillLoader.ResolveAndLoadAsync(
                 "rules/rules_csharp.md", loadIndexOnly: true, fs);
             if (byCatalogName.IsError
                 || !byCatalogName.Value.Markdown.Contains("C# rules", StringComparison.Ordinal))
@@ -257,7 +257,7 @@ public class DysonOpenRulesTests
         }
     }
 
-    private static void AssertGetOpenRulesConfigShape()
+    private static async Task AssertGetOpenRulesConfigShape()
     {
         var root = TempRoot("mcp");
         try
@@ -285,8 +285,8 @@ public class DysonOpenRulesTests
                 StartedUtc = DateTime.UtcNow,
             });
 
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
-            var result = executor.ExecuteAsync(
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
+            var result = await executor.ExecuteAsync(
                     new DysonToolCall
                     {
                         CallId = "1",
@@ -294,8 +294,7 @@ public class DysonOpenRulesTests
                         Stage = 0,
                         ArgumentsJson = "{}",
                     },
-                    CancellationToken.None)
-                .GetAwaiter().GetResult();
+                    CancellationToken.None);
 
             if (result.IsError)
                 throw new InvalidOperationException(result.Content);
@@ -325,8 +324,8 @@ public class DysonOpenRulesTests
 
             // Missing manifest note
             File.Delete(Path.Combine(root, "openrules.json"));
-            var missing = DysonOpenRules.FormatConfigSummaryJson(
-                DysonWorkspaceTestFs.CreateLocal(root));
+            var missing = await DysonOpenRules.FormatConfigSummaryJsonAsync(
+                await DysonWorkspaceTestFs.CreateLocalAsync(root));
             using var missingDoc = JsonDocument.Parse(missing);
             if (missingDoc.RootElement.GetProperty("manifestPresent").GetBoolean()
                 || missingDoc.RootElement.GetProperty("note").GetString() is not { Length: > 0 })
@@ -340,7 +339,7 @@ public class DysonOpenRulesTests
         }
     }
 
-    private static void AssertProvidersFilter()
+    private static async Task AssertProvidersFilter()
     {
         var root = TempRoot("providers");
         try
@@ -363,8 +362,8 @@ public class DysonOpenRulesTests
                 }
                 """);
 
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
-            var loaded = DysonOpenRules.TryLoad(fs);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
+            var loaded = await DysonOpenRules.TryLoadAsync(fs);
             if (loaded.IsError || loaded.Value is null)
                 throw new InvalidOperationException("Expected loaded config.");
 
@@ -374,7 +373,7 @@ public class DysonOpenRulesTests
                 throw new InvalidOperationException("Providers filter mismatch for dyson.");
             }
 
-            var block = DysonOpenRules.BuildSystemPromptBlock(fs);
+            var block = await DysonOpenRules.BuildSystemPromptBlockAsync(fs);
             if (block is null
                 || !block.Contains("# Universal", StringComparison.Ordinal)
                 || block.Contains("# Claude only", StringComparison.Ordinal)
@@ -383,10 +382,10 @@ public class DysonOpenRulesTests
                 throw new InvalidOperationException($"Dyson AutoInclude must skip claude-only bodies:\n{block}");
             }
 
-            if (DysonOpenRules.ListAgentOptional(fs).Count != 0)
+            if ((await DysonOpenRules.ListAgentOptionalAsync(fs)).Count != 0)
                 throw new InvalidOperationException("Claude-only AgentOptional must be hidden from dyson catalog.");
 
-            var summary = DysonOpenRules.FormatConfigSummaryJson(fs);
+            var summary = await DysonOpenRules.FormatConfigSummaryJsonAsync(fs);
             using var doc = JsonDocument.Parse(summary);
             if (doc.RootElement.GetProperty("Rules").GetArrayLength() != 3)
                 throw new InvalidOperationException("GetOpenRulesConfig must return all rows unfiltered.");
@@ -397,7 +396,7 @@ public class DysonOpenRulesTests
         }
     }
 
-    private static void AssertUrlPathHelpers()
+    private static async Task AssertUrlPathHelpers()
     {
         if (!DysonOpenRules.IsPathUrl(DysonOpenRules.DefaultOpenRulesSkillUrl)
             || !DysonOpenRules.IsPathUrl("http://example.com/a.md")
@@ -427,15 +426,15 @@ public class DysonOpenRulesTests
                 }
                 """);
 
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
-            var loaded = DysonOpenRules.TryLoad(fs);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
+            var loaded = await DysonOpenRules.TryLoadAsync(fs);
             if (loaded.IsError || loaded.Value is null || loaded.Value.Skills.Count != 1)
                 throw new InvalidOperationException("Expected URL skill entry.");
             var skill = loaded.Value.Skills[0];
             if (!skill.IsUrl || !skill.Exists || skill.Providers is not null)
                 throw new InvalidOperationException("URL skill must Exist, IsUrl, and have no Providers.");
 
-            var optional = DysonOpenRules.ListAgentOptional(fs);
+            var optional = await DysonOpenRules.ListAgentOptionalAsync(fs);
             if (optional.Count != 1
                 || !DysonOpenRules.CatalogNameFor(optional[0]).Equals("openrules", StringComparison.OrdinalIgnoreCase)
                 || !DysonOpenRules.MatchesAgentOptionalName(optional[0], "SKILL.md")
@@ -446,7 +445,7 @@ public class DysonOpenRulesTests
                 throw new InvalidOperationException("URL AgentOptional match failed.");
             }
 
-            var catalog = DysonSkillLoader.ListCatalog(fs);
+            var catalog = await DysonSkillLoader.ListCatalogAsync(fs);
             if (!catalog.Any(e =>
                     e.Source == DysonSkillSource.OpenRules
                     && e.Name.Equals("openrules", StringComparison.OrdinalIgnoreCase)))
@@ -460,15 +459,15 @@ public class DysonOpenRulesTests
         }
     }
 
-    private static void AssertInitializeOpenRules()
+    private static async Task AssertInitializeOpenRules()
     {
         var root = TempRoot("init");
         try
         {
             Directory.CreateDirectory(root);
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
 
-            var created = DysonOpenRules.InitializeOrRead(fs);
+            var created = await DysonOpenRules.InitializeOrReadAsync(fs);
             if (created.IsError || !created.Value.Created)
                 throw new InvalidOperationException("Expected create-if-missing.");
             using (var doc = JsonDocument.Parse(created.Value.Json))
@@ -484,7 +483,7 @@ public class DysonOpenRulesTests
                 }
             }
 
-            var again = DysonOpenRules.InitializeOrRead(fs);
+            var again = await DysonOpenRules.InitializeOrReadAsync(fs);
             if (again.IsError || again.Value.Created)
                 throw new InvalidOperationException("Second call must not overwrite.");
             if (!string.Equals(again.Value.Json, created.Value.Json, StringComparison.Ordinal))
@@ -497,8 +496,8 @@ public class DysonOpenRulesTests
                 Instruction = "test",
                 StartedUtc = DateTime.UtcNow,
             });
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
-            var mcp = executor.ExecuteAsync(
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
+            var mcp = await executor.ExecuteAsync(
                     new DysonToolCall
                     {
                         CallId = "2",
@@ -506,8 +505,7 @@ public class DysonOpenRulesTests
                         Stage = 0,
                         ArgumentsJson = "{}",
                     },
-                    CancellationToken.None)
-                .GetAwaiter().GetResult();
+                    CancellationToken.None);
             if (mcp.IsError)
                 throw new InvalidOperationException(mcp.Content);
             using var mcpDoc = JsonDocument.Parse(mcp.Content);
@@ -524,7 +522,7 @@ public class DysonOpenRulesTests
         }
     }
 
-    private static void AssertPathEscapeBlocked()
+    private static async Task AssertPathEscapeBlocked()
     {
         var root = TempRoot("escape");
         try
@@ -542,14 +540,14 @@ public class DysonOpenRulesTests
                 }
                 """);
 
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
-            var loaded = DysonOpenRules.TryLoad(fs);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
+            var loaded = await DysonOpenRules.TryLoadAsync(fs);
             if (loaded.IsError || loaded.Value is null)
-                throw new InvalidOperationException("Bad path must not fail TryLoad: " + (loaded.IsError ? loaded.Error : "null"));
+                throw new InvalidOperationException("Bad path must not fail TryLoadAsync: " + (loaded.IsError ? loaded.Error : "null"));
             if (loaded.Value.Rules.Count != 1 || loaded.Value.Rules[0].Exists)
                 throw new InvalidOperationException("Escaping path must resolve as Exists=false.");
 
-            var resolve = DysonSkillLoader.ResolveAndLoad("../outside.md", loadIndexOnly: true, fs);
+            var resolve = await DysonSkillLoader.ResolveAndLoadAsync("../outside.md", loadIndexOnly: true, fs);
             if (!resolve.IsError)
                 throw new InvalidOperationException("Path escape must be blocked.");
         }
@@ -571,15 +569,15 @@ public class DysonOpenRulesTests
         }
     }
 
-    private static void AssertEnsureAgentOptionalSkill()
+    private static async Task AssertEnsureAgentOptionalSkill()
     {
         var root = TempRoot("ensure");
         try
         {
             Directory.CreateDirectory(root);
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
 
-            var added = DysonOpenRules.EnsureAgentOptionalSkill(
+            var added = await DysonOpenRules.EnsureAgentOptionalSkillAsync(
                 fs,
                 ".dyson/skills/demo/SKILL.md",
                 " Demo skill ");
@@ -625,7 +623,7 @@ public class DysonOpenRulesTests
                 }
                 """);
 
-            var preserved = DysonOpenRules.EnsureAgentOptionalSkill(
+            var preserved = await DysonOpenRules.EnsureAgentOptionalSkillAsync(
                 fs, ".dyson/skills/other/SKILL.md", "Other");
             if (preserved.IsError || !preserved.Value)
                 throw new InvalidOperationException("Expected append onto existing manifest.");
@@ -646,11 +644,11 @@ public class DysonOpenRulesTests
                 }
             }
 
-            var again = DysonOpenRules.EnsureAgentOptionalSkill(fs, ".dyson/skills/other/SKILL.md");
+            var again = await DysonOpenRules.EnsureAgentOptionalSkillAsync(fs, ".dyson/skills/other/SKILL.md");
             if (again.IsError || again.Value)
                 throw new InvalidOperationException("Second call with same path must be idempotent.");
 
-            var viaDir = DysonOpenRules.EnsureAgentOptionalSkill(fs, ".dyson/skills/other");
+            var viaDir = await DysonOpenRules.EnsureAgentOptionalSkillAsync(fs, ".dyson/skills/other");
             if (viaDir.IsError || viaDir.Value)
                 throw new InvalidOperationException("Directory vs SKILL.md must not duplicate.");
 
@@ -662,10 +660,10 @@ public class DysonOpenRulesTests
             }
 
             var beforeEscape = File.ReadAllText(Path.Combine(root, "openrules.json"));
-            var escape = DysonOpenRules.EnsureAgentOptionalSkill(fs, "../outside.md");
+            var escape = await DysonOpenRules.EnsureAgentOptionalSkillAsync(fs, "../outside.md");
             if (!escape.IsError)
                 throw new InvalidOperationException("Path escape must error.");
-            var empty = DysonOpenRules.EnsureAgentOptionalSkill(fs, "   ");
+            var empty = await DysonOpenRules.EnsureAgentOptionalSkillAsync(fs, "   ");
             if (!empty.IsError)
                 throw new InvalidOperationException("Empty path must error.");
             if (!string.Equals(
@@ -685,9 +683,9 @@ public class DysonOpenRulesTests
         try
         {
             Directory.CreateDirectory(emptyRoot);
-            var emptyFs = DysonWorkspaceTestFs.CreateLocal(emptyRoot);
-            var emptyPath = DysonOpenRules.EnsureAgentOptionalSkill(emptyFs, "");
-            var escapeOnly = DysonOpenRules.EnsureAgentOptionalSkill(emptyFs, "../outside.md");
+            var emptyFs = await DysonWorkspaceTestFs.CreateLocalAsync(emptyRoot);
+            var emptyPath = await DysonOpenRules.EnsureAgentOptionalSkillAsync(emptyFs, "");
+            var escapeOnly = await DysonOpenRules.EnsureAgentOptionalSkillAsync(emptyFs, "../outside.md");
             if (!emptyPath.IsError || !escapeOnly.IsError)
                 throw new InvalidOperationException("Empty/escape Ensure on missing manifest must error.");
             if (File.Exists(Path.Combine(emptyRoot, "openrules.json")))
@@ -699,7 +697,7 @@ public class DysonOpenRulesTests
         }
     }
 
-    private static void AssertSetEntryMode()
+    private static async Task AssertSetEntryMode()
     {
         var root = TempRoot("set-mode");
         try
@@ -723,9 +721,9 @@ public class DysonOpenRulesTests
                   ]
                 }
                 """);
-            var fs = DysonWorkspaceTestFs.CreateLocal(root);
+            var fs = await DysonWorkspaceTestFs.CreateLocalAsync(root);
 
-            var flipped = DysonOpenRules.SetEntryMode(
+            var flipped = await DysonOpenRules.SetEntryModeAsync(
                 fs,
                 ".dyson/skills/demo/SKILL.md",
                 isSkill: true,
@@ -752,7 +750,7 @@ public class DysonOpenRulesTests
             }
 
             var beforeSame = File.ReadAllText(Path.Combine(root, "openrules.json"));
-            var same = DysonOpenRules.SetEntryMode(
+            var same = await DysonOpenRules.SetEntryModeAsync(
                 fs,
                 ".dyson/skills/demo/SKILL.md",
                 isSkill: true,
@@ -767,7 +765,7 @@ public class DysonOpenRulesTests
                 throw new InvalidOperationException("Same mode must not rewrite the file.");
             }
 
-            var wrongList = DysonOpenRules.SetEntryMode(
+            var wrongList = await DysonOpenRules.SetEntryModeAsync(
                 fs,
                 "rules/keep.md",
                 isSkill: true,
@@ -782,7 +780,7 @@ public class DysonOpenRulesTests
                 throw new InvalidOperationException("Wrong-list SetEntryMode must not write.");
             }
 
-            var unknownPath = DysonOpenRules.SetEntryMode(
+            var unknownPath = await DysonOpenRules.SetEntryModeAsync(
                 fs,
                 "skills/missing/SKILL.md",
                 isSkill: true,
@@ -790,7 +788,7 @@ public class DysonOpenRulesTests
             if (!unknownPath.IsError)
                 throw new InvalidOperationException("Unknown path must error.");
 
-            var badMode = DysonOpenRules.SetEntryMode(
+            var badMode = await DysonOpenRules.SetEntryModeAsync(
                 fs,
                 ".dyson/skills/demo/SKILL.md",
                 isSkill: true,
@@ -819,8 +817,8 @@ public class DysonOpenRulesTests
         try
         {
             Directory.CreateDirectory(missingRoot);
-            var missingFs = DysonWorkspaceTestFs.CreateLocal(missingRoot);
-            var missing = DysonOpenRules.SetEntryMode(
+            var missingFs = await DysonWorkspaceTestFs.CreateLocalAsync(missingRoot);
+            var missing = await DysonOpenRules.SetEntryModeAsync(
                 missingFs,
                 ".dyson/skills/demo/SKILL.md",
                 isSkill: true,

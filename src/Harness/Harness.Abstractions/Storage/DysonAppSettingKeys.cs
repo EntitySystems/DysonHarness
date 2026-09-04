@@ -180,4 +180,11 @@ public static class DysonAppSettingKeys
     /// <see cref="AutomaticCodeReview"/>.
     /// </summary>
     public const string SelfReviewIntensity = "self_review_intensity";
+
+    /// <summary>
+    /// JSON document for S3-compatible file storage credentials:
+    /// <c>{"endpointUrl","accessKeyId","secretAccessKey"}</c>.
+    /// Empty / missing ⇒ not configured. Empty/whitespace delete via <c>SetSettingAsync</c>.
+    /// </summary>
+    public const string FileStorageS3 = "file_storage_s3";
 }

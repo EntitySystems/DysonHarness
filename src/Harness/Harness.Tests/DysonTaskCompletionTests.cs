@@ -9,13 +9,13 @@ namespace Harness.Tests;
 public class DysonTaskCompletionTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertFactoriesAndTerminalGate();
-        AssertCompleteTaskEnqueuesConfirm();
-        AssertConfirmAndContinuePhaseGuard();
-        AssertConfirmEnqueuesReportSummary();
-        AssertContinueEnqueuesContinuation();
+        await AssertCompleteTaskEnqueuesConfirm();
+        await AssertConfirmAndContinuePhaseGuard();
+        await AssertConfirmEnqueuesReportSummary();
+        await AssertContinueEnqueuesContinuation();
     }
 
     private static void AssertFactoriesAndTerminalGate()
@@ -54,12 +54,12 @@ public class DysonTaskCompletionTests
         }
     }
 
-    private static void AssertCompleteTaskEnqueuesConfirm()
+    private static async Task AssertCompleteTaskEnqueuesConfirm()
     {
         var session = new StubSession();
         session.ConfigureRootForTest();
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
 
         var result = executor.ExecuteAsync(new DysonToolCall
         {
@@ -85,12 +85,12 @@ public class DysonTaskCompletionTests
             throw new InvalidOperationException("CompleteTask success JSON should note nextTurnKind.");
     }
 
-    private static void AssertConfirmAndContinuePhaseGuard()
+    private static async Task AssertConfirmAndContinuePhaseGuard()
     {
         var session = new StubSession();
         session.ConfigureRootForTest();
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
 
         var confirm = executor.ExecuteAsync(new DysonToolCall
         {
@@ -121,13 +121,13 @@ public class DysonTaskCompletionTests
         }
     }
 
-    private static void AssertConfirmEnqueuesReportSummary()
+    private static async Task AssertConfirmEnqueuesReportSummary()
     {
         var session = new StubSession();
         session.ConfigureRootForTest();
         session.AddTurnForTest(DysonTaskCompletionFlow.CreateCompletionConfirmTurn("prior"));
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
 
         if (!session.IsInTaskCompletionConfirmPhase)
             throw new InvalidOperationException("Expected IsInTaskCompletionConfirmPhase after confirm turn.");
@@ -160,13 +160,13 @@ public class DysonTaskCompletionTests
         }
     }
 
-    private static void AssertContinueEnqueuesContinuation()
+    private static async Task AssertContinueEnqueuesContinuation()
     {
         var session = new StubSession();
         session.ConfigureRootForTest();
         session.AddTurnForTest(DysonTaskCompletionFlow.CreateCompletionConfirmTurn("prior"));
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
 
         var result = executor.ExecuteAsync(new DysonToolCall
         {

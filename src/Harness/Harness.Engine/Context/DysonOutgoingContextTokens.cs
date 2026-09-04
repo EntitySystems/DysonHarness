@@ -100,6 +100,7 @@ public static class DysonOutgoingContextTokens
         if (text.Length < 12)
             return false;
 
+        // 85-token stub is for data: (and raw jpeg base64) only — https:// presigned URLs count as strings.
         if (text.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
             return true;
 

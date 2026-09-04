@@ -188,10 +188,11 @@ internal static class DysonSkillPackageInstall
     /// Extracts a skill zip into <c>.dyson/skills/{safeSlug}/</c>, stripping a single top-level
     /// folder when present. Requires SKILL.md after extract.
     /// </summary>
-    public static Result<string, string> ExtractZipToSkillDir(
+    public static async Task<Result<string, string>> ExtractZipToSkillDirAsync(
         byte[] zipBytes,
         string safeSlug,
-        IDysonWorkspaceFileSystem fs)
+        IDysonWorkspaceFileSystem fs,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(zipBytes);
         ArgumentNullException.ThrowIfNull(fs);
@@ -204,7 +205,7 @@ internal static class DysonSkillPackageInstall
 
         try
         {
-            var prepared = PrepareSkillDir(destRoot, fs);
+            var prepared = await PrepareSkillDirAsync(destRoot, fs, cancellationToken).ConfigureAwait(false);
             if (prepared.IsError)
                 return Result<string, string>.AsError(prepared.Error);
 
@@ -215,6 +216,7 @@ internal static class DysonSkillPackageInstall
             var wroteFile = false;
             foreach (var entry in archive.Entries)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var relative = NormalizeZipEntryPath(entry.FullName, prefix);
                 if (relative is null)
                     continue;
@@ -229,7 +231,8 @@ internal static class DysonSkillPackageInstall
                         return Result<string, string>.AsError(
                             $"Refusing to extract unsafe zip path '{entry.FullName}'.");
                     }
-                    var dirCreate = fs.CreateDirectory(destRoot + "/" + dirRel);
+                    var dirCreate = await fs.CreateDirectoryAsync(destRoot + "/" + dirRel, cancellationToken)
+                        .ConfigureAwait(false);
                     if (dirCreate.IsError)
                         return Result<string, string>.AsError(dirCreate.Error);
                     continue;
@@ -246,7 +249,8 @@ internal static class DysonSkillPackageInstall
                 if (parentSlash > 0)
                 {
                     var parent = target[..parentSlash];
-                    var parentCreate = fs.CreateDirectory(parent);
+                    var parentCreate = await fs.CreateDirectoryAsync(parent, cancellationToken)
+                        .ConfigureAwait(false);
                     if (parentCreate.IsError)
                         return Result<string, string>.AsError(parentCreate.Error);
                 }
@@ -254,7 +258,8 @@ internal static class DysonSkillPackageInstall
                 using var entryStream = entry.Open();
                 using var outMs = new MemoryStream();
                 entryStream.CopyTo(outMs);
-                var write = fs.WriteAllBytes(target, outMs.ToArray());
+                var write = await fs.WriteAllBytesAsync(target, outMs.ToArray(), cancellationToken)
+                    .ConfigureAwait(false);
                 if (write.IsError)
                     return Result<string, string>.AsError(write.Error);
                 wroteFile = true;
@@ -263,13 +268,14 @@ internal static class DysonSkillPackageInstall
             if (!wroteFile)
                 return Result<string, string>.AsError("Skill package contained no files.");
 
-            var skillMd = fs.FileExists(destRoot + "/SKILL.md");
+            var skillMd = await fs.FileExistsAsync(destRoot + "/SKILL.md", cancellationToken)
+                .ConfigureAwait(false);
             if (skillMd.IsError)
                 return Result<string, string>.AsError(skillMd.Error);
             if (!skillMd.Value)
             {
                 // ponytail: some zips use skill.md; accept case variants via enumerate
-                if (!HasSkillMarkdown(fs, destRoot))
+                if (!await HasSkillMarkdownAsync(fs, destRoot, cancellationToken).ConfigureAwait(false))
                 {
                     return Result<string, string>.AsError(
                         $"Installed package under '{destRoot}' is missing SKILL.md.");
@@ -292,10 +298,11 @@ internal static class DysonSkillPackageInstall
     /// Writes a single SKILL.md body to <c>.dyson/skills/{safeSlug}/SKILL.md</c>
     /// (markdown-only install, e.g. SkillsHub).
     /// </summary>
-    public static Result<string, string> WriteSkillMarkdown(
+    public static async Task<Result<string, string>> WriteSkillMarkdownAsync(
         string markdown,
         string safeSlug,
-        IDysonWorkspaceFileSystem fs)
+        IDysonWorkspaceFileSystem fs,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(markdown);
         ArgumentNullException.ThrowIfNull(fs);
@@ -305,11 +312,12 @@ internal static class DysonSkillPackageInstall
             return Result<string, string>.AsError(slugResult.Error);
 
         var destRoot = DysonSkillLoader.DysonSkillsRelativeDir + "/" + slugResult.Value;
-        var prepared = PrepareSkillDir(destRoot, fs);
+        var prepared = await PrepareSkillDirAsync(destRoot, fs, cancellationToken).ConfigureAwait(false);
         if (prepared.IsError)
             return Result<string, string>.AsError(prepared.Error);
 
-        var write = fs.WriteAllText(destRoot + "/SKILL.md", markdown);
+        var write = await fs.WriteAllTextAsync(destRoot + "/SKILL.md", markdown, cancellationToken)
+            .ConfigureAwait(false);
         if (write.IsError)
             return Result<string, string>.AsError(write.Error);
 
@@ -403,22 +411,26 @@ internal static class DysonSkillPackageInstall
         return Result<string, string>.AsValue(trimmed);
     }
 
-    private static Result<string, string> PrepareSkillDir(string destRoot, IDysonWorkspaceFileSystem fs)
+    private static async Task<Result<string, string>> PrepareSkillDirAsync(
+        string destRoot,
+        IDysonWorkspaceFileSystem fs,
+        CancellationToken cancellationToken)
     {
         if (!fs.IsInitialized)
             return Result<string, string>.AsError("Workspace filesystem is not initialized.");
 
-        var exists = fs.DirectoryExists(destRoot);
+        var exists = await fs.DirectoryExistsAsync(destRoot, cancellationToken).ConfigureAwait(false);
         if (exists.IsError)
             return Result<string, string>.AsError(exists.Error);
         if (exists.Value)
         {
-            var deleted = fs.DeleteDirectory(destRoot, recursive: true);
+            var deleted = await fs.DeleteDirectoryAsync(destRoot, recursive: true, cancellationToken)
+                .ConfigureAwait(false);
             if (deleted.IsError)
                 return Result<string, string>.AsError(deleted.Error);
         }
 
-        var created = fs.CreateDirectory(destRoot);
+        var created = await fs.CreateDirectoryAsync(destRoot, cancellationToken).ConfigureAwait(false);
         if (created.IsError)
             return Result<string, string>.AsError(created.Error);
 
@@ -441,9 +453,12 @@ internal static class DysonSkillPackageInstall
         return name;
     }
 
-    private static bool HasSkillMarkdown(IDysonWorkspaceFileSystem fs, string destRoot)
+    private static async Task<bool> HasSkillMarkdownAsync(
+        IDysonWorkspaceFileSystem fs,
+        string destRoot,
+        CancellationToken cancellationToken)
     {
-        var entries = fs.EnumerateEntries(destRoot);
+        var entries = await fs.EnumerateEntriesAsync(destRoot, cancellationToken).ConfigureAwait(false);
         if (entries.IsError)
             return false;
         return entries.Value.Any(e =>

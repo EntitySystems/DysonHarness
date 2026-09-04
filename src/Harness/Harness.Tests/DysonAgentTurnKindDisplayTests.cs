@@ -26,6 +26,7 @@ public class DysonAgentTurnKindDisplayTests
         AssertNumeric(DysonAgentTurnKind.TaskEndReflect, 14);
         AssertNumeric(DysonAgentTurnKind.BugReview, 15);
         AssertNumeric(DysonAgentTurnKind.FullSummarize, 16);
+        AssertNumeric(DysonAgentTurnKind.WorktreeCreating, 17);
 
         AssertLabel(DysonAgentTurnKind.Normal, "Turn");
         AssertLabel(DysonAgentTurnKind.ExpandThoughtProcess, "Expand thought");
@@ -44,11 +45,12 @@ public class DysonAgentTurnKindDisplayTests
         AssertLabel(DysonAgentTurnKind.TaskEndReflect, "Task end reflection");
         AssertLabel(DysonAgentTurnKind.BugReview, "Code review");
         AssertLabel(DysonAgentTurnKind.FullSummarize, "Full summary");
+        AssertLabel(DysonAgentTurnKind.WorktreeCreating, "Creating worktree");
 
         if ((int)DysonAgentTurnKind.DropContext != 13)
             throw new InvalidOperationException("DysonAgentTurnKind.DropContext must stay 13 (append-only).");
 
-        // Append-only after DropContext=13: TaskEndReflect=14, BugReview=15, FullSummarize=16.
+        // Append-only after DropContext=13: TaskEndReflect=14, BugReview=15, FullSummarize=16, WorktreeCreating=17.
 
         foreach (var kind in Enum.GetValues<DysonAgentTurnKind>())
         {
@@ -63,10 +65,12 @@ public class DysonAgentTurnKindDisplayTests
         Assert.False(new DysonAgentTurn { Kind = DysonAgentTurnKind.TaskEndReflect }.AllowEnqueue);
         Assert.True(new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal }.AllowEnqueue);
         Assert.True(new DysonAgentTurn { Kind = DysonAgentTurnKind.BugReview }.AllowEnqueue);
+        Assert.True(new DysonAgentTurn { Kind = DysonAgentTurnKind.WorktreeCreating }.AllowEnqueue);
 
         Assert.False(DysonAgentTurnKindRules.AllowsEnqueue(DysonAgentTurnKind.TaskEndReflect));
         Assert.True(DysonAgentTurnKindRules.AllowsEnqueue(DysonAgentTurnKind.Normal));
         Assert.True(DysonAgentTurnKindRules.AllowsEnqueue(DysonAgentTurnKind.BugReview));
+        Assert.True(DysonAgentTurnKindRules.AllowsEnqueue(DysonAgentTurnKind.WorktreeCreating));
     }
 
     private static void AssertNumeric(DysonAgentTurnKind kind, int expected)

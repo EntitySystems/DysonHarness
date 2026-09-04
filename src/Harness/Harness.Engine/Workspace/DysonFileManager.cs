@@ -21,9 +21,11 @@ public sealed class DysonFileManager
     public string WorkRoot => _fs.NativeRootPath;
 
     /// <summary>Ensures <c>{workRoot}/.dyson/plans/</c> exists.</summary>
-    public VoidResult<string> EnsurePlansDirectory()
+    public async Task<VoidResult<string>> EnsurePlansDirectoryAsync(
+        CancellationToken cancellationToken = default)
     {
-        var created = _fs.CreateDirectory(PlansRelativeDir);
+        var created = await _fs.CreateDirectoryAsync(PlansRelativeDir, cancellationToken)
+            .ConfigureAwait(false);
         if (created.IsError)
             return VoidResult<string>.AsError($"Failed to create plans directory: {created.Error}");
 
@@ -34,11 +36,14 @@ public sealed class DysonFileManager
     /// Writes a new plan markdown file as <c>.dyson/plans/{slug}-{hash}.md</c>
     /// and returns the workspace-relative path (forward slashes).
     /// </summary>
-    public Result<string, string> WriteNewPlan(string titleSlug, string markdown)
+    public async Task<Result<string, string>> WriteNewPlanAsync(
+        string titleSlug,
+        string markdown,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(markdown);
 
-        var ensured = EnsurePlansDirectory();
+        var ensured = await EnsurePlansDirectoryAsync(cancellationToken).ConfigureAwait(false);
         if (ensured.IsError)
             return Result<string, string>.AsError(ensured.Error);
 
@@ -54,7 +59,8 @@ public sealed class DysonFileManager
         if (!IsUnderPlansDir(resolved.Value))
             return Result<string, string>.AsError($"Plan path escapes {PlansRelativeDir}: {relative}");
 
-        var written = _fs.WriteAllText(relative, markdown);
+        var written = await _fs.WriteAllTextAsync(relative, markdown, cancellationToken)
+            .ConfigureAwait(false);
         if (written.IsError)
             return Result<string, string>.AsError($"Failed to write plan: {written.Error}");
 
@@ -62,11 +68,13 @@ public sealed class DysonFileManager
     }
 
     /// <summary>Reads UTF-8 text at a workspace-relative (or absolute-under-root) path.</summary>
-    public Result<string, string> ReadText(string relativePath)
+    public async Task<Result<string, string>> ReadTextAsync(
+        string relativePath,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
 
-        var read = _fs.ReadAllText(relativePath);
+        var read = await _fs.ReadAllTextAsync(relativePath, cancellationToken).ConfigureAwait(false);
         if (read.IsError)
             return Result<string, string>.AsError(read.Error);
 

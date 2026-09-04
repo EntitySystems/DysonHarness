@@ -131,6 +131,26 @@ public class DysonSessionInactiveDeleteTests
     }
 
     [Fact]
+    public void DeadRoot_WithHasWorktree_NotSelected()
+    {
+        var rootId = Guid.NewGuid();
+        var selected = DysonSessionInactiveDelete.SelectDeletableRootIds(
+            [Summary(rootId, DysonSessionStatus.Completed, hasWorktree: true)]);
+
+        Assert.Empty(selected);
+    }
+
+    [Fact]
+    public void DeadRoot_WithoutHasWorktree_Selected()
+    {
+        var rootId = Guid.NewGuid();
+        var selected = DysonSessionInactiveDelete.SelectDeletableRootIds(
+            [Summary(rootId, DysonSessionStatus.Completed, hasWorktree: false)]);
+
+        Assert.Equal([rootId], selected);
+    }
+
+    [Fact]
     public void ActiveRoot_WithEmptyLiveActiveIds_Selected()
     {
         var rootId = Guid.NewGuid();
@@ -170,11 +190,13 @@ public class DysonSessionInactiveDeleteTests
     private static DysonSessionSummary Summary(
         Guid id,
         DysonSessionStatus status,
-        Guid? parentSessionId = null) =>
+        Guid? parentSessionId = null,
+        bool hasWorktree = false) =>
         new()
         {
             Id = id,
             ParentSessionId = parentSessionId,
             Status = status,
+            HasWorktree = hasWorktree,
         };
 }

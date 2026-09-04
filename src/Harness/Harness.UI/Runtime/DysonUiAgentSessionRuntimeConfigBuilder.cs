@@ -198,6 +198,8 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
                 }
             }
 
+            await TryHydrateFileStorageSettingAsync(config, cancellationToken)
+                .ConfigureAwait(false);
             await TryHydrateImageGenerationProviderSettingAsync(
                     p => config.ImageGenerationProvider = p,
                     cancellationToken)
@@ -353,6 +355,23 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
         }
 
         return names;
+    }
+
+    private async Task TryHydrateFileStorageSettingAsync(
+        DysonAgentSessionConfig config,
+        CancellationToken cancellationToken)
+    {
+        var setting = await _appSettings
+            .GetSettingAsync(DysonAppSettingKeys.FileStorageS3, cancellationToken)
+            .ConfigureAwait(false);
+        if (setting.IsError || string.IsNullOrWhiteSpace(setting.Value))
+            return;
+
+        var created = DysonS3FileStorage.TryCreateFromJson(setting.Value);
+        if (created.IsError)
+            return;
+
+        config.FileStorage = created.Value;
     }
 
     private async Task TryHydrateImageGenerationProviderSettingAsync(

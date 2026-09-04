@@ -61,6 +61,7 @@ Wire (Responses API): nested `reasoning.effort` — same Dyson Responses client 
 - Slug lists rot; re-Verify after upstream catalog changes.
 - Disconnect in the UI clears pending auth-session tracking only — it does not delete the managed row or stop the proxy.
 - Connect fails visibly if port **54545** is already bound.
+- Claude Fable 5.1 requires CLIProxyAPI ≥ **v7.2.148** (Claude Code fingerprint ≥ 2.1.251). Dyson pins **v7.2.149**. Reinstall CLI proxy from Settings → Models after a pin bump; an old `external/cliproxy/7.2.145/` tree is not treated as installed.
 
 ## Sources
 

@@ -1586,6 +1586,9 @@ code, .mono {
   justify-content: center;
   padding: 24px;
   background: var(--overlay);
+  /* Overlay chips sit in a pointer-events:none cluster; display:contents
+     promotes this backdrop into that cluster, so restore hit-testing. */
+  pointer-events: auto;
 }
 
 .prompt-user-dialog {
@@ -2484,7 +2487,7 @@ code, .mono {
   background: var(--bg-2);
 }
 
-/* Session overview chips overlay the transcript (top-right of the main stage). */
+/* Session overview chips overlay the transcript (top-center of the main stage). */
 .session-main-stage {
   flex: 1;
   min-height: 0;
@@ -2496,15 +2499,17 @@ code, .mono {
 .session-overview-actions {
   position: absolute;
   top: 10px;
-  right: 14px;
+  left: 0;
+  right: 0;
   z-index: 6;
   display: flex;
   flex-direction: row;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: center;
   pointer-events: none;
+  padding: 0 14px;
 }
 
 .session-todos,
@@ -5029,6 +5034,20 @@ code, .mono {
 .composer-chip.is-muted {
   color: var(--text-dim);
   border-style: dashed;
+}
+
+.composer-worktree {
+  max-width: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.composer-worktree input {
+  margin: 0;
+}
+
+.composer-worktree.is-muted {
+  cursor: default;
 }
 
 .agent-mode-picker {

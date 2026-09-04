@@ -171,7 +171,9 @@ public static partial class DysonPluginPaths
         });
     }
 
-    public static Result<DysonPluginScopeRoots, string> EnsureScopeRoots(DysonPluginInstallTarget target)
+    public static async Task<Result<DysonPluginScopeRoots, string>> EnsureScopeRootsAsync(
+        DysonPluginInstallTarget target,
+        CancellationToken cancellationToken = default)
     {
         var roots = GetScopeRoots(target);
         if (roots.IsError)
@@ -180,11 +182,13 @@ public static partial class DysonPluginPaths
         if (target.Scope == DysonPluginInstallScope.Project)
         {
             var fs = target.WorkspaceFileSystem!;
-            var plugins = fs.CreateDirectory(ProjectPluginsRelativeDirectory);
+            var plugins = await fs.CreateDirectoryAsync(ProjectPluginsRelativeDirectory, cancellationToken)
+                .ConfigureAwait(false);
             if (plugins.IsError)
                 return Result<DysonPluginScopeRoots, string>.AsError(plugins.Error);
 
-            var data = fs.CreateDirectory(ProjectPluginDataRelativeDirectory);
+            var data = await fs.CreateDirectoryAsync(ProjectPluginDataRelativeDirectory, cancellationToken)
+                .ConfigureAwait(false);
             if (data.IsError)
                 return Result<DysonPluginScopeRoots, string>.AsError(data.Error);
         }

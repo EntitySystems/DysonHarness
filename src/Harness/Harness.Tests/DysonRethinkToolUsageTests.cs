@@ -9,7 +9,7 @@ namespace Harness.Tests;
 public class DysonRethinkToolUsageTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertEnumAndFactories();
         AssertRethinkInstructionContent();
@@ -17,10 +17,10 @@ public class DysonRethinkToolUsageTests
         AssertSoftPauseEnqueuesRethink();
         AssertSoftPauseOnRethinkDoesNotReenqueue();
         AssertSoftPauseOnExploreDoesNotEnqueue();
-        AssertResumePhaseGuardAndEnqueue();
-        AssertResumeSurvivesPlanResultAppend();
-        AssertResumeSurvivesPrematureCompletedUtc();
-        AssertWaitForSecondsRange();
+        await AssertResumePhaseGuardAndEnqueue();
+        await AssertResumeSurvivesPlanResultAppend();
+        await AssertResumeSurvivesPrematureCompletedUtc();
+        await AssertWaitForSecondsRange();
     }
 
     private static void AssertEnumAndFactories()
@@ -89,6 +89,22 @@ public class DysonRethinkToolUsageTests
         {
             throw new InvalidOperationException(
                 "System prompt rethink blurb must note Explore budget 120 and no-rethink.");
+        }
+
+        if (prompt.IndexOf(
+                "Each turn you may and are encouraged to issue multiple tool calls in a single turn",
+                StringComparison.Ordinal) < 0)
+        {
+            throw new InvalidOperationException(
+                "SharedPreamble must encourage multiple tool calls in a single turn.");
+        }
+
+        if (prompt.IndexOf(
+                "Independent reads, searches, and listings belong together in one round",
+                StringComparison.Ordinal) < 0)
+        {
+            throw new InvalidOperationException(
+                "SharedPreamble must say independent reads, searches, and listings belong together in one round.");
         }
     }
 
@@ -180,12 +196,12 @@ public class DysonRethinkToolUsageTests
         }
     }
 
-    private static void AssertResumePhaseGuardAndEnqueue()
+    private static async Task AssertResumePhaseGuardAndEnqueue()
     {
         var session = new StubSession(DysonAgentModes.Work);
         session.ConfigureRootForTest();
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
 
         var outside = executor.ExecuteAsync(new DysonToolCall
         {
@@ -243,12 +259,12 @@ public class DysonRethinkToolUsageTests
     /// Mid-prompt <see cref="DysonAgentSession.AppendPlanResultTurn"/> displaces
     /// <c>TurnHistory[^1]</c>; Resume must still succeed via <see cref="DysonAgentSession.InFlightPromptTurn"/>.
     /// </summary>
-    private static void AssertResumeSurvivesPlanResultAppend()
+    private static async Task AssertResumeSurvivesPlanResultAppend()
     {
         var session = new StubSession(DysonAgentModes.Work);
         session.ConfigureRootForTest();
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
 
         var rethink = DysonRethinkToolUsageFlow.CreateTurn();
         session.AddTurnForTest(rethink);
@@ -292,12 +308,12 @@ public class DysonRethinkToolUsageTests
     /// Host may stamp <see cref="DysonAgentTurn.CompletedUtc"/> mid-tool-loop on child sessions
     /// (no <c>_busySessions</c>). Phase guard must still trust <see cref="DysonAgentSession.InFlightPromptTurn"/>.
     /// </summary>
-    private static void AssertResumeSurvivesPrematureCompletedUtc()
+    private static async Task AssertResumeSurvivesPrematureCompletedUtc()
     {
         var session = new StubSession(DysonAgentModes.Work);
         session.ConfigureRootForTest();
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
 
         var rethink = DysonRethinkToolUsageFlow.CreateTurn();
         session.AddTurnForTest(rethink);
@@ -335,12 +351,12 @@ public class DysonRethinkToolUsageTests
         }
     }
 
-    private static void AssertWaitForSecondsRange()
+    private static async Task AssertWaitForSecondsRange()
     {
         var session = new StubSession(DysonAgentModes.Work);
         session.ConfigureRootForTest();
         using var http = new HttpClient();
-        var executor = DysonWorkspaceTestFs.CreateExecutor(session, Path.GetTempPath(), http);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
 
         var zero = executor.ExecuteAsync(new DysonToolCall
         {

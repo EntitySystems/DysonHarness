@@ -27,7 +27,7 @@ public static class DysonSessionLogDisplay
     private static DysonSessionLogLevel Classify(string body)
     {
         // ponytail: keyword scan is enough for rail presentation; upgrade if AppendLog gains structured levels
-        if (ContainsAny(body, "failed", "exception", "fatal", " 404 ", "not found"))
+        if (ContainsAny(body, "failed", "exception", "fatal", " 404 ", "not found", "openai api"))
             return DysonSessionLogLevel.Error;
 
         if (ContainsAny(body, "retry", "soft-pause", "skip", "fallback", "nudge", "missing", "dropped", "warn"))

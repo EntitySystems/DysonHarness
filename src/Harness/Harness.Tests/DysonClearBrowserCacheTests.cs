@@ -10,10 +10,10 @@ namespace Harness.Tests;
 public class DysonClearBrowserCacheTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertCatalog();
-        AssertExecutorInvokesControl();
+        await AssertExecutorInvokesControl();
         AssertNullControlUnavailable();
     }
 
@@ -38,7 +38,7 @@ public class DysonClearBrowserCacheTests
             throw new InvalidOperationException("ClearBrowserCache must be omitted when BrowserControl is unavailable.");
     }
 
-    private static void AssertExecutorInvokesControl()
+    private static async Task AssertExecutorInvokesControl()
     {
         var control = new RecordingBrowserControl(windows: 2, tabsReloaded: 3);
         var config = new DysonAgentSessionConfig { BrowserControl = control };
@@ -48,7 +48,7 @@ public class DysonClearBrowserCacheTests
         Directory.CreateDirectory(root);
         try
         {
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, new HttpClient());
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
             var call = new DysonToolCall
             {
                 CallId = "cache1",

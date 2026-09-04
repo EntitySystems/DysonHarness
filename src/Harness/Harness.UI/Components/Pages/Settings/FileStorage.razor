@@ -1,0 +1,272 @@
+@page "/settings/file-storage"
+@layout SettingsLayout
+@using DysonHarness
+@using Harness.UI.Demo
+@inject IDysonSubjectSettingsRepository AppSettings
+@inject DysonUiHost Host
+
+<PageTitle>File storage — Settings</PageTitle>
+
+<div class="settings-page">
+    <h1 class="settings-page__title">File storage</h1>
+    <p class="settings-page__copy">
+        Connect an S3-compatible bucket so composer and tool images are sent as HTTPS URLs instead of huge base64 payloads.
+        New and resumed sessions pick up the saved credentials.
+    </p>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="error-banner">@_error</div>
+    }
+
+    @if (!string.IsNullOrEmpty(_status))
+    {
+        <p class="settings-page__copy" style="margin:0 0 8px;">@_status</p>
+    }
+
+    <div class="settings-page__panel panel">
+        <div class="field">
+            <label for="file-storage-url">URL</label>
+            <input id="file-storage-url"
+                   class="field"
+                   @bind="_endpointUrl"
+                   type="url"
+                   autocomplete="off"
+                   placeholder="https://s3.example.com/bucket"
+                   disabled="@_busy" />
+        </div>
+        <div class="field">
+            <label for="file-storage-access-key">Access key ID</label>
+            <input id="file-storage-access-key"
+                   class="field"
+                   @bind="_accessKeyId"
+                   type="text"
+                   autocomplete="off"
+                   disabled="@_busy" />
+        </div>
+        <div class="field">
+            <label for="file-storage-secret">Secret</label>
+            <input id="file-storage-secret"
+                   class="field"
+                   @bind="_secretAccessKey"
+                   type="password"
+                   autocomplete="off"
+                   placeholder="@(_hasStoredSecret ? "Leave blank to keep stored secret" : null)"
+                   disabled="@_busy" />
+        </div>
+
+        <div class="btn-row" style="margin-top:12px;">
+            <button type="button"
+                    class="btn"
+                    disabled="@_busy"
+                    @onclick="TestConnectionAsync">
+                Test connection
+            </button>
+            <button type="button"
+                    class="btn btn-primary"
+                    disabled="@_busy"
+                    @onclick="SaveAsync">
+                Save
+            </button>
+            <button type="button"
+                    class="btn btn-ghost"
+                    disabled="@(_busy || !_hasStoredSecret)"
+                    @onclick="DisconnectAsync">
+                Disconnect
+            </button>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string _endpointUrl = "";
+    private string _accessKeyId = "";
+    private string _secretAccessKey = "";
+    private string? _storedSecret;
+    private bool _hasStoredSecret;
+    private string? _error;
+    private string? _status;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _error = null;
+        var setting = await AppSettings.GetSettingAsync(DysonAppSettingKeys.FileStorageS3);
+        if (setting.IsError)
+        {
+            _error = setting.Error;
+            return;
+        }
+
+        ApplyLoadedJson(setting.Value);
+    }
+
+    private void ApplyLoadedJson(string? json)
+    {
+        var parsed = DysonS3FileStorageSettings.TryParse(json);
+        if (parsed.IsError)
+        {
+            _endpointUrl = "";
+            _accessKeyId = "";
+            _secretAccessKey = "";
+            _storedSecret = null;
+            _hasStoredSecret = false;
+            return;
+        }
+
+        _endpointUrl = parsed.Value.EndpointUrl;
+        _accessKeyId = parsed.Value.AccessKeyId;
+        _secretAccessKey = "";
+        _storedSecret = parsed.Value.SecretAccessKey;
+        _hasStoredSecret = !string.IsNullOrWhiteSpace(_storedSecret);
+    }
+
+    private Result<DysonS3FileStorageSettings, string> TryBuildSettings(bool requireSecret)
+    {
+        var secret = _secretAccessKey.Trim();
+        if (string.IsNullOrWhiteSpace(secret) && _hasStoredSecret)
+            secret = _storedSecret ?? "";
+
+        if (string.IsNullOrWhiteSpace(_endpointUrl) || string.IsNullOrWhiteSpace(_accessKeyId))
+            return Result<DysonS3FileStorageSettings, string>.AsError("URL and access key ID are required.");
+
+        if (requireSecret && string.IsNullOrWhiteSpace(secret))
+            return Result<DysonS3FileStorageSettings, string>.AsError("Secret is required.");
+
+        if (string.IsNullOrWhiteSpace(secret))
+            return Result<DysonS3FileStorageSettings, string>.AsError("Secret is required.");
+
+        return Result<DysonS3FileStorageSettings, string>.AsValue(new DysonS3FileStorageSettings
+        {
+            EndpointUrl = _endpointUrl.Trim(),
+            AccessKeyId = _accessKeyId.Trim(),
+            SecretAccessKey = secret,
+        });
+    }
+
+    private async Task TestConnectionAsync()
+    {
+        if (_busy)
+            return;
+
+        _error = null;
+        _status = null;
+        var built = TryBuildSettings(requireSecret: true);
+        if (built.IsError)
+        {
+            _error = built.Error;
+            return;
+        }
+
+        var created = DysonS3FileStorage.TryCreate(built.Value);
+        if (created.IsError)
+        {
+            _error = created.Error;
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            using (created.Value)
+            {
+                var ping = await created.Value.PingAsync().ConfigureAwait(true);
+                if (ping.IsError)
+                {
+                    _error = ping.Error;
+                    return;
+                }
+            }
+
+            _status = "Connection succeeded.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_busy)
+            return;
+
+        _error = null;
+        _status = null;
+        var built = TryBuildSettings(requireSecret: true);
+        if (built.IsError)
+        {
+            _error = built.Error;
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var created = DysonS3FileStorage.TryCreate(built.Value);
+            if (created.IsError)
+            {
+                _error = created.Error;
+                return;
+            }
+
+            using (created.Value)
+            {
+                var ping = await created.Value.PingAsync().ConfigureAwait(true);
+                if (ping.IsError)
+                {
+                    _error = ping.Error;
+                    return;
+                }
+            }
+
+            var applied = await Host.ApplyFileStorageSettingsAsync(built.Value).ConfigureAwait(true);
+            if (applied.IsError)
+            {
+                _error = applied.Error;
+                return;
+            }
+
+            _storedSecret = built.Value.SecretAccessKey;
+            _hasStoredSecret = true;
+            _secretAccessKey = "";
+            _status = "Saved.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DisconnectAsync()
+    {
+        if (_busy)
+            return;
+
+        _error = null;
+        _status = null;
+        _busy = true;
+        try
+        {
+            var disconnected = await Host.DisconnectFileStorageAsync().ConfigureAwait(true);
+            if (disconnected.IsError)
+            {
+                _error = disconnected.Error;
+                return;
+            }
+
+            _endpointUrl = "";
+            _accessKeyId = "";
+            _secretAccessKey = "";
+            _storedSecret = null;
+            _hasStoredSecret = false;
+            _status = "Disconnected.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

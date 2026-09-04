@@ -20,6 +20,8 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
     private readonly ConcurrentDictionary<Guid, DysonAgentSession> _sessionsById = new();
     private readonly ConcurrentDictionary<Guid, Guid> _parentSessionIdByChild = new();
     private readonly ConcurrentDictionary<DysonAgentSession, byte> _hookedSessions = new();
+    private readonly ConcurrentDictionary<DysonAgentSession, IDisposable> _sessionEventTokens = new();
+    private readonly DysonSessionEventPublisher? _sessionEvents;
     private readonly ConcurrentDictionary<Guid, DysonAgentSessionRuntimeLease> _leasesById = new();
     private readonly ConcurrentDictionary<Guid, EventHandler<DysonToolCallStatusChangedEventArgs>> _toolHandlers = new();
     private readonly ConcurrentDictionary<Guid, byte> _busySessions = new();
@@ -45,11 +47,13 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
     public DysonSessionRuntime(
         IDysonSubjectContext subjectContext,
         IDysonSessionRepository sessions,
-        IDysonAgentSessionRuntimeFactory sessionFactory)
+        IDysonAgentSessionRuntimeFactory sessionFactory,
+        DysonSessionEventPublisher? sessionEvents = null)
     {
         ArgumentNullException.ThrowIfNull(subjectContext);
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _sessionFactory = sessionFactory ?? throw new ArgumentNullException(nameof(sessionFactory));
+        _sessionEvents = sessionEvents;
 
         var normalized = DysonSessionRuntimeRegistry.NormalizeSubjectId(subjectContext.SubjectId);
         if (normalized.IsError)
@@ -522,6 +526,7 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
             _sessionsById.Clear();
             _parentSessionIdByChild.Clear();
             _hookedSessions.Clear();
+            _sessionEventTokens.Clear();
             _leasesById.Clear();
             _toolHandlers.Clear();
             _busySessions.Clear();
@@ -835,6 +840,7 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         session.LogAppended += OnLogAppended;
         session.TodosChanged += OnTodosChanged;
         session.SubagentSpawned += OnSubagentSpawned;
+        TryAttachSessionEvents(session);
 
         foreach (var turn in session.Turns)
             HookTurn(turn);
@@ -962,6 +968,8 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         if (!_hookedSessions.TryRemove(session, out _))
             return;
 
+        TryDisposeSessionEventToken(session);
+
         session.TurnAdded -= OnTurnAdded;
         session.LogAppended -= OnLogAppended;
         session.TodosChanged -= OnTodosChanged;
@@ -969,6 +977,22 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
 
         foreach (var turn in session.Turns)
             UnhookTurn(turn);
+    }
+
+    private void TryAttachSessionEvents(DysonAgentSession session)
+    {
+        if (_sessionEvents is null)
+            return;
+
+        var attached = _sessionEvents.Attach(session);
+        if (attached.IsSuccess)
+            _sessionEventTokens[session] = attached.Value;
+    }
+
+    private void TryDisposeSessionEventToken(DysonAgentSession session)
+    {
+        if (_sessionEventTokens.TryRemove(session, out var token))
+            token.Dispose();
     }
 
     private void HookTurn(DysonAgentTurn turn)

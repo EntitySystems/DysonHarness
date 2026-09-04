@@ -12,20 +12,20 @@ namespace Harness.Tests;
 public class DysonToolResultLimitTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertShortUnchanged();
         AssertExactCapUnchanged();
         AssertLongTruncatedWithFooter();
-        AssertReadFileSmallSuccess();
-        AssertReadFileHugeErrorsWithoutBody();
-        AssertReadFileOffsetSlice();
-        AssertReadFileTail();
-        AssertReadFileGiantLineClipped();
-        AssertReadFileBinaryUsesLoadBinary();
-        AssertShellExecuteOverflowTruncated();
+        await AssertReadFileSmallSuccess();
+        await AssertReadFileHugeErrorsWithoutBody();
+        await AssertReadFileOffsetSlice();
+        await AssertReadFileTail();
+        await AssertReadFileGiantLineClipped();
+        await AssertReadFileBinaryUsesLoadBinary();
+        await AssertShellExecuteOverflowTruncated();
         AssertCatalogCaps();
-        AssertSubscribeClampsIncludeTailMaxChars();
+        await AssertSubscribeClampsIncludeTailMaxChars();
     }
 
     private static void AssertShortUnchanged()
@@ -64,14 +64,13 @@ public class DysonToolResultLimitTests
             throw new InvalidOperationException("Long TruncateContent length must be MaxContentChars + footer.");
     }
 
-    private static void AssertReadFileSmallSuccess()
-    {
-        WithTempWork((root, executor) =>
+    private static Task AssertReadFileSmallSuccess() =>
+        WithTempWorkAsync(async (root, executor) =>
         {
             var body = string.Join('\n', Enumerable.Range(1, 20).Select(i => $"line-{i}"));
             File.WriteAllText(Path.Combine(root, "small.txt"), body);
 
-            var result = ReadFile(executor, "small.txt");
+            var result = await ReadFileAsync(executor, "small.txt");
             if (result.IsError)
                 throw new InvalidOperationException($"Small ReadFile must succeed: {result.Content}");
 
@@ -87,18 +86,16 @@ public class DysonToolResultLimitTests
                 throw new InvalidOperationException("Small ReadFile must not include the over-cap instruction.");
             }
         });
-    }
 
-    private static void AssertReadFileHugeErrorsWithoutBody()
-    {
-        WithTempWork((root, executor) =>
+    private static Task AssertReadFileHugeErrorsWithoutBody() =>
+        WithTempWorkAsync(async (root, executor) =>
         {
             var sb = new StringBuilder(220_000);
             for (var i = 1; i <= 10_000; i++)
                 sb.Append("line-").Append(i).Append("-xxxxxxxx").Append('\n');
             File.WriteAllText(Path.Combine(root, "huge.txt"), sb.ToString());
 
-            var result = ReadFile(executor, "huge.txt");
+            var result = await ReadFileAsync(executor, "huge.txt");
             if (!result.IsError)
                 throw new InvalidOperationException("Huge ReadFile with no limit must be IsError.");
             if (result.Content.Length >= 2048)
@@ -117,18 +114,16 @@ public class DysonToolResultLimitTests
                 throw new InvalidOperationException("Huge ReadFile error must not contain the file body.");
             }
         });
-    }
 
-    private static void AssertReadFileOffsetSlice()
-    {
-        WithTempWork((root, executor) =>
+    private static Task AssertReadFileOffsetSlice() =>
+        WithTempWorkAsync(async (root, executor) =>
         {
             var sb = new StringBuilder(220_000);
             for (var i = 1; i <= 10_000; i++)
                 sb.Append("line-").Append(i).Append("-xxxxxxxx").Append('\n');
             File.WriteAllText(Path.Combine(root, "paged.txt"), sb.ToString());
 
-            var result = ReadFile(executor, "paged.txt", offset: 9950, limit: 5);
+            var result = await ReadFileAsync(executor, "paged.txt", offset: 9950, limit: 5);
             if (result.IsError)
                 throw new InvalidOperationException($"Paged ReadFile must succeed: {result.Content}");
             if (!result.Content.Contains("9950|line-9950", StringComparison.Ordinal)
@@ -143,16 +138,14 @@ public class DysonToolResultLimitTests
                 throw new InvalidOperationException("Paged ReadFile must not return the start of the file.");
             }
         });
-    }
 
-    private static void AssertReadFileTail()
-    {
-        WithTempWork((root, executor) =>
+    private static Task AssertReadFileTail() =>
+        WithTempWorkAsync(async (root, executor) =>
         {
             var ten = string.Join('\n', Enumerable.Range(1, 10).Select(i => $"line-{i}"));
             File.WriteAllText(Path.Combine(root, "ten.txt"), ten);
 
-            var tailTwo = ReadFile(executor, "ten.txt", offset: -2);
+            var tailTwo = await ReadFileAsync(executor, "ten.txt", offset: -2);
             if (tailTwo.IsError)
                 throw new InvalidOperationException($"Tail -2 must succeed: {tailTwo.Content}");
             if (!tailTwo.Content.Contains("9|line-9", StringComparison.Ordinal)
@@ -169,7 +162,7 @@ public class DysonToolResultLimitTests
 
             var twoHundred = string.Join('\n', Enumerable.Range(1, 200).Select(i => $"row-{i}"));
             File.WriteAllText(Path.Combine(root, "twohundred.txt"), twoHundred);
-            var tailEighty = ReadFile(executor, "twohundred.txt", offset: -80);
+            var tailEighty = await ReadFileAsync(executor, "twohundred.txt", offset: -80);
             if (tailEighty.IsError)
                 throw new InvalidOperationException($"Tail -80 must succeed: {tailEighty.Content}");
 
@@ -193,7 +186,7 @@ public class DysonToolResultLimitTests
             }
 
             File.WriteAllText(Path.Combine(root, "efdump.txt"), giant.ToString());
-            var giantTail = ReadFile(executor, "efdump.txt", offset: -80);
+            var giantTail = await ReadFileAsync(executor, "efdump.txt", offset: -80);
             if (!giantTail.IsError)
                 throw new InvalidOperationException("Giant-line tail must be IsError.");
             if (giantTail.Content.Contains("@p", StringComparison.Ordinal)
@@ -209,14 +202,12 @@ public class DysonToolResultLimitTests
                 throw new InvalidOperationException("Giant-line tail error must mention offset/limit and Grep.");
             }
         });
-    }
 
-    private static void AssertReadFileGiantLineClipped()
-    {
-        WithTempWork((root, executor) =>
+    private static Task AssertReadFileGiantLineClipped() =>
+        WithTempWorkAsync(async (root, executor) =>
         {
             File.WriteAllText(Path.Combine(root, "oneline.txt"), new string('A', 200_000));
-            var result = ReadFile(executor, "oneline.txt");
+            var result = await ReadFileAsync(executor, "oneline.txt");
             if (result.IsError)
                 throw new InvalidOperationException($"Single giant line must succeed (clipped): {result.Content}");
             if (!result.Content.StartsWith("1|", StringComparison.Ordinal))
@@ -231,22 +222,19 @@ public class DysonToolResultLimitTests
             if (result.Content.Length > DysonToolResultLimits.MaxReadFileChars + 256)
                 throw new InvalidOperationException($"Clipped giant line Content too large: {result.Content.Length}.");
         });
-    }
 
-    private static void AssertReadFileBinaryUsesLoadBinary()
-    {
-        WithTempWork((root, executor) =>
+    private static Task AssertReadFileBinaryUsesLoadBinary() =>
+        WithTempWorkAsync(async (root, executor) =>
         {
             File.WriteAllBytes(Path.Combine(root, "blob.bin"), [0x4D, 0x5A, 0x00, 0x01, 0x02]);
-            var result = ReadFile(executor, "blob.bin");
+            var result = await ReadFileAsync(executor, "blob.bin");
             if (!result.IsError)
                 throw new InvalidOperationException("Binary ReadFile must be IsError.");
             if (!result.Content.Contains("LoadBinary", StringComparison.Ordinal))
                 throw new InvalidOperationException("Binary ReadFile must mention LoadBinary.");
         });
-    }
 
-    private static void AssertShellExecuteOverflowTruncated()
+    private static async Task AssertShellExecuteOverflowTruncated()
     {
         if (!OperatingSystem.IsWindows())
             return;
@@ -260,7 +248,7 @@ public class DysonToolResultLimitTests
                     AvailableShells = [new DysonConfiguredShellSpec("PowerShell", "powershell.exe")],
                 });
             using var http = new HttpClient();
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, http);
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, http);
             var call = new DysonToolCall
             {
                 CallId = "shell-overflow",
@@ -270,7 +258,7 @@ public class DysonToolResultLimitTests
                     """{"shell":"PowerShell","command":"[Console]::Out.Write(('x'*200000))","timeoutMs":30000}""",
             };
 
-            var result = executor.ExecuteAsync(call).GetAwaiter().GetResult();
+            var result = await executor.ExecuteAsync(call);
             if (result.IsError)
             {
                 if (result.Content.Contains("not available", StringComparison.OrdinalIgnoreCase)
@@ -344,7 +332,7 @@ public class DysonToolResultLimitTests
         }
     }
 
-    private static void AssertSubscribeClampsIncludeTailMaxChars()
+    private static async Task AssertSubscribeClampsIncludeTailMaxChars()
     {
         if (!OperatingSystem.IsWindows())
             return;
@@ -359,12 +347,10 @@ public class DysonToolResultLimitTests
                     AvailableShells = [new DysonConfiguredShellSpec("Cmd", "cmd.exe")],
                 });
             using var http = new HttpClient();
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, http, store: null, workDirId);
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, http, store: null, workDirId);
 
-            var started = DysonLongRunningShellRegistry
-                .StartAsync(workDirId, "Cmd", "cmd.exe", "echo clamp-tail", root)
-                .GetAwaiter()
-                .GetResult();
+            var started = await DysonLongRunningShellRegistry
+                .StartAsync(workDirId, "Cmd", "cmd.exe", "echo clamp-tail", root);
             if (started.IsError)
                 return;
 
@@ -376,7 +362,7 @@ public class DysonToolResultLimitTests
                 ArgumentsJson = $$"""{"longRunningShellId":{{started.Value.Id}},"includeTailMaxChars":10000000}""",
             };
 
-            var result = executor.ExecuteAsync(call).GetAwaiter().GetResult();
+            var result = await executor.ExecuteAsync(call);
             if (result.IsError)
                 throw new InvalidOperationException($"Subscribe clamp failed: {result.Content}");
             if (!result.Content.Contains("includeTailMaxChars=65536", StringComparison.Ordinal))
@@ -392,7 +378,7 @@ public class DysonToolResultLimitTests
         }
     }
 
-    private static DysonToolCallResult ReadFile(
+    private static Task<DysonToolCallResult> ReadFileAsync(
         DysonWorkspaceToolExecutor executor,
         string path,
         int? offset = null,
@@ -411,18 +397,18 @@ public class DysonToolResultLimitTests
             Stage = 0,
             ArgumentsJson = JsonSerializer.Serialize(payload),
         };
-        return executor.ExecuteAsync(call).GetAwaiter().GetResult();
+        return executor.ExecuteAsync(call);
     }
 
-    private static void WithTempWork(Action<string, DysonWorkspaceToolExecutor> body)
+    private static async Task WithTempWorkAsync(Func<string, DysonWorkspaceToolExecutor, Task> body)
     {
         var root = CreateTempDir();
         try
         {
             var session = new StubSession();
             using var http = new HttpClient();
-            var executor = DysonWorkspaceTestFs.CreateExecutor(session, root, http);
-            body(root, executor);
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, http);
+            await body(root, executor);
         }
         finally
         {

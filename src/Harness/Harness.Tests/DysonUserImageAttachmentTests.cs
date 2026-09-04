@@ -16,9 +16,11 @@ public class DysonUserImageAttachmentTests
         AssertFactoryCompresses();
         AssertPersistenceRoundTrip();
         AssertHtmlRefRoundTrip();
+        AssertRemoteFieldsRoundTrip();
         AssertDipSelectionMapsToPixelRect();
         AssertCompletionsTranscriptIncludesImageUrl();
         AssertResponsesTranscriptIncludesInputImage();
+        AssertRemoteUrlUsesHttpsAndWinsOverFileId();
     }
 
     [Fact]
@@ -171,6 +173,63 @@ public class DysonUserImageAttachmentTests
             throw new InvalidOperationException("Empty HtmlRef should be omitted from JSON.");
     }
 
+    private static void AssertRemoteFieldsRoundTrip()
+    {
+        var created = DysonUserImageFactory.CreateFromBytes("photo.png", TinyPng());
+        if (created.IsError)
+            throw new InvalidOperationException(created.Error);
+
+        var expires = new DateTime(2026, 9, 24, 12, 0, 0, DateTimeKind.Utc);
+        var withRemote = new DysonBinaryAttachment
+        {
+            FileName = created.Value.FileName,
+            Extension = created.Value.Extension,
+            MimeType = created.Value.MimeType,
+            Base64Data = created.Value.Base64Data,
+            RemoteUrl = "https://s3.example.com/dyson/shot.jpg?X-Amz-Signature=abc",
+            ObjectKey = "dyson/2026/09/abc-shot.jpg",
+            RemoteUrlExpiresUtc = expires,
+        };
+
+        var json = DysonUserImagesSerializer.Serialize([withRemote]);
+        if (json is null
+            || !json.Contains("remoteUrl", StringComparison.Ordinal)
+            || !json.Contains("objectKey", StringComparison.Ordinal)
+            || !json.Contains("remoteUrlExpiresUtc", StringComparison.Ordinal)
+            || !json.Contains("base64Data", StringComparison.Ordinal)
+            || !json.Contains(created.Value.Base64Data, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("UserImagesJson must persist remote fields and Base64Data.");
+        }
+
+        var restored = DysonUserImagesSerializer.Deserialize(json);
+        if (restored.Count != 1
+            || restored[0].Base64Data != created.Value.Base64Data
+            || restored[0].RemoteUrl != withRemote.RemoteUrl
+            || restored[0].ObjectKey != withRemote.ObjectKey
+            || restored[0].RemoteUrlExpiresUtc != expires)
+        {
+            throw new InvalidOperationException("RemoteUrl fields must round-trip with Base64Data.");
+        }
+
+        var noRemote = new DysonBinaryAttachment
+        {
+            FileName = created.Value.FileName,
+            Extension = created.Value.Extension,
+            MimeType = created.Value.MimeType,
+            Base64Data = created.Value.Base64Data,
+            RemoteUrl = "",
+            ObjectKey = "  ",
+        };
+        var omitted = DysonUserImagesSerializer.Serialize([noRemote]);
+        if (omitted is not null
+            && (omitted.Contains("remoteUrl", StringComparison.Ordinal)
+                || omitted.Contains("objectKey", StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException("Empty RemoteUrl/ObjectKey should be omitted from JSON.");
+        }
+    }
+
     private static void AssertDipSelectionMapsToPixelRect()
     {
         var mapped = DysonBrowserSnipCrop.MapDipSelectionToPixelRect(
@@ -314,6 +373,119 @@ public class DysonUserImageAttachmentTests
 
         if (!hasImage)
             throw new InvalidOperationException("Responses must prefer input_image.file_id for user images.");
+    }
+
+    private static void AssertRemoteUrlUsesHttpsAndWinsOverFileId()
+    {
+        var created = DysonUserImageFactory.CreateFromBytes("ui.png", TinyPng());
+        if (created.IsError)
+            throw new InvalidOperationException(created.Error);
+
+        const string remoteUrl = "https://s3.example.com/dyson/ui.jpg?X-Amz-Signature=xyz";
+        var withRemote = new DysonBinaryAttachment
+        {
+            FileName = created.Value.FileName,
+            Extension = created.Value.Extension,
+            MimeType = created.Value.MimeType,
+            Base64Data = created.Value.Base64Data,
+            RemoteUrl = "  " + remoteUrl + "  ",
+            FileId = "file-user-img",
+        };
+
+        var session = new StubSession();
+        var turn = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "describe",
+            StartedUtc = DateTime.UtcNow,
+            AssistantText = "# Done\n\nok",
+            AgentTitle = "Done",
+        };
+        turn.AddUserImage(withRemote);
+        session.AddTurnForTest(turn);
+
+        var completions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null);
+        var completionsJson = completions.Messages.ToJsonString();
+        if (!completionsJson.Contains(remoteUrl, StringComparison.Ordinal)
+            || completionsJson.Contains("data:image", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Completions UserImages with RemoteUrl must emit HTTPS and no data:image.");
+        }
+
+        JsonObject? completionsImage = null;
+        foreach (var node in completions.Messages)
+        {
+            if (node is not JsonObject msg
+                || msg["role"]?.GetValue<string>() != "user"
+                || msg["content"] is not JsonArray parts)
+            {
+                continue;
+            }
+
+            foreach (var part in parts)
+            {
+                if (part is JsonObject p
+                    && string.Equals(p["type"]?.GetValue<string>(), "image_url", StringComparison.Ordinal))
+                {
+                    completionsImage = p;
+                    break;
+                }
+            }
+
+            if (completionsImage is not null)
+                break;
+        }
+
+        if (completionsImage?["image_url"]?["url"]?.GetValue<string>() != remoteUrl)
+        {
+            throw new InvalidOperationException(
+                "Completions nested image_url.url must be the trimmed RemoteUrl.");
+        }
+
+        var responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session,
+            currentUserPrompt: null,
+            currentFilePaths: null);
+        var responsesJson = responses.Input.ToJsonString();
+        if (!responsesJson.Contains(remoteUrl, StringComparison.Ordinal)
+            || responsesJson.Contains("data:image", StringComparison.Ordinal)
+            || responsesJson.Contains("file-user-img", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Responses UserImages with RemoteUrl must emit HTTPS image_url and no file_id.");
+        }
+
+        JsonObject? responsesImage = null;
+        foreach (var node in responses.Input)
+        {
+            if (node is not JsonObject msg || msg["content"] is not JsonArray parts)
+                continue;
+            foreach (var part in parts)
+            {
+                if (part is JsonObject p
+                    && string.Equals(p["type"]?.GetValue<string>(), "input_image", StringComparison.Ordinal))
+                {
+                    responsesImage = p;
+                    break;
+                }
+            }
+
+            if (responsesImage is not null)
+                break;
+        }
+
+        if (responsesImage is null
+            || responsesImage["image_url"]?.GetValue<string>() != remoteUrl
+            || responsesImage["file_id"] is not null
+            || responsesImage["detail"]?.GetValue<string>() != "auto")
+        {
+            throw new InvalidOperationException(
+                "Responses input_image must use HTTPS RemoteUrl (not file_id) when RemoteUrl is set.");
+        }
     }
 
     private sealed class StubProvider : DysonAgentProvider;

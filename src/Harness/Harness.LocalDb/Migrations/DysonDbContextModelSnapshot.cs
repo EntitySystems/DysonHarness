@@ -551,6 +551,15 @@ namespace Harness.LocalDb.Migrations
                     b.Property<Guid?>("WorkDirectoryId")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("WorktreeAbsolutePath")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("WorktreeBranch")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("WorktreeEnabled")
+                        .HasColumnType("INTEGER");
+
                     b.HasKey("Id");
 
                     b.HasIndex("LastActivityUtc");
