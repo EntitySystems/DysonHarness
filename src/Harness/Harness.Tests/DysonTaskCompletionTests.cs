@@ -13,6 +13,7 @@ public class DysonTaskCompletionTests
     {
         AssertFactoriesAndTerminalGate();
         await AssertCompleteTaskEnqueuesConfirm();
+        await AssertCompleteTaskRejectsCompletedUntilReopen();
         await AssertConfirmAndContinuePhaseGuard();
         await AssertConfirmEnqueuesReportSummary();
         await AssertContinueEnqueuesContinuation();
@@ -83,6 +84,68 @@ public class DysonTaskCompletionTests
 
         if (!result.Content.Contains("TaskCompletionConfirm", StringComparison.Ordinal))
             throw new InvalidOperationException("CompleteTask success JSON should note nextTurnKind.");
+    }
+
+    private static async Task AssertCompleteTaskRejectsCompletedUntilReopen()
+    {
+        var session = new StubSession();
+        session.ConfigureRootForTest();
+        if (!session.TryMarkTerminal(DysonSessionStatus.Completed, "first cycle"))
+            throw new InvalidOperationException("Expected TryMarkTerminal Completed to succeed.");
+
+        using var http = new HttpClient();
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
+
+        var blocked = executor.ExecuteAsync(new DysonToolCall
+        {
+            CallId = "term1",
+            ToolName = "CompleteTask",
+            Stage = 0,
+            ArgumentsJson = """{"summary":"second cycle"}""",
+        }).GetAwaiter().GetResult();
+
+        if (!blocked.IsError
+            || blocked.Content.IndexOf("already Completed", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            throw new InvalidOperationException(
+                "CompleteTask must fail while the root is still Completed: " + blocked.Content);
+        }
+
+        if (session.TryDequeuePendingTurn(out _))
+            throw new InvalidOperationException("CompleteTask must not enqueue while still Completed.");
+
+        using (session.BeginInFlightPrompt(new DysonAgentTurn
+               {
+                   Kind = DysonAgentTurnKind.Normal,
+                   Instruction = "later user prompt",
+               }))
+        {
+            if (session.Status != DysonSessionStatus.Active || session.IsTerminal)
+            {
+                throw new InvalidOperationException(
+                    "Expected Completed root to reopen to Active after BeginInFlightPrompt.");
+            }
+
+            var result = executor.ExecuteAsync(new DysonToolCall
+            {
+                CallId = "term2",
+                ToolName = "CompleteTask",
+                Stage = 0,
+                ArgumentsJson = """{"summary":"second cycle"}""",
+            }).GetAwaiter().GetResult();
+
+            if (result.IsError)
+                throw new InvalidOperationException("CompleteTask should succeed after reopen: " + result.Content);
+
+            if (!session.TryDequeuePendingTurn(out var turn)
+                || turn.Kind != DysonAgentTurnKind.TaskCompletionConfirm
+                || turn.Instruction is null
+                || !turn.Instruction.Contains("second cycle", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "CompleteTask after reopen must enqueue a TaskCompletionConfirm turn.");
+            }
+        }
     }
 
     private static async Task AssertConfirmAndContinuePhaseGuard()

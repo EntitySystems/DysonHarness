@@ -282,36 +282,12 @@ public static class DysonTaskLifecycleFlow
             }
         }
 
-        var hasBugReview = false;
-        var bugReviewCompleted = false;
-        for (var i = 0; i < turns.Count; i++)
-        {
-            var kind = turns[i].Kind;
-            if (kind != DysonAgentTurnKind.BugReview)
-                continue;
-
-            hasBugReview = true;
-            if (turns[i].CompletedUtc is not null)
-                bugReviewCompleted = true;
-        }
-
-        if (hasBugReview)
-        {
-            // A report-only review normally leaves todos unchanged, but automatically-fix may
-            // honestly add a follow-up. Never terminalize the root while that work remains.
-            if (hasIncompleteTodo)
-                return default;
-
-            if (bugReviewCompleted)
-                return new DysonTaskLifecycleDecision(DysonTaskLifecycleKind.ReadyToFinalize);
-
-            return default;
-        }
-
         if (hasIncompleteTodo)
         {
             // The reflection turn itself is not a trigger, but a later substantive turn may
             // need another reflection if pending work remains.
+            // BugReview is not a trigger: automatically-fix may add a follow-up todo and
+            // must not terminalize (or spin reflection) while that work remains.
             if (!IsTaskEndReflectionTriggerKind(last.Kind))
                 return default;
 
@@ -319,7 +295,21 @@ public static class DysonTaskLifecycleFlow
         }
 
         if (last.Kind == DysonAgentTurnKind.ReportSummary)
+        {
+            // One BugReview per session: a later ReportSummary after a completed review
+            // finalizes without enqueueing a second review. History alone is not enough;
+            // a Normal/Continuation/ShellExited last turn after reopen must not finalize.
+            for (var i = 0; i < turns.Count; i++)
+            {
+                if (turns[i].Kind == DysonAgentTurnKind.BugReview)
+                    return new DysonTaskLifecycleDecision(DysonTaskLifecycleKind.ReadyToFinalize);
+            }
+
             return new DysonTaskLifecycleDecision(DysonTaskLifecycleKind.CodeReviewReady);
+        }
+
+        if (last.Kind == DysonAgentTurnKind.BugReview)
+            return new DysonTaskLifecycleDecision(DysonTaskLifecycleKind.ReadyToFinalize);
 
         return default;
     }

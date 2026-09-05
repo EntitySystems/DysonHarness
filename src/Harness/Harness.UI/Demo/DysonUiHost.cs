@@ -66,7 +66,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _taskLifecycleGates = new();
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _taskLifecycleEvaluateCts = new();
     private const int TaskLifecycleEvaluateDelayMs = 300;
-    private readonly ConcurrentDictionary<Guid, DysonTaskLifecycleKind> _lastTaskLifecycleActionBySession = new();
+    /// <summary>Last fired lifecycle action per session, keyed with last-turn id so a later ReportSummary can re-fire.</summary>
+    private readonly ConcurrentDictionary<Guid, (DysonTaskLifecycleKind Kind, Guid LastTurnId)> _lastTaskLifecycleActionBySession = new();
     private readonly ConcurrentDictionary<Guid, EventHandler<DysonToolCallStatusChangedEventArgs>> _toolHandlers = new();
     private readonly ConcurrentDictionary<Guid, EventHandler> _textHandlers = new();
     private readonly DysonNotifyCoalescer _notifyCoalescer;
@@ -5771,7 +5772,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (last?.Kind == DysonAgentTurnKind.TaskEndReflect
                 && last.CompletedUtc is not null
                 && _lastTaskLifecycleActionBySession.TryGetValue(live.PersistenceId, out var action)
-                && action == DysonTaskLifecycleKind.TaskEndReflectionRequired)
+                && action.Kind == DysonTaskLifecycleKind.TaskEndReflectionRequired)
             {
                 _lastTaskLifecycleActionBySession.TryRemove(live.PersistenceId, out _);
             }
@@ -5804,8 +5805,13 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         try
         {
+            var last = session.Turns.Count > 0 ? session.Turns[^1] : null;
+            if (last is null)
+                return;
+
             if (_lastTaskLifecycleActionBySession.TryGetValue(sessionId, out var previous)
-                && previous == kind)
+                && previous.Kind == kind
+                && previous.LastTurnId == last.Id)
             {
                 return;
             }
@@ -5822,7 +5828,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                         return;
                     }
 
-                    _lastTaskLifecycleActionBySession[sessionId] = kind;
+                    _lastTaskLifecycleActionBySession[sessionId] = (kind, last.Id);
                     var started = await PromptHarnessTurnOnSessionAsync(
                             session,
                             session.CreateTaskEndReflectTurn(),
@@ -5854,7 +5860,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     var level = DysonTaskLifecycleFlow.NormalizeReviewLevel(setting.Value);
                     if (!DysonTaskLifecycleFlow.IsReviewRunnable(level))
                     {
-                        _lastTaskLifecycleActionBySession[sessionId] = kind;
+                        _lastTaskLifecycleActionBySession[sessionId] = (kind, last.Id);
                         if (level == DysonAutomaticCodeReviewLevel.High)
                         {
                             session.AppendDisplayInfoTurn(
@@ -5881,13 +5887,13 @@ public sealed class DysonUiHost : IAsyncDisposable
                     var action = DysonTaskLifecycleFlow.NormalizeReviewAction(actionSetting.Value);
                     var worktreeScope = await BuildAutomaticReviewWorktreeScopeAsync(session)
                         .ConfigureAwait(false);
-                    _lastTaskLifecycleActionBySession[sessionId] = kind;
+                    _lastTaskLifecycleActionBySession[sessionId] = (kind, last.Id);
                     EnqueuePrompt(sessionId, session.CreateBugReviewTurn(level, action, worktreeScope));
                     break;
                 }
 
                 case DysonTaskLifecycleKind.ReadyToFinalize:
-                    _lastTaskLifecycleActionBySession[sessionId] = kind;
+                    _lastTaskLifecycleActionBySession[sessionId] = (kind, last.Id);
                     var finalization = await FinalizeTaskLifecycleAsync(session).ConfigureAwait(false);
                     if (finalization.IsError)
                         LastError = finalization.Error;

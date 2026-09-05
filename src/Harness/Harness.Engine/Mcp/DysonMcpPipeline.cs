@@ -1574,7 +1574,10 @@ public sealed class DysonMcpPipeline
             Description =
                 "Request completion review: the harness schedules a confirmation turn rather than ending immediately. " +
                 "On that follow-up turn you must call ConfirmTaskComplete or ContinueWork. " +
-                "After ConfirmTaskComplete, a ReportSummary turn follows.",
+                "After ConfirmTaskComplete, a ReportSummary turn follows. " +
+                "After a confirmed cycle, CompleteTask is valid again only after a new user/in-flight prompt " +
+                "(Completed/Failed reopens to Active). " +
+                "Do not call CompleteTask while still Completed with no new turn. Stopped/Interrupted stay locked.",
             InputSchemaJson = """
                 {
                   "type": "object",

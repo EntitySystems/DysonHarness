@@ -367,7 +367,9 @@ After the model calls `CompleteTask`:
 
 1. **Confirm** — enqueue **`TaskCompletionConfirm`** (`DysonTaskCompletionFlow.CreateCompletionConfirmTurn`); on that turn only, `ConfirmTaskComplete` or `ContinueWork` are valid
 2. **Continue** — `ContinueWork` enqueues a **`Continuation`** turn if work remains
-3. **Report** — `ConfirmTaskComplete` enqueues a **`ReportSummary`** turn (final handoff)
+3. **Report** — `ConfirmTaskComplete` enqueues a **`ReportSummary`** turn (final handoff for this cycle)
+
+After **`ReportSummary`**, the host marks the root **`Completed`**. A later in-flight prompt (`PromptAsync` / queued user turn) reopens `Completed`/`Failed` to **`Active`** so `CompleteTask` can run again (new cycle). `Stopped`/`Interrupted` stay locked. `CompleteTask` is not valid while the session is still `Completed` with no new turn.
 
 `DysonTaskCompletionFlow.ShouldMarkTerminalAfterTurn` is true only for **`ReportSummary`**. That is the completion-boundary signal, not an unconditional host `TryMarkTerminal`. Factories: `DysonTaskCompletionFlow` and session helpers `CreateCompletionConfirmTurn` / `CreateContinuationTurn` / `CreateReportSummaryTurn`. Covered by `DysonTaskCompletionTests` in `Harness.Tests`.
 
