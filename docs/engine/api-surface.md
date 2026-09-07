@@ -120,17 +120,19 @@ Process-local typed pub/sub (`Harness.Engine/Messaging/`). Sealed `DysonMessageB
 | ---- | ----- |
 | `IDysonMessageBusEvent` | Marker for immutable event records |
 | `DysonMessageBus` | Sealed singleton. `Publish` / `PublishAsync` → `VoidResult<string>`; `Subscribe` → `Result<IDisposable, string>`. Sync fan-out on the publisher thread over snapshot lists; exact key + `DysonBusScopes.Wildcard`; no replay/queue; handler exceptions logged, not thrown. Idempotent tokens drop empty dictionary entries |
-| `DysonBusScopes` | `Wildcard` `*`; `Session(Guid)` → `session:{id:D}`; `Subject(string)`; `Host(Guid)` → `host:{id:D}` |
+| `DysonBusScopes` | `Wildcard` `*`; `Session(Guid)` → `session:{id:D}`; `Subject(string)`; `Host(Guid)` → `host:{id:D}`; `WorkDirectory(Guid)` → `workdir:{id:D}` |
 | `DysonSessionEventPublisher` | `Attach(root)` Result token; recursive + `SubagentSpawned` follow-on; per-session refcount so runtime and UI can Attach the same tree. Status/spawn/turn/`ParentEventsChanged` publish immediately; activity via reused 75ms `DysonNotifyCoalescer` + `(title, LatestTurnStepTitle, isRunning)` dedupe. Hooks `DysonAgentSession.ParentEventsChanged` (publisher is the only bus writer; CLR event remains the choke) |
 | `DysonSubagentSpawnedEvent` | Parent + child session keys: `ParentPersistenceId`, `ChildPersistenceId`, `RuntimeId`, `Title`, `AgentMode` |
 | `DysonSubagentStatusChangedEvent` | Child + parent session keys: `PersistenceId`, `ParentPersistenceId`, `RuntimeId`, `Status`, `IsRunning`, `Summary` |
 | `DysonSubagentActivityChangedEvent` | Session (+ parent) keys: `PersistenceId`, `RuntimeId`, `Title`, `LatestTurnStepTitle`, `IsRunning` |
 | `DysonSessionTurnAddedEvent` | Session key: `PersistenceId`, `TurnId`, `Kind` |
 | `DysonParentEventsChangedEvent` | Session key **only** (no parent fan-out): `PersistenceId`, `HasPendingAsk`, `HasPendingUserDialog`. Flags are snapshots, not question/dialog JSON |
-| `DysonHostStateChangedEvent` | Host key: `Kind` (`DysonHostChangeKind` mask), optional `SessionId`. Replaces deleted `DysonUiHost.Changed` |
+| `DysonHostStateChangedEvent` | Host key: `Kind` (`DysonHostChangeKind` mask), optional `SessionId`. Replaces deleted `DysonUiHost.Changed`. File-viewer paint is a UI Demo event (`DysonFileViewerOpenRequestedEvent` / `DysonFileViewerChangedEvent` in `Harness.UI.Demo`, not Engine records) on the same host key |
+| `DysonGitRepoChangedEvent` | WorkDirectory key: `WorkDirectoryId`, `RepoRoot`. No paths. Publish point is `DysonGitRepoChangePublisher` |
+| `DysonGitRepoChangePublisher` | Public `IDisposable` singleton (`Harness.Engine/Workspace/`). `Watch(Guid workDirectoryId, string repoRoot)` → `VoidResult<string>`; `Unwatch()`. `DebounceMs = 1000` trailing-only; after a quiet second publishes `DysonGitRepoChangedEvent` on the WorkDirectory key. `Changed`+`Failed` coalesce; `Failed` still publishes (no auto-restart; porcelain is source of truth). Optional createWatcher + delay test seam (same style as `DysonNotifyCoalescer`) — not `DysonNotifyCoalescer` itself. Does not use workdir-sandboxed `IDysonWorkspaceFileSystem.CreateWatcher()`; constructs `DysonLocalWorkspaceChangeWatcher` on the repo root so a parent repo is visible |
 | `DysonSessionStatusChangedEventArgs` | `PreviousStatus`, `Status`, `Summary` — payload of `DysonAgentSession.StatusChanged` |
 
-Covered by `DysonMessageBusTests` + `DysonSessionEventPublisherTests` in `Harness.Tests`. Host delegation tests subscribe on `host.Bus` / `host.BusScopeKey`.
+Covered by `DysonMessageBusTests` + `DysonSessionEventPublisherTests` + `DysonGitRepoChangePublisherTests` in `Harness.Tests`. Host delegation tests subscribe on `host.Bus` / `host.BusScopeKey`.
 
 ## Modes & prompts
 

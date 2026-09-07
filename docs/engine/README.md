@@ -122,6 +122,7 @@ Process-local typed pub/sub in `Harness.Engine/Messaging/`. `DysonMessageBus` is
 | `Session(Guid)` | `session:{persistenceId:D}` |
 | `Subject(string)` | `subject:{subjectId}` |
 | `Host(Guid)` | `host:{hostId:D}` (per-circuit UI host) |
+| `WorkDirectory(Guid)` | `workdir:{id:D}` |
 
 **Delivery**
 
@@ -137,7 +138,8 @@ Process-local typed pub/sub in `Harness.Engine/Messaging/`. `DysonMessageBus` is
 - Status, spawn, turn-added, and `ParentEventsChanged` publish immediately (not coalesced). Activity (`DysonSubagentActivityChangedEvent`) uses a reused 75ms `DysonNotifyCoalescer` plus tuple dedupe `(title, LatestTurnStepTitle, isRunning)`.
 - `DysonAgentSession.StatusChanged` is the choke point: raised **outside** `_terminalGate` from `TryMarkTerminal` / `TryAcceptSubagentReport` / `TryReopenForNewParentTask` when status actually changes.
 - `DysonAgentSession.ParentEventsChanged` is the choke for Ask/Dialog pending flags. The publisher is the only bus writer; it hooks that CLR event and does not invent a second source. Flags are snapshots (`HasPendingAsk` / `HasPendingUserDialog`), not question/dialog JSON.
-- Host UI: `DysonUiHost` coalescer sink publishes `DysonHostStateChangedEvent` on `Host.BusScopeKey` (`DysonBusScopes.Host(HostId)`). This replaces `DysonUiHost.Changed` (deleted). If the bus is not injected, the host owns a private bus. `DysonSessionRuntime.Changed` / `DysonRuntimeChange` is unchanged (recovery/reattach).
+- Host UI: `DysonUiHost` coalescer sink publishes `DysonHostStateChangedEvent` on `Host.BusScopeKey` (`DysonBusScopes.Host(HostId)`). This replaces `DysonUiHost.Changed` (deleted). If the bus is not injected, the host owns a private bus. `DysonSessionRuntime.Changed` / `DysonRuntimeChange` is unchanged (recovery/reattach). File-viewer paint is a UI Demo event (`DysonFileViewerOpenRequestedEvent` / `DysonFileViewerChangedEvent` in `Harness.UI.Demo`, not Engine records) on the same host key.
+- `DysonGitRepoChangePublisher` (public `IDisposable` singleton, `Harness.Engine/Workspace/`) is the publish point: engine `FileSystemWatcher` on the root-most git repo (`DysonLocalWorkspaceChangeWatcher` on the repo root — not workdir-sandboxed `IDysonWorkspaceFileSystem.CreateWatcher()`). `Watch(Guid workDirectoryId, string repoRoot)` → `VoidResult<string>`; `Unwatch()`. `DebounceMs = 1000`, trailing-only; `Changed` and `Failed` coalesce. After a quiet second, publishes `DysonGitRepoChangedEvent` on the WorkDirectory key (no paths in payload). `Failed` still publishes (no auto-restart; porcelain is source of truth).
 
 | Record | Key | Payload |
 | ------ | --- | ------- |
@@ -147,10 +149,11 @@ Process-local typed pub/sub in `Harness.Engine/Messaging/`. `DysonMessageBus` is
 | `DysonSessionTurnAddedEvent` | session | `PersistenceId`, `TurnId`, `Kind` |
 | `DysonParentEventsChangedEvent` | session key **only** (no parent fan-out) | `PersistenceId`, `HasPendingAsk`, `HasPendingUserDialog` |
 | `DysonHostStateChangedEvent` | host | `DysonHostChangeKind` mask, optional `SessionId` |
+| `DysonGitRepoChangedEvent` | WorkDirectory key | `WorkDirectoryId`, `RepoRoot` |
 
 DI (`DysonUiWebHost`): `AddSingleton<DysonMessageBus>()` then `AddSingleton<DysonSessionEventPublisher>()` next to `DysonSessionRuntimeRegistry`. Runtime Attach on first `EnsureRegistered`; dispose token in UnhookSession. Host Attach tokens disposed in `DetachSessionUiHandlers`.
 
-Covered by `DysonMessageBusTests` + `DysonSessionEventPublisherTests` in `Harness.Tests` (`dotnet test src/Harness/Harness.Tests/Harness.Tests.csproj`). Host delegation tests subscribe on `host.Bus` / `host.BusScopeKey`.
+Covered by `DysonMessageBusTests` + `DysonSessionEventPublisherTests` + `DysonGitRepoChangePublisherTests` in `Harness.Tests` (`dotnet test src/Harness/Harness.Tests/Harness.Tests.csproj`). Host delegation tests subscribe on `host.Bus` / `host.BusScopeKey`.
 
 ## Plugin subsystem
 

@@ -9,4 +9,6 @@ public static class DysonBusScopes
     public static string Subject(string subjectId) => $"subject:{subjectId}";
 
     public static string Host(Guid hostId) => $"host:{hostId:D}";
+
+    public static string WorkDirectory(Guid id) => $"workdir:{id:D}";
 }

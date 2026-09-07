@@ -120,9 +120,12 @@ public class DysonFileViewerPdfTests
             Assert.Single(host.FileViewer.Actions);
             Assert.Equal("Keep me", host.FileViewer.Actions[0].Label);
 
-            host.OpenFileViewerContent("skillsdirectory:demo/SKILL.md", "# Skill");
+            await host.OpenFileViewerContentAsync("skillsdirectory:demo/SKILL.md", "# Skill");
             Assert.NotNull(host.FileViewer);
             Assert.Equal("# Skill", host.FileViewer.Content);
+            Assert.False(host.FileViewer.IsLoading);
+            Assert.False(host.FileViewer.IsTextPreview);
+            Assert.NotEmpty(host.FileViewer.MarkdownBlocks);
             Assert.Null(host.FileViewer.Error);
             Assert.Empty(host.FileViewer.GitDiffAnnotations);
 
