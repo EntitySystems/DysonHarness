@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
+using System.Text.Json;
 using DysonHarness;
 using Harness.UI.Theme;
 using Harness.UI.Markdown;
@@ -66,7 +68,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _taskLifecycleGates = new();
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _taskLifecycleEvaluateCts = new();
     private const int TaskLifecycleEvaluateDelayMs = 300;
-    private readonly ConcurrentDictionary<Guid, DysonTaskLifecycleKind> _lastTaskLifecycleActionBySession = new();
+    /// <summary>Last fired lifecycle action per session, keyed with last-turn id so a later ReportSummary can re-fire.</summary>
+    private readonly ConcurrentDictionary<Guid, (DysonTaskLifecycleKind Kind, Guid LastTurnId)> _lastTaskLifecycleActionBySession = new();
     private readonly ConcurrentDictionary<Guid, EventHandler<DysonToolCallStatusChangedEventArgs>> _toolHandlers = new();
     private readonly ConcurrentDictionary<Guid, EventHandler> _textHandlers = new();
     private readonly DysonNotifyCoalescer _notifyCoalescer;
@@ -76,6 +79,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     private DysonAskUiState? _pendingAskUi;
     private DysonUserDialogUiState? _pendingUserDialogUi;
     private DysonFileViewerState? _fileViewer;
+    private IDisposable? _fileViewerRequestedSub;
+    private int _fileViewerEpoch;
     private DysonSkillViewerState? _skillViewer;
     private readonly List<string> _pendingSkillNames = [];
     private readonly object _pendingSkillsGate = new();
@@ -164,6 +169,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return;
             _ = Bus.Publish(BusScopeKey, new DysonHostStateChangedEvent(mask, ActiveSessionId));
         });
+        _fileViewerRequestedSub = Bus.Subscribe<DysonFileViewerOpenRequestedEvent>(
+            BusScopeKey, HandleFileViewerOpenRequestedAsync).Value;
         _theme.Changed += OnThemeChanged;
         _runtimeAttachment = runtimeAttachment;
         _usageAnalytics = usageAnalytics;
@@ -1587,7 +1594,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         var actionList = NormalizeFileViewerActions(actions);
 
-        // Stay on the Blazor sync context so Notify() paints FileViewerOverlay.
+        // Stay on the Blazor sync context so FileViewerOverlay paints via DysonFileViewerChangedEvent.
         var resolvedRoot = workRoot;
         if (string.IsNullOrWhiteSpace(resolvedRoot))
             resolvedRoot = await TryResolveActiveWorkRootAsync(cancellationToken);
@@ -1794,31 +1801,172 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
-    /// Opens the file viewer with caller-supplied content (no disk read).
+    /// Publishes a host-bus request to open the file viewer with caller-supplied content (no disk read).
+    /// Returns immediately; the host prepares off-thread.
     /// <see cref="DysonFileViewerState.AbsolutePath"/> is null so "Open in default editor" is hidden.
     /// </summary>
     /// <param name="relativePath">Display path (e.g. <c>skillsdirectory:{slug}/SKILL.md</c>).</param>
-    public void OpenFileViewerContent(
+    public void RequestOpenFileViewerContent(
         string relativePath,
         string content,
         IReadOnlyList<DysonFileViewerAction>? actions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
         ArgumentNullException.ThrowIfNull(content);
+        _ = Bus.Publish(
+            BusScopeKey,
+            new DysonFileViewerOpenRequestedEvent(
+                relativePath,
+                content,
+                NormalizeFileViewerActions(actions)));
+    }
+
+    /// <summary>
+    /// Opens the file viewer with caller-supplied content (no disk read). Awaitable for tests;
+    /// click paths should <see cref="RequestOpenFileViewerContent"/> instead.
+    /// </summary>
+    public async Task OpenFileViewerContentAsync(
+        string relativePath,
+        string content,
+        IReadOnlyList<DysonFileViewerAction>? actions = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
+        ArgumentNullException.ThrowIfNull(content);
 
         var path = relativePath.Trim().Replace('\\', '/');
+        var title = Path.GetFileName(path) ?? path;
+        var actionList = NormalizeFileViewerActions(actions);
         var isMd = IsMarkdownPath(path);
+        var epoch = Interlocked.Increment(ref _fileViewerEpoch);
+
         SetFileViewer(new DysonFileViewerState
         {
             RelativePath = path,
-            Title = Path.GetFileName(path) ?? path,
-            Content = content,
+            Title = title,
+            Content = "",
             IsMarkdown = isMd,
+            IsLoading = true,
             AbsolutePath = null,
             CanOpenInDefaultEditor = false,
-            MarkdownBlocks = isMd ? DysonFileViewerMarkdown.Build(content) : [],
-            Actions = NormalizeFileViewerActions(actions),
-        });
+            MarkdownBlocks = [],
+            Actions = actionList,
+        }, epoch);
+
+        try
+        {
+            var prepared = await Task.Run(
+                    () => PrepareInMemoryFileViewerContent(path, content, isMd),
+                    cancellationToken)
+                .ConfigureAwait(true);
+
+            if (_disposed || epoch != Volatile.Read(ref _fileViewerEpoch))
+                return;
+
+            if (prepared.SmallMarkdown)
+            {
+                SetFileViewer(new DysonFileViewerState
+                {
+                    RelativePath = path,
+                    Title = title,
+                    Content = content,
+                    IsMarkdown = true,
+                    IsTextPreview = false,
+                    IsLoading = false,
+                    AbsolutePath = null,
+                    CanOpenInDefaultEditor = false,
+                    MarkdownBlocks = prepared.MarkdownBlocks,
+                    Actions = actionList,
+                }, epoch);
+                return;
+            }
+
+            var previewId = _filePreviews.Put(prepared.PreviewBytes, "text/plain; charset=utf-8");
+            SetFileViewer(new DysonFileViewerState
+            {
+                RelativePath = path,
+                Title = title,
+                Content = "",
+                IsMarkdown = false,
+                IsTextPreview = true,
+                TextPreviewId = previewId,
+                TextPreviewUrl = DysonFilePreviewStore.UrlFor(previewId),
+                IsLoading = false,
+                AbsolutePath = null,
+                CanOpenInDefaultEditor = false,
+                MarkdownBlocks = [],
+                Actions = actionList,
+            }, epoch);
+        }
+        catch (Exception ex)
+        {
+            SetFileViewer(new DysonFileViewerState
+            {
+                RelativePath = path,
+                Title = title,
+                Content = "",
+                IsMarkdown = isMd,
+                IsLoading = false,
+                AbsolutePath = null,
+                CanOpenInDefaultEditor = false,
+                MarkdownBlocks = [],
+                Error = ex.Message,
+                Actions = actionList,
+            }, epoch);
+        }
+    }
+
+    private async Task HandleFileViewerOpenRequestedAsync(
+        DysonFileViewerOpenRequestedEvent requested,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await OpenFileViewerContentAsync(
+                    requested.RelativePath,
+                    requested.Content,
+                    requested.Actions,
+                    cancellationToken)
+                .ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            if (_disposed)
+                return;
+            var path = requested.RelativePath.Trim().Replace('\\', '/');
+            SetFileViewer(new DysonFileViewerState
+            {
+                RelativePath = path,
+                Title = Path.GetFileName(path) ?? path,
+                Content = "",
+                IsMarkdown = IsMarkdownPath(path),
+                Error = ex.Message,
+                Actions = requested.Actions,
+            });
+        }
+    }
+
+    private static (bool SmallMarkdown, IReadOnlyList<DysonFileViewerMarkdownBlock> MarkdownBlocks, byte[] PreviewBytes)
+        PrepareInMemoryFileViewerContent(string path, string content, bool isMd)
+    {
+        if (isMd && content.Length <= ColorCodeHtml.MaxHighlightedChars)
+            return (true, DysonFileViewerMarkdown.Build(content), []);
+
+        var text = content;
+        if (path.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var parsed = JsonSerializer.Deserialize<JsonElement>(content);
+                text = JsonSerializer.Serialize(parsed, new JsonSerializerOptions { WriteIndented = true });
+            }
+            catch (JsonException)
+            {
+                text = content;
+            }
+        }
+
+        return (false, [], Encoding.UTF8.GetBytes(text));
     }
 
     /// <summary>
@@ -1865,11 +2013,21 @@ public sealed class DysonUiHost : IAsyncDisposable
         });
     }
 
-    private void SetFileViewer(DysonFileViewerState state)
+    private void SetFileViewer(DysonFileViewerState state, int? expectedEpoch = null)
     {
+        if (_disposed || (expectedEpoch is { } epoch && epoch != Volatile.Read(ref _fileViewerEpoch)))
+        {
+            RevokeFileViewerPreview(state);
+            return;
+        }
+
         RevokeFileViewerPreview(_fileViewer);
         _fileViewer = state;
-        Notify(DysonHostChangeKind.Overlay);
+        _ = Bus.Publish(
+            BusScopeKey,
+            new DysonFileViewerChangedEvent(
+                expectedEpoch ?? Volatile.Read(ref _fileViewerEpoch),
+                _fileViewer));
     }
 
     private void RevokeFileViewerPreview(DysonFileViewerState? viewer)
@@ -1878,6 +2036,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             _filePreviews.Remove(pdfId);
         if (viewer?.ImagePreviewId is { } imageId)
             _filePreviews.Remove(imageId);
+        if (viewer?.TextPreviewId is { } textId)
+            _filePreviews.Remove(textId);
     }
 
     private static IReadOnlyList<DysonFileViewerAction> NormalizeFileViewerActions(
@@ -2079,11 +2239,12 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     public void CloseFileViewer()
     {
+        var epoch = Interlocked.Increment(ref _fileViewerEpoch);
         if (_fileViewer is null)
             return;
         RevokeFileViewerPreview(_fileViewer);
         _fileViewer = null;
-        Notify(DysonHostChangeKind.Overlay);
+        _ = Bus.Publish(BusScopeKey, new DysonFileViewerChangedEvent(epoch, null));
     }
 
     public void OpenSkillViewer(DysonContextFileEntry entry)
@@ -5771,7 +5932,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (last?.Kind == DysonAgentTurnKind.TaskEndReflect
                 && last.CompletedUtc is not null
                 && _lastTaskLifecycleActionBySession.TryGetValue(live.PersistenceId, out var action)
-                && action == DysonTaskLifecycleKind.TaskEndReflectionRequired)
+                && action.Kind == DysonTaskLifecycleKind.TaskEndReflectionRequired)
             {
                 _lastTaskLifecycleActionBySession.TryRemove(live.PersistenceId, out _);
             }
@@ -5804,8 +5965,13 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         try
         {
+            var last = session.Turns.Count > 0 ? session.Turns[^1] : null;
+            if (last is null)
+                return;
+
             if (_lastTaskLifecycleActionBySession.TryGetValue(sessionId, out var previous)
-                && previous == kind)
+                && previous.Kind == kind
+                && previous.LastTurnId == last.Id)
             {
                 return;
             }
@@ -5822,7 +5988,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                         return;
                     }
 
-                    _lastTaskLifecycleActionBySession[sessionId] = kind;
+                    _lastTaskLifecycleActionBySession[sessionId] = (kind, last.Id);
                     var started = await PromptHarnessTurnOnSessionAsync(
                             session,
                             session.CreateTaskEndReflectTurn(),
@@ -5854,7 +6020,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     var level = DysonTaskLifecycleFlow.NormalizeReviewLevel(setting.Value);
                     if (!DysonTaskLifecycleFlow.IsReviewRunnable(level))
                     {
-                        _lastTaskLifecycleActionBySession[sessionId] = kind;
+                        _lastTaskLifecycleActionBySession[sessionId] = (kind, last.Id);
                         if (level == DysonAutomaticCodeReviewLevel.High)
                         {
                             session.AppendDisplayInfoTurn(
@@ -5881,13 +6047,13 @@ public sealed class DysonUiHost : IAsyncDisposable
                     var action = DysonTaskLifecycleFlow.NormalizeReviewAction(actionSetting.Value);
                     var worktreeScope = await BuildAutomaticReviewWorktreeScopeAsync(session)
                         .ConfigureAwait(false);
-                    _lastTaskLifecycleActionBySession[sessionId] = kind;
+                    _lastTaskLifecycleActionBySession[sessionId] = (kind, last.Id);
                     EnqueuePrompt(sessionId, session.CreateBugReviewTurn(level, action, worktreeScope));
                     break;
                 }
 
                 case DysonTaskLifecycleKind.ReadyToFinalize:
-                    _lastTaskLifecycleActionBySession[sessionId] = kind;
+                    _lastTaskLifecycleActionBySession[sessionId] = (kind, last.Id);
                     var finalization = await FinalizeTaskLifecycleAsync(session).ConfigureAwait(false);
                     if (finalization.IsError)
                         LastError = finalization.Error;
@@ -7375,6 +7541,10 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         _disposed = true;
         _notifyCoalescer.Dispose();
+        _fileViewerRequestedSub?.Dispose();
+        _fileViewerRequestedSub = null;
+        RevokeFileViewerPreview(_fileViewer);
+        _fileViewer = null;
         if (_ownsBus)
             Bus.Dispose();
         _theme.Changed -= OnThemeChanged;

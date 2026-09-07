@@ -138,6 +138,7 @@ public static class DysonUiWebHost
         builder.Services.AddSingleton<IDysonSessionRuntimeScopeFactory, DysonUiSessionRuntimeScopeFactory>();
         builder.Services.AddSingleton<DysonSessionRuntimeRegistry>();
         builder.Services.AddSingleton<DysonMessageBus>();
+        builder.Services.AddSingleton<DysonGitRepoChangePublisher>();
         builder.Services.AddSingleton<DysonSessionEventPublisher>();
         builder.Services.AddScoped<DysonUiRuntimeAttachment>();
         builder.Services.AddScoped<IDysonAgentSessionRuntimeFactory, DysonUiAgentSessionRuntimeFactory>();

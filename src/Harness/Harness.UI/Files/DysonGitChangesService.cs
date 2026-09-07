@@ -5,25 +5,35 @@ namespace Harness.UI.Files;
 
 /// <summary>
 /// Process-lifetime git change list: per-workdir snapshot, root-most repo discovery,
-/// and live refresh via <see cref="DysonFileTreeService.Changed"/> debounce.
+/// and live refresh via <see cref="DysonGitRepoChangedEvent"/>.
 /// </summary>
 public sealed class DysonGitChangesService : IDisposable
 {
-    private const int DebounceMs = 250;
-
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly DysonFileTreeService _fileTree;
+    private readonly DysonGitRepoChangePublisher _publisher;
     private readonly Dictionary<DysonWorkspaceRootKey, DysonGitChangesState> _cache = new();
     private readonly object _gate = new();
-    private Timer? _debounceTimer;
+    private readonly IDisposable _subscription;
     private CancellationTokenSource? _refreshCts;
     private bool _disposed;
 
-    public DysonGitChangesService(IServiceScopeFactory scopeFactory, DysonFileTreeService fileTree)
+    public DysonGitChangesService(
+        IServiceScopeFactory scopeFactory,
+        DysonFileTreeService fileTree,
+        DysonMessageBus bus,
+        DysonGitRepoChangePublisher publisher)
     {
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
         _fileTree = fileTree ?? throw new ArgumentNullException(nameof(fileTree));
-        _fileTree.Changed += OnFileTreeChanged;
+        ArgumentNullException.ThrowIfNull(bus);
+        _publisher = publisher ?? throw new ArgumentNullException(nameof(publisher));
+
+        var subscribed = bus.Subscribe<DysonGitRepoChangedEvent>(DysonBusScopes.Wildcard, OnRepoChanged);
+        if (subscribed.IsError)
+            throw new InvalidOperationException(subscribed.Error);
+
+        _subscription = subscribed.Value;
     }
 
     public DysonGitChangesState? Active { get; private set; }
@@ -32,7 +42,7 @@ public sealed class DysonGitChangesService : IDisposable
 
     /// <summary>
     /// Switch the active workdir snapshot. Cached entries are reused until process exit;
-    /// status is refreshed on activate and after file-tree FS events.
+    /// status is refreshed on activate and after git-repo bus events.
     /// </summary>
     public async Task<VoidResult<string>> SetActiveAsync(
         Guid? workDirectoryId,
@@ -45,6 +55,7 @@ public sealed class DysonGitChangesService : IDisposable
         {
             lock (_gate)
                 Active = null;
+            _publisher.Unwatch();
             Notify();
             return VoidResult<string>.Success;
         }
@@ -109,9 +120,8 @@ public sealed class DysonGitChangesService : IDisposable
             return;
 
         _disposed = true;
-        _fileTree.Changed -= OnFileTreeChanged;
-        _debounceTimer?.Dispose();
-        _debounceTimer = null;
+        _subscription.Dispose();
+        _publisher.Unwatch();
         lock (_gate)
         {
             _refreshCts?.Cancel();
@@ -122,23 +132,22 @@ public sealed class DysonGitChangesService : IDisposable
         }
     }
 
-    private void OnFileTreeChanged()
+    private void OnRepoChanged(DysonGitRepoChangedEvent evt)
     {
         if (_disposed)
             return;
 
         lock (_gate)
         {
-            _debounceTimer?.Dispose();
-            _debounceTimer = new Timer(
-                _ => _ = RefreshActiveFromDebounceAsync(),
-                null,
-                DebounceMs,
-                Timeout.Infinite);
+            var active = Active;
+            if (active is null || evt.WorkDirectoryId != active.WorkDirectoryId)
+                return;
         }
+
+        _ = RefreshActiveAsync();
     }
 
-    private async Task RefreshActiveFromDebounceAsync()
+    private async Task RefreshActiveAsync()
     {
         DysonGitChangesState? state;
         lock (_gate)
@@ -218,11 +227,14 @@ public sealed class DysonGitChangesService : IDisposable
                 state.RepoRoot = null;
                 state.Entries = [];
                 state.NoRepo = true;
+                _publisher.Unwatch();
                 return;
             }
 
             state.NoRepo = false;
             state.RepoRoot = root.Value;
+            // Watch as soon as a repo exists so porcelain failures still live-refresh.
+            _ = _publisher.Watch(state.WorkDirectoryId, state.RepoRoot);
 
             var status = await Task.Run(
                     () => DysonGitInfo.TryGetStatusPorcelain(root.Value),

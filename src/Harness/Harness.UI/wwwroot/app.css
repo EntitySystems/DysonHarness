@@ -7065,6 +7065,13 @@ code, .mono {
   background: var(--bg-0);
 }
 
+.file-viewer-modal__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 8rem;
+}
+
 .file-viewer-modal__image {
   flex: 1;
   max-width: 100%;
