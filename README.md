@@ -1,4 +1,4 @@
-# DysonHarness
+# Dyson Harness: The C# programmable programming agent
 
 **DysonHarness** is a multitasking orchestrator of smaller agents for large-scale work — not a single-agent chat wrapper. From [EntitySystems](https://github.com/EntitySystems).
 
@@ -26,6 +26,11 @@ Website: [dysonharness.com](https://dysonharness.com/)
 - Kimi K2.7 Code
 - Kimi K3
 - GPT 5.6 Luna/Terra
+- GPT 5.6 Sol
+- Claude Sonnet 5
+- Claude Opus 5
+- Claude Fable 5.1
+- Grok 4.6
 
 ## Usage guidance
 
