@@ -1112,6 +1112,36 @@ public abstract class DysonAgentSession
         _inFlightPromptStack.Count > 0 ? _inFlightPromptStack.Peek() : null;
 
     /// <summary>
+    /// Queues a mid-turn user comment on an in-flight prompt (any nested stack entry,
+    /// not only <see cref="InFlightPromptTurn"/>). Does not mutate <see cref="DysonAgentTurn.Instruction"/>.
+    /// </summary>
+    public VoidResult<string> InjectTurnComment(Guid turnId, string comment)
+    {
+        foreach (var turn in _inFlightPromptStack)
+        {
+            if (turn.Id == turnId)
+                return turn.EnqueueUserComment(comment);
+        }
+
+        return VoidResult<string>.AsError("Turn is not currently running.");
+    }
+
+    /// <summary>
+    /// True iff <paramref name="turnId"/> is on the in-flight prompt stack
+    /// (any nested entry, not only Peek).
+    /// </summary>
+    public bool IsTurnInFlight(Guid turnId)
+    {
+        foreach (var turn in _inFlightPromptStack)
+        {
+            if (turn.Id == turnId)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Marks <paramref name="turn"/> as the in-flight prompt turn until disposed.
     /// Nestable (DropContext inject inside another prompt). Call after <see cref="AddTurn"/>.
     /// A Completed/Failed root or child is reopened to <see cref="DysonSessionStatus.Active"/>

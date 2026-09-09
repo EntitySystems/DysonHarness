@@ -790,9 +790,11 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     }
 
     /// <summary>
-    /// History turns always send clean <see cref="DysonAgentTurn.Instruction"/> with a
-    /// <c>[turnId=…]</c> header. Incomplete current turn may append ephemeral mandates
-    /// (chrome-skipped rename review; first Plan-stint Explore).
+    /// History turns send <see cref="DysonAgentTurn.Instruction"/> with a
+    /// <c>[turnId=…]</c> header, plus persisted UserComment blocks
+    /// (<c>USER INJECTED COMMENT:</c>) when present. Incomplete current turn may
+    /// append ephemeral mandates (chrome-skipped rename review; first Plan-stint
+    /// Explore) and must not splice comments here (they go out as currentUserPrompt).
     /// </summary>
     private static string FormatTurnUserContent(
         DysonAgentSession session,
@@ -818,7 +820,18 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         }
 
         if (!incompleteCurrent)
+        {
+            var comments = turn.FormatInjectedUserCommentsForTranscript();
+            if (!string.IsNullOrEmpty(comments))
+            {
+                if (sb.Length > 0 && sb[^1] != '\n')
+                    sb.AppendLine();
+                sb.AppendLine();
+                sb.Append(comments);
+            }
+
             return sb.ToString().TrimEnd();
+        }
 
         if (ShouldAppendPlanFirstTurnMandate(
                 session, session.Turns, zeroBasedIndex, turn, incompleteCurrent))
