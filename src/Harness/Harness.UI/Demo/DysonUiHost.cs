@@ -292,6 +292,28 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     public DemoDysonEngine? Engine => _engine;
     public DysonAgentSession? Session => _session;
+
+    /// <summary>
+    /// Thin hook: inject a mid-turn comment on the focused session's in-flight prompt.
+    /// Engine owns validation, queue, and reasoning segments.
+    /// </summary>
+    public VoidResult<string> InjectTurnComment(Guid turnId, string comment)
+    {
+        if (_session is null)
+            return VoidResult<string>.AsError("No active session.");
+
+        var result = _session.InjectTurnComment(turnId, comment);
+        if (result.IsError)
+        {
+            LastError = result.Error;
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
+            return result;
+        }
+
+        Notify(DysonHostChangeKind.Transcript);
+        return result;
+    }
+
     public Guid? ActiveSessionId => _session?.PersistenceId is { } id && id != Guid.Empty ? id : null;
     public Guid HostId { get; } = Guid.NewGuid();
     public DysonMessageBus Bus { get; }

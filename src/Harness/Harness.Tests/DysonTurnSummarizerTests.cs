@@ -45,12 +45,22 @@ public class DysonTurnSummarizerTests
             CompletedUtc = DateTime.UtcNow,
         };
 
+        var enqueued = turn.EnqueueUserComment("focus on jwt");
+        if (enqueued.IsError)
+            throw new InvalidOperationException($"FormatTurnBody comment enqueue failed: {enqueued.Error}");
+
         var body = DysonTurnSummarizer.FormatTurnBody(turn);
         if (!body.Contains("inspect auth", StringComparison.Ordinal)
             || !body.Contains("found JwtBearer", StringComparison.Ordinal)
             || !body.Contains("ReadFile Program.cs", StringComparison.Ordinal))
         {
             throw new InvalidOperationException("FormatTurnBody must include instruction/assistant/tools.");
+        }
+
+        if (!body.Contains("User comments:", StringComparison.Ordinal)
+            || !body.Contains("USER INJECTED COMMENT: focus on jwt", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("FormatTurnBody must include a User comments section.");
         }
 
         if (DysonTurnSummarizer.HasSummary(turn))
@@ -63,10 +73,16 @@ public class DysonTurnSummarizerTests
         var stub = DysonTurnSummarizer.FormatSummaryStub(turn);
         if (!stub.Contains($"[turnId={turn.Id:D}]", StringComparison.Ordinal)
             || !stub.Contains("[contextSummary]", StringComparison.Ordinal)
-            || !stub.Contains("Auth uses JwtBearer.", StringComparison.Ordinal))
+            || !stub.Contains("Auth uses JwtBearer.", StringComparison.Ordinal)
+            || !stub.Contains("USER INJECTED COMMENT: focus on jwt", StringComparison.Ordinal))
         {
-            throw new InvalidOperationException("FormatSummaryStub must include turnId + summary.");
+            throw new InvalidOperationException("FormatSummaryStub must include turnId + summary + comments.");
         }
+
+        var summaryIdx = stub.IndexOf("Auth uses JwtBearer.", StringComparison.Ordinal);
+        var commentIdx = stub.IndexOf("USER INJECTED COMMENT: focus on jwt", StringComparison.Ordinal);
+        if (summaryIdx < 0 || commentIdx <= summaryIdx)
+            throw new InvalidOperationException("FormatSummaryStub must append comments after ContextSummary.");
     }
 
     private static void AssertPersistenceRoundTrip()

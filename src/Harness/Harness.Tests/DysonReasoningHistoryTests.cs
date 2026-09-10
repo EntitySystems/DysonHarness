@@ -327,6 +327,46 @@ public class DysonReasoningHistoryTests
             includeInterimText: true);
         titled.AppendReasoningDelta("still streaming");
         ExpectStep(titled, "Report accepted", "AgentTitle precedence");
+
+        var oneComment = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        ExpectSuccess(oneComment.EnqueueUserComment("please focus on tests"), "single UserComment enqueue");
+        ExpectStep(oneComment, "User Comment 1", "single UserComment fallback");
+
+        var twoComments = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        ExpectSuccess(twoComments.EnqueueUserComment("first comment"), "first of two UserComments");
+        ExpectSuccess(twoComments.EnqueueUserComment("second comment"), "second of two UserComments");
+        ExpectStep(twoComments, "User Comment 2", "multiple UserComment ordinal");
+
+        var hashedComment = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        ExpectSuccess(
+            hashedComment.EnqueueUserComment("# Heading must not become the slot title"),
+            "hashed UserComment enqueue");
+        ExpectStep(hashedComment, "User Comment 1", "UserComment must not SplitSegmentTitle");
+
+        var liveWins = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        ExpectSuccess(liveWins.EnqueueUserComment("injected while thinking"), "comment before live thought");
+        liveWins.AppendReasoningDelta("streaming thought");
+        ExpectStep(liveWins, "Thinking", "live streaming thought wins over just-injected comment");
+
+        var liveAfterThought = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        liveAfterThought.AppendReasoningRound(0, "committed", null, includeInterimText: false);
+        ExpectSuccess(liveAfterThought.EnqueueUserComment("steer"), "comment after thought before live");
+        liveAfterThought.AppendReasoningDelta("more SECRET_PREVIEW_TOKEN");
+        ExpectStep(liveAfterThought, "Thinking 2", "live trailing Thinking N wins over just-injected comment");
+
+        var commentAfterThought = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        commentAfterThought.AppendReasoningRound(0, "committed thought", null, includeInterimText: false);
+        ExpectSuccess(commentAfterThought.EnqueueUserComment("steer after thought"), "comment after thoughts");
+        ExpectStep(commentAfterThought, "User Comment 1", "last segment UserComment after thoughts");
+    }
+
+    private static void ExpectSuccess(VoidResult<string> result, string caseName)
+    {
+        if (result.IsError)
+        {
+            throw new InvalidOperationException(
+                $"{caseName}: expected success, got '{result.Error}'.");
+        }
     }
 
     private static void ExpectStep(DysonAgentTurn turn, string expected, string caseName)

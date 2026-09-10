@@ -2986,6 +2986,71 @@ code, .mono {
   }
 }
 
+/* Mid-turn inject comment (in-flight TurnBlock, above subagent cards) */
+.turn-block__inject {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px 8px;
+}
+
+.turn-block__inject-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  width: min(100%, 32rem);
+}
+
+.turn-block__inject-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  resize: vertical;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.turn-block__inject-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.turn-block__inject-toggle,
+.turn-block__inject-send {
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.turn-block__inject-send {
+  flex: 0 0 auto;
+}
+
+.turn-block__inject-toggle:hover,
+.turn-block__inject-send:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
 /* Parent ? child subagent cards (inside TurnBlock) */
 .turn-block__subagents {
   display: flex;
@@ -3358,10 +3423,13 @@ code, .mono {
 
 .turn-block {
   --turn-header-sticky-offset: 52px;
+  --turn-inner-radius: calc(var(--radius-md) - 1px);
   position: relative;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-1);
+  background-clip: padding-box;
+  box-shadow: var(--shadow-1);
   /* visible: overflow:hidden would trap sticky .turn-block__tools */
   overflow: visible;
   flex-shrink: 0;
@@ -3369,13 +3437,13 @@ code, .mono {
 
 /* Sentinel is first in DOM (absolute); radius targets the real chrome. */
 .turn-block > .turn-block__header {
-  border-top-left-radius: 5px;
-  border-top-right-radius: 5px;
+  border-top-left-radius: var(--turn-inner-radius);
+  border-top-right-radius: var(--turn-inner-radius);
 }
 
 .turn-block > :last-child {
-  border-bottom-left-radius: 5px;
-  border-bottom-right-radius: 5px;
+  border-bottom-left-radius: var(--turn-inner-radius);
+  border-bottom-right-radius: var(--turn-inner-radius);
 }
 
 /* Zero-layout marker above sticky header for IntersectionObserver stuck detection. */
@@ -3906,6 +3974,11 @@ code, .mono {
 
 .turn-block__reasoning--interim {
   opacity: 0.75;
+}
+
+.turn-block__reasoning--comment {
+  border-left-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  opacity: 0.92;
 }
 
 .turn-block__tools {
