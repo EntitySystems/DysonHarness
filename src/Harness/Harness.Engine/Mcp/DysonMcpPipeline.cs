@@ -2024,7 +2024,8 @@ public sealed class DysonMcpPipeline
                 "Never include ReadFile line prefixes (e.g. '123|') in old_text/new_text; copy only the content after '|'. " +
                 "The match must be unique unless replace_all is true. " +
                 "Fuzzy matching tolerates whitespace, indentation, and EOL (CRLF/LF) differences when the match is unique. " +
-                "Use content only for create-like full rewrites when targeted edits are impractical.",
+                "Use content only for create-like full rewrites when targeted edits are impractical. " +
+                "Issue at most one WriteFile per path per stage (same-stage calls run concurrently); use edits[] for multiple hunks in one call.",
             InputSchemaJson = """
                 {
                   "type": "object",
