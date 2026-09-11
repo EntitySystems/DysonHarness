@@ -348,7 +348,7 @@ Out of scope for this MVP: news tools, CSDN/Juejin, Baidu/Sogou/Yandex scrapers,
 
 `SharedPreamble` (built-in modes) encourages multiple tool calls per turn and asks independent reads, searches, and listings to go out together in one round on the same stage.
 
-Issue at most one `WriteFile` per file per stage: same-stage calls run concurrently with no per-path lock. Multiple hunks belong in `edits[]` (or one `old_text`/`new_text`) in a single `WriteFile`; sequential writes to the same path use later stages. Parallel `WriteFile` on different files in the same stage remains correct. This is SharedPreamble / built-in guidance plus the `WriteFile` catalog Description — the scheduler does not enforce it, and custom agents do not get SharedPreamble.
+Issue at most one `WriteFile` per file per stage: multiple hunks belong in `edits[]` (or one `old_text`/`new_text`) in a single `WriteFile`; sequential writes to the same path use later stages. Parallel `WriteFile` on different files in the same stage remains concurrent. This is SharedPreamble / built-in guidance plus the `WriteFile` catalog Description — the scheduler does not reject duplicate paths, and custom agents do not get SharedPreamble. `WriteFileAsync` serializes overlapping writes to the same resolved native path with a process-wide `SemaphoreSlim(1)` so same-file concurrent calls wait instead of racing.
 
 ### Turn timestamps
 

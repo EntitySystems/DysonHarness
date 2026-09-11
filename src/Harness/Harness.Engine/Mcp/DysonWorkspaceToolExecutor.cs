@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -1884,6 +1885,10 @@ public sealed partial class DysonWorkspaceToolExecutor
         return $"{stem}-{Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(12)).ToLowerInvariant()}{extension}";
     }
 
+    // ponytail: dictionary grows with distinct WriteFile native paths for process lifetime; upgrade = prune unused gates.
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> WriteFileGates =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private async Task<DysonToolCallResult> WriteFileAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)
@@ -1894,88 +1899,101 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (path.IsError)
             return Error(call, path.Error);
 
-        var exists = await _fs.FileExistsAsync(path.Value, cancellationToken).ConfigureAwait(false);
-        if (exists.IsError)
-            return Error(call, exists.Error);
+        var resolved = _fs.ResolvePath(path.Value);
+        if (resolved.IsError)
+            return Error(call, resolved.Error);
 
-        if (!exists.Value
-            && !(doc.RootElement.TryGetProperty("content", out var fullContentProp)
-                 && fullContentProp.ValueKind == JsonValueKind.String))
+        var gate = WriteFileGates.GetOrAdd(resolved.Value, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            return Error(call, $"File not found: {path.Value}");
-        }
+            var exists = await _fs.FileExistsAsync(path.Value, cancellationToken).ConfigureAwait(false);
+            if (exists.IsError)
+                return Error(call, exists.Error);
 
-        if (doc.RootElement.TryGetProperty("content", out var contentProp)
-            && contentProp.ValueKind == JsonValueKind.String
-            && !doc.RootElement.TryGetProperty("old_text", out _)
-            && !doc.RootElement.TryGetProperty("edits", out _))
-        {
-            var full = contentProp.GetString() ?? "";
-            var written = await _fs.WriteAllTextAsync(path.Value, full, cancellationToken)
-                .ConfigureAwait(false);
-            if (written.IsError)
-                return Error(call, written.Error);
-
-            return Ok(call, $"Wrote full content to {path.Value} ({full.Length} chars).");
-        }
-
-        var read = await _fs.ReadAllTextAsync(path.Value, cancellationToken).ConfigureAwait(false);
-        if (read.IsError)
-            return Error(call, read.Error);
-
-        var text = read.Value;
-        var edits = new List<(string Old, string New, bool ReplaceAll)>();
-        var defaultReplaceAll = GetBool(doc.RootElement, "replace_all");
-
-        if (doc.RootElement.TryGetProperty("old_text", out var oldProp)
-            && doc.RootElement.TryGetProperty("new_text", out var newProp))
-        {
-            edits.Add((oldProp.GetString() ?? "", newProp.GetString() ?? "", defaultReplaceAll));
-        }
-
-        if (doc.RootElement.TryGetProperty("edits", out var editsArr)
-            && editsArr.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var edit in editsArr.EnumerateArray())
+            if (!exists.Value
+                && !(doc.RootElement.TryGetProperty("content", out var fullContentProp)
+                     && fullContentProp.ValueKind == JsonValueKind.String))
             {
-                if (!edit.TryGetProperty("old_text", out var o) || !edit.TryGetProperty("new_text", out var n))
-                    continue;
-                var itemReplaceAll = edit.TryGetProperty("replace_all", out var ra)
-                    ? ra.ValueKind == JsonValueKind.True
-                    : defaultReplaceAll;
-                edits.Add((o.GetString() ?? "", n.GetString() ?? "", itemReplaceAll));
-            }
-        }
-
-        if (edits.Count == 0)
-            return Error(call, "WriteFile: provide content, or old_text/new_text, or edits[].");
-
-        var appliedEdits = 0;
-        var replacementCount = 0;
-        foreach (var (oldText, newText, replaceAll) in edits)
-        {
-            if (string.IsNullOrEmpty(oldText))
-                return Error(call, "WriteFile: old_text must be non-empty.");
-
-            var result = DysonTextEditApplier.TryReplace(text, oldText, newText, replaceAll);
-            if (result.IsError)
-            {
-                var failure = result.Error;
-                return Error(call, $"WriteFile: {failure.Message} ({path.Value})");
+                return Error(call, $"File not found: {path.Value}");
             }
 
-            text = result.Value.Content;
-            appliedEdits++;
-            replacementCount += result.Value.ReplacementCount;
+            if (doc.RootElement.TryGetProperty("content", out var contentProp)
+                && contentProp.ValueKind == JsonValueKind.String
+                && !doc.RootElement.TryGetProperty("old_text", out _)
+                && !doc.RootElement.TryGetProperty("edits", out _))
+            {
+                var full = contentProp.GetString() ?? "";
+                var written = await _fs.WriteAllTextAsync(path.Value, full, cancellationToken)
+                    .ConfigureAwait(false);
+                if (written.IsError)
+                    return Error(call, written.Error);
+
+                return Ok(call, $"Wrote full content to {path.Value} ({full.Length} chars).");
+            }
+
+            var read = await _fs.ReadAllTextAsync(path.Value, cancellationToken).ConfigureAwait(false);
+            if (read.IsError)
+                return Error(call, read.Error);
+
+            var text = read.Value;
+            var edits = new List<(string Old, string New, bool ReplaceAll)>();
+            var defaultReplaceAll = GetBool(doc.RootElement, "replace_all");
+
+            if (doc.RootElement.TryGetProperty("old_text", out var oldProp)
+                && doc.RootElement.TryGetProperty("new_text", out var newProp))
+            {
+                edits.Add((oldProp.GetString() ?? "", newProp.GetString() ?? "", defaultReplaceAll));
+            }
+
+            if (doc.RootElement.TryGetProperty("edits", out var editsArr)
+                && editsArr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var edit in editsArr.EnumerateArray())
+                {
+                    if (!edit.TryGetProperty("old_text", out var o) || !edit.TryGetProperty("new_text", out var n))
+                        continue;
+                    var itemReplaceAll = edit.TryGetProperty("replace_all", out var ra)
+                        ? ra.ValueKind == JsonValueKind.True
+                        : defaultReplaceAll;
+                    edits.Add((o.GetString() ?? "", n.GetString() ?? "", itemReplaceAll));
+                }
+            }
+
+            if (edits.Count == 0)
+                return Error(call, "WriteFile: provide content, or old_text/new_text, or edits[].");
+
+            var appliedEdits = 0;
+            var replacementCount = 0;
+            foreach (var (oldText, newText, replaceAll) in edits)
+            {
+                if (string.IsNullOrEmpty(oldText))
+                    return Error(call, "WriteFile: old_text must be non-empty.");
+
+                var result = DysonTextEditApplier.TryReplace(text, oldText, newText, replaceAll);
+                if (result.IsError)
+                {
+                    var failure = result.Error;
+                    return Error(call, $"WriteFile: {failure.Message} ({path.Value})");
+                }
+
+                text = result.Value.Content;
+                appliedEdits++;
+                replacementCount += result.Value.ReplacementCount;
+            }
+
+            var saved = await _fs.WriteAllTextAsync(path.Value, text, cancellationToken).ConfigureAwait(false);
+            if (saved.IsError)
+                return Error(call, saved.Error);
+
+            return Ok(
+                call,
+                $"Applied {appliedEdits} edit(s) ({replacementCount} replacement(s)) to {path.Value}.");
         }
-
-        var saved = await _fs.WriteAllTextAsync(path.Value, text, cancellationToken).ConfigureAwait(false);
-        if (saved.IsError)
-            return Error(call, saved.Error);
-
-        return Ok(
-            call,
-            $"Applied {appliedEdits} edit(s) ({replacementCount} replacement(s)) to {path.Value}.");
+        finally
+        {
+            gate.Release();
+        }
     }
 
     private const int GrepMaxLineChars = 400;
