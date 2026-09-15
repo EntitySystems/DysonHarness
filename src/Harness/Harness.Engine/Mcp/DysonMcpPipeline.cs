@@ -134,7 +134,7 @@ public sealed class DysonMcpPipeline
             "You must pass shell as one of these. Prefer dedicated MCP file tools over shell when they fit.";
         description = AppendPythonNodeSnippetSentence(description, names);
         description +=
-            " stdout/stderr are captured up to 64KiB each; overflow is truncated (command may still run until timeout).";
+            " timeoutMs (integer > 0) is required. stdout/stderr are captured up to 64KiB each; overflow is truncated (command may still run until timeout).";
         if (planMode)
             description += " " + PlanShellExecuteWarning;
 
@@ -157,14 +157,14 @@ public sealed class DysonMcpPipeline
                     },
                     "timeoutMs": {
                       "type": "integer",
-                      "description": "Optional max run time in milliseconds before the process is killed."
+                      "description": "Mandatory max run time in milliseconds before the process is killed. Must be > 0 (executor rejects omitted/<= 0)."
                     },
                     "workingDirectory": {
                       "type": "string",
                       "description": "Optional subdirectory under the work root (default: work root)."
                     }
                   },
-                  "required": ["shell", "command"]
+                  "required": ["shell", "command", "timeoutMs"]
                 }
                 """,
         };
@@ -655,7 +655,7 @@ public sealed class DysonMcpPipeline
     {
         const string TimeoutMsJson =
             """
-            "timeoutMs": { "type": "integer", "description": "Optional timeout in milliseconds (default 60000)." }
+            "timeoutMs": { "type": "integer", "description": "Mandatory wait budget in milliseconds. Must be > 0 (executor rejects omitted/<= 0)." }
             """;
 
         yield return new DysonMcpTool
@@ -862,7 +862,7 @@ public sealed class DysonMcpPipeline
             Name = "ClearBrowserCache",
             Description =
                 "Clear the shared CEF HTTP cache for open agent browser windows, then hard-reload every tab. " +
-                "Does not clear cookies or site storage. No args — always all open windows. " +
+                "Does not clear cookies or site storage. " +
                 "Empty window list returns success with windows=0, tabsReloaded=0. " +
                 "Agent windows and the Windows shell UI share %LocalAppData%\\DysonHarness\\cef-cache; " +
                 "CDP cache clear is profile-wide (shell is not hard-reloaded).",
@@ -1052,8 +1052,7 @@ public sealed class DysonMcpPipeline
             Name = "BrowserTakeScreenshot",
             Description =
                 "Capture a screenshot of the tab (JPEG multimodal attachment + short JSON ack; no base64 in Content). " +
-                "Requires FileStorage (presigned HTTPS URL); unconfigured returns file_storage_required. " +
-                "Optional timeoutMs (default 60000).",
+                "Requires FileStorage (presigned HTTPS URL); unconfigured returns file_storage_required.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1102,12 +1101,12 @@ public sealed class DysonMcpPipeline
     }
 
     private const string BrowserTimeoutMsDescription =
-        "Optional timeout in milliseconds (default 60000).";
+        "Mandatory wait budget in milliseconds. Must be > 0 (executor rejects omitted/<= 0).";
 
     /// <summary>
-    /// Injects optional <c>timeoutMs</c> (default 60000) into every browser tool schema.
+    /// Injects required <c>timeoutMs</c> into every browser tool schema.
     /// </summary>
-    private static DysonMcpTool EnsureOptionalBrowserTimeoutMs(DysonMcpTool tool)
+    private static DysonMcpTool EnsureRequiredBrowserTimeoutMs(DysonMcpTool tool)
     {
         using var doc = JsonDocument.Parse(tool.InputSchemaJson);
         using var stream = new MemoryStream();
@@ -1115,6 +1114,7 @@ public sealed class DysonMcpPipeline
         {
             writer.WriteStartObject();
             var wroteProperties = false;
+            var wroteRequired = false;
             foreach (var prop in doc.RootElement.EnumerateObject())
             {
                 if (prop.NameEquals("properties"))
@@ -1138,6 +1138,18 @@ public sealed class DysonMcpPipeline
                     continue;
                 }
 
+                if (prop.NameEquals("required"))
+                {
+                    wroteRequired = true;
+                    writer.WritePropertyName("required");
+                    writer.WriteStartArray();
+                    foreach (var item in prop.Value.EnumerateArray())
+                        item.WriteTo(writer);
+                    writer.WriteStringValue("timeoutMs");
+                    writer.WriteEndArray();
+                    continue;
+                }
+
                 prop.WriteTo(writer);
             }
 
@@ -1151,6 +1163,14 @@ public sealed class DysonMcpPipeline
                 writer.WriteString("description", BrowserTimeoutMsDescription);
                 writer.WriteEndObject();
                 writer.WriteEndObject();
+            }
+
+            if (!wroteRequired)
+            {
+                writer.WritePropertyName("required");
+                writer.WriteStartArray();
+                writer.WriteStringValue("timeoutMs");
+                writer.WriteEndArray();
             }
 
             writer.WriteEndObject();
@@ -1284,7 +1304,7 @@ public sealed class DysonMcpPipeline
         if (browserControlAvailable)
         {
             foreach (var tool in CreateBrowserTools())
-                yield return EnsureOptionalBrowserTimeoutMs(tool);
+                yield return EnsureRequiredBrowserTimeoutMs(tool);
         }
 
         yield return new DysonMcpTool
@@ -1574,7 +1594,10 @@ public sealed class DysonMcpPipeline
             Description =
                 "Request completion review: the harness schedules a confirmation turn rather than ending immediately. " +
                 "On that follow-up turn you must call ConfirmTaskComplete or ContinueWork. " +
-                "After ConfirmTaskComplete, a ReportSummary turn follows.",
+                "After ConfirmTaskComplete, a ReportSummary turn follows. " +
+                "After a confirmed cycle, CompleteTask is valid again only after a new user/in-flight prompt " +
+                "(Completed/Failed reopens to Active). " +
+                "Do not call CompleteTask while still Completed with no new turn. Stopped/Interrupted stay locked.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -2021,7 +2044,8 @@ public sealed class DysonMcpPipeline
                 "Never include ReadFile line prefixes (e.g. '123|') in old_text/new_text; copy only the content after '|'. " +
                 "The match must be unique unless replace_all is true. " +
                 "Fuzzy matching tolerates whitespace, indentation, and EOL (CRLF/LF) differences when the match is unique. " +
-                "Use content only for create-like full rewrites when targeted edits are impractical.",
+                "Use content only for create-like full rewrites when targeted edits are impractical. " +
+                "Issue at most one WriteFile per path per stage (same-stage calls run concurrently); use edits[] for multiple hunks in one call.",
             InputSchemaJson = """
                 {
                   "type": "object",

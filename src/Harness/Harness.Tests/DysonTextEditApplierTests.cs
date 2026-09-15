@@ -26,10 +26,12 @@ public class DysonTextEditApplierTests
         if (!pipeline.Tools.TryGetValue("WriteFile", out var write)
             || !write.Description.Contains("replace_all", StringComparison.Ordinal)
             || !write.Description.Contains("123|", StringComparison.Ordinal)
+            || !write.Description.Contains("per path per stage", StringComparison.Ordinal)
+            || !write.Description.Contains("edits[]", StringComparison.Ordinal)
             || !write.InputSchemaJson.Contains("replace_all", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "WriteFile catalog must document replace_all and ReadFile prefix guidance.");
+                "WriteFile catalog must document replace_all, ReadFile prefix guidance, and the per-path-per-stage / edits[] constraint.");
         }
 
         if (!pipeline.Tools.TryGetValue("ReadFile", out var read)

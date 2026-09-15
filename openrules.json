@@ -28,7 +28,7 @@
     },
     {
       "Path": "rules/rules_ponytail.md",
-      "Mode": "AgentOptional",
+      "Mode": "AutoInclude",
       "Description": "Ponytail lazy-senior efficiency ladder (mandatory)"
     },
     {

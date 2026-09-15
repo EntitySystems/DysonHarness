@@ -840,7 +840,7 @@ public abstract class DysonAgentSession
 
         var reopened = child.TryReopenForNewParentTask();
         if (reopened)
-            await PersistReopenForParentTaskAsync(child).ConfigureAwait(false);
+            await child.PersistReopenAsync("parent TriggerSubagentEvent").ConfigureAwait(false);
 
         if (interruptSubagent)
         {
@@ -1112,17 +1112,48 @@ public abstract class DysonAgentSession
         _inFlightPromptStack.Count > 0 ? _inFlightPromptStack.Peek() : null;
 
     /// <summary>
+    /// Queues a mid-turn user comment on an in-flight prompt (any nested stack entry,
+    /// not only <see cref="InFlightPromptTurn"/>). Does not mutate <see cref="DysonAgentTurn.Instruction"/>.
+    /// </summary>
+    public VoidResult<string> InjectTurnComment(Guid turnId, string comment)
+    {
+        foreach (var turn in _inFlightPromptStack)
+        {
+            if (turn.Id == turnId)
+                return turn.EnqueueUserComment(comment);
+        }
+
+        return VoidResult<string>.AsError("Turn is not currently running.");
+    }
+
+    /// <summary>
+    /// True iff <paramref name="turnId"/> is on the in-flight prompt stack
+    /// (any nested entry, not only Peek).
+    /// </summary>
+    public bool IsTurnInFlight(Guid turnId)
+    {
+        foreach (var turn in _inFlightPromptStack)
+        {
+            if (turn.Id == turnId)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Marks <paramref name="turn"/> as the in-flight prompt turn until disposed.
     /// Nestable (DropContext inject inside another prompt). Call after <see cref="AddTurn"/>.
-    /// A child <see cref="DysonSessionStatus.Completed"/> / <see cref="DysonSessionStatus.Failed"/>
-    /// session is reopened to <see cref="DysonSessionStatus.Active"/> at the start of a new in-flight prompt.
+    /// A Completed/Failed root or child is reopened to <see cref="DysonSessionStatus.Active"/>
+    /// at the start of a new in-flight prompt. Stopped/Interrupted stay locked.
+    /// Pushes first so <c>DysonTaskLifecycleFlow.Evaluate</c> no-ops while this prompt is in flight
+    /// (reopening to Active before push would leave a window where last turn is still ReportSummary/BugReview).
     /// </summary>
     public IDisposable BeginInFlightPrompt(DysonAgentTurn turn)
     {
         ArgumentNullException.ThrowIfNull(turn);
-        if (Parent is not null)
-            TryReopenForNewParentTask();
         _inFlightPromptStack.Push(turn);
+        TryReopenForNewParentTask();
         return new InFlightPromptScope(this);
     }
 
@@ -1537,9 +1568,11 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
-    /// Reopens a Completed/Failed child so a new SubmitSubagentReport cycle can run after parent
-    /// <c>TriggerSubagentEvent</c> or when a new child in-flight prompt begins. Stopped/Interrupted stay locked.
-    /// Sets <see cref="Status"/> to Active in memory only; durable Active is written by the parent inject path.
+    /// Reopens a Completed/Failed session so a new CompleteTask / SubmitSubagentReport cycle can run
+    /// after parent <c>TriggerSubagentEvent</c> or when a new in-flight prompt begins.
+    /// Stopped/Interrupted stay locked.
+    /// Sets <see cref="Status"/> to Active in memory; durable Active is written by the parent inject
+    /// path or the prompt path (<see cref="PersistReopenAsync"/>).
     /// </summary>
     public bool TryReopenForNewParentTask()
     {
@@ -1929,27 +1962,28 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
-    /// Persist child Active after parent TriggerSubagentEvent reopened a Completed/Failed report cycle.
+    /// Persist Active after a Completed/Failed session was reopened (parent inject or new in-flight prompt).
+    /// No-op when <see cref="SessionStore"/> is null or <see cref="PersistenceId"/> is empty.
     /// </summary>
-    private static async Task PersistReopenForParentTaskAsync(DysonAgentSession child)
+    protected async Task PersistReopenAsync(string reason)
     {
-        var store = child.SessionStore;
-        if (store is null || child.PersistenceId == Guid.Empty)
+        var store = SessionStore;
+        if (store is null || PersistenceId == Guid.Empty)
             return;
 
         await store.UpdateSessionMetaAsync(
             new DysonSessionMetaUpdate
             {
-                SessionId = child.PersistenceId,
+                SessionId = PersistenceId,
                 Status = DysonSessionStatus.Active,
             }).ConfigureAwait(false);
 
         var statusLog = DysonSessionLogPayload.CreateEntry(
-            child.PersistenceId,
+            PersistenceId,
             DysonSessionLogKind.SessionStatusChanged,
             new DysonSessionLogSessionStatusChanged(
                 DysonSessionStatus.Active,
-                "parent TriggerSubagentEvent"));
+                reason));
         await store.AppendLogAsync(statusLog).ConfigureAwait(false);
     }
 

@@ -7,9 +7,10 @@ namespace DysonHarness;
 /// Wired loop:
 /// <list type="number">
 /// <item><c>CompleteTask</c> → enqueue <see cref="DysonAgentTurnKind.TaskCompletionConfirm"/>.</item>
-/// <item><c>ConfirmTaskComplete</c> → enqueue <see cref="DysonAgentTurnKind.ReportSummary"/> (last); after that reply, mark session task complete.</item>
+/// <item><c>ConfirmTaskComplete</c> → enqueue <see cref="DysonAgentTurnKind.ReportSummary"/> (last for this cycle); after that reply, mark session task complete.</item>
 /// <item><c>ContinueWork</c> → enqueue <see cref="DysonAgentTurnKind.Continuation"/> (then normal work until <c>CompleteTask</c> again).</item>
 /// </list>
+/// A later in-flight user turn starts a new CompleteTask cycle.
 /// </remarks>
 public static class DysonTaskCompletionFlow
 {
@@ -34,9 +35,10 @@ public static class DysonTaskCompletionFlow
         """;
 
     public const string ReportSummaryInstruction = """
-        Report summary turn (final): Briefly explain the work done so a parent agent has enough context to continue without re-deriving your steps.
+        Report summary turn (final for this cycle): Briefly explain the work done so a parent agent has enough context to continue without re-deriving your steps.
         Cover: outcome, key files/changes, how you verified, and any residual risks or follow-ups.
         Stay concise and factual. Prefer writing the summary in your reply; avoid further tool calls unless essential to cite a path.
+        A later user turn starts a new completion cycle.
         """;
 
     /// <summary>System turn after CompleteTask: model must ConfirmTaskComplete or ContinueWork.</summary>
@@ -71,7 +73,7 @@ public static class DysonTaskCompletionFlow
         };
     }
 
-    /// <summary>Final turn after ConfirmTaskComplete: brief parent-agent handoff summary.</summary>
+    /// <summary>Final turn of this cycle after ConfirmTaskComplete: brief parent-agent handoff summary.</summary>
     public static DysonAgentTurn CreateReportSummaryTurn(string? confirmRationale = null)
     {
         var instruction = string.IsNullOrWhiteSpace(confirmRationale)

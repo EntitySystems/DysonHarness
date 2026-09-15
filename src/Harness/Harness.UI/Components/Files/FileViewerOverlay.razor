@@ -11,7 +11,7 @@
     <div class="file-viewer-modal-backdrop"
          @onclick="Close"
          @onkeydown="OnBackdropKeyDown">
-        <div class="file-viewer-modal @(viewer.IsPdf ? "file-viewer-modal--pdf" : viewer.IsImage ? "file-viewer-modal--image" : null)"
+        <div class="file-viewer-modal @(viewer.IsPdf || viewer.IsTextPreview ? "file-viewer-modal--pdf" : viewer.IsImage ? "file-viewer-modal--image" : null)"
              role="dialog"
              aria-modal="true"
              aria-labelledby="file-viewer-modal-title"
@@ -74,10 +74,16 @@
                     </div>
                 }
 
-                <div class="file-viewer-modal__content @(viewer.IsPdf ? "file-viewer-modal__content--pdf" : viewer.IsImage ? "file-viewer-modal__content--image" : null)">
+                <div class="file-viewer-modal__content @(viewer.IsPdf || viewer.IsTextPreview ? "file-viewer-modal__content--pdf" : viewer.IsImage ? "file-viewer-modal__content--image" : null)">
                     @if (!string.IsNullOrEmpty(viewer.Error))
                     {
                         <div class="error-banner">@viewer.Error</div>
+                    }
+                    else if (viewer.IsLoading)
+                    {
+                        <div class="file-viewer-modal__loading" aria-busy="true">
+                            <span class="turn-block__spinner" aria-hidden="true"></span>
+                        </div>
                     }
                     else if (viewer.IsPdf && !string.IsNullOrEmpty(viewer.PdfPreviewUrl))
                     {
@@ -92,7 +98,13 @@
                              src="@viewer.ImagePreviewUrl"
                              alt="@viewer.Title" />
                     }
-                    else if (viewer.IsMarkdown)
+                    else if (viewer.IsTextPreview && !string.IsNullOrEmpty(viewer.TextPreviewUrl))
+                    {
+                        <iframe class="file-viewer-modal__pdf"
+                                title="@viewer.Title"
+                                src="@viewer.TextPreviewUrl"></iframe>
+                    }
+                    else if (viewer.IsMarkdown && !viewer.IsLoading && !viewer.IsTextPreview)
                     {
                         @* ponytail: selection is paragraph/heading/pre blocks only (split on blank lines), not AST-precise; upgrade to Markdig block walker when comments persist. *@
                         var markdownBlocks = viewer.MarkdownBlocks;
@@ -215,10 +227,11 @@ else
     }
 
     private IDisposable? _hostSub;
+    private int _boundEpoch = -1;
 
     protected override void OnInitialized()
     {
-        var sub = Bus.Subscribe<DysonHostStateChangedEvent>(Host.BusScopeKey, OnHostChanged);
+        var sub = Bus.Subscribe<DysonFileViewerChangedEvent>(Host.BusScopeKey, OnFileViewerChanged);
         if (sub.IsSuccess)
             _hostSub = sub.Value;
     }
@@ -267,10 +280,11 @@ else
         </div>
     };
 
-    private void OnHostChanged(DysonHostStateChangedEvent evt)
+    private void OnFileViewerChanged(DysonFileViewerChangedEvent evt)
     {
-        if ((evt.Kind & DysonHostChangeKind.Overlay) == 0)
-            return;
+        if (evt.Viewer is null || evt.Epoch != _boundEpoch)
+            ClearViewerState();
+        _boundEpoch = evt.Viewer is null ? -1 : evt.Epoch;
         _ = InvokeAsync(StateHasChanged);
     }
 

@@ -181,6 +181,7 @@
                             @{
                                 var thoughtOrdinal = 0;
                                 var interimOrdinal = 0;
+                                var commentOrdinal = 0;
                                 var thoughtCount = Turn.ReasoningLog.Count(s =>
                                     s.Kind == DysonReasoningSegmentKind.Thought);
                                 var interimCount = Turn.ReasoningLog.Count(s =>
@@ -234,6 +235,27 @@
                                         }
                                     </div>
                                     interimOrdinal++;
+                                }
+                                else if (segment.Kind == DysonReasoningSegmentKind.UserComment
+                                         && !string.IsNullOrWhiteSpace(segment.Text))
+                                {
+                                    var key = $"c:{commentOrdinal}";
+                                    var title = DysonReasoningHistoryUi.UserCommentFallback(commentOrdinal);
+                                    <div class="turn-block__reasoning turn-block__reasoning--comment" @key="@($"{Turn.Id}:{key}")">
+                                        <button type="button"
+                                                class="turn-block__reasoning-summary"
+                                                aria-expanded="@IsSegmentExpanded(key)"
+                                                @onclick="() => ToggleSegment(key)"
+                                                @onclick:stopPropagation="true">
+                                            <span class="turn-block__reasoning-chevron" aria-hidden="true">@(IsSegmentExpanded(key) ? "▾" : "▸")</span>
+                                            <span>@title</span>
+                                        </button>
+                                        @if (IsSegmentExpanded(key))
+                                        {
+                                            <div class="turn-block__body">@MarkdownRenderer.ToHtml(segment.Text)</div>
+                                        }
+                                    </div>
+                                    commentOrdinal++;
                                 }
                             }
 
@@ -329,6 +351,44 @@
             </div>
         }
 
+        @if (CanInjectComment)
+        {
+            <div class="turn-block__inject">
+                @if (!_injectOpen)
+                {
+                    <button type="button"
+                            class="turn-block__inject-toggle"
+                            title="Inject a comment into this running turn"
+                            @onclick="OpenInject"
+                            @onclick:stopPropagation="true">
+                        Inject comment
+                    </button>
+                }
+                else
+                {
+                    <div class="turn-block__inject-form">
+                        <textarea @ref="_injectInput"
+                                  class="turn-block__inject-input"
+                                  rows="2"
+                                  placeholder="Steer this turn…"
+                                  aria-label="Inject comment"
+                                  @bind="_injectText"
+                                  @bind:event="oninput"
+                                  @onkeydown="HandleInjectKeyDown"
+                                  @onkeydown:stopPropagation="true"
+                                  @onclick:stopPropagation="true"></textarea>
+                        <button type="button"
+                                class="turn-block__inject-send"
+                                title="Send comment"
+                                @onclick="SubmitInjectComment"
+                                @onclick:stopPropagation="true">
+                            Send
+                        </button>
+                    </div>
+                }
+            </div>
+        }
+
         @if (CollectSubagentPersistenceIds() is { Count: > 0 } subagentIds)
         {
             <div class="turn-block__subagents">
@@ -376,6 +436,7 @@
     private ElementReference _headerEl;
     private ElementReference _contentEl;
     private ElementReference _resizerEl;
+    private ElementReference _injectInput;
     private DotNetObjectReference<TurnBlock>? _dotNetRef;
     private bool _stickyAttached;
     private bool _resizerAttached;
@@ -388,6 +449,10 @@
     private bool _contextMenuOpen;
     private double _contextMenuX;
     private double _contextMenuY;
+    private Guid _injectTurnId;
+    private bool _injectOpen;
+    private bool _injectFocusPending;
+    private string _injectText = "";
 
     [Parameter, EditorRequired] public DysonAgentTurn Turn { get; set; } = default!;
 
@@ -501,8 +566,19 @@
             t.Status is DysonToolCallStatus.Queued or DysonToolCallStatus.Working)
         || (Turn.ToolCalls.Count > 0 && Turn.TrackedToolCalls.Count == 0);
 
+    private bool CanInjectComment =>
+        Host.Session?.IsTurnInFlight(Turn.Id) == true;
+
     protected override void OnParametersSet()
     {
+        if (_injectTurnId != Turn.Id)
+        {
+            _injectTurnId = Turn.Id;
+            _injectOpen = false;
+            _injectText = "";
+            _injectFocusPending = false;
+        }
+
         var fingerprint = BuildExpandPolicyFingerprint();
         if (fingerprint == _expandPolicyFingerprint)
             return;
@@ -537,6 +613,7 @@
         var keys = new List<string>();
         var thoughtOrdinal = 0;
         var interimOrdinal = 0;
+        var commentOrdinal = 0;
         foreach (var segment in Turn.ReasoningLog)
         {
             if (segment.Kind == DysonReasoningSegmentKind.Thought)
@@ -549,6 +626,12 @@
             {
                 keys.Add($"i:{interimOrdinal}");
                 interimOrdinal++;
+            }
+            else if (segment.Kind == DysonReasoningSegmentKind.UserComment
+                     && !string.IsNullOrWhiteSpace(segment.Text))
+            {
+                keys.Add($"c:{commentOrdinal}");
+                commentOrdinal++;
             }
         }
 
@@ -690,9 +773,59 @@
         await OnToggleExpand.InvokeAsync();
     }
 
+    private void OpenInject()
+    {
+        _injectOpen = true;
+        _injectFocusPending = true;
+    }
+
+    private void HandleInjectKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+        {
+            _injectOpen = false;
+            _injectText = "";
+            _injectFocusPending = false;
+            return;
+        }
+
+        if (e.Key == "Enter" && !e.ShiftKey)
+            SubmitInjectComment();
+    }
+
+    private void SubmitInjectComment()
+    {
+        var text = _injectText.Trim();
+        if (string.IsNullOrEmpty(text))
+            return;
+
+        var result = Host.InjectTurnComment(Turn.Id, text);
+        if (result.IsError)
+            return;
+
+        _injectText = "";
+        _injectOpen = false;
+        _injectFocusPending = false;
+    }
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         await EnsureStickyHeaderAsync();
+
+        if (_injectOpen && _injectFocusPending)
+        {
+            _injectFocusPending = false;
+            try
+            {
+                await _injectInput.FocusAsync();
+            }
+            catch (JSException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
 
         if (!IsExpanded || !HasTools)
         {

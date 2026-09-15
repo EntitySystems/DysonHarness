@@ -53,7 +53,10 @@ public sealed class DysonAgentTurn
     private readonly object _reasoningLogGate = new();
 
     /// <summary>
-    /// Ordered thought + interim-text segments for this turn (UI + DB only; omitted from transcripts).
+    /// Ordered thought + interim-text + user-comment segments for this turn.
+    /// Thought/InterimText are UI + DB only (omitted from transcripts).
+    /// UserComment is re-emitted as user-role history via
+    /// <see cref="FormatInjectedUserCommentsForTranscript"/>.
     /// Returns a snapshot so UI enumeration cannot race Append/Restore mutations.
     /// </summary>
     public IReadOnlyList<DysonReasoningSegment> ReasoningLog
@@ -148,6 +151,9 @@ public sealed class DysonAgentTurn
 
     /// <summary>Append-only as each call completes (includes ToolName + CallId).</summary>
     public ConcurrentQueue<DysonToolCallResult> ResponseLog { get; } = new();
+
+    private const int MaxUserCommentLength = 16 * 1024;
+    private readonly ConcurrentQueue<string> _pendingUserComments = new();
 
     /// <summary>
     /// When true, tool history for this turn has been compacted and must not be rewritten
@@ -425,6 +431,74 @@ public sealed class DysonAgentTurn
         // Settles one tool-loop round (not a per-SSE-delta stream) — flush so the round's text lands immediately.
         if (added)
             FlushAssistantTextChanged();
+    }
+
+    /// <summary>
+    /// Validates, queues, and records a mid-turn user comment. Does not mutate
+    /// <see cref="Instruction"/> or <see cref="ReasoningText"/>.
+    /// </summary>
+    public VoidResult<string> EnqueueUserComment(string comment)
+    {
+        if (string.IsNullOrWhiteSpace(comment))
+            return VoidResult<string>.AsError("Comment cannot be empty.");
+
+        var trimmed = comment.Trim();
+        if (trimmed.Length > MaxUserCommentLength)
+            return VoidResult<string>.AsError($"Comment exceeds the {MaxUserCommentLength} character limit.");
+
+        _pendingUserComments.Enqueue(trimmed);
+
+        lock (_reasoningLogGate)
+        {
+            var roundIndex = _reasoningLog.Count > 0 ? _reasoningLog[^1].RoundIndex : 0;
+            _reasoningLog.Add(new DysonReasoningSegment(
+                DysonReasoningSegmentKind.UserComment,
+                trimmed,
+                roundIndex));
+        }
+
+        FlushAssistantTextChanged();
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>Drains the in-memory comment queue (ReasoningLog segments remain).</summary>
+    public string[] TryDequeueUserComments()
+    {
+        if (_pendingUserComments.IsEmpty)
+            return [];
+
+        var drained = new List<string>();
+        while (_pendingUserComments.TryDequeue(out var comment))
+            drained.Add(comment);
+        return [.. drained];
+    }
+
+    /// <summary>True when at least one injected comment is still waiting to drain into the tool loop.</summary>
+    public bool HasPendingUserComments => !_pendingUserComments.IsEmpty;
+
+    /// <summary>
+    /// Joins persisted <see cref="DysonReasoningSegmentKind.UserComment"/> segments as
+    /// <c>USER INJECTED COMMENT:</c> blocks (blank line between). Empty string when none.
+    /// Uses the reasoning log, not the in-memory drain queue.
+    /// </summary>
+    public string FormatInjectedUserCommentsForTranscript()
+    {
+        StringBuilder? sb = null;
+        foreach (var segment in ReasoningLog)
+        {
+            if (segment.Kind != DysonReasoningSegmentKind.UserComment)
+                continue;
+            if (string.IsNullOrWhiteSpace(segment.Text))
+                continue;
+
+            sb ??= new StringBuilder();
+            if (sb.Length > 0)
+                sb.AppendLine();
+            sb.Append("USER INJECTED COMMENT: ");
+            sb.AppendLine(segment.Text);
+        }
+
+        return sb is null ? "" : sb.ToString();
     }
 
     /// <summary>

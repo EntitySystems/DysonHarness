@@ -4,22 +4,36 @@ using System.Text.Json.Serialization;
 
 namespace DysonHarness;
 
-/// <summary>Ordered reasoning / interim-text segment kinds for a turn's thinking history.</summary>
+/// <summary>
+/// Ordered reasoning / interim-text / user-comment segment kinds for a turn's thinking history.
+/// JSON is numeric; append new values only. Thought and InterimText remain UI+DB-only.
+/// UserComment is re-emitted as user-role history via
+/// <see cref="DysonAgentTurn.FormatInjectedUserCommentsForTranscript"/>.
+/// </summary>
 public enum DysonReasoningSegmentKind
 {
     Thought = 0,
     InterimText = 1,
+    UserComment = 2,
 }
 
 /// <summary>
-/// One entry in a turn's reasoning log (UI + DB only; never injected into model transcripts).
+/// One entry in a turn's reasoning log. Thought and InterimText are UI + DB only
+/// (never injected into model transcripts). UserComment is persisted the same way
+/// and re-emitted as user-role history via
+/// <see cref="DysonAgentTurn.FormatInjectedUserCommentsForTranscript"/>.
 /// </summary>
 public sealed record DysonReasoningSegment(
     DysonReasoningSegmentKind Kind,
     string Text,
     int RoundIndex);
 
-/// <summary>JSON serialize/restore helpers for <see cref="DysonAgentTurn.ReasoningLog"/>.</summary>
+/// <summary>
+/// JSON serialize/restore helpers for <see cref="DysonAgentTurn.ReasoningLog"/>.
+/// Kind is numeric (append-only enum). Thought/Interim stay UI+DB-only;
+/// UserComment is re-emitted as user-role history via
+/// <see cref="DysonAgentTurn.FormatInjectedUserCommentsForTranscript"/>.
+/// </summary>
 public static class DysonReasoningLogSerializer
 {
     private static readonly JsonSerializerOptions Options = new()
@@ -161,10 +175,19 @@ public static class DysonReasoningHistoryUi
         => thoughtCount > 0 ? $"Thinking {thoughtCount + 1}" : "Thinking";
 
     /// <summary>
+    /// User-comment fallback matching TurnBlock ordinals: always <c>User Comment N</c>
+    /// (1-based), even for a single comment.
+    /// </summary>
+    public static string UserCommentFallback(int ordinal)
+        => $"User Comment {ordinal + 1}";
+
+    /// <summary>
     /// Latest safe visible step label for a turn (parent-card / thinking-history titles).
     /// Precedence: finalized <see cref="DysonAgentTurn.AgentTitle"/>; live
-    /// <c>Thinking</c>/<c>Thinking N</c> while reasoning streams (never the preview body);
-    /// last non-empty <see cref="DysonAgentTurn.ReasoningLog"/> segment (H1 or ordinal fallback);
+    /// <c>Thinking</c>/<c>Thinking N</c> while reasoning streams (never the preview body,
+    /// and still wins over a just-injected UserComment);
+    /// last non-empty <see cref="DysonAgentTurn.ReasoningLog"/> segment (Thought/Interim
+    /// H1 or ordinal fallback; UserComment is always <c>User Comment N</c> without H1 split);
     /// legacy <see cref="DysonAgentTurn.ReasoningText"/> as <c>Thinking</c> (or its H1);
     /// otherwise null. Read-only; does not persist or inject reasoning.
     /// </summary>
@@ -195,8 +218,10 @@ public static class DysonReasoningHistoryUi
         DysonReasoningSegment? last = null;
         var lastThoughtOrdinal = -1;
         var lastInterimOrdinal = -1;
+        var lastUserCommentOrdinal = -1;
         var thoughtOrdinal = 0;
         var interimOrdinal = 0;
+        var userCommentOrdinal = 0;
         foreach (var segment in log)
         {
             if (segment.Kind == DysonReasoningSegmentKind.Thought)
@@ -216,10 +241,20 @@ public static class DysonReasoningHistoryUi
                 lastInterimOrdinal = interimOrdinal;
                 interimOrdinal++;
             }
+            else if (segment.Kind == DysonReasoningSegmentKind.UserComment
+                     && !string.IsNullOrWhiteSpace(segment.Text))
+            {
+                last = segment;
+                lastUserCommentOrdinal = userCommentOrdinal;
+                userCommentOrdinal++;
+            }
         }
 
         if (last is not null)
         {
+            if (last.Kind == DysonReasoningSegmentKind.UserComment)
+                return UserCommentFallback(lastUserCommentOrdinal);
+
             var fallback = last.Kind == DysonReasoningSegmentKind.Thought
                 ? ThoughtFallback(lastThoughtOrdinal, thoughtCount, liveStreaming: false)
                 : InterimFallback(lastInterimOrdinal, interimCount);

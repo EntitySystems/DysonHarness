@@ -106,6 +106,14 @@ public class DysonRethinkToolUsageTests
             throw new InvalidOperationException(
                 "SharedPreamble must say independent reads, searches, and listings belong together in one round.");
         }
+
+        if (prompt.IndexOf(
+                "at most one WriteFile per file per stage",
+                StringComparison.Ordinal) < 0)
+        {
+            throw new InvalidOperationException(
+                "SharedPreamble must say at most one WriteFile per file per stage.");
+        }
     }
 
     private static void AssertMaxToolRounds()

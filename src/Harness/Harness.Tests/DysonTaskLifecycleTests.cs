@@ -121,6 +121,7 @@ public class DysonTaskLifecycleTests
         AssertLifecycleFlowWhenPresent(reflect, bugReview);
         AssertActionAwareBugReviewPrompts();
         AssertEvaluationGatesAndDedup(reflect, bugReview);
+        AssertLastTurnKeysCompletionBoundary();
         AssertChildReflectionGate(reflect);
         AssertAutomaticReviewCompletionSuppression();
     }
@@ -497,6 +498,36 @@ public class DysonTaskLifecycleTests
         var createdBug = viaSession.CreateBugReviewTurn(DysonAutomaticCodeReviewLevel.Medium);
         if (createdReflect.Kind != reflect || createdBug.Kind != bugReview)
             throw new InvalidOperationException("Session lifecycle turn helpers mismatch.");
+    }
+
+    private static void AssertLastTurnKeysCompletionBoundary()
+    {
+        var session = CreateRootWithCompletedTodoAndReport();
+        var reviewReady = session.EvaluateTaskLifecycle(hasActiveDescendant: false);
+        if (reviewReady.Kind != DysonTaskLifecycleKind.CodeReviewReady)
+        {
+            throw new InvalidOperationException(
+                "ReportSummary + complete todos (no BugReview) should raise CodeReviewReady.");
+        }
+
+        session.AddTurnForTest(Completed(
+            DysonTaskLifecycleFlow.CreateBugReviewTurn(DysonAutomaticCodeReviewLevel.Low)));
+        var finalize = session.EvaluateTaskLifecycle(hasActiveDescendant: false);
+        if (finalize.Kind != DysonTaskLifecycleKind.ReadyToFinalize)
+            throw new InvalidOperationException("Completed BugReview as last turn should raise ReadyToFinalize.");
+
+        session.AddTurnForTest(Completed(DysonAgentSession.CreateNormalTurn("reopened user prompt")));
+        ExpectNoLifecycle(
+            session.EvaluateTaskLifecycle(hasActiveDescendant: false),
+            "completed Normal after BugReview must not re-finalize");
+
+        session.AddTurnForTest(Completed(DysonTaskCompletionFlow.CreateReportSummaryTurn("second cycle")));
+        var secondCycle = session.EvaluateTaskLifecycle(hasActiveDescendant: false);
+        if (secondCycle.Kind != DysonTaskLifecycleKind.ReadyToFinalize)
+        {
+            throw new InvalidOperationException(
+                "ReportSummary after historical BugReview should ReadyToFinalize, not a second review.");
+        }
     }
 
     private static void AssertChildReflectionGate(DysonAgentTurnKind reflect)

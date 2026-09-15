@@ -25,6 +25,7 @@ public static class DysonAgentSystemPrompts
         - Each turn you may and are encouraged to issue multiple tool calls in a single turn when that advances the task. Independent reads, searches, and listings belong together in one round (same stage).
         - Every tool call includes a stage integer: lower stages run first; calls with the same stage run concurrently; after a stage finishes, the next stage runs; then the turn ends.
         - Prefer batching independent reads/searches on the same stage; use later stages for dependent writes or follow-ups.
+        - Issue at most one WriteFile per file per stage. Same-stage WriteFile calls on different files may run together. Multiple hunks in one file belong in a single WriteFile via edits[] (or one old_text/new_text); sequential writes to the same path must use later stages.
         - When context grows noisy or the plan is unclear, call ExpandThoughtProcess to reformulate before continuing. Calling it ends the current turn; the harness runs an ExpandThoughtProcess turn, then auto-continues with a Normal turn. Prefer SummarizeTurns (with reason) when older turns still have useful facts but are verbose; DropTurnContext (with reason) is for true noise only; RestoreTurnContext can undo a drop when needed.
         - When you need a clean new turn with specific instructions (not reformulation), call StartNewTurn(promptInstructions). Calling it ends the current turn and queues a Normal turn with those instructions. Not a substitute for ExpandThoughtProcess.
 
@@ -36,7 +37,8 @@ public static class DysonAgentSystemPrompts
         CompleteTask confirmation:
         - Calling CompleteTask does not end the session immediately; the harness schedules a confirmation turn.
         - On that turn, call ConfirmTaskComplete if the work is truly done, or ContinueWork if anything remains.
-        - After ConfirmTaskComplete, the harness schedules a final ReportSummary turn; write a brief handoff summary for a parent agent (outcome, key files/changes, verification, residual risks). Prefer writing the summary in your reply; avoid further work tools unless essential.
+        - After ConfirmTaskComplete, the harness schedules a final ReportSummary turn for this cycle; write a brief handoff summary for a parent agent (outcome, key files/changes, verification, residual risks). Prefer writing the summary in your reply; avoid further work tools unless essential.
+        - After a confirmed complete and ReportSummary, the root is marked Completed. CompleteTask cannot run again while still Completed; a later in-flight user prompt reopens the session to Active so CompleteTask may be called again (new cycle). Stopped/Interrupted stay locked.
 
         Tool-round budget and rethink:
         - Each turn has a tool-round budget (50 by default; Explore mode 120). Hitting it soft-pauses the turn.

@@ -24,7 +24,7 @@ public class DysonSessionTodoTests
         await AssertSubmitSubagentReportSameTurnRetryRejected();
         await AssertSubmitSubagentReportBeginInFlightPromptReopenFailedToFailed();
         AssertSubmitSubagentReportBeginInFlightPromptDoesNotReopenStopped();
-        await AssertSubmitSubagentReportBeginInFlightPromptRootNoOp();
+        await AssertSubmitSubagentReportBeginInFlightPromptRootReopens();
         await AssertSubmitSubagentReportSuccessContentEndTurnHint();
         await AssertSubmitSubagentReportEndsCurrentTurn();
         AssertSubmitSubagentReportCatalogWording();
@@ -660,7 +660,7 @@ public class DysonSessionTodoTests
         }
     }
 
-    private static async Task AssertSubmitSubagentReportBeginInFlightPromptRootNoOp()
+    private static async Task AssertSubmitSubagentReportBeginInFlightPromptRootReopens()
     {
         var root = new StubSession();
         var first = await root.SubmitSubagentReportAsync("root handoff").ConfigureAwait(false);
@@ -675,10 +675,27 @@ public class DysonSessionTodoTests
                    Instruction = "later",
                }))
         {
-            if (root.Status != DysonSessionStatus.Completed)
+            if (root.Status != DysonSessionStatus.Active || root.IsTerminal)
             {
                 throw new InvalidOperationException(
-                    "Expected root (Parent null) to stay Completed after BeginInFlightPrompt.");
+                    "Expected Completed root to reopen to Active after BeginInFlightPrompt.");
+            }
+        }
+
+        var failedRoot = new StubSession();
+        var failed = await failedRoot.SubmitSubagentReportAsync("blocked", failed: true).ConfigureAwait(false);
+        if (failed.IsError)
+            throw new InvalidOperationException($"Expected root failed report ok, got: {failed.Error}");
+        using (failedRoot.BeginInFlightPrompt(new DysonAgentTurn
+               {
+                   Kind = DysonAgentTurnKind.Normal,
+                   Instruction = "later",
+               }))
+        {
+            if (failedRoot.Status != DysonSessionStatus.Active || failedRoot.IsTerminal)
+            {
+                throw new InvalidOperationException(
+                    "Expected Failed root to reopen to Active after BeginInFlightPrompt.");
             }
         }
     }

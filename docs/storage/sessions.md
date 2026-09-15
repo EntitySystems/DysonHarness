@@ -23,7 +23,7 @@ Contracts: `IDysonSessionRepository` in `Harness.Abstractions`. Implementation: 
 | `WorktreeAbsolutePath` | string? — absolute git worktree checkout; null until created. Clearing after merge/remove is allowed. |
 | `WorktreeBranch` | string? — e.g. `dyson/{8-hex of session id}`; null until created |
 | `McpAccessMode` | enum |
-| `Status` | `Active`=0 / `Completed`=1 / `Stopped`=2 / `Failed`=3 / `Interrupted`=4 (child terminal after process-restart recovery; roots stay `Active`; `Completed`/`Failed` children may return to `Active` when a new child turn starts — `BeginInFlightPrompt` / host `ShellExited` / `PromptHarnessTurnAsync` as well as parent `TriggerSubagentEvent`. In-memory reopen is `TryReopenForNewParentTask` at `BeginInFlightPrompt`; durable `Active` persist remains `TriggerSubagentEvent`’s persist helper. Do not reopen `Stopped`/`Interrupted`) |
+| `Status` | `Active`=0 / `Completed`=1 / `Stopped`=2 / `Failed`=3 / `Interrupted`=4 (child terminal after process-restart recovery; roots stay `Active` on that sweep. `Completed`/`Failed` **roots and children** may return to `Active` on a new in-flight prompt (`BeginInFlightPrompt` / `PromptAsync` / queued user turn / `PromptHarnessTurnAsync`; children also via parent `TriggerSubagentEvent`). In-memory reopen is `TryReopenForNewParentTask` at `BeginInFlightPrompt`; durable `Active` persist is `PersistReopenAsync` on the prompt path (roots and children) and on parent `TriggerSubagentEvent`. Do not reopen `Stopped`/`Interrupted`) |
 | `Title` | Optional UI title (agent `RenameSession` / first prompt); mirrored live as `DysonAgentSession.DisplayTitle` |
 | `SystemPromptSnapshot` | Prompt at create time; updated on mid-session `ApplyAgentMode` |
 | `CreatedUtc`, `UpdatedUtc`, `LastActivityUtc` | `DateTime` UTC |
@@ -43,7 +43,7 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `Instruction` | Harness-injected instruction |
 | `AssistantText` | Agent body after title |
 | `ReasoningText` | Denormalized join of Thought segments only (UI / reload / search; not replayed into transcripts) |
-| `ReasoningLogJson` | Ordered Thought + InterimText JSON for thinking history (UI + DB only; omitted from transcripts). Empty/null with legacy `ReasoningText` → restore synthesizes one Thought |
+| `ReasoningLogJson` | Ordered Thought + InterimText + **UserComment** JSON for thinking history. Thought/Interim stay UI + DB only (omitted from transcripts). **UserComment** (`kind` 2) is persisted the same way and later turns replay it via `FormatInjectedUserCommentsForTranscript` (`USER INJECTED COMMENT:`). The in-memory drain queue (`HasPendingUserComments`) is **not** persisted — comments survive resume via this log, not the queue. Empty/null with legacy `ReasoningText` → restore synthesizes one Thought |
 | `SkillsUsedJson` | Context files attached this turn (slash `/skill-` or `LoadSkill` skills, or StartSubagent `contextFiles`); JSON array of `DysonContextFileEntry` including `kind`. Injected into provider transcripts as separate `[Skill: …]` or `[File: relative/path]` user messages |
 | `UserImagesJson` | User-attached composer images this turn; JSON array of `DysonBinaryAttachment` fields (no `FileId`; includes `base64Data` for thumbs plus optional `remoteUrl` / `objectKey` / `remoteUrlExpiresUtc`). Re-emitted as multimodal Completions/Responses parts on restore |
 | `ToolStateJson` | Full snapshot of tool calls + results (restore fidelity) |

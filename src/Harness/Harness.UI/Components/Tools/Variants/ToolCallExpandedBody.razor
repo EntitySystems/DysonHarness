@@ -124,14 +124,26 @@
     [Parameter] public bool IsError { get; set; }
     [Parameter] public bool ArgsOnly { get; set; }
 
-    private DysonToolCallUi.ViewAsFile? FileView =>
-        DysonToolCallUi.TryResolveViewAsFile(ToolName, CallId, ArgumentsJson, ResultContent);
+    private DysonToolCallUi.ViewAsFile? _fileView;
+    private (string ToolName, string? CallId, string? ArgumentsJson, string? ResultContent)? _fileViewKey;
+
+    private DysonToolCallUi.ViewAsFile? FileView => _fileView;
+
+    protected override void OnParametersSet()
+    {
+        var key = (ToolName, CallId, ArgumentsJson, ResultContent);
+        if (_fileViewKey == key)
+            return;
+
+        _fileViewKey = key;
+        _fileView = DysonToolCallUi.TryResolveViewAsFile(ToolName, CallId, ArgumentsJson, ResultContent);
+    }
 
     private void ViewResultAsFile()
     {
         if (FileView is not { } file)
             return;
 
-        Host.OpenFileViewerContent(file.DisplayPath, file.Content);
+        Host.RequestOpenFileViewerContent(file.DisplayPath, file.Content);
     }
 }

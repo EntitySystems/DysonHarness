@@ -17,7 +17,7 @@ public static class DysonTurnSummarizer
         turn is not null && !string.IsNullOrWhiteSpace(turn.ContextSummary);
 
     /// <summary>
-    /// Builds compact turn text for the summarizer (instruction, assistant, tool log).
+    /// Builds compact turn text for the summarizer (instruction, assistant, tool log, user comments).
     /// </summary>
     public static string FormatTurnBody(DysonAgentTurn turn)
     {
@@ -51,6 +51,15 @@ public static class DysonTurnSummarizer
                 sb.AppendLine("Tools:");
                 sb.AppendLine(tools);
             }
+        }
+
+        var comments = turn.FormatInjectedUserCommentsForTranscript();
+        if (!string.IsNullOrEmpty(comments))
+        {
+            if (sb.Length > 0)
+                sb.AppendLine();
+            sb.AppendLine("User comments:");
+            sb.Append(comments);
         }
 
         return sb.ToString().Trim();
@@ -129,7 +138,10 @@ public static class DysonTurnSummarizer
         }
     }
 
-    /// <summary>Transcript stub: turnId header + summary body.</summary>
+    /// <summary>
+    /// Transcript stub: turnId header + summary body, then persisted UserComment
+    /// blocks so comments survive <c>SummarizeTurns</c> (HasSummary emits only this stub).
+    /// </summary>
     public static string FormatSummaryStub(DysonAgentTurn turn)
     {
         ArgumentNullException.ThrowIfNull(turn);
@@ -140,6 +152,14 @@ public static class DysonTurnSummarizer
         sb.Append("[contextSummary]");
         sb.AppendLine();
         sb.Append(turn.ContextSummary?.Trim() ?? "");
+        var comments = turn.FormatInjectedUserCommentsForTranscript();
+        if (!string.IsNullOrEmpty(comments))
+        {
+            sb.AppendLine();
+            sb.AppendLine();
+            sb.Append(comments);
+        }
+
         return sb.ToString().TrimEnd();
     }
 

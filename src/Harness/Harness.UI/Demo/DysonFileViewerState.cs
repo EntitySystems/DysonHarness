@@ -29,6 +29,18 @@ public sealed class DysonFileViewerState
     /// <summary>Preview store token to revoke on close; null when not an image preview.</summary>
     public string? ImagePreviewId { get; init; }
 
+    /// <summary>True while the host is preparing in-memory content off the circuit.</summary>
+    public bool IsLoading { get; init; }
+
+    /// <summary>When true, <see cref="TextPreviewUrl"/> is the iframe src for a <c>text/plain</c> preview-store body.</summary>
+    public bool IsTextPreview { get; init; }
+
+    /// <summary>Relative URL under <see cref="DysonFilePreviewStore.RoutePrefix"/>, or null when not a text preview.</summary>
+    public string? TextPreviewUrl { get; init; }
+
+    /// <summary>Preview store token to revoke on close; null when not a text preview.</summary>
+    public string? TextPreviewId { get; init; }
+
     public string? AbsolutePath { get; init; }
 
     /// <summary>True when the overlay may show "Open in default editor" (resolved path; no render-time File.Exists).</summary>

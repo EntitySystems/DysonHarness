@@ -35,3 +35,6 @@ public sealed record DysonParentEventsChangedEvent(
 public sealed record DysonHostStateChangedEvent(
     DysonHostChangeKind Kind,
     Guid? SessionId) : IDysonMessageBusEvent;
+
+public sealed record DysonGitRepoChangedEvent(Guid WorkDirectoryId, string RepoRoot)
+    : IDysonMessageBusEvent;

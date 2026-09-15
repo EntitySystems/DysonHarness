@@ -637,8 +637,11 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         }
 
         AppendLog($"prompt: {Truncate(turn.Instruction ?? turn.Kind.ToString(), 120)}");
+        var wasTerminal = IsTerminal;
         AddTurn(turn);
         using var inFlightPrompt = BeginInFlightPrompt(turn);
+        if (wasTerminal && !IsTerminal)
+            await PersistReopenAsync("new in-flight prompt").ConfigureAwait(false);
 
         var fsResult = await DysonWorkspaceFileSystems
             .CreateLocalAsync(_workDirectoryPath, cancellationToken)
@@ -670,6 +673,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             for (var round = 0; round < maxRounds; round++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                DrainPendingUserCommentsIntoFollowUp(turn, ref harnessFollowUp);
 
                 async Task<Result<OpenAiModelReply, string>> ConsumeCurrentProviderRoundAsync()
                 {
@@ -782,6 +786,10 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     return new VoidResult<string>(replyResult.Error);
                 }
 
+                // This round already sent comments / child-report nudge as currentUserPrompt.
+                // Clear so later rounds do not re-emit them (new comments drain at loop start).
+                harnessFollowUp = null;
+
                 var reply = replyResult.Value;
                 await RecordUsageAsync(reply, cancellationToken).ConfigureAwait(false);
                 if (!string.IsNullOrEmpty(reply.UsageCacheHint))
@@ -862,6 +870,16 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
                     // Continuing tool loop — interim assistant words (not final reply).
                     CommitInterimText(turn, reply.Content, round);
+                    continue;
+                }
+
+                // Comment arrived during this stream — inject on the next round instead of finalizing.
+                if (turn.HasPendingUserComments)
+                {
+                    CommitReasoningRound(turn, reply, round, isFinalAssistant: true);
+                    turn.ClearStreamingPreview();
+                    turn.ClearReasoningPreview();
+                    previousResponseId = null;
                     continue;
                 }
 
@@ -1430,6 +1448,44 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         {
             turn.AssistantText = text;
         }
+    }
+
+    /// <summary>
+    /// Drains in-flight user comments into <paramref name="harnessFollowUp"/> (comments first,
+    /// then any existing child-report nudge). No-op when the queue is empty.
+    /// </summary>
+    private static void DrainPendingUserCommentsIntoFollowUp(DysonAgentTurn turn, ref string? harnessFollowUp)
+    {
+        if (!turn.HasPendingUserComments)
+            return;
+
+        var formatted = FormatDrainedUserComments(turn.TryDequeueUserComments());
+        if (formatted.Length == 0)
+            return;
+
+        harnessFollowUp = string.IsNullOrEmpty(harnessFollowUp)
+            ? formatted
+            : formatted + Environment.NewLine + harnessFollowUp;
+    }
+
+    /// <summary>
+    /// Formats drained queue text as <c>USER INJECTED COMMENT:</c> blocks (blank line between).
+    /// Matches <see cref="DysonAgentTurn.FormatInjectedUserCommentsForTranscript"/> layout.
+    /// </summary>
+    private static string FormatDrainedUserComments(string[] comments)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var comment in comments)
+        {
+            if (string.IsNullOrWhiteSpace(comment))
+                continue;
+            if (sb.Length > 0)
+                sb.AppendLine();
+            sb.Append("USER INJECTED COMMENT: ");
+            sb.AppendLine(comment);
+        }
+
+        return sb.ToString();
     }
 
     /// <summary>

@@ -54,7 +54,7 @@ public class DysonClearBrowserCacheTests
                 CallId = "cache1",
                 ToolName = "ClearBrowserCache",
                 Stage = 0,
-                ArgumentsJson = "{}",
+                ArgumentsJson = """{"timeoutMs":60000}""",
             };
 
             var result = executor.ExecuteAsync(call).GetAwaiter().GetResult();
