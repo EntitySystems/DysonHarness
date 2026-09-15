@@ -1,12 +1,13 @@
 using System.Diagnostics;
+using System.Text.Json;
 
 using DysonHarness;
 
 namespace Harness.Tests;
 
 /// <summary>
-/// ponytail: every browser MCP tool has optional timeoutMs (default 60s);
-/// engine linked CTS fails hung JS without waiting the default.
+/// ponytail: every browser MCP tool requires timeoutMs (&gt; 0);
+/// engine linked CTS fails hung JS without waiting a default.
 /// </summary>
 public class DysonBrowserTimeoutTests
 {
@@ -14,6 +15,7 @@ public class DysonBrowserTimeoutTests
     public async Task Run()
     {
         AssertCatalogHasTimeoutMs();
+        await AssertTimeoutMsRequiredOnSharedGate();
         await AssertHungJavaScriptTimesOut();
         await AssertCallerCancelIsCancelledNotTimeout();
     }
@@ -23,27 +25,100 @@ public class DysonBrowserTimeoutTests
         var pipeline = DysonMcpPipeline.CreateDefault(
             DysonMcpAccessMode.FullAccess,
             browserControlAvailable: true);
-        var missing = pipeline.Tools.Values
+        var failing = pipeline.Tools.Values
             .Where(t => t.Name.StartsWith("Browser", StringComparison.Ordinal)
                 || t.Name is "OpenBrowser" or "ListBrowserWindows" or "CloseBrowser"
                     or "ResizeBrowser" or "ListBrowserTabs" or "NewBrowserTab"
                     or "CloseBrowserTab" or "ActivateBrowserTab" or "ClearBrowserCache")
             .Where(t => !t.InputSchemaJson.Contains("timeoutMs", StringComparison.Ordinal)
-                || !t.InputSchemaJson.Contains("default 60000", StringComparison.Ordinal))
+                || t.InputSchemaJson.Contains("default 60000", StringComparison.Ordinal)
+                || !RequiredIncludesTimeoutMs(t.InputSchemaJson))
             .Select(t => t.Name)
             .ToList();
-        if (missing.Count > 0)
+        if (failing.Count > 0)
         {
             throw new InvalidOperationException(
-                "Browser tools must expose optional timeoutMs (default 60000): "
-                + string.Join(", ", missing));
+                "Browser tools must require timeoutMs (no default 60000): "
+                + string.Join(", ", failing));
         }
 
         if (!pipeline.Tools.TryGetValue("BrowserTakeScreenshot", out var shot)
-            || shot.Description.Contains("30000", StringComparison.Ordinal))
+            || shot.Description.Contains("30000", StringComparison.Ordinal)
+            || shot.Description.Contains("default 60000", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "BrowserTakeScreenshot description must not still say default 30000.");
+                "BrowserTakeScreenshot description must not still say default 30000 or default 60000.");
+        }
+    }
+
+    private static bool RequiredIncludesTimeoutMs(string schemaJson)
+    {
+        using var doc = JsonDocument.Parse(schemaJson);
+        if (!doc.RootElement.TryGetProperty("required", out var required)
+            || required.ValueKind != JsonValueKind.Array)
+            return false;
+
+        foreach (var item in required.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String
+                && string.Equals(item.GetString(), "timeoutMs", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static async Task AssertTimeoutMsRequiredOnSharedGate()
+    {
+        var config = new DysonAgentSessionConfig { BrowserControl = new HangControl() };
+        var session = new StubSession(config);
+        var root = Path.Combine(Path.GetTempPath(), "dyson-browser-timeout-gate-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
+            var sw = Stopwatch.StartNew();
+            (string ToolName, string Args)[] cases =
+            [
+                ("ListBrowserWindows", "{}"),
+                ("ListBrowserWindows", """{"timeoutMs":0}"""),
+                ("ListBrowserWindows", """{"timeoutMs":-1}"""),
+                ("BrowserWaitForSelector", """{"windowId":"win1","tabId":"tab1","selector":"#x"}"""),
+                ("BrowserWaitForSelector", """{"windowId":"win1","tabId":"tab1","selector":"#x","timeoutMs":0}"""),
+                ("BrowserWaitForSelector", """{"windowId":"win1","tabId":"tab1","selector":"#x","timeoutMs":-1}"""),
+            ];
+            foreach (var (toolName, args) in cases)
+            {
+                var result = await executor.ExecuteAsync(new DysonToolCall
+                {
+                    CallId = "gate1",
+                    ToolName = toolName,
+                    Stage = 0,
+                    ArgumentsJson = args,
+                });
+                var expected = $"{toolName}: timeoutMs (integer > 0) is required.";
+                if (!result.IsError
+                    || result.Content is null
+                    || !result.Content.Contains(expected, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Expected {expected} for {toolName} {args}. Got IsError={result.IsError} Content={result.Content}");
+                }
+            }
+
+            if (sw.Elapsed >= TimeSpan.FromSeconds(2))
+                throw new InvalidOperationException("timeoutMs reject must not wait the old 60s default.");
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+                // best-effort temp cleanup
+            }
         }
     }
 

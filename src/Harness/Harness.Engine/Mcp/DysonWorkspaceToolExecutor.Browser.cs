@@ -25,9 +25,10 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
 
         var timeoutMs = GetInt(root, "timeoutMs");
-        var effective = timeoutMs is > 0 ? timeoutMs.Value : DysonBrowserDefaults.DefaultTimeoutMs;
+        if (timeoutMs is null or <= 0)
+            return Error(call, $"{call.ToolName}: timeoutMs (integer > 0) is required.");
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        linked.CancelAfter(effective);
+        linked.CancelAfter(timeoutMs.Value);
         try
         {
             return call.ToolName switch
@@ -62,7 +63,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return Error(call, $"{call.ToolName} timed out after {effective}ms.");
+            return Error(call, $"{call.ToolName} timed out after {timeoutMs.Value}ms.");
         }
     }
 

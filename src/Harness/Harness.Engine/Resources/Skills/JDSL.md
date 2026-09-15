@@ -20,11 +20,11 @@ Prefer JDSL when several catalog calls should run in **one** turn with branching
 {
   "FunctionCall": {
     "Function": "MCP:ShellExecute",
-    "Arguments": { "command": "cmd-a" },
+    "Arguments": { "shell": "PowerShell", "command": "cmd-a", "timeoutMs": 30000 },
     "OnFailure": {
       "FunctionCall": {
         "Function": "MCP:ShellExecute",
-        "Arguments": { "command": "cmd-b" },
+        "Arguments": { "shell": "PowerShell", "command": "cmd-b", "timeoutMs": 30000 },
         "OnFailure": {
           "FunctionCall": {
             "Function": "MCP:CompleteTask",

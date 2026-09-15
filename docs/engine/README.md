@@ -269,7 +269,7 @@ Workspace text search uses **.NET** `System.Text.RegularExpressions` — not a l
 ### ShellExecute
 
 - Session config `AvailableShells` is an `IReadOnlyList<DysonConfiguredShellSpec>` (`Name` + `ExecutablePath` + optional `FixedArgs`). Empty ⇒ `ShellExecute` and all long-running shell tools are omitted. The UI host loads **enabled** rows from `configured_shells` (`IDysonConfiguredShellRepository.EnsureDefaultsAsync` + `ListEnabledSpecsAsync`) on new/resume.
-- MCP schema `shell` enum + description list those **names**; the model must pass `shell` plus `command` (optional `timeoutMs`, `workingDirectory` under the work root).
+- MCP schema `shell` enum + description list those **names**; the model must pass `shell` plus `command` plus `timeoutMs` (> 0, no default); optional `workingDirectory` under the work root.
 - Default cwd is the session workspace FS `NativeRootPath` (from `DysonWorkspaceFileSystems.CreateLocalAsync` / `IDysonWorkspaceFileSystem`); optional `workingDirectory` is resolved through the same sandboxed FS.
 - Executor resolves name → path/`FixedArgs` against `AvailableShells`, then `DysonWindowsShell.ExecuteWithPathAsync` via `ResolveFixedArgs`: non-empty spec `FixedArgs` win; else basename heuristics (`pwsh`/`powershell` → `-NoProfile -NonInteractive -Command`, `cmd` → `/d /c`, `bash`/`sh`/`zsh`/`git-bash` → `-c`, `python`/`python3` → `-c`, `node`/`nodejs` → `-e`). Unknown basename without Fixed args errors (list includes `python`/`python3`/`node`/`nodejs`) and still tells the user to set Fixed args in Settings → Shells.
 - **Capture cap:** stdout and stderr are captured up to **64KiB each**; overflow is truncated (the command may still run until timeout). `DysonShellRunResult.StdoutTruncated` / `StderrTruncated`. Do not kill the process solely for overflow.
@@ -307,13 +307,13 @@ Optional process-wide `IDysonBrowserControl` on `DysonAgentSessionConfig.Browser
 | `ListBrowserWindows` / `CloseBrowser` / `ResizeBrowser` | Window list / close / resize |
 | `ListBrowserTabs` / `NewBrowserTab` / `CloseBrowserTab` / `ActivateBrowserTab` | Tab management |
 | `BrowserNavigate` / `BrowserGoBack` / `BrowserGoForward` / `BrowserReload` | Navigation |
-| `ClearBrowserCache` | Clear shared CEF HTTP cache once, then hard-reload every tab in every open agent window (no args). Does not clear cookies/storage. Empty windows → `{ windows: 0, tabsReloaded: 0 }`. Profile-wide: agent + shell share `%LocalAppData%\DysonHarness\cef-cache` (shell is not hard-reloaded) |
+| `ClearBrowserCache` | Clear shared CEF HTTP cache once, then hard-reload every tab in every open agent window. Does not clear cookies/storage. Empty windows → `{ windows: 0, tabsReloaded: 0 }`. Profile-wide: agent + shell share `%LocalAppData%\DysonHarness\cef-cache` (shell is not hard-reloaded) |
 | `BrowserClick` / `BrowserType` / `BrowserFill` / `BrowserHover` / `BrowserPressKey` | Interaction (JS helpers for click/type/etc.) |
-| `BrowserWaitForSelector` / `BrowserWaitForNavigation` | Waits (optional `timeoutMs`; omitted default 60s) |
+| `BrowserWaitForSelector` / `BrowserWaitForNavigation` | Waits |
 | `BrowserExecuteJavaScript` / `BrowserGetHtml` / `BrowserTakeScreenshot` | Page inspection (screenshot via DevTools CDP). JS/HTML evaluation races the linked timeout token so `BrowserExecuteJavaScript` cannot hang forever |
 | `BrowserReadConsoleLog` / `BrowserReadNetworkLog` | Thin collectors (console messages + main-frame loads until CDP deepens) |
 
-Every browser tool accepts optional `timeoutMs` (default **60000**). The engine wraps the call with a linked CTS. Wait and screenshot omitted defaults are also 60s. Prompt cancel still fails as cancelled, not timeout.
+Every browser tool requires `timeoutMs` (> 0, no default). The engine wraps the call with a linked CTS. Prompt cancel still fails as cancelled, not timeout.
 
 Contracts: `IDysonBrowserControl` / `IDysonBrowserWindow` / `IDysonBrowserTab` + request/log DTOs in `Harness.Abstractions`. Null stand-in: `DysonNullBrowserControl`.
 
