@@ -2645,13 +2645,16 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (!dirExists.Value)
             return Error(call, $"Working directory not found: {workDirRel ?? "."}");
 
-        var timeoutMs = GetInt(doc.RootElement, "timeoutMs");
+        var parsedTimeout = GetInt(doc.RootElement, "timeoutMs");
+        if (parsedTimeout is null or <= 0)
+            return Error(call, "ShellExecute: timeoutMs (integer > 0) is required.");
+
         var run = await DysonWindowsShell
             .ExecuteWithPathAsync(
                 resolve.Value.ExecutablePath,
                 command.Value,
                 workDir.Value,
-                timeoutMs,
+                parsedTimeout.Value,
                 cancellationToken,
                 resolve.Value.FixedArgs)
             .ConfigureAwait(false);

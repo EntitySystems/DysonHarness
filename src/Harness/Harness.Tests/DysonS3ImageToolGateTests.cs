@@ -34,7 +34,7 @@ public class DysonS3ImageToolGateTests
                 CallId = "shot1",
                 ToolName = "BrowserTakeScreenshot",
                 Stage = 0,
-                ArgumentsJson = """{"windowId":"win1","tabId":"tab1"}""",
+                ArgumentsJson = """{"windowId":"win1","tabId":"tab1","timeoutMs":60000}""",
             });
 
             AssertGatedWithoutAttachment(result);

@@ -275,7 +275,7 @@ Keep `TError` / user-facing messages clean — do not stringify exceptions into 
 | `IDysonBrowserControl` | Process-wide singleton: `OpenBrowserAsync` / `ListWindowsAsync` / `GetWindowAsync` / `ClearBrowserCacheAsync` (`DysonBrowserCacheClearResult`); `SnipCaptured` (`DysonBrowserSnipPayload`) for chrome snips → UI host pending images + composer URL/scroll line |
 | `IDysonBrowserWindow` | Tabs + close/resize/bring-to-front |
 | `IDysonBrowserTab` | Navigate, interact, JS, screenshot (`TakeScreenshotAsync` optional `timeoutMs`, default 60s when omitted/invalid via `DysonBrowserDefaults.DefaultTimeoutMs`; races CDP vs linked prompt CT). `ExecuteJavaScript` honors cancellation (timeout race). Console/network logs |
-| `DysonBrowserDefaults` | `DefaultTimeoutMs` = 60_000 — optional MCP `timeoutMs` when omitted, invalid, or non-positive |
+| `DysonBrowserDefaults` | `DefaultTimeoutMs` = 60_000 — **tab API** fallback when omitted, invalid, or non-positive; MCP browser tools no longer use it |
 | `DysonBrowserClickRequest` / `DysonBrowserTypeRequest` / `DysonBrowserKeyRequest` | Interaction DTOs |
 | `DysonBrowserConsoleEntry` / `DysonBrowserNetworkEntry` | Log DTOs |
 | `DysonBrowserSnipPayload` / `DysonBrowserSnipCrop` | Snip event payload (`ImageBytes`, empty `HtmlRef`, `FileName`, `Url`, `ScrollY`, `ScrollHeight`, `ViewportHeight`, `PercentDown`) + DIP→pixel crop math (`MapDipSelectionToPixelRect`) + composer line (`FormatPromptLine`, `PercentDownThePage`). Chrome crops the overlay bitmap (no second CDP capture). Host queues the JPEG and appends `Snip: {url} · {n}% down the page` in the composer |
