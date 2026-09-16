@@ -624,7 +624,7 @@
 
     private async Task StartVisualDemoAsync()
     {
-        var result = await Host.TryStartVisualDemoAsync(_activeWorkDirectoryId);
+        var result = await Host.TryStartVisualDemoAsync();
         if (result.IsError)
         {
             _listError = result.Error;

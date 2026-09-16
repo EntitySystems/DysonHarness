@@ -735,7 +735,8 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         var delayMs = 180 + (Math.Abs(call.ToolName.GetHashCode(StringComparison.Ordinal)) % 220);
         await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
 
-        var content = DysonVisualDemoMode.Current.AppliesTo(this)
+        var visual = DysonVisualDemoMode.Current.AppliesTo(this);
+        var content = visual
             ? DysonVisualDemoScenario.MockToolContent(call)
             : $"[demo] {call.ToolName} ok — args={Truncate(call.ArgumentsJson, 80)}";
 
@@ -744,7 +745,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             CallId = call.CallId,
             ToolName = call.ToolName,
             Stage = call.Stage,
-            IsError = false,
+            IsError = visual && DysonVisualDemoScenario.IsFailedDemoTool(call),
             Content = content,
         };
     }

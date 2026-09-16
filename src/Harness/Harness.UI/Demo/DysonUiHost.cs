@@ -2738,12 +2738,13 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
-    /// Demo Mode auto-play: ensure a work directory + Demo Mock slug, resume an existing
-    /// <c>DEMO:</c> session or start a Work session and prompt the scripted showcase.
-    /// No-op when <see cref="DysonVisualDemoMode.Enabled"/> is false.
+    /// Demo Mode auto-play: register the promo workspace + Demo Mock slug, resume an
+    /// existing <c>DEMO:</c> session on that workdir or start a Work session and prompt
+    /// the scripted showcase. Always uses <see cref="DysonVisualDemoScenario.EnsurePromoWorkspace"/>
+    /// so the file tree shows <c>ClientBillService</c>. No-op when
+    /// <see cref="DysonVisualDemoMode.Enabled"/> is false.
     /// </summary>
     public async Task<VoidResult<string>> TryStartVisualDemoAsync(
-        Guid? workDirectoryId = null,
         CancellationToken cancellationToken = default)
     {
         var mode = DysonVisualDemoMode.Current;
@@ -2754,7 +2755,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (ensured.IsError)
             return ensured;
 
-        var workdir = await EnsureVisualDemoWorkDirectoryAsync(workDirectoryId, cancellationToken)
+        var workdir = await EnsureVisualDemoWorkDirectoryAsync(cancellationToken)
             .ConfigureAwait(false);
         if (workdir.IsError)
             return new VoidResult<string>(workdir.Error);
@@ -2802,26 +2803,31 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     private async Task<Result<Guid, string>> EnsureVisualDemoWorkDirectoryAsync(
-        Guid? workDirectoryId,
         CancellationToken cancellationToken)
     {
-        if (workDirectoryId is Guid id && id != Guid.Empty)
-            return Result<Guid, string>.AsValue(id);
+        var root = DysonVisualDemoScenario.EnsurePromoWorkspace();
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(root);
+        }
+        catch (Exception ex)
+        {
+            return Result<Guid, string>.AsError($"Invalid promo workspace path: {ex.Message}");
+        }
 
         var list = await _workDirectories.ListAsync(cancellationToken).ConfigureAwait(false);
         if (list.IsError)
             return Result<Guid, string>.AsError(list.Error);
-        if (list.Value.Count > 0)
-            return Result<Guid, string>.AsValue(list.Value[0].Id);
 
-        var root = Environment.GetEnvironmentVariable("DYSON_VISUAL_DEMO_WORKDIR");
-        if (string.IsNullOrWhiteSpace(root))
-            root = Directory.GetCurrentDirectory();
+        var existing = list.Value.FirstOrDefault(w =>
+            string.Equals(w.AbsolutePath, fullPath, StringComparison.Ordinal));
+        if (existing is not null)
+            return Result<Guid, string>.AsValue(existing.Id);
 
-        var created = await _workDirectories
-            .CreateAsync(root, DysonVisualDemoScenario.WorkDirectoryName, cancellationToken)
+        return await _workDirectories
+            .CreateAsync(fullPath, DysonVisualDemoScenario.WorkDirectoryName, cancellationToken)
             .ConfigureAwait(false);
-        return created;
     }
 
     private async Task<Result<DysonModelSlugEntity, string>> EnsureDemoMockSlugAsync(

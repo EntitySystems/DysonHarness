@@ -68,7 +68,7 @@ Windows desktop shell:
 dotnet run --project src/Harness/DysonHarness.UI.Windows -- --demo
 ```
 
-Same flag as an env var: `DYSON_VISUAL_DEMO=1`. The chrome shows **DEMO / PREVIEW**. A Work session auto-plays a repository-extraction showcase (Explore → Drone handoffs, tool rows, todos, status badges). See [UI — Demo Mode](docs/ui/README.md#demo-mode).
+Same flag as an env var: `DYSON_VISUAL_DEMO=1`. The chrome shows **DEMO / PREVIEW**. A Work session auto-plays the repository-migration promo: prompt `make a plan to move database calls to repositories`, plan steps inventory → interfaces → migrate → tests → verify, seven subagents, cascading tool rows on `ClientBillService`. See [UI — Demo Mode](docs/ui/README.md#demo-mode).
 
 **Downloads:** continuous self-contained builds (Windows / Linux / macOS) are on [GitHub Releases](https://github.com/EntitySystems/DysonHarness/releases) (CalVer pre-releases). Windows: MSI installer or zip (`DysonHarness.exe`). See [releases](docs/packaging/releases.md).
 

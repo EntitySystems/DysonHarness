@@ -4,27 +4,25 @@ using DysonHarness;
 namespace Harness.UI.Demo;
 
 /// <summary>
-/// Scripted repository-extraction showcase. Seeds real catalog tool names onto a live
-/// <see cref="DysonAgentTurn"/> so the UI tool rows, todos, subagent cards, and
-/// <see cref="DysonAgentTurnKind.SubagentReportProcessing"/> handoffs update for real.
+/// Remotion promo storyline, played through the live engine + UI.
+/// Prompt, plan steps, seven subagents, ClientBillService, cascading tool statuses.
 /// </summary>
 public static class DysonVisualDemoScenario
 {
-    public const string SessionTitle = "DEMO: Repository extraction";
-    public const string WorkDirectoryName = "DysonHarness (DEMO)";
+    public const string SessionTitle = "DEMO: Move DB calls to repositories";
+    public const string WorkDirectoryName = "Billing (DEMO)";
     public const string DemoSlug = "demo-mock";
+    public const int ExpectedSubagentCount = 7;
 
-    public const string UserPrompt =
-        "Plan how we move all EF Core DbContext calls out of UI/host code into repositories. "
-        + "Explore the current data-access surface first, then hand implementation to a Drone.";
+    public const string UserPrompt = "make a plan to move database calls to repositories";
 
-    public const string ExploreTask =
-        "Find every EF Core DbContext / IDyson*Repository call site in UI and host code. "
-        + "Report concrete files and a recommended repository split.";
-
-    public const string DroneTask =
-        "Extract session + work-directory persistence behind IDysonSessionRepository and "
-        + "IDysonWorkDirectoryRepository. Do not change engine contracts.";
+    public const string InventoryClientTask = "Inventory ClientBillService database calls";
+    public const string InventoryRestTask = "Inventory remaining billing service DB calls";
+    public const string InterfacesTask = "Add IClientBillRepository and EF adapter";
+    public const string MigrateClientTask = "Migrate ClientBillService onto the repository";
+    public const string MigrateRestTask = "Migrate remaining billing services";
+    public const string TestsTask = "Add repository and service tests";
+    public const string VerifyTask = "Verify no leftover database calls";
 
     public static IReadOnlyList<DysonToolCall> SeedTools(DysonAgentSession session, DysonAgentTurn turn)
     {
@@ -35,11 +33,11 @@ public static class DysonVisualDemoScenario
             || string.Equals(session.Mode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase)
             || string.Equals(session.Mode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase))
         {
-            return SeedChild(session);
+            return SeedChild(session, turn);
         }
 
         if (turn.Kind == DysonAgentTurnKind.SubagentReportProcessing)
-            return HasDrone(session) ? SeedRootAfterDrone() : SeedRootAfterExplore();
+            return SeedRootHandoff(session);
 
         if (!HasUserKickoff(session))
             return SeedRootKickoff();
@@ -51,171 +49,247 @@ public static class DysonVisualDemoScenario
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(turn);
+        var hint = ChildHint(session, turn);
 
-        if (session.Parent is not null
-            && string.Equals(session.Mode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase))
-        {
-            return "# Map DbContext call sites\n\nSearch UI/host first, then read the repository contracts.";
-        }
-
-        if (session.Parent is not null
-            && string.Equals(session.Mode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase))
-        {
-            return "# Extract repositories\n\nKeep engine types; move host-owned queries behind existing interfaces.";
-        }
+        if (hint.Contains("Inventory ClientBill", StringComparison.OrdinalIgnoreCase))
+            return "# Inventory ClientBillService\n\nRead the service, then grep every DbContext call.";
+        if (hint.Contains("Inventory remaining", StringComparison.OrdinalIgnoreCase))
+            return "# Inventory remaining services\n\nInvoiceService and the shared BillingDbContext next.";
+        if (hint.Contains("IClientBillRepository", StringComparison.OrdinalIgnoreCase))
+            return "# Interfaces\n\nExtract IClientBillRepository before touching call sites.";
+        if (hint.Contains("Migrate ClientBill", StringComparison.OrdinalIgnoreCase))
+            return "# Migrate ClientBillService\n\nReplace BillingDbContext usage with the repository.";
+        if (hint.Contains("Migrate remaining", StringComparison.OrdinalIgnoreCase))
+            return "# Migrate remaining services\n\nSame pattern on InvoiceService.";
+        if (hint.Contains("service tests", StringComparison.OrdinalIgnoreCase))
+            return "# Tests\n\nCover the repository adapter and the migrated service.";
+        if (hint.Contains("Verify no leftover", StringComparison.OrdinalIgnoreCase))
+            return "# Verify\n\nGrep, build, and spot-check the billing UI for leftover DB calls.";
 
         if (turn.Kind == DysonAgentTurnKind.SubagentReportProcessing)
-        {
-            return HasDrone(session)
-                ? "# Integrate Drone report\n\nMark remaining todos complete and hand off to the user."
-                : "# Read Explore report\n\nDispatch a Drone for the persistence extraction slice.";
-        }
+            return "# Subagent handoff\n\nRead the report, update the plan, dispatch the next wave.";
 
-        return "# Repository extraction\n\nExplore call sites, file todos, then spawn Explore — do not implement yet.";
+        return "# Plan\n\nInventory → interfaces → migrate → tests → verify. Explore first, then Drones.";
     }
 
     public static string ComposeReply(DysonAgentSession session, DysonAgentTurn turn)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(turn);
+        var hint = ChildHint(session, turn);
 
-        if (session.Parent is not null
-            && string.Equals(session.Mode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase))
+        if (hint.Contains("Inventory ClientBill", StringComparison.OrdinalIgnoreCase))
         {
             return """
-                # Explore: DbContext call sites
+                # Inventory: ClientBillService
 
-                ## Findings
-                UI/host still constructs `DysonDbContext` / repo facades instead of going through
-                `IDysonSessionRepository` and `IDysonWorkDirectoryRepository`.
+                `ClientBillService` talks to `BillingDbContext` for client bills, balances, and
+                invoice lines. Call sites to move behind `IClientBillRepository`:
+                `GetOpenBills`, `RecordPayment`, `GetClientBalance`.
 
-                | Area | Files | Issue |
-                | --- | --- | --- |
-                | Session persist | `Harness.UI/Demo/DysonUiHost.cs` | Host calls store helpers that wrap EF |
-                | Workdirs | `Harness.LocalDb/Storage/DysonWorkDirectoryRepository.cs` | Correct repo — UI should stop bypassing it |
-                | Models | `Harness.LocalDb/Storage/DysonModelRepository.cs` | Already behind `IDysonModelRepository` |
-
-                ## Recommended split
-                1. Keep engine on the `IDyson*Repository` interfaces.
-                2. Move remaining host EF usage into LocalDb repos.
-                3. UI binds repositories only.
-
-                Report submitted to parent (turn handoff).
+                Report submitted to parent.
                 """;
         }
 
-        if (session.Parent is not null
-            && string.Equals(session.Mode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase))
+        if (hint.Contains("Inventory remaining", StringComparison.OrdinalIgnoreCase))
         {
             return """
-                # Drone: persistence extraction
+                # Inventory: remaining services
 
-                ## Agent actions
-                1. Confirmed call sites against Explore report.
-                2. Routed session + workdir writes through existing repository interfaces.
-                3. Left engine contracts unchanged.
+                `InvoiceService` still new's `BillingDbContext`. Shared helpers in
+                `BillingDbContext` stay — only service call sites migrate.
 
-                ## Recap
-                Host no longer talks to `DysonDbContext` directly for session/workdir rows.
-                Remaining model CRUD already used `IDysonModelRepository`.
+                Report submitted to parent.
+                """;
+        }
 
-                Report submitted to parent (turn handoff).
+        if (hint.Contains("IClientBillRepository", StringComparison.OrdinalIgnoreCase))
+        {
+            return """
+                # Interfaces ready
+
+                Added `IClientBillRepository` and an EF adapter. `ClientBillService` can take
+                the interface next without changing public methods.
+
+                Report submitted to parent.
+                """;
+        }
+
+        if (hint.Contains("Migrate ClientBill", StringComparison.OrdinalIgnoreCase))
+        {
+            return """
+                # ClientBillService migrated
+
+                Constructor now takes `IClientBillRepository`. DbContext calls in
+                `GetOpenBills` / `RecordPayment` / `GetClientBalance` are gone.
+
+                Report submitted to parent.
+                """;
+        }
+
+        if (hint.Contains("Migrate remaining", StringComparison.OrdinalIgnoreCase))
+        {
+            return """
+                # Remaining services migrated
+
+                `InvoiceService` uses the repository. One browser smoke selector missed —
+                verify will catch leftover UI bindings.
+
+                Report submitted to parent.
+                """;
+        }
+
+        if (hint.Contains("service tests", StringComparison.OrdinalIgnoreCase))
+        {
+            return """
+                # Tests
+
+                Repository adapter + `ClientBillService` payment/balance cases are green.
+
+                Report submitted to parent.
+                """;
+        }
+
+        if (hint.Contains("Verify no leftover", StringComparison.OrdinalIgnoreCase))
+        {
+            return """
+                # Verify
+
+                No `BillingDbContext` left in services. Build is clean. Billing UI no longer
+                reads the context from the page.
+
+                Report submitted to parent.
                 """;
         }
 
         if (turn.Kind == DysonAgentTurnKind.SubagentReportProcessing)
         {
-            return HasDrone(session)
-                ? """
-                    # Subagent report: repositories landed
+            if (HasChild(session, "Verify no leftover") && AllMatchingTerminal(session, "Verify no leftover"))
+            {
+                return """
+                    # Handoff: repository migration complete
 
-                    ## Report
-                    Drone finished the persistence extraction. Engine interfaces are unchanged.
+                    | Turn | Subagent | Status |
+                    | --- | --- | --- |
+                    | 1 | Inventory ClientBillService | completed |
+                    | 2 | Inventory remaining services | completed |
+                    | 3 | IClientBillRepository + adapter | completed |
+                    | 4 | Migrate ClientBillService | completed |
+                    | 5 | Migrate remaining services | completed |
+                    | 6 | Tests | completed |
+                    | 7 | Verify | completed |
 
-                    ## Next
-                    Todos are complete. Ready for a review pass on `DysonUiHost` persist helpers.
-                    """
-                : """
-                    # Subagent report: Explore complete
-
-                    ## Report
-                    Explore mapped the DbContext / repository split. Dispatching a Drone for the
-                    session + work-directory extraction slice.
-
-                    ## Next
-                    Wait for the Drone handoff before claiming the work done.
+                    `ClientBillService` is on `IClientBillRepository`. Plan steps
+                    inventory → interfaces → migrate → tests → verify are done.
                     """;
+            }
+
+            return """
+                # Subagent report
+
+                Report received. Updating the plan and starting the next wave.
+                """;
         }
 
         return """
-            # Plan: move DB calls behind repositories
+            # Plan: move database calls to repositories
 
-            ## Recap
-            This is a turn-based Work session (not chat). I filed todos, grepped the host/UI
-            persist surface, and started an Explore subagent.
+            Turn-based Work session — not chat. Five steps, seven subagents:
 
-            ## Agent actions
-            1. Explore reports call sites + recommended repository split.
-            2. A later Drone implements against `IDysonSessionRepository` / `IDysonWorkDirectoryRepository`.
-            3. Parent consumes each handoff as a `SubagentReportProcessing` turn.
+            1. **Inventory** — ClientBillService, then remaining billing services
+            2. **Interfaces** — `IClientBillRepository` + EF adapter
+            3. **Migrate** — ClientBillService first, then the rest
+            4. **Tests** — repository + service
+            5. **Verify** — no leftover DbContext calls
 
-            Explore is running in the background — its report will arrive as a harness turn.
+            Two Explore inventories are in flight. Each handoff is its own turn.
             """;
+    }
+
+    public static bool IsFailedDemoTool(DysonToolCall call)
+    {
+        ArgumentNullException.ThrowIfNull(call);
+        return string.Equals(call.ToolName, "BrowserWaitForSelector", StringComparison.OrdinalIgnoreCase);
     }
 
     public static string MockToolContent(DysonToolCall call)
     {
         ArgumentNullException.ThrowIfNull(call);
         var name = call.ToolName;
+        var path = ReadPath(call.ArgumentsJson);
 
         if (string.Equals(name, "Grep", StringComparison.OrdinalIgnoreCase))
         {
             return """
-                src/Harness/Harness.UI/Demo/DysonUiHost.cs:2445:        var createProvider = await _models.CreateProviderAsync(
-                src/Harness/Harness.UI/Demo/DysonUiHost.cs:2594:        var workDir = await _workDirectories.GetAsync(workDirectoryId.Value, cancellationToken)
-                src/Harness/Harness.LocalDb/Storage/DysonSessionRepository.cs:18:        await using var db = await _accessor.CreateDbContextAsync(cancellationToken)
-                src/Harness/Harness.LocalDb/Storage/DysonWorkDirectoryRepository.cs:22:        await using var db = await _accessor.CreateDbContextAsync(cancellationToken)
+                src/Billing/ClientBillService.cs:18:        _db = new BillingDbContext(options);
+                src/Billing/ClientBillService.cs:27:        return _db.ClientBills.Where(b => b.ClientId == clientId && !b.IsClosed).ToList();
+                src/Billing/ClientBillService.cs:41:        _db.Payments.Add(payment);
+                src/Billing/InvoiceService.cs:14:        using var db = new BillingDbContext(options);
+                src/Billing/BillingDbContext.cs:8:public sealed class BillingDbContext : DbContext
                 """;
         }
 
         if (string.Equals(name, "ReadFile", StringComparison.OrdinalIgnoreCase))
         {
-            return """
-                1|public sealed class DysonSessionRepository : IDysonSessionRepository
-                2|{
-                3|    private readonly DysonDbAccessor _accessor;
-                4|
-                5|    public async Task<Result<Guid, string>> CreateSessionAsync(...)
-                6|    {
-                7|        await using var db = await _accessor.CreateDbContextAsync(cancellationToken);
-                8|        db.Sessions.Add(row);
-                9|        await db.SaveChangesAsync(cancellationToken);
-                10|    }
-                """;
+            if (path.Contains("IClientBillRepository", StringComparison.OrdinalIgnoreCase))
+                return IClientBillRepositoryListing;
+            if (path.Contains("InvoiceService", StringComparison.OrdinalIgnoreCase))
+                return InvoiceServiceListing;
+            return ClientBillServiceListing;
         }
 
         if (string.Equals(name, "ListDirectory", StringComparison.OrdinalIgnoreCase))
         {
             return """
-                Harness.Abstractions/Storage/IDysonSessionRepository.cs
-                Harness.Abstractions/Storage/IDysonWorkDirectoryRepository.cs
-                Harness.LocalDb/Storage/DysonSessionRepository.cs
-                Harness.LocalDb/Storage/DysonWorkDirectoryRepository.cs
-                Harness.UI/Demo/DysonUiHost.cs
+                src/Billing/BillingDbContext.cs
+                src/Billing/ClientBillService.cs
+                src/Billing/InvoiceService.cs
                 """;
         }
 
-        if (string.Equals(name, "WriteFile", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(name, "WriteFile", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "CreateFile", StringComparison.OrdinalIgnoreCase))
         {
-            return """{"ok":true,"path":"src/Harness/Harness.LocalDb/Storage/DysonSessionRepository.cs","edits":1}""";
+            return $$"""{"ok":true,"path":"{{path}}","edits":1}""";
+        }
+
+        if (string.Equals(name, "ShellExecute", StringComparison.OrdinalIgnoreCase))
+        {
+            return """
+                exitCode=0
+                Build succeeded.
+                    0 Warning(s)
+                    0 Error(s)
+                """;
+        }
+
+        if (string.Equals(name, "BrowserWaitForSelector", StringComparison.OrdinalIgnoreCase))
+        {
+            return "timeout: #legacy-db-banner was not found (good — page no longer binds BillingDbContext).";
+        }
+
+        if (name.StartsWith("Browser", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "OpenBrowser", StringComparison.OrdinalIgnoreCase))
+        {
+            return """{"ok":true,"windowId":1,"tabId":1,"url":"http://localhost:5180/billing"}""";
         }
 
         return $"[demo] {name} ok — args={Truncate(call.ArgumentsJson, 80)}";
     }
 
-    public static bool HasDrone(DysonAgentSession session) =>
-        session.SubSessions.Any(child =>
-            string.Equals(child.Mode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase));
+    public static string EnsurePromoWorkspace()
+    {
+        var dest = Environment.GetEnvironmentVariable("DYSON_VISUAL_DEMO_WORKDIR");
+        if (string.IsNullOrWhiteSpace(dest))
+            dest = Path.Combine(DysonAppPaths.GetRoot(DysonBuildInfo.Current), "visual-demo-workspace");
+
+        Directory.CreateDirectory(Path.Combine(dest, "src", "Billing"));
+        WriteIfMissing(Path.Combine(dest, "README.md"), PromoReadme);
+        WriteIfMissing(Path.Combine(dest, "src", "Billing", "BillingDbContext.cs"), BillingDbContextSource);
+        WriteIfMissing(Path.Combine(dest, "src", "Billing", "ClientBillService.cs"), ClientBillServiceSource);
+        WriteIfMissing(Path.Combine(dest, "src", "Billing", "InvoiceService.cs"), InvoiceServiceSource);
+        return dest;
+    }
 
     public static bool HasUserKickoff(DysonAgentSession session) =>
         session.Turns.Any(t =>
@@ -224,62 +298,186 @@ public static class DysonVisualDemoScenario
     private static IReadOnlyList<DysonToolCall> SeedRootKickoff() =>
     [
         Call("RenameSession", 0, Json(new { title = SessionTitle })),
-        Call("Grep", 0, Json(new { pattern = "DysonDbContext|CreateDbContextAsync", path = "src/Harness", glob = "*.cs" })),
-        Call("ReadFile", 0, Json(new { path = "src/Harness/Harness.LocalDb/Storage/DysonSessionRepository.cs", limit = 40 })),
-        Call("ListDirectory", 0, Json(new { path = "src/Harness/Harness.LocalDb/Storage" })),
-        Call("CreateTodo", 1, Json(new { taskCode = "map-call-sites", displayName = "Map DbContext call sites", status = "ongoing" })),
-        Call("CreateTodo", 1, Json(new { taskCode = "extract-session-repo", displayName = "Extract session persist into repository", status = "pending" })),
-        Call("CreateTodo", 1, Json(new { taskCode = "extract-workdir-repo", displayName = "Extract work-directory persist into repository", status = "pending" })),
-        Call("StartSubagent", 2, Json(new { agentMode = DysonAgentModes.Explore, task = ExploreTask })),
+        Call("Grep", 0, Json(new { pattern = "BillingDbContext|new BillingDbContext", path = "src/Billing", glob = "*.cs" })),
+        Call("ReadFile", 0, Json(new { path = "src/Billing/ClientBillService.cs" })),
+        Call("ListDirectory", 1, Json(new { path = "src/Billing" })),
+        Call("CreateTodo", 1, Json(new { taskCode = "inventory", displayName = "Inventory database call sites", status = "ongoing" })),
+        Call("CreateTodo", 1, Json(new { taskCode = "interfaces", displayName = "Add repository interfaces", status = "pending" })),
+        Call("CreateTodo", 1, Json(new { taskCode = "migrate", displayName = "Migrate services onto repositories", status = "pending" })),
+        Call("CreateTodo", 1, Json(new { taskCode = "tests", displayName = "Add repository and service tests", status = "pending" })),
+        Call("CreateTodo", 1, Json(new { taskCode = "verify", displayName = "Verify no leftover database calls", status = "pending" })),
+        Call("StartSubagent", 2, Json(new { agentMode = DysonAgentModes.Explore, task = InventoryClientTask })),
+        Call("StartSubagent", 3, Json(new { agentMode = DysonAgentModes.Explore, task = InventoryRestTask })),
     ];
 
-    private static IReadOnlyList<DysonToolCall> SeedRootAfterExplore() =>
-    [
-        Call("UpdateTodo", 0, Json(new { taskCode = "map-call-sites", status = "complete", appendComment = "Explore report received." })),
-        Call("UpdateTodo", 0, Json(new { taskCode = "extract-session-repo", status = "ongoing" })),
-        Call("StartSubagent", 1, Json(new { agentMode = DysonAgentModes.Drone, task = DroneTask })),
-    ];
-
-    private static IReadOnlyList<DysonToolCall> SeedRootAfterDrone() =>
-    [
-        Call("UpdateTodo", 0, Json(new { taskCode = "extract-session-repo", status = "complete", appendComment = "Drone report received." })),
-        Call("UpdateTodo", 0, Json(new { taskCode = "extract-workdir-repo", status = "complete" })),
-        Call("ListTodos", 1, "{}"),
-    ];
-
-    private static IReadOnlyList<DysonToolCall> SeedChild(DysonAgentSession session)
+    private static IReadOnlyList<DysonToolCall> SeedRootHandoff(DysonAgentSession session)
     {
-        if (string.Equals(session.Mode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase))
+        var tools = new List<DysonToolCall>();
+
+        if (AllMatchingTerminal(session, "Inventory") && !HasChild(session, "IClientBillRepository"))
+        {
+            tools.Add(Call("UpdateTodo", 0, Json(new { taskCode = "inventory", status = "complete", appendComment = "Both inventory reports in." })));
+            tools.Add(Call("UpdateTodo", 0, Json(new { taskCode = "interfaces", status = "ongoing" })));
+            tools.Add(Call("StartSubagent", 1, Json(new { agentMode = DysonAgentModes.Drone, task = InterfacesTask })));
+            return tools;
+        }
+
+        if (AllMatchingTerminal(session, "IClientBillRepository") && !HasChild(session, "Migrate ClientBillService"))
+        {
+            tools.Add(Call("UpdateTodo", 0, Json(new { taskCode = "interfaces", status = "complete" })));
+            tools.Add(Call("UpdateTodo", 0, Json(new { taskCode = "migrate", status = "ongoing" })));
+            tools.Add(Call("StartSubagent", 1, Json(new { agentMode = DysonAgentModes.Drone, task = MigrateClientTask })));
+            tools.Add(Call("StartSubagent", 2, Json(new { agentMode = DysonAgentModes.Drone, task = MigrateRestTask })));
+            return tools;
+        }
+
+        if (AllMatchingTerminal(session, "Migrate") && !HasChild(session, "service tests"))
+        {
+            tools.Add(Call("UpdateTodo", 0, Json(new { taskCode = "migrate", status = "complete", appendComment = "ClientBillService + remaining services." })));
+            tools.Add(Call("UpdateTodo", 0, Json(new { taskCode = "tests", status = "ongoing" })));
+            tools.Add(Call("StartSubagent", 1, Json(new { agentMode = DysonAgentModes.Drone, task = TestsTask })));
+            return tools;
+        }
+
+        if (AllMatchingTerminal(session, "service tests") && !HasChild(session, "Verify no leftover"))
+        {
+            tools.Add(Call("UpdateTodo", 0, Json(new { taskCode = "tests", status = "complete" })));
+            tools.Add(Call("UpdateTodo", 0, Json(new { taskCode = "verify", status = "ongoing" })));
+            tools.Add(Call("StartSubagent", 1, Json(new { agentMode = DysonAgentModes.Explore, task = VerifyTask })));
+            return tools;
+        }
+
+        if (AllMatchingTerminal(session, "Verify no leftover"))
+        {
+            tools.Add(Call("UpdateTodo", 0, Json(new { taskCode = "verify", status = "complete" })));
+            tools.Add(Call("ListTodos", 1, "{}"));
+            tools.Add(Call("ListSubagents", 1, "{}"));
+        }
+
+        return tools;
+    }
+
+    private static IReadOnlyList<DysonToolCall> SeedChild(DysonAgentSession session, DysonAgentTurn turn)
+    {
+        var hint = ChildHint(session, turn);
+
+        if (hint.Contains("Inventory ClientBill", StringComparison.OrdinalIgnoreCase))
         {
             return
             [
-                Call("Grep", 0, Json(new { pattern = "DysonDbContext|IDysonSessionRepository", path = "src/Harness", glob = "*.cs" })),
-                Call("ReadFile", 0, Json(new { path = "src/Harness/Harness.Abstractions/Storage/IDysonSessionRepository.cs" })),
-                Call("ListDirectory", 1, Json(new { path = "src/Harness/Harness.UI/Demo" })),
+                Call("Grep", 0, Json(new { pattern = "BillingDbContext|_db\\.", path = "src/Billing/ClientBillService.cs" })),
+                Call("ReadFile", 0, Json(new { path = "src/Billing/ClientBillService.cs" })),
+                Call("ListDirectory", 1, Json(new { path = "src/Billing" })),
                 Call("SubmitSubagentReport", 2, Json(new
                 {
                     status = "completed",
-                    summary =
-                        "UI/host still reaches EF around session + workdir persist. "
-                        + "Keep engine on IDysonSessionRepository / IDysonWorkDirectoryRepository; "
-                        + "move remaining host EF into LocalDb repos.",
+                    summary = "ClientBillService constructs BillingDbContext and uses it in GetOpenBills, RecordPayment, GetClientBalance.",
+                })),
+            ];
+        }
+
+        if (hint.Contains("Inventory remaining", StringComparison.OrdinalIgnoreCase))
+        {
+            return
+            [
+                Call("Grep", 0, Json(new { pattern = "new BillingDbContext", path = "src/Billing", glob = "*.cs" })),
+                Call("ReadFile", 0, Json(new { path = "src/Billing/InvoiceService.cs" })),
+                Call("SubmitSubagentReport", 2, Json(new
+                {
+                    status = "completed",
+                    summary = "InvoiceService also news BillingDbContext. Shared context class should stay.",
+                })),
+            ];
+        }
+
+        if (hint.Contains("IClientBillRepository", StringComparison.OrdinalIgnoreCase))
+        {
+            return
+            [
+                Call("ReadFile", 0, Json(new { path = "src/Billing/ClientBillService.cs" })),
+                Call("CreateFile", 1, Json(new { path = "src/Billing/IClientBillRepository.cs", content = IClientBillRepositorySource })),
+                Call("CreateFile", 1, Json(new { path = "src/Billing/ClientBillRepository.cs", content = "// EF adapter implementing IClientBillRepository" })),
+                Call("SubmitSubagentReport", 2, Json(new
+                {
+                    status = "completed",
+                    summary = "IClientBillRepository and EF adapter added. Ready to migrate ClientBillService.",
+                })),
+            ];
+        }
+
+        if (hint.Contains("Migrate ClientBill", StringComparison.OrdinalIgnoreCase))
+        {
+            return
+            [
+                Call("ReadFile", 0, Json(new { path = "src/Billing/ClientBillService.cs" })),
+                Call("ReadFile", 0, Json(new { path = "src/Billing/IClientBillRepository.cs" })),
+                Call("WriteFile", 1, """{"path":"src/Billing/ClientBillService.cs","old_text":"        _db = new BillingDbContext(options);","new_text":"        _bills = bills;"}"""),
+                Call("ShellExecute", 2, Json(new { shell = "pwsh", command = "dotnet build src/Billing", timeoutMs = 30000 })),
+                Call("SubmitSubagentReport", 3, Json(new
+                {
+                    status = "completed",
+                    summary = "ClientBillService now depends on IClientBillRepository. Build succeeded.",
+                })),
+            ];
+        }
+
+        if (hint.Contains("Migrate remaining", StringComparison.OrdinalIgnoreCase))
+        {
+            return
+            [
+                Call("Grep", 0, Json(new { pattern = "new BillingDbContext", path = "src/Billing/InvoiceService.cs" })),
+                Call("WriteFile", 1, """{"path":"src/Billing/InvoiceService.cs","old_text":"using var db = new BillingDbContext(options);","new_text":"var invoices = _invoices;"}"""),
+                Call("OpenBrowser", 2, Json(new { url = "http://localhost:5180/billing", timeoutMs = 5000 })),
+                Call("BrowserWaitForSelector", 3, Json(new { selector = "#legacy-db-banner", timeoutMs = 2000 })),
+                Call("SubmitSubagentReport", 4, Json(new
+                {
+                    status = "completed",
+                    summary = "InvoiceService migrated. Browser smoke missed #legacy-db-banner (expected after the cut-over).",
+                })),
+            ];
+        }
+
+        if (hint.Contains("service tests", StringComparison.OrdinalIgnoreCase))
+        {
+            return
+            [
+                Call("CreateFile", 0, Json(new { path = "src/Billing.Tests/ClientBillServiceTests.cs", content = "// payment + balance cases against a fake IClientBillRepository" })),
+                Call("ShellExecute", 1, Json(new { shell = "pwsh", command = "dotnet test src/Billing.Tests", timeoutMs = 30000 })),
+                Call("SubmitSubagentReport", 2, Json(new
+                {
+                    status = "completed",
+                    summary = "Repository and ClientBillService tests passed.",
                 })),
             ];
         }
 
         return
         [
-            Call("ReadFile", 0, Json(new { path = "src/Harness/Harness.UI/Demo/DysonUiHost.cs", offset = 2430, limit = 40 })),
-            Call("WriteFile", 1, """{"path":"src/Harness/Harness.LocalDb/Storage/DysonSessionRepository.cs","old_text":"host-owned EF","new_text":"repository method"}"""),
-            Call("ListTodos", 1, "{}"),
-            Call("SubmitSubagentReport", 2, Json(new
+            Call("Grep", 0, Json(new { pattern = "new BillingDbContext", path = "src", glob = "*.cs" })),
+            Call("ShellExecute", 1, Json(new { shell = "pwsh", command = "dotnet build", timeoutMs = 30000 })),
+            Call("OpenBrowser", 2, Json(new { url = "http://localhost:5180/billing", timeoutMs = 5000 })),
+            Call("BrowserNavigate", 3, Json(new { url = "http://localhost:5180/billing/clients/42", timeoutMs = 5000 })),
+            Call("SubmitSubagentReport", 4, Json(new
             {
                 status = "completed",
-                summary =
-                    "Session and work-directory writes now go through IDysonSessionRepository "
-                    + "and IDysonWorkDirectoryRepository. Engine contracts unchanged.",
+                summary = "No leftover BillingDbContext in services. Verify build and billing page are clean.",
             })),
         ];
+    }
+
+    private static string ChildHint(DysonAgentSession session, DysonAgentTurn turn) =>
+        $"{session.DisplayTitle} {turn.Instruction}";
+
+    private static bool HasChild(DysonAgentSession session, string titleNeedle) =>
+        session.SubSessions.Any(child =>
+            (child.DisplayTitle ?? "").Contains(titleNeedle, StringComparison.OrdinalIgnoreCase));
+
+    private static bool AllMatchingTerminal(DysonAgentSession session, string titleNeedle)
+    {
+        var matches = session.SubSessions
+            .Where(child => (child.DisplayTitle ?? "").Contains(titleNeedle, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        return matches.Count > 0 && matches.All(child => child.IsTerminal);
     }
 
     private static DysonToolCall Call(string toolName, int stage, string argumentsJson) =>
@@ -293,10 +491,135 @@ public static class DysonVisualDemoScenario
 
     private static string Json(object value) => JsonSerializer.Serialize(value);
 
+    private static string ReadPath(string? argumentsJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
+            if (doc.RootElement.TryGetProperty("path", out var path) && path.ValueKind == JsonValueKind.String)
+                return path.GetString() ?? "";
+        }
+        catch (JsonException)
+        {
+        }
+
+        return "";
+    }
+
+    private static void WriteIfMissing(string path, string contents)
+    {
+        if (File.Exists(path))
+            return;
+        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+        File.WriteAllText(path, contents);
+    }
+
     private static string Truncate(string? value, int max)
     {
         if (string.IsNullOrEmpty(value) || value.Length <= max)
             return value ?? "";
         return value[..max] + "…";
     }
+
+    private const string PromoReadme = """
+        Billing (DEMO)
+        Scripted Demo Mode workspace for the repository-migration promo.
+        """;
+
+    private const string BillingDbContextSource = """
+        using Microsoft.EntityFrameworkCore;
+
+        namespace Billing;
+
+        public sealed class BillingDbContext : DbContext
+        {
+            public DbSet<ClientBill> ClientBills => Set<ClientBill>();
+            public DbSet<Payment> Payments => Set<Payment>();
+        }
+        """;
+
+    private const string ClientBillServiceSource = """
+        namespace Billing;
+
+        public sealed class ClientBillService
+        {
+            private readonly BillingDbContext _db;
+
+            public ClientBillService(DbContextOptions options)
+            {
+                _db = new BillingDbContext(options);
+            }
+
+            public IReadOnlyList<ClientBill> GetOpenBills(int clientId) =>
+                _db.ClientBills.Where(b => b.ClientId == clientId && !b.IsClosed).ToList();
+
+            public void RecordPayment(int billId, decimal amount)
+            {
+                var payment = new Payment { BillId = billId, Amount = amount };
+                _db.Payments.Add(payment);
+                _db.SaveChanges();
+            }
+
+            public decimal GetClientBalance(int clientId) =>
+                _db.ClientBills.Where(b => b.ClientId == clientId).Sum(b => b.Balance);
+        }
+        """;
+
+    private const string InvoiceServiceSource = """
+        namespace Billing;
+
+        public sealed class InvoiceService
+        {
+            public Invoice Load(int invoiceId, DbContextOptions options)
+            {
+                using var db = new BillingDbContext(options);
+                return db.Set<Invoice>().First(i => i.Id == invoiceId);
+            }
+        }
+        """;
+
+    private const string IClientBillRepositorySource = """
+        namespace Billing;
+
+        public interface IClientBillRepository
+        {
+            IReadOnlyList<ClientBill> GetOpenBills(int clientId);
+            void RecordPayment(int billId, decimal amount);
+            decimal GetClientBalance(int clientId);
+        }
+        """;
+
+    private const string ClientBillServiceListing = """
+        1|public sealed class ClientBillService
+        2|{
+        3|    private readonly BillingDbContext _db;
+        4|
+        5|    public ClientBillService(DbContextOptions options)
+        6|    {
+        7|        _db = new BillingDbContext(options);
+        8|    }
+        9|
+        10|    public IReadOnlyList<ClientBill> GetOpenBills(int clientId) =>
+        11|        _db.ClientBills.Where(b => b.ClientId == clientId && !b.IsClosed).ToList();
+        """;
+
+    private const string InvoiceServiceListing = """
+        1|public sealed class InvoiceService
+        2|{
+        3|    public Invoice Load(int invoiceId, DbContextOptions options)
+        4|    {
+        5|        using var db = new BillingDbContext(options);
+        6|        return db.Set<Invoice>().First(i => i.Id == invoiceId);
+        7|    }
+        8|}
+        """;
+
+    private const string IClientBillRepositoryListing = """
+        1|public interface IClientBillRepository
+        2|{
+        3|    IReadOnlyList<ClientBill> GetOpenBills(int clientId);
+        4|    void RecordPayment(int billId, decimal amount);
+        5|    decimal GetClientBalance(int clientId);
+        6|}
+        """;
 }
