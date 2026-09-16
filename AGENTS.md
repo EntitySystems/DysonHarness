@@ -27,6 +27,7 @@ AI model harness.
 - Skills: [rules/rules_skills.md](rules/rules_skills.md)
 - Docs: [rules/rules_docs.md](rules/rules_docs.md)
 - UI restart: [rules/rules_ui_restart.md](rules/rules_ui_restart.md)
+- UI CSS isolation: [rules/rules_ui_css.md](rules/rules_ui_css.md) (new CSS in `<Component>.razor.css`; tokens/keyframes stay in `app.css`)
 - Ponytail (lazy senior, mandatory): [rules/rules_ponytail.md](rules/rules_ponytail.md)
 - Cursor rules migration: [rules/rules_cursor_rules.md](rules/rules_cursor_rules.md) (aimed at Cursor; `.cursor/` is gitignored, rules live in `rules/`)
 - Model roles: [rules/rules_model_roles.md](rules/rules_model_roles.md) (migrated from `.cursor/rules/model-roles.mdc`)

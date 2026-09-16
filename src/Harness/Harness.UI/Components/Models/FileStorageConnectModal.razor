@@ -7,18 +7,20 @@
 @inject DysonUiHost Host
 @implements IDisposable
 
-@if (Connect.IsOpen)
-{
-    <div class="confirm-dialog-backdrop"
+<DysonTransition Item="Connect.IsOpen" ExitMs="140" RestoreFocus="true"
+                 OnEntered="FocusBackdropAsync" Context="ctx">
+    <div class="confirm-dialog-backdrop dyson-fade-scale @ctx.StateClass"
          role="presentation"
-         @onclick="CancelAsync">
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => ctx.IsExiting ? Task.CompletedTask : CancelAsync()"
+         @onkeydown="args => { if (!ctx.IsExiting) OnKeyDown(args); }">
         <div class="confirm-dialog"
              role="dialog"
              aria-modal="true"
              aria-labelledby="file-storage-connect-modal-title"
              style="max-width:480px;width:100%;"
-             @onclick:stopPropagation="true"
-             @onkeydown="OnKeyDown">
+             @onclick:stopPropagation="true">
             <div class="confirm-dialog__header">
                 <h3 id="file-storage-connect-modal-title">Must connect S3 bucket</h3>
             </div>
@@ -62,19 +64,19 @@
                 <button type="button"
                         class="btn btn-ghost btn--sm"
                         disabled="@_busy"
-                        @onclick="CancelAsync">
+                        @onclick="() => ctx.IsExiting ? Task.CompletedTask : CancelAsync()">
                     Cancel
                 </button>
                 <button type="button"
                         class="btn btn-primary btn--sm"
                         disabled="@_busy"
-                        @onclick="SubmitAsync">
+                        @onclick="() => ctx.IsExiting ? Task.CompletedTask : SubmitAsync()">
                     Submit
                 </button>
             </div>
         </div>
     </div>
-}
+</DysonTransition>
 
 @code {
     private string _endpointUrl = "";
@@ -83,6 +85,7 @@
     private string? _error;
     private bool _busy;
     private bool _initializedForOpen;
+    private ElementReference _backdropEl;
 
     protected override void OnInitialized() => Connect.Changed += OnConnectChanged;
 
@@ -111,6 +114,12 @@
         {
             _initializedForOpen = false;
         }
+    }
+
+    private async Task FocusBackdropAsync()
+    {
+        try { await _backdropEl.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
     }
 
     private void OnKeyDown(KeyboardEventArgs e)

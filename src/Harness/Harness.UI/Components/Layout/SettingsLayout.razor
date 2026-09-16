@@ -1,6 +1,9 @@
 @inherits LayoutComponentBase
 @layout MainLayout
+@implements IDisposable
 @using DysonHarness
+@using Microsoft.AspNetCore.Components.Routing
+@inject NavigationManager Nav
 
 <div class="settings-shell">
     <aside class="settings-shell__nav">
@@ -26,7 +29,51 @@
         </div>
     </aside>
 
-    <main class="settings-shell__content">
+    <main class="settings-shell__content @(_navEnter ? "settings-shell__content--enter" : null)">
         @Body
     </main>
 </div>
+
+@code {
+    /// <summary>Matches --motion-base, so the class outlives the animation it triggers.</summary>
+    private const int NavEnterMs = 200;
+
+    private bool _navEnter;
+
+    /// <summary>
+    /// `/settings/*` → `/settings/*` keeps LayoutType identical, so this element and its MainLayout
+    /// parent both persist and only <c>@Body</c> swaps — there is no insert for CSS to animate.
+    /// Nothing in the app subscribed to <c>LocationChanged</c> before this.
+    /// <para>
+    /// <c>FocusOnNavigate Selector="h1"</c> in Routes.razor still lands correctly: the fade animates
+    /// an element that is already in the DOM rather than delaying the content behind it.
+    /// </para>
+    /// </summary>
+    protected override void OnInitialized() => Nav.LocationChanged += OnLocationChanged;
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e) => _ = RunNavEnterAsync();
+
+    /// <summary>
+    /// Timed, not <c>animationend</c>-driven: reduced motion suppresses that event. It needs no
+    /// reduced-motion check either — the class only carries an <c>animation</c>, which the blanket
+    /// rule in <c>app.css</c> already neutralizes.
+    /// ponytail: ceiling = a second navigation inside the window does not restart the animation
+    /// (the class is already applied); upgrade path is alternating class names.
+    /// </summary>
+    private async Task RunNavEnterAsync()
+    {
+        try
+        {
+            _navEnter = true;
+            await InvokeAsync(StateHasChanged);
+            await Task.Delay(NavEnterMs);
+            _navEnter = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex) when (ex is ObjectDisposedException or TaskCanceledException)
+        {
+        }
+    }
+
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
+}

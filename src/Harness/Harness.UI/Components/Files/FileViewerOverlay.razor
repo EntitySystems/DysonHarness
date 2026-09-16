@@ -6,17 +6,18 @@
 @inject DysonUiHost Host
 @inject DysonMessageBus Bus
 
-@if (Host.FileViewer is { } viewer)
-{
-    <div class="file-viewer-modal-backdrop"
-         @onclick="Close"
+<DysonTransition TItem="DysonFileViewerState" Item="Host.FileViewer" ExitMs="140" RestoreFocus="true" OnEntered="FocusBackdropAsync" Context="ctx">
+    @{ var viewer = ctx.Item; }
+    <div class="file-viewer-modal-backdrop dyson-fade-scale @ctx.StateClass"
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => { if (!ctx.IsExiting) Close(); }"
          @onkeydown="OnBackdropKeyDown">
         <div class="file-viewer-modal @(viewer.IsPdf || viewer.IsTextPreview ? "file-viewer-modal--pdf" : viewer.IsImage ? "file-viewer-modal--image" : null)"
              role="dialog"
              aria-modal="true"
              aria-labelledby="file-viewer-modal-title"
-             @onclick:stopPropagation="true"
-             @onkeydown="OnModalKeyDown">
+             @onclick:stopPropagation="true">
             <div class="file-viewer-modal__header">
                 <div class="file-viewer-modal__titles">
                     <h3 id="file-viewer-modal-title">@viewer.Title</h3>
@@ -28,13 +29,13 @@
                         <button type="button"
                                 class="btn btn-ghost file-viewer-modal__open-editor"
                                 title="Open in default editor"
-                                @onclick="OpenInDefaultEditor">
+                                @onclick="() => { if (!ctx.IsExiting) OpenInDefaultEditor(); }">
                             Open in default editor
                         </button>
                     }
                     <button type="button"
                             class="btn btn-ghost file-viewer-modal__close"
-                            @onclick="Close"
+                            @onclick="() => { if (!ctx.IsExiting) Close(); }"
                             aria-label="Close">×</button>
                 </div>
             </div>
@@ -55,12 +56,12 @@
                                                 class="file-viewer-comments__edit"
                                                 title="Edit comment"
                                                 aria-label="Edit comment"
-                                                @onclick="@(() => OpenEdit(comment))">✎</button>
+                                                @onclick="@(() => { if (!ctx.IsExiting) OpenEdit(comment); })">✎</button>
                                         <button type="button"
                                                 class="file-viewer-comments__delete"
                                                 title="Delete comment"
                                                 aria-label="Delete comment"
-                                                @onclick="@(() => DeleteComment(comment))">×</button>
+                                                @onclick="@(() => { if (!ctx.IsExiting) DeleteComment(comment); })">×</button>
                                     </div>
                                 </li>
                             }
@@ -68,7 +69,7 @@
                         <button type="button"
                                 class="btn btn-primary file-viewer-comments__submit"
                                 disabled="@(_submitting || _comments.Count == 0)"
-                                @onclick="SubmitCommentsAsync">
+                                @onclick="() => ctx.IsExiting ? Task.CompletedTask : SubmitCommentsAsync()">
                             Submit comments
                         </button>
                     </div>
@@ -186,7 +187,7 @@ else
                         <button type="button"
                                 class="btn @(action.IsPrimary ? "btn-primary" : "btn-ghost") file-viewer-modal__footer-action"
                                 disabled="@_actionRunning"
-                                @onclick="@(() => RunActionAsync(action))">
+                                @onclick="@(() => ctx.IsExiting ? Task.CompletedTask : RunActionAsync(action))">
                             @if (showSpinner)
                             {
                                 <span class="turn-block__spinner" aria-hidden="true"></span>
@@ -198,10 +199,11 @@ else
             }
         </div>
     </div>
-}
+</DysonTransition>
 
 @code {
     private int? _selectedBlock;
+    private ElementReference _backdropEl;
     private readonly List<FileComment> _comments = [];
     private CommentDraft? _draft;
     private ElementReference _draftTextarea;
@@ -456,14 +458,10 @@ else
             Close();
     }
 
-    private void OnModalKeyDown(KeyboardEventArgs e)
+    private async Task FocusBackdropAsync()
     {
-        if (e.Key != "Escape")
-            return;
-        if (_draft is not null)
-            CancelDraft();
-        else
-            Close();
+        try { await _backdropEl.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
     }
 
     [Flags]

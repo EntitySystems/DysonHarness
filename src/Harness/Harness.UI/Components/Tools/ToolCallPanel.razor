@@ -3,22 +3,13 @@
 
 <div class="tool-panel" style="padding:0;">
     <div class="tool-panel__title">Tools</div>
-    @if (Turn.TrackedToolCalls.Count == 0)
+    @foreach (var row in Rows)
     {
-        @foreach (var call in Turn.ToolCalls)
-        {
-            <QueuedToolCallRow Call="call" />
-        }
-    }
-    else
-    {
-        @foreach (var tracked in Turn.TrackedToolCalls)
-        {
-            <ToolCallRow Tracked="tracked"
-                         SessionBusy="SessionBusy"
-                         IsLatestTurn="IsLatestTurn"
-                         OnCancel="OnCancel" />
-        }
+        <ToolCallRow @key="row.Call"
+                     Tracked="row"
+                     SessionBusy="SessionBusy"
+                     IsLatestTurn="IsLatestTurn"
+                     OnCancel="OnCancel" />
     }
 </div>
 
@@ -33,4 +24,14 @@
 
     /// <summary>Cancels the in-flight prompt (wired only for the latest busy turn).</summary>
     [Parameter] public EventCallback OnCancel { get; set; }
+
+    /// <summary>
+    /// One row list for both phases: tracked rows once the engine has them, otherwise Queued
+    /// placeholders over <see cref="DysonAgentTurn.ToolCalls"/>. Keyed on the shared
+    /// <see cref="DysonToolCall"/> instance (CallId may be empty), so the swap to real tracked rows
+    /// reuses the same <c>ToolCallRow</c> DOM instead of remounting and re-firing the enter animation.
+    /// </summary>
+    private IReadOnlyList<DysonTrackedToolCall> Rows => Turn.TrackedToolCalls.Count > 0
+        ? Turn.TrackedToolCalls
+        : [.. Turn.ToolCalls.Select(call => new DysonTrackedToolCall { Call = call })];
 }

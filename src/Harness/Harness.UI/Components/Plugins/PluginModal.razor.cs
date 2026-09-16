@@ -21,6 +21,7 @@ public partial class PluginModal
     private string _globalPluginsRoot = "";
     private string? _selectedPackageRoot;
     private string? _selectedDataRoot;
+    private ElementReference _backdropEl;
 
     [Inject] private DysonPluginPackageLimits PackageLimits { get; set; } = null!;
     [Inject] private IDysonPluginPackageService PackageService { get; set; } = null!;
@@ -40,9 +41,14 @@ public partial class PluginModal
     {
         if (_busy)
             return;
+        // Open() re-clears error/status; doing it here would blink the panel mid-exit.
         _open = false;
-        _error = null;
-        _status = null;
+    }
+
+    private async Task FocusBackdropAsync()
+    {
+        try { await _backdropEl.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
     }
 
     private async Task OnZipSelectedAsync(InputFileChangeEventArgs args)

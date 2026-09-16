@@ -13,13 +13,12 @@
         <main class="app-shell__main">
             @Main
         </main>
-        @if (ShowRailBackdrop)
-        {
-            <div class="app-shell__rail-backdrop"
+        <DysonTransition Item="ShowRailBackdrop" ExitMs="140" Context="railBackdrop">
+            <div class="app-shell__rail-backdrop dyson-fade @railBackdrop.StateClass"
                  tabindex="-1"
-                 @onclick="CloseRail"
+                 @onclick="() => { if (!railBackdrop.IsExiting) CloseRail(); }"
                  @onkeydown="OnBackdropKeyDown"></div>
-        }
+        </DysonTransition>
         <aside id="app-shell-rail"
                class="app-shell__rail"
                aria-hidden="@(!RailOpen)">

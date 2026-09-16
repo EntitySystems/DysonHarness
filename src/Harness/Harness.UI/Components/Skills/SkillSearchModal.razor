@@ -5,22 +5,22 @@
 @inject IDysonSkillExplorer Explorer
 @inject DysonUiHost Host
 
-@if (_open)
-{
-    <div class="skill-search-modal-backdrop"
-         @onclick="Close"
+<DysonTransition Item="_open" ExitMs="140" RestoreFocus="true" OnEntered="FocusSearchAsync" Context="ctx">
+    <div class="skill-search-modal-backdrop dyson-fade-scale @ctx.StateClass"
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => { if (!ctx.IsExiting) Close(); }"
          @onkeydown="OnBackdropKeyDown">
         <div class="skill-search-modal"
              role="dialog"
              aria-modal="true"
              aria-labelledby="skill-search-modal-title"
-             @onclick:stopPropagation="true"
-             @onkeydown="OnModalKeyDown">
+             @onclick:stopPropagation="true">
             <div class="skill-search-modal__header">
                 <h3 id="skill-search-modal-title">Search skills</h3>
                 <button type="button"
                         class="btn btn-ghost skill-search-modal__close"
-                        @onclick="Close"
+                        @onclick="() => { if (!ctx.IsExiting) Close(); }"
                         aria-label="Close">×</button>
             </div>
 
@@ -35,7 +35,7 @@
                                 class="skill-search-modal__tab @(active ? "is-active" : null)"
                                 role="tab"
                                 aria-selected="@active"
-                                @onclick="() => SelectProviderAsync(name)">
+                                @onclick="() => ctx.IsExiting ? Task.CompletedTask : SelectProviderAsync(name)">
                             @provider.DisplayName
                         </button>
                     }
@@ -48,8 +48,7 @@
                        placeholder="Search skills…"
                        value="@_search"
                        disabled="@(_providers.Count == 0)"
-                       @oninput="OnSearchInput"
-                       @onkeydown="OnModalKeyDown" />
+                       @oninput="OnSearchInput" />
             </div>
 
             @if (!string.IsNullOrEmpty(_error))
@@ -112,13 +111,13 @@
                                     <button type="button"
                                             class="btn btn-ghost"
                                             disabled="@(busy || _previewing)"
-                                            @onclick="() => ViewAsync(slug)">
+                                            @onclick="() => ctx.IsExiting ? Task.CompletedTask : ViewAsync(slug)">
                                         View skill file
                                     </button>
                                     <button type="button"
                                             class="btn btn-primary"
                                             disabled="@busy"
-                                            @onclick="() => DownloadAsync(slug)">
+                                            @onclick="() => ctx.IsExiting ? Task.CompletedTask : DownloadAsync(slug)">
                                         @if (busy)
                                         {
                                             <span class="skill-search-modal__spinner" aria-hidden="true"></span>
@@ -148,13 +147,13 @@
                                                 <button type="button"
                                                         class="btn btn-ghost"
                                                         disabled="@(matchBusy || _previewing)"
-                                                        @onclick="() => ViewAsync(matchSlug, parentSlug: slug)">
+                                                        @onclick="() => ctx.IsExiting ? Task.CompletedTask : ViewAsync(matchSlug, parentSlug: slug)">
                                                     View
                                                 </button>
                                                 <button type="button"
                                                         class="btn btn-primary"
                                                         disabled="@matchBusy"
-                                                        @onclick="() => DownloadAsync(matchSlug, parentSlug: slug)">
+                                                        @onclick="() => ctx.IsExiting ? Task.CompletedTask : DownloadAsync(matchSlug, parentSlug: slug)">
                                                     @if (matchBusy)
                                                     {
                                                         <span class="skill-search-modal__spinner" aria-hidden="true"></span>
@@ -176,14 +175,13 @@
             </div>
         </div>
     </div>
-}
+</DysonTransition>
 
 @code {
     private const int SearchLimit = 25;
     private const int DebounceMs = 280;
 
     private bool _open;
-    private bool _focusSearch;
     private bool _loading;
     private bool _previewing;
     private string _search = "";
@@ -192,6 +190,7 @@
     private string? _providerName;
     private string? _downloadingSlug;
     private ElementReference _searchInput;
+    private ElementReference _backdropEl;
     private CancellationTokenSource? _searchCts;
     private int _searchGeneration;
     private IReadOnlyList<DysonSkillExplorerProviderInfo> _providers = [];
@@ -208,7 +207,6 @@
         _error = null;
         _status = null;
         _downloadingSlug = null;
-        _focusSearch = true;
         _providers = Explorer.ListProviders();
         _providerName = _providers.Count > 0 ? _providers[0].Name : null;
         _results = [];
@@ -219,12 +217,8 @@
 
     private void Close()
     {
+        // Open() re-clears search/error/status/matches; doing it here would blink the panel mid-exit.
         _open = false;
-        _search = "";
-        _error = null;
-        _status = null;
-        _downloadingSlug = null;
-        ClearAmbiguousMatches();
         CancelPendingSearch();
     }
 
@@ -443,10 +437,10 @@
             Close();
     }
 
-    private void OnModalKeyDown(KeyboardEventArgs args)
+    private async Task FocusSearchAsync()
     {
-        if (args.Key == "Escape")
-            Close();
+        try { await _searchInput.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
     }
 
     private void CancelPendingSearch()
@@ -461,21 +455,5 @@
         }
 
         _searchCts = null;
-    }
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (!_open || !_focusSearch)
-            return;
-
-        _focusSearch = false;
-        try
-        {
-            await _searchInput.FocusAsync();
-        }
-        catch
-        {
-            // Element may not be ready on first paint of the modal.
-        }
     }
 }

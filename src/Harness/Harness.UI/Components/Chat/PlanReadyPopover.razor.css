@@ -1,0 +1,16 @@
+/* Slide-up to pair with .dyson-fade (app.css owns the opacity half). In-flow element
+   inside .composer, so transform is safe here — no sticky ancestor. */
+.composer-plan-ready {
+  transform: translateY(6px);
+  transition: transform var(--motion-base) var(--ease);
+}
+
+.composer-plan-ready.is-entered {
+  transform: none;
+}
+
+.composer-plan-ready.is-exiting {
+  transform: translateY(4px);
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--ease-in);
+}

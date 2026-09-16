@@ -7,7 +7,7 @@
 
 <div class="chat-panel" style="--tools-col-width: @(Host.ToolPanelWidthPercent.ToString("0.##", CultureInfo.InvariantCulture))%">
     <div @ref="_turnsEl"
-         class="chat-panel__turns">
+         class="chat-panel__turns @(_swapActive ? "chat-panel__turns--swap" : null)">
         @{
             var lastTurnId = Turns.Count > 0 ? Turns[^1].Id : (Guid?)null;
         }
@@ -72,6 +72,7 @@
                                Turn="turn"
                                SessionBusy="SessionBusy"
                                IsLatestTurn="@(lastTurnId == turn.Id)"
+                               Enter="@_enteringTurnIds.Contains(turn.Id)"
                                IsExpanded="@(!_collapsedIds.Contains(turn.Id))"
                                OnToggleExpand="() => ToggleExpand(turn.Id)"
                                OnCancel="OnCancelPrompt"
@@ -115,9 +116,18 @@
     private bool _lastStreamingActive;
     private int _renderVersion;
     private int _lastScrolledRenderVersion = -1;
+    private readonly HashSet<Guid> _seenTurnIds = [];
+    private readonly HashSet<Guid> _enteringTurnIds = [];
+    private Guid? _lastSessionId;
+    private bool _initialLoad = true;
+    private bool _swapPending;
+    private bool _swapActive;
 
     private const string CreatePlanDisplayInfo = "Let's harness your ideas, tell me your goals";
     private const string AskQuestionDisplayInfo = "Ask me anything";
+
+    /// <summary>Matches --motion-slow, so the class outlives the animation it triggers.</summary>
+    private const int SessionSwapFadeMs = 320;
 
     [Parameter] public IReadOnlyList<DysonAgentTurn> Turns { get; set; } = [];
     [Parameter] public bool Disabled { get; set; }
@@ -177,6 +187,8 @@
 
     protected override void OnParametersSet()
     {
+        TrackSessionSwap();
+
         var firstId = Turns.Count > 0 ? Turns[0].Id : (Guid?)null;
         var identityChanged = firstId != _firstTurnId || Turns.Count != _lastTurnCount;
         if (identityChanged)
@@ -203,6 +215,43 @@
         {
             _timeline = BuildTimeline();
             _renderVersion++;
+        }
+    }
+
+    /// <summary>
+    /// Session switch keeps this component and the <c>.chat-panel__turns</c> element alive (there is
+    /// no <c>@key</c> on session id, deliberately — keying it would cost the element's scroll and
+    /// stick state), so CSS has no insert to animate and the crossfade needs an explicit trigger.
+    /// Fades <c>.chat-panel__turns</c> rather than <c>.session-main-stage</c>: the latter holds the
+    /// absolutely-positioned <c>.session-overview-actions</c> chips, which would fade along with it.
+    /// <para>
+    /// The same pass decides which turns get an entrance fade. The batch that arrives with a new
+    /// session is marked seen-but-not-entering, so neither a session load nor the
+    /// empty-state → timeline swap animates per-turn; the container crossfade covers those.
+    /// </para>
+    /// </summary>
+    private void TrackSessionSwap()
+    {
+        var sessionId = Host.ActiveSessionId;
+        var sessionChanged = _initialLoad || sessionId != _lastSessionId;
+        if (sessionChanged)
+        {
+            _lastSessionId = sessionId;
+            _seenTurnIds.Clear();
+            _enteringTurnIds.Clear();
+            // Cold boot is covered by the splash; only a real switch crossfades.
+            _swapPending = !_initialLoad;
+            _swapActive = _swapPending;
+            _initialLoad = false;
+        }
+
+        // Entering ids are never dropped mid-session: the class has to survive the whole
+        // animation, and renders land every ~75ms while streaming. The CSS animation only
+        // fires on the element's first style pass, so keeping the class is free afterwards.
+        foreach (var turn in Turns)
+        {
+            if (_seenTurnIds.Add(turn.Id) && !sessionChanged)
+                _enteringTurnIds.Add(turn.Id);
         }
     }
 
@@ -251,6 +300,32 @@
         {
         }
         catch (InvalidOperationException)
+        {
+        }
+
+        // Scroll first (above), fade second: scrollToBottom reads scrollHeight synchronously, and
+        // an opacity animation leaves layout alone, so the transcript never jumps after the fade.
+        if (_swapPending)
+        {
+            _swapPending = false;
+            _ = EndSessionSwapFadeAsync();
+        }
+    }
+
+    /// <summary>
+    /// Drops the crossfade class once the animation is over. Timed, not <c>animationend</c>-driven:
+    /// reduced motion suppresses that event. No reduced-motion check is needed here either — the
+    /// class only carries an <c>animation</c>, which the blanket rule in <c>app.css</c> neutralizes.
+    /// </summary>
+    private async Task EndSessionSwapFadeAsync()
+    {
+        try
+        {
+            await Task.Delay(SessionSwapFadeMs);
+            _swapActive = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex) when (ex is ObjectDisposedException or TaskCanceledException)
         {
         }
     }

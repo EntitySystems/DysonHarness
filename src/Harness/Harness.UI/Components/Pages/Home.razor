@@ -52,10 +52,11 @@
                 <SessionSubagentOverview Session="Host.Session" />
                 <SessionVisualizationOverview Session="Host.Session" />
             </div>
-            @if (!string.IsNullOrEmpty(Host.LastError))
-            {
-                <ErrorToast @key="Host.LastError" Message="@Host.LastError" />
-            }
+            <DysonTransition TItem="string" Item="LastErrorToast" ExitMs="140" Context="errorToast">
+                <ErrorToast @key="errorToast.Item"
+                            Message="@errorToast.Item"
+                            MotionClass="@errorToast.StateClass" />
+            </DysonTransition>
             <ChatPanel Turns="@(Host.Session?.Turns ?? Array.Empty<DysonAgentTurn>())"
                        Disabled="@(Host.Session is null)"
                        SessionBusy="Host.IsBusy"
@@ -137,6 +138,9 @@
     private WorkDirectorySwitcher? _workdirSwitcher;
     private DotNetObjectReference<DysonUiHost>? _chatLinksRef;
     private IDisposable? _hostSub;
+
+    /// <summary>Toast gate. Null (not empty) is what clears <c>DysonTransition</c>, so normalize here.</summary>
+    private string? LastErrorToast => string.IsNullOrEmpty(Host.LastError) ? null : Host.LastError;
 
     protected override async Task OnInitializedAsync()
     {

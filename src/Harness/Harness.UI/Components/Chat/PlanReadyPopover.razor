@@ -3,31 +3,30 @@
 @using Harness.UI.Demo
 @inject DysonUiHost Host
 
-@if (Pending is not null)
-{
-    <div class="composer-plan-ready" role="status" aria-label="Plan ready">
+<DysonTransition TItem="DysonPlanReadyInfo" Item="Pending" ExitMs="140" Context="ctx">
+    <div class="composer-plan-ready dyson-fade @ctx.StateClass" role="status" aria-label="Plan ready">
         <div class="composer-plan-ready__meta">
-            <div class="composer-plan-ready__title">Plan ready — @Pending.Title</div>
-            <div class="composer-plan-ready__path mono" title="@Pending.Path">@Pending.Path</div>
+            <div class="composer-plan-ready__title">Plan ready — @ctx.Item.Title</div>
+            <div class="composer-plan-ready__path mono" title="@ctx.Item.Path">@ctx.Item.Path</div>
         </div>
         <div class="composer-plan-ready__actions">
             <button type="button"
                     class="btn"
-                    disabled="@_busy"
+                    disabled="@(ctx.IsExiting || _busy)"
                     @onclick="ViewAsync"
                     @onclick:stopPropagation="true">
                 View plan file
             </button>
             <button type="button"
                     class="btn btn-primary"
-                    disabled="@(_busy || Host.IsBusy)"
+                    disabled="@(ctx.IsExiting || _busy || Host.IsBusy)"
                     @onclick="BuildAsync"
                     @onclick:stopPropagation="true">
                 Build plan
             </button>
         </div>
     </div>
-}
+</DysonTransition>
 
 @code {
     [Parameter] public DysonPlanReadyInfo? Pending { get; set; }

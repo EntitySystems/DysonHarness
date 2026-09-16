@@ -1,0 +1,5 @@
+/* The success variant is not an expiring error, so kill the border-depletion animation
+   .error-banner--toast inherits from app.css. Was an inline `animation:none`. */
+.error-banner--toast.is-ok {
+  animation: none;
+}

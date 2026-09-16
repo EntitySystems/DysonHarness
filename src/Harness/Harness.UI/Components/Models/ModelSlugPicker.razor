@@ -30,20 +30,20 @@
     }
 </div>
 
-@if (_modalOpen)
-{
-    <div class="model-slug-modal-backdrop"
-         @onclick="CloseModal"
+<DysonTransition Item="_modalOpen" ExitMs="140" RestoreFocus="true" OnEntered="FocusSearchAsync" Context="ctx">
+    <div class="model-slug-modal-backdrop dyson-fade-scale @ctx.StateClass"
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => { if (!ctx.IsExiting) CloseModal(); }"
          @onkeydown="OnBackdropKeyDown">
         <div class="model-slug-modal"
              role="dialog"
              aria-modal="true"
              aria-labelledby="model-slug-modal-title"
-             @onclick:stopPropagation="true"
-             @onkeydown="OnModalKeyDown">
+             @onclick:stopPropagation="true">
             <div class="model-slug-modal__header">
                 <h3 id="model-slug-modal-title">Select model</h3>
-                <button type="button" class="btn btn-ghost model-slug-modal__close" @onclick="CloseModal" aria-label="Close">×</button>
+                <button type="button" class="btn btn-ghost model-slug-modal__close" @onclick="() => { if (!ctx.IsExiting) CloseModal(); }" aria-label="Close">×</button>
             </div>
 
             <div class="model-slug-modal__search">
@@ -52,7 +52,6 @@
                        placeholder="Search alias, provider, or slug…"
                        value="@_search"
                        @oninput="OnSearchInput"
-                       @onkeydown="OnModalKeyDown"
                        autofocus />
             </div>
 
@@ -63,7 +62,7 @@
                     <div class="model-slug-modal__row @(emptySelected ? "is-selected" : null)" role="option" aria-selected="@emptySelected">
                         <button type="button"
                                 class="model-slug-modal__option"
-                                @onclick="ClearAsync">
+                                @onclick="() => ctx.IsExiting ? Task.CompletedTask : ClearAsync()">
                             <span class="model-slug-modal__option-label">@EmptyLabel</span>
                         </button>
                     </div>
@@ -81,7 +80,7 @@
                             <button type="button"
                                     class="model-slug-modal__option"
                                     disabled="@(!option.IsEligible)"
-                                    @onclick="() => SelectAsync(option.Id)">
+                                    @onclick="() => ctx.IsExiting ? Task.CompletedTask : SelectAsync(option.Id)">
                                 <span class="model-slug-modal__option-label">@option.Label</span>
                                 @if (!option.IsEligible)
                                 {
@@ -96,7 +95,7 @@
                                     class="model-slug-modal__star @(option.IsFavorite ? "is-favorite" : null)"
                                     title="@(option.IsFavorite ? "Remove favorite" : "Add favorite")"
                                     aria-label="@(option.IsFavorite ? "Remove favorite" : "Add favorite")"
-                                    @onclick="() => ToggleFavoriteAsync(option)"
+                                    @onclick="() => ctx.IsExiting ? Task.CompletedTask : ToggleFavoriteAsync(option)"
                                     @onclick:stopPropagation="true">
                                 @(option.IsFavorite ? "★" : "☆")
                             </button>
@@ -106,16 +105,16 @@
             </div>
         </div>
     </div>
-}
+</DysonTransition>
 
 @code {
     private readonly List<SlugOption> _options = [];
     private HashSet<Guid> _favoriteIds = [];
     private string? _error;
     private bool _modalOpen;
-    private bool _focusSearch;
     private string _search = "";
     private ElementReference _searchInput;
+    private ElementReference _backdropEl;
 
     [Parameter] public Guid? SelectedSlugId { get; set; }
     [Parameter] public EventCallback<Guid?> SelectedSlugIdChanged { get; set; }
@@ -169,20 +168,10 @@
 
     protected override async Task OnInitializedAsync() => await RefreshAsync();
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    private async Task FocusSearchAsync()
     {
-        if (!_modalOpen || !_focusSearch)
-            return;
-
-        _focusSearch = false;
-        try
-        {
-            await _searchInput.FocusAsync();
-        }
-        catch
-        {
-            // Element may not be ready on first paint of the modal.
-        }
+        try { await _searchInput.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
     }
 
     public async Task RefreshAsync()
@@ -236,7 +225,6 @@
     {
         _search = "";
         _modalOpen = true;
-        _focusSearch = true;
     }
 
     /// <summary>Public entry for empty-state / external open (same as trigger click).</summary>
@@ -246,22 +234,12 @@
         StateHasChanged();
     }
 
-    private void CloseModal()
-    {
-        _modalOpen = false;
-        _search = "";
-    }
+    private void CloseModal() => _modalOpen = false;
 
     private void OnSearchInput(ChangeEventArgs args) =>
         _search = args.Value?.ToString() ?? "";
 
     private void OnBackdropKeyDown(KeyboardEventArgs args)
-    {
-        if (args.Key == "Escape")
-            CloseModal();
-    }
-
-    private void OnModalKeyDown(KeyboardEventArgs args)
     {
         if (args.Key == "Escape")
             CloseModal();

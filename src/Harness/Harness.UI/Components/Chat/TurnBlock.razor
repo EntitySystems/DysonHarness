@@ -8,7 +8,7 @@
 @inject IJSRuntime Js
 @inject DysonUiHost Host
 
-<article class="turn-block @(IsExpanded ? null : "turn-block--collapsed") @(Turn.IsExcludedFromContext ? "turn-block--dropped" : null)"
+<article class="turn-block @(IsExpanded ? null : "turn-block--collapsed") @(Turn.IsExcludedFromContext ? "turn-block--dropped" : null) @(Enter ? "turn-block--enter" : null)"
          @oncontextmenu="OnContextMenu"
          @oncontextmenu:preventDefault="true"
          @oncontextmenu:stopPropagation="true">
@@ -69,8 +69,12 @@
             <div class="turn-block__timestamp mono">@FormatTurnTimes()</div>
         }
     </header>
-    @if (IsExpanded)
-    {
+    @* Always mounted: collapse animates this wrapper's height instead of destroying the
+       subtree, so a new prompt no longer tears down and rebuilds every prior turn's body
+       (and with it TurnBlock's sticky-header / tools-resizer JS attach). `inert` keeps the
+       collapsed body out of the tab order and the accessibility tree. *@
+    <div class="turn-block__collapsible @(IsExpanded ? null : "turn-block__collapsible--collapsed")"
+         inert="@(!IsExpanded)">
         @if (IsUserTurn && (!string.IsNullOrWhiteSpace(Turn.Instruction) || Turn.ContextFiles.Count > 0 || Turn.UserImages.Count > 0))
         {
             <div class="turn-block__user">
@@ -168,10 +172,7 @@
             <div class="turn-block__instruction">@MarkdownRenderer.ToHtml(Turn.Instruction)</div>
         }
 
-        @if (Turn.Kind != DysonAgentTurnKind.DisplayInfo
-             && Turn.Kind != DysonAgentTurnKind.ModeSwitch
-             && Turn.Kind != DysonAgentTurnKind.WorktreeCreating
-             && (HasAssistantBody || HasReasoning || HasTools || HasVisualizations || HasGeneratedImages || ShowThinkingIdleDots))
+        @if (ShowsContentColumn)
         {
             <div @ref="_contentEl" class="turn-block__content">
                 <div class="turn-block__main">
@@ -197,19 +198,18 @@
                                     var fallback = DysonReasoningHistoryUi.ThoughtFallback(
                                         thoughtOrdinal, thoughtCount, liveStreaming);
                                     var (title, body) = DysonReasoningHistoryUi.SplitSegmentTitle(segment.Text, fallback);
-                                    <div class="turn-block__reasoning" @key="@($"{Turn.Id}:{key}")">
+                                    <div class="@SegmentClass(key)" @key="@($"{Turn.Id}:{key}")">
                                         <button type="button"
                                                 class="turn-block__reasoning-summary"
                                                 aria-expanded="@IsSegmentExpanded(key)"
                                                 @onclick="() => ToggleSegment(key)"
                                                 @onclick:stopPropagation="true">
-                                            <span class="turn-block__reasoning-chevron" aria-hidden="true">@(IsSegmentExpanded(key) ? "▾" : "▸")</span>
+                                            <span class="turn-block__reasoning-chevron" aria-hidden="true">▸</span>
                                             <span>@title</span>
                                         </button>
-                                        @if (IsSegmentExpanded(key))
-                                        {
+                                        <div class="@SegmentBodyClass(key)" inert="@(!IsSegmentExpanded(key))">
                                             <div class="turn-block__body">@MarkdownRenderer.ToHtml(body)</div>
-                                        }
+                                        </div>
                                     </div>
                                     thoughtOrdinal++;
                                 }
@@ -220,19 +220,18 @@
                                     var fallback = DysonReasoningHistoryUi.InterimFallback(
                                         interimOrdinal, interimCount);
                                     var (title, body) = DysonReasoningHistoryUi.SplitSegmentTitle(segment.Text, fallback);
-                                    <div class="turn-block__reasoning turn-block__reasoning--interim" @key="@($"{Turn.Id}:{key}")">
+                                    <div class="@SegmentClass(key) turn-block__reasoning--interim" @key="@($"{Turn.Id}:{key}")">
                                         <button type="button"
                                                 class="turn-block__reasoning-summary"
                                                 aria-expanded="@IsSegmentExpanded(key)"
                                                 @onclick="() => ToggleSegment(key)"
                                                 @onclick:stopPropagation="true">
-                                            <span class="turn-block__reasoning-chevron" aria-hidden="true">@(IsSegmentExpanded(key) ? "▾" : "▸")</span>
+                                            <span class="turn-block__reasoning-chevron" aria-hidden="true">▸</span>
                                             <span>@title</span>
                                         </button>
-                                        @if (IsSegmentExpanded(key))
-                                        {
+                                        <div class="@SegmentBodyClass(key)" inert="@(!IsSegmentExpanded(key))">
                                             <div class="turn-block__body">@MarkdownRenderer.ToHtml(body)</div>
-                                        }
+                                        </div>
                                     </div>
                                     interimOrdinal++;
                                 }
@@ -241,19 +240,18 @@
                                 {
                                     var key = $"c:{commentOrdinal}";
                                     var title = DysonReasoningHistoryUi.UserCommentFallback(commentOrdinal);
-                                    <div class="turn-block__reasoning turn-block__reasoning--comment" @key="@($"{Turn.Id}:{key}")">
+                                    <div class="@SegmentClass(key) turn-block__reasoning--comment" @key="@($"{Turn.Id}:{key}")">
                                         <button type="button"
                                                 class="turn-block__reasoning-summary"
                                                 aria-expanded="@IsSegmentExpanded(key)"
                                                 @onclick="() => ToggleSegment(key)"
                                                 @onclick:stopPropagation="true">
-                                            <span class="turn-block__reasoning-chevron" aria-hidden="true">@(IsSegmentExpanded(key) ? "▾" : "▸")</span>
+                                            <span class="turn-block__reasoning-chevron" aria-hidden="true">▸</span>
                                             <span>@title</span>
                                         </button>
-                                        @if (IsSegmentExpanded(key))
-                                        {
+                                        <div class="@SegmentBodyClass(key)" inert="@(!IsSegmentExpanded(key))">
                                             <div class="turn-block__body">@MarkdownRenderer.ToHtml(segment.Text)</div>
-                                        }
+                                        </div>
                                     </div>
                                     commentOrdinal++;
                                 }
@@ -263,21 +261,24 @@
                             {
                                 const string liveKey = "live";
                                 var liveTitle = DysonReasoningHistoryUi.LiveThoughtTitle(thoughtCount);
-                                <div class="turn-block__reasoning turn-block__reasoning--live" @key="@($"{Turn.Id}:{liveKey}")">
+                                <div class="@SegmentClass(liveKey) turn-block__reasoning--live" @key="@($"{Turn.Id}:{liveKey}")">
                                     <button type="button"
                                             class="turn-block__reasoning-summary"
                                             aria-expanded="@IsSegmentExpanded(liveKey)"
                                             @onclick="() => ToggleSegment(liveKey)"
                                             @onclick:stopPropagation="true">
-                                        <span class="turn-block__reasoning-chevron" aria-hidden="true">@(IsSegmentExpanded(liveKey) ? "▾" : "▸")</span>
+                                        <span class="turn-block__reasoning-chevron" aria-hidden="true">▸</span>
                                         <span>@liveTitle</span>
                                     </button>
-                                    @if (IsSegmentExpanded(liveKey))
-                                    {
-                                        <div class="turn-block__body turn-block__body--streaming">
-                                            @Turn.ReasoningStreamingPreview<span class="turn-block__caret" aria-hidden="true"></span>
+                                    <div class="@SegmentBodyClass(liveKey)" inert="@(!IsSegmentExpanded(liveKey))">
+                                        <div @ref="_reasoningStreamEl" class="turn-block__body turn-block__body--streaming">
+                                            @if (_streamTextUnavailable)
+                                            {
+                                                @Turn.ReasoningStreamingPreview
+                                            }
+                                            <span class="turn-block__caret" aria-hidden="true"></span>
                                         </div>
-                                    }
+                                    </div>
                                 </div>
                             }
                             else if (Turn.ReasoningLog.Count == 0 && !string.IsNullOrWhiteSpace(Turn.ReasoningText))
@@ -286,19 +287,18 @@
                                 const string legacyKey = "legacy";
                                 var (legacyTitle, legacyBody) = DysonReasoningHistoryUi.SplitSegmentTitle(
                                     Turn.ReasoningText, "Thinking");
-                                <div class="turn-block__reasoning" @key="@($"{Turn.Id}:{legacyKey}")">
+                                <div class="@SegmentClass(legacyKey)" @key="@($"{Turn.Id}:{legacyKey}")">
                                     <button type="button"
                                             class="turn-block__reasoning-summary"
                                             aria-expanded="@IsSegmentExpanded(legacyKey)"
                                             @onclick="() => ToggleSegment(legacyKey)"
                                             @onclick:stopPropagation="true">
-                                        <span class="turn-block__reasoning-chevron" aria-hidden="true">@(IsSegmentExpanded(legacyKey) ? "▾" : "▸")</span>
+                                        <span class="turn-block__reasoning-chevron" aria-hidden="true">▸</span>
                                         <span>@legacyTitle</span>
                                     </button>
-                                    @if (IsSegmentExpanded(legacyKey))
-                                    {
+                                    <div class="@SegmentBodyClass(legacyKey)" inert="@(!IsSegmentExpanded(legacyKey))">
                                         <div class="turn-block__body">@MarkdownRenderer.ToHtml(legacyBody)</div>
-                                    }
+                                    </div>
                                 </div>
                             }
                         </div>
@@ -306,13 +306,23 @@
 
                     @if (Turn.IsStreaming && !string.IsNullOrEmpty(Turn.StreamingPreview))
                     {
-                        <div class="turn-block__body turn-block__body--streaming">
-                            @Turn.StreamingPreview<span class="turn-block__caret" aria-hidden="true"></span>
+                        @* Text is declared here only as the fallback for a failed stream-text.js
+                           load. Normally wwwroot/stream-text.js owns this div's children so each
+                           delta can fade in as its own span; Blazor never re-renders children it
+                           did not declare, which is what keeps those spans alive. *@
+                        <div @ref="_streamEl" class="turn-block__body turn-block__body--streaming">
+                            @if (_streamTextUnavailable)
+                            {
+                                @Turn.StreamingPreview
+                            }
+                            <span class="turn-block__caret" aria-hidden="true"></span>
                         </div>
                     }
                     else if (!string.IsNullOrWhiteSpace(Turn.AssistantText))
                     {
-                        <div class="turn-block__body">@MarkdownRenderer.ToHtml(Turn.AssistantText)</div>
+                        @* --final only after this instance streamed, so a session load does not
+                           fade in every historic reply. *@
+                        <div class="turn-block__body @(_streamed ? "turn-block__body--final" : null)">@MarkdownRenderer.ToHtml(Turn.AssistantText)</div>
                     }
 
                     @if (HasVisualizations)
@@ -398,24 +408,24 @@
                 }
             </div>
         }
-    }
+    </div>
 </article>
 
-@if (_contextMenuOpen)
-{
+<DysonTransition Item="_contextMenuOpen" ExitMs="90" RestoreFocus="true" OnEntered="FocusContextBackdropAsync" Context="ctx">
     <div class="turn-block__context-backdrop"
          tabindex="-1"
-         @onclick="CloseContextMenu"
+         @ref="_contextBackdropEl"
+         @onclick="() => { if (!ctx.IsExiting) CloseContextMenu(); }"
          @onkeydown="OnContextBackdropKeyDown"></div>
-    <div class="turn-block__context-menu"
+    <div class="turn-block__context-menu dyson-pop @ctx.StateClass"
          role="menu"
          aria-label="Turn actions"
-         style="left:@(_contextMenuX.ToString(System.Globalization.CultureInfo.InvariantCulture))px;top:@(_contextMenuY.ToString(System.Globalization.CultureInfo.InvariantCulture))px;"
+         style="left:@(_contextMenuX.ToString(System.Globalization.CultureInfo.InvariantCulture))px;top:@(_contextMenuY.ToString(System.Globalization.CultureInfo.InvariantCulture))px;--dyson-pop-origin:top left;"
          @onclick:stopPropagation="true">
         <button type="button"
                 class="turn-block__context-menu-item"
                 role="menuitem"
-                disabled="@(!CanSummarizeTurn)"
+                disabled="@(ctx.IsExiting || !CanSummarizeTurn)"
                 title="@SummarizeTurnTitle"
                 @onclick="HandleSummarizeTurnAsync">
             Summarize turn
@@ -423,13 +433,13 @@
         <button type="button"
                 class="turn-block__context-menu-item"
                 role="menuitem"
-                disabled="@(!CanDropTurn)"
+                disabled="@(ctx.IsExiting || !CanDropTurn)"
                 title="@DropTurnTitle"
                 @onclick="HandleDropTurnAsync">
             Drop turn
         </button>
     </div>
-}
+</DysonTransition>
 
 @code {
     private ElementReference _stickySentinel;
@@ -437,6 +447,8 @@
     private ElementReference _contentEl;
     private ElementReference _resizerEl;
     private ElementReference _injectInput;
+    private ElementReference _streamEl;
+    private ElementReference _reasoningStreamEl;
     private DotNetObjectReference<TurnBlock>? _dotNetRef;
     private bool _stickyAttached;
     private bool _resizerAttached;
@@ -446,7 +458,11 @@
     private List<Guid> _cachedSubagentIds = [];
     private readonly HashSet<string> _expandedKeys = new(StringComparer.Ordinal);
     private string? _expandPolicyFingerprint;
+    private bool _segmentAnimate;
+    private bool _streamTextUnavailable;
+    private bool _streamed;
     private bool _contextMenuOpen;
+    private ElementReference _contextBackdropEl;
     private double _contextMenuX;
     private double _contextMenuY;
     private Guid _injectTurnId;
@@ -464,6 +480,12 @@
 
     /// <summary>When false, only the header chrome is shown.</summary>
     [Parameter] public bool IsExpanded { get; set; } = true;
+
+    /// <summary>
+    /// Plays the entrance fade. Set by <see cref="ChatPanel"/> for genuinely new turns only —
+    /// never for a session-load batch or the empty-state swap.
+    /// </summary>
+    [Parameter] public bool Enter { get; set; }
 
     /// <summary>Toggles expand/collapse from the turn header.</summary>
     [Parameter] public EventCallback OnToggleExpand { get; set; }
@@ -569,8 +591,39 @@
     private bool CanInjectComment =>
         Host.Session?.IsTurnInFlight(Turn.Id) == true;
 
+    /// <summary>Mirrors the content-column condition in the markup (also gates its JS attach).</summary>
+    private bool ShowsContentColumn =>
+        Turn.Kind != DysonAgentTurnKind.DisplayInfo
+        && Turn.Kind != DysonAgentTurnKind.ModeSwitch
+        && Turn.Kind != DysonAgentTurnKind.WorktreeCreating
+        && (HasAssistantBody || HasReasoning || HasTools || HasVisualizations || HasGeneratedImages || ShowThinkingIdleDots);
+
+    private bool ShowsAssistantStream =>
+        ShowsContentColumn && Turn.IsStreaming && !string.IsNullOrEmpty(Turn.StreamingPreview);
+
+    private bool ShowsReasoningStream =>
+        ShowsContentColumn && HasReasoning && DysonReasoningHistoryUi.IsLiveReasoningStreaming(Turn);
+
+    private string SegmentClass(string key) =>
+        IsSegmentExpanded(key)
+            ? "turn-block__reasoning turn-block__reasoning--open"
+            : "turn-block__reasoning";
+
+    /// <summary>
+    /// Reasoning bodies are always mounted and animate height, but <see cref="ApplyExpandPolicy"/>
+    /// rebuilds <c>_expandedKeys</c> wholesale on every reasoning transition — a whole batch of
+    /// panels changes state in one frame. Only user toggles get the transition.
+    /// </summary>
+    private string SegmentBodyClass(string key) => string.Concat(
+        "turn-block__reasoning-body",
+        IsSegmentExpanded(key) ? "" : " turn-block__reasoning-body--collapsed",
+        _segmentAnimate ? "" : " turn-block__reasoning-body--instant");
+
     protected override void OnParametersSet()
     {
+        if (Turn.IsStreaming)
+            _streamed = true;
+
         if (_injectTurnId != Turn.Id)
         {
             _injectTurnId = Turn.Id;
@@ -608,6 +661,7 @@
 
     private void ApplyExpandPolicy()
     {
+        _segmentAnimate = false;
         _expandedKeys.Clear();
 
         var keys = new List<string>();
@@ -670,6 +724,7 @@
 
     private void ToggleSegment(string key)
     {
+        _segmentAnimate = true;
         if (!_expandedKeys.Remove(key))
             _expandedKeys.Add(key);
     }
@@ -733,6 +788,19 @@
     {
         if (e.Key == "Escape")
             CloseContextMenu();
+    }
+
+    /// <summary>Escape is handled on the backdrop, so focus has to land there when the menu opens.</summary>
+    private async Task FocusContextBackdropAsync()
+    {
+        try
+        {
+            await _contextBackdropEl.FocusAsync();
+        }
+        catch
+        {
+            // Menu may already be gone.
+        }
     }
 
     private async Task HandleDropTurnAsync()
@@ -811,6 +879,7 @@
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         await EnsureStickyHeaderAsync();
+        await PaintStreamTextAsync();
 
         if (_injectOpen && _injectFocusPending)
         {
@@ -827,7 +896,8 @@
             }
         }
 
-        if (!IsExpanded || !HasTools)
+        // Collapse no longer unmounts the resizer, so it stays attached across a class flip.
+        if (!ShowsContentColumn || !HasTools)
         {
             await DetachResizerAsync();
             return;
@@ -847,6 +917,39 @@
         }
         catch (InvalidOperationException)
         {
+        }
+    }
+
+    /// <summary>
+    /// Hands the current preview to <c>stream-text.js</c>, which appends only the new suffix as a
+    /// fading span. On a hard JS failure (module never loaded) this switches the streaming divs to
+    /// Blazor-rendered plain text for the rest of the circuit — the text always shows, only the
+    /// per-chunk fade is lost.
+    /// </summary>
+    private async Task PaintStreamTextAsync()
+    {
+        if (_streamTextUnavailable)
+            return;
+
+        try
+        {
+            if (ShowsAssistantStream)
+                await Js.InvokeVoidAsync("dysonStreamText.paint", _streamEl, Turn.StreamingPreview);
+
+            if (ShowsReasoningStream)
+                await Js.InvokeVoidAsync("dysonStreamText.paint", _reasoningStreamEl, Turn.ReasoningStreamingPreview);
+        }
+        catch (JSException)
+        {
+            _streamTextUnavailable = true;
+            StateHasChanged();
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+            // Prerender: interop is unavailable, not broken. Keep the JS-owned path.
         }
     }
 
