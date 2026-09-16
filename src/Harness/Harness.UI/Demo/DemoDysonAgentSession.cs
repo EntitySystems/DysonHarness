@@ -417,7 +417,8 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             };
 
         // Mock RenameSession only on review cadence (turns 1, 9, 17, …) — not every turn.
-        if (isRenameReview)
+        // Visual demo seeds its own RenameSession on the kickoff turn.
+        if (isRenameReview && !DysonVisualDemoMode.Current.AppliesTo(this))
         {
             var renameTitle = Truncate(prompt.Trim(), 64);
             turn.ToolCalls.Add(new DysonToolCall
@@ -429,7 +430,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             });
         }
 
-        SeedDemoTools(turn);
+        SeedTurnTools(turn);
         return PromptWithTurnAsync(turn, prompt, cancellationToken);
     }
 
@@ -438,7 +439,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(turn);
-        SeedDemoTools(turn);
+        SeedTurnTools(turn);
         return PromptWithTurnAsync(turn, turn.Instruction ?? turn.Kind.ToString(), cancellationToken);
     }
 
@@ -448,7 +449,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         CancellationToken cancellationToken = default)
     {
         var turn = DysonBeginBuildPlanFlow.CreateTurn(planRelativePath, reportBlocks);
-        SeedDemoTools(turn);
+        SeedTurnTools(turn);
         return PromptWithTurnAsync(turn, turn.Instruction ?? planRelativePath, cancellationToken);
     }
 
@@ -458,7 +459,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         CancellationToken cancellationToken = default)
     {
         var turn = DysonSubagentReportPrompt.CreateTurn(interrupt, title);
-        SeedDemoTools(turn);
+        SeedTurnTools(turn);
         return PromptWithTurnAsync(turn, turn.Instruction ?? "Subagent report", cancellationToken);
     }
 
@@ -467,7 +468,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         CancellationToken cancellationToken = default)
     {
         var turn = DysonSubagentReportPrompt.CreateTurn(instruction);
-        SeedDemoTools(turn);
+        SeedTurnTools(turn);
         return PromptWithTurnAsync(turn, turn.Instruction ?? instruction, cancellationToken);
     }
 
@@ -511,9 +512,21 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         }
 
         var turn = DysonLongRunningShellExitedFlow.CreateTurn(interrupt, info, tailText);
-        SeedDemoTools(turn);
+        SeedTurnTools(turn);
         return await PromptWithTurnAsync(turn, turn.Instruction ?? "Shell exited", cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    private void SeedTurnTools(DysonAgentTurn turn)
+    {
+        if (DysonVisualDemoMode.Current.AppliesTo(this))
+        {
+            foreach (var call in DysonVisualDemoScenario.SeedTools(this, turn))
+                turn.ToolCalls.Add(call);
+            return;
+        }
+
+        SeedDemoTools(turn);
     }
 
     private static void SeedDemoTools(DysonAgentTurn turn)
@@ -578,6 +591,9 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
 
         try
         {
+            if (DysonVisualDemoMode.Current.AppliesTo(this))
+                await StreamVisualDemoReasoningAsync(turn, cancellationToken).ConfigureAwait(false);
+
             var staged = await DysonToolCallScheduler.RunStagedAsync(
                 turn,
                 ExecuteMockToolAsync,
@@ -618,7 +634,9 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                 return VoidResult<string>.Success;
             }
 
-            var reply = turn.Kind == DysonAgentTurnKind.BeginBuildPlan
+            var reply = DysonVisualDemoMode.Current.AppliesTo(this)
+                ? DysonVisualDemoScenario.ComposeReply(this, turn)
+                : turn.Kind == DysonAgentTurnKind.BeginBuildPlan
                 ? $"""
                     # Begin build plan
 
@@ -706,8 +724,20 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             return await ExecuteSubagentToolAsync(call, cancellationToken).ConfigureAwait(false);
         }
 
+        if (string.Equals(call.ToolName, "CreateTodo", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(call.ToolName, "UpdateTodo", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(call.ToolName, "ListTodos", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(call.ToolName, "DeleteTodo", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ExecuteTodoToolAsync(call, cancellationToken).ConfigureAwait(false);
+        }
+
         var delayMs = 180 + (Math.Abs(call.ToolName.GetHashCode(StringComparison.Ordinal)) % 220);
         await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
+
+        var content = DysonVisualDemoMode.Current.AppliesTo(this)
+            ? DysonVisualDemoScenario.MockToolContent(call)
+            : $"[demo] {call.ToolName} ok — args={Truncate(call.ArgumentsJson, 80)}";
 
         return new DysonToolCallResult
         {
@@ -715,8 +745,143 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             ToolName = call.ToolName,
             Stage = call.Stage,
             IsError = false,
-            Content = $"[demo] {call.ToolName} ok — args={Truncate(call.ArgumentsJson, 80)}",
+            Content = content,
         };
+    }
+
+    private async Task StreamVisualDemoReasoningAsync(
+        DysonAgentTurn turn,
+        CancellationToken cancellationToken)
+    {
+        var thought = DysonVisualDemoScenario.ComposeThought(this, turn);
+        foreach (var chunk in ChunkForStreaming(thought, chunkSize: 24))
+        {
+            turn.AppendReasoningDelta(chunk);
+            await Task.Delay(18, cancellationToken).ConfigureAwait(false);
+        }
+
+        turn.AppendReasoningRound(0, thought, interimText: null, includeInterimText: false);
+        turn.FinishReasoningStreaming();
+    }
+
+    private async Task<DysonToolCallResult> ExecuteTodoToolAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(
+                string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
+            var root = doc.RootElement;
+
+            if (string.Equals(call.ToolName, "ListTodos", StringComparison.OrdinalIgnoreCase))
+            {
+                var listed = await ListTodosAsync(cancellationToken).ConfigureAwait(false);
+                return listed.IsError
+                    ? ToolError(call, listed.Error)
+                    : ToolOk(call, JsonSerializer.Serialize(listed.Value.Select(t => new
+                    {
+                        t.TaskCode,
+                        t.DisplayName,
+                        status = t.Status.ToString().ToLowerInvariant(),
+                        t.Comments,
+                    })));
+            }
+
+            if (string.Equals(call.ToolName, "DeleteTodo", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!root.TryGetProperty("taskCode", out var deleteCode)
+                    || string.IsNullOrWhiteSpace(deleteCode.GetString()))
+                {
+                    return ToolError(call, "DeleteTodo: taskCode is required.");
+                }
+
+                var deleted = await DeleteTodoAsync(deleteCode.GetString()!, cancellationToken)
+                    .ConfigureAwait(false);
+                return deleted.IsError
+                    ? ToolError(call, deleted.Error)
+                    : ToolOk(call, $"Deleted todo '{deleteCode.GetString()}'.");
+            }
+
+            if (string.Equals(call.ToolName, "CreateTodo", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!root.TryGetProperty("taskCode", out var createCode)
+                    || string.IsNullOrWhiteSpace(createCode.GetString()))
+                {
+                    return ToolError(call, "CreateTodo: taskCode is required.");
+                }
+
+                if (!root.TryGetProperty("displayName", out var display)
+                    || string.IsNullOrWhiteSpace(display.GetString()))
+                {
+                    return ToolError(call, "CreateTodo: displayName is required.");
+                }
+
+                var status = DysonSessionTodoStatus.Pending;
+                if (root.TryGetProperty("status", out var statusProp)
+                    && statusProp.ValueKind == JsonValueKind.String
+                    && Enum.TryParse<DysonSessionTodoStatus>(statusProp.GetString(), true, out var parsed))
+                {
+                    status = parsed;
+                }
+
+                var created = await CreateTodoAsync(
+                        createCode.GetString()!,
+                        display.GetString()!,
+                        status,
+                        comments: null,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                return created.IsError
+                    ? ToolError(call, created.Error)
+                    : ToolOk(call, JsonSerializer.Serialize(new
+                    {
+                        created.Value.TaskCode,
+                        created.Value.DisplayName,
+                        status = created.Value.Status.ToString().ToLowerInvariant(),
+                    }));
+            }
+
+            if (!root.TryGetProperty("taskCode", out var updateCode)
+                || string.IsNullOrWhiteSpace(updateCode.GetString()))
+            {
+                return ToolError(call, "UpdateTodo: taskCode is required.");
+            }
+
+            DysonSessionTodoStatus? updateStatus = null;
+            if (root.TryGetProperty("status", out var updateStatusProp)
+                && updateStatusProp.ValueKind == JsonValueKind.String
+                && Enum.TryParse<DysonSessionTodoStatus>(updateStatusProp.GetString(), true, out var parsedUpdate))
+            {
+                updateStatus = parsedUpdate;
+            }
+
+            var append = root.TryGetProperty("appendComment", out var appendProp)
+                && appendProp.ValueKind == JsonValueKind.String
+                ? appendProp.GetString()
+                : null;
+
+            var updated = await UpdateTodoAsync(
+                    updateCode.GetString()!,
+                    displayName: null,
+                    updateStatus,
+                    comments: null,
+                    append,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return updated.IsError
+                ? ToolError(call, updated.Error)
+                : ToolOk(call, JsonSerializer.Serialize(new
+                {
+                    updated.Value.TaskCode,
+                    updated.Value.DisplayName,
+                    status = updated.Value.Status.ToString().ToLowerInvariant(),
+                }));
+        }
+        catch (JsonException)
+        {
+            return ToolError(call, $"{call.ToolName}: invalid JSON arguments.");
+        }
     }
 
     private async Task<DysonToolCallResult> ExecuteSubagentToolAsync(

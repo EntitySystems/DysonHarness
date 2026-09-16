@@ -18,6 +18,12 @@
 @inject ThemeService Theme
 @inject IJSRuntime Js
 @inject ILogger<Home> Logger
+@inject DysonVisualDemoMode DemoMode
+
+@if (DemoMode.Enabled)
+{
+    <PageTitle>DEMO / PREVIEW — DysonHarness</PageTitle>
+}
 
 <AppShell>
     <Sidebar>
@@ -132,6 +138,7 @@
     private string? _operatorWorkspacePath;
     private string? _gitBranch;
     private bool _workdirHydrated;
+    private bool _visualDemoStarted;
     private bool _booted;
     private Guid? _pendingBootWorkDirectoryId;
     private string? _pendingBootWorkDirectoryPath;
@@ -218,6 +225,12 @@
                     _ = CompleteBootMetadataAsync(pendingBoot, pendingPath);
                 }
             }
+        }
+
+        if (DemoMode.Enabled && !_visualDemoStarted)
+        {
+            _visualDemoStarted = true;
+            await StartVisualDemoAsync();
         }
     }
 
@@ -607,6 +620,31 @@
             _activeTitle = _sessions.FirstOrDefault(s => s.Id == id)?.Title;
         else
             _activeTitle = null;
+    }
+
+    private async Task StartVisualDemoAsync()
+    {
+        var result = await Host.TryStartVisualDemoAsync(_activeWorkDirectoryId);
+        if (result.IsError)
+        {
+            _listError = result.Error;
+            return;
+        }
+
+        if (Host.Session is DemoDysonAgentSession demo
+            && demo.WorkDirectoryId != Guid.Empty
+            && _activeWorkDirectoryId != demo.WorkDirectoryId)
+        {
+            var get = await WorkDirs.GetAsync(demo.WorkDirectoryId);
+            if (get.IsSuccess)
+                await SetActiveWorkDirectoryAsync(demo.WorkDirectoryId, get.Value.AbsolutePath);
+        }
+
+        SyncSelectedSlugFromSession();
+        SyncReasoningEffortFromHost();
+        SyncContextTokensFromHost();
+        SyncSelectedAgentModeFromSession();
+        await RefreshSessionsAsync();
     }
 
     private async Task StartNewAsync()

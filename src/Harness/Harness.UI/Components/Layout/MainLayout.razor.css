@@ -7,6 +7,20 @@
     animation: dyson-fade-in var(--motion-slow) var(--ease);
 }
 
+/* Demo banner is a sibling of AppShell (100vh). Shrink the shell so the bar does not clip. */
+.page-root:has(.visual-demo-banner) {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+.page-root:has(.visual-demo-banner) ::deep .app-shell,
+.page-root:has(.visual-demo-banner) ::deep .settings-shell {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+}
+
 #blazor-error-ui {
     background: var(--bg-2);
     color: var(--danger);

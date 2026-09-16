@@ -2737,6 +2737,125 @@ public sealed class DysonUiHost : IAsyncDisposable
         return VoidResult<string>.Success;
     }
 
+    /// <summary>
+    /// Demo Mode auto-play: ensure a work directory + Demo Mock slug, resume an existing
+    /// <c>DEMO:</c> session or start a Work session and prompt the scripted showcase.
+    /// No-op when <see cref="DysonVisualDemoMode.Enabled"/> is false.
+    /// </summary>
+    public async Task<VoidResult<string>> TryStartVisualDemoAsync(
+        Guid? workDirectoryId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var mode = DysonVisualDemoMode.Current;
+        if (!mode.Enabled)
+            return VoidResult<string>.Success;
+
+        var ensured = await EnsureDefaultModelAsync(cancellationToken).ConfigureAwait(false);
+        if (ensured.IsError)
+            return ensured;
+
+        var workdir = await EnsureVisualDemoWorkDirectoryAsync(workDirectoryId, cancellationToken)
+            .ConfigureAwait(false);
+        if (workdir.IsError)
+            return new VoidResult<string>(workdir.Error);
+
+        SetComposerWorkDirectoryId(workdir.Value);
+
+        var sessions = await ListSessionsAsync(workdir.Value, cancellationToken).ConfigureAwait(false);
+        if (sessions.IsError)
+            return new VoidResult<string>(sessions.Error);
+
+        var existing = sessions.Value.FirstOrDefault(s =>
+            s.ParentSessionId is null
+            && s.Title is not null
+            && s.Title.StartsWith("DEMO:", StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            mode.AutoPlaySessionId = existing.Id;
+            return await ResumeSessionAsync(existing.Id, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!mode.TryBeginAutoPlay())
+            return VoidResult<string>.Success;
+
+        var slug = await EnsureDemoMockSlugAsync(cancellationToken).ConfigureAwait(false);
+        if (slug.IsError)
+            return new VoidResult<string>(slug.Error);
+
+        var started = await StartNewSessionAsync(
+                DysonAgentModes.Work,
+                slug.Value.Id,
+                workdir.Value,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (started.IsError)
+            return started;
+
+        if (_session?.PersistenceId is Guid persistenceId)
+            mode.AutoPlaySessionId = persistenceId;
+
+        return await PromptAsync(
+                DysonVisualDemoScenario.UserPrompt,
+                DysonAgentModes.Work,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<Result<Guid, string>> EnsureVisualDemoWorkDirectoryAsync(
+        Guid? workDirectoryId,
+        CancellationToken cancellationToken)
+    {
+        if (workDirectoryId is Guid id && id != Guid.Empty)
+            return Result<Guid, string>.AsValue(id);
+
+        var list = await _workDirectories.ListAsync(cancellationToken).ConfigureAwait(false);
+        if (list.IsError)
+            return Result<Guid, string>.AsError(list.Error);
+        if (list.Value.Count > 0)
+            return Result<Guid, string>.AsValue(list.Value[0].Id);
+
+        var root = Environment.GetEnvironmentVariable("DYSON_VISUAL_DEMO_WORKDIR");
+        if (string.IsNullOrWhiteSpace(root))
+            root = Directory.GetCurrentDirectory();
+
+        var created = await _workDirectories
+            .CreateAsync(root, DysonVisualDemoScenario.WorkDirectoryName, cancellationToken)
+            .ConfigureAwait(false);
+        return created;
+    }
+
+    private async Task<Result<DysonModelSlugEntity, string>> EnsureDemoMockSlugAsync(
+        CancellationToken cancellationToken)
+    {
+        var found = await _models
+            .FindSlugByNameAsync(DysonVisualDemoScenario.DemoSlug, cancellationToken)
+            .ConfigureAwait(false);
+        if (found.IsSuccess)
+            return found;
+
+        var createProvider = await _models.CreateProviderAsync(
+            new DysonModelProviderEntity
+            {
+                DisplayName = "Demo Mock",
+                ProviderKind = DysonProviderKinds.Demo,
+            },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (createProvider.IsError)
+            return Result<DysonModelSlugEntity, string>.AsError(createProvider.Error);
+
+        var added = await _models.AddSlugAsync(
+                createProvider.Value,
+                slug: DysonVisualDemoScenario.DemoSlug,
+                displayAlias: "Demo Mock",
+                isDefault: false,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        if (added.IsError)
+            return Result<DysonModelSlugEntity, string>.AsError(added.Error);
+
+        return await _models.GetSlugAsync(added.Value, cancellationToken).ConfigureAwait(false);
+    }
+
     private void ApplyPendingMaxTargetToSession(DysonAgentSession session)
     {
         if (_pendingMaxTargetContextTokens is int overrideTokens)
