@@ -1,0 +1,200 @@
+@namespace Harness.UI.Components.Motion
+@typeparam TItem
+@inject IJSRuntime Js
+@implements IAsyncDisposable
+
+@if (ChildContent is not null && HasValue(_shown))
+{
+    @ChildContent(new DysonTransitionContext<TItem>(_shown!, StateClass, _phase is Phase.Exiting))
+}
+
+@*
+    Deferred-unmount wrapper. Overlays in this app are `@if`-gated, so an exit animation has
+    no DOM to run on: the node is gone before CSS can react. Render the overlay *inside* this
+    component instead (drop the `@if`) and it keeps the last item plus an `is-exiting` class
+    for `ExitMs` after the item goes away.
+
+    Reduced motion suppresses transitionend/animationend, so the window is timed, never
+    event-driven, and collapses to zero via dysonUi.prefersReducedMotion().
+*@
+
+@code {
+    /// <summary>One frame with <c>is-entering</c> applied so CSS has a start state to move from.</summary>
+    private const int FrameMs = 16;
+
+    private enum Phase { Hidden, Entering, Entered, Exiting }
+
+    private TItem? _shown;
+    private Phase _phase = Phase.Hidden;
+    private bool _reducedMotion;
+    private bool _focusCaptured;
+    private CancellationTokenSource? _cts;
+
+    /// <summary>
+    /// Shown while set; cleared (null, or <c>default</c> for value types such as <c>bool</c>) starts
+    /// the exit window. The last set value stays available to <see cref="ChildContent"/> until unmount.
+    /// </summary>
+    [Parameter] public TItem? Item { get; set; }
+
+    [Parameter] public RenderFragment<DysonTransitionContext<TItem>>? ChildContent { get; set; }
+
+    /// <summary>Enter window in ms — only delays <see cref="OnEntered"/>; CSS owns the visual duration.</summary>
+    [Parameter] public int EnterMs { get; set; } = 200;
+
+    /// <summary>Exit window in ms. Keep it at or above the CSS exit duration (default: <c>--motion-fast</c>).</summary>
+    [Parameter] public int ExitMs { get; set; } = 140;
+
+    /// <summary>Capture the focused element on show and restore it after unmount (overlays).</summary>
+    [Parameter] public bool RestoreFocus { get; set; }
+
+    /// <summary>
+    /// Fired once the enter window has elapsed. Do deferred focus here so <c>FocusAsync</c>'s
+    /// scroll-into-view does not interrupt the enter transition.
+    /// </summary>
+    [Parameter] public EventCallback OnEntered { get; set; }
+
+    private string StateClass => _phase switch
+    {
+        Phase.Entering => "is-entering",
+        Phase.Entered => "is-entered",
+        Phase.Exiting => "is-exiting",
+        _ => ""
+    };
+
+    private static bool HasValue(TItem? value) =>
+        !EqualityComparer<TItem?>.Default.Equals(value, default);
+
+    protected override void OnParametersSet()
+    {
+        if (HasValue(Item))
+        {
+            _shown = Item;
+
+            if (_phase is Phase.Exiting)
+            {
+                // Re-shown mid-exit: drop the unmount and let CSS reverse from where it is.
+                Cancel();
+                _phase = Phase.Entered;
+            }
+            else if (_phase is Phase.Hidden)
+            {
+                if (RestoreFocus)
+                    _ = CaptureFocusAsync();
+
+                _phase = _reducedMotion ? Phase.Entered : Phase.Entering;
+                _ = RunEnterAsync(Restart());
+            }
+
+            return;
+        }
+
+        if (_phase is Phase.Entering or Phase.Entered)
+        {
+            _phase = Phase.Exiting;
+            _ = RunExitAsync(Restart());
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        try
+        {
+            _reducedMotion = await Js.InvokeAsync<bool>("dysonUi.prefersReducedMotion");
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
+        {
+            // Prerender / torn-down circuit: keep the animated defaults (CSS still suppresses motion).
+        }
+    }
+
+    private async Task RunEnterAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (!_reducedMotion)
+            {
+                await Task.Delay(FrameMs, ct);
+                _phase = Phase.Entered;
+                await InvokeAsync(StateHasChanged);
+                await Task.Delay(Math.Max(0, EnterMs), ct);
+            }
+
+            if (OnEntered.HasDelegate)
+                await OnEntered.InvokeAsync();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async Task RunExitAsync(CancellationToken ct)
+    {
+        try
+        {
+            var window = _reducedMotion ? 0 : Math.Max(0, ExitMs);
+            if (window > 0)
+                await Task.Delay(window, ct);
+
+            _phase = Phase.Hidden;
+            _shown = default;
+            await InvokeAsync(StateHasChanged);
+
+            if (_focusCaptured)
+                await RestoreFocusAsync();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async Task CaptureFocusAsync()
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("dysonUi.captureFocus");
+            _focusCaptured = true;
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
+        {
+        }
+    }
+
+    private async Task RestoreFocusAsync()
+    {
+        _focusCaptured = false;
+        try
+        {
+            await Js.InvokeVoidAsync("dysonUi.restoreFocus");
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
+        {
+        }
+    }
+
+    private CancellationToken Restart()
+    {
+        Cancel();
+        _cts = new CancellationTokenSource();
+        return _cts.Token;
+    }
+
+    private void Cancel()
+    {
+        if (_cts is null)
+            return;
+
+        _cts.Cancel();
+        _cts.Dispose();
+        _cts = null;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Cancel();
+        if (_focusCaptured)
+            await RestoreFocusAsync();
+    }
+}

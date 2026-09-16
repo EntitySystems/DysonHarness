@@ -1,0 +1,6 @@
+/* DysonTransition renders no markup of its own — it only hands `is-entering` / `is-entered` /
+   `is-exiting` to ChildContent, which carries the *consumer's* scope attribute. Scoped CSS
+   here cannot reach those elements, so the shared motion classes (`.dyson-fade`,
+   `.dyson-fade-scale`, `.dyson-pop`) and their keyframes live in `wwwroot/app.css`
+   (see rules/rules_ui_css.md). This file exists for chrome DysonTransition itself may render
+   later; keep consumer-applied classes out of it. */

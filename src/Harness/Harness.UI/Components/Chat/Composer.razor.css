@@ -1,0 +1,5 @@
+/* Slash dropdown is anchored to the bottom of .composer__prompt and grows upward,
+   so .dyson-pop must scale from that edge. */
+.composer-slash {
+  --dyson-pop-origin: bottom center;
+}

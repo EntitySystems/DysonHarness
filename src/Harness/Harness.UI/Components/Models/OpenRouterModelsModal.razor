@@ -3,24 +3,24 @@
 @using Microsoft.AspNetCore.Components.Web
 @inject IDysonModelRepository ModelStore
 
-@if (IsOpen)
-{
-    <div class="model-slug-modal-backdrop"
+<DysonTransition Item="IsOpen" ExitMs="140" RestoreFocus="true" OnEntered="FocusBackdropAsync" Context="ctx">
+    <div class="model-slug-modal-backdrop dyson-fade-scale @ctx.StateClass"
          role="presentation"
-         @onclick="CloseAsync"
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()"
          @onkeydown="OnBackdropKeyDown">
         <div class="model-slug-modal model-slug-modal--wide"
              role="dialog"
              aria-modal="true"
              aria-labelledby="openrouter-models-modal-title"
-             @onclick:stopPropagation="true"
-             @onkeydown="OnModalKeyDown">
+             @onclick:stopPropagation="true">
             <div class="model-slug-modal__header">
                 <h3 id="openrouter-models-modal-title">Browse @(Direct?.DisplayName ?? "models")</h3>
                 <button type="button"
                         class="btn btn-ghost model-slug-modal__close"
                         disabled="@_toggleBusy"
-                        @onclick="CloseAsync"
+                        @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()"
                         aria-label="Close">×</button>
             </div>
 
@@ -29,8 +29,7 @@
                        placeholder="Search slug or display name…"
                        value="@_search"
                        disabled="@_busy"
-                       @oninput="OnSearchInput"
-                       @onkeydown="OnModalKeyDown" />
+                       @oninput="OnSearchInput" />
             </div>
 
             @if (!string.IsNullOrEmpty(_error))
@@ -59,7 +58,7 @@
                                 <input type="checkbox"
                                        checked="@enabled"
                                        disabled="@(_busy || _toggleBusy)"
-                                       @onchange="args => ToggleAsync(model, args)" />
+                                       @onchange="args => ctx.IsExiting ? Task.CompletedTask : ToggleAsync(model, args)" />
                                 <span class="model-slug-modal__catalog-copy">
                                     <span class="list-item__title">@model.DisplayName</span>
                                     <span class="list-item__meta mono">@model.Slug</span>
@@ -80,7 +79,7 @@
             </div>
         </div>
     </div>
-}
+</DysonTransition>
 
 @code {
     [Parameter] public bool IsOpen { get; set; }
@@ -97,6 +96,7 @@
     private bool _busy;
     private bool _toggleBusy;
     private bool _initializedForOpen;
+    private ElementReference _backdropEl;
 
     private IReadOnlyList<ManagedInferenceModel> FilteredModels
     {
@@ -260,10 +260,10 @@
             _ = CloseAsync();
     }
 
-    private void OnModalKeyDown(KeyboardEventArgs args)
+    private async Task FocusBackdropAsync()
     {
-        if (args.Key == "Escape")
-            _ = CloseAsync();
+        try { await _backdropEl.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
     }
 
     private async Task CloseAsync()

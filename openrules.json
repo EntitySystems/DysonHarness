@@ -27,6 +27,11 @@
       "Description": "Local UI restart on port 5180 after UI/engine changes"
     },
     {
+      "Path": "rules/rules_ui_css.md",
+      "Mode": "AgentOptional",
+      "Description": "New UI CSS lives in <Component>.razor.css; what must stay global in app.css"
+    },
+    {
       "Path": "rules/rules_ponytail.md",
       "Mode": "AutoInclude",
       "Description": "Ponytail lazy-senior efficiency ladder (mandatory)"

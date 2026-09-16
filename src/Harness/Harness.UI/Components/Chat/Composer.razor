@@ -22,26 +22,25 @@
     <div @ref="_shell"
          class="composer-shell @(_dragOver ? "is-drop-target" : null)">
         <div class="composer__prompt">
-            @if (_slashOpen && _suggestions.Count > 0)
-            {
-                <div class="composer-slash" role="listbox" aria-label="Slash commands">
-                    @for (var i = 0; i < _suggestions.Count; i++)
+            <DysonTransition TItem="IReadOnlyList<ComposerSlashCommands.Suggestion>" Item="SlashSuggestions" ExitMs="90" Context="slash">
+                <div class="composer-slash dyson-pop @slash.StateClass" role="listbox" aria-label="Slash commands">
+                    @for (var i = 0; i < slash.Item.Count; i++)
                     {
-                        var suggestion = _suggestions[i];
+                        var suggestion = slash.Item[i];
                         var index = i;
                         <button type="button"
                                 class="composer-slash__item @(index == _highlight ? "is-active" : null)"
                                 role="option"
                                 aria-selected="@(index == _highlight)"
                                 @onmousedown:preventDefault="true"
-                                @onclick="() => ApplySuggestionAsync(suggestion)">
+                                @onclick="() => slash.IsExiting ? Task.CompletedTask : ApplySuggestionAsync(suggestion)">
                             <span class="composer-slash__token">@suggestion.Token</span>
                             <span class="composer-slash__desc">@suggestion.Label</span>
                         </button>
                     }
                 </div>
-            }
-            else if (Host.QueuedPrompts.Count > 0)
+            </DysonTransition>
+            @if (SlashSuggestions is null && Host.QueuedPrompts.Count > 0)
             {
                 var queueCount = Host.QueuedPrompts.Count;
                 <div class="composer-queue" aria-label="Queued prompts">
@@ -261,6 +260,13 @@
     private readonly List<ComposerSlashCommands.PluginCommandOption> _pluginCommands = [];
     private IReadOnlyList<ComposerSlashCommands.Suggestion> _suggestions = [];
     private bool _slashOpen;
+
+    /// <summary>
+    /// Slash dropdown gate. Closing clears <c>_suggestions</c>, so the transition has to cache the
+    /// list itself rather than a bool, and the queue panel takes the slot only once this is null.
+    /// </summary>
+    private IReadOnlyList<ComposerSlashCommands.Suggestion>? SlashSuggestions =>
+        _slashOpen && _suggestions.Count > 0 ? _suggestions : null;
     private int _highlight;
     private int _slashRefreshGeneration;
     private bool _queueExpanded;

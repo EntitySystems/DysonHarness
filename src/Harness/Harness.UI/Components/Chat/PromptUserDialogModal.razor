@@ -6,49 +6,51 @@
 @inject DysonMessageBus Bus
 @implements IDisposable
 
-@if (Host.PendingUserDialogUi is { } dialog)
-{
-    <div class="prompt-user-dialog-backdrop"
-         role="presentation">
+<DysonTransition TItem="DysonUserDialogUiState" Item="Host.PendingUserDialogUi" ExitMs="140" RestoreFocus="true" OnEntered="FocusBackdropAsync" Context="ctx">
+    <div class="prompt-user-dialog-backdrop dyson-fade-scale @ctx.StateClass"
+         role="presentation"
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onkeydown="e => { if (!ctx.IsExiting) OnKeyDown(e); }">
         <div class="prompt-user-dialog"
              role="dialog"
              aria-modal="true"
-             aria-labelledby="prompt-user-dialog-title"
-             @onkeydown="OnKeyDown">
+             aria-labelledby="prompt-user-dialog-title">
             <div class="prompt-user-dialog__header">
-                <h3 id="prompt-user-dialog-title">@dialog.Dialog.Title</h3>
+                <h3 id="prompt-user-dialog-title">@ctx.Item.Dialog.Title</h3>
                 <span class="prompt-user-dialog__source">
-                    @(dialog.Source == DysonUserDialogUiSource.RootPromptUserDialog
+                    @(ctx.Item.Source == DysonUserDialogUiSource.RootPromptUserDialog
                         ? "PromptUserDialog"
                         : "PromptUserDialog from subagent")
                 </span>
             </div>
             <div class="prompt-user-dialog__body">
-                <p class="prompt-user-dialog__description">@dialog.Dialog.Description</p>
+                <p class="prompt-user-dialog__description">@ctx.Item.Dialog.Description</p>
             </div>
             <div class="prompt-user-dialog__actions">
-                @foreach (var action in dialog.Dialog.Actions)
+                @foreach (var action in ctx.Item.Dialog.Actions)
                 {
                     <button type="button"
                             class="@(action.Primary ? "btn btn-primary" : "btn")"
                             disabled="@_busy"
-                            @onclick="() => ChooseAsync(action.Label, skipped: false)">
+                            @onclick="() => ctx.IsExiting ? Task.CompletedTask : ChooseAsync(action.Label, skipped: false)">
                         @action.Label
                     </button>
                 }
                 <button type="button"
                         class="btn"
                         disabled="@_busy"
-                        @onclick="() => ChooseAsync(DysonPromptUserDialog.SkipActionLabel, skipped: true)">
+                        @onclick="() => ctx.IsExiting ? Task.CompletedTask : ChooseAsync(DysonPromptUserDialog.SkipActionLabel, skipped: true)">
                     @DysonPromptUserDialog.SkipActionLabel
                 </button>
             </div>
         </div>
     </div>
-}
+</DysonTransition>
 
 @code {
     private bool _busy;
+    private ElementReference _backdropEl;
     private Guid? _boundSessionId;
     private IDisposable? _hostSub;
     private IDisposable? _parentEventsSub;
@@ -107,6 +109,12 @@
         if (evt.PersistenceId != Host.ActiveSessionId)
             return;
         _ = InvokeAsync(StateHasChanged);
+    }
+
+    private async Task FocusBackdropAsync()
+    {
+        try { await _backdropEl.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
     }
 
     private void OnKeyDown(KeyboardEventArgs e)

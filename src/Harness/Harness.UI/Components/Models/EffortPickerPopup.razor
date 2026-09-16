@@ -13,14 +13,13 @@
         <span class="effort-picker__caret">▾</span>
     </button>
 
-    @if (_open)
-    {
-        <div class="effort-picker__backdrop" @onclick="Close"></div>
-        <div class="effort-picker__panel" tabindex="0">
+    <DysonTransition Item="_open" ExitMs="90" RestoreFocus="true" Context="ctx">
+        <div class="effort-picker__backdrop" @onclick="() => { if (!ctx.IsExiting) Close(); }"></div>
+        <div class="effort-picker__panel dyson-pop @ctx.StateClass" tabindex="0">
             <div class="effort-picker__section-label">Current effort</div>
             <button type="button"
                     class="effort-picker__option @(string.IsNullOrWhiteSpace(Slug.DefaultReasoningEffort) ? "is-selected" : null)"
-                    @onclick="PickOmit">
+                    @onclick="() => ctx.IsExiting ? Task.CompletedTask : PickOmit()">
                 <span class="mono">omit</span>
             </button>
             @foreach (var mode in EffortModes)
@@ -28,7 +27,7 @@
                 var m = mode;
                 <button type="button"
                         class="effort-picker__option @(string.Equals(Slug.DefaultReasoningEffort, m, StringComparison.OrdinalIgnoreCase) ? "is-selected" : null)"
-                        @onclick="() => PickEffort(m)">
+                        @onclick="() => ctx.IsExiting ? Task.CompletedTask : PickEffort(m)">
                     <span class="mono">@m</span>
                 </button>
             }
@@ -57,7 +56,7 @@
                 <ReasoningModesEditor Modes="_workingModes" ModesChanged="HandleModesChanged" />
             }
         </div>
-    }
+    </DysonTransition>
 </div>
 
 @code {
