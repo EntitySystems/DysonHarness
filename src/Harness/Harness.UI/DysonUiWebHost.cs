@@ -34,6 +34,10 @@ public static class DysonUiWebHost
         if (!string.IsNullOrWhiteSpace(options.Urls))
             builder.WebHost.UseUrls(options.Urls);
 
+        var visualDemo = DysonVisualDemoMode.FromCommandLine(args, builder.Configuration);
+        DysonVisualDemoMode.Current = visualDemo;
+        builder.Services.AddSingleton(visualDemo);
+
         // Without launchSettings (ASPNETCORE_ENVIRONMENT=Production), MapStaticAssets
         // looks under wwwroot and throws FileNotFoundException for scoped CSS / blazor.web.js.
         if (!builder.Environment.IsDevelopment())

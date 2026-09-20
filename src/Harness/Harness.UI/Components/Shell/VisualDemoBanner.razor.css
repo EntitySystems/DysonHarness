@@ -1,0 +1,42 @@
+.visual-demo-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning) 16%, var(--bg-1));
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.visual-demo-banner__mark {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warning) 28%, var(--bg-2));
+  border: 1px solid color-mix(in srgb, var(--warning) 50%, var(--border));
+  color: var(--warning);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.visual-demo-banner__mark--preview {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.visual-demo-banner__text {
+  min-width: 0;
+  color: var(--text-muted);
+}
+
+@media (max-width: 720px) {
+  .visual-demo-banner__text {
+    display: none;
+  }
+}
