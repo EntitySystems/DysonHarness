@@ -373,9 +373,9 @@ Root sessions only (subagents use `SubmitSubagentReport`). Pending follow-ups li
 
 After the model calls `CompleteTask`:
 
-1. **Confirm** — enqueue **`TaskCompletionConfirm`** (`DysonTaskCompletionFlow.CreateCompletionConfirmTurn`); on that turn only, `ConfirmTaskComplete` or `ContinueWork` are valid
+1. **Confirm** — enqueue **`TaskCompletionConfirm`** (`DysonTaskCompletionFlow.CreateCompletionConfirmTurn`); on that turn only, `ConfirmTaskComplete` or `ContinueWork` are valid (no handoff summary on that turn)
 2. **Continue** — `ContinueWork` enqueues a **`Continuation`** turn if work remains
-3. **Report** — `ConfirmTaskComplete` enqueues a **`ReportSummary`** turn (final handoff for this cycle)
+3. **Report** — `ConfirmTaskComplete` enqueues a **`ReportSummary`** turn (detailed handoff for this cycle)
 
 After **`ReportSummary`**, the host marks the root **`Completed`**. A later in-flight prompt (`PromptAsync` / queued user turn) reopens `Completed`/`Failed` to **`Active`** so `CompleteTask` can run again (new cycle). `Stopped`/`Interrupted` stay locked. `CompleteTask` is not valid while the session is still `Completed` with no new turn.
 

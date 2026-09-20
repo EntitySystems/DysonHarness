@@ -1620,7 +1620,8 @@ public sealed class DysonMcpPipeline
             Name = "ConfirmTaskComplete",
             Description =
                 "Affirm the prior CompleteTask claim after self-check. " +
-                "The harness then schedules a ReportSummary turn (final handoff for this agent).",
+                "That schedules a ReportSummary turn whose instruction asks for the detailed handoff summary — " +
+                "do not write that summary on the confirm turn.",
             InputSchemaJson = """
                 {
                   "type": "object",
