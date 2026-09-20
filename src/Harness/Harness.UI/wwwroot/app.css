@@ -3333,7 +3333,7 @@ code, .mono {
   animation: turn-block-spin 0.7s linear infinite;
 }
 
-/* Subagent event block ? reuses .turn-block chrome; sibling gap from .chat-panel__turns */
+/* Subagent event block — reuses .turn-block chrome; separation from the .turn-block bottom hairline */
 .subagent-event-block.is-addressed {
   opacity: 0.72;
 }
@@ -3562,10 +3562,10 @@ code, .mono {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 14px;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
 }
 
 /* Shared opacity-enter keyframe for the transcript, the session crossfade, streaming chunks and
@@ -3604,30 +3604,14 @@ code, .mono {
 
 .turn-block {
   --turn-header-sticky-offset: 52px;
-  --turn-inner-radius: calc(var(--radius-md) - 1px);
   position: relative;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border: 0;
+  border-bottom: 1px solid var(--border);
   background: var(--bg-1);
   background-clip: padding-box;
-  box-shadow: var(--shadow-1);
   /* visible: overflow:hidden would trap sticky .turn-block__tools */
   overflow: visible;
   flex-shrink: 0;
-}
-
-/* Sentinel is first in DOM (absolute); radius targets the real chrome. */
-.turn-block > .turn-block__header {
-  border-top-left-radius: var(--turn-inner-radius);
-  border-top-right-radius: var(--turn-inner-radius);
-}
-
-/* Collapsed no longer means "header is the last child" — the body wrapper stays mounted at
-   height 0 — so the header needs the bottom radius in that state too. */
-.turn-block > :last-child,
-.turn-block--collapsed > .turn-block__header {
-  border-bottom-left-radius: var(--turn-inner-radius);
-  border-bottom-right-radius: var(--turn-inner-radius);
 }
 
 /* Zero-layout marker above sticky header for IntersectionObserver stuck detection. */
@@ -3658,18 +3642,10 @@ code, .mono {
   z-index: 2;
 }
 
-/* Stuck-only: bubble separation while pinned over scrolling turn body. */
+/* Stuck-only: flat pinned bar, accent hairline. */
 .turn-block__header--stuck {
-  top: 6px;
-  margin-inline: 6px;
-  border: 1px solid var(--accent-border);
-  border-radius: var(--radius-md);
-  background: var(--surface-glass);
-  box-shadow: var(--shadow-2);
-}
-
-.turn-block:has(.turn-block__header--stuck) {
-  --turn-header-sticky-offset: 58px;
+  border-bottom-color: var(--accent-border);
+  box-shadow: var(--shadow-1);
 }
 
 .turn-block--collapsed .turn-block__header {
@@ -3678,7 +3654,7 @@ code, .mono {
 }
 
 .turn-block--collapsed .turn-block__header--stuck {
-  border: 1px solid var(--border-strong);
+  border-bottom: 1px solid var(--border-strong);
 }
 
 .turn-block__icons {
@@ -8013,7 +7989,6 @@ code, .mono {
   .ask-popover,
   .composer-plan-ready,
   .turn-block__header,
-  .turn-block__header--stuck,
   .turn-block__context-menu,
   .session-header__tools-menu,
   .file-tree__context-menu,
