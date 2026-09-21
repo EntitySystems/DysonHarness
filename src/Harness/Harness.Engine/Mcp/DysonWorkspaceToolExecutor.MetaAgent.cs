@@ -533,6 +533,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (updated.IsError)
             return Error(call, updated.Error);
 
+        PublishPlansChanged(planId);
         _session.AppendLog($"SetPlanStatus #{planId} → {FormatPlanStatus(status)}");
         return Ok(call, JsonSerializer.Serialize(new
         {
@@ -638,6 +639,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (updated.IsError)
             return Error(call, updated.Error);
 
+        PublishPlansChanged(planId);
         return Ok(call, JsonSerializer.Serialize(new
         {
             planId,
@@ -699,6 +701,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (deleted.IsError)
             return Error(call, deleted.Error);
 
+        PublishPlansChanged(planId);
         _session.AppendLog($"DeletePlan #{planId}: {reason}");
         return Ok(call, JsonSerializer.Serialize(new
         {
@@ -800,6 +803,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             status = DysonPlanStatus.Draft;
         }
 
+        PublishPlansChanged(planId);
         var log = summary is null
             ? $"SubmitMetaPlan #{planId} ({title})"
             : $"SubmitMetaPlan #{planId} ({title}): {summary}";
@@ -811,6 +815,17 @@ public sealed partial class DysonWorkspaceToolExecutor
             title,
             status = FormatPlanStatus(status),
         }));
+    }
+
+    private void PublishPlansChanged(long planId)
+    {
+        var bus = _session.Config.Bus;
+        if (bus is null || _workDirectoryId == Guid.Empty)
+            return;
+
+        bus.Publish(
+            DysonBusScopes.WorkDirectory(_workDirectoryId),
+            new DysonPlansChangedEvent(_workDirectoryId, planId));
     }
 
     private Task<Result<DysonStartSubagentResult, string>> CreateMetaAgentDroneChildAsync(

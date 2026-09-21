@@ -146,6 +146,13 @@ public class DysonAgentSessionConfig
     public IDysonBrowserControl? BrowserControl { get; set; }
 
     /// <summary>
+    /// Optional process-wide message bus. Plan mutations publish
+    /// <see cref="DysonPlansChangedEvent"/> on <see cref="DysonBusScopes.WorkDirectory"/>.
+    /// Null ⇒ publish is a silent no-op. Children share this config instance.
+    /// </summary>
+    public DysonMessageBus? Bus { get; set; }
+
+    /// <summary>
     /// Optional workdir-scoped custom MCP host (<c>.dyson/mcp</c>).
     /// When set and <see cref="DysonCustomMcpHost.McpActive"/>, namespaced tools are merged into the catalog.
     /// </summary>

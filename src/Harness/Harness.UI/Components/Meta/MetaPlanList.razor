@@ -1,8 +1,10 @@
 @namespace Harness.UI.Components.Meta
 @using DysonHarness
 @using Harness.UI.Demo
+@implements IDisposable
 @inject IDysonPlanRepository Plans
 @inject DysonUiHost Host
+@inject DysonMessageBus Bus
 
 <div class="meta-plan-list">
     <div class="sidebar__section-label">Plans</div>
@@ -73,6 +75,18 @@
     private IReadOnlyList<DysonPlan> _plans = [];
     private string? _error;
     private bool _busy;
+    private Guid? _subscribedWorkDirectoryId;
+    private IDisposable? _sub;
+
+    protected override void OnParametersSet()
+    {
+        if (WorkDirectoryId == _subscribedWorkDirectoryId)
+            return;
+
+        DisposeSubscription();
+        _subscribedWorkDirectoryId = WorkDirectoryId;
+        SubscribeIfNeeded();
+    }
 
     protected override Task OnParametersSetAsync() => RefreshAsync();
 
@@ -94,6 +108,35 @@
 
         _plans = list.Value;
     }
+
+    private void SubscribeIfNeeded()
+    {
+        if (WorkDirectoryId == Guid.Empty)
+            return;
+
+        var sub = Bus.Subscribe<DysonPlansChangedEvent>(
+            DysonBusScopes.WorkDirectory(WorkDirectoryId),
+            OnPlansChanged);
+        if (sub.IsSuccess)
+            _sub = sub.Value;
+    }
+
+    private void OnPlansChanged(DysonPlansChangedEvent evt) => _ = InvokeAsync(async () =>
+    {
+        if (evt.WorkDirectoryId != WorkDirectoryId)
+            return;
+
+        await RefreshAsync();
+        StateHasChanged();
+    });
+
+    private void DisposeSubscription()
+    {
+        _sub?.Dispose();
+        _sub = null;
+    }
+
+    public void Dispose() => DisposeSubscription();
 
     private Task OnRowKeyDown(KeyboardEventArgs e, DysonPlan plan)
     {

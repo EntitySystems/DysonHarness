@@ -4882,6 +4882,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         var config = new DysonAgentSessionConfig
         {
             BrowserControl = _browserControl,
+            Bus = Bus,
             PluginContributions = contributions,
             UiTheme = resolvedUiTheme,
         };

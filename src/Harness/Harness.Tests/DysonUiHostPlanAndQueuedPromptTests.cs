@@ -75,6 +75,46 @@ public class DysonUiHostPlanAndQueuedPromptTests
     }
 
     [Fact]
+    public async Task OpenAi_session_from_host_carries_the_host_message_bus()
+    {
+        // The plan repository shipped as null from this exact path once; Bus takes the same
+        // route, and a null bus is a silent no-op — so the plans column would just stop
+        // refreshing with nothing to show for it.
+        await using var ctx = await HostContext.CreateAsync();
+        var workRoot = Path.Combine(Path.GetTempPath(), $"dyson-host-bus-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workRoot);
+        try
+        {
+            var wd = await ctx.WorkDirectories.CreateAsync(workRoot, "BusHost");
+            Assert.True(wd.IsSuccess, wd.IsError ? wd.Error : null);
+
+            var create = await ctx.Models.CreateProviderAsync(new DysonModelProviderEntity
+            {
+                DisplayName = "OpenAI Local",
+                ProviderKind = DysonProviderKinds.OpenAICompatible,
+                BaseUrl = "https://example.invalid/v1",
+                ApiKey = "sk-test",
+            });
+            Assert.True(create.IsSuccess, create.IsError ? create.Error : null);
+
+            var slug = await ctx.Models.AddSlugAsync(create.Value, "gpt-test", "GPT Test");
+            Assert.True(slug.IsSuccess, slug.IsError ? slug.Error : null);
+
+            var started = await ctx.Host.StartNewSessionAsync(
+                DysonAgentModes.MetaAgent, slug.Value, wd.Value);
+            Assert.True(started.IsSuccess, started.IsError ? started.Error : null);
+
+            var session = ctx.Host.Session
+                ?? throw new InvalidOperationException("Expected focused session.");
+            Assert.Same(ctx.Host.Bus, session.Config.Bus);
+        }
+        finally
+        {
+            try { Directory.Delete(workRoot, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public async Task Queued_multiline_prompt_round_trips_full_Text()
     {
         await using var ctx = await HostContext.CreateAsync();

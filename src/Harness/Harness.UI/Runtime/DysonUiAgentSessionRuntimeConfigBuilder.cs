@@ -65,7 +65,8 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
     DysonPluginCatalogService pluginCatalog,
     DysonPluginContributionResolver pluginContributions,
     DysonPluginMcpGrantService pluginMcpGrants,
-    DysonPluginMcpResolver pluginMcpResolver)
+    DysonPluginMcpResolver pluginMcpResolver,
+    DysonMessageBus? bus = null)
 {
     private readonly IDysonWorkDirectoryRepository _workDirectories =
         workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
@@ -85,6 +86,7 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
         pluginMcpGrants ?? throw new ArgumentNullException(nameof(pluginMcpGrants));
     private readonly DysonPluginMcpResolver _pluginMcpResolver =
         pluginMcpResolver ?? throw new ArgumentNullException(nameof(pluginMcpResolver));
+    private readonly DysonMessageBus? _bus = bus;
 
     public async Task<Result<DysonUiAgentSessionRuntimeConfigLease, string>> BuildAsync(
         DysonUiAgentSessionRuntimeConfigRequest request,
@@ -115,6 +117,7 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
         {
             PluginContributions = contributions,
             UiTheme = request.Theme,
+            Bus = _bus,
         };
         MergePluginCustomAgents(config, contributions);
         if (request.McpAccessMode is { } mode)

@@ -78,7 +78,7 @@ Refuses while `Status == Building` (`"Call SetPlanStatus with stale, or stop the
 
 ### `SubmitMetaPlan` / `ReadMetaPlan` (drone-only)
 
-`SubmitMetaPlan` inserts `Kind = MetaPlan`, `Status = Draft` (or overwrites `Title`/`Markdown` in place when `planId` is given). Returns `{planId, title, status}`. Writes **no file**. Cross-workdir `planId` is `"Plan '{id}' not found."`. Empty markdown is a Result error.
+`SubmitMetaPlan` inserts `Kind = MetaPlan`, `Status = Draft` (or overwrites `Title`/`Markdown` in place when `planId` is given). Returns `{planId, title, status}`. Writes **no file**. Cross-workdir `planId` is `"Plan '{id}' not found."`. Empty markdown is a Result error. After a successful create or revise (and after `SetPlanStatus` / `BeginBuildPlan` / `DeletePlan` succeed), the executor publishes `DysonPlansChangedEvent` on `DysonBusScopes.WorkDirectory` so an already-open meta page can refresh `MetaPlanList` without a reload.
 
 It is **not** a report: no `EndsCurrentTurn`, does not call `SubmitSubagentReportAsync`, does not enqueue a parent interrupt. The drone must still `SubmitSubagentReport`. A plan-authoring drone that stops after `SubmitMetaPlan` is caught by the existing unfinished-work / child-report watch. Covered by `DysonSubmitMetaPlanTests`.
 
