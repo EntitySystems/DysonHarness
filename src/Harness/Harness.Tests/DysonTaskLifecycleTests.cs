@@ -104,6 +104,8 @@ public class DysonTaskLifecycleTests
     private const int BugReviewValue = 15;
     private const int FullSummarizeValue = 16;
     private const int WorktreeCreatingValue = 17;
+    private const int MetaMaintenanceValue = 18;
+    private const int ChildReportReminderValue = 19;
 
     [Fact]
     public async Task Run()
@@ -144,16 +146,24 @@ public class DysonTaskLifecycleTests
             || (int)DysonAgentTurnKind.DropContext != LastPreLifecycleKindValue)
         {
             throw new InvalidOperationException(
-                "DysonAgentTurnKind values 0–13 must stay stable; append TaskEndReflect=14, BugReview=15, FullSummarize=16, WorktreeCreating=17.");
+                "DysonAgentTurnKind values 0–13 must stay stable; append TaskEndReflect=14, BugReview=15, FullSummarize=16, WorktreeCreating=17, MetaMaintenance=18, ChildReportReminder=19.");
+        }
+
+        if ((int)DysonAgentTurnKind.WorktreeCreating != WorktreeCreatingValue
+            || (int)DysonAgentTurnKind.MetaMaintenance != MetaMaintenanceValue
+            || (int)DysonAgentTurnKind.ChildReportReminder != ChildReportReminderValue)
+        {
+            throw new InvalidOperationException(
+                "DysonAgentTurnKind must stay WorktreeCreating=17, MetaMaintenance=18, ChildReportReminder=19.");
         }
 
         var max = Enum.GetValues<DysonAgentTurnKind>().Select(k => (int)k).Max();
         if (max < LastPreLifecycleKindValue)
             throw new InvalidOperationException("DysonAgentTurnKind lost DropContext=13.");
-        if (max > WorktreeCreatingValue)
+        if (max > ChildReportReminderValue)
         {
             throw new InvalidOperationException(
-                $"Unexpected DysonAgentTurnKind value {max}; expected append-only through WorktreeCreating=17.");
+                $"Unexpected DysonAgentTurnKind value {max}; expected append-only through ChildReportReminder=19.");
         }
     }
 

@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace DysonHarness;
 
 /// <summary>Resolved per-session git worktree checkout.</summary>
@@ -120,6 +122,11 @@ public static class DysonSessionWorktree
         return DysonGitInfo.TryRemoveWorktree(repo.Value, worktreeAbsolutePath, force);
     }
 
+    // ponytail: one lock per repo anchor serializes concurrent drone merges; fine for tens of drones.
+    // Upgrade to a per-branch queue if hundreds of drones finish together and wait on each other.
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> MergeGates =
+        new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// Merges <paramref name="branchName"/> into the registered checkout, then removes the worktree.
     /// Merge conflicts leave the worktree in place.
@@ -134,11 +141,20 @@ public static class DysonSessionWorktree
         if (repo.IsError)
             return VoidResult<string>.AsError(repo.Error);
 
-        var merge = DysonGitInfo.TryMergeBranch(repo.Value, branchName);
-        if (merge.IsError)
-            return merge;
+        var gate = MergeGates.GetOrAdd(repo.Value, static _ => new SemaphoreSlim(1, 1));
+        gate.Wait();
+        try
+        {
+            var merge = DysonGitInfo.TryMergeBranch(repo.Value, branchName);
+            if (merge.IsError)
+                return merge;
 
-        return DysonGitInfo.TryRemoveWorktree(repo.Value, worktreeAbsolutePath, forceRemoveIfDirty);
+            return DysonGitInfo.TryRemoveWorktree(repo.Value, worktreeAbsolutePath, forceRemoveIfDirty);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     internal static void CopyUntrackedHarnessFiles(string sourceRoot, string destRoot)

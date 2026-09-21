@@ -62,7 +62,7 @@ public class DysonSessionRecoveryServiceTests
     }
 
     [Fact]
-    public async Task RecoverAsync_active_child_is_interrupted_without_parent_report()
+    public async Task RecoverAsync_active_child_is_interrupted_with_one_failed_parent_report()
     {
         var accessor = DysonTempDb.OpenMemoryAccessor(out SqliteConnection conn);
         using var _keepAlive = conn;
@@ -94,9 +94,9 @@ public class DysonSessionRecoveryServiceTests
         Assert.DoesNotContain(
             fullRoot.Value.Logs,
             l => l.Kind is nameof(DysonSessionLogKind.AgentReply)
-                or nameof(DysonSessionLogKind.Interrupt)
                 or nameof(DysonSessionLogKind.CompletionFlow));
         Assert.Single(fullRoot.Value.Turns);
+        AssertOneFailedChildReport(fullRoot.Value.Logs, childId, runtimeId: 1);
 
         var fullChild = await sessions.GetFullSessionAsync(childId);
         Assert.True(fullChild.IsSuccess, fullChild.IsError ? fullChild.Error : null);
@@ -166,6 +166,7 @@ public class DysonSessionRecoveryServiceTests
         Assert.Single(
             afterSecondRoot.Value.Logs,
             l => l.Kind == nameof(DysonSessionLogKind.TurnInterrupted));
+        AssertOneFailedChildReport(afterSecondRoot.Value.Logs, childId, runtimeId: 1);
         Assert.Single(
             afterSecondChild.Value.Logs,
             l => l.Kind == nameof(DysonSessionLogKind.TurnInterrupted));
@@ -231,9 +232,9 @@ public class DysonSessionRecoveryServiceTests
         Assert.DoesNotContain(
             fullRoot.Value.Logs,
             l => l.Kind is nameof(DysonSessionLogKind.AgentReply)
-                or nameof(DysonSessionLogKind.Interrupt)
                 or nameof(DysonSessionLogKind.CompletionFlow)
                 or nameof(DysonSessionLogKind.SessionStatusChanged));
+        AssertOneFailedChildReport(fullRoot.Value.Logs, childId, runtimeId: 1);
 
         var fullChild = await sessions.GetFullSessionAsync(childId);
         Assert.True(fullChild.IsSuccess, fullChild.IsError ? fullChild.Error : null);
@@ -246,6 +247,7 @@ public class DysonSessionRecoveryServiceTests
         Assert.DoesNotContain(
             fullChild.Value.Logs,
             l => l.Kind == nameof(DysonSessionLogKind.TurnInterrupted));
+        AssertOneFailedChildReport(fullChild.Value.Logs, grandchildId, runtimeId: 2);
         var childStatus = Assert.Single(
             fullChild.Value.Logs,
             l => l.Kind == nameof(DysonSessionLogKind.SessionStatusChanged));
@@ -285,6 +287,7 @@ public class DysonSessionRecoveryServiceTests
         Assert.Single(
             afterSecondChild.Value.Logs,
             l => l.Kind == nameof(DysonSessionLogKind.SessionStatusChanged));
+        AssertOneFailedChildReport(afterSecondChild.Value.Logs, grandchildId, runtimeId: 2);
     }
 
     [Fact]
@@ -385,6 +388,22 @@ public class DysonSessionRecoveryServiceTests
         Assert.Null(entity.CompletedUtc);
         var upsert = await sessions.UpsertTurnAsync(entity);
         Assert.False(upsert.IsError, upsert.IsError ? upsert.Error : null);
+    }
+
+    private static void AssertOneFailedChildReport(
+        IReadOnlyList<DysonSessionLogEntry> logs,
+        Guid childPersistenceId,
+        int runtimeId)
+    {
+        var interrupt = Assert.Single(
+            logs,
+            l => l.Kind == nameof(DysonSessionLogKind.Interrupt));
+        var payload = DysonSessionLogPayload.Deserialize<DysonSessionLogInterrupt>(interrupt.PayloadJson);
+        Assert.NotNull(payload);
+        Assert.Equal(DysonAgentInterruptKind.SubagentFailed.ToString(), payload.InterruptKind);
+        Assert.Equal(runtimeId, payload.SubagentId);
+        Assert.Equal(childPersistenceId, payload.PersistenceId);
+        Assert.Equal(DysonChildReportWatch.ApplicationRestartReason, payload.Summary);
     }
 
     private static void AssertRepairedToolState(string toolStateJson)

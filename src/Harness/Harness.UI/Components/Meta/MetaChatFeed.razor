@@ -1,0 +1,94 @@
+@namespace Harness.UI.Components.Meta
+@using DysonHarness
+@using Harness.UI.Demo
+@using Harness.UI.Markdown
+@inject IJSRuntime Js
+
+<div @ref="_feedEl" class="meta-chat-feed" role="log" aria-label="Meta agent transcript" aria-live="polite">
+    @if (_items.Count == 0 && !SessionBusy)
+    {
+        <div class="empty-state">
+            <p class="empty-state__message">@EmptyMessage</p>
+        </div>
+    }
+    else
+    {
+        <div class="meta-chat-feed__list">
+            @foreach (var item in _items)
+            {
+                <div @key="item.Key"
+                     class="meta-chat__msg @(item.Role == MetaChatRole.User ? "meta-chat__msg--user" : "meta-chat__msg--agent") @(item.Pending ? "meta-chat__msg--pending" : null)">
+                    <div class="meta-chat__msg-bar">
+                        <span class="meta-chat__msg-role">@(item.Role == MetaChatRole.User ? "You" : "Meta agent")</span>
+                        @if (item.Pending)
+                        {
+                            <span class="subagent-card__spinner" title="Queued" aria-label="Queued"></span>
+                            @if (item.QueuedId is Guid queuedId && OnRemoveQueued.HasDelegate)
+                            {
+                                <button type="button"
+                                        class="meta-chat__unsend"
+                                        title="Remove from queue"
+                                        aria-label="Remove queued message"
+                                        @onclick="() => OnRemoveQueued.InvokeAsync(queuedId)">
+                                    ×
+                                </button>
+                            }
+                        }
+                    </div>
+                    <div class="meta-chat__body turn-block__body">@MarkdownRenderer.ToHtml(item.Text)</div>
+                </div>
+            }
+            @if (SessionBusy)
+            {
+                <div class="meta-chat__working" aria-live="polite">
+                    <span class="subagent-card__spinner" aria-hidden="true"></span>
+                    <span>Working…</span>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private ElementReference _feedEl;
+    private bool _attached;
+    private int _renderVersion;
+    private int _lastScrolledRenderVersion = -1;
+    private IReadOnlyList<MetaChatItem> _items = [];
+
+    [Parameter] public IReadOnlyList<DysonAgentTurn> Turns { get; set; } = [];
+    [Parameter] public IReadOnlyList<QueuedPrompt> Queued { get; set; } = [];
+    [Parameter] public bool SessionBusy { get; set; }
+    [Parameter] public string EmptyMessage { get; set; } = "Tell the meta agent what to orchestrate.";
+    [Parameter] public EventCallback<Guid> OnRemoveQueued { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        _items = MetaChatItems.Build(Turns, Queued);
+        _renderVersion++;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        try
+        {
+            if (!_attached)
+            {
+                await Js.InvokeVoidAsync("dysonChat.attach", _feedEl);
+                _attached = true;
+            }
+
+            if (_renderVersion != _lastScrolledRenderVersion)
+            {
+                _lastScrolledRenderVersion = _renderVersion;
+                await Js.InvokeVoidAsync("dysonChat.scrollToBottom", _feedEl);
+            }
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+}

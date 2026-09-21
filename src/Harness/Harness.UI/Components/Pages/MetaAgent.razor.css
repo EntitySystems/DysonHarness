@@ -27,9 +27,16 @@
   white-space: nowrap;
 }
 
+.meta-stage__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
 .meta-stage__body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
+  grid-template-columns: 260px minmax(0, 1fr) 260px;
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
@@ -42,6 +49,18 @@
   min-width: 0;
   min-height: 0;
   padding: 16px;
+}
+
+.meta-plans {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px 12px;
+  border-right: 1px solid var(--border);
+  background: var(--surface-chrome);
+  overflow: auto;
 }
 
 .meta-agents {
@@ -60,23 +79,40 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0;
 }
 
-/* Dummy cards borrow .subagent-card chrome but are not actionable yet. */
-.meta-agents__card { cursor: default; }
-.meta-agents__card:hover {
-  background: var(--bg-2);
-  border-color: var(--border);
-  box-shadow: none;
+.meta-agents__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px 8px;
+  text-align: center;
+}
+
+.meta-agents__empty-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.meta-agents__empty-hint {
+  margin: 0;
+  max-width: 16em;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-dim);
 }
 
 .meta-chat {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-1);
@@ -95,4 +131,18 @@
   font: inherit;
 }
 
-.meta-composer__actions { justify-content: flex-end; }
+.meta-composer__actions {
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 1400px) {
+  .meta-plans { display: none; }
+  .meta-stage__body { grid-template-columns: minmax(0, 1fr) 260px; }
+}
+
+@media (max-width: 1100px) {
+  .meta-agents { display: none; }
+  .meta-stage__body { grid-template-columns: minmax(0, 1fr); }
+}

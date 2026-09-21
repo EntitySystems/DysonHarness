@@ -23,6 +23,8 @@ public static class DysonAgentTurnKindDisplay
         DysonAgentTurnKind.BugReview => "Code review",
         DysonAgentTurnKind.FullSummarize => "Full summary",
         DysonAgentTurnKind.WorktreeCreating => "Creating worktree",
+        DysonAgentTurnKind.MetaMaintenance => "Meta maintenance",
+        DysonAgentTurnKind.ChildReportReminder => "Child report reminder",
         _ => kind.ToString(),
     };
 }

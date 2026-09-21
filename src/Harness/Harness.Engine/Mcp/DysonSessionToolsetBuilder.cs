@@ -41,6 +41,7 @@ public static class DysonSessionToolsetBuilder
         config.PluginMcpHost?.ApplyToPipeline(pipeline);
         ApplyImageGenerationProviderGate(pipeline, config);
         ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
+        ApplyModeCatalog(pipeline, agentMode);
         return pipeline;
     }
 
@@ -68,6 +69,7 @@ public static class DysonSessionToolsetBuilder
         config.PluginMcpHost?.ApplyToPipeline(pipeline);
         ApplyImageGenerationProviderGate(pipeline, config);
         ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
+        ApplyModeCatalog(pipeline, agentMode);
         return pipeline;
     }
 
@@ -115,6 +117,7 @@ public static class DysonSessionToolsetBuilder
         config.PluginMcpHost?.ApplyToPipeline(pipeline);
         ApplyImageGenerationProviderGate(pipeline, config);
         ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
+        ApplyModeCatalog(pipeline, agentMode);
     }
 
     /// <summary>
@@ -151,6 +154,23 @@ public static class DysonSessionToolsetBuilder
 
         return config.DisabledTools
             ?? (IReadOnlySet<string>)new HashSet<string>(StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Meta Agent: strip to the allowlist (no file/shell/wait/completion). Meta Agent never completes.
+    /// Meta Agent Drone: strip the depth-1 FromParent trio and add ReadMetaPlan / SubmitMetaPlan.
+    /// </summary>
+    private static void ApplyModeCatalog(DysonMcpPipeline pipeline, string agentMode)
+    {
+        if (string.Equals(agentMode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+        {
+            OmitRootTaskCompletionTools(pipeline);
+            DysonMetaAgentTools.ApplyAllowlist(pipeline);
+            return;
+        }
+
+        if (string.Equals(agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
+            DysonMetaAgentTools.ApplyDroneAllowlist(pipeline);
     }
 
     public static void OmitRootTaskCompletionTools(DysonMcpPipeline pipeline)

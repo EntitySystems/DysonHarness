@@ -59,6 +59,21 @@ public sealed class DysonSessionRepository(
         }
     }
 
+    public Task<VoidResult<string>> DeleteTurnsAsync(
+        Guid sessionId,
+        IReadOnlyList<Guid> turnIds,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(turnIds);
+        if (turnIds.Count == 0)
+            return Task.FromResult(VoidResult<string>.Success);
+
+        var subjectId = _subjectContext.SubjectId;
+        return _accessor.RunAsync(
+            (db, token) => DeleteTurnsCoreAsync(db, subjectId, sessionId, turnIds, token),
+            ct);
+    }
+
     public Task<VoidResult<string>> AppendLogAsync(
         DysonSessionLogEntry entry,
         CancellationToken cancellationToken = default)
@@ -661,6 +676,38 @@ public sealed class DysonSessionRepository(
         {
             return Result<IReadOnlyList<DysonSessionSummary>, string>.AsError(
                 $"Failed to list active descendant sessions: {ex.Message}");
+        }
+    }
+
+    private static async Task<VoidResult<string>> DeleteTurnsCoreAsync(
+        DysonDbContext db,
+        string subjectId,
+        Guid sessionId,
+        IReadOnlyList<Guid> turnIds,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var sessionExists = await db.Sessions
+                .AnyAsync(s => s.Id == sessionId && s.SubjectId == subjectId, cancellationToken)
+                .ConfigureAwait(false);
+            if (!sessionExists)
+                return new VoidResult<string>($"Session '{sessionId}' not found.");
+
+            var matches = await db.Turns
+                .Where(t => t.SessionId == sessionId && turnIds.Contains(t.Id))
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (matches.Count == 0)
+                return VoidResult<string>.Success;
+
+            db.Turns.RemoveRange(matches);
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return new VoidResult<string>($"Failed to delete turns: {ex.Message}");
         }
     }
 

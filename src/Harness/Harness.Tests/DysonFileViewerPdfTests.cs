@@ -82,6 +82,7 @@ public class DysonFileViewerPdfTests
             models,
             workDirs,
             workDirConfigs,
+            DysonTempDb.Plans(accessor),
             settings,
             shells,
             http,

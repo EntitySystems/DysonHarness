@@ -1,9 +1,13 @@
 @page "/meta/{WorkDirectoryId:guid}"
 @using DysonHarness
+@using Harness.UI.Components.Meta
 @using Harness.UI.Demo
+@implements IAsyncDisposable
 @inject DysonUiHost Host
+@inject DysonMessageBus Bus
 @inject IDysonWorkDirectoryRepository WorkDirs
 @inject NavigationManager Nav
+@inject IJSRuntime Js
 
 <PageTitle>Meta agent — @(_workDirectoryName ?? "DysonHarness")</PageTitle>
 
@@ -33,7 +37,16 @@
                     <h1 class="meta-stage__title">Meta agent</h1>
                     <span class="meta-stage__subtitle mono">@(_workDirectoryName ?? WorkDirectoryId.ToString())</span>
                 </div>
-                <a class="btn" href="/">← Back to agent</a>
+                <div class="meta-stage__actions">
+                    <button type="button"
+                            class="btn"
+                            disabled="@(!CanOpenFullSession)"
+                            title="Open this Meta Agent session in the full chat UI"
+                            @onclick="OpenFullSessionAsync">
+                        Open full session
+                    </button>
+                    <a class="btn" href="/">← Back to agent</a>
+                </div>
             </header>
 
             @if (_unknownWorkDirectory)
@@ -43,50 +56,67 @@
             else
             {
                 <div class="meta-stage__body">
+                    <aside class="meta-plans" aria-label="Plans">
+                        <MetaPlanList @ref="_planList" WorkDirectoryId="WorkDirectoryId" />
+                    </aside>
+
                     <div class="meta-main">
-                        <div class="meta-chat" role="log" aria-label="Meta agent transcript">
-                            <div class="empty-state">
-                                <p class="empty-state__message">
-                                    Meta agent mode is a placeholder. Orchestration wiring lands in a later iteration.
-                                </p>
-                            </div>
+                        @if (!string.IsNullOrEmpty(BannerError))
+                        {
+                            <div class="error-banner">@BannerError</div>
+                        }
+
+                        <div class="meta-chat">
+                            <MetaChatFeed Turns="ChatTurns"
+                                          Queued="ChatQueued"
+                                          SessionBusy="IsMetaFocused && Host.IsBusy"
+                                          OnRemoveQueued="RemoveQueuedAsync" />
                         </div>
 
                         <div class="composer meta-composer">
                             <div class="composer-shell">
                                 <textarea class="meta-composer__prompt"
                                           rows="3"
-                                          placeholder="Describe what the meta agent should orchestrate…"
-                                          disabled></textarea>
+                                          placeholder="Message the meta agent…"
+                                          disabled="@ComposerDisabled"
+                                          @bind="_draft"
+                                          @bind:event="oninput"
+                                          @onkeydown="OnComposerKeyDown"></textarea>
                             </div>
                             <div class="btn-row meta-composer__actions">
-                                <button type="button" class="btn btn-primary" disabled>Send</button>
+                                <span class="list-item__meta">Ctrl+Enter to send</span>
+                                <ComposerStopMenu />
+                                <button type="button"
+                                        class="btn btn-primary"
+                                        disabled="@(ComposerDisabled || !CanSend)"
+                                        @onclick="SendAsync">
+                                    Send
+                                </button>
                             </div>
                         </div>
                     </div>
 
-                    <section class="meta-agents" aria-label="Meta agents (placeholder)">
-                        <div class="sidebar__section-label">Agents · placeholder</div>
+                    <section class="meta-agents" aria-label="Agents">
+                        <div class="sidebar__section-label">Agents</div>
                         <div class="meta-agents__list">
-                            @foreach (var agent in PlaceholderAgents)
+                            @{
+                                var childIds = ChildIds;
+                            }
+                            @if (childIds.Count == 0)
                             {
-                                <div class="subagent-card meta-agents__card">
-                                    <span class="subagent-card__icon @agent.ColorClass"
-                                          style="--subagent-mode-icon: url('@agent.IconUrl')"
-                                          aria-hidden="true"></span>
-                                    <div class="subagent-card__text">
-                                        <div class="subagent-card__title">
-                                            <span class="subagent-card__name">@agent.Title</span>
-                                            <span class="subagent-card__id mono">#@agent.Number</span>
-                                            <span class="subagent-card__step">@agent.Step</span>
-                                        </div>
-                                        <div class="subagent-card__model">@agent.Model</div>
-                                    </div>
-                                    @if (agent.Running)
-                                    {
-                                        <span class="subagent-card__spinner" aria-hidden="true"></span>
-                                    }
+                                <div class="meta-agents__empty">
+                                    <p class="meta-agents__empty-title">No agents yet</p>
+                                    <p class="meta-agents__empty-hint">Drones and explores appear here when the meta agent dispatches them.</p>
                                 </div>
+                            }
+                            else
+                            {
+                                @foreach (var id in childIds)
+                                {
+                                    <SubagentCard @key="id"
+                                                  PersistenceId="id"
+                                                  AfterNavigate="InspectChildAsync" />
+                                }
                             }
                         </div>
                     </section>
@@ -99,25 +129,87 @@
 @code {
     [Parameter] public Guid WorkDirectoryId { get; set; }
 
-    private sealed record PlaceholderAgent(
-        string Title, int Number, string Step, string Model, string IconUrl, string ColorClass, bool Running);
-
-    private static readonly PlaceholderAgent[] PlaceholderAgents =
-    [
-        new("Repo mapper", 1, "Scanning src/Harness", "claude-sonnet-5",
-            "icons/agent-modes/explore.svg", "subagent-card__icon--explore", true),
-        new("Implementer", 2, "Waiting for plan", "claude-opus-5",
-            "icons/agent-modes/drone.svg", "subagent-card__icon--drone", false),
-        new("Reviewer", 3, "Idle", "claude-sonnet-5",
-            "icons/agent-modes/security-review.svg", "subagent-card__icon--review", false),
-    ];
-
     private IReadOnlyList<DysonSessionSummary> _sessions = [];
     private Guid? _activeWorkDirectoryId;
     private string? _error;
     private string? _workDirectoryName;
     private bool _unknownWorkDirectory;
     private Guid _loadedWorkDirectoryId;
+    private Guid? _metaSessionId;
+    private bool _sessionReady;
+    private bool _sending;
+    private string _draft = "";
+    private MetaPlanList? _planList;
+    private IDisposable? _hostSub;
+    private DotNetObjectReference<DysonUiHost>? _chatLinksRef;
+
+    private string? BannerError =>
+        !string.IsNullOrEmpty(_error) ? _error : Host.LastError;
+
+    private bool IsMetaFocused =>
+        _sessionReady
+        && _metaSessionId is Guid id
+        && Host.Session is { } session
+        && session.PersistenceId == id
+        && string.Equals(session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase);
+
+    private bool CanOpenFullSession => _metaSessionId is Guid id && id != Guid.Empty;
+
+    private bool ComposerDisabled => _unknownWorkDirectory || !IsMetaFocused || _sending;
+
+    private bool CanSend => !string.IsNullOrWhiteSpace(_draft);
+
+    private IReadOnlyList<DysonAgentTurn> ChatTurns =>
+        IsMetaFocused && Host.Session is { } session ? session.Turns : [];
+
+    private IReadOnlyList<QueuedPrompt> ChatQueued =>
+        IsMetaFocused ? Host.QueuedPrompts : [];
+
+    private IReadOnlyList<Guid> ChildIds
+    {
+        get
+        {
+            if (!IsMetaFocused || Host.Session is null)
+                return [];
+
+            return Host.Session.SubSessions
+                .Where(child => child.PersistenceId != Guid.Empty)
+                .OrderByDescending(child => child.Id)
+                .Select(child => child.PersistenceId)
+                .ToList();
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var sub = Bus.Subscribe<DysonHostStateChangedEvent>(Host.BusScopeKey, OnHostChanged);
+        if (sub.IsSuccess)
+            _hostSub = sub.Value;
+
+        var attached = await Host.EnsureRuntimeAttachedAsync();
+        if (attached.IsError)
+            _error = attached.Error;
+
+        await Host.EnsureDefaultModelAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        _chatLinksRef ??= DotNetObjectReference.Create(Host);
+        try
+        {
+            await Js.InvokeVoidAsync("dysonChatLinks.install", _chatLinksRef);
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
 
     protected override async Task OnParametersSetAsync()
     {
@@ -132,10 +224,75 @@
         if (_unknownWorkDirectory)
         {
             _sessions = [];
+            _sessionReady = false;
+            _metaSessionId = null;
             return;
         }
 
         Host.SetComposerWorkDirectoryId(WorkDirectoryId);
+        await RefreshSessionsAsync();
+        await EnsureMetaSessionAsync();
+    }
+
+    private async Task EnsureMetaSessionAsync()
+    {
+        _sessionReady = false;
+
+        if (Host.Session is { } live
+            && string.Equals(live.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase)
+            && Host.ActiveWorkDirectoryId == WorkDirectoryId
+            && live.PersistenceId != Guid.Empty)
+        {
+            _metaSessionId = live.PersistenceId;
+            _sessionReady = true;
+            return;
+        }
+
+        var list = await Host.ListSessionsAsync(WorkDirectoryId);
+        if (list.IsError)
+        {
+            _error = list.Error;
+            return;
+        }
+
+        _sessions = OverlayLiveTitle(list.Value);
+        var existing = MetaAgentSessionLocator.SelectExisting(_sessions);
+        if (existing is not null)
+        {
+            var resume = await Host.ResumeSessionAsync(existing.Id);
+            if (resume.IsError)
+            {
+                _error = resume.Error;
+                return;
+            }
+
+            _metaSessionId = existing.Id;
+        }
+        else
+        {
+            var started = await Host.StartNewSessionAsync(
+                DysonAgentModes.MetaAgent,
+                null,
+                WorkDirectoryId);
+            if (started.IsError)
+            {
+                _error = started.Error;
+                return;
+            }
+
+            _metaSessionId = Host.ActiveSessionId;
+        }
+
+        if (_metaSessionId is not Guid metaId
+            || Host.Session is not { } session
+            || session.PersistenceId != metaId
+            || !string.Equals(session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+        {
+            _error = "Could not open the Meta Agent session.";
+            return;
+        }
+
+        _sessionReady = true;
         await RefreshSessionsAsync();
     }
 
@@ -143,36 +300,167 @@
     {
         _error = null;
         var list = await Host.ListSessionsAsync(WorkDirectoryId);
-        if (list.IsError) { _error = list.Error; return; }
-        _sessions = list.Value;
+        if (list.IsError)
+        {
+            _error = list.Error;
+            return;
+        }
+
+        _sessions = OverlayLiveTitle(list.Value);
+    }
+
+    private IReadOnlyList<DysonSessionSummary> OverlayLiveTitle(
+        IReadOnlyList<DysonSessionSummary> list)
+    {
+        if (Host.Session?.PersistenceId is not Guid pid)
+            return list;
+
+        var liveTitle = Host.Session.DisplayTitle;
+        var lastTurn = Host.Session.Turns.Count > 0 ? Host.Session.Turns[^1] : null;
+        var liveActivity = lastTurn?.CompletedUtc ?? lastTurn?.StartedUtc;
+
+        return list
+            .Select(s => s.Id == pid
+                ? new DysonSessionSummary
+                {
+                    Id = s.Id,
+                    RuntimeId = s.RuntimeId,
+                    ParentSessionId = s.ParentSessionId,
+                    AgentMode = s.AgentMode,
+                    Status = s.Status,
+                    Title = liveTitle ?? s.Title,
+                    ModelSlugId = s.ModelSlugId,
+                    WorkDirectoryId = s.WorkDirectoryId,
+                    CreatedUtc = s.CreatedUtc,
+                    LastActivityUtc = liveActivity ?? s.LastActivityUtc,
+                    WorktreeEnabled = s.WorktreeEnabled,
+                    HasWorktree = s.HasWorktree,
+                }
+                : s)
+            .ToList();
+    }
+
+    private const DysonHostChangeKind PlanRefreshMask =
+        DysonHostChangeKind.Transcript | DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Busy;
+
+    private void OnHostChanged(DysonHostStateChangedEvent evt) => _ = InvokeAsync(async () =>
+    {
+        _sessions = OverlayLiveTitle(_sessions);
+        if ((evt.Kind & PlanRefreshMask) != 0 && _planList is not null)
+            await _planList.RefreshAsync();
+        StateHasChanged();
+    });
+
+    private async Task SendAsync()
+    {
+        var text = _draft.Trim();
+        if (string.IsNullOrWhiteSpace(text) || !IsMetaFocused || Host.Session is null)
+            return;
+
+        _sending = true;
+        _error = null;
+        try
+        {
+            if (Host.Session.InFlightPromptTurn is { } inFlight)
+            {
+                var injected = Host.InjectTurnComment(inFlight.Id, text);
+                if (injected.IsSuccess)
+                {
+                    _draft = "";
+                    return;
+                }
+            }
+
+            var result = await Host.PromptAsync(text, DysonAgentModes.MetaAgent);
+            if (result.IsError)
+            {
+                _error = result.Error;
+                return;
+            }
+
+            _draft = "";
+        }
+        finally
+        {
+            _sending = false;
+        }
+    }
+
+    private Task OnComposerKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && e.CtrlKey)
+            return SendAsync();
+        return Task.CompletedTask;
+    }
+
+    private Task RemoveQueuedAsync(Guid queuedId)
+    {
+        Host.RemoveQueuedPrompt(queuedId);
+        return Task.CompletedTask;
+    }
+
+    private async Task OpenFullSessionAsync()
+    {
+        if (_metaSessionId is not Guid id)
+            return;
+
+        if (Host.ActiveSessionId != id)
+        {
+            var resume = await Host.ResumeSessionAsync(id);
+            if (resume.IsError)
+            {
+                _error = resume.Error;
+                return;
+            }
+        }
+
+        Nav.NavigateTo("/");
+    }
+
+    private Task InspectChildAsync()
+    {
+        Nav.NavigateTo("/");
+        return Task.CompletedTask;
     }
 
     // Acting on a session is a session-shell concern — do it, then hand off to "/".
     private async Task StartNewAsync()
     {
         var result = await Host.StartNewSessionAsync(DysonAgentModes.Work, null, WorkDirectoryId);
-        if (result.IsError) { _error = result.Error; return; }
+        if (result.IsError)
+        {
+            _error = result.Error;
+            return;
+        }
+
         Nav.NavigateTo("/");
     }
 
     private async Task ResumeAsync(Guid sessionId)
     {
         var result = await Host.ResumeSessionAsync(sessionId);
-        if (result.IsError) { _error = result.Error; return; }
+        if (result.IsError)
+        {
+            _error = result.Error;
+            return;
+        }
+
         Nav.NavigateTo("/");
     }
 
     private async Task DeleteAsync(Guid sessionId)
     {
         var result = await Host.DeleteSessionAsync(sessionId);
-        if (result.IsError) _error = result.Error;
+        if (result.IsError)
+            _error = result.Error;
         await RefreshSessionsAsync();
     }
 
     private async Task DeleteInactiveAsync()
     {
         var result = await Host.DeleteInactiveSessionsAsync(WorkDirectoryId);
-        if (result.IsError) _error = result.Error;
+        if (result.IsError)
+            _error = result.Error;
         await RefreshSessionsAsync();
     }
 
@@ -186,5 +474,27 @@
 
         _activeWorkDirectoryId = wd;
         Nav.NavigateTo($"/meta/{wd}");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _hostSub?.Dispose();
+        _hostSub = null;
+        try
+        {
+            await Js.InvokeVoidAsync("dysonChatLinks.uninstall");
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+
+        _chatLinksRef?.Dispose();
+        _chatLinksRef = null;
     }
 }

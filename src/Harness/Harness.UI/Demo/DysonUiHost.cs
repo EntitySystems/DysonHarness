@@ -26,6 +26,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly IDysonModelRepository _models;
     private readonly IDysonWorkDirectoryRepository _workDirectories;
     private readonly IDysonWorkDirectoryConfigurationRepository _workDirectoryConfigurations;
+    private readonly IDysonPlanRepository _plans;
     private readonly IDysonSubjectSettingsRepository _appSettings;
     private readonly IDysonConfiguredShellRepository _configuredShells;
     private readonly DysonCliProxyHost _cliProxy;
@@ -126,6 +127,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         IDysonModelRepository models,
         IDysonWorkDirectoryRepository workDirectories,
         IDysonWorkDirectoryConfigurationRepository workDirectoryConfigurations,
+        IDysonPlanRepository plans,
         IDysonSubjectSettingsRepository appSettings,
         IDysonConfiguredShellRepository configuredShells,
         HttpClient http,
@@ -149,6 +151,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _workDirectories = workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
         _workDirectoryConfigurations = workDirectoryConfigurations
             ?? throw new ArgumentNullException(nameof(workDirectoryConfigurations));
+        _plans = plans ?? throw new ArgumentNullException(nameof(plans));
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         _configuredShells = configuredShells ?? throw new ArgumentNullException(nameof(configuredShells));
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -514,6 +517,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// <summary>
     /// Effective max target context for the composer stepper
     /// (session override → slug default → 100K; 0 = Off).
+    /// Meta Agent is pinned at 100K via <see cref="DysonAgentSession.ResolveEffectiveMaxTargetContextTokens"/>.
     /// </summary>
     public int SessionMaxTargetContextTokens =>
         _session is not null
@@ -617,7 +621,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         return false;
     }
 
-    /// <summary>Queued prompts for the focused session (FIFO; first-line previews).</summary>
+    /// <summary>Queued prompts for the focused session (FIFO; full Text plus FirstLine preview).</summary>
     public IReadOnlyList<QueuedPrompt> QueuedPrompts
     {
         get
@@ -637,7 +641,10 @@ public sealed class DysonUiHost : IAsyncDisposable
                     if (_promptQueues.TryGetValue(id, out var projected) && projected.Count == count)
                     {
                         return projected
-                            .Select(e => new QueuedPrompt(e.Id, e.FirstLine))
+                            .Select(e => new QueuedPrompt(
+                                e.Id,
+                                e.FirstLine,
+                                e.Turn.Instruction ?? e.Turn.Kind.ToString()))
                             .ToArray();
                     }
                 }
@@ -645,7 +652,10 @@ public sealed class DysonUiHost : IAsyncDisposable
                 if (runtime.TryPeekPrompt(id, out var peeked))
                 {
                     var instruction = peeked.Turn.Instruction ?? peeked.Turn.Kind.ToString();
-                    return [new QueuedPrompt(peeked.Id, DysonSubagentHostLogic.PromptFirstLine(instruction))];
+                    return [new QueuedPrompt(
+                        peeked.Id,
+                        DysonSubagentHostLogic.PromptFirstLine(instruction),
+                        instruction)];
                 }
 
                 return [];
@@ -657,7 +667,10 @@ public sealed class DysonUiHost : IAsyncDisposable
                     return [];
 
                 return list
-                    .Select(e => new QueuedPrompt(e.Id, e.FirstLine))
+                    .Select(e => new QueuedPrompt(
+                        e.Id,
+                        e.FirstLine,
+                        e.Turn.Instruction ?? e.Turn.Kind.ToString()))
                     .ToArray();
             }
         }
@@ -2636,6 +2649,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 config: config,
                 models: _models,
                 usageAnalytics: _usageAnalytics,
+                plans: _plans,
                 workDirectoryName: workDir.Value.Name,
                 worktreeEnabled: forkWorktree,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -3461,6 +3475,13 @@ public sealed class DysonUiHost : IAsyncDisposable
             _pendingMaxTargetContextTokens = normalized;
             Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
             return VoidResult<string>.Success;
+        }
+
+        if (string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+        {
+            LastError = "Meta Agent context is fixed at 100K.";
+            Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
+            return new VoidResult<string>(LastError);
         }
 
         if (IsBusy)
@@ -4349,6 +4370,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         RememberParentId(child, parent.PersistenceId);
         EnsureRegistered(parent);
         EnsureRegistered(child);
+        await child.ApplyChildReportWatchAsync(cancellationToken).ConfigureAwait(false);
         return VoidResult<string>.Success;
     }
 
@@ -4505,6 +4527,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 models: _models,
                 appendResumeLog: appendResumeLog,
                 usageAnalytics: _usageAnalytics,
+                plans: _plans,
                 workDirectoryName: workDirectoryName,
                 registeredWorkDirectoryAbsolutePath: registeredPath,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -4623,6 +4646,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 parent.RestoreRegisteredSubagent(child);
                 RememberParentId(child, parent.PersistenceId);
                 EnsureRegistered(child);
+                await child.ApplyChildReportWatchAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -6800,6 +6824,9 @@ public sealed class DysonUiHost : IAsyncDisposable
                     if (persistDropped.IsError)
                         return persistDropped;
 
+                    await session.ApplyChildReportWatchAsync(token).ConfigureAwait(false);
+                    await session.ApplyMetaMaintenanceTickAsync(last, token).ConfigureAwait(false);
+
                     EnqueueHostFollowUpWork(session);
                 }
 
@@ -7210,8 +7237,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         _ = await PersistSessionStatusAsync(
                 session,
-                DysonSessionStatus.Stopped,
-                "Stopped by user.",
+                session.Status,
+                session.LastReportSummary ?? "Stopped by user.",
                 CancellationToken.None)
             .ConfigureAwait(false);
     }
@@ -7594,7 +7621,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 }
 
 /// <summary>Queued composer prompt preview for the active session.</summary>
-public readonly record struct QueuedPrompt(Guid Id, string FirstLine);
+public readonly record struct QueuedPrompt(Guid Id, string FirstLine, string Text);
 
 /// <summary>Pending composer image (JPEG after compress) shown as a dismissible thumbnail.</summary>
 public sealed record PendingComposerImage(
