@@ -52,20 +52,42 @@
   padding: 8px 9px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  cursor: default;
+  cursor: pointer;
+  text-align: left;
   transition: background var(--motion-fast) var(--ease);
 }
 
-.meta-plan-row:hover {
+.meta-plan-row:hover,
+.meta-plan-row:focus-visible {
   background: var(--bg-2);
 }
 
+.meta-plan-row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.meta-plan-row__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
 .meta-plan-row__title {
+  flex: 1 1 auto;
+  min-width: 0;
   font-weight: 500;
   font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.meta-plan-row__build {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 11px;
 }
 
 .meta-plan-row__meta {

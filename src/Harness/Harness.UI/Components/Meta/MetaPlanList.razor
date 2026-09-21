@@ -1,6 +1,8 @@
 @namespace Harness.UI.Components.Meta
 @using DysonHarness
+@using Harness.UI.Demo
 @inject IDysonPlanRepository Plans
+@inject DysonUiHost Host
 
 <div class="meta-plan-list">
     <div class="sidebar__section-label">Plans</div>
@@ -22,9 +24,31 @@
         <div class="meta-plan-list__rows">
             @foreach (var plan in _plans)
             {
-                <div @key="plan.Id" class="meta-plan-row">
-                    <div class="meta-plan-row__title" title="@plan.Title">
-                        @(string.IsNullOrWhiteSpace(plan.Title) ? "Untitled" : plan.Title)
+                var canBuild = DysonMetaPlanDisplayPath.CanBuild(plan.Status, CanBuildPlans);
+                var buildTitle = plan.Status == DysonPlanStatus.Building
+                    ? "A build is already live"
+                    : CanBuildPlans
+                        ? "Ask the meta agent to begin this plan"
+                        : "Meta agent session is not ready";
+                <div @key="plan.Id"
+                     class="meta-plan-row"
+                     role="button"
+                     tabindex="0"
+                     title="@plan.Title"
+                     @onclick="() => OpenAsync(plan)"
+                     @onkeydown="e => OnRowKeyDown(e, plan)">
+                    <div class="meta-plan-row__header">
+                        <div class="meta-plan-row__title">
+                            @(string.IsNullOrWhiteSpace(plan.Title) ? "Untitled" : plan.Title)
+                        </div>
+                        <button type="button"
+                                class="btn meta-plan-row__build"
+                                disabled="@(!canBuild || _busy)"
+                                title="@buildTitle"
+                                @onclick="() => BuildAsync(plan)"
+                                @onclick:stopPropagation="true">
+                            Build
+                        </button>
                     </div>
                     <div class="meta-plan-row__meta">
                         <span class="meta-plan-row__status @StatusClass(plan.Status)"
@@ -43,8 +67,12 @@
 @code {
     [Parameter] public Guid WorkDirectoryId { get; set; }
 
+    /// <summary>True when the focused Meta Agent session runtime is attached.</summary>
+    [Parameter] public bool CanBuildPlans { get; set; }
+
     private IReadOnlyList<DysonPlan> _plans = [];
     private string? _error;
+    private bool _busy;
 
     protected override Task OnParametersSetAsync() => RefreshAsync();
 
@@ -65,6 +93,51 @@
         }
 
         _plans = list.Value;
+    }
+
+    private Task OnRowKeyDown(KeyboardEventArgs e, DysonPlan plan)
+    {
+        if (e.Key == "Enter")
+            return OpenAsync(plan);
+        return Task.CompletedTask;
+    }
+
+    private async Task OpenAsync(DysonPlan plan)
+    {
+        if (_busy)
+            return;
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var opened = await Host.OpenMetaPlanAsync(plan.Id, WorkDirectoryId);
+            if (opened.IsError)
+                _error = opened.Error;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task BuildAsync(DysonPlan plan)
+    {
+        if (_busy || !DysonMetaPlanDisplayPath.CanBuild(plan.Status, CanBuildPlans))
+            return;
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var built = await Host.PromptMetaPlanBuildAsync(plan.Id, plan.Title);
+            if (built.IsError)
+                _error = built.Error;
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
     private static string StatusClass(DysonPlanStatus status) => status switch

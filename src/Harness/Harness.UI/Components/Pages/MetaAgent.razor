@@ -57,7 +57,9 @@
             {
                 <div class="meta-stage__body">
                     <aside class="meta-plans" aria-label="Plans">
-                        <MetaPlanList @ref="_planList" WorkDirectoryId="WorkDirectoryId" />
+                        <MetaPlanList @ref="_planList"
+                                      WorkDirectoryId="WorkDirectoryId"
+                                      CanBuildPlans="IsMetaFocused" />
                     </aside>
 
                     <div class="meta-main">
@@ -126,6 +128,8 @@
     </Main>
 </AppShell>
 
+<FileViewerOverlay />
+
 @code {
     [Parameter] public Guid WorkDirectoryId { get; set; }
 
@@ -137,7 +141,6 @@
     private Guid _loadedWorkDirectoryId;
     private Guid? _metaSessionId;
     private bool _sessionReady;
-    private bool _sending;
     private string _draft = "";
     private MetaPlanList? _planList;
     private IDisposable? _hostSub;
@@ -155,7 +158,7 @@
 
     private bool CanOpenFullSession => _metaSessionId is Guid id && id != Guid.Empty;
 
-    private bool ComposerDisabled => _unknownWorkDirectory || !IsMetaFocused || _sending;
+    private bool ComposerDisabled => _unknownWorkDirectory || !IsMetaFocused;
 
     private bool CanSend => !string.IsNullOrWhiteSpace(_draft);
 
@@ -357,32 +360,14 @@
         if (string.IsNullOrWhiteSpace(text) || !IsMetaFocused || Host.Session is null)
             return;
 
-        _sending = true;
         _error = null;
-        try
+        _draft = "";
+        // Inject into the in-flight turn when one exists, else prompt (host enqueues while busy).
+        var result = await Host.PromptOrInjectAsync(text, DysonAgentModes.MetaAgent);
+        if (result.IsError)
         {
-            if (Host.Session.InFlightPromptTurn is { } inFlight)
-            {
-                var injected = Host.InjectTurnComment(inFlight.Id, text);
-                if (injected.IsSuccess)
-                {
-                    _draft = "";
-                    return;
-                }
-            }
-
-            var result = await Host.PromptAsync(text, DysonAgentModes.MetaAgent);
-            if (result.IsError)
-            {
-                _error = result.Error;
-                return;
-            }
-
-            _draft = "";
-        }
-        finally
-        {
-            _sending = false;
+            _error = result.Error;
+            _draft = text;
         }
     }
 

@@ -317,6 +317,25 @@ public sealed class DysonUiHost : IAsyncDisposable
         return result;
     }
 
+    /// <summary>
+    /// Inject into the in-flight prompt when one exists; otherwise
+    /// <see cref="PromptAsync"/> (which enqueues while busy).
+    /// </summary>
+    public Task<VoidResult<string>> PromptOrInjectAsync(
+        string text,
+        string? agentMode = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (_session?.InFlightPromptTurn is { } inFlight)
+        {
+            var injected = InjectTurnComment(inFlight.Id, text);
+            if (injected.IsSuccess)
+                return Task.FromResult(injected);
+        }
+
+        return PromptAsync(text, agentMode, cancellationToken);
+    }
+
     public Guid? ActiveSessionId => _session?.PersistenceId is { } id && id != Guid.Empty ? id : null;
     public Guid HostId { get; } = Guid.NewGuid();
     public DysonMessageBus Bus { get; }
@@ -1951,6 +1970,52 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Opens a DB-backed meta plan in the file viewer (no disk read).
+    /// Display path is <c>metaplan:{planId}/{slug}.md</c>.
+    /// </summary>
+    public async Task<VoidResult<string>> OpenMetaPlanAsync(
+        long planId,
+        Guid workDirectoryId,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+        var loaded = await _plans.GetAsync(planId, workDirectoryId, cancellationToken).ConfigureAwait(true);
+        if (loaded.IsError)
+        {
+            LastError = loaded.Error;
+            Notify(DysonHostChangeKind.Error);
+            return VoidResult<string>.AsError(loaded.Error);
+        }
+
+        var plan = loaded.Value;
+        var path = DysonMetaPlanDisplayPath.Format(plan.Id, plan.Title);
+        var markdown = plan.Markdown ?? "";
+        IReadOnlyList<DysonFileViewerAction>? actions = null;
+        if (DysonMetaPlanDisplayPath.CanBuild(plan.Status, HasMetaAgentRuntime))
+        {
+            var id = plan.Id;
+            var title = plan.Title;
+            actions =
+            [
+                new DysonFileViewerAction
+                {
+                    Label = "Build plan",
+                    IsPrimary = true,
+                    Invoke = () => PromptMetaPlanBuildAsync(id, title),
+                },
+            ];
+        }
+
+        await OpenFileViewerContentAsync(path, markdown, actions, cancellationToken).ConfigureAwait(true);
+        return VoidResult<string>.Success;
+    }
+
+    private bool HasMetaAgentRuntime =>
+        _session is { } session
+        && session.PersistenceId != Guid.Empty
+        && string.Equals(session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase);
+
     private async Task HandleFileViewerOpenRequestedAsync(
         DysonFileViewerOpenRequestedEvent requested,
         CancellationToken cancellationToken)
@@ -3071,6 +3136,36 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         Notify(DysonHostChangeKind.All);
         return result;
+    }
+
+    /// <summary>
+    /// Enqueues a Meta Agent message so the agent itself calls
+    /// <c>BeginBuildPlan(planId)</c>. Does not spawn a drone or set Status=Building.
+    /// Classic <see cref="DysonBeginBuildPlanFlow"/> / <c>PromptBeginBuildPlanAsync</c>
+    /// is Work-mode layout-only (ReadFile) and cannot be reused here.
+    /// </summary>
+    public Task<VoidResult<string>> PromptMetaPlanBuildAsync(
+        long planId,
+        string? title,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+        if (_session is null)
+        {
+            LastError = "No active session.";
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
+            return Task.FromResult(VoidResult<string>.AsError(LastError));
+        }
+
+        if (!string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+        {
+            LastError = "Build is only available on a Meta Agent session.";
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
+            return Task.FromResult(VoidResult<string>.AsError(LastError));
+        }
+
+        var prompt = DysonMetaPlanDisplayPath.FormatBuildPrompt(planId, title);
+        return PromptOrInjectAsync(prompt, DysonAgentModes.MetaAgent, cancellationToken);
     }
 
     private async Task<VoidResult<string>> ApplyAgentModeCoreAsync(

@@ -31,4 +31,16 @@ public class DysonFileViewerCommentsTests
             throw new InvalidOperationException("FormatPrompt shape mismatch.");
         }
     }
+
+    [Fact]
+    public void FormatPrompt_metaplan_path_keeps_plan_id_and_anchors()
+    {
+        var prompt = DysonFileViewerComments.FormatPrompt(
+            "metaplan:7/hello-world.md",
+            [("the recap block", "tighten the scope")]);
+
+        Assert.StartsWith("# Plan comments on `metaplan:7/hello-world.md`", prompt);
+        Assert.Contains("**On:** the recap block", prompt, StringComparison.Ordinal);
+        Assert.Contains("tighten the scope", prompt, StringComparison.Ordinal);
+    }
 }

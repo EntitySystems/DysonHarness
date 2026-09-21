@@ -86,7 +86,7 @@ It is **not** a report: no `EndsCurrentTurn`, does not call `SubmitSubagentRepor
 
 ### Status vs `BuildAgentId`
 
-- **`Status` is authoritative for "is this building"** on the page and for `DeletePlan`. The UI spinner keys off `Status` only (`MetaPlanList`: `BuildAgentId` can linger after a build ends).
+- **`Status` is authoritative for "is this building"** on the page and for `DeletePlan`. The UI spinner and the Build button both key off `Status` only (`MetaPlanList`: `BuildAgentId` can linger after a build ends). Clicking a plan opens `FileViewerOverlay` with display path `metaplan:{planId}/{slug}.md` from `GetAsync` (no disk). **Build** sends a session message; the Meta Agent calls `BeginBuildPlan` itself.
 - **`BuildAgentId` is history.** It is set when a build starts and is **not cleared on completion** (`IDysonPlanRepository.UpdateAsync` cannot null it — null means leave unchanged). Do not treat a leftover id as "still building".
 
 ## Child-report watch (all parents)
