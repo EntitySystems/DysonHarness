@@ -137,6 +137,15 @@
   gap: 8px;
 }
 
+/* Model + effort sit left of the send controls; global .composer rules size the triggers. */
+.meta-composer__pickers {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-right: auto;
+}
+
 @media (max-width: 1400px) {
   .meta-plans { display: none; }
   .meta-stage__body { grid-template-columns: minmax(0, 1fr) 260px; }

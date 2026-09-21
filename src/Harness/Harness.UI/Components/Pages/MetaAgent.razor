@@ -6,6 +6,7 @@
 @inject DysonUiHost Host
 @inject DysonMessageBus Bus
 @inject IDysonWorkDirectoryRepository WorkDirs
+@inject IDysonModelRepository ModelStore
 @inject NavigationManager Nav
 @inject IJSRuntime Js
 
@@ -86,6 +87,15 @@
                                           @onkeydown="OnComposerKeyDown"></textarea>
                             </div>
                             <div class="btn-row meta-composer__actions">
+                                <div class="meta-composer__pickers">
+                                    <ModelSlugPicker @ref="_modelPicker"
+                                                     SelectedSlugId="_selectedSlugId"
+                                                     SelectedSlugIdChanged="OnSelectedSlugIdChangedAsync" />
+                                    <ComposerEffortPicker Options="EffortOptions"
+                                                          Value="@_reasoningEffort"
+                                                          Disabled="@ComposerDisabled"
+                                                          OnPick="OnReasoningEffortChangedAsync" />
+                                </div>
                                 <span class="list-item__meta">Ctrl+Enter to send</span>
                                 <ComposerStopMenu />
                                 <button type="button"
@@ -142,6 +152,11 @@
     private Guid? _metaSessionId;
     private bool _sessionReady;
     private string _draft = "";
+    private Guid? _selectedSlugId;
+    private string? _reasoningEffort;
+    private ModelSlugPicker? _modelPicker;
+    private IReadOnlyList<string> _effortModes = [];
+    private Guid? _effortModesSlugId;
     private MetaPlanList? _planList;
     private IDisposable? _hostSub;
     private DotNetObjectReference<DysonUiHost>? _chatLinksRef;
@@ -161,6 +176,9 @@
     private bool ComposerDisabled => _unknownWorkDirectory || !IsMetaFocused;
 
     private bool CanSend => !string.IsNullOrWhiteSpace(_draft);
+
+    private IEnumerable<string> EffortOptions =>
+        ComposerEffortOptions.Build(_effortModes, _reasoningEffort);
 
     private IReadOnlyList<DysonAgentTurn> ChatTurns =>
         IsMetaFocused && Host.Session is { } session ? session.Turns : [];
@@ -235,6 +253,70 @@
         Host.SetComposerWorkDirectoryId(WorkDirectoryId);
         await RefreshSessionsAsync();
         await EnsureMetaSessionAsync();
+        await SyncModelFromHostAsync();
+    }
+
+    /// <summary>
+    /// Mirror the focused meta session's provider into the pickers. The host owns the value:
+    /// a rejected or deferred switch must not leave the picker showing a model that is not in use.
+    /// </summary>
+    private async Task SyncModelFromHostAsync()
+    {
+        if (!IsMetaFocused)
+            return;
+
+        _selectedSlugId = Host.Session?.Provider switch
+        {
+            OpenAiCompatibleAgentProvider oai => oai.SlugId,
+            DemoDysonAgentProvider demo => demo.SlugId,
+            _ => _selectedSlugId,
+        };
+        _reasoningEffort = Host.SessionReasoningEffort;
+
+        if (_selectedSlugId is not Guid slugId)
+        {
+            _effortModes = [];
+            _effortModesSlugId = null;
+            return;
+        }
+
+        // Effort modes only change with the slug; this runs on every host event.
+        if (_effortModesSlugId == slugId)
+            return;
+
+        var slug = await ModelStore.GetSlugAsync(slugId);
+        _effortModes = slug.IsSuccess ? slug.Value.ReasoningModes : [];
+        var firstSlug = _effortModesSlugId is null;
+        _effortModesSlugId = slugId;
+
+        // The picker builds its option list once, on init — before this page has resolved the
+        // session. A slug that is disabled is only listed when it is the current selection, so
+        // without this refresh a session pinned to a disabled model renders as "Select model…".
+        if (firstSlug && _modelPicker is not null)
+            await _modelPicker.RefreshAsync();
+    }
+
+    private async Task OnSelectedSlugIdChangedAsync(Guid? id)
+    {
+        // ModelSlugPicker auto-writes a default on load; the host is shared, so only the
+        // page that owns the focused meta session may repoint it.
+        if (!IsMetaFocused)
+            return;
+
+        var result = await Host.SetSessionModelSlugAsync(id);
+        _error = result.IsError ? result.Error : null;
+        await SyncModelFromHostAsync();
+    }
+
+    private async Task OnReasoningEffortChangedAsync(string? effort)
+    {
+        if (!IsMetaFocused)
+            return;
+
+        // Rejected while a prompt is in flight — say so instead of silently snapping back.
+        var result = await Host.SetSessionReasoningEffortAsync(effort);
+        _error = result.IsError ? result.Error : null;
+        await SyncModelFromHostAsync();
     }
 
     private async Task EnsureMetaSessionAsync()
@@ -351,6 +433,7 @@
         _sessions = OverlayLiveTitle(_sessions);
         if ((evt.Kind & PlanRefreshMask) != 0 && _planList is not null)
             await _planList.RefreshAsync();
+        await SyncModelFromHostAsync();
         StateHasChanged();
     });
 

@@ -310,28 +310,13 @@
         || Host.PendingImages.Count > 0
         || Host.PendingFilePaths.Count > 0;
 
-    private IEnumerable<string> EffortOptions
-    {
-        get
-        {
-            IReadOnlyList<string> modes = [];
-            if (SelectedSlugId is Guid slugId
-                && _slugReasoningModes.TryGetValue(slugId, out var registered))
-            {
-                modes = registered;
-            }
-
-            foreach (var mode in modes)
-                yield return mode;
-
-            var current = string.IsNullOrWhiteSpace(ReasoningEffort) ? null : ReasoningEffort.Trim();
-            if (current is not null
-                && !modes.Contains(current, StringComparer.Ordinal))
-            {
-                yield return current;
-            }
-        }
-    }
+    private IEnumerable<string> EffortOptions =>
+        ComposerEffortOptions.Build(
+            SelectedSlugId is Guid slugId
+                && _slugReasoningModes.TryGetValue(slugId, out var registered)
+                ? registered
+                : [],
+            ReasoningEffort);
 
     protected override void OnInitialized()
     {
