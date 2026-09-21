@@ -1,0 +1,73 @@
+/* Turn motion. Only the pieces that need a *new* selector live here; rules that already
+   existed in wwwroot/app.css (the `.turn-block__spinner` / `.turn-block__cancel-icon` swap,
+   the chevron, the corner radii) were edited in place there so no rule ends up split across
+   both files. Keyframes stay global by necessity — Blazor does not rewrite keyframe names
+   (rules/rules_ui_css.md). */
+
+/* Opacity only. `.turn-block` is the sticky ancestor of `.turn-block__header` and of
+   `.turn-block__main` / `.turn-block__tools`, so transform / filter / will-change / contain
+   here would create a containing block and break their pinning — the same reason
+   `.turn-block` carries a deliberate `overflow: visible` in app.css. ChatPanel sets `Enter`
+   for genuinely new turns only, so a session-load batch never animates. */
+.turn-block--enter {
+  animation: dyson-fade-in var(--motion-base) var(--ease);
+}
+
+/* Always-mounted turn body: expand/collapse animates height instead of creating and
+   destroying the subtree on every new prompt.
+
+   `overflow: clip`, not `hidden`: `hidden` creates a scroll container, which would become the
+   scrollport for the sticky `.turn-block__main` / `.turn-block__tools` inside and break their
+   pinning. `clip` clips without creating one.
+
+   `interpolate-size` is what makes `auto` <-> `0` interpolable (Chromium 149). Content growth
+   during streaming does not animate: the computed value stays `auto`, and transitions fire on
+   computed-value changes only. */
+.turn-block__collapsible {
+  interpolate-size: allow-keywords;
+  height: auto;
+  overflow: clip;
+  transition: height var(--motion-base) var(--ease-standard);
+}
+
+/* content-visibility implies `contain`, which creates a containing block — so it is scoped to
+   the fully collapsed state, where the sticky columns are zero-height and irrelevant. It must
+   never be active while the turn is expanded.
+   ponytail: ceiling = every turn's body now renders on every ChatPanel render (~13/sec while
+   streaming); this skips off-screen layout and paint but not the C# render pass. Upgrade path
+   is a ShouldRender fingerprint on TurnBlock. */
+/* No contain-intrinsic-size: it is only consulted where size containment has to guess, and both
+   axes are already determined here (height is an explicit 0, width comes from the block parent),
+   so the declaration would never be read. */
+.turn-block__collapsible--collapsed {
+  height: 0;
+  content-visibility: auto;
+}
+
+/* Reasoning bodies: same height animation, and no sticky descendants to protect. */
+.turn-block__reasoning-body {
+  height: auto;
+  overflow: clip;
+  transition: height var(--motion-base) var(--ease-standard);
+}
+
+.turn-block__reasoning-body--collapsed {
+  height: 0;
+}
+
+/* ApplyExpandPolicy() rebuilds the expanded set wholesale on every reasoning transition, so a
+   batch of panels flips in one frame. Those get no transition; user toggles do. */
+.turn-block__reasoning-body--instant {
+  transition: none;
+}
+
+/* One rotatable glyph instead of swapping the ▾/▸ text nodes, which cannot be transitioned. */
+.turn-block__reasoning--open .turn-block__reasoning-chevron {
+  rotate: 90deg;
+}
+
+/* Stream end destroys the streaming div and builds this one fresh, so its mount is the
+   crossfade to the formatted Markdig body. Opacity only, per `.turn-block--enter` above. */
+.turn-block__body--final {
+  animation: dyson-fade-in var(--motion-base) var(--ease);
+}

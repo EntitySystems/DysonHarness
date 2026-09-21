@@ -1,47 +1,53 @@
 @namespace Harness.UI.Components.Models
 @implements IDisposable
 
-@if (!string.IsNullOrEmpty(Error))
-{
-    <div class="error-banner error-banner--toast" role="alert">
-        <span class="error-banner__text">@Error</span>
+<DysonTransition TItem="string" Item="ErrorToastText" ExitMs="140" Context="err">
+    <div class="error-banner error-banner--toast dyson-fade @err.StateClass" role="alert">
+        <span class="error-banner__text">@err.Item</span>
         <button type="button"
                 class="error-banner__dismiss"
                 title="Dismiss"
                 aria-label="Dismiss error"
-                @onclick="DismissErrorAsync">
+                @onclick="() => err.IsExiting ? Task.CompletedTask : DismissErrorAsync()">
             <img class="error-banner__dismiss-icon" src="icons/cancel.svg" alt="" />
         </button>
     </div>
-}
-else if (!string.IsNullOrEmpty(Status))
-{
-    <div class="error-banner error-banner--toast is-ok"
+</DysonTransition>
+
+<DysonTransition TItem="string" Item="StatusToastText" ExitMs="140" Context="ok">
+    <div class="error-banner error-banner--toast is-ok dyson-fade @ok.StateClass"
          role="status"
-         style="border-color:color-mix(in srgb, var(--success) 70%, var(--border));outline-color:color-mix(in srgb, var(--success) 25%, var(--border));background:color-mix(in srgb, var(--success) 12%, var(--bg-1));color:var(--success);animation:none;">
-        <span class="error-banner__text">@Status</span>
+         style="border-color:color-mix(in srgb, var(--success) 70%, var(--border));outline-color:color-mix(in srgb, var(--success) 25%, var(--border));background:color-mix(in srgb, var(--success) 12%, var(--bg-1));color:var(--success);">
+        <span class="error-banner__text">@ok.Item</span>
         <button type="button"
                 class="error-banner__dismiss"
                 title="Dismiss"
                 aria-label="Dismiss status"
                 style="color:var(--success);"
-                @onclick="DismissStatusAsync">
+                @onclick="() => ok.IsExiting ? Task.CompletedTask : DismissStatusAsync()">
             <img class="error-banner__dismiss-icon" src="icons/cancel.svg" alt=""
                  style="filter:brightness(0) saturate(100%) invert(58%) sepia(40%) saturate(900%) hue-rotate(100deg) brightness(1.0);" />
         </button>
     </div>
-}
+</DysonTransition>
 
 @code {
     private static readonly TimeSpan StatusLifetime = TimeSpan.FromSeconds(5);
 
     [Parameter] public string? Status { get; set; }
     [Parameter] public string? Error { get; set; }
+
     [Parameter] public EventCallback OnStatusCleared { get; set; }
     [Parameter] public EventCallback OnErrorCleared { get; set; }
 
     private CancellationTokenSource? _statusCts;
     private string? _armedStatus;
+
+    private string? ErrorToastText => string.IsNullOrEmpty(Error) ? null : Error;
+
+    /// <summary>Error wins, as the original if/else-if did; null (not empty) is what clears the transition.</summary>
+    private string? StatusToastText =>
+        string.IsNullOrEmpty(Error) && !string.IsNullOrEmpty(Status) ? Status : null;
 
     protected override void OnParametersSet()
     {

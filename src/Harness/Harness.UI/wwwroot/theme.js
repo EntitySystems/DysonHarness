@@ -1,4 +1,33 @@
 window.dysonUi = {
+  /**
+   * The blanket `prefers-reduced-motion` rule in app.css only covers declarative CSS, and
+   * the preference also suppresses `transitionend` / `animationend`. Anything orchestrated
+   * in JS or C# (DysonTransition's exit window, stream-text chunk fades) must ask here and
+   * collapse its own duration to zero.
+   */
+  prefersReducedMotion: function () {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  },
+
+  /**
+   * Focus restore for overlays: capture before the overlay takes focus, restore after its
+   * node is gone. Restore is skipped unless focus was actually lost with the removed node
+   * (activeElement is body/null), so clicking elsewhere while open is not overridden.
+   * ponytail: ceiling = one global stack; fine for nested overlays, not for concurrent roots.
+   */
+  _focusStack: [],
+  captureFocus: function () {
+    var el = document.activeElement;
+    this._focusStack.push(el && el !== document.body ? el : null);
+  },
+  restoreFocus: function () {
+    var el = this._focusStack.pop();
+    if (!el || !el.isConnected || typeof el.focus !== "function") return;
+    var active = document.activeElement;
+    if (active && active !== document.body) return;
+    el.focus();
+  },
+
   isNarrow: function (maxWidthPx) {
     return window.matchMedia("(max-width: " + maxWidthPx + "px)").matches;
   },

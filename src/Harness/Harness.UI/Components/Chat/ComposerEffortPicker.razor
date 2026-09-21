@@ -16,14 +16,13 @@
         <span class="effort-picker__caret">▾</span>
     </button>
 
-    @if (_open)
-    {
-        <div class="effort-picker__backdrop" @onclick="Close"></div>
-        <div class="effort-picker__panel" tabindex="0">
+    <DysonTransition Item="_open" ExitMs="90" RestoreFocus="true" Context="ctx">
+        <div class="effort-picker__backdrop" @onclick="() => { if (!ctx.IsExiting) Close(); }"></div>
+        <div class="effort-picker__panel dyson-pop @ctx.StateClass" tabindex="0">
             <div class="effort-picker__section-label">@SectionLabel</div>
             <button type="button"
                     class="effort-picker__option @(string.IsNullOrWhiteSpace(Value) ? "is-selected" : null)"
-                    @onclick="() => PickAsync(null)">
+                    @onclick="() => ctx.IsExiting ? Task.CompletedTask : PickAsync(null)">
                 <span class="mono">@EmptyLabel</span>
             </button>
             @foreach (var mode in Options)
@@ -31,12 +30,12 @@
                 var m = mode;
                 <button type="button"
                         class="effort-picker__option @(string.Equals(Value, m, StringComparison.OrdinalIgnoreCase) ? "is-selected" : null)"
-                        @onclick="() => PickAsync(m)">
+                        @onclick="() => ctx.IsExiting ? Task.CompletedTask : PickAsync(m)">
                     <span class="mono">@m</span>
                 </button>
             }
         </div>
-    }
+    </DysonTransition>
 </div>
 
 @code {

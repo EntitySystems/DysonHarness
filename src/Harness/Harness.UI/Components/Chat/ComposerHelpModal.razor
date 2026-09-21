@@ -1,22 +1,22 @@
 @namespace Harness.UI.Components.Chat
 @using Microsoft.AspNetCore.Components.Web
 
-@if (_open)
-{
-    <div class="composer-help-modal-backdrop"
-         @onclick="Close"
+<DysonTransition Item="_open" ExitMs="140" RestoreFocus="true" OnEntered="FocusBackdropAsync" Context="ctx">
+    <div class="composer-help-modal-backdrop dyson-fade-scale @ctx.StateClass"
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => { if (!ctx.IsExiting) Close(); }"
          @onkeydown="OnBackdropKeyDown">
         <div class="composer-help-modal"
              role="dialog"
              aria-modal="true"
              aria-labelledby="composer-help-modal-title"
-             @onclick:stopPropagation="true"
-             @onkeydown="OnModalKeyDown">
+             @onclick:stopPropagation="true">
             <div class="composer-help-modal__header">
                 <h3 id="composer-help-modal-title">Composer commands</h3>
                 <button type="button"
                         class="btn btn-ghost composer-help-modal__close"
-                        @onclick="Close"
+                        @onclick="() => { if (!ctx.IsExiting) Close(); }"
                         aria-label="Close">×</button>
             </div>
 
@@ -36,7 +36,7 @@
                             </div>
                             <button type="button"
                                     class="btn btn-ghost composer-help-modal__insert"
-                                    @onclick="() => InsertAsync(entry.Template)">
+                                    @onclick="() => ctx.IsExiting ? Task.CompletedTask : InsertAsync(entry.Template)">
                                 Insert
                             </button>
                         </div>
@@ -56,7 +56,7 @@
                                 </div>
                                 <button type="button"
                                         class="btn btn-ghost composer-help-modal__insert"
-                                        @onclick="() => InsertAsync(command.Token)">
+                                        @onclick="() => ctx.IsExiting ? Task.CompletedTask : InsertAsync(command.Token)">
                                     Insert
                                 </button>
                             </div>
@@ -75,7 +75,7 @@
                             </div>
                             <button type="button"
                                     class="btn btn-ghost composer-help-modal__insert"
-                                    @onclick="() => InsertAsync(entry.Template)">
+                                    @onclick="() => ctx.IsExiting ? Task.CompletedTask : InsertAsync(entry.Template)">
                                 Insert
                             </button>
                         </div>
@@ -84,10 +84,11 @@
             </div>
         </div>
     </div>
-}
+</DysonTransition>
 
 @code {
     private bool _open;
+    private ElementReference _backdropEl;
 
     [Parameter] public EventCallback<string> OnInsert { get; set; }
 
@@ -122,9 +123,9 @@
             Close();
     }
 
-    private void OnModalKeyDown(KeyboardEventArgs args)
+    private async Task FocusBackdropAsync()
     {
-        if (args.Key == "Escape")
-            Close();
+        try { await _backdropEl.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
     }
 }

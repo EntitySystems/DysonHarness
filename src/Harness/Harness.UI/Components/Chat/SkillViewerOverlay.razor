@@ -6,29 +6,29 @@
 @inject DysonUiHost Host
 @inject DysonMessageBus Bus
 
-@if (Host.SkillViewer is { } viewer)
-{
-    <div class="file-viewer-modal-backdrop"
-         @onclick="Close"
+<DysonTransition TItem="DysonSkillViewerState" Item="Host.SkillViewer" ExitMs="140" RestoreFocus="true" OnEntered="FocusBackdropAsync" Context="ctx">
+    <div class="file-viewer-modal-backdrop dyson-fade-scale @ctx.StateClass"
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => { if (!ctx.IsExiting) Close(); }"
          @onkeydown="OnKeyDown">
         <div class="file-viewer-modal skill-viewer-modal"
              role="dialog"
              aria-modal="true"
              aria-labelledby="skill-viewer-modal-title"
-             @onclick:stopPropagation="true"
-             @onkeydown="OnKeyDown">
+             @onclick:stopPropagation="true">
             <div class="file-viewer-modal__header">
                 <div class="file-viewer-modal__titles">
-                    <h3 id="skill-viewer-modal-title">@viewer.DisplayName</h3>
-                    @if (!string.IsNullOrWhiteSpace(viewer.ResolvedPath))
+                    <h3 id="skill-viewer-modal-title">@ctx.Item.DisplayName</h3>
+                    @if (!string.IsNullOrWhiteSpace(ctx.Item.ResolvedPath))
                     {
-                        <div class="file-viewer-modal__path mono">@viewer.ResolvedPath</div>
+                        <div class="file-viewer-modal__path mono">@ctx.Item.ResolvedPath</div>
                     }
                 </div>
                 <div class="file-viewer-modal__actions">
                     <button type="button"
                             class="btn btn-ghost file-viewer-modal__close"
-                            @onclick="Close"
+                            @onclick="() => { if (!ctx.IsExiting) Close(); }"
                             aria-label="Close">×</button>
                 </div>
             </div>
@@ -36,16 +36,17 @@
             <div class="file-viewer-modal__body">
                 <div class="file-viewer-modal__content">
                     <div class="file-viewer-modal__markdown turn-block__body">
-                        @MarkdownRenderer.ToHtml(viewer.Markdown)
+                        @MarkdownRenderer.ToHtml(ctx.Item.Markdown)
                     </div>
                 </div>
             </div>
         </div>
     </div>
-}
+</DysonTransition>
 
 @code {
     private IDisposable? _hostSub;
+    private ElementReference _backdropEl;
 
     protected override void OnInitialized()
     {
@@ -62,6 +63,12 @@
     }
 
     private void Close() => Host.CloseSkillViewer();
+
+    private async Task FocusBackdropAsync()
+    {
+        try { await _backdropEl.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
+    }
 
     private void OnKeyDown(KeyboardEventArgs e)
     {

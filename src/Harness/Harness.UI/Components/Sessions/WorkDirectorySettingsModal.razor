@@ -7,25 +7,25 @@
 @inject ConfirmDialogService Confirm
 @inject DysonUiHost Host
 
-@if (_open && WorkDirectory is not null)
-{
-    <div class="workdir-modal-backdrop"
-         @onclick="CloseAsync"
+<DysonTransition TItem="DysonWorkDirectoryEntity" Item="@(_open ? WorkDirectory : null)" ExitMs="140" RestoreFocus="true" OnEntered="FocusBackdropAsync" Context="ctx">
+    <div class="workdir-modal-backdrop dyson-fade-scale @ctx.StateClass"
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()"
          @onkeydown="OnBackdropKeyDown">
         <div class="workdir-settings-modal"
              role="dialog"
              aria-modal="true"
              aria-labelledby="workdir-settings-title"
-             @onclick:stopPropagation="true"
-             @onkeydown="OnModalKeyDown">
+             @onclick:stopPropagation="true">
             <div class="workdir-modal__header">
                 <h3 id="workdir-settings-title">Work directory settings</h3>
-                <button type="button" class="btn btn-ghost workdir-modal__close" @onclick="CloseAsync" aria-label="Close">×</button>
+                <button type="button" class="btn btn-ghost workdir-modal__close" @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()" aria-label="Close">×</button>
             </div>
 
             <div class="workdir-settings-modal__meta">
-                <div class="workdir-settings-modal__name">@WorkDirectory.Name</div>
-                <div class="workdir-settings-modal__path mono" title="@WorkDirectory.AbsolutePath">@WorkDirectory.AbsolutePath</div>
+                <div class="workdir-settings-modal__name">@ctx.Item.Name</div>
+                <div class="workdir-settings-modal__path mono" title="@ctx.Item.AbsolutePath">@ctx.Item.AbsolutePath</div>
             </div>
 
             @if (!string.IsNullOrEmpty(_error))
@@ -128,7 +128,7 @@
                         <button type="button"
                                 class="btn btn-ghost btn-sm"
                                 disabled="@Busy"
-                                @onclick="CreateOpenRulesAsync">
+                                @onclick="() => ctx.IsExiting ? Task.CompletedTask : CreateOpenRulesAsync()">
                             Create openrules.json
                         </button>
                     }
@@ -154,7 +154,7 @@
                         <button type="button"
                                 class="btn btn-ghost btn-sm"
                                 disabled="@(Busy || !_mcpActive)"
-                                @onclick="BeginAdd">
+                                @onclick="() => { if (!ctx.IsExiting) BeginAdd(); }">
                             Add
                         </button>
                     </div>
@@ -190,19 +190,19 @@
                                         <button type="button"
                                                 class="btn btn-ghost btn-sm"
                                                 disabled="@(Busy || !_mcpActive || status.Disabled)"
-                                                @onclick="() => RestartAsync(status.ServerId)">
+                                                @onclick="() => { if (!ctx.IsExiting) RestartAsync(status.ServerId); }">
                                             Restart
                                         </button>
                                         <button type="button"
                                                 class="btn btn-ghost btn-sm"
                                                 disabled="@Busy"
-                                                @onclick="() => BeginEdit(status.ServerId)">
+                                                @onclick="() => { if (!ctx.IsExiting) BeginEdit(status.ServerId); }">
                                             Edit
                                         </button>
                                         <button type="button"
                                                 class="btn btn-ghost btn-sm"
                                                 disabled="@Busy"
-                                                @onclick="() => DeleteAsync(status.ServerId)">
+                                                @onclick="() => ctx.IsExiting ? Task.CompletedTask : DeleteAsync(status.ServerId)">
                                             Delete
                                         </button>
                                     </div>
@@ -237,8 +237,8 @@
                                           @bind:event="oninput"></textarea>
                             </label>
                             <div class="btn-row">
-                                <button type="button" class="btn btn-primary btn-sm" disabled="@Busy" @onclick="SaveEditorAsync">Save</button>
-                                <button type="button" class="btn btn-ghost btn-sm" disabled="@Busy" @onclick="CancelEditor">Cancel</button>
+                                <button type="button" class="btn btn-primary btn-sm" disabled="@Busy" @onclick="() => ctx.IsExiting ? Task.CompletedTask : SaveEditorAsync()">Save</button>
+                                <button type="button" class="btn btn-ghost btn-sm" disabled="@Busy" @onclick="() => { if (!ctx.IsExiting) CancelEditor(); }">Cancel</button>
                             </div>
                         </div>
                     }
@@ -246,10 +246,11 @@
             </div>
         </div>
     </div>
-}
+</DysonTransition>
 
 @code {
     private bool _open;
+    private ElementReference _backdropEl;
     private bool _mcpActive = true;
     private string? _error;
     private DysonCustomMcpHost? _host;
@@ -563,8 +564,8 @@
 
     private async Task CloseAsync()
     {
+        // OpenAsync() re-runs CancelEditor(); doing it here would blink the editor away mid-exit.
         _open = false;
-        CancelEditor();
         await ReleaseHostAsync();
     }
 
@@ -589,10 +590,10 @@
             _ = CloseAsync();
     }
 
-    private void OnModalKeyDown(KeyboardEventArgs args)
+    private async Task FocusBackdropAsync()
     {
-        if (args.Key == "Escape")
-            _ = CloseAsync();
+        try { await _backdropEl.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
     }
 
     private static string TransportLabel(DysonCustomMcpTransportKind kind) => kind switch

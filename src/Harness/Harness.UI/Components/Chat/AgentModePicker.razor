@@ -13,20 +13,20 @@
     </button>
 </div>
 
-@if (_modalOpen)
-{
-    <div class="agent-mode-modal-backdrop"
-         @onclick="CloseModal"
+<DysonTransition Item="_modalOpen" ExitMs="140" RestoreFocus="true" OnEntered="FocusSearchAsync" Context="ctx">
+    <div class="agent-mode-modal-backdrop dyson-fade-scale @ctx.StateClass"
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => { if (!ctx.IsExiting) CloseModal(); }"
          @onkeydown="OnBackdropKeyDown">
         <div class="agent-mode-modal"
              role="dialog"
              aria-modal="true"
              aria-labelledby="agent-mode-modal-title"
-             @onclick:stopPropagation="true"
-             @onkeydown="OnModalKeyDown">
+             @onclick:stopPropagation="true">
             <div class="agent-mode-modal__header">
                 <h3 id="agent-mode-modal-title">Select agent mode</h3>
-                <button type="button" class="btn btn-ghost agent-mode-modal__close" @onclick="CloseModal" aria-label="Close">×</button>
+                <button type="button" class="btn btn-ghost agent-mode-modal__close" @onclick="() => { if (!ctx.IsExiting) CloseModal(); }" aria-label="Close">×</button>
             </div>
 
             <div class="agent-mode-modal__search">
@@ -35,7 +35,6 @@
                        placeholder="Search modes…"
                        value="@_search"
                        @oninput="OnSearchInput"
-                       @onkeydown="OnModalKeyDown"
                        autofocus />
             </div>
 
@@ -54,7 +53,7 @@
                              aria-selected="@selected">
                             <button type="button"
                                     class="agent-mode-modal__option"
-                                    @onclick="() => SelectAsync(mode)">
+                                    @onclick="() => ctx.IsExiting ? Task.CompletedTask : SelectAsync(mode)">
                                 <span class="agent-mode-modal__option-label">@mode</span>
                             </button>
                         </div>
@@ -63,13 +62,13 @@
             </div>
         </div>
     </div>
-}
+</DysonTransition>
 
 @code {
     private bool _modalOpen;
-    private bool _focusSearch;
     private string _search = "";
     private ElementReference _searchInput;
+    private ElementReference _backdropEl;
 
     [Parameter] public string SelectedMode { get; set; } = DysonAgentModes.Work;
     [Parameter] public EventCallback<string> SelectedModeChanged { get; set; }
@@ -89,45 +88,24 @@
         }
     }
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    private async Task FocusSearchAsync()
     {
-        if (!_modalOpen || !_focusSearch)
-            return;
-
-        _focusSearch = false;
-        try
-        {
-            await _searchInput.FocusAsync();
-        }
-        catch
-        {
-            // Element may not be ready on first paint of the modal.
-        }
+        try { await _searchInput.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
     }
 
     private void OpenModal()
     {
         _search = "";
         _modalOpen = true;
-        _focusSearch = true;
     }
 
-    private void CloseModal()
-    {
-        _modalOpen = false;
-        _search = "";
-    }
+    private void CloseModal() => _modalOpen = false;
 
     private void OnSearchInput(ChangeEventArgs args) =>
         _search = args.Value?.ToString() ?? "";
 
     private void OnBackdropKeyDown(KeyboardEventArgs args)
-    {
-        if (args.Key == "Escape")
-            CloseModal();
-    }
-
-    private void OnModalKeyDown(KeyboardEventArgs args)
     {
         if (args.Key == "Escape")
             CloseModal();

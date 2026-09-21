@@ -5,17 +5,19 @@
 @inject IDysonSubjectSettingsRepository AppSettings
 @implements IDisposable
 
-@if (Visible)
-{
-    <div class="confirm-dialog-backdrop"
+<DysonTransition Item="Visible" ExitMs="140" RestoreFocus="true"
+                 OnEntered="FocusBackdropAsync" Context="ctx">
+    <div class="confirm-dialog-backdrop dyson-fade-scale @ctx.StateClass"
          role="presentation"
-         @onclick="OnBackdropClick">
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => { if (!ctx.IsExiting) OnBackdropClick(); }"
+         @onkeydown="args => { if (!ctx.IsExiting) OnKeyDown(args); }">
         <div class="confirm-dialog confirm-dialog--update"
              role="dialog"
              aria-modal="true"
              aria-labelledby="update-dialog-title"
-             @onclick:stopPropagation="true"
-             @onkeydown="OnKeyDown">
+             @onclick:stopPropagation="true">
             <div class="confirm-dialog__header">
                 <h3 id="update-dialog-title">Update available</h3>
             </div>
@@ -57,22 +59,23 @@
                 <div class="confirm-dialog__actions">
                     @if (Updates.Phase is DysonAppUpdatePhase.Failed)
                     {
-                        <button type="button" class="btn btn-ghost" @onclick="Close">Close</button>
+                        <button type="button" class="btn btn-ghost" @onclick="() => { if (!ctx.IsExiting) Close(); }">Close</button>
                     }
                     else
                     {
-                        <button type="button" class="btn btn-ghost" @onclick="SkipAsync">Not now</button>
-                        <button type="button" class="btn btn-primary" @onclick="InstallAsync">Update</button>
+                        <button type="button" class="btn btn-ghost" @onclick="() => ctx.IsExiting ? Task.CompletedTask : SkipAsync()">Not now</button>
+                        <button type="button" class="btn btn-primary" @onclick="() => ctx.IsExiting ? Task.CompletedTask : InstallAsync()">Update</button>
                     }
                 </div>
             }
         </div>
     </div>
-}
+</DysonTransition>
 
 @code {
     private string? _skippedVersion;
     private bool _loaded;
+    private ElementReference _backdropEl;
 
     private bool Locked => Updates.Phase is DysonAppUpdatePhase.Downloading;
 
@@ -109,6 +112,12 @@
     }
 
     private void OnUpdatesChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private async Task FocusBackdropAsync()
+    {
+        try { await _backdropEl.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
+    }
 
     private void OnKeyDown(KeyboardEventArgs e)
     {

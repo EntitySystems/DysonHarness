@@ -22,21 +22,21 @@
     </button>
 </div>
 
-@if (_modalOpen)
-{
-    <div class="workdir-modal-backdrop"
-         @onclick="CloseModal"
+<DysonTransition Item="_modalOpen" ExitMs="140" RestoreFocus="true" OnEntered="FocusSearchAsync" Context="ctx">
+    <div class="workdir-modal-backdrop dyson-fade-scale @ctx.StateClass"
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => { if (!ctx.IsExiting) CloseModal(); }"
          @onkeydown="OnBackdropKeyDown">
         <div class="workdir-modal"
              role="dialog"
              aria-modal="true"
              aria-labelledby="workdir-modal-title"
              aria-busy="@(_selectingId is not null)"
-             @onclick:stopPropagation="true"
-             @onkeydown="OnModalKeyDown">
+             @onclick:stopPropagation="true">
             <div class="workdir-modal__header">
                 <h3 id="workdir-modal-title">Select work directory</h3>
-                <button type="button" class="btn btn-ghost workdir-modal__close" disabled="@ControlsLocked" @onclick="CloseModal" aria-label="Close">×</button>
+                <button type="button" class="btn btn-ghost workdir-modal__close" disabled="@ControlsLocked" @onclick="() => { if (!ctx.IsExiting) CloseModal(); }" aria-label="Close">×</button>
             </div>
 
             @if (!string.IsNullOrEmpty(_error))
@@ -51,7 +51,6 @@
                        value="@_search"
                        disabled="@ControlsLocked"
                        @oninput="OnSearchInput"
-                       @onkeydown="OnModalKeyDown"
                        autofocus />
             </div>
 
@@ -78,7 +77,7 @@
                             <button type="button"
                                     class="workdir-modal__option"
                                     disabled="@ControlsLocked"
-                                    @onclick="() => SelectAsync(item.Id)">
+                                    @onclick="() => ctx.IsExiting ? Task.CompletedTask : SelectAsync(item.Id)">
                                 <span class="workdir-modal__option-text">
                                     <span class="workdir-modal__option-name">@item.Name</span>
                                     <span class="workdir-modal__option-path mono" title="@item.AbsolutePath">
@@ -95,7 +94,7 @@
                                     disabled="@ControlsLocked"
                                     title="Work directory settings"
                                     aria-label="Settings for @item.Name"
-                                    @onclick="() => OpenSettingsAsync(item)"
+                                    @onclick="() => ctx.IsExiting ? Task.CompletedTask : OpenSettingsAsync(item)"
                                     @onclick:stopPropagation="true">
                                 <img src="icons/cog.svg" alt="Work directory settings" />
                             </button>
@@ -104,7 +103,7 @@
                                     disabled="@ControlsLocked"
                                     title="Remove from list (does not delete disk folder)"
                                     aria-label="Remove @item.Name"
-                                    @onclick="() => RemoveAsync(item.Id)"
+                                    @onclick="() => ctx.IsExiting ? Task.CompletedTask : RemoveAsync(item.Id)"
                                     @onclick:stopPropagation="true">
                                 <img src="icons/trash.svg" alt="Remove work directory" />
                             </button>
@@ -119,13 +118,13 @@
                         disabled="@ControlsLocked"
                         title="Add work directory"
                         aria-label="Add work directory"
-                        @onclick="AddAsync">
+                        @onclick="() => ctx.IsExiting ? Task.CompletedTask : AddAsync()">
                     <img src="icons/folder-plus.svg" alt="Add work directory" />
                 </button>
             </div>
         </div>
     </div>
-}
+</DysonTransition>
 
 <WorkDirectorySettingsModal @ref="_settingsModal" Busy="Busy" OnChanged="OnChanged" />
 
@@ -134,9 +133,9 @@
     private string? _error;
     private Guid? _selectingId;
     private bool _modalOpen;
-    private bool _focusSearch;
     private string _search = "";
     private ElementReference _searchInput;
+    private ElementReference _backdropEl;
     private WorkDirectorySettingsModal? _settingsModal;
 
     [Parameter] public Guid? ActiveWorkDirectoryId { get; set; }
@@ -174,20 +173,10 @@
 
     protected override async Task OnInitializedAsync() => await RefreshAsync();
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    private async Task FocusSearchAsync()
     {
-        if (!_modalOpen || !_focusSearch)
-            return;
-
-        _focusSearch = false;
-        try
-        {
-            await _searchInput.FocusAsync();
-        }
-        catch
-        {
-            // Element may not be ready on first paint of the modal.
-        }
+        try { await _searchInput.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
     }
 
     public async Task RefreshAsync()
@@ -212,7 +201,6 @@
     {
         _search = "";
         _modalOpen = true;
-        _focusSearch = true;
     }
 
     /// <summary>Public entry for New-session / external open (same as trigger click).</summary>
@@ -228,7 +216,6 @@
             return;
 
         _modalOpen = false;
-        _search = "";
     }
 
     private async Task OpenSettingsAsync(DysonWorkDirectoryEntity item)
@@ -242,12 +229,6 @@
         _search = args.Value?.ToString() ?? "";
 
     private void OnBackdropKeyDown(KeyboardEventArgs args)
-    {
-        if (args.Key == "Escape")
-            CloseModal();
-    }
-
-    private void OnModalKeyDown(KeyboardEventArgs args)
     {
         if (args.Key == "Escape")
             CloseModal();

@@ -1,0 +1,7 @@
+/* Session-switch crossfade. Opacity only: `.chat-panel__turns` is the scroll container and the
+   sticky ancestor of every `.turn-block__header`, and opacity creates a stacking context but not
+   a containing block, so pinning survives. Keyframe is global — Blazor does not rewrite keyframe
+   names (rules/rules_ui_css.md). */
+.chat-panel__turns--swap {
+  animation: dyson-fade-in var(--motion-slow) var(--ease);
+}

@@ -36,8 +36,8 @@ public static class DysonAgentSystemPrompts
 
         CompleteTask confirmation:
         - Calling CompleteTask does not end the session immediately; the harness schedules a confirmation turn.
-        - On that turn, call ConfirmTaskComplete if the work is truly done, or ContinueWork if anything remains.
-        - After ConfirmTaskComplete, the harness schedules a final ReportSummary turn for this cycle; write a brief handoff summary for a parent agent (outcome, key files/changes, verification, residual risks). Prefer writing the summary in your reply; avoid further work tools unless essential.
+        - On that turn, call ConfirmTaskComplete if the work is truly done, or ContinueWork if anything remains. Do not write the handoff summary there.
+        - After ConfirmTaskComplete, the harness schedules a final ReportSummary turn for this cycle; write a detailed handoff summary for a parent agent (outcome, key files/changes, verification, residual risks). Prefer writing the summary in your reply; avoid further work tools unless essential.
         - After a confirmed complete and ReportSummary, the root is marked Completed. CompleteTask cannot run again while still Completed; a later in-flight user prompt reopens the session to Active so CompleteTask may be called again (new cycle). Stopped/Interrupted stay locked.
 
         Tool-round budget and rethink:

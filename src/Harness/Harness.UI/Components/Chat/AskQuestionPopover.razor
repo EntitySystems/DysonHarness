@@ -2,19 +2,18 @@
 @using DysonHarness
 @using Harness.UI.Demo
 
-@if (Ask is not null)
-{
-    <div class="ask-popover" role="dialog" aria-label="Agent questions">
+<DysonTransition TItem="DysonAskUiState" Item="Ask" ExitMs="140" Context="ctx">
+    <div class="ask-popover dyson-fade @ctx.StateClass" role="dialog" aria-label="Agent questions">
         <div class="ask-popover__header">
             <span class="ask-popover__title">
-                @(Ask.Source == DysonAskUiSource.RootAskQuestion ? "AskQuestion" : "AskQuestion from subagent")
+                @(ctx.Item.Source == DysonAskUiSource.RootAskQuestion ? "AskQuestion" : "AskQuestion from subagent")
             </span>
         </div>
         <div class="ask-popover__questions">
-            @for (var i = 0; i < Ask.Questions.Count; i++)
+            @for (var i = 0; i < ctx.Item.Questions.Count; i++)
             {
                 var qi = i;
-                var q = Ask.Questions[qi];
+                var q = ctx.Item.Questions[qi];
                 var draft = _drafts[qi];
                 <div class="ask-popover__question">
                     <div class="ask-popover__prompt">Q@(qi + 1) — @q.Prompt</div>
@@ -75,13 +74,13 @@
             }
             <button type="button"
                     class="btn btn-primary"
-                    disabled="@(!AllResolved())"
+                    disabled="@(ctx.IsExiting || !AllResolved())"
                     @onclick="SubmitAsync">
                 Submit answers
             </button>
         </div>
     </div>
-}
+</DysonTransition>
 
 @code {
     private DysonAskUiState? _boundAsk;
@@ -96,11 +95,14 @@
         if (ReferenceEquals(Ask, _boundAsk))
             return;
 
+        // Cleared only starts the exit window: the popover still renders the cached
+        // questions, so the drafts backing them must outlive Ask going null.
+        if (Ask is null)
+            return;
+
         _boundAsk = Ask;
         _error = null;
-        _drafts = Ask is null
-            ? []
-            : Ask.Questions.Select(_ => new Draft()).ToList();
+        _drafts = Ask.Questions.Select(_ => new Draft()).ToList();
     }
 
     private void Skip(int i)

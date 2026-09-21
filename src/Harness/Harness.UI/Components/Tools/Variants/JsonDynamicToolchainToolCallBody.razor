@@ -20,11 +20,11 @@
     }
 </div>
 
-@if (_modalOpen && Flow is not null)
-{
-    <div class="toolchain-flow-modal-backdrop"
+<DysonTransition TItem="DysonJsonDynamicToolchainFlowNode" Item="ModalFlow" ExitMs="140" RestoreFocus="true" OnEntered="FocusBackdropAsync" Context="ctx">
+    <div class="toolchain-flow-modal-backdrop dyson-fade-scale @ctx.StateClass"
          tabindex="-1"
-         @onclick="CloseModal"
+         @ref="_backdropEl"
+         @onclick="() => { if (!ctx.IsExiting) CloseModal(); }"
          @onkeydown="OnBackdropKeyDown">
         <div class="toolchain-flow-modal"
              role="dialog"
@@ -33,14 +33,17 @@
              @onclick:stopPropagation="true">
             <div class="toolchain-flow-modal__header">
                 <h3 id="toolchain-flow-title">Toolchain flow</h3>
-                <button type="button" class="toolchain-flow-modal__close" @onclick="CloseModal" aria-label="Close">×</button>
+                <button type="button"
+                        class="toolchain-flow-modal__close"
+                        @onclick="() => { if (!ctx.IsExiting) CloseModal(); }"
+                        aria-label="Close">×</button>
             </div>
             <div class="toolchain-flow-modal__body">
-                @RenderFlowNode(Flow)
+                @RenderFlowNode(ctx.Item)
             </div>
         </div>
     </div>
-}
+</DysonTransition>
 
 @code {
     [Parameter] public string? ArgumentsJson { get; set; }
@@ -49,9 +52,12 @@
     [Parameter] public bool ArgsOnly { get; set; }
 
     private bool _modalOpen;
+    private ElementReference _backdropEl;
     private DysonJsonDynamicToolchainFlowNode? Flow { get; set; }
     private string SummaryText { get; set; } = "toolchain";
     private string? ErrorText { get; set; }
+
+    private DysonJsonDynamicToolchainFlowNode? ModalFlow => _modalOpen ? Flow : null;
 
     protected override void OnParametersSet()
     {
@@ -101,6 +107,19 @@
     {
         if (e.Key == "Escape")
             CloseModal();
+    }
+
+    /// <summary>Escape is handled on the backdrop, so focus has to land there when the modal opens.</summary>
+    private async Task FocusBackdropAsync()
+    {
+        try
+        {
+            await _backdropEl.FocusAsync();
+        }
+        catch
+        {
+            // Modal may already be gone.
+        }
     }
 
     private RenderFragment RenderFlowNode(DysonJsonDynamicToolchainFlowNode node) => builder =>

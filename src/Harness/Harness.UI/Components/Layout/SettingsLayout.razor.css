@@ -1,0 +1,6 @@
+/* Settings-to-settings content fade, triggered from LocationChanged because this element
+   persists across those routes. Keyframe is global (app.css): Blazor does not rewrite keyframe
+   names (rules/rules_ui_css.md). */
+.settings-shell__content--enter {
+    animation: dyson-fade-in var(--motion-base) var(--ease);
+}

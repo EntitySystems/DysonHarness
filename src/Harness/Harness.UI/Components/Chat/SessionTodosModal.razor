@@ -2,18 +2,19 @@
 @using Microsoft.AspNetCore.Components.Web
 @using DysonHarness
 
-@if (IsOpen)
-{
-    <div class="confirm-dialog-backdrop"
+<DysonTransition Item="IsOpen" ExitMs="140" RestoreFocus="true"
+                 OnEntered="FocusBackdropAsync" Context="ctx">
+    <div class="confirm-dialog-backdrop dyson-fade-scale @ctx.StateClass"
          role="presentation"
-         @onclick="CloseAsync"
-         @onkeydown="OnKeyDown">
+         tabindex="-1"
+         @ref="_backdropEl"
+         @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()"
+         @onkeydown="args => { if (!ctx.IsExiting) OnKeyDown(args); }">
         <div class="confirm-dialog session-todos-modal"
              role="dialog"
              aria-modal="true"
              aria-labelledby="session-todos-modal-title"
-             @onclick:stopPropagation="true"
-             @onkeydown="OnKeyDown">
+             @onclick:stopPropagation="true">
             <div class="confirm-dialog__header">
                 <div class="session-todos-modal__title-row">
                     <h3 id="session-todos-modal-title">Tasks</h3>
@@ -23,7 +24,7 @@
                 </div>
                 <button type="button"
                         class="btn btn-ghost session-todos-modal__close"
-                        @onclick="CloseAsync"
+                        @onclick="() => ctx.IsExiting ? Task.CompletedTask : CloseAsync()"
                         aria-label="Close">×</button>
             </div>
 
@@ -61,7 +62,7 @@
             </div>
         </div>
     </div>
-}
+</DysonTransition>
 
 @code {
     [Parameter] public bool IsOpen { get; set; }
@@ -72,7 +73,15 @@
 
     [Parameter] public EventCallback OnClose { get; set; }
 
+    private ElementReference _backdropEl;
+
     private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private async Task FocusBackdropAsync()
+    {
+        try { await _backdropEl.FocusAsync(); }
+        catch { /* overlay may already be gone */ }
+    }
 
     private void OnKeyDown(KeyboardEventArgs args)
     {

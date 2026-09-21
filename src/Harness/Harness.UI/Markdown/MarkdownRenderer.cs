@@ -54,14 +54,18 @@ public static class MarkdownRenderer
 
         var html = new MarkupString(global::Markdig.Markdown.ToHtml(document, Pipeline));
 
-        // ponytail: 64-entry ceiling, insertion-order eviction (not true LRU — a cache hit does not
+        // ponytail: 256-entry ceiling, insertion-order eviction (not true LRU — a cache hit does not
         // bump Seq, so a hot entry can still be evicted before a cold one). Overflow does an O(n) scan
-        // over the ~64 entries to find the oldest ~16 by Seq instead of Clear()-ing everything, so a
+        // over the ~256 entries to find the oldest ~64 by Seq instead of Clear()-ing everything, so a
         // long transcript scroll degrades gradually instead of cold-starting every turn's HTML at once.
         // Upgrade to a real LRU (bump Seq on read) if eviction-of-hot-entries becomes visible.
-        if (HtmlCache.Count >= 64)
+        // The ceiling was 64 while collapsed turns were @if-removed from the render tree. TurnBlock
+        // now keeps every turn's body mounted, so one render pass touches every turn's instruction,
+        // reply and reasoning bodies — at ~13 renders/sec a 64-entry cache would thrash and re-run
+        // Markdig + ColorCode for the whole transcript on every delta.
+        if (HtmlCache.Count >= 256)
         {
-            var oldest = HtmlCache.OrderBy(static entry => entry.Value.Seq).Take(16);
+            var oldest = HtmlCache.OrderBy(static entry => entry.Value.Seq).Take(64);
             foreach (var entry in oldest)
                 HtmlCache.TryRemove(entry.Key, out _);
         }

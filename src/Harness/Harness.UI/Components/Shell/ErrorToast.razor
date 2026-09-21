@@ -2,7 +2,7 @@
 @implements IDisposable
 @inject DysonUiHost Host
 
-<div class="error-banner error-banner--toast" role="alert">
+<div class="error-banner error-banner--toast dyson-fade @MotionClass" role="alert">
     <span class="error-banner__text">@Message</span>
     <button type="button"
             class="error-banner__dismiss"
@@ -16,6 +16,9 @@
 @code {
     [Parameter, EditorRequired]
     public string Message { get; set; } = "";
+
+    /// <summary>DysonTransition state class — the owner gates this component, so it cannot self-animate.</summary>
+    [Parameter] public string? MotionClass { get; set; }
 
     private CancellationTokenSource? _cts;
 

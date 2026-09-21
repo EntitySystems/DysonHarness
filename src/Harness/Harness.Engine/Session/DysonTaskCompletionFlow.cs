@@ -24,9 +24,9 @@ public static class DysonTaskCompletionFlow
     public const string ConfirmInstruction = """
         You previously called CompleteTask. Before the harness accepts completion, confirm carefully.
         Re-check: was the user request fully satisfied? Were required verifications run? Are residual blockers unresolved?
-        - If truly complete, call ConfirmTaskComplete (optionally with a short rationale).
+        - If truly complete, call ConfirmTaskComplete (optionally with a short rationale). That call schedules a ReportSummary turn next, whose instruction will ask you to write a detailed handoff summary — do not write that summary on this confirm turn.
         - If anything remains, call ContinueWork with what is left; do not claim done.
-        Prefer a single decisive tool call this turn.
+        Prefer a single decisive tool call this turn. No completion summary in the reply.
         """;
 
     public const string ContinuationInstruction = """
@@ -35,9 +35,9 @@ public static class DysonTaskCompletionFlow
         """;
 
     public const string ReportSummaryInstruction = """
-        Report summary turn (final for this cycle): Briefly explain the work done so a parent agent has enough context to continue without re-deriving your steps.
+        Report summary turn (final for this cycle): Write a detailed handoff summary of the work done so a parent agent has enough context to continue without re-deriving your steps.
         Cover: outcome, key files/changes, how you verified, and any residual risks or follow-ups.
-        Stay concise and factual. Prefer writing the summary in your reply; avoid further tool calls unless essential to cite a path.
+        Stay factual. Prefer writing the summary in your reply; avoid further tool calls unless essential to cite a path.
         A later user turn starts a new completion cycle.
         """;
 
@@ -73,7 +73,7 @@ public static class DysonTaskCompletionFlow
         };
     }
 
-    /// <summary>Final turn of this cycle after ConfirmTaskComplete: brief parent-agent handoff summary.</summary>
+    /// <summary>Final turn of this cycle after ConfirmTaskComplete: detailed parent-agent handoff summary.</summary>
     public static DysonAgentTurn CreateReportSummaryTurn(string? confirmRationale = null)
     {
         var instruction = string.IsNullOrWhiteSpace(confirmRationale)

@@ -25,7 +25,9 @@ public class DysonTaskCompletionTests
         if (confirm.Kind != DysonAgentTurnKind.TaskCompletionConfirm
             || string.IsNullOrWhiteSpace(confirm.Instruction)
             || !confirm.Instruction.Contains(DysonTaskCompletionFlow.ConfirmInstruction, StringComparison.Ordinal)
-            || !confirm.Instruction.Contains("done", StringComparison.Ordinal))
+            || !confirm.Instruction.Contains("done", StringComparison.Ordinal)
+            || !confirm.Instruction.Contains("ReportSummary", StringComparison.Ordinal)
+            || !confirm.Instruction.Contains("do not write that summary", StringComparison.Ordinal))
         {
             throw new InvalidOperationException("CreateCompletionConfirmTurn fields mismatch.");
         }

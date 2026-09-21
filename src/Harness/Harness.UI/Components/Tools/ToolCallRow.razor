@@ -45,20 +45,18 @@
             </button>
         }
     </div>
-    @if (_expanded)
-    {
-        <div class="tool-row__body">
-            <ToolCallExpandedBody ToolName="@Tracked.Call.ToolName"
-                                  CallId="@Tracked.Call.CallId"
-                                  Stage="@Tracked.Call.Stage"
-                                  ArgumentsJson="@Tracked.Call.ArgumentsJson"
-                                  ResultContent="@(Tracked.Result?.Content)"
-                                  BinaryAttachment="@(Tracked.Result?.BinaryAttachment)"
-                                  GeneratedImageArtifacts="@(Tracked.Result?.GeneratedImageArtifacts ?? [])"
-                                  IsError="@(Tracked.Result?.IsError == true || Tracked.Status == DysonToolCallStatus.Failed)"
-                                  ArgsOnly="false" />
-        </div>
-    }
+    @* Always rendered: `.tool-row__body` is shown/hidden by the --expanded class so the reveal can animate. *@
+    <div class="tool-row__body">
+        <ToolCallExpandedBody ToolName="@Tracked.Call.ToolName"
+                              CallId="@Tracked.Call.CallId"
+                              Stage="@Tracked.Call.Stage"
+                              ArgumentsJson="@Tracked.Call.ArgumentsJson"
+                              ResultContent="@(Tracked.Result?.Content)"
+                              BinaryAttachment="@(Tracked.Result?.BinaryAttachment)"
+                              GeneratedImageArtifacts="@(Tracked.Result?.GeneratedImageArtifacts ?? [])"
+                              IsError="@(Tracked.Result?.IsError == true || Tracked.Status == DysonToolCallStatus.Failed)"
+                              ArgsOnly="false" />
+    </div>
 </div>
 
 @code {
