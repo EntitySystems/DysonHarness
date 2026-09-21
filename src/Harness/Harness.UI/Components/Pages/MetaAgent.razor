@@ -1,0 +1,190 @@
+@page "/meta/{WorkDirectoryId:guid}"
+@using DysonHarness
+@using Harness.UI.Demo
+@inject DysonUiHost Host
+@inject IDysonWorkDirectoryRepository WorkDirs
+@inject NavigationManager Nav
+
+<PageTitle>Meta agent — @(_workDirectoryName ?? "DysonHarness")</PageTitle>
+
+<AppShell>
+    <Sidebar>
+        <Sidebar>
+            <WorkDirectory>
+                <WorkDirectorySwitcher ActiveWorkDirectoryId="_activeWorkDirectoryId"
+                                       ActiveWorkDirectoryIdChanged="OnWorkDirectoryChanged" />
+            </WorkDirectory>
+            <SessionList>
+                <SessionList Sessions="_sessions"
+                             ActiveSessionId="Host.ActiveSessionId"
+                             Error="@_error"
+                             OnNew="StartNewAsync"
+                             OnResume="ResumeAsync"
+                             OnDelete="DeleteAsync"
+                             OnDeleteInactive="DeleteInactiveAsync"
+                             OnRefresh="RefreshSessionsAsync" />
+            </SessionList>
+        </Sidebar>
+    </Sidebar>
+    <Main>
+        <div class="meta-stage">
+            <header class="meta-stage__header">
+                <div class="meta-stage__heading">
+                    <h1 class="meta-stage__title">Meta agent</h1>
+                    <span class="meta-stage__subtitle mono">@(_workDirectoryName ?? WorkDirectoryId.ToString())</span>
+                </div>
+                <a class="btn" href="/">← Back to agent</a>
+            </header>
+
+            @if (_unknownWorkDirectory)
+            {
+                <div class="error-banner">Unknown work directory.</div>
+            }
+            else
+            {
+                <div class="meta-stage__body">
+                    <div class="meta-main">
+                        <div class="meta-chat" role="log" aria-label="Meta agent transcript">
+                            <div class="empty-state">
+                                <p class="empty-state__message">
+                                    Meta agent mode is a placeholder. Orchestration wiring lands in a later iteration.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="composer meta-composer">
+                            <div class="composer-shell">
+                                <textarea class="meta-composer__prompt"
+                                          rows="3"
+                                          placeholder="Describe what the meta agent should orchestrate…"
+                                          disabled></textarea>
+                            </div>
+                            <div class="btn-row meta-composer__actions">
+                                <button type="button" class="btn btn-primary" disabled>Send</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <section class="meta-agents" aria-label="Meta agents (placeholder)">
+                        <div class="sidebar__section-label">Agents · placeholder</div>
+                        <div class="meta-agents__list">
+                            @foreach (var agent in PlaceholderAgents)
+                            {
+                                <div class="subagent-card meta-agents__card">
+                                    <span class="subagent-card__icon @agent.ColorClass"
+                                          style="--subagent-mode-icon: url('@agent.IconUrl')"
+                                          aria-hidden="true"></span>
+                                    <div class="subagent-card__text">
+                                        <div class="subagent-card__title">
+                                            <span class="subagent-card__name">@agent.Title</span>
+                                            <span class="subagent-card__id mono">#@agent.Number</span>
+                                            <span class="subagent-card__step">@agent.Step</span>
+                                        </div>
+                                        <div class="subagent-card__model">@agent.Model</div>
+                                    </div>
+                                    @if (agent.Running)
+                                    {
+                                        <span class="subagent-card__spinner" aria-hidden="true"></span>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    </section>
+                </div>
+            }
+        </div>
+    </Main>
+</AppShell>
+
+@code {
+    [Parameter] public Guid WorkDirectoryId { get; set; }
+
+    private sealed record PlaceholderAgent(
+        string Title, int Number, string Step, string Model, string IconUrl, string ColorClass, bool Running);
+
+    private static readonly PlaceholderAgent[] PlaceholderAgents =
+    [
+        new("Repo mapper", 1, "Scanning src/Harness", "claude-sonnet-5",
+            "icons/agent-modes/explore.svg", "subagent-card__icon--explore", true),
+        new("Implementer", 2, "Waiting for plan", "claude-opus-5",
+            "icons/agent-modes/drone.svg", "subagent-card__icon--drone", false),
+        new("Reviewer", 3, "Idle", "claude-sonnet-5",
+            "icons/agent-modes/security-review.svg", "subagent-card__icon--review", false),
+    ];
+
+    private IReadOnlyList<DysonSessionSummary> _sessions = [];
+    private Guid? _activeWorkDirectoryId;
+    private string? _error;
+    private string? _workDirectoryName;
+    private bool _unknownWorkDirectory;
+    private Guid _loadedWorkDirectoryId;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _activeWorkDirectoryId = WorkDirectoryId;
+        if (_loadedWorkDirectoryId == WorkDirectoryId)
+            return;
+        _loadedWorkDirectoryId = WorkDirectoryId;
+
+        var get = await WorkDirs.GetAsync(WorkDirectoryId);
+        _unknownWorkDirectory = get.IsError;
+        _workDirectoryName = get.IsSuccess ? get.Value.Name : null;
+        if (_unknownWorkDirectory)
+        {
+            _sessions = [];
+            return;
+        }
+
+        Host.SetComposerWorkDirectoryId(WorkDirectoryId);
+        await RefreshSessionsAsync();
+    }
+
+    private async Task RefreshSessionsAsync()
+    {
+        _error = null;
+        var list = await Host.ListSessionsAsync(WorkDirectoryId);
+        if (list.IsError) { _error = list.Error; return; }
+        _sessions = list.Value;
+    }
+
+    // Acting on a session is a session-shell concern — do it, then hand off to "/".
+    private async Task StartNewAsync()
+    {
+        var result = await Host.StartNewSessionAsync(DysonAgentModes.Work, null, WorkDirectoryId);
+        if (result.IsError) { _error = result.Error; return; }
+        Nav.NavigateTo("/");
+    }
+
+    private async Task ResumeAsync(Guid sessionId)
+    {
+        var result = await Host.ResumeSessionAsync(sessionId);
+        if (result.IsError) { _error = result.Error; return; }
+        Nav.NavigateTo("/");
+    }
+
+    private async Task DeleteAsync(Guid sessionId)
+    {
+        var result = await Host.DeleteSessionAsync(sessionId);
+        if (result.IsError) _error = result.Error;
+        await RefreshSessionsAsync();
+    }
+
+    private async Task DeleteInactiveAsync()
+    {
+        var result = await Host.DeleteInactiveSessionsAsync(WorkDirectoryId);
+        if (result.IsError) _error = result.Error;
+        await RefreshSessionsAsync();
+    }
+
+    // The switcher re-reads ActiveWorkDirectoryId after the callback and reports
+    // "Could not switch work directory" when it did not change; the route Guid only
+    // updates once navigation lands, so hold the selection locally first.
+    private void OnWorkDirectoryChanged(Guid? id)
+    {
+        if (id is not Guid wd || wd == WorkDirectoryId)
+            return;
+
+        _activeWorkDirectoryId = wd;
+        Nav.NavigateTo($"/meta/{wd}");
+    }
+}

@@ -1,0 +1,98 @@
+.meta-stage {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.meta-stage__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: var(--shell-header-height);
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-glass);
+}
+
+.meta-stage__heading { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.meta-stage__title { margin: 0; font-size: 15px; font-weight: 600; }
+.meta-stage__subtitle {
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta-stage__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.meta-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px;
+}
+
+.meta-agents {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px 12px;
+  border-left: 1px solid var(--border);
+  background: var(--surface-chrome);
+  overflow: auto;
+}
+
+.meta-agents__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Dummy cards borrow .subagent-card chrome but are not actionable yet. */
+.meta-agents__card { cursor: default; }
+.meta-agents__card:hover {
+  background: var(--bg-2);
+  border-color: var(--border);
+  box-shadow: none;
+}
+
+.meta-chat {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-1);
+}
+
+.meta-composer { border-top: 0; padding: 0; background: transparent; }
+
+.meta-composer__prompt {
+  width: 100%;
+  min-height: 72px;
+  resize: none;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.meta-composer__actions { justify-content: flex-end; }
