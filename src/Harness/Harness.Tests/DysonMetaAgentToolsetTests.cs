@@ -17,6 +17,24 @@ public class DysonMetaAgentToolsetTests
     }
 
     [Fact]
+    public void Meta_agent_catalog_keeps_browser_tools_when_browser_control_is_set()
+    {
+        var pipeline = DysonSessionToolsetBuilder.Build(
+            new DysonAgentSessionConfig { BrowserControl = new DysonNullBrowserControl() },
+            DysonAgentModes.MetaAgent);
+
+        foreach (var tool in DysonMcpPipeline.CreateBrowserTools())
+            Assert.Contains(tool.Name, pipeline.Tools.Keys);
+
+        foreach (var name in new[]
+        {
+            "ReadFile", "WriteFile", "Grep", "ListDirectory",
+            "CreateFile", "CreateDirectory", "ShellExecute", "LoadBinary",
+        })
+            Assert.DoesNotContain(name, pipeline.Tools.Keys);
+    }
+
+    [Fact]
     public void Meta_agent_drone_catalog_keeps_trigger_parent_event_and_adds_plan_tools()
     {
         var pipeline = DysonSessionToolsetBuilder.Build(

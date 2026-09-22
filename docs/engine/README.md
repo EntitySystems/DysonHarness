@@ -310,7 +310,7 @@ Same platform gate as `ShellExecute` (omitted when no shells). Plan soft-warns o
 
 ### Browser control
 
-Optional process-wide `IDysonBrowserControl` on `DysonAgentSessionConfig.BrowserControl` (Windows: CefSharp WPF via `Harness.WindowsBrowser`; see [packaging/webview](../packaging/webview.md)). When null, browser tools are **omitted** from the MCP catalog.
+Optional process-wide `IDysonBrowserControl` on `DysonAgentSessionConfig.BrowserControl` (Windows: CefSharp WPF via `Harness.WindowsBrowser`; see [packaging/webview](../packaging/webview.md)). When null, browser tools are **omitted** from the MCP catalog. Meta Agent root keeps this set when `BrowserControl` is set.
 
 | Tool | Behavior |
 | ---- | -------- |

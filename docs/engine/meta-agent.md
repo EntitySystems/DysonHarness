@@ -14,9 +14,9 @@ Never-blocking orchestrator plus isolated implementer. Page-launched; not in the
 
 ## Toolset (allowlist strip)
 
-`DysonSessionToolsetBuilder.ApplyModeCatalog` runs **after** default catalog, inter-agent depth, completion omit, plugin/custom merge, and the mode denylist. Meta Agent is an allowlist, not a denylist: everything not in `DysonMetaAgentTools.AllowedToolNames` is removed, shared schemas (`SummarizeTurns`, todos, `GetOpenRulesConfig`, `LoadSkill`) are restored from `CreateDefault`, then meta-only tools are added. `OmitRootTaskCompletionTools` also runs — a meta session never completes.
+`DysonSessionToolsetBuilder.ApplyModeCatalog` runs **after** default catalog, inter-agent depth, completion omit, plugin/custom merge, and the mode denylist. Meta Agent is an allowlist, not a denylist: everything not in `DysonMetaAgentTools.AllowedToolNames` is removed except `CreateBrowserTools` names already on the pipeline, shared schemas (`SummarizeTurns`, todos, `GetOpenRulesConfig`, `LoadSkill`) are restored from a no-browser `CreateDefault`, then meta-only tools are added. Browser tools are not copied back, so a denylist removal and a null `BrowserControl` both stay absent. `OmitRootTaskCompletionTools` also runs — a meta session never completes.
 
-Enforced list: `DysonMetaAgentTools.ExcludedToolNames`, asserted by `DysonMetaAgentNoFileAccessTests` (catalog contains none of those names, does contain `LoadSkill` + `GetOpenRulesConfig`, and no plan-tool schema accepts a `path` argument). `DysonMetaAgentToolsetTests` asserts the live catalog **is exactly** `AllowedToolNames`.
+Enforced list: `DysonMetaAgentTools.ExcludedToolNames`, asserted by `DysonMetaAgentNoFileAccessTests` (catalog contains none of those names, does contain `LoadSkill` + `GetOpenRulesConfig`, and no plan-tool schema accepts a `path` argument). `DysonMetaAgentToolsetTests` asserts the live catalog **is exactly** `AllowedToolNames` when `BrowserControl` is null, and that a non-null control (including `DysonNullBrowserControl`) keeps every `CreateBrowserTools` name while file and shell tools stay absent.
 
 Kept:
 
@@ -35,10 +35,11 @@ Kept:
 | `ListPlans` / `SetPlanStatus` / `BeginBuildPlan` / `DeletePlan` | Plan tools below. |
 | `GetOpenRulesConfig` / `LoadSkill` | Rules without files. |
 | `SummarizeTurns` / `CreateTodo` / `ListTodos` / `UpdateTodo` | Shared schemas. |
+| Browser tools (`CreateBrowserTools`) | Present only when `BrowserControl` is set and the name survived the denylist. Not in `AllowedToolNames`. `BrowserWaitForSelector` and `BrowserWaitForNavigation` return in this turn, bounded by required `timeoutMs`; they are not a stand-in for `WaitForSubagent`. A long `timeoutMs` stalls the orchestrator until the call returns. |
 
 Todos are the record of dispatches; posted messages are not in later transcripts.
 
-Structurally absent (not an exhaustive list — see `ExcludedToolNames`): file/shell/browser/search tools, `WaitForSubagent`, `StartSubagent` and the classic subagent quartet, `AskQuestion` / `PromptUserDialog` (they block), completion tools, `SubmitSubagentReport`, `DropTurnContext` / `RestoreTurnContext`, `StartNewTurn` / `ExpandThoughtProcess`, `GetDateTime`, `RenameSession`, `InitializeOpenRules`, `SubmitPlan` / `EditPlan`.
+Structurally absent (not an exhaustive list — see `ExcludedToolNames`): file/shell/search tools, `WaitForSubagent`, `StartSubagent` and the classic subagent quartet, `AskQuestion` / `PromptUserDialog` (they block), completion tools, `SubmitSubagentReport`, `DropTurnContext` / `RestoreTurnContext`, `StartNewTurn` / `ExpandThoughtProcess`, `GetDateTime`, `RenameSession`, `InitializeOpenRules`, `SubmitPlan` / `EditPlan`.
 
 ### `LoadSkill` Literal gate
 
