@@ -3084,6 +3084,39 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
+    /// Invokes the in-process func for one meta-chat button.
+    /// Does not append or remove turns and does not set <see cref="LastError"/>.
+    /// </summary>
+    public Task<Result<string, string>> InvokeMetaConversationActionAsync(
+        Guid turnId,
+        int index,
+        CancellationToken cancellationToken = default)
+    {
+        var session = _session;
+        if (session is null)
+            return Task.FromResult(Result<string, string>.AsError("No active session."));
+
+        DysonAgentTurn? turn = null;
+        foreach (var candidate in session.Turns)
+        {
+            if (candidate.Id == turnId)
+            {
+                turn = candidate;
+                break;
+            }
+        }
+
+        if (turn is null)
+            return Task.FromResult(Result<string, string>.AsError("Conversation message was not found."));
+
+        var actions = turn.ConversationActions;
+        if ((uint)index >= (uint)actions.Count)
+            return Task.FromResult(Result<string, string>.AsError("Conversation action index is out of range."));
+
+        return session.InvokeConversationActionAsync(actions[index].FuncKey, cancellationToken);
+    }
+
+    /// <summary>
     /// Consumes buffered Plan-mode Explore completion reports into a
     /// <see cref="DysonAgentTurnKind.BeginBuildPlan"/> turn, then switches to Work.
     /// Busy-rejects when a turn is in flight.

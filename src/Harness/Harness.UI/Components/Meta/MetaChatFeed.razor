@@ -52,6 +52,24 @@
                     {
                         <div class="meta-chat__body turn-block__body">@MarkdownRenderer.ToHtml(item.Text)</div>
                     }
+                    @if (item.Actions.Count > 0)
+                    {
+                        var busy = _actionBusy.Contains(item.Key);
+                        <div class="meta-chat__actions">
+                            @for (var i = 0; i < item.Actions.Count; i++)
+                            {
+                                var index = i;
+                                <button type="button"
+                                        class="btn"
+                                        disabled="@busy"
+                                        @onclick="() => InvokeActionAsync(item, index)">@item.Actions[index].Name</button>
+                            }
+                        </div>
+                        @if (_actionResults.TryGetValue(item.Key, out var actionText))
+                        {
+                            <div class="meta-chat__action-result">@actionText</div>
+                        }
+                    }
                 </div>
             }
             @if (SessionBusy)
@@ -71,12 +89,46 @@
     private int _renderVersion;
     private int _lastScrolledRenderVersion = -1;
     private IReadOnlyList<MetaChatItem> _items = [];
+    private readonly HashSet<string> _actionBusy = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _actionResults = new(StringComparer.Ordinal);
 
     [Parameter] public IReadOnlyList<DysonAgentTurn> Turns { get; set; } = [];
     [Parameter] public IReadOnlyList<QueuedPrompt> Queued { get; set; } = [];
     [Parameter] public bool SessionBusy { get; set; }
     [Parameter] public string EmptyMessage { get; set; } = "Tell the meta agent what to orchestrate.";
     [Parameter] public EventCallback<Guid> OnRemoveQueued { get; set; }
+    [Parameter] public EventCallback<MetaChatActionClick> OnConversationAction { get; set; }
+
+    /// <summary>
+    /// Last click text for a bubble, keyed by item key. Ephemeral: a reload restores buttons, not this.
+    /// </summary>
+    public void NoteConversationActionResult(Guid turnId, Result<string, string> result)
+    {
+        var key = $"a:{turnId:D}";
+        if (result.IsError)
+            _actionResults[key] = result.Error ?? "";
+        else if (!string.IsNullOrWhiteSpace(result.Value))
+            _actionResults[key] = result.Value;
+        else
+            _actionResults.Remove(key);
+    }
+
+    private async Task InvokeActionAsync(MetaChatItem item, int index)
+    {
+        if (item.TurnId is not Guid turnId || _actionBusy.Contains(item.Key))
+            return;
+
+        _actionBusy.Add(item.Key);
+        StateHasChanged();
+        try
+        {
+            await OnConversationAction.InvokeAsync(new MetaChatActionClick(turnId, index));
+        }
+        finally
+        {
+            _actionBusy.Remove(item.Key);
+        }
+    }
 
     protected override void OnParametersSet()
     {

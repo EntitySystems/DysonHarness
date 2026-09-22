@@ -29,7 +29,7 @@ Kept:
 | `StopMetaAgentDrone` | `StopSubagentAsync`. Optional `discardWorktree` → `DysonSessionWorktree.Remove(..., force: true)` and clears worktree columns. |
 | `MessageMetaAgentDrone` | `TriggerSubagentEventAsync` (reopens `Completed`/`Failed`). |
 | `DeleteMetaAgent` | Terminal-only (walks descendants); then `_store.DeleteSessionAsync` (unmerged worktree still fails with the existing merge-or-delete message) and `UnregisterSubagent`. |
-| `PostConversationMessage` | `AppendDisplayInfoTurn`. `{ok:true}`. Does not end the turn. Assistant text is not shown on the meta page — this is the user-visible channel. |
+| `PostConversationMessage` | `AppendDisplayInfoTurn`. Optional `actions` of `{ name, func }` where `func` is a string key registered on the session. Buttons render on the meta bubble; click invokes that key. A missing key or a failed func is `Result` text on the bubble and the message stays. Still `{ok:true}`. Still does not end the turn. Still not in the provider transcript. Assistant text is not shown on the meta page — this is the user-visible channel. |
 | `CompactConversation` | Enqueues `DysonFullSummarizeFlow.CreateTurn()` and **ends the current turn**. |
 | `RemoveTodos` | Runtime `_session.Mode == MetaAgent` check. `DeleteTodo` is not in the catalog. |
 | `ListPlans` / `SetPlanStatus` / `BeginBuildPlan` / `DeletePlan` | Plan tools below. |

@@ -12,6 +12,10 @@ public abstract class DysonAgentSession
     private readonly ConcurrentQueue<string> _logLines = new();
     private readonly List<DysonSessionTodo> _todos = [];
     private readonly object _todosGate = new();
+    // ponytail: one lock around the in-process action map; upgrade only if registration becomes hot.
+    private readonly object _conversationActionsGate = new();
+    private readonly Dictionary<string, Func<CancellationToken, Task<Result<string, string>>>> _conversationActions =
+        new(StringComparer.Ordinal);
     private readonly List<DysonAgentSession> _subSessions = [];
     private readonly object _subSessionsGate = new();
     private readonly object _terminalGate = new();
@@ -2620,6 +2624,8 @@ public abstract class DysonAgentSession
                 DysonReasoningLogSerializer.DeserializeOrSynthesize(row.ReasoningLogJson, row.ReasoningText));
             turn.RestoreContextFiles(DysonContextFilesSerializer.Deserialize(row.SkillsUsedJson));
             turn.RestoreUserImages(DysonUserImagesSerializer.Deserialize(row.UserImagesJson));
+            turn.RestoreConversationActions(
+                DysonConversationActionsSerializer.Deserialize(row.ConversationActionsJson));
             DysonTurnToolStateSerializer.ApplyToTurn(turn, row.ToolStateJson);
             turn.FinalizeIncompleteTools(
                 "Tool call did not complete (cancelled or interrupted).");
@@ -3092,7 +3098,9 @@ public abstract class DysonAgentSession
     /// Appends a completed UI-only <see cref="DysonAgentTurnKind.DisplayInfo"/> turn
     /// (message in <see cref="DysonAgentTurn.AssistantText"/>). No inference.
     /// </summary>
-    public DysonAgentTurn AppendDisplayInfoTurn(string message)
+    public DysonAgentTurn AppendDisplayInfoTurn(
+        string message,
+        IReadOnlyList<DysonConversationAction>? actions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
         var now = DateTime.UtcNow;
@@ -3103,8 +3111,64 @@ public abstract class DysonAgentSession
             StartedUtc = now,
             CompletedUtc = now,
         };
+        if (actions is { Count: > 0 })
+            turn.RestoreConversationActions(actions);
         AddTurn(turn);
         return turn;
+    }
+
+    /// <summary>
+    /// Binds <paramref name="key"/> to an in-process func. Same key replaces.
+    /// Not persisted and not copied onto child sessions.
+    /// </summary>
+    public VoidResult<string> RegisterConversationAction(
+        string key,
+        Func<CancellationToken, Task<Result<string, string>>> func)
+    {
+        var trimmed = key?.Trim() ?? "";
+        if (trimmed.Length == 0)
+            return VoidResult<string>.AsError("Conversation action key is required.");
+        if (func is null)
+            return VoidResult<string>.AsError("Conversation action func is required.");
+
+        lock (_conversationActionsGate)
+            _conversationActions[trimmed] = func;
+
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Runs the func registered for <paramref name="key"/>.
+    /// A blank key, an unknown key, a failed <see cref="Result{TValue, TError}"/>, or a thrown func
+    /// is a failed result. Does not add or remove turns.
+    /// </summary>
+    public async Task<Result<string, string>> InvokeConversationActionAsync(
+        string key,
+        CancellationToken cancellationToken)
+    {
+        var trimmed = key?.Trim() ?? "";
+        if (trimmed.Length == 0)
+            return Result<string, string>.AsError("Conversation action key is required.");
+
+        Func<CancellationToken, Task<Result<string, string>>>? func;
+        lock (_conversationActionsGate)
+        {
+            if (!_conversationActions.TryGetValue(trimmed, out func))
+                return Result<string, string>.AsError($"Conversation action '{trimmed}' is not registered.");
+        }
+
+        try
+        {
+            var result = await func(cancellationToken).ConfigureAwait(false);
+            return result ?? Result<string, string>.AsError("Conversation action returned no result.");
+        }
+        catch (Exception ex)
+        {
+            var message = string.IsNullOrWhiteSpace(ex.Message)
+                ? "Conversation action failed."
+                : ex.Message;
+            return Result<string, string>.AsError(message, ex);
+        }
     }
 
     /// <summary>

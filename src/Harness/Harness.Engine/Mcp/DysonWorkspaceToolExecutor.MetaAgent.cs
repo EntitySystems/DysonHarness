@@ -319,22 +319,73 @@ public sealed partial class DysonWorkspaceToolExecutor
 
     private DysonToolCallResult PostConversationMessage(DysonToolCall call)
     {
-        string message;
         try
         {
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
             var messageResult = RequireString(doc.RootElement, "message");
             if (messageResult.IsError)
                 return Error(call, messageResult.Error);
-            message = messageResult.Value;
+
+            var actions = ParseConversationActions(doc.RootElement);
+            if (actions.IsError)
+                return Error(call, actions.Error);
+
+            _session.AppendDisplayInfoTurn(
+                messageResult.Value,
+                actions.Value.Count == 0 ? null : actions.Value);
         }
         catch (JsonException)
         {
             return Error(call, "PostConversationMessage: invalid JSON arguments.");
         }
 
-        _session.AppendDisplayInfoTurn(message);
         return Ok(call, """{"ok":true}""");
+    }
+
+    private const int MaxConversationActions = 8;
+
+    private static Result<List<DysonConversationAction>, string> ParseConversationActions(JsonElement root)
+    {
+        if (!root.TryGetProperty("actions", out var actions) || actions.ValueKind == JsonValueKind.Null)
+            return Result<List<DysonConversationAction>, string>.AsValue([]);
+
+        if (actions.ValueKind != JsonValueKind.Array)
+            return Result<List<DysonConversationAction>, string>.AsError(
+                "PostConversationMessage: actions must be an array.");
+
+        if (actions.GetArrayLength() > MaxConversationActions)
+            return Result<List<DysonConversationAction>, string>.AsError(
+                "PostConversationMessage: actions cannot exceed 8.");
+
+        var list = new List<DysonConversationAction>();
+        var index = 0;
+        foreach (var item in actions.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                return Result<List<DysonConversationAction>, string>.AsError(
+                    $"PostConversationMessage: actions[{index}] must be an object.");
+
+            if (!item.TryGetProperty("name", out var nameEl)
+                || nameEl.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(nameEl.GetString()))
+            {
+                return Result<List<DysonConversationAction>, string>.AsError(
+                    $"PostConversationMessage: actions[{index}].name is required.");
+            }
+
+            if (!item.TryGetProperty("func", out var funcEl)
+                || funcEl.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(funcEl.GetString()))
+            {
+                return Result<List<DysonConversationAction>, string>.AsError(
+                    $"PostConversationMessage: actions[{index}].func is required.");
+            }
+
+            list.Add(new DysonConversationAction(nameEl.GetString()!.Trim(), funcEl.GetString()!.Trim()));
+            index++;
+        }
+
+        return Result<List<DysonConversationAction>, string>.AsValue(list);
     }
 
     private DysonToolCallResult CompactConversation(DysonToolCall call)

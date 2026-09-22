@@ -240,6 +240,8 @@ public sealed class DysonSessionRecoveryService
             DysonReasoningLogSerializer.DeserializeOrSynthesize(row.ReasoningLogJson, row.ReasoningText));
         turn.RestoreContextFiles(DysonContextFilesSerializer.Deserialize(row.SkillsUsedJson));
         turn.RestoreUserImages(DysonUserImagesSerializer.Deserialize(row.UserImagesJson));
+        turn.RestoreConversationActions(
+            DysonConversationActionsSerializer.Deserialize(row.ConversationActionsJson));
         DysonTurnToolStateSerializer.ApplyToTurn(turn, row.ToolStateJson);
         return turn;
     }

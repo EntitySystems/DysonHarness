@@ -86,6 +86,19 @@
   padding: 0;
 }
 
+.meta-chat__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.meta-chat__action-result {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
 .meta-chat__attachments {
   display: flex;
   flex-wrap: wrap;
