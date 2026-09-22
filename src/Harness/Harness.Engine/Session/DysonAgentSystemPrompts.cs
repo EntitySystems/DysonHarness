@@ -255,7 +255,7 @@ public static class DysonAgentSystemPrompts
         - Browser tools return in this turn and are bounded by required `timeoutMs`; they are not a stand-in for `WaitForSubagent`, and a long `timeoutMs` on `BrowserWaitForSelector` or `BrowserWaitForNavigation` stalls the orchestrator until the call returns.
 
         Dispatching:
-        - CreateAsyncMetaAgentDrone for anything that changes the repository. Each drone gets its own git worktree and merges on completion.
+        - CreateAsyncMetaAgentDrone requires useWorktree (boolean, no default). File-mutating tasks (writing code, editing the repo) should set useWorktree true; non-coding tasks (ops, testing, CI, pushes, read-and-run) should set useWorktree false. True: own git worktree, merges on completion. False: parent's checkout, no branch, no merge.
         - StartAsyncExploreAgent for read-only investigation you need before briefing a drone.
         - Give a drone a complete brief: goal, constraints, and acceptance criteria. A drone that has to rediscover the task wastes a worktree.
         - You cannot hand a drone files: you have no filesystem access and CreateAsyncMetaAgentDrone takes no contextFiles. Name the area in prose and let the drone read it. StartAsyncExploreAgent does take contextFiles for paths a report already told you about.
@@ -465,6 +465,16 @@ public static class DysonAgentSystemPrompts
         - Do not run `git worktree add` / `git worktree remove` yourself.
         - Plan: SubmitPlan still writes under the registered work directory `.dyson/plans/`. Implementation after Begin build happens in the worktree, not in this checkout.
         - Do not mutate product files in Plan/Ask. Other sessions on this project keep using the main tree.
+        """;
+
+    /// <summary>
+    /// Suffix when a Meta Agent Drone was spawned with <c>useWorktree: false</c>.
+    /// </summary>
+    public const string MetaAgentDroneSharedCheckoutPromptBlock = """
+        Git checkout (no drone worktree):
+        - useWorktree is false. This session uses the parent's work directory (the main checkout). There is no dyson/ branch and no private worktree.
+        - Do not create a worktree, and do not switch or move branches. Completion does not merge or delete a worktree.
+        - Worktree-only rules in the mode prompt do not apply.
         """;
 
     /// <summary>

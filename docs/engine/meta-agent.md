@@ -22,7 +22,7 @@ Kept:
 
 | Tool | Notes |
 | ---- | ----- |
-| `CreateAsyncMetaAgentDrone` | `CreateChildAsync(MetaAgentDrone)`. `purpose` `build` (default) or `plan` (`plan` prepends the explore-then-`SubmitMetaPlan` mandate onto `task`). Returns `{droneId, persistenceId, worktreeBranch}`. No `contextFiles` — the meta agent has no filesystem. Never waits. |
+| `CreateAsyncMetaAgentDrone` | `CreateChildAsync(MetaAgentDrone)`. Required boolean `useWorktree` (no default): file-mutating tasks (writing code, editing the repo) should set true (own worktree, merge on completion); non-coding tasks (ops, testing, CI, pushes, read-and-run) should set false (parent checkout, no branch, no merge). `purpose` `build` (default) or `plan` (`plan` prepends the explore-then-`SubmitMetaPlan` mandate onto `task`). Returns `{droneId, persistenceId, worktreeBranch}` (`worktreeBranch` null when false). No `contextFiles` — the meta agent has no filesystem. Never waits. |
 | `StartAsyncExploreAgent` | `CreateChildAsync(Explore)`. Returns `{agentId, persistenceId}`. Does take `contextFiles`. Never waits. |
 | `ListMetaAgentDrones` | `FormatChildRosterJson(includeReports: true)` — `kind` (`drone` / `explore` / `other`), `worktreeBranch` (null for Explore), `lastReport`, `finishedAt`, plus the `ListSubagents` fields. Plain stable projection: no notices or counts (`DysonMetaAgentToolsetTests` byte-identical across calls). Prune pressure lives in the [maintenance tick](README.md#meta-agent-maintenance-tick), not here, so the cached prompt prefix is not busted on every dispatch. |
 | `ReadMetaAgentDroneLog` | `InspectSubagentLog` / `SnapshotLog`. In-memory; empty after process restart even though the child session row survives. |
@@ -51,7 +51,7 @@ Root + AutoInclude bodies are already in the system prompt. `LoadSkill` still ru
 
 A parent-event continuation is kind `ParentEvent` (20): it stays in the session transcript and is not a meta-chat bubble, and a posted message may relay the status or question and must not name the event.
 
-As built, `CreateChildAsync` still **copies the parent's `Worktree*`** onto every child (demo + OpenAI). Meta Agent Drones do not get their own worktree at spawn; `worktreeBranch` in the create result is whatever the parent had. Auto-merge on completed report is not implemented. `EnsureSessionWorktreeIfNeededAsync` still early-returns when `session.Parent is not null`.
+`CreateAsyncMetaAgentDrone` requires boolean `useWorktree` (no default). File-mutating tasks should set it true: own git worktree and branch, merge on completed report. Non-coding tasks (ops, testing, CI, pushes, read-and-run) should set it false: parent's checkout, no `dyson/` branch, no merge. `BeginBuildPlan` passes true. Classic children still copy the parent's worktree columns. `EnsureSessionWorktreeIfNeededAsync` still early-returns when `session.Parent is not null`.
 
 ## Plan tools
 
@@ -146,6 +146,6 @@ See [README.md](README.md)#meta-agent-maintenance-tick and [sessions.md](../stor
 - Sequential `planId`s are guessable; always pass `_workDirectoryId`.
 - `ReadMetaAgentDroneLog` / reminder counts / `LastReportSummary` die with the process. The child **session** row rehydrates; the log lines do not.
 - `SubagentFailed` after a user Stop is a closed loop, not a failed build. Read `Status`.
-- Meta Agent Drones currently share the parent's worktree columns. Two drones on one checkout will conflict if they both write.
+- `useWorktree: false` drones share the parent checkout and must not switch branches. Two `useWorktree: true` drones editing the same files still conflict at merge.
 - `IDysonPlanRepository.UpdateAsync` cannot null `Note` / `BuildAgentId`. `DysonPlanKind.ClassicPlan = 0` is reserved; every row today is `MetaPlan`.
 }

@@ -16,6 +16,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         string? reasoningEffort;
         IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos;
         var purpose = "build";
+        bool useWorktree;
         try
         {
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
@@ -24,6 +25,10 @@ public sealed partial class DysonWorkspaceToolExecutor
             if (taskResult.IsError)
                 return Error(call, taskResult.Error);
             task = taskResult.Value;
+            var useWorktreeResult = RequireBool(root, "useWorktree");
+            if (useWorktreeResult.IsError)
+                return Error(call, "CreateAsyncMetaAgentDrone: " + useWorktreeResult.Error);
+            useWorktree = useWorktreeResult.Value;
             context = GetOptionalString(root, "context");
             modelSlug = GetOptionalString(root, "modelSlug");
             reasoningEffort = GetOptionalString(root, "reasoningEffort");
@@ -62,6 +67,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 initialTodos,
                 modelSlug,
                 reasoningEffort,
+                useWorktree,
                 cancellationToken)
             .ConfigureAwait(false);
         if (started.IsError)
@@ -670,6 +676,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                     initialTodos: null,
                     modelSlug: null,
                     reasoningEffort: null,
+                    useWorktree: true,
                     cancellationToken)
                 .ConfigureAwait(false);
             if (started.IsError)
@@ -879,22 +886,35 @@ public sealed partial class DysonWorkspaceToolExecutor
             new DysonPlansChangedEvent(_workDirectoryId, planId));
     }
 
-    private Task<Result<DysonStartSubagentResult, string>> CreateMetaAgentDroneChildAsync(
+    private async Task<Result<DysonStartSubagentResult, string>> CreateMetaAgentDroneChildAsync(
         string task,
         string? context,
         IReadOnlyList<DysonSessionTodoReplaceItem>? initialTodos,
         string? modelSlug,
         string? reasoningEffort,
-        CancellationToken cancellationToken) =>
-        _session.CreateChildAsync(
-            DysonAgentModes.MetaAgentDrone,
-            task,
-            context,
-            initialTodos,
-            modelSlug,
-            reasoningEffort,
-            contextFiles: null,
-            cancellationToken);
+        bool useWorktree,
+        CancellationToken cancellationToken)
+    {
+        // Explicit per call. AsyncLocal so both session implementations share one spawn path.
+        DysonAgentSession.MetaAgentDroneUseWorktree.Value = useWorktree;
+        try
+        {
+            return await _session.CreateChildAsync(
+                    DysonAgentModes.MetaAgentDrone,
+                    task,
+                    context,
+                    initialTodos,
+                    modelSlug,
+                    reasoningEffort,
+                    contextFiles: null,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            DysonAgentSession.MetaAgentDroneUseWorktree.Value = null;
+        }
+    }
 
     private DysonAgentSession? FindLiveBuilder(Guid? buildAgentId)
     {

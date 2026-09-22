@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using DysonHarness;
 using Harness.UI.Demo;
 
@@ -73,6 +74,114 @@ public class DysonMetaAgentDroneWorktreeTests
             Assert.True(persistedA.IsSuccess, persistedA.IsError ? persistedA.Error : null);
             Assert.Equal(droneA.WorktreeAbsolutePath, persistedA.Value.Session.WorktreeAbsolutePath);
             Assert.Equal(droneA.WorktreeBranch, persistedA.Value.Session.WorktreeBranch);
+        }
+        finally
+        {
+            CleanupWorktrees(repo);
+            DeleteQuiet(parent);
+        }
+    }
+
+    [Fact]
+    public async Task UseWorktree_false_does_not_allocate_and_omitted_flag_starts_nothing()
+    {
+        var pipeline = DysonSessionToolsetBuilder.Build(
+            new DysonAgentSessionConfig(),
+            DysonAgentModes.MetaAgent);
+        var tool = pipeline.Tools["CreateAsyncMetaAgentDrone"];
+        const string guidance =
+            "File-mutating tasks (writing code, editing the repo) should set useWorktree true; non-coding tasks (ops, testing, CI, pushes, read-and-run) should set useWorktree false.";
+        Assert.Contains(guidance, tool.Description, StringComparison.Ordinal);
+        using (var schema = JsonDocument.Parse(tool.InputSchemaJson))
+        {
+            var required = schema.RootElement.GetProperty("required").EnumerateArray()
+                .Select(e => e.GetString())
+                .ToArray();
+            Assert.Contains("useWorktree", required);
+            Assert.Equal(
+                "boolean",
+                schema.RootElement.GetProperty("properties").GetProperty("useWorktree").GetProperty("type").GetString());
+        }
+
+        var prompt = DysonAgentSystemPrompts.ForMode(DysonAgentModes.MetaAgent);
+        Assert.False(prompt.IsError);
+        Assert.Contains(guidance, prompt.Value, StringComparison.Ordinal);
+
+        var parent = CreateTempDir();
+        var repo = Path.Combine(parent, "repo");
+        Directory.CreateDirectory(repo);
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var keepAlive = conn;
+        using var http = new HttpClient();
+
+        try
+        {
+            GitInit(repo);
+            WriteAllLf(Path.Combine(repo, "file.txt"), "base\n");
+            RunGitOrThrow(repo, ["add", "-A"]);
+            RunGitOrThrow(repo, ["commit", "-m", "init"]);
+
+            var workDirs = DysonTempDb.WorkDirectories(accessor);
+            var sessions = DysonTempDb.Sessions(accessor);
+            var wd = await workDirs.CreateAsync(repo);
+            Assert.True(wd.IsSuccess, wd.IsError ? wd.Error : null);
+
+            var created = await DemoDysonAgentSession.CreateAsync(
+                sessions,
+                new DemoDysonAgentProvider(provider: null, slug: null),
+                wd.Value,
+                DysonAgentModes.MetaAgent,
+                workDirectoryAbsolutePath: repo);
+            Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+            var meta = created.Value;
+
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(meta, repo, http, sessions, wd.Value);
+
+            var missing = await executor.ExecuteAsync(DroneCall("missing", """{"task":"run tests"}"""));
+            Assert.True(missing.IsError);
+            Assert.Contains("useWorktree", missing.Content, StringComparison.Ordinal);
+            Assert.Empty(meta.SubSessions);
+
+            var notBool = await executor.ExecuteAsync(DroneCall("bad", """{"task":"run tests","useWorktree":"no"}"""));
+            Assert.True(notBool.IsError);
+            Assert.Contains("useWorktree", notBool.Content, StringComparison.Ordinal);
+            Assert.Empty(meta.SubSessions);
+            AssertNoDroneWorktree(repo);
+
+            var shared = await executor.ExecuteAsync(DroneCall("shared", """{"task":"run tests","useWorktree":false}"""));
+            Assert.False(shared.IsError, shared.Content);
+            var drone = Assert.IsType<DemoDysonAgentSession>(Assert.Single(meta.SubSessions));
+            Assert.Equal(DysonAgentModes.MetaAgentDrone, drone.Mode);
+            Assert.NotEqual(Guid.Empty, drone.PersistenceId);
+            Assert.False(drone.WorktreeEnabled);
+            Assert.Null(drone.WorktreeAbsolutePath);
+            Assert.Null(drone.WorktreeBranch);
+            Assert.True(SamePath(repo, drone.WorkDirectoryPath!));
+            Assert.Contains("no private worktree", drone.SystemPrompt, StringComparison.Ordinal);
+            AssertNoDroneWorktree(repo);
+            using (var body = JsonDocument.Parse(shared.Content))
+            {
+                Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("worktreeBranch").ValueKind);
+            }
+
+            var reported = await drone.SubmitSubagentReportAsync("done");
+            Assert.True(reported.IsSuccess, reported.IsError ? reported.Error : null);
+            Assert.Equal(DysonSessionStatus.Completed, drone.Status);
+            Assert.DoesNotContain("merged", drone.LastReportSummary ?? "", StringComparison.OrdinalIgnoreCase);
+            Assert.Null(drone.WorktreeAbsolutePath);
+            Assert.False(drone.WorktreeEnabled);
+            Assert.Equal("base\n", File.ReadAllText(Path.Combine(repo, "file.txt")));
+            AssertNoDroneWorktree(repo);
+
+            var owned = await executor.ExecuteAsync(DroneCall("owned", """{"task":"edit the repo","useWorktree":true}"""));
+            Assert.False(owned.IsError, owned.Content);
+            var forked = Assert.IsType<DemoDysonAgentSession>(meta.SubSessions[1]);
+            Assert.True(forked.WorktreeEnabled);
+            Assert.False(string.IsNullOrWhiteSpace(forked.WorktreeAbsolutePath));
+            Assert.Equal(DysonSessionWorktree.FormatBranch(forked.PersistenceId), forked.WorktreeBranch);
+            Assert.True(Directory.Exists(forked.WorktreeAbsolutePath));
+            Assert.Contains(forked.WorktreeBranch!, RunGitOrThrow(repo, ["branch", "--list", "dyson/*"]), StringComparison.Ordinal);
+            Assert.Null(drone.WorktreeAbsolutePath);
         }
         finally
         {
@@ -378,6 +487,22 @@ public class DysonMetaAgentDroneWorktreeTests
             => Task.FromResult(Result<DysonAgentSessionEvent, string>.AsError("not used"));
     }
 
+    private static DysonToolCall DroneCall(string callId, string argumentsJson) => new()
+    {
+        CallId = callId,
+        ToolName = "CreateAsyncMetaAgentDrone",
+        Stage = 0,
+        ArgumentsJson = argumentsJson,
+    };
+
+    private static void AssertNoDroneWorktree(string repo)
+    {
+        var listed = DysonGitInfo.TryListWorktrees(repo);
+        Assert.True(listed.IsSuccess, listed.IsError ? listed.Error : null);
+        Assert.DoesNotContain(listed.Value, e => !SamePath(e.Path, repo));
+        Assert.True(string.IsNullOrWhiteSpace(RunGitOrThrow(repo, ["branch", "--list", "dyson/*"])));
+    }
+
     private static bool SamePath(string a, string b)
     {
         var comparison = OperatingSystem.IsWindows()
@@ -440,7 +565,7 @@ public class DysonMetaAgentDroneWorktreeTests
         File.WriteAllText(path, contents);
     }
 
-    private static void RunGitOrThrow(string workingDirectory, string[] args)
+    private static string RunGitOrThrow(string workingDirectory, string[] args)
     {
         using var process = new Process
         {
@@ -481,5 +606,7 @@ public class DysonMetaAgentDroneWorktreeTests
         Task.WhenAll(stdoutTask, stderrTask).GetAwaiter().GetResult();
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"git {(string.Join(' ', args))} failed: {stderrTask.Result}");
+
+        return stdoutTask.Result;
     }
 }

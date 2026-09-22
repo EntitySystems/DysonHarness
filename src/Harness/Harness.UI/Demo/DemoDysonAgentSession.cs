@@ -236,26 +236,31 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         if (attached.IsError)
             return Result<DysonStartSubagentResult, string>.AsError(attached.Error);
 
-        var isolateWorktree = string.Equals(
-            agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase);
-        var childWorktreeEnabled = isolateWorktree || WorktreeEnabled;
-        var childWorktreePath = isolateWorktree ? null : WorktreeAbsolutePath;
-        var childWorktreeBranch = isolateWorktree ? null : WorktreeBranch;
+        var (isolateWorktree, suppressWorktree) = ResolveMetaAgentDroneWorktree(agentMode);
+        var childWorktreeEnabled = suppressWorktree ? false : isolateWorktree || WorktreeEnabled;
+        var childWorktreePath = suppressWorktree || isolateWorktree ? null : WorktreeAbsolutePath;
+        var childWorktreeBranch = suppressWorktree || isolateWorktree ? null : WorktreeBranch;
 
         var providerKind = childProvider is DemoDysonAgentProvider demoKind
             ? DysonProviderKinds.EffectiveKind(demoKind.ProviderKind, demoKind.BaseUrl, demoKind.ApiKey)
             : DysonProviderKinds.Demo;
         var registered = _registeredWorkDirectoryPath ?? _workDirectoryPath ?? "";
+        var childWorkDirectory = suppressWorktree && !string.IsNullOrWhiteSpace(registered)
+            ? registered
+            : _workDirectoryPath;
+        var worktreePrompt = suppressWorktree
+            ? DysonAgentSystemPrompts.MetaAgentDroneSharedCheckoutPromptBlock
+            : DysonAgentSystemPrompts.BuildWorktreePromptBlock(
+                childWorktreeEnabled, childWorktreePath, childWorktreeBranch, registered);
         var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
             await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
-                    _models, providerKind, _workDirectoryPath, cancellationToken)
+                    _models, providerKind, childWorkDirectory, cancellationToken)
                 .ConfigureAwait(false),
-            DysonAgentSystemPrompts.BuildWorktreePromptBlock(
-                childWorktreeEnabled, childWorktreePath, childWorktreeBranch, registered));
+            worktreePrompt);
 
         var child = new DemoDysonAgentSession(
             agentMode, Config, childProvider, _store, _workDirectoryId, _models, suffix,
-            _workDirectoryPath,
+            childWorkDirectory,
             registeredWorkDirectoryAbsolutePath: _registeredWorkDirectoryPath);
         child.WorktreeEnabled = childWorktreeEnabled;
         child.WorktreeAbsolutePath = childWorktreePath;

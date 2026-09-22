@@ -152,9 +152,10 @@ public static class DysonMetaAgentTools
         {
             Name = "CreateAsyncMetaAgentDrone",
             Description =
-                "Spawn a Meta Agent Drone for anything that changes the repository (non-blocking). " +
-                "Each drone gets its own git worktree and merges on completion. " +
-                "Returns immediately with droneId / persistenceId / worktreeBranch; never waits. " +
+                "Spawn a Meta Agent Drone (non-blocking). " +
+                "File-mutating tasks (writing code, editing the repo) should set useWorktree true; non-coding tasks (ops, testing, CI, pushes, read-and-run) should set useWorktree false. " +
+                "true: own git worktree and branch, merged on completion. false: parent's work directory, no branch, no merge. " +
+                "Returns immediately with droneId / persistenceId / worktreeBranch (null when useWorktree is false); never waits. " +
                 "purpose=build (default) implements; purpose=plan explores then SubmitMetaPlan. " +
                 "Call ListMetaAgentDrones before dispatching. Reuse an existing drone with MessageMetaAgentDrone " +
                 "instead of spawning a second one for the same work.",
@@ -163,6 +164,10 @@ public static class DysonMetaAgentTools
                   "type": "object",
                   "properties": {
                     "task": { "type": "string", "description": "Assigned task brief for the drone. Goal, constraints, and acceptance criteria." },
+                    "useWorktree": {
+                      "type": "boolean",
+                      "description": "Required, no default. File-mutating tasks (writing code, editing the repo) should set useWorktree true; non-coding tasks (ops, testing, CI, pushes, read-and-run) should set useWorktree false. true forks a git worktree and merges on completion; false stays on the parent checkout with no branch and no merge."
+                    },
                     "purpose": {
                       "type": "string",
                       "enum": ["build", "plan"],
@@ -200,7 +205,7 @@ public static class DysonMetaAgentTools
                       "description": "Optional freeform reasoning_effort. Omit keeps the parent or slug default."
                     }
                   },
-                  "required": ["task"]
+                  "required": ["task", "useWorktree"]
                 }
                 """,
         };

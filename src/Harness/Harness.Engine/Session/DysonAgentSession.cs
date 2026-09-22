@@ -287,6 +287,26 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
+    /// Set by <c>CreateAsyncMetaAgentDrone</c> for the duration of that spawn.
+    /// Null (direct <see cref="CreateChildAsync"/>) keeps the historical always-fork.
+    /// </summary>
+    internal static readonly AsyncLocal<bool?> MetaAgentDroneUseWorktree = new();
+
+    /// <summary>
+    /// <c>Isolate</c> forks via <see cref="BindOwnWorktree"/>. <c>Suppress</c> stays on the
+    /// registered checkout: no branch, and completion does not merge.
+    /// </summary>
+    protected static (bool Isolate, bool Suppress) ResolveMetaAgentDroneWorktree(string agentMode)
+    {
+        if (!string.Equals(agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
+            return (false, false);
+
+        // null or true → fork. Only an explicit false stays on the parent checkout.
+        var suppress = MetaAgentDroneUseWorktree.Value == false;
+        return (!suppress, suppress);
+    }
+
+    /// <summary>
     /// Bumped by <see cref="ApplyAgentMode"/> so OpenAI <c>prompt_cache_key</c> invalidates
     /// after a mid-session system-prompt rebuild (cache loss is intentional).
     /// </summary>
@@ -2216,6 +2236,12 @@ public abstract class DysonAgentSession
         else if (string.Equals(agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
         {
             sb.AppendLine(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate.Trim());
+            if (MetaAgentDroneUseWorktree.Value == false)
+            {
+                sb.AppendLine(
+                    "useWorktree is false: work in the parent's checkout. Do not switch or move branches. Completion does not merge.");
+            }
+
             sb.AppendLine();
         }
 
