@@ -85,11 +85,10 @@
         if (Session is null)
             return;
 
-        foreach (var child in Session.SubSessions.OrderByDescending(c => c.Id))
+        foreach (var child in Session.SubSessions
+                     .Where(c => c is not null && c.PersistenceId != Guid.Empty)
+                     .OrderByDescending(c => c.Id))
         {
-            if (child.PersistenceId == Guid.Empty)
-                continue;
-
             _children.Add(child.PersistenceId);
             if (child.Status == DysonSessionStatus.Active)
                 _activeCount++;

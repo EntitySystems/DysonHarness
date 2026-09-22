@@ -4,7 +4,7 @@ Never-blocking orchestrator plus isolated implementer. Page-launched; not in the
 
 ## Modes
 
-`DysonAgentModes.MetaAgent` (`"Meta Agent"`) and `MetaAgentDrone` (`"Meta Agent Drone"`) are in `BuiltIns`. Neither is in `ComposerSelectable`. Directives: `DysonAgentSystemPrompts.MetaAgentDirective` / `MetaAgentDroneDirective`. Child first turns prepend `SubagentReportRequiredMandate`; Meta Agent Drone also gets `MetaAgentDroneFirstTurnMandate`. Default provider: `DysonAgentSessionConfig.MetaAgentDroneDefaultProvider` (same omit-slug cascade as Drone).
+`DysonAgentModes.MetaAgent` (`"Meta Agent"`) and `MetaAgentDrone` (`"Meta Agent Drone"`) are in `BuiltIns`. Neither is in `ComposerSelectable`. Directives: `DysonAgentSystemPrompts.MetaAgentDirective` / `MetaAgentDroneDirective`. Child first turns prepend `SubagentReportRequiredMandate`; Meta Agent Drone also gets `MetaAgentDroneFirstTurnMandate`. Default provider: `DysonAgentSessionConfig.MetaAgentDroneDefaultProvider` (same omit-slug cascade as Drone). Settable at Settings → Agent behavior via `meta_agent_drone_model_slug_id` (effort: `meta_agent_drone_reasoning_effort`); empty inherits the parent chat model, and an explicit spawn `modelSlug` still wins.
 
 `ValidateSubagentSpawn` (`DysonMetaAgentSpawnGateTests`):
 
@@ -36,6 +36,8 @@ Kept:
 | `GetOpenRulesConfig` / `LoadSkill` | Rules without files. |
 | `SummarizeTurns` / `CreateTodo` / `ListTodos` / `UpdateTodo` | Shared schemas. |
 
+Todos are the record of dispatches; posted messages are not in later transcripts.
+
 Structurally absent (not an exhaustive list — see `ExcludedToolNames`): file/shell/browser/search tools, `WaitForSubagent`, `StartSubagent` and the classic subagent quartet, `AskQuestion` / `PromptUserDialog` (they block), completion tools, `SubmitSubagentReport`, `DropTurnContext` / `RestoreTurnContext`, `StartNewTurn` / `ExpandThoughtProcess`, `GetDateTime`, `RenameSession`, `InitializeOpenRules`, `SubmitPlan` / `EditPlan`.
 
 ### `LoadSkill` Literal gate
@@ -44,7 +46,7 @@ Root + AutoInclude bodies are already in the system prompt. `LoadSkill` still ru
 
 ### Meta Agent Drone catalog
 
-`ApplyDroneAllowlist`: Work catalog minus the depth-1 trio (`AskQuestionFromParent`, `PromptUserDialogFromParent`, `TriggerParentEvent`), plus `ReadMetaPlan` and `SubmitMetaPlan`. Blocked drones report `failed` with the question. `SubmitSubagentReport` stays. Covered by `DysonMetaAgentToolsetTests`.
+`ApplyDroneAllowlist`: Work catalog minus `AskQuestionFromParent` and `PromptUserDialogFromParent` only (`TriggerParentEvent` stays), plus `ReadMetaPlan` and `SubmitMetaPlan`. Questions and section-boundary status pings go up as `TriggerParentEvent` with kind `message`; the parent answers with `RespondToSubagentEvent` — immediately for a status (and posts it to the user), after the user decides for a question. `SubmitSubagentReport` stays. Covered by `DysonMetaAgentToolsetTests`.
 
 As built, `CreateChildAsync` still **copies the parent's `Worktree*`** onto every child (demo + OpenAI). Meta Agent Drones do not get their own worktree at spawn; `worktreeBranch` in the create result is whatever the parent had. Auto-merge on completed report is not implemented. `EnsureSessionWorktreeIfNeededAsync` still early-returns when `session.Parent is not null`.
 

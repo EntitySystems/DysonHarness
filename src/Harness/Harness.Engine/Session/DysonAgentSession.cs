@@ -12,6 +12,8 @@ public abstract class DysonAgentSession
     private readonly ConcurrentQueue<string> _logLines = new();
     private readonly List<DysonSessionTodo> _todos = [];
     private readonly object _todosGate = new();
+    private readonly List<DysonAgentSession> _subSessions = [];
+    private readonly object _subSessionsGate = new();
     private readonly object _terminalGate = new();
     private TaskCompletionSource<(DysonSessionStatus Status, string? Summary)> _terminalTcs =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -49,7 +51,6 @@ public abstract class DysonAgentSession
     {
         Config = config ?? throw new ArgumentNullException(nameof(config));
         Provider = provider ?? throw new ArgumentNullException(nameof(provider));
-        SubSessions = new List<DysonAgentSession>();
 
         var prompt = DysonAgentSystemPrompts.ForMode(agentMode, config.CustomAgents);
         if (prompt.IsError)
@@ -370,7 +371,18 @@ public abstract class DysonAgentSession
         set => field = value ?? throw new ArgumentNullException(nameof(value));
     }
 
-    public IList<DysonAgentSession> SubSessions { get; }
+    /// <summary>
+    /// Direct children. Each read copies the list so UI enumeration cannot race unregister.
+    /// </summary>
+    // ponytail: per-read array; cache the snapshot if drone counts make this alloc hot
+    public IReadOnlyList<DysonAgentSession> SubSessions
+    {
+        get
+        {
+            lock (_subSessionsGate)
+                return _subSessions.ToArray();
+        }
+    }
 
     /// <summary>Parent lookup for Wait/Inspect/Stop. Keyed by subagent Id.</summary>
     protected Dictionary<int, DysonAgentSession> SubagentsById { get; } = new();
@@ -386,15 +398,19 @@ public abstract class DysonAgentSession
     {
         ArgumentNullException.ThrowIfNull(child);
 
-        if (child.Id != 0 || SubagentsById.ContainsValue(child) || SubSessions.Contains(child))
-            throw new InvalidOperationException("Subagent is already registered.");
+        lock (_subSessionsGate)
+        {
+            if (child.Id != 0 || SubagentsById.ContainsValue(child) || _subSessions.Contains(child))
+                throw new InvalidOperationException("Subagent is already registered.");
 
-        var id = AllocateSubagentId();
-        child.Id = id;
-        child.Parent = this;
-        ApplyChildStructuralGates(child);
-        SubagentsById[id] = child;
-        SubSessions.Add(child);
+            var id = AllocateSubagentId();
+            child.Id = id;
+            child.Parent = this;
+            ApplyChildStructuralGates(child);
+            SubagentsById[id] = child;
+            _subSessions.Add(child);
+        }
+
         SubagentSpawned?.Invoke(this, child);
     }
 
@@ -413,28 +429,31 @@ public abstract class DysonAgentSession
         if (child.Id < 1)
             throw new InvalidOperationException("Restored subagent must already have RuntimeId ≥ 1.");
 
-        if (SubagentsById.TryGetValue(child.Id, out var existingById))
+        lock (_subSessionsGate)
         {
-            if (!ReferenceEquals(existingById, child))
+            if (SubagentsById.TryGetValue(child.Id, out var existingById))
             {
-                throw new InvalidOperationException(
-                    $"Subagent id {child.Id} is already registered to a different session.");
+                if (!ReferenceEquals(existingById, child))
+                {
+                    throw new InvalidOperationException(
+                        $"Subagent id {child.Id} is already registered to a different session.");
+                }
+
+                child.Parent = this;
+                ApplyChildStructuralGates(child);
+                BumpNextSubagentId(child.Id);
+                return;
             }
+
+            if (SubagentsById.ContainsValue(child) || _subSessions.Contains(child))
+                throw new InvalidOperationException("Subagent is already registered under a different id.");
 
             child.Parent = this;
             ApplyChildStructuralGates(child);
+            SubagentsById[child.Id] = child;
+            _subSessions.Add(child);
             BumpNextSubagentId(child.Id);
-            return;
         }
-
-        if (SubagentsById.ContainsValue(child) || SubSessions.Contains(child))
-            throw new InvalidOperationException("Subagent is already registered under a different id.");
-
-        child.Parent = this;
-        ApplyChildStructuralGates(child);
-        SubagentsById[child.Id] = child;
-        SubSessions.Add(child);
-        BumpNextSubagentId(child.Id);
     }
 
     /// <summary>
@@ -465,8 +484,11 @@ public abstract class DysonAgentSession
         child.Config.PluginMcpHost?.AttachSession(child);
     }
 
-    public bool TryGetSubagent(int subagentId, out DysonAgentSession child) =>
-        SubagentsById.TryGetValue(subagentId, out child!);
+    public bool TryGetSubagent(int subagentId, out DysonAgentSession child)
+    {
+        lock (_subSessionsGate)
+            return SubagentsById.TryGetValue(subagentId, out child!);
+    }
 
     /// <summary>
     /// Drops a direct child from <see cref="SubagentsById"/> / <see cref="SubSessions"/>
@@ -474,12 +496,66 @@ public abstract class DysonAgentSession
     /// </summary>
     public bool UnregisterSubagent(int subagentId)
     {
-        if (!SubagentsById.Remove(subagentId, out var child))
-            return false;
+        lock (_subSessionsGate)
+        {
+            if (!SubagentsById.Remove(subagentId, out var child))
+                return false;
 
-        SubSessions.Remove(child);
-        child.Parent = null;
-        return true;
+            _subSessions.Remove(child);
+            child.Parent = null;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Drops a child <see cref="CreateChildAsync"/> already registered when a later step fails.
+    /// A worktree this child owns is removed and its columns cleared so delete is not refused.
+    /// An inherited parent worktree is not removed. Cleanup errors are ignored.
+    /// </summary>
+    protected async Task AbandonRegisteredChildAsync(
+        DysonAgentSession child,
+        CancellationToken cancellationToken)
+    {
+        var persisted = child.PersistenceId;
+        var worktreePath = child.WorktreeAbsolutePath;
+        var ownsWorktree = persisted != Guid.Empty
+            && !string.IsNullOrWhiteSpace(worktreePath)
+            && string.Equals(
+                child.WorktreeBranch,
+                DysonSessionWorktree.FormatBranch(persisted),
+                StringComparison.Ordinal);
+
+        UnregisterSubagent(child.Id);
+
+        if (ownsWorktree)
+        {
+            var anchor = child.RegisteredWorkDirectoryAbsolutePath;
+            if (string.IsNullOrWhiteSpace(anchor))
+                anchor = RegisteredWorkDirectoryAbsolutePath;
+            if (!string.IsNullOrWhiteSpace(anchor))
+                DysonSessionWorktree.Remove(anchor, worktreePath!, force: true);
+        }
+
+        if (SessionStore is null || persisted == Guid.Empty)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(worktreePath))
+        {
+            await SessionStore.UpdateSessionMetaAsync(
+                    new DysonSessionMetaUpdate
+                    {
+                        SessionId = persisted,
+                        UpdateWorktreeEnabled = true,
+                        WorktreeEnabled = false,
+                        UpdateWorktreeLocation = true,
+                        WorktreeAbsolutePath = null,
+                        WorktreeBranch = null,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        await SessionStore.DeleteSessionAsync(persisted, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

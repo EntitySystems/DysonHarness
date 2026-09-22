@@ -4,7 +4,7 @@ using DysonHarness;
 
 namespace Harness.Tests;
 
-/// <summary>Meta Agent catalog is the allowlist; Meta Agent Drone drops the FromParent trio.</summary>
+/// <summary>Meta Agent catalog is the allowlist; Meta Agent Drone keeps TriggerParentEvent and drops Ask/dialog FromParent tools.</summary>
 public class DysonMetaAgentToolsetTests
 {
     [Fact]
@@ -17,7 +17,7 @@ public class DysonMetaAgentToolsetTests
     }
 
     [Fact]
-    public void Meta_agent_drone_catalog_strips_from_parent_trio_and_adds_plan_tools()
+    public void Meta_agent_drone_catalog_keeps_trigger_parent_event_and_adds_plan_tools()
     {
         var pipeline = DysonSessionToolsetBuilder.Build(
             new DysonAgentSessionConfig(),
@@ -27,7 +27,7 @@ public class DysonMetaAgentToolsetTests
 
         Assert.False(pipeline.Tools.ContainsKey("AskQuestionFromParent"));
         Assert.False(pipeline.Tools.ContainsKey("PromptUserDialogFromParent"));
-        Assert.False(pipeline.Tools.ContainsKey("TriggerParentEvent"));
+        Assert.True(pipeline.Tools.ContainsKey("TriggerParentEvent"));
         Assert.True(pipeline.Tools.ContainsKey("ReadMetaPlan"));
         Assert.True(pipeline.Tools.ContainsKey("SubmitMetaPlan"));
         Assert.True(pipeline.Tools.ContainsKey("ReadFile"));

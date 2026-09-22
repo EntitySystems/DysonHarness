@@ -15,6 +15,7 @@ public class DysonMetaAgentDirectiveTests
         AssertMetaAgentDroneForMode();
         AssertBothDifferFromWork();
         AssertSubmitMetaPlanIsNotAReportInMandate();
+        AssertMetaAgentDroneFirstTurnMandate();
     }
 
     private static void AssertMetaAgentForMode()
@@ -27,6 +28,13 @@ public class DysonMetaAgentDirectiveTests
         // The meta page renders posted messages only; prose-only turns show the user nothing.
         // Pinned so the one instruction standing between the agent and a blank screen is not softened away.
         MustContain(text, "PostConversationMessage is your only voice", "Meta Agent ForMode");
+        // The todo list outlives the roster and the transcript; posted messages do not come back on later turns.
+        MustContain(text, "ListTodos before you answer whether work was dispatched", "Meta Agent ForMode");
+        MustContain(text, "A posted message is shown to the user and is not in later turns", "Meta Agent ForMode");
+        MustContain(text, "blocked inside TriggerParentEvent", "Meta Agent ForMode");
+        MustContain(text, "only a status", "Meta Agent ForMode");
+        MustContain(text, "Remember the subagentId and eventId", "Meta Agent ForMode");
+        MustNotContain(text, "reports failed with the question", "Meta Agent ForMode");
     }
 
     private static void AssertMetaAgentDroneForMode()
@@ -36,6 +44,10 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "SubmitMetaPlan", "Meta Agent Drone ForMode");
         MustContain(text, "must still SubmitSubagentReport", "Meta Agent Drone ForMode");
         MustContain(text, "Do not implement it, and do not commit anything on your branch.", "Meta Agent Drone ForMode");
+        MustContain(text, "TriggerParentEvent is how you talk to the Meta Agent", "Meta Agent Drone ForMode");
+        MustContain(text, "when you finish a section of the implementation", "Meta Agent Drone ForMode");
+        MustContain(text, "Do not SubmitSubagentReport to ask a question or to give a status", "Meta Agent Drone ForMode");
+        MustNotContain(text, "There is no path from you to the user", "Meta Agent Drone ForMode");
     }
 
     private static void AssertBothDifferFromWork()
@@ -63,6 +75,15 @@ public class DysonMetaAgentDirectiveTests
             nameof(DysonAgentSystemPrompts.SubagentReportRequiredMandate));
     }
 
+    private static void AssertMetaAgentDroneFirstTurnMandate()
+    {
+        var text = DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate;
+        MustContain(text, "That is the final state only", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
+        MustContain(text, "At each section boundary", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
+        MustContain(text, "Never report failed just to ask a question or to give a status", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
+        MustNotContain(text, "Blocked or needing a decision", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
+    }
+
     private static string Prompt(string mode)
     {
         var result = DysonAgentSystemPrompts.ForMode(mode);
@@ -77,5 +98,11 @@ public class DysonMetaAgentDirectiveTests
     {
         if (!text.Contains(needle, StringComparison.Ordinal))
             throw new InvalidOperationException($"{subject} must contain '{needle}'.");
+    }
+
+    private static void MustNotContain(string text, string needle, string subject)
+    {
+        if (text.Contains(needle, StringComparison.Ordinal))
+            throw new InvalidOperationException($"{subject} must not contain '{needle}'.");
     }
 }

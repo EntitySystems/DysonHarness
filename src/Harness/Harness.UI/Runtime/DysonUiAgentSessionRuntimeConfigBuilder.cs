@@ -249,6 +249,12 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
                     p => config.BugReviewDefaultProvider = p,
                     cancellationToken)
                 .ConfigureAwait(false);
+            await TryHydrateOpenAiProviderSettingAsync(
+                    DysonAppSettingKeys.MetaAgentDroneModelSlugId,
+                    DysonAppSettingKeys.MetaAgentDroneReasoningEffort,
+                    p => config.MetaAgentDroneDefaultProvider = p,
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             var lease = new DysonUiAgentSessionRuntimeConfigLease(config, diagnostics);
             transferred = true;

@@ -41,6 +41,12 @@
                 <div class="meta-stage__actions">
                     <button type="button"
                             class="btn"
+                            disabled="@(!IsMetaFocused)"
+                            @onclick="ToggleTasks">
+                        Tasks
+                    </button>
+                    <button type="button"
+                            class="btn"
                             disabled="@(!CanOpenFullSession)"
                             title="Open this Meta Agent session in the full chat UI"
                             @onclick="OpenFullSessionAsync">
@@ -140,6 +146,11 @@
 
 <FileViewerOverlay />
 
+<SessionTodosModal IsOpen="_tasksOpen"
+                   Todos="MetaTodos"
+                   CompleteCount="MetaTodoCompleteCount"
+                   OnClose="CloseTasks" />
+
 @code {
     [Parameter] public Guid WorkDirectoryId { get; set; }
 
@@ -160,6 +171,7 @@
     private MetaPlanList? _planList;
     private IDisposable? _hostSub;
     private DotNetObjectReference<DysonUiHost>? _chatLinksRef;
+    private bool _tasksOpen;
 
     private string? BannerError =>
         !string.IsNullOrEmpty(_error) ? _error : Host.LastError;
@@ -186,6 +198,14 @@
     private IReadOnlyList<QueuedPrompt> ChatQueued =>
         IsMetaFocused ? Host.QueuedPrompts : [];
 
+    private IReadOnlyList<DysonSessionTodo> MetaTodos =>
+        IsMetaFocused && Host.Session?.Todos is { Count: > 0 } todos
+            ? todos.OrderByDescending(t => t.Sequence).ToArray()
+            : [];
+
+    private int MetaTodoCompleteCount =>
+        MetaTodos.Count(t => t.Status == DysonSessionTodoStatus.Complete);
+
     private IReadOnlyList<Guid> ChildIds
     {
         get
@@ -194,7 +214,7 @@
                 return [];
 
             return Host.Session.SubSessions
-                .Where(child => child.PersistenceId != Guid.Empty)
+                .Where(child => child is not null && child.PersistenceId != Guid.Empty)
                 .OrderByDescending(child => child.Id)
                 .Select(child => child.PersistenceId)
                 .ToList();
@@ -238,6 +258,7 @@
         if (_loadedWorkDirectoryId == WorkDirectoryId)
             return;
         _loadedWorkDirectoryId = WorkDirectoryId;
+        _tasksOpen = false;
 
         var get = await WorkDirs.GetAsync(WorkDirectoryId);
         _unknownWorkDirectory = get.IsError;
@@ -466,6 +487,10 @@
         Host.RemoveQueuedPrompt(queuedId);
         return Task.CompletedTask;
     }
+
+    private void ToggleTasks() => _tasksOpen = !_tasksOpen;
+
+    private void CloseTasks() => _tasksOpen = false;
 
     private async Task OpenFullSessionAsync()
     {

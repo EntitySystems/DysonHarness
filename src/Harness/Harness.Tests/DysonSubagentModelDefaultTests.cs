@@ -3,7 +3,7 @@ using DysonHarness;
 namespace Harness.Tests;
 
 /// <summary>
-/// ponytail: assert Explore / Drone / Security Review / Bug Review settings-default resolve order
+/// ponytail: assert Explore / Drone / Security Review / Bug Review / Meta Agent Drone settings-default resolve order
 /// (explicit modelSlug wins; blank + config default uses default; blank + no default inherits).
 /// </summary>
 public class DysonSubagentModelDefaultTests
@@ -21,6 +21,8 @@ public class DysonSubagentModelDefaultTests
             new DysonModelSlugEntity { Slug = "security-default", DisplayAlias = "Security" });
         var bug = new OpenAiCompatibleAgentProvider(
             new DysonModelSlugEntity { Slug = "bug-default", DisplayAlias = "Bug" });
+        var metaDrone = new OpenAiCompatibleAgentProvider(
+            new DysonModelSlugEntity { Slug = "meta-drone-default", DisplayAlias = "Meta Drone" });
 
         var config = new DysonAgentSessionConfig
         {
@@ -28,6 +30,7 @@ public class DysonSubagentModelDefaultTests
             DroneDefaultProvider = drone,
             SecurityReviewDefaultProvider = security,
             BugReviewDefaultProvider = bug,
+            MetaAgentDroneDefaultProvider = metaDrone,
         };
 
         if (!ReferenceEquals(config.TryGetSubagentDefaultProvider(DysonAgentModes.Explore), explore))
@@ -38,6 +41,8 @@ public class DysonSubagentModelDefaultTests
             throw new InvalidOperationException("Security Review should map to SecurityReviewDefaultProvider.");
         if (!ReferenceEquals(config.TryGetSubagentDefaultProvider(DysonAgentModes.BugReview), bug))
             throw new InvalidOperationException("Bug Review should map to BugReviewDefaultProvider.");
+        if (!ReferenceEquals(config.TryGetSubagentDefaultProvider(DysonAgentModes.MetaAgentDrone), metaDrone))
+            throw new InvalidOperationException("Meta Agent Drone should map to MetaAgentDroneDefaultProvider.");
 
         if (config.TryGetSubagentDefaultProvider("explore") is null)
             throw new InvalidOperationException("Mode lookup should be case-insensitive.");
@@ -50,7 +55,8 @@ public class DysonSubagentModelDefaultTests
 
         // Resolve order: explicit modelSlug wins (settings default ignored).
         if (config.TryGetSubagentDefaultWhenSlugOmitted("gpt-4o", DysonAgentModes.Explore) is not null
-            || config.TryGetSubagentDefaultWhenSlugOmitted("gpt-4o", DysonAgentModes.Drone) is not null)
+            || config.TryGetSubagentDefaultWhenSlugOmitted("gpt-4o", DysonAgentModes.Drone) is not null
+            || config.TryGetSubagentDefaultWhenSlugOmitted("gpt-4o", DysonAgentModes.MetaAgentDrone) is not null)
             throw new InvalidOperationException("Explicit modelSlug must win over settings default.");
 
         // Blank + config default → use default.
@@ -65,7 +71,10 @@ public class DysonSubagentModelDefaultTests
                 security)
             || !ReferenceEquals(
                 config.TryGetSubagentDefaultWhenSlugOmitted(null, DysonAgentModes.BugReview),
-                bug))
+                bug)
+            || !ReferenceEquals(
+                config.TryGetSubagentDefaultWhenSlugOmitted(null, DysonAgentModes.MetaAgentDrone),
+                metaDrone))
         {
             throw new InvalidOperationException("Blank modelSlug should use the mode settings default.");
         }
@@ -79,8 +88,9 @@ public class DysonSubagentModelDefaultTests
 
         var empty = new DysonAgentSessionConfig();
         if (empty.TryGetSubagentDefaultWhenSlugOmitted(null, DysonAgentModes.Explore) is not null
-            || empty.TryGetSubagentDefaultWhenSlugOmitted(null, DysonAgentModes.Drone) is not null)
-            throw new InvalidOperationException("Unset Explore / Drone default must inherit parent.");
+            || empty.TryGetSubagentDefaultWhenSlugOmitted(null, DysonAgentModes.Drone) is not null
+            || empty.TryGetSubagentDefaultWhenSlugOmitted(null, DysonAgentModes.MetaAgentDrone) is not null)
+            throw new InvalidOperationException("Unset Explore / Drone / Meta Agent Drone default must inherit parent.");
     }
 
     private static void AssertBuiltInPromptsContainModelSlugOmissionGuidance()

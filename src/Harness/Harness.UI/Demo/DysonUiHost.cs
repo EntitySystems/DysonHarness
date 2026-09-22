@@ -5009,6 +5009,12 @@ public sealed class DysonUiHost : IAsyncDisposable
                 p => config.BugReviewDefaultProvider = p,
                 cancellationToken)
             .ConfigureAwait(false);
+        await TryHydrateOpenAiProviderSettingAsync(
+                DysonAppSettingKeys.MetaAgentDroneModelSlugId,
+                DysonAppSettingKeys.MetaAgentDroneReasoningEffort,
+                p => config.MetaAgentDroneDefaultProvider = p,
+                cancellationToken)
+            .ConfigureAwait(false);
 
         return config;
     }

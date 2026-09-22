@@ -158,7 +158,8 @@ public static class DysonSessionToolsetBuilder
 
     /// <summary>
     /// Meta Agent: strip to the allowlist (no file/shell/wait/completion). Meta Agent never completes.
-    /// Meta Agent Drone: strip the depth-1 FromParent trio and add ReadMetaPlan / SubmitMetaPlan.
+    /// Meta Agent Drone: drop AskQuestionFromParent and PromptUserDialogFromParent
+    /// (TriggerParentEvent stays) and add ReadMetaPlan / SubmitMetaPlan.
     /// </summary>
     private static void ApplyModeCatalog(DysonMcpPipeline pipeline, string agentMode)
     {

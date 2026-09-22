@@ -200,6 +200,19 @@ public class DysonMetaMaintenanceTickTests
         Assert.Equal(session.Turns[^1].Id, full.Value.Turns[^1].Id);
         foreach (var live in session.Turns)
             Assert.Contains(full.Value.Turns, row => row.Id == live.Id);
+
+        var maxSequence = full.Value.Turns.Max(t => t.Sequence);
+        var fresh = Completed("t-after-tick");
+        session.AddTurnForTest(fresh);
+        var afterTick = await store.UpsertTurnAsync(
+            DysonTurnPersistence.ToEntity(fresh, created.Value, session.Turns.Count - 1));
+        Assert.True(afterTick.IsSuccess, afterTick.IsError ? afterTick.Error : null);
+
+        var reloaded = await store.GetFullSessionAsync(created.Value);
+        Assert.True(reloaded.IsSuccess, reloaded.IsError ? reloaded.Error : null);
+        Assert.Equal(41, reloaded.Value.Turns.Count);
+        var stored = Assert.Single(reloaded.Value.Turns, t => t.Id == fresh.Id);
+        Assert.Equal(maxSequence + 1, stored.Sequence);
     }
 
     private static StubSession SeedMeta(int count) => Seed(DysonAgentModes.MetaAgent, count);

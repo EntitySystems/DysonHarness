@@ -262,6 +262,12 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         child.WorktreeBranch = childWorktreeBranch;
         RegisterSubagent(child);
 
+        async Task<Result<DysonStartSubagentResult, string>> FailRegisteredChild(string error)
+        {
+            await AbandonRegisteredChildAsync(child, cancellationToken).ConfigureAwait(false);
+            return Result<DysonStartSubagentResult, string>.AsError(error);
+        }
+
         var title = TitleFromTask(task);
         child.SetDisplayTitle(title);
         if (childProvider is DemoDysonAgentProvider demoSlug)
@@ -292,7 +298,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             cancellationToken).ConfigureAwait(false);
 
         if (create.IsError)
-            return Result<DysonStartSubagentResult, string>.AsError(create.Error);
+            return await FailRegisteredChild(create.Error).ConfigureAwait(false);
 
         child.SetPersistenceId(create.Value);
 
@@ -300,7 +306,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         {
             var bound = child.BindOwnWorktree(registered);
             if (bound.IsError)
-                return Result<DysonStartSubagentResult, string>.AsError(bound.Error);
+                return await FailRegisteredChild(bound.Error).ConfigureAwait(false);
 
             var reboundSuffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
                 await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
@@ -324,14 +330,14 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                     cancellationToken)
                 .ConfigureAwait(false);
             if (persist.IsError)
-                return Result<DysonStartSubagentResult, string>.AsError(persist.Error);
+                return await FailRegisteredChild(persist.Error).ConfigureAwait(false);
         }
 
         if (initialTodos is { Count: > 0 })
         {
             var seeded = await child.ReplaceTodosAsync(initialTodos, cancellationToken).ConfigureAwait(false);
             if (seeded.IsError)
-                return Result<DysonStartSubagentResult, string>.AsError(seeded.Error);
+                return await FailRegisteredChild(seeded.Error).ConfigureAwait(false);
         }
 
         var createdLog = DysonSessionLogPayload.CreateEntry(
@@ -341,7 +347,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
 
         var append = await _store.AppendLogAsync(createdLog, cancellationToken).ConfigureAwait(false);
         if (append.IsError)
-            return Result<DysonStartSubagentResult, string>.AsError(append.Error);
+            return await FailRegisteredChild(append.Error).ConfigureAwait(false);
 
         var runCts = new CancellationTokenSource();
         child.AttachBackgroundRun(runCts);

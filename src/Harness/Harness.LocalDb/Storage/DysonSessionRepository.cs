@@ -54,7 +54,7 @@ public sealed class DysonSessionRepository(
             }
             catch (Exception ex)
             {
-                return new VoidResult<string>($"Failed to upsert turn: {ex.Message}");
+                return new VoidResult<string>($"Failed to upsert turn: {InnermostMessage(ex)}");
             }
         }
     }
@@ -350,12 +350,21 @@ public sealed class DysonSessionRepository(
                 if (turn.CreatedUtc == default)
                     turn.CreatedUtc = DateTime.UtcNow;
 
+                // Holes below MAX are still "taken" for ordering: a caller index after a
+                // prefix delete would sort before older survivors. Append instead.
+                var max = await db.Turns
+                    .Where(t => t.SessionId == turn.SessionId)
+                    .MaxAsync(t => (int?)t.Sequence, cancellationToken)
+                    .ConfigureAwait(false);
+                if (max is int currentMax && turn.Sequence <= currentMax)
+                    turn.Sequence = currentMax + 1;
+
                 db.Turns.Add(turn);
             }
             else
             {
                 existing.SessionId = turn.SessionId;
-                existing.Sequence = turn.Sequence;
+
                 existing.Kind = turn.Kind;
                 existing.AgentTitle = turn.AgentTitle;
                 existing.PlanRelativePath = turn.PlanRelativePath;
@@ -383,8 +392,20 @@ public sealed class DysonSessionRepository(
         }
         catch (Exception ex) when (!DysonDbAccessor.IsContention(ex))
         {
-            return new VoidResult<string>($"Failed to upsert turn: {ex.Message}");
+            return new VoidResult<string>($"Failed to upsert turn: {InnermostMessage(ex)}");
         }
+    }
+
+    private static string InnermostMessage(Exception ex)
+    {
+        var message = ex.Message;
+        for (var inner = ex.InnerException; inner is not null; inner = inner.InnerException)
+        {
+            if (!string.IsNullOrWhiteSpace(inner.Message))
+                message = inner.Message;
+        }
+
+        return message;
     }
 
     private static async Task<VoidResult<string>> AppendLogCoreAsync(

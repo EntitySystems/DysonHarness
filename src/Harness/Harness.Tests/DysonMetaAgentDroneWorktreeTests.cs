@@ -252,6 +252,63 @@ public class DysonMetaAgentDroneWorktreeTests
         }
     }
 
+    [Fact]
+    public async Task Failed_spawn_after_worktree_persist_drops_row_and_worktree()
+    {
+        var parent = CreateTempDir();
+        var repo = Path.Combine(parent, "repo");
+        Directory.CreateDirectory(repo);
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var keepAlive = conn;
+
+        try
+        {
+            GitInit(repo);
+            WriteAllLf(Path.Combine(repo, "file.txt"), "base\n");
+            RunGitOrThrow(repo, ["add", "-A"]);
+            RunGitOrThrow(repo, ["commit", "-m", "init"]);
+
+            var workDirs = DysonTempDb.WorkDirectories(accessor);
+            var sessions = DysonTempDb.Sessions(accessor);
+            var wd = await workDirs.CreateAsync(repo);
+            Assert.True(wd.IsSuccess, wd.IsError ? wd.Error : null);
+
+            var created = await DemoDysonAgentSession.CreateAsync(
+                sessions,
+                new DemoDysonAgentProvider(provider: null, slug: null),
+                wd.Value,
+                DysonAgentModes.MetaAgent,
+                workDirectoryAbsolutePath: repo);
+            Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+            var meta = created.Value;
+
+            var spawned = await meta.CreateChildAsync(
+                DysonAgentModes.MetaAgentDrone,
+                "duplicate todos",
+                initialTodos:
+                [
+                    new DysonSessionTodoReplaceItem { TaskCode = "same", DisplayName = "A" },
+                    new DysonSessionTodoReplaceItem { TaskCode = "same", DisplayName = "B" },
+                ]);
+            Assert.True(spawned.IsError);
+            Assert.Contains("Duplicate TaskCode", spawned.Error, StringComparison.Ordinal);
+            Assert.Empty(meta.SubSessions);
+
+            var children = await sessions.ListChildSessionsAsync(meta.PersistenceId);
+            Assert.True(children.IsSuccess, children.IsError ? children.Error : null);
+            Assert.Empty(children.Value);
+
+            var listed = DysonGitInfo.TryListWorktrees(repo);
+            Assert.True(listed.IsSuccess, listed.IsError ? listed.Error : null);
+            Assert.DoesNotContain(listed.Value, e => !SamePath(e.Path, repo));
+        }
+        finally
+        {
+            CleanupWorktrees(repo);
+            DeleteQuiet(parent);
+        }
+    }
+
     private sealed class StubProvider : DysonAgentProvider;
 
     private sealed class StubSession(string mode) : DysonAgentSession(

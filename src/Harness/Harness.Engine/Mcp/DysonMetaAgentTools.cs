@@ -43,6 +43,7 @@ public static class DysonMetaAgentTools
         "PostConversationMessage",
         "ReadMetaAgentDroneLog",
         "RemoveTodos",
+        "RespondToSubagentEvent",
         "SetPlanStatus",
         "StartAsyncExploreAgent",
         "StopMetaAgentDrone",
@@ -71,7 +72,6 @@ public static class DysonMetaAgentTools
         "AskQuestion",
         "PromptUserDialog",
         "WaitForSubagent",
-        "RespondToSubagentEvent",
         "CompleteTask",
         "ConfirmTaskComplete",
         "ContinueWork",
@@ -123,8 +123,8 @@ public static class DysonMetaAgentTools
     }
 
     /// <summary>
-    /// Meta Agent Drone: keep the Work catalog, strip the depth-1 FromParent trio,
-    /// add <c>ReadMetaPlan</c> and a <c>SubmitMetaPlan</c> seam.
+    /// Meta Agent Drone: keep the Work catalog (including <c>TriggerParentEvent</c>),
+    /// drop Ask/dialog FromParent tools, add <c>ReadMetaPlan</c> and a <c>SubmitMetaPlan</c> seam.
     /// </summary>
     public static void ApplyDroneAllowlist(DysonMcpPipeline pipeline)
     {
@@ -132,7 +132,6 @@ public static class DysonMetaAgentTools
 
         pipeline.Tools.Remove("AskQuestionFromParent");
         pipeline.Tools.Remove("PromptUserDialogFromParent");
-        pipeline.Tools.Remove("TriggerParentEvent");
 
         foreach (var tool in CreateMetaAgentDroneTools())
             pipeline.Tools[tool.Name] = tool;
