@@ -75,6 +75,7 @@ public sealed class DysonAgentTurn
 
     private readonly List<DysonContextFileEntry> _contextFiles = [];
     private readonly List<DysonBinaryAttachment> _userImages = [];
+    private readonly List<DysonConversationAction> _conversationActions = [];
 
     /// <summary>
     /// Context files attached this turn (slash / <c>LoadSkill</c> skills, or StartSubagent
@@ -87,6 +88,12 @@ public sealed class DysonAgentTurn
     /// provider multimodal transcripts (unlike one-shot tool <see cref="DysonToolCallResult.BinaryAttachment"/>).
     /// </summary>
     public IReadOnlyList<DysonBinaryAttachment> UserImages => _userImages;
+
+    /// <summary>
+    /// Meta-chat buttons for a DisplayInfo post (name + func key). Empty for every other turn.
+    /// The delegate map is not on the turn.
+    /// </summary>
+    public IReadOnlyList<DysonConversationAction> ConversationActions => _conversationActions;
 
     /// <summary>UTC when this turn began (live create or restored from persistence).</summary>
     public DateTime StartedUtc { get; set; }
@@ -347,6 +354,20 @@ public sealed class DysonAgentTurn
 
         _contextFiles.Clear();
         _contextFiles.AddRange(files);
+    }
+
+    /// <summary>Replaces <see cref="ConversationActions"/> from a persisted snapshot.</summary>
+    public void RestoreConversationActions(IEnumerable<DysonConversationAction> actions)
+    {
+        ArgumentNullException.ThrowIfNull(actions);
+
+        _conversationActions.Clear();
+        foreach (var action in actions)
+        {
+            if (action is null)
+                continue;
+            _conversationActions.Add(action);
+        }
     }
 
     /// <summary>Appends a user-attached image for this turn (composer).</summary>

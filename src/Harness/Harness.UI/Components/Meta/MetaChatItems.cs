@@ -26,7 +26,16 @@ public readonly record struct MetaChatItem(
 
     /// <summary>File-name chips parsed from local paths. Never a directory or URL.</summary>
     public IReadOnlyList<string> FileNames { get; init; } = [];
+
+    /// <summary>Buttons on an agent DisplayInfo bubble. Empty everywhere else.</summary>
+    public IReadOnlyList<DysonConversationAction> Actions { get; init; } = [];
+
+    /// <summary>Source turn for an agent DisplayInfo bubble. Null for user and queued rows.</summary>
+    public Guid? TurnId { get; init; }
 }
+
+/// <summary>Click on a meta-chat conversation action button. Index is into that turn's actions.</summary>
+public readonly record struct MetaChatActionClick(Guid TurnId, int Index);
 
 /// <summary>
 /// Newest root Meta Agent session for a work-directory list (roots-only <see cref="DysonSessionSummary"/>).
@@ -120,7 +129,11 @@ public static class MetaChatItems
                     MetaChatRole.Agent,
                     turn.AssistantText,
                     Pending: false,
-                    QueuedId: null));
+                    QueuedId: null)
+                {
+                    Actions = turn.ConversationActions,
+                    TurnId = turn.Id,
+                });
             }
         }
 

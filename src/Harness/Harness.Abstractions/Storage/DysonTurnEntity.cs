@@ -41,6 +41,12 @@ public sealed class DysonTurnEntity
     /// </summary>
     public string? UserImagesJson { get; set; }
 
+    /// <summary>
+    /// Meta-chat buttons for this turn (name + func key). Null or empty means no buttons.
+    /// The in-process delegate map is not stored.
+    /// </summary>
+    public string? ConversationActionsJson { get; set; }
+
     public string ToolStateJson { get; set; } = "{}";
     public bool ToolHistoryOptimized { get; set; }
     public string? CompactToolHistory { get; set; }

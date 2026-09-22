@@ -76,10 +76,12 @@
                         }
 
                         <div class="meta-chat">
-                            <MetaChatFeed Turns="ChatTurns"
+                            <MetaChatFeed @ref="_chatFeed"
+                                          Turns="ChatTurns"
                                           Queued="ChatQueued"
                                           SessionBusy="IsMetaFocused && Host.IsBusy"
-                                          OnRemoveQueued="RemoveQueuedAsync" />
+                                          OnRemoveQueued="RemoveQueuedAsync"
+                                          OnConversationAction="OnConversationActionAsync" />
                         </div>
 
                         <div class="composer meta-composer">
@@ -221,6 +223,7 @@
     private IReadOnlyList<string> _effortModes = [];
     private Guid? _effortModesSlugId;
     private MetaPlanList? _planList;
+    private MetaChatFeed? _chatFeed;
     private IDisposable? _hostSub;
     private DotNetObjectReference<DysonUiHost>? _chatLinksRef;
     private bool _tasksOpen;
@@ -632,6 +635,12 @@
     {
         Host.RemoveQueuedPrompt(queuedId);
         return Task.CompletedTask;
+    }
+
+    private async Task OnConversationActionAsync(MetaChatActionClick click)
+    {
+        var result = await Host.InvokeMetaConversationActionAsync(click.TurnId, click.Index);
+        _chatFeed?.NoteConversationActionResult(click.TurnId, result);
     }
 
     private void ToggleTasks() => _tasksOpen = !_tasksOpen;
