@@ -21,6 +21,7 @@ public static class DysonTurnPersistence
             AgentTitle = turn.AgentTitle,
             PlanRelativePath = turn.PlanRelativePath,
             Instruction = turn.Instruction,
+            HiddenInstruction = turn.HiddenInstruction,
             AssistantText = turn.AssistantText,
             ReasoningText = turn.ReasoningText,
             ReasoningLogJson = DysonReasoningLogSerializer.Serialize(turn.ReasoningLog),

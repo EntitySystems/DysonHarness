@@ -642,6 +642,9 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
                     if (persistDropped.IsError)
                         return persistDropped;
 
+                    await session.ApplyChildReportWatchAsync(token).ConfigureAwait(false);
+                    await session.ApplyMetaMaintenanceTickAsync(last, token).ConfigureAwait(false);
+
                     RaiseChanged(DysonRuntimeChangeKind.SessionGraph, sessionId);
                 }
 
@@ -1109,7 +1112,10 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         var entity = DysonTurnPersistence.ToEntity(turn, sessionId, sequence);
         var upsert = await PersistAsync(() => _sessions.UpsertTurnAsync(entity)).ConfigureAwait(false);
         if (upsert.IsError)
+        {
+            ReportError(upsert.Error);
             return;
+        }
 
         var started = DysonTurnPersistence.CreateTurnStartedLog(sessionId, turn);
         await PersistAsync(() => _sessions.AppendLogAsync(started)).ConfigureAwait(false);
@@ -1137,7 +1143,10 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
 
         var sequence = IndexOfTurn(session, turn);
         var entity = DysonTurnPersistence.ToEntity(turn, sessionId, sequence);
-        await PersistAsync(() => _sessions.UpsertTurnAsync(entity)).ConfigureAwait(false);
+        var upsert = await PersistAsync(() => _sessions.UpsertTurnAsync(entity)).ConfigureAwait(false);
+        if (upsert.IsError)
+            ReportError(upsert.Error);
+
         RaiseChanged(DysonRuntimeChangeKind.SessionGraph, sessionId);
     }
 

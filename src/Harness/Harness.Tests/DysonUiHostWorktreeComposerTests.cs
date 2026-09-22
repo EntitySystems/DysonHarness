@@ -40,6 +40,7 @@ public sealed class DysonUiHostWorktreeComposerTests
             models,
             workDirs,
             workDirConfigs,
+            DysonTempDb.Plans(accessor),
             settings,
             shells,
             http,

@@ -125,6 +125,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     private readonly IDysonUsageAnalyticsRepository? _usageAnalytics;
     private readonly string _workDirectoryName;
     private readonly string _registeredWorkDirectoryPath;
+    private readonly IDysonPlanRepository? _plans;
     // ponytail: one hop per prompt; Explore recap shares this so a main-loop hop is not repeated
     private bool _fallbackAppliedThisTurn;
 
@@ -140,7 +141,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         string? systemPromptSuffix = null,
         IDysonUsageAnalyticsRepository? usageAnalytics = null,
         string workDirectoryName = "",
-        string? registeredWorkDirectoryAbsolutePath = null)
+        string? registeredWorkDirectoryAbsolutePath = null,
+        IDysonPlanRepository? plans = null)
         : base(agentMode, config, provider, systemPromptSuffix)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -149,12 +151,14 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         _registeredWorkDirectoryPath = string.IsNullOrWhiteSpace(registeredWorkDirectoryAbsolutePath)
             ? _workDirectoryPath
             : Path.GetFullPath(registeredWorkDirectoryAbsolutePath);
+        RegisteredWorkDirectoryAbsolutePath = _registeredWorkDirectoryPath;
         _store = store;
         SessionStore = store;
         _workDirectoryId = workDirectoryId;
         _models = models;
         _usageAnalytics = usageAnalytics;
         _workDirectoryName = workDirectoryName ?? "";
+        _plans = plans;
         _completions = new OpenAiCompletionsClient(_http);
         _responses = new OpenAiResponsesClient(_http);
     }
@@ -166,7 +170,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     public Guid WorkDirectoryId => _workDirectoryId;
 
     /// <summary>Rebinds native workspace root (registered checkout vs session worktree).</summary>
-    public void RebindWorkDirectoryPath(string absolutePath)
+    public override void RebindWorkDirectoryPath(string absolutePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(absolutePath);
         _workDirectoryPath = Path.GetFullPath(absolutePath);
@@ -185,6 +189,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         IDysonUsageAnalyticsRepository? usageAnalytics = null,
         string workDirectoryName = "",
         bool worktreeEnabled = false,
+        IDysonPlanRepository? plans = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -208,7 +213,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 workDirectoryAbsolutePath));
         var session = new OpenAiCompatibleAgentSession(
             agentMode, config, provider, http, workDirectoryAbsolutePath, store, workDirectoryId, models,
-            suffix, usageAnalytics, workDirectoryName);
+            suffix, usageAnalytics, workDirectoryName, plans: plans);
         session.WorktreeEnabled = worktreeEnabled;
         session.ConfigureRootInterAgentTools();
         session.SlugDefaultMaxTargetContextTokens = provider.DefaultMaxTargetContextTokens;
@@ -261,6 +266,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         IDysonUsageAnalyticsRepository? usageAnalytics = null,
         string workDirectoryName = "",
         string? registeredWorkDirectoryAbsolutePath = null,
+        IDysonPlanRepository? plans = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -301,7 +307,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             suffix,
             usageAnalytics,
             workDirectoryName,
-            registeredWorkDirectoryAbsolutePath: registered);
+            registeredWorkDirectoryAbsolutePath: registered,
+            plans: plans);
         session.RestoreFromPersisted(state);
         session.SlugDefaultMaxTargetContextTokens = provider.DefaultMaxTargetContextTokens;
         if (state.Session.ParentSessionId is null)
@@ -366,6 +373,12 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         if (attached.IsError)
             return Result<DysonStartSubagentResult, string>.AsError(attached.Error);
 
+        var isolateWorktree = string.Equals(
+            agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase);
+        var childWorktreeEnabled = isolateWorktree || WorktreeEnabled;
+        var childWorktreePath = isolateWorktree ? null : WorktreeAbsolutePath;
+        var childWorktreeBranch = isolateWorktree ? null : WorktreeBranch;
+
         var providerKind = DysonProviderKinds.EffectiveKind(
             childProvider.ProviderKind, childProvider.BaseUrl, childProvider.ApiKey);
         var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
@@ -373,7 +386,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     _models, providerKind, _workDirectoryPath, cancellationToken)
                 .ConfigureAwait(false),
             DysonAgentSystemPrompts.BuildWorktreePromptBlock(
-                WorktreeEnabled, WorktreeAbsolutePath, WorktreeBranch, _registeredWorkDirectoryPath));
+                childWorktreeEnabled, childWorktreePath, childWorktreeBranch, _registeredWorkDirectoryPath));
 
         var child = new OpenAiCompatibleAgentSession(
             agentMode,
@@ -387,12 +400,19 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             suffix,
             _usageAnalytics,
             _workDirectoryName,
-            registeredWorkDirectoryAbsolutePath: _registeredWorkDirectoryPath);
-        child.WorktreeEnabled = WorktreeEnabled;
-        child.WorktreeAbsolutePath = WorktreeAbsolutePath;
-        child.WorktreeBranch = WorktreeBranch;
+            registeredWorkDirectoryAbsolutePath: _registeredWorkDirectoryPath,
+            plans: _plans);
+        child.WorktreeEnabled = childWorktreeEnabled;
+        child.WorktreeAbsolutePath = childWorktreePath;
+        child.WorktreeBranch = childWorktreeBranch;
 
         RegisterSubagent(child);
+
+        async Task<Result<DysonStartSubagentResult, string>> FailRegisteredChild(string error)
+        {
+            await AbandonRegisteredChildAsync(child, cancellationToken).ConfigureAwait(false);
+            return Result<DysonStartSubagentResult, string>.AsError(error);
+        }
 
         var title = TitleFromTask(task);
         child.SetDisplayTitle(title);
@@ -412,22 +432,53 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 Title = title,
                 SystemPromptSnapshot = child.SystemPrompt,
                 Status = DysonSessionStatus.Active,
-                WorktreeEnabled = WorktreeEnabled,
-                WorktreeAbsolutePath = WorktreeAbsolutePath,
-                WorktreeBranch = WorktreeBranch,
+                WorktreeEnabled = childWorktreeEnabled,
+                WorktreeAbsolutePath = childWorktreePath,
+                WorktreeBranch = childWorktreeBranch,
             },
             cancellationToken).ConfigureAwait(false);
 
         if (create.IsError)
-            return Result<DysonStartSubagentResult, string>.AsError(create.Error);
+            return await FailRegisteredChild(create.Error).ConfigureAwait(false);
 
         child.SetPersistenceId(create.Value);
+
+        if (isolateWorktree)
+        {
+            var bound = child.BindOwnWorktree(_registeredWorkDirectoryPath);
+            if (bound.IsError)
+                return await FailRegisteredChild(bound.Error).ConfigureAwait(false);
+
+            var reboundSuffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+                await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                        _models, providerKind, child.WorkDirectoryPath, cancellationToken)
+                    .ConfigureAwait(false),
+                DysonAgentSystemPrompts.BuildWorktreePromptBlock(
+                    true, child.WorktreeAbsolutePath, child.WorktreeBranch, _registeredWorkDirectoryPath));
+            child.ReplaceSystemPromptSuffix(reboundSuffix);
+
+            var persist = await _store.UpdateSessionMetaAsync(
+                    new DysonSessionMetaUpdate
+                    {
+                        SessionId = child.PersistenceId,
+                        UpdateWorktreeEnabled = true,
+                        WorktreeEnabled = true,
+                        UpdateWorktreeLocation = true,
+                        WorktreeAbsolutePath = child.WorktreeAbsolutePath,
+                        WorktreeBranch = child.WorktreeBranch,
+                        SystemPromptSnapshot = child.SystemPrompt,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (persist.IsError)
+                return await FailRegisteredChild(persist.Error).ConfigureAwait(false);
+        }
 
         if (initialTodos is { Count: > 0 })
         {
             var seeded = await child.ReplaceTodosAsync(initialTodos, cancellationToken).ConfigureAwait(false);
             if (seeded.IsError)
-                return Result<DysonStartSubagentResult, string>.AsError(seeded.Error);
+                return await FailRegisteredChild(seeded.Error).ConfigureAwait(false);
         }
 
         var createdLog = DysonSessionLogPayload.CreateEntry(
@@ -437,7 +488,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         var append = await _store.AppendLogAsync(createdLog, cancellationToken).ConfigureAwait(false);
         if (append.IsError)
-            return Result<DysonStartSubagentResult, string>.AsError(append.Error);
+            return await FailRegisteredChild(append.Error).ConfigureAwait(false);
 
         var runCts = new CancellationTokenSource();
         child.AttachBackgroundRun(runCts);
@@ -649,7 +700,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         if (fsResult.IsError)
             return new VoidResult<string>($"Workspace filesystem: {fsResult.Error}");
 
-        var executor = new DysonWorkspaceToolExecutor(this, fsResult.Value, _http, _store, _workDirectoryId);
+        var executor = new DysonWorkspaceToolExecutor(this, fsResult.Value, _http, _store, _workDirectoryId, _plans);
         var inFlight = new List<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound>();
         var useResponses = string.Equals(
             OpenAiProvider.OpenAiApiMode,
@@ -1217,31 +1268,76 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     private static bool SkipResponsesFilesUpload(DysonBinaryAttachment attachment) =>
         attachment.IsImage && !string.IsNullOrWhiteSpace(attachment.RemoteUrl);
 
-    private static void AppendPathsToLastUser(
+    /// <summary>
+    /// Round-0 local paths. History already includes the in-flight turn
+    /// (<c>excludeLastIfCurrent</c> is false), and that text already contains
+    /// <see cref="DysonAgentTurn.HiddenInstruction"/>. Skip when the same block
+    /// is present so the model does not see it twice. A multimodal user message
+    /// is the current turn: edit its text part or stop. Do not paint an older turn.
+    /// </summary>
+    internal static void AppendPathsToLastUser(
         System.Text.Json.Nodes.JsonArray messagesOrInput,
         IReadOnlyList<string> filePaths)
     {
+        if (filePaths.Count == 0)
+            return;
+
+        var block = FormatAttachedPathsBlock(filePaths);
         for (var i = messagesOrInput.Count - 1; i >= 0; i--)
         {
             if (messagesOrInput[i] is not System.Text.Json.Nodes.JsonObject msg)
                 continue;
             if (msg["role"]?.GetValue<string>() != "user")
                 continue;
-            if (msg["content"] is not System.Text.Json.Nodes.JsonValue contentVal
-                || !contentVal.TryGetValue<string>(out var text))
+
+            if (msg["content"] is System.Text.Json.Nodes.JsonValue contentVal
+                && contentVal.TryGetValue<string>(out var text))
             {
-                continue;
+                if (text.Contains(block, StringComparison.Ordinal))
+                    return;
+
+                var sb = new System.Text.StringBuilder(text);
+                sb.AppendLine();
+                sb.AppendLine();
+                sb.Append(block);
+                msg["content"] = sb.ToString().TrimEnd();
+                return;
             }
 
-            var sb = new System.Text.StringBuilder(text);
-            sb.AppendLine();
-            sb.AppendLine();
-            sb.AppendLine("Attached paths:");
-            foreach (var path in filePaths)
-                sb.AppendLine($"- {path}");
-            msg["content"] = sb.ToString().TrimEnd();
+            if (msg["content"] is not System.Text.Json.Nodes.JsonArray parts)
+                continue;
+
+            foreach (var part in parts)
+            {
+                if (part is not System.Text.Json.Nodes.JsonObject obj)
+                    continue;
+                var type = obj["type"]?.GetValue<string>();
+                if (type is not ("text" or "input_text"))
+                    continue;
+
+                var partText = obj["text"]?.GetValue<string>() ?? "";
+                if (partText.Contains(block, StringComparison.Ordinal))
+                    return;
+
+                var sb = new System.Text.StringBuilder(partText);
+                sb.AppendLine();
+                sb.AppendLine();
+                sb.Append(block);
+                obj["text"] = sb.ToString().TrimEnd();
+                return;
+            }
+
             return;
         }
+    }
+
+    private static string FormatAttachedPathsBlock(IReadOnlyList<string> filePaths)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Attached paths:");
+        foreach (var path in filePaths)
+            sb.AppendLine($"- {path}");
+        return sb.ToString().TrimEnd();
     }
 
     /// <summary>

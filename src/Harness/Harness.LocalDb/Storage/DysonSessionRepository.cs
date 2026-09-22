@@ -54,9 +54,24 @@ public sealed class DysonSessionRepository(
             }
             catch (Exception ex)
             {
-                return new VoidResult<string>($"Failed to upsert turn: {ex.Message}");
+                return new VoidResult<string>($"Failed to upsert turn: {InnermostMessage(ex)}");
             }
         }
+    }
+
+    public Task<VoidResult<string>> DeleteTurnsAsync(
+        Guid sessionId,
+        IReadOnlyList<Guid> turnIds,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(turnIds);
+        if (turnIds.Count == 0)
+            return Task.FromResult(VoidResult<string>.Success);
+
+        var subjectId = _subjectContext.SubjectId;
+        return _accessor.RunAsync(
+            (db, token) => DeleteTurnsCoreAsync(db, subjectId, sessionId, turnIds, token),
+            ct);
     }
 
     public Task<VoidResult<string>> AppendLogAsync(
@@ -335,16 +350,26 @@ public sealed class DysonSessionRepository(
                 if (turn.CreatedUtc == default)
                     turn.CreatedUtc = DateTime.UtcNow;
 
+                // Holes below MAX are still "taken" for ordering: a caller index after a
+                // prefix delete would sort before older survivors. Append instead.
+                var max = await db.Turns
+                    .Where(t => t.SessionId == turn.SessionId)
+                    .MaxAsync(t => (int?)t.Sequence, cancellationToken)
+                    .ConfigureAwait(false);
+                if (max is int currentMax && turn.Sequence <= currentMax)
+                    turn.Sequence = currentMax + 1;
+
                 db.Turns.Add(turn);
             }
             else
             {
                 existing.SessionId = turn.SessionId;
-                existing.Sequence = turn.Sequence;
+
                 existing.Kind = turn.Kind;
                 existing.AgentTitle = turn.AgentTitle;
                 existing.PlanRelativePath = turn.PlanRelativePath;
                 existing.Instruction = turn.Instruction;
+                existing.HiddenInstruction = turn.HiddenInstruction;
                 existing.AssistantText = turn.AssistantText;
                 existing.ReasoningText = turn.ReasoningText;
                 existing.ReasoningLogJson = turn.ReasoningLogJson;
@@ -368,8 +393,20 @@ public sealed class DysonSessionRepository(
         }
         catch (Exception ex) when (!DysonDbAccessor.IsContention(ex))
         {
-            return new VoidResult<string>($"Failed to upsert turn: {ex.Message}");
+            return new VoidResult<string>($"Failed to upsert turn: {InnermostMessage(ex)}");
         }
+    }
+
+    private static string InnermostMessage(Exception ex)
+    {
+        var message = ex.Message;
+        for (var inner = ex.InnerException; inner is not null; inner = inner.InnerException)
+        {
+            if (!string.IsNullOrWhiteSpace(inner.Message))
+                message = inner.Message;
+        }
+
+        return message;
     }
 
     private static async Task<VoidResult<string>> AppendLogCoreAsync(
@@ -661,6 +698,38 @@ public sealed class DysonSessionRepository(
         {
             return Result<IReadOnlyList<DysonSessionSummary>, string>.AsError(
                 $"Failed to list active descendant sessions: {ex.Message}");
+        }
+    }
+
+    private static async Task<VoidResult<string>> DeleteTurnsCoreAsync(
+        DysonDbContext db,
+        string subjectId,
+        Guid sessionId,
+        IReadOnlyList<Guid> turnIds,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var sessionExists = await db.Sessions
+                .AnyAsync(s => s.Id == sessionId && s.SubjectId == subjectId, cancellationToken)
+                .ConfigureAwait(false);
+            if (!sessionExists)
+                return new VoidResult<string>($"Session '{sessionId}' not found.");
+
+            var matches = await db.Turns
+                .Where(t => t.SessionId == sessionId && turnIds.Contains(t.Id))
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (matches.Count == 0)
+                return VoidResult<string>.Success;
+
+            db.Turns.RemoveRange(matches);
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return new VoidResult<string>($"Failed to delete turns: {ex.Message}");
         }
     }
 

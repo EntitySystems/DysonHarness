@@ -19,6 +19,11 @@ public sealed class DysonAgentTurn
 
     /// <summary>Harness / user instruction for this turn (may be trimmed after completion for history hygiene).</summary>
     public string? Instruction { get; set; }
+
+    /// <summary>
+    /// Model-only local paths for files that were not uploaded. Not shown in chat.
+    /// </summary>
+    public string? HiddenInstruction { get; set; }
     public DysonAgentTurnKind Kind { get; init; }
 
     /// <summary>

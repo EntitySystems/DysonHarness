@@ -1,0 +1,124 @@
+.meta-plan-list {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 8px;
+}
+
+.error-banner {
+  margin: 0 0 8px;
+}
+
+.meta-plan-list__empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px 8px;
+  text-align: center;
+}
+
+.meta-plan-list__empty-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.meta-plan-list__empty-hint {
+  margin: 0;
+  max-width: 16em;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+.meta-plan-list__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.meta-plan-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--motion-fast) var(--ease);
+}
+
+.meta-plan-row:hover,
+.meta-plan-row:focus-visible {
+  background: var(--bg-2);
+}
+
+.meta-plan-row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.meta-plan-row__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.meta-plan-row__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 500;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meta-plan-row__build {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.meta-plan-row__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.meta-plan-row__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.meta-plan-row__status--draft { color: var(--text-muted); }
+.meta-plan-row__status--building { color: var(--accent); }
+.meta-plan-row__status--completed { color: var(--success); }
+.meta-plan-row__status--stale { color: var(--warning); }
+
+.meta-plan-row__icon {
+  flex: 0 0 auto;
+  display: block;
+}
+
+.meta-plan-row__time {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}

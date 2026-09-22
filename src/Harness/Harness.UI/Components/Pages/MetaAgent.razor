@@ -1,0 +1,759 @@
+@page "/meta/{WorkDirectoryId:guid}"
+@using DysonHarness
+@using Harness.UI.Components.Meta
+@using Harness.UI.Demo
+@implements IAsyncDisposable
+@inject DysonUiHost Host
+@inject DysonMessageBus Bus
+@inject IDysonWorkDirectoryRepository WorkDirs
+@inject IDysonModelRepository ModelStore
+@inject NavigationManager Nav
+@inject IJSRuntime Js
+
+<PageTitle>Meta agent — @(_workDirectoryName ?? "DysonHarness")</PageTitle>
+
+<AppShell>
+    <Sidebar>
+        <Sidebar>
+            <WorkDirectory>
+                <WorkDirectorySwitcher ActiveWorkDirectoryId="_activeWorkDirectoryId"
+                                       ActiveWorkDirectoryIdChanged="OnWorkDirectoryChanged" />
+            </WorkDirectory>
+            <SessionList>
+                <SessionList Sessions="_sessions"
+                             ActiveSessionId="Host.ActiveSessionId"
+                             Error="@_error"
+                             OnNew="StartNewAsync"
+                             OnResume="ResumeAsync"
+                             OnDelete="DeleteAsync"
+                             OnDeleteInactive="DeleteInactiveAsync"
+                             OnRefresh="RefreshSessionsAsync" />
+            </SessionList>
+        </Sidebar>
+    </Sidebar>
+    <Main>
+        <div class="meta-stage">
+            <header class="meta-stage__header">
+                <div class="meta-stage__heading">
+                    <h1 class="meta-stage__title">Meta agent</h1>
+                    <span class="meta-stage__subtitle mono">@(_workDirectoryName ?? WorkDirectoryId.ToString())</span>
+                </div>
+                <div class="meta-stage__actions">
+                    <button type="button"
+                            class="btn"
+                            disabled="@(!IsMetaFocused)"
+                            @onclick="ToggleTasks">
+                        Tasks
+                    </button>
+                    <button type="button"
+                            class="btn"
+                            disabled="@(!CanOpenFullSession)"
+                            title="Open this Meta Agent session in the full chat UI"
+                            @onclick="OpenFullSessionAsync">
+                        Open full session
+                    </button>
+                    <a class="btn" href="/">← Back to agent</a>
+                </div>
+            </header>
+
+            @if (_unknownWorkDirectory)
+            {
+                <div class="error-banner">Unknown work directory.</div>
+            }
+            else
+            {
+                <div class="meta-stage__body">
+                    <aside class="meta-plans" aria-label="Plans">
+                        <MetaPlanList @ref="_planList"
+                                      WorkDirectoryId="WorkDirectoryId"
+                                      CanBuildPlans="IsMetaFocused" />
+                    </aside>
+
+                    <div class="meta-main">
+                        @if (!string.IsNullOrEmpty(BannerError))
+                        {
+                            <div class="error-banner">@BannerError</div>
+                        }
+
+                        <div class="meta-chat">
+                            <MetaChatFeed Turns="ChatTurns"
+                                          Queued="ChatQueued"
+                                          SessionBusy="IsMetaFocused && Host.IsBusy"
+                                          OnRemoveQueued="RemoveQueuedAsync" />
+                        </div>
+
+                        <div class="composer meta-composer">
+                            <div @ref="_shell"
+                                 class="composer-shell @(_dragOver ? "is-drop-target" : null)">
+                                @if (Host.PendingImages.Count > 0 || Host.PendingFilePaths.Count > 0)
+                                {
+                                    <div class="composer-context" aria-label="Pending attachments">
+                                        @foreach (var filePath in Host.PendingFilePaths)
+                                        {
+                                            if (IsPathAttachedToPendingImage(filePath))
+                                                continue;
+                                            var path = filePath;
+                                            var fileLabel = System.IO.Path.GetFileName(path.Replace('/', System.IO.Path.DirectorySeparatorChar));
+                                            if (string.IsNullOrWhiteSpace(fileLabel))
+                                                fileLabel = path;
+                                            <span class="composer-context__chip" title="@fileLabel">
+                                                <span class="composer-context__label">@fileLabel</span>
+                                                <button type="button"
+                                                        class="composer-context__remove"
+                                                        title="Remove pending file"
+                                                        aria-label="@($"Remove pending file {fileLabel}")"
+                                                        @onclick="() => Host.RemovePendingFilePath(path)">
+                                                    ×
+                                                </button>
+                                            </span>
+                                        }
+                                        @foreach (var image in Host.PendingImages)
+                                        {
+                                            var pending = image;
+                                            <span class="composer-context__thumb" title="@pending.FileName">
+                                                <img src="@pending.DataUrl" alt="@pending.FileName" />
+                                                <button type="button"
+                                                        class="composer-context__remove"
+                                                        title="Remove image"
+                                                        aria-label="@($"Remove image {pending.FileName}")"
+                                                        @onclick="() => Host.RemovePendingImage(pending.Id)">
+                                                    ×
+                                                </button>
+                                            </span>
+                                        }
+                                    </div>
+                                }
+                                <textarea class="meta-composer__prompt"
+                                          rows="3"
+                                          placeholder="Message the meta agent…"
+                                          disabled="@ComposerDisabled"
+                                          @bind="_draft"
+                                          @bind:event="oninput"
+                                          @onkeydown="OnComposerKeyDown"></textarea>
+                                <InputFile @key="_fileInputKey"
+                                           OnChange="OnFilesSelectedAsync"
+                                           multiple
+                                           class="composer-attach__input"
+                                           disabled="@ComposerDisabled" />
+                            </div>
+                            <div class="btn-row meta-composer__actions">
+                                <div class="meta-composer__pickers">
+                                    <button type="button"
+                                            class="composer-attach"
+                                            title="Attach files or images"
+                                            aria-label="Attach files or images"
+                                            disabled="@ComposerDisabled"
+                                            @onclick="OpenFilePickerAsync">
+                                        <span class="composer-attach__icon" aria-hidden="true"></span>
+                                    </button>
+                                    <ModelSlugPicker @ref="_modelPicker"
+                                                     SelectedSlugId="_selectedSlugId"
+                                                     SelectedSlugIdChanged="OnSelectedSlugIdChangedAsync" />
+                                    <ComposerEffortPicker Options="EffortOptions"
+                                                          Value="@_reasoningEffort"
+                                                          Disabled="@ComposerDisabled"
+                                                          OnPick="OnReasoningEffortChangedAsync" />
+                                </div>
+                                <span class="list-item__meta">Ctrl+Enter to send · paste/drop files or images</span>
+                                <ComposerStopMenu />
+                                <button type="button"
+                                        class="btn btn-primary"
+                                        disabled="@(ComposerDisabled || !CanSend)"
+                                        @onclick="SendAsync">
+                                    Send
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <section class="meta-agents" aria-label="Agents">
+                        <div class="sidebar__section-label">Agents</div>
+                        <div class="meta-agents__list">
+                            @{
+                                var childIds = ChildIds;
+                            }
+                            @if (childIds.Count == 0)
+                            {
+                                <div class="meta-agents__empty">
+                                    <p class="meta-agents__empty-title">No agents yet</p>
+                                    <p class="meta-agents__empty-hint">Drones and explores appear here when the meta agent dispatches them.</p>
+                                </div>
+                            }
+                            else
+                            {
+                                @foreach (var id in childIds)
+                                {
+                                    <SubagentCard @key="id"
+                                                  PersistenceId="id"
+                                                  AfterNavigate="InspectChildAsync" />
+                                }
+                            }
+                        </div>
+                    </section>
+                </div>
+            }
+        </div>
+    </Main>
+</AppShell>
+
+<FileViewerOverlay />
+
+<SessionTodosModal IsOpen="_tasksOpen"
+                   Todos="MetaTodos"
+                   CompleteCount="MetaTodoCompleteCount"
+                   OnClose="CloseTasks" />
+
+@code {
+    [Parameter] public Guid WorkDirectoryId { get; set; }
+
+    private IReadOnlyList<DysonSessionSummary> _sessions = [];
+    private Guid? _activeWorkDirectoryId;
+    private string? _error;
+    private string? _workDirectoryName;
+    private bool _unknownWorkDirectory;
+    private Guid _loadedWorkDirectoryId;
+    private Guid? _metaSessionId;
+    private bool _sessionReady;
+    private string _draft = "";
+    private Guid? _selectedSlugId;
+    private string? _reasoningEffort;
+    private ModelSlugPicker? _modelPicker;
+    private IReadOnlyList<string> _effortModes = [];
+    private Guid? _effortModesSlugId;
+    private MetaPlanList? _planList;
+    private IDisposable? _hostSub;
+    private DotNetObjectReference<DysonUiHost>? _chatLinksRef;
+    private bool _tasksOpen;
+    private ElementReference _shell;
+    private bool _imageCaptureBound;
+    private bool _dragOver;
+    private int _fileInputKey;
+    private DotNetObjectReference<MetaAgent>? _imageCaptureRef;
+
+    private string? BannerError =>
+        !string.IsNullOrEmpty(_error) ? _error : Host.LastError;
+
+    private bool IsMetaFocused =>
+        _sessionReady
+        && _metaSessionId is Guid id
+        && Host.Session is { } session
+        && session.PersistenceId == id
+        && string.Equals(session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase);
+
+    private bool CanOpenFullSession => _metaSessionId is Guid id && id != Guid.Empty;
+
+    private bool ComposerDisabled => _unknownWorkDirectory || !IsMetaFocused;
+
+    private bool CanSend =>
+        !string.IsNullOrWhiteSpace(_draft)
+        || Host.PendingImages.Count > 0
+        || Host.PendingFilePaths.Count > 0;
+
+    private IEnumerable<string> EffortOptions =>
+        ComposerEffortOptions.Build(_effortModes, _reasoningEffort);
+
+    private IReadOnlyList<DysonAgentTurn> ChatTurns =>
+        IsMetaFocused && Host.Session is { } session ? session.Turns : [];
+
+    private IReadOnlyList<QueuedPrompt> ChatQueued =>
+        IsMetaFocused ? Host.QueuedPrompts : [];
+
+    private IReadOnlyList<DysonSessionTodo> MetaTodos =>
+        IsMetaFocused && Host.Session?.Todos is { Count: > 0 } todos
+            ? todos.OrderByDescending(t => t.Sequence).ToArray()
+            : [];
+
+    private int MetaTodoCompleteCount =>
+        MetaTodos.Count(t => t.Status == DysonSessionTodoStatus.Complete);
+
+    private IReadOnlyList<Guid> ChildIds
+    {
+        get
+        {
+            if (!IsMetaFocused || Host.Session is null)
+                return [];
+
+            return Host.Session.SubSessions
+                .Where(child => child is not null && child.PersistenceId != Guid.Empty)
+                .OrderByDescending(child => child.Id)
+                .Select(child => child.PersistenceId)
+                .ToList();
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var sub = Bus.Subscribe<DysonHostStateChangedEvent>(Host.BusScopeKey, OnHostChanged);
+        if (sub.IsSuccess)
+            _hostSub = sub.Value;
+
+        var attached = await Host.EnsureRuntimeAttachedAsync();
+        if (attached.IsError)
+            _error = attached.Error;
+
+        await Host.EnsureDefaultModelAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _chatLinksRef ??= DotNetObjectReference.Create(Host);
+            try
+            {
+                await Js.InvokeVoidAsync("dysonChatLinks.install", _chatLinksRef);
+            }
+            catch (JSException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        if (_imageCaptureBound || _unknownWorkDirectory)
+            return;
+
+        try
+        {
+            _imageCaptureRef ??= DotNetObjectReference.Create(this);
+            await Js.InvokeVoidAsync("dysonComposer.attachImageCapture", _shell, _imageCaptureRef);
+            _imageCaptureBound = true;
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _activeWorkDirectoryId = WorkDirectoryId;
+        if (_loadedWorkDirectoryId == WorkDirectoryId)
+            return;
+        _loadedWorkDirectoryId = WorkDirectoryId;
+        _tasksOpen = false;
+
+        var get = await WorkDirs.GetAsync(WorkDirectoryId);
+        _unknownWorkDirectory = get.IsError;
+        _workDirectoryName = get.IsSuccess ? get.Value.Name : null;
+        if (_unknownWorkDirectory)
+        {
+            _sessions = [];
+            _sessionReady = false;
+            _metaSessionId = null;
+            return;
+        }
+
+        Host.SetComposerWorkDirectoryId(WorkDirectoryId);
+        await RefreshSessionsAsync();
+        await EnsureMetaSessionAsync();
+        await SyncModelFromHostAsync();
+    }
+
+    /// <summary>
+    /// Mirror the focused meta session's provider into the pickers. The host owns the value:
+    /// a rejected or deferred switch must not leave the picker showing a model that is not in use.
+    /// </summary>
+    private async Task SyncModelFromHostAsync()
+    {
+        if (!IsMetaFocused)
+            return;
+
+        _selectedSlugId = Host.Session?.Provider switch
+        {
+            OpenAiCompatibleAgentProvider oai => oai.SlugId,
+            DemoDysonAgentProvider demo => demo.SlugId,
+            _ => _selectedSlugId,
+        };
+        _reasoningEffort = Host.SessionReasoningEffort;
+
+        if (_selectedSlugId is not Guid slugId)
+        {
+            _effortModes = [];
+            _effortModesSlugId = null;
+            return;
+        }
+
+        // Effort modes only change with the slug; this runs on every host event.
+        if (_effortModesSlugId == slugId)
+            return;
+
+        var slug = await ModelStore.GetSlugAsync(slugId);
+        _effortModes = slug.IsSuccess ? slug.Value.ReasoningModes : [];
+        var firstSlug = _effortModesSlugId is null;
+        _effortModesSlugId = slugId;
+
+        // The picker builds its option list once, on init — before this page has resolved the
+        // session. A slug that is disabled is only listed when it is the current selection, so
+        // without this refresh a session pinned to a disabled model renders as "Select model…".
+        if (firstSlug && _modelPicker is not null)
+            await _modelPicker.RefreshAsync();
+    }
+
+    private async Task OnSelectedSlugIdChangedAsync(Guid? id)
+    {
+        // ModelSlugPicker auto-writes a default on load; the host is shared, so only the
+        // page that owns the focused meta session may repoint it.
+        if (!IsMetaFocused)
+            return;
+
+        var result = await Host.SetSessionModelSlugAsync(id);
+        _error = result.IsError ? result.Error : null;
+        await SyncModelFromHostAsync();
+    }
+
+    private async Task OnReasoningEffortChangedAsync(string? effort)
+    {
+        if (!IsMetaFocused)
+            return;
+
+        // Rejected while a prompt is in flight — say so instead of silently snapping back.
+        var result = await Host.SetSessionReasoningEffortAsync(effort);
+        _error = result.IsError ? result.Error : null;
+        await SyncModelFromHostAsync();
+    }
+
+    private async Task EnsureMetaSessionAsync()
+    {
+        _sessionReady = false;
+
+        if (Host.Session is { } live
+            && string.Equals(live.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase)
+            && Host.ActiveWorkDirectoryId == WorkDirectoryId
+            && live.PersistenceId != Guid.Empty)
+        {
+            _metaSessionId = live.PersistenceId;
+            _sessionReady = true;
+            return;
+        }
+
+        var list = await Host.ListSessionsAsync(WorkDirectoryId);
+        if (list.IsError)
+        {
+            _error = list.Error;
+            return;
+        }
+
+        _sessions = OverlayLiveTitle(list.Value);
+        var existing = MetaAgentSessionLocator.SelectExisting(_sessions);
+        if (existing is not null)
+        {
+            var resume = await Host.ResumeSessionAsync(existing.Id);
+            if (resume.IsError)
+            {
+                _error = resume.Error;
+                return;
+            }
+
+            _metaSessionId = existing.Id;
+        }
+        else
+        {
+            var started = await Host.StartNewSessionAsync(
+                DysonAgentModes.MetaAgent,
+                null,
+                WorkDirectoryId);
+            if (started.IsError)
+            {
+                _error = started.Error;
+                return;
+            }
+
+            _metaSessionId = Host.ActiveSessionId;
+        }
+
+        if (_metaSessionId is not Guid metaId
+            || Host.Session is not { } session
+            || session.PersistenceId != metaId
+            || !string.Equals(session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+        {
+            _error = "Could not open the Meta Agent session.";
+            return;
+        }
+
+        _sessionReady = true;
+        await RefreshSessionsAsync();
+    }
+
+    private async Task RefreshSessionsAsync()
+    {
+        _error = null;
+        var list = await Host.ListSessionsAsync(WorkDirectoryId);
+        if (list.IsError)
+        {
+            _error = list.Error;
+            return;
+        }
+
+        _sessions = OverlayLiveTitle(list.Value);
+    }
+
+    private IReadOnlyList<DysonSessionSummary> OverlayLiveTitle(
+        IReadOnlyList<DysonSessionSummary> list)
+    {
+        if (Host.Session?.PersistenceId is not Guid pid)
+            return list;
+
+        var liveTitle = Host.Session.DisplayTitle;
+        var lastTurn = Host.Session.Turns.Count > 0 ? Host.Session.Turns[^1] : null;
+        var liveActivity = lastTurn?.CompletedUtc ?? lastTurn?.StartedUtc;
+
+        return list
+            .Select(s => s.Id == pid
+                ? new DysonSessionSummary
+                {
+                    Id = s.Id,
+                    RuntimeId = s.RuntimeId,
+                    ParentSessionId = s.ParentSessionId,
+                    AgentMode = s.AgentMode,
+                    Status = s.Status,
+                    Title = liveTitle ?? s.Title,
+                    ModelSlugId = s.ModelSlugId,
+                    WorkDirectoryId = s.WorkDirectoryId,
+                    CreatedUtc = s.CreatedUtc,
+                    LastActivityUtc = liveActivity ?? s.LastActivityUtc,
+                    WorktreeEnabled = s.WorktreeEnabled,
+                    HasWorktree = s.HasWorktree,
+                }
+                : s)
+            .ToList();
+    }
+
+    private const DysonHostChangeKind PlanRefreshMask =
+        DysonHostChangeKind.Transcript | DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Busy;
+
+    private void OnHostChanged(DysonHostStateChangedEvent evt) => _ = InvokeAsync(async () =>
+    {
+        _sessions = OverlayLiveTitle(_sessions);
+        if ((evt.Kind & PlanRefreshMask) != 0 && _planList is not null)
+            await _planList.RefreshAsync();
+        await SyncModelFromHostAsync();
+        StateHasChanged();
+    });
+
+    private async Task SendAsync()
+    {
+        var text = _draft.Trim();
+        var hasAttachments = Host.PendingImages.Count > 0 || Host.PendingFilePaths.Count > 0;
+        if ((string.IsNullOrWhiteSpace(text) && !hasAttachments) || !IsMetaFocused || Host.Session is null)
+            return;
+
+        _error = null;
+        _draft = "";
+        // Attachments must stay on the same turn as the words, so enqueue via PromptAsync
+        // even while a prompt is in flight. Text-only still injects a comment when busy.
+        var result = hasAttachments
+            ? await Host.PromptAsync(text, DysonAgentModes.MetaAgent)
+            : await Host.PromptOrInjectAsync(text, DysonAgentModes.MetaAgent);
+        if (result.IsError)
+        {
+            _error = result.Error;
+            _draft = text;
+        }
+    }
+
+    private async Task OpenFilePickerAsync()
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("dysonComposer.openFileInput", _shell);
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private bool IsPathAttachedToPendingImage(string filePath)
+    {
+        foreach (var image in Host.PendingImages)
+        {
+            if (image.AttachedRelativePath is { } attached
+                && string.Equals(attached, filePath, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private async Task OnFilesSelectedAsync(InputFileChangeEventArgs e)
+    {
+        if (ComposerDisabled)
+        {
+            Host.ReportError("Cannot attach files while the composer is busy.");
+            _fileInputKey++;
+            return;
+        }
+
+        var maxCount = Math.Max(DysonUserImageFactory.MaxPendingImages, DysonComposerUploads.MaxPendingFiles);
+        foreach (var file in e.GetMultipleFiles(maxCount))
+        {
+            try
+            {
+                await using var stream = file.OpenReadStream(DysonComposerUploads.MaxRawBytes);
+                using var ms = new MemoryStream();
+                await stream.CopyToAsync(ms);
+                var bytes = ms.ToArray();
+                if (DysonComposerUploads.LooksLikeImage(file.ContentType, file.Name))
+                    await Host.QueuePendingImageFromBytesAsync(file.Name, bytes);
+                else
+                    await Host.QueuePendingFileFromBytesAsync(file.Name, bytes);
+            }
+            catch (Exception ex)
+            {
+                Host.ReportError($"Could not read file: {ex.Message}");
+            }
+        }
+
+        _fileInputKey++;
+    }
+
+    [JSInvokable]
+    public Task SetDragOver(bool value)
+    {
+        if (_dragOver == value)
+            return Task.CompletedTask;
+        _dragOver = value;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private Task OnComposerKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && e.CtrlKey)
+            return SendAsync();
+        return Task.CompletedTask;
+    }
+
+    private Task RemoveQueuedAsync(Guid queuedId)
+    {
+        Host.RemoveQueuedPrompt(queuedId);
+        return Task.CompletedTask;
+    }
+
+    private void ToggleTasks() => _tasksOpen = !_tasksOpen;
+
+    private void CloseTasks() => _tasksOpen = false;
+
+    private async Task OpenFullSessionAsync()
+    {
+        if (_metaSessionId is not Guid id)
+            return;
+
+        if (Host.ActiveSessionId != id)
+        {
+            var resume = await Host.ResumeSessionAsync(id);
+            if (resume.IsError)
+            {
+                _error = resume.Error;
+                return;
+            }
+        }
+
+        Nav.NavigateTo("/");
+    }
+
+    private Task InspectChildAsync()
+    {
+        Nav.NavigateTo("/");
+        return Task.CompletedTask;
+    }
+
+    // Acting on a session is a session-shell concern — do it, then hand off to "/".
+    private async Task StartNewAsync()
+    {
+        var result = await Host.StartNewSessionAsync(DysonAgentModes.Work, null, WorkDirectoryId);
+        if (result.IsError)
+        {
+            _error = result.Error;
+            return;
+        }
+
+        Nav.NavigateTo("/");
+    }
+
+    private async Task ResumeAsync(Guid sessionId)
+    {
+        var result = await Host.ResumeSessionAsync(sessionId);
+        if (result.IsError)
+        {
+            _error = result.Error;
+            return;
+        }
+
+        Nav.NavigateTo("/");
+    }
+
+    private async Task DeleteAsync(Guid sessionId)
+    {
+        var result = await Host.DeleteSessionAsync(sessionId);
+        if (result.IsError)
+            _error = result.Error;
+        await RefreshSessionsAsync();
+    }
+
+    private async Task DeleteInactiveAsync()
+    {
+        var result = await Host.DeleteInactiveSessionsAsync(WorkDirectoryId);
+        if (result.IsError)
+            _error = result.Error;
+        await RefreshSessionsAsync();
+    }
+
+    // The switcher re-reads ActiveWorkDirectoryId after the callback and reports
+    // "Could not switch work directory" when it did not change; the route Guid only
+    // updates once navigation lands, so hold the selection locally first.
+    private void OnWorkDirectoryChanged(Guid? id)
+    {
+        if (id is not Guid wd || wd == WorkDirectoryId)
+            return;
+
+        _activeWorkDirectoryId = wd;
+        Nav.NavigateTo($"/meta/{wd}");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _hostSub?.Dispose();
+        _hostSub = null;
+        if (_imageCaptureBound)
+        {
+            try
+            {
+                await Js.InvokeVoidAsync("dysonComposer.detachImageCapture", _shell);
+            }
+            catch (JSException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+
+        _imageCaptureRef?.Dispose();
+        _imageCaptureRef = null;
+        try
+        {
+            await Js.InvokeVoidAsync("dysonChatLinks.uninstall");
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+
+        _chatLinksRef?.Dispose();
+        _chatLinksRef = null;
+    }
+}

@@ -213,6 +213,7 @@ public class DysonFileViewerContentTests
                 models,
                 workDirs,
                 workDirConfigs,
+                DysonTempDb.Plans(accessor),
                 settings,
                 shells,
                 new HttpClient(),

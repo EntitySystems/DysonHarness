@@ -44,13 +44,15 @@
     private DotNetObjectReference<AppShell>? _selfRef;
     private IJSObjectReference? _viewport;
 
-    public bool RailOpen => _railOpen;
+    private bool HasRail => Rail is not null;
+
+    public bool RailOpen => _railOpen && HasRail;
 
     public bool SidebarOpen => _sidebarOpen;
 
     public bool IsNarrow => _narrow;
 
-    private bool ShowRailBackdrop => _hydrated && _narrow && _railOpen;
+    private bool ShowRailBackdrop => _hydrated && _narrow && RailOpen;
 
     private string ShellClass
     {
@@ -59,7 +61,7 @@
             var css = "app-shell";
             if (_hydrated)
                 css += " app-shell--rail-hydrated";
-            css += _railOpen ? " app-shell--rail-open" : " app-shell--rail-closed";
+            css += RailOpen ? " app-shell--rail-open" : " app-shell--rail-closed";
             css += _sidebarOpen ? " app-shell--sidebar-open" : " app-shell--sidebar-collapsed";
             return css;
         }

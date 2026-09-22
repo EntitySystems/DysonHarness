@@ -32,7 +32,8 @@ public sealed partial class DysonWorkspaceToolExecutor
         IDysonWorkspaceFileSystem workspaceFileSystem,
         HttpClient http,
         IDysonSessionRepository? store = null,
-        Guid workDirectoryId = default)
+        Guid workDirectoryId = default,
+        IDysonPlanRepository? plans = null)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _fs = workspaceFileSystem ?? throw new ArgumentNullException(nameof(workspaceFileSystem));
@@ -41,6 +42,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         _workDirectoryId = workDirectoryId;
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _store = store;
+        _plans = plans;
     }
 
     private string WorkRoot => _fs.NativeRootPath;
@@ -78,6 +80,22 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "SubmitPlan" => await SubmitPlanAsync(call, cancellationToken).ConfigureAwait(false),
                 "StartSubagent" => await StartSubagentAsync(call, cancellationToken).ConfigureAwait(false),
                 "ListSubagents" => await ListSubagentsAsync(call, cancellationToken).ConfigureAwait(false),
+                "CreateAsyncMetaAgentDrone" => await CreateAsyncMetaAgentDroneAsync(call, cancellationToken).ConfigureAwait(false),
+                "StartAsyncExploreAgent" => await StartAsyncExploreAgentAsync(call, cancellationToken).ConfigureAwait(false),
+                "ListMetaAgentDrones" => await ListMetaAgentDronesAsync(call, cancellationToken).ConfigureAwait(false),
+                "ReadMetaAgentDroneLog" => await ReadMetaAgentDroneLogAsync(call, cancellationToken).ConfigureAwait(false),
+                "StopMetaAgentDrone" => await StopMetaAgentDroneAsync(call, cancellationToken).ConfigureAwait(false),
+                "MessageMetaAgentDrone" => await MessageMetaAgentDroneAsync(call, cancellationToken).ConfigureAwait(false),
+                "DeleteMetaAgent" => await DeleteMetaAgentAsync(call, cancellationToken).ConfigureAwait(false),
+                "PostConversationMessage" => PostConversationMessage(call),
+                "CompactConversation" => CompactConversation(call),
+                "RemoveTodos" => await RemoveTodosAsync(call, cancellationToken).ConfigureAwait(false),
+                "ListPlans" => await ListPlansAsync(call, cancellationToken).ConfigureAwait(false),
+                "SetPlanStatus" => await SetPlanStatusAsync(call, cancellationToken).ConfigureAwait(false),
+                "BeginBuildPlan" => await BeginBuildPlanAsync(call, cancellationToken).ConfigureAwait(false),
+                "DeletePlan" => await DeletePlanAsync(call, cancellationToken).ConfigureAwait(false),
+                "ReadMetaPlan" => await ReadMetaPlanAsync(call, cancellationToken).ConfigureAwait(false),
+                "SubmitMetaPlan" => await SubmitMetaPlanAsync(call, cancellationToken).ConfigureAwait(false),
                 "WaitForSubagent" => await WaitForSubagentAsync(call, cancellationToken).ConfigureAwait(false),
                 "InspectSubagentLog" => await InspectSubagentLogAsync(call, cancellationToken).ConfigureAwait(false),
                 "StopSubagent" => await StopSubagentAsync(call, cancellationToken).ConfigureAwait(false),
@@ -1746,6 +1764,12 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (loaded.IsError)
             return Error(call, loaded.Error);
 
+        if (string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase)
+            && loaded.Value.Source == DysonSkillSource.Literal)
+        {
+            return Error(call, DysonMetaAgentTools.LoadSkillLiteralRejectedMessage);
+        }
+
         var turn = _session.Turns.Count > 0 ? _session.Turns[^1] : null;
         if (turn is not null && turn.CompletedUtc is null)
             turn.AttachContextFile(loaded.Value, DysonContextFileKind.Skill);
@@ -3302,6 +3326,17 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var i))
             return i;
         if (prop.ValueKind == JsonValueKind.String && int.TryParse(prop.GetString(), out var parsed))
+            return parsed;
+        return null;
+    }
+
+    private static long? GetInt64(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var prop))
+            return null;
+        if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt64(out var l))
+            return l;
+        if (prop.ValueKind == JsonValueKind.String && long.TryParse(prop.GetString(), out var parsed))
             return parsed;
         return null;
     }

@@ -86,6 +86,11 @@ internal static class DysonTempDb
         IDysonSubjectContext? subject = null) =>
         new(accessor, subject ?? DysonFixedLocalSubjectContext.Instance);
 
+    public static DysonPlanRepository Plans(
+        DysonDbAccessor accessor,
+        IDysonSubjectContext? subject = null) =>
+        new(accessor, subject ?? DysonFixedLocalSubjectContext.Instance);
+
     public static DysonWorkDirectoryConfigurationRepository WorkDirectoryConfigurations(
         DysonDbAccessor accessor,
         IDysonSubjectContext? subject = null) =>

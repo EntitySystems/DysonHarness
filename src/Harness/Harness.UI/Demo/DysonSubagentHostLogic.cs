@@ -98,6 +98,18 @@ public static class DysonSubagentHostLogic
     }
 
     /// <summary>
+    /// Wraps <see cref="BuildSubagentEventContinuationPrompt"/> as a
+    /// <see cref="DysonAgentTurnKind.ParentEvent"/> turn (not a user message).
+    /// </summary>
+    public static DysonAgentTurn CreateTurn(string prompt) =>
+        new()
+        {
+            Kind = DysonAgentTurnKind.ParentEvent,
+            Instruction = prompt,
+            StartedUtc = DateTime.UtcNow,
+        };
+
+    /// <summary>
     /// True only when kind is askQuestion and payload parses as AskQuestion questions JSON (Ask UI path).
     /// Plain-text askQuestion and all other kinds return false (parent auto-turn required).
     /// </summary>

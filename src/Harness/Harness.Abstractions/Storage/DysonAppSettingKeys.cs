@@ -90,6 +90,18 @@ public static class DysonAppSettingKeys
     public const string BugReviewReasoningEffort = "bug_review_reasoning_effort";
 
     /// <summary>
+    /// Guid string of the default model slug for Meta Agent Drone subagents when the spawning tool omits modelSlug.
+    /// Empty / missing ⇒ inherit the parent session model.
+    /// </summary>
+    public const string MetaAgentDroneModelSlugId = "meta_agent_drone_model_slug_id";
+
+    /// <summary>
+    /// Reasoning-effort override for the Meta Agent Drone default slug.
+    /// Empty / missing ⇒ the slug’s <c>DefaultReasoningEffort</c>.
+    /// </summary>
+    public const string MetaAgentDroneReasoningEffort = "meta_agent_drone_reasoning_effort";
+
+    /// <summary>
     /// Guid string of the dedicated direct-OpenAI model slug used by <c>GenerateImage</c>.
     /// Empty, invalid, or unsupported ⇒ image generation is disabled; it never falls back to the chat model.
     /// </summary>

@@ -424,9 +424,9 @@ else
                 viewer.RelativePath,
                 _comments.Select(c => (c.Excerpt, c.Text)));
 
-            // PromptAsync sync-validates (and enqueues when busy) before awaiting the turn.
+            // Inject when a turn is in flight; otherwise PromptAsync (enqueues when busy).
             // Close once issued — do not keep the modal open through generation.
-            var issued = Host.PromptAsync(prompt);
+            var issued = Host.PromptOrInjectAsync(prompt);
             if (issued.IsCompleted)
             {
                 var result = await issued;

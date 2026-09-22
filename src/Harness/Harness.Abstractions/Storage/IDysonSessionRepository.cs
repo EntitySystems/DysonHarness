@@ -19,6 +19,16 @@ public interface IDysonSessionRepository
         DysonTurnEntity turn,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Hard-deletes the given turn rows for <paramref name="sessionId"/>. Empty
+    /// <paramref name="turnIds"/> is a no-op success. Missing ids are ignored.
+    /// Cross-subject session ids → error.
+    /// </summary>
+    Task<VoidResult<string>> DeleteTurnsAsync(
+        Guid sessionId,
+        IReadOnlyList<Guid> turnIds,
+        CancellationToken ct = default);
+
     Task<VoidResult<string>> AppendLogAsync(
         DysonSessionLogEntry entry,
         CancellationToken cancellationToken = default);

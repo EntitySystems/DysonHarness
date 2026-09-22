@@ -18,6 +18,7 @@
 @inject ThemeService Theme
 @inject IJSRuntime Js
 @inject ILogger<Home> Logger
+@inject NavigationManager Nav
 
 <AppShell>
     <Sidebar>
@@ -36,7 +37,8 @@
                              OnResume="ResumeAsync"
                              OnDelete="DeleteAsync"
                              OnDeleteInactive="DeleteInactiveAsync"
-                             OnRefresh="RefreshSessionsAsync" />
+                             OnRefresh="RefreshSessionsAsync"
+                             OnOpenMetaAgent="OpenMetaAgentMode" />
             </SessionList>
         </Sidebar>
     </Sidebar>
@@ -607,6 +609,17 @@
             _activeTitle = _sessions.FirstOrDefault(s => s.Id == id)?.Title;
         else
             _activeTitle = null;
+    }
+
+    private void OpenMetaAgentMode()
+    {
+        if (_activeWorkDirectoryId is not Guid id)
+        {
+            _workdirSwitcher?.Open();
+            return;
+        }
+
+        Nav.NavigateTo($"/meta/{id}");
     }
 
     private async Task StartNewAsync()

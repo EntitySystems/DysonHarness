@@ -34,6 +34,9 @@ public class DysonStopSubagentTests
         await child.PromptFinished.Task.WaitAsync(TimeSpan.FromSeconds(2));
         await Task.Delay(50);
 
+        // A stop is a stop. The synthetic report still closes the loop for the parent
+        // (LastReportSummary below), but the status stays Stopped — Failed would claim
+        // the work broke when the user simply halted it.
         Assert.Equal(DysonSessionStatus.Stopped, child.Status);
         Assert.False(child.HasActiveBackgroundRun);
         Assert.False(child.HasPendingTurn);

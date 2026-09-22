@@ -26,6 +26,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly IDysonModelRepository _models;
     private readonly IDysonWorkDirectoryRepository _workDirectories;
     private readonly IDysonWorkDirectoryConfigurationRepository _workDirectoryConfigurations;
+    private readonly IDysonPlanRepository _plans;
     private readonly IDysonSubjectSettingsRepository _appSettings;
     private readonly IDysonConfiguredShellRepository _configuredShells;
     private readonly DysonCliProxyHost _cliProxy;
@@ -126,6 +127,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         IDysonModelRepository models,
         IDysonWorkDirectoryRepository workDirectories,
         IDysonWorkDirectoryConfigurationRepository workDirectoryConfigurations,
+        IDysonPlanRepository plans,
         IDysonSubjectSettingsRepository appSettings,
         IDysonConfiguredShellRepository configuredShells,
         HttpClient http,
@@ -149,6 +151,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _workDirectories = workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
         _workDirectoryConfigurations = workDirectoryConfigurations
             ?? throw new ArgumentNullException(nameof(workDirectoryConfigurations));
+        _plans = plans ?? throw new ArgumentNullException(nameof(plans));
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         _configuredShells = configuredShells ?? throw new ArgumentNullException(nameof(configuredShells));
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -312,6 +315,25 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         Notify(DysonHostChangeKind.Transcript);
         return result;
+    }
+
+    /// <summary>
+    /// Inject into the in-flight prompt when one exists; otherwise
+    /// <see cref="PromptAsync"/> (which enqueues while busy).
+    /// </summary>
+    public Task<VoidResult<string>> PromptOrInjectAsync(
+        string text,
+        string? agentMode = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (_session?.InFlightPromptTurn is { } inFlight)
+        {
+            var injected = InjectTurnComment(inFlight.Id, text);
+            if (injected.IsSuccess)
+                return Task.FromResult(injected);
+        }
+
+        return PromptAsync(text, agentMode, cancellationToken);
     }
 
     public Guid? ActiveSessionId => _session?.PersistenceId is { } id && id != Guid.Empty ? id : null;
@@ -514,6 +536,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// <summary>
     /// Effective max target context for the composer stepper
     /// (session override → slug default → 100K; 0 = Off).
+    /// Meta Agent is pinned at 100K via <see cref="DysonAgentSession.ResolveEffectiveMaxTargetContextTokens"/>.
     /// </summary>
     public int SessionMaxTargetContextTokens =>
         _session is not null
@@ -617,7 +640,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         return false;
     }
 
-    /// <summary>Queued prompts for the focused session (FIFO; first-line previews).</summary>
+    /// <summary>Queued prompts for the focused session (FIFO; full Text plus FirstLine preview).</summary>
     public IReadOnlyList<QueuedPrompt> QueuedPrompts
     {
         get
@@ -637,7 +660,11 @@ public sealed class DysonUiHost : IAsyncDisposable
                     if (_promptQueues.TryGetValue(id, out var projected) && projected.Count == count)
                     {
                         return projected
-                            .Select(e => new QueuedPrompt(e.Id, e.FirstLine))
+                            .Select(e => new QueuedPrompt(
+                                e.Id,
+                                e.FirstLine,
+                                e.Turn.Instruction ?? e.Turn.Kind.ToString(),
+                                TurnHasQueuedAttachments(e.Turn)))
                             .ToArray();
                     }
                 }
@@ -645,7 +672,11 @@ public sealed class DysonUiHost : IAsyncDisposable
                 if (runtime.TryPeekPrompt(id, out var peeked))
                 {
                     var instruction = peeked.Turn.Instruction ?? peeked.Turn.Kind.ToString();
-                    return [new QueuedPrompt(peeked.Id, DysonSubagentHostLogic.PromptFirstLine(instruction))];
+                    return [new QueuedPrompt(
+                        peeked.Id,
+                        DysonSubagentHostLogic.PromptFirstLine(instruction),
+                        instruction,
+                        TurnHasQueuedAttachments(peeked.Turn))];
                 }
 
                 return [];
@@ -657,7 +688,11 @@ public sealed class DysonUiHost : IAsyncDisposable
                     return [];
 
                 return list
-                    .Select(e => new QueuedPrompt(e.Id, e.FirstLine))
+                    .Select(e => new QueuedPrompt(
+                        e.Id,
+                        e.FirstLine,
+                        e.Turn.Instruction ?? e.Turn.Kind.ToString(),
+                        TurnHasQueuedAttachments(e.Turn)))
                     .ToArray();
             }
         }
@@ -827,8 +862,10 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
-    /// Decode/compress image bytes, queue vision, and dual-write JPEG under
-    /// <c>.dyson/composer-uploads</c> as a pending path for the next prompt.
+    /// Decode/compress image bytes and queue vision for the next prompt.
+    /// Missing storage holds the bytes and opens the connect modal.
+    /// After upload, the image is queued with no workspace path (no
+    /// <c>.dyson/composer-uploads</c> file).
     /// </summary>
     public async Task<VoidResult<string>> QueuePendingImageFromBytesAsync(
         string? fileName,
@@ -895,16 +932,6 @@ public sealed class DysonUiHost : IAsyncDisposable
             return VoidResult<string>.Success;
         }
 
-        lock (_pendingFilesGate)
-        {
-            if (_pendingFilePaths.Count >= DysonComposerUploads.MaxPendingFiles)
-            {
-                LastError = $"At most {DysonComposerUploads.MaxPendingFiles} files can be attached.";
-                Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
-                return new VoidResult<string>(LastError);
-            }
-        }
-
         var uploaded = await storage
             .EnsureRemoteUrlAsync(attachment, cancellationToken)
             .ConfigureAwait(false);
@@ -915,45 +942,11 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(uploaded.Error);
         }
 
-        var root = await TryResolveCatalogWorkRootAsync(cancellationToken).ConfigureAwait(false);
-        if (root is null)
-        {
-            LastError = "Select a work directory before attaching files.";
-            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
-            return new VoidResult<string>(LastError);
-        }
-
-        var fsResult = await DysonWorkspaceFileSystems
-            .CreateLocalAsync(root, cancellationToken)
-            .ConfigureAwait(false);
-        if (fsResult.IsError)
-        {
-            LastError = fsResult.Error;
-            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
-            return new VoidResult<string>(fsResult.Error);
-        }
-
-        var written = await DysonComposerUploads
-            .WriteAsync(fsResult.Value, attachment.FileName, jpegBytes, cancellationToken)
-            .ConfigureAwait(false);
-        if (written.IsError)
-        {
-            LastError = written.Error;
-            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
-            return new VoidResult<string>(written.Error);
-        }
-
-        var queued = QueuePendingImage(attachment, written.Value);
-        if (queued.IsError)
-            return queued;
-
-        QueuePendingFilePath(written.Value);
-        LastError = null;
-        Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
-        return VoidResult<string>.Success;
+        // RemoteUrl stays on the attachment. No local file and no pending path.
+        return QueuePendingImage(uploaded.Value);
     }
 
-    /// <summary>Decode a data URL, compress, dual-write, and queue for the next prompt.</summary>
+    /// <summary>Decode a data URL, compress, and queue for the next prompt.</summary>
     public Task<VoidResult<string>> QueuePendingImageFromDataUrlAsync(
         string? fileName,
         string dataUrl,
@@ -979,7 +972,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return Task.FromResult(new VoidResult<string>(LastError));
         }
 
-        // Re-enter via bytes path so uploads dual-write stays in one place.
+        // Re-enter via the bytes path so upload-or-hold stays in one place.
         // JPEG bytes are already compressed; CreateFromBytes will re-encode (cheap for small thumbs).
         return QueuePendingImageFromBytesAsync(
             created.Value.FileName,
@@ -1938,6 +1931,52 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Opens a DB-backed meta plan in the file viewer (no disk read).
+    /// Display path is <c>metaplan:{planId}/{slug}.md</c>.
+    /// </summary>
+    public async Task<VoidResult<string>> OpenMetaPlanAsync(
+        long planId,
+        Guid workDirectoryId,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+        var loaded = await _plans.GetAsync(planId, workDirectoryId, cancellationToken).ConfigureAwait(true);
+        if (loaded.IsError)
+        {
+            LastError = loaded.Error;
+            Notify(DysonHostChangeKind.Error);
+            return VoidResult<string>.AsError(loaded.Error);
+        }
+
+        var plan = loaded.Value;
+        var path = DysonMetaPlanDisplayPath.Format(plan.Id, plan.Title);
+        var markdown = plan.Markdown ?? "";
+        IReadOnlyList<DysonFileViewerAction>? actions = null;
+        if (DysonMetaPlanDisplayPath.CanBuild(plan.Status, HasMetaAgentRuntime))
+        {
+            var id = plan.Id;
+            var title = plan.Title;
+            actions =
+            [
+                new DysonFileViewerAction
+                {
+                    Label = "Build plan",
+                    IsPrimary = true,
+                    Invoke = () => PromptMetaPlanBuildAsync(id, title),
+                },
+            ];
+        }
+
+        await OpenFileViewerContentAsync(path, markdown, actions, cancellationToken).ConfigureAwait(true);
+        return VoidResult<string>.Success;
+    }
+
+    private bool HasMetaAgentRuntime =>
+        _session is { } session
+        && session.PersistenceId != Guid.Empty
+        && string.Equals(session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase);
+
     private async Task HandleFileViewerOpenRequestedAsync(
         DysonFileViewerOpenRequestedEvent requested,
         CancellationToken cancellationToken)
@@ -2636,6 +2675,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 config: config,
                 models: _models,
                 usageAnalytics: _usageAnalytics,
+                plans: _plans,
                 workDirectoryName: workDir.Value.Name,
                 worktreeEnabled: forkWorktree,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -3059,6 +3099,36 @@ public sealed class DysonUiHost : IAsyncDisposable
         return result;
     }
 
+    /// <summary>
+    /// Enqueues a Meta Agent message so the agent itself calls
+    /// <c>BeginBuildPlan(planId)</c>. Does not spawn a drone or set Status=Building.
+    /// Classic <see cref="DysonBeginBuildPlanFlow"/> / <c>PromptBeginBuildPlanAsync</c>
+    /// is Work-mode layout-only (ReadFile) and cannot be reused here.
+    /// </summary>
+    public Task<VoidResult<string>> PromptMetaPlanBuildAsync(
+        long planId,
+        string? title,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+        if (_session is null)
+        {
+            LastError = "No active session.";
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
+            return Task.FromResult(VoidResult<string>.AsError(LastError));
+        }
+
+        if (!string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+        {
+            LastError = "Build is only available on a Meta Agent session.";
+            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
+            return Task.FromResult(VoidResult<string>.AsError(LastError));
+        }
+
+        var prompt = DysonMetaPlanDisplayPath.FormatBuildPrompt(planId, title);
+        return PromptOrInjectAsync(prompt, DysonAgentModes.MetaAgent, cancellationToken);
+    }
+
     private async Task<VoidResult<string>> ApplyAgentModeCoreAsync(
         string agentMode,
         CancellationToken cancellationToken)
@@ -3461,6 +3531,13 @@ public sealed class DysonUiHost : IAsyncDisposable
             _pendingMaxTargetContextTokens = normalized;
             Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
             return VoidResult<string>.Success;
+        }
+
+        if (string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+        {
+            LastError = "Meta Agent context is fixed at 100K.";
+            Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
+            return new VoidResult<string>(LastError);
         }
 
         if (IsBusy)
@@ -4251,6 +4328,10 @@ public sealed class DysonUiHost : IAsyncDisposable
             });
         }
 
+        // pendingFiles are local non-images only (uploaded images are not path-queued).
+        if (pendingFiles.Count > 0)
+            turn.HiddenInstruction = FormatLocalAttachedPaths(pendingFiles);
+
         if (pendingSkills.Count == 0)
             return Result<BuiltUserTurn, string>.AsValue(new BuiltUserTurn(turn, pendingFiles));
 
@@ -4349,6 +4430,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         RememberParentId(child, parent.PersistenceId);
         EnsureRegistered(parent);
         EnsureRegistered(child);
+        await child.ApplyChildReportWatchAsync(cancellationToken).ConfigureAwait(false);
         return VoidResult<string>.Success;
     }
 
@@ -4505,6 +4587,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 models: _models,
                 appendResumeLog: appendResumeLog,
                 usageAnalytics: _usageAnalytics,
+                plans: _plans,
                 workDirectoryName: workDirectoryName,
                 registeredWorkDirectoryAbsolutePath: registeredPath,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -4623,6 +4706,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 parent.RestoreRegisteredSubagent(child);
                 RememberParentId(child, parent.PersistenceId);
                 EnsureRegistered(child);
+                await child.ApplyChildReportWatchAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -4763,6 +4847,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         var config = new DysonAgentSessionConfig
         {
             BrowserControl = _browserControl,
+            Bus = Bus,
             PluginContributions = contributions,
             UiTheme = resolvedUiTheme,
         };
@@ -4887,6 +4972,12 @@ public sealed class DysonUiHost : IAsyncDisposable
                 DysonAppSettingKeys.BugReviewModelSlugId,
                 DysonAppSettingKeys.BugReviewReasoningEffort,
                 p => config.BugReviewDefaultProvider = p,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await TryHydrateOpenAiProviderSettingAsync(
+                DysonAppSettingKeys.MetaAgentDroneModelSlugId,
+                DysonAppSettingKeys.MetaAgentDroneReasoningEffort,
+                p => config.MetaAgentDroneDefaultProvider = p,
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -6611,8 +6702,11 @@ public sealed class DysonUiHost : IAsyncDisposable
                 {
                     var prompt = DysonSubagentHostLogic.BuildSubagentEventContinuationPrompt(
                         interrupt, title);
-                    var eventResult = await PromptOnSessionAsync(
-                            parent, prompt, CancellationToken.None)
+                    var turn = DysonSubagentHostLogic.CreateTurn(prompt);
+                    var eventResult = await ExecutePromptOnSessionAsync(
+                            parent,
+                            (session, token) => session.PromptHarnessTurnAsync(turn, token),
+                            CancellationToken.None)
                         .ConfigureAwait(false);
                     if (eventResult.IsError)
                     {
@@ -6799,6 +6893,9 @@ public sealed class DysonUiHost : IAsyncDisposable
                         .ConfigureAwait(false);
                     if (persistDropped.IsError)
                         return persistDropped;
+
+                    await session.ApplyChildReportWatchAsync(token).ConfigureAwait(false);
+                    await session.ApplyMetaMaintenanceTickAsync(last, token).ConfigureAwait(false);
 
                     EnqueueHostFollowUpWork(session);
                 }
@@ -7210,8 +7307,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         _ = await PersistSessionStatusAsync(
                 session,
-                DysonSessionStatus.Stopped,
-                "Stopped by user.",
+                session.Status,
+                session.LastReportSummary ?? "Stopped by user.",
                 CancellationToken.None)
             .ConfigureAwait(false);
     }
@@ -7259,6 +7356,23 @@ public sealed class DysonUiHost : IAsyncDisposable
                 cancellationToken)
             .ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Path block for <see cref="DysonAgentTurn.HiddenInstruction"/>.
+    /// Same lines as OpenAiCompatibleAgentSession.AppendPathsToLastUser.
+    /// Round 0 skips a second append when this block is already in the user text.
+    /// </summary>
+    private static string FormatLocalAttachedPaths(IReadOnlyList<string> paths)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Attached paths:");
+        foreach (var path in paths)
+            sb.AppendLine($"- {path}");
+        return sb.ToString().TrimEnd();
+    }
+
+    private static bool TurnHasQueuedAttachments(DysonAgentTurn turn) =>
+        turn.UserImages.Count > 0 || !string.IsNullOrWhiteSpace(turn.HiddenInstruction);
 
     private sealed record BuiltUserTurn(
         DysonAgentTurn Turn,
@@ -7593,8 +7707,17 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 }
 
-/// <summary>Queued composer prompt preview for the active session.</summary>
-public readonly record struct QueuedPrompt(Guid Id, string FirstLine);
+/// <summary>
+/// Queued composer prompt preview for the active session.
+/// <paramref name="Text"/> is the typed words only (never paths or URLs).
+/// <paramref name="HasAttachments"/> is true when the turn has images or a non-empty
+/// <see cref="DysonAgentTurn.HiddenInstruction"/>, so an attachment-only row still renders.
+/// </summary>
+public readonly record struct QueuedPrompt(
+    Guid Id,
+    string FirstLine,
+    string Text,
+    bool HasAttachments = false);
 
 /// <summary>Pending composer image (JPEG after compress) shown as a dismissible thumbnail.</summary>
 public sealed record PendingComposerImage(
@@ -7606,8 +7729,7 @@ public sealed record PendingComposerImage(
     /// <summary>Optional browser snip DOM ref (empty today; future HTML element hit-test).</summary>
     string? HtmlRef = null,
     /// <summary>
-    /// Workspace-relative path dual-written under <c>.dyson/composer-uploads</c>
-    /// (also queued in <see cref="DysonUiHost.PendingFilePaths"/>; Composer hides the path chip).
+    /// Optional workspace-relative path. Uploaded images leave this null (no local file).
     /// </summary>
     string? AttachedRelativePath = null,
     string? RemoteUrl = null,

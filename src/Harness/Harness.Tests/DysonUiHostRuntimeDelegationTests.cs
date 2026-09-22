@@ -448,6 +448,8 @@ public class DysonUiHostRuntimeDelegationTests
 
         await Task.Delay(300);
 
+        // A user halt is not a failure: the synthetic report closes the parent's loop while the
+        // child keeps Stopped, so the UI can still tell "I stopped this" from "this died".
         Assert.Equal(DysonSessionStatus.Stopped, child.Status);
         Assert.False(child.HasActiveBackgroundRun);
         Assert.False(host.IsSessionBusy(parentId));
@@ -529,7 +531,7 @@ public class DysonUiHostRuntimeDelegationTests
 
         await host.StopAllExecution();
         await WaitUntilAsync(
-            () => child.Status == DysonSessionStatus.Stopped && !child.HasActiveBackgroundRun,
+            () => child.Status == DysonSessionStatus.Failed && !child.HasActiveBackgroundRun,
             TimeSpan.FromSeconds(5));
 
         Assert.False(host.IsSessionBusy(childId));
@@ -1028,6 +1030,7 @@ public class DysonUiHostRuntimeDelegationTests
                 Models,
                 WorkDirectories,
                 WorkDirectoryConfigurations,
+                DysonTempDb.Plans(Accessor),
                 Settings,
                 Shells,
                 new HttpClient(),

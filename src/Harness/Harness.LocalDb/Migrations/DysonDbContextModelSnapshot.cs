@@ -204,6 +204,52 @@ namespace Harness.LocalDb.Migrations
                     b.ToTable("model_slugs", (string)null);
                 });
 
+            modelBuilder.Entity("DysonHarness.DysonPlanEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid?>("BuildAgentId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Markdown")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Note")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PlanRelativePath")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("WorkDirectoryId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("WorkDirectoryId", "PlanRelativePath")
+                        .IsUnique()
+                        .HasFilter("\"PlanRelativePath\" IS NOT NULL");
+
+                    b.ToTable("plans", (string)null);
+                });
+
             modelBuilder.Entity("DysonHarness.DysonPluginHookAuditEntity", b =>
                 {
                     b.Property<Guid>("Id")
@@ -696,6 +742,9 @@ namespace Harness.LocalDb.Migrations
                     b.Property<DateTime>("CreatedUtc")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("HiddenInstruction")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Instruction")
                         .HasColumnType("TEXT");
 
@@ -893,6 +942,17 @@ namespace Harness.LocalDb.Migrations
                         .IsRequired();
 
                     b.Navigation("Provider");
+                });
+
+            modelBuilder.Entity("DysonHarness.DysonPlanEntity", b =>
+                {
+                    b.HasOne("DysonHarness.DysonWorkDirectoryEntity", "WorkDirectory")
+                        .WithMany()
+                        .HasForeignKey("WorkDirectoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("WorkDirectory");
                 });
 
             modelBuilder.Entity("DysonHarness.DysonPluginHookAuditEntity", b =>

@@ -1,0 +1,128 @@
+.meta-chat-feed {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.meta-chat-feed__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  min-height: min-content;
+}
+
+.meta-chat-feed .empty-state {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.meta-chat__msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 85%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+}
+
+.meta-chat__msg--user {
+  align-self: flex-end;
+  background: var(--accent-soft);
+  border-color: var(--accent-border, var(--border));
+}
+
+.meta-chat__msg--agent {
+  align-self: flex-start;
+}
+
+.meta-chat__msg--pending {
+  opacity: 0.65;
+}
+
+.meta-chat__msg-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.meta-chat__msg-role {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.meta-chat__unsend {
+  margin-left: auto;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  transition: background var(--motion-fast) var(--ease),
+    color var(--motion-fast) var(--ease);
+}
+
+.meta-chat__unsend:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.meta-chat__body.turn-block__body {
+  padding: 0;
+}
+
+.meta-chat__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.meta-chat__thumb {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-1);
+}
+
+.meta-chat__file {
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 1.25;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border-strong));
+  border-radius: var(--radius-full);
+  background: var(--bg-1);
+  color: var(--text);
+}
+
+.meta-chat__working {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 8px;
+  padding: 4px 2px;
+  font-size: 12px;
+  color: var(--text-muted);
+}

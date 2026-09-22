@@ -2,8 +2,10 @@ namespace DysonHarness;
 
 /// <summary>
 /// Deterministic process-restart recovery for durable unfinished work on the
-/// current subject. Does not replay model or tool calls, invent assistant text,
-/// or synthesize a parent subagent report. Safe to invoke repeatedly.
+/// current subject. Does not replay model or tool calls or invent assistant text.
+/// Interrupted descendants get a synthetic failed parent report (same Interrupt
+/// log shape as <c>SubmitSubagentReport</c>) so the parent is not stranded idle.
+/// Safe to invoke repeatedly.
 /// </summary>
 public sealed class DysonSessionRecoveryService
 {
@@ -166,7 +168,44 @@ public sealed class DysonSessionRecoveryService
         if (meta.IsError)
             return Result<bool, string>.AsError(meta.Error);
 
+        var parentId = state.Session.ParentSessionId;
+        if (parentId is Guid parentSessionId)
+        {
+            var synthesized = await PersistSyntheticParentReportAsync(
+                    parentSessionId,
+                    state.Session,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (synthesized.IsError)
+                return Result<bool, string>.AsError(synthesized.Error);
+        }
+
         return Result<bool, string>.AsValue(true);
+    }
+
+    private async Task<VoidResult<string>> PersistSyntheticParentReportAsync(
+        Guid parentSessionId,
+        DysonSessionEntity descendant,
+        CancellationToken cancellationToken)
+    {
+        var parentLoaded = await _sessions
+            .GetFullSessionAsync(parentSessionId, cancellationToken)
+            .ConfigureAwait(false);
+        if (parentLoaded.IsError)
+            return VoidResult<string>.AsError(parentLoaded.Error);
+
+        if (HasSubagentFailedInterrupt(parentLoaded.Value.Logs, descendant.Id))
+            return VoidResult<string>.Success;
+
+        var interruptLog = DysonSessionLogPayload.CreateEntry(
+            parentSessionId,
+            DysonSessionLogKind.Interrupt,
+            new DysonSessionLogInterrupt(
+                DysonAgentInterruptKind.SubagentFailed.ToString(),
+                SubagentId: descendant.RuntimeId,
+                Summary: DysonChildReportWatch.ApplicationRestartReason,
+                PersistenceId: descendant.Id));
+        return await _sessions.AppendLogAsync(interruptLog, cancellationToken).ConfigureAwait(false);
     }
 
     private static DysonAgentTurn RepairUnfinishedTurn(DysonTurnEntity row)
@@ -185,6 +224,7 @@ public sealed class DysonSessionRecoveryService
             Id = row.Id,
             Kind = row.Kind,
             Instruction = row.Instruction,
+            HiddenInstruction = row.HiddenInstruction,
             AgentTitle = row.AgentTitle,
             PlanRelativePath = row.PlanRelativePath,
             AssistantText = row.AssistantText,
@@ -217,6 +257,32 @@ public sealed class DysonSessionRecoveryService
             var payload = DysonSessionLogPayload.Deserialize<DysonSessionLogTurnInterrupted>(log.PayloadJson);
             if (payload?.TurnId == turnId)
                 return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasSubagentFailedInterrupt(
+        IReadOnlyList<DysonSessionLogEntry> logs,
+        Guid childPersistenceId)
+    {
+        foreach (var log in logs)
+        {
+            if (!DysonSessionLogPayload.TryParseKind(log.Kind, out var kind)
+                || kind != DysonSessionLogKind.Interrupt)
+            {
+                continue;
+            }
+
+            var payload = DysonSessionLogPayload.Deserialize<DysonSessionLogInterrupt>(log.PayloadJson);
+            if (payload?.PersistenceId == childPersistenceId
+                && string.Equals(
+                    payload.InterruptKind,
+                    DysonAgentInterruptKind.SubagentFailed.ToString(),
+                    StringComparison.Ordinal))
+            {
+                return true;
+            }
         }
 
         return false;

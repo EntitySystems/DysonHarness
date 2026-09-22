@@ -65,3 +65,6 @@ artifacts/
 
 ## Local scratch artifacts
 /.tmp/
+
+## Isolated build outputs (dev UI on :5180 holds bin/; drones redirect here)
+.buildtmp/
