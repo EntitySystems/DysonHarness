@@ -455,6 +455,9 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
             if (_disposed != 0)
                 return VoidResult<string>.AsError("Session runtime has been disposed.");
 
+            if (await IsMetaAgentSessionAsync(sessionId, cancellationToken).ConfigureAwait(false))
+                return FailVoid(DysonSessionPolicy.CannotDeleteMessage);
+
             await UnregisterSessionTreeAsync(sessionId).ConfigureAwait(false);
 
             var deleted = await _sessions.DeleteSessionAsync(sessionId, cancellationToken)
@@ -470,6 +473,22 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         {
             _graphGate.Release();
         }
+    }
+
+    /// <summary>
+    /// Loaded live mode, else the persisted row. Missing rows are not Meta Agent
+    /// (delete then returns not-found).
+    /// </summary>
+    private async Task<bool> IsMetaAgentSessionAsync(
+        Guid sessionId,
+        CancellationToken cancellationToken)
+    {
+        if (TryGetSession(sessionId, out var live))
+            return DysonSessionPolicy.IsMetaAgent(live.Mode);
+
+        var full = await _sessions.GetFullSessionAsync(sessionId, cancellationToken)
+            .ConfigureAwait(false);
+        return full.IsSuccess && DysonSessionPolicy.IsMetaAgent(full.Value.Session.AgentMode);
     }
 
     public void ReportError(string message)

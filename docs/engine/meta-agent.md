@@ -4,7 +4,7 @@ Never-blocking orchestrator plus isolated implementer. Page-launched; not in the
 
 ## Modes
 
-`DysonAgentModes.MetaAgent` (`"Meta Agent"`) and `MetaAgentDrone` (`"Meta Agent Drone"`) are in `BuiltIns`. Neither is in `ComposerSelectable`. Directives: `DysonAgentSystemPrompts.MetaAgentDirective` / `MetaAgentDroneDirective`. Child first turns prepend `SubagentReportRequiredMandate`; Meta Agent Drone also gets `MetaAgentDroneFirstTurnMandate`. Default provider: `DysonAgentSessionConfig.MetaAgentDroneDefaultProvider` (same omit-slug cascade as Drone). Settable at Settings → Agent behavior via `meta_agent_drone_model_slug_id` (effort: `meta_agent_drone_reasoning_effort`); empty inherits the parent chat model, and an explicit spawn `modelSlug` still wins.
+`DysonAgentModes.MetaAgent` (`"Meta Agent"`) and `MetaAgentDrone` (`"Meta Agent Drone"`) are in `BuiltIns`. Neither is in `ComposerSelectable`. The page-launched root is not in the work-session list and is not user-deletable (`Meta Agent sessions cannot be deleted.`). `DeleteMetaAgent` still deletes terminal drones. Directives: `DysonAgentSystemPrompts.MetaAgentDirective` / `MetaAgentDroneDirective`. Child first turns prepend `SubagentReportRequiredMandate`; Meta Agent Drone also gets `MetaAgentDroneFirstTurnMandate`. Default provider: `DysonAgentSessionConfig.MetaAgentDroneDefaultProvider` (same omit-slug cascade as Drone). Settable at Settings → Agent behavior via `meta_agent_drone_model_slug_id` (effort: `meta_agent_drone_reasoning_effort`); empty inherits the parent chat model, and an explicit spawn `modelSlug` still wins.
 
 `ValidateSubagentSpawn` (`DysonMetaAgentSpawnGateTests`):
 

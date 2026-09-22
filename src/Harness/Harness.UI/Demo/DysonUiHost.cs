@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using DysonHarness;
+using Harness.UI.Components.Meta;
 using Harness.UI.Theme;
 using Harness.UI.Markdown;
 using Harness.UI.Services;
@@ -2506,11 +2507,42 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     public async Task<Result<IReadOnlyList<DysonSessionSummary>, string>> ListSessionsAsync(
         Guid? workDirectoryId = null,
-        CancellationToken cancellationToken = default) =>
-        await _sessions.ListSessionsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var list = await _sessions.ListSessionsAsync(
             workDirectoryId: workDirectoryId,
             rootsOnly: true,
             cancellationToken).ConfigureAwait(false);
+        if (list.IsError)
+            return list;
+
+        var visible = new List<DysonSessionSummary>(list.Value.Count);
+        foreach (var session in list.Value)
+        {
+            if (!DysonSessionPolicy.IsMetaAgent(session.AgentMode))
+                visible.Add(session);
+        }
+
+        return Result<IReadOnlyList<DysonSessionSummary>, string>.AsValue(visible);
+    }
+
+    /// <summary>
+    /// Newest root Meta Agent for find-or-create. Unfiltered repository list;
+    /// <see cref="ListSessionsAsync"/> hides these rows from the sidebar.
+    /// </summary>
+    public async Task<Result<DysonSessionSummary?, string>> FindExistingMetaAgentSessionAsync(
+        Guid? workDirectoryId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var list = await _sessions.ListSessionsAsync(
+            workDirectoryId: workDirectoryId,
+            rootsOnly: true,
+            cancellationToken).ConfigureAwait(false);
+        return list.IsError
+            ? Result<DysonSessionSummary?, string>.AsError(list.Error)
+            : Result<DysonSessionSummary?, string>.AsValue(
+                MetaAgentSessionLocator.SelectExisting(list.Value));
+    }
 
     public async Task<VoidResult<string>> DeleteSessionAsync(
         Guid sessionId,
@@ -2518,13 +2550,20 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         LastError = null;
 
+        var runtime = await TryAttachRuntimeForDemoAsync(cancellationToken).ConfigureAwait(false);
+        if (await IsMetaAgentDeleteTargetAsync(sessionId, runtime, cancellationToken).ConfigureAwait(false))
+        {
+            LastError = DysonSessionPolicy.CannotDeleteMessage;
+            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
+            return VoidResult<string>.AsError(LastError);
+        }
+
         if (ActiveSessionId == sessionId)
         {
             CancelPrompt();
             ClearFocus();
         }
 
-        var runtime = await TryAttachRuntimeForDemoAsync(cancellationToken).ConfigureAwait(false);
         if (runtime is not null
             && (IsRuntimeOwned(sessionId) || runtime.TryGetSession(sessionId, out _)))
         {
@@ -2555,6 +2594,22 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
         return VoidResult<string>.Success;
+    }
+
+    private async Task<bool> IsMetaAgentDeleteTargetAsync(
+        Guid sessionId,
+        DysonSessionRuntime? runtime,
+        CancellationToken cancellationToken)
+    {
+        if (ActiveSessionId == sessionId)
+            return DysonSessionPolicy.IsMetaAgent(_session?.Mode);
+
+        if (runtime is not null && runtime.TryGetSession(sessionId, out var loaded))
+            return DysonSessionPolicy.IsMetaAgent(loaded.Mode);
+
+        var full = await _sessions.GetFullSessionAsync(sessionId, cancellationToken)
+            .ConfigureAwait(false);
+        return full.IsSuccess && DysonSessionPolicy.IsMetaAgent(full.Value.Session.AgentMode);
     }
 
     public async Task<Result<int, string>> DeleteInactiveSessionsAsync(

@@ -748,6 +748,9 @@ public sealed class DysonSessionRepository(
             if (root is null)
                 return new VoidResult<string>($"Session '{sessionId}' not found.");
 
+            if (DysonSessionPolicy.IsMetaAgent(root.AgentMode))
+                return new VoidResult<string>(DysonSessionPolicy.CannotDeleteMessage);
+
             if (!string.IsNullOrEmpty(root.WorktreeAbsolutePath))
             {
                 return new VoidResult<string>(

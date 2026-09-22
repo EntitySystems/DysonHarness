@@ -430,15 +430,14 @@
             return;
         }
 
-        var list = await Host.ListSessionsAsync(WorkDirectoryId);
-        if (list.IsError)
+        var found = await Host.FindExistingMetaAgentSessionAsync(WorkDirectoryId);
+        if (found.IsError)
         {
-            _error = list.Error;
+            _error = found.Error;
             return;
         }
 
-        _sessions = OverlayLiveTitle(list.Value);
-        var existing = MetaAgentSessionLocator.SelectExisting(_sessions);
+        var existing = found.Value;
         if (existing is not null)
         {
             var resume = await Host.ResumeSessionAsync(existing.Id);
