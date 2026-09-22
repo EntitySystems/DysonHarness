@@ -86,6 +86,37 @@
   padding: 0;
 }
 
+.meta-chat__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.meta-chat__thumb {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-1);
+}
+
+.meta-chat__file {
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 1.25;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border-strong));
+  border-radius: var(--radius-full);
+  background: var(--bg-1);
+  color: var(--text);
+}
+
 .meta-chat__working {
   display: inline-flex;
   align-items: center;

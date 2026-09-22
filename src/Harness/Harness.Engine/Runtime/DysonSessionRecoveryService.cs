@@ -224,6 +224,7 @@ public sealed class DysonSessionRecoveryService
             Id = row.Id,
             Kind = row.Kind,
             Instruction = row.Instruction,
+            HiddenInstruction = row.HiddenInstruction,
             AgentTitle = row.AgentTitle,
             PlanRelativePath = row.PlanRelativePath,
             AssistantText = row.AssistantText,

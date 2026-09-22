@@ -12,6 +12,12 @@ public sealed class DysonTurnEntity
     public string? PlanRelativePath { get; set; }
 
     public string? Instruction { get; set; }
+
+    /// <summary>
+    /// Model-only local paths for files that were not uploaded. Not shown in chat.
+    /// </summary>
+    public string? HiddenInstruction { get; set; }
+
     public string? AssistantText { get; set; }
 
     /// <summary>

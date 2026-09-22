@@ -54,6 +54,10 @@ public enum DysonAgentTurnKind
     /// Child session ended a turn without SubmitSubagentReport; harness reminder to report or continue.
     /// </summary>
     ChildReportReminder = 19,
+    /// <summary>
+    /// Harness parent-event continuation; included in provider transcripts; not a user message.
+    /// </summary>
+    ParentEvent = 20,
 }
 
 public static class DysonAgentTurnKindRules

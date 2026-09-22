@@ -48,6 +48,8 @@ Root + AutoInclude bodies are already in the system prompt. `LoadSkill` still ru
 
 `ApplyDroneAllowlist`: Work catalog minus `AskQuestionFromParent` and `PromptUserDialogFromParent` only (`TriggerParentEvent` stays), plus `ReadMetaPlan` and `SubmitMetaPlan`. Questions and section-boundary status pings go up as `TriggerParentEvent` with kind `message`; the parent answers with `RespondToSubagentEvent` — immediately for a status (and posts it to the user), after the user decides for a question. `SubmitSubagentReport` stays. Covered by `DysonMetaAgentToolsetTests`.
 
+A parent-event continuation is kind `ParentEvent` (20): it stays in the session transcript and is not a meta-chat bubble, and a posted message may relay the status or question and must not name the event.
+
 As built, `CreateChildAsync` still **copies the parent's `Worktree*`** onto every child (demo + OpenAI). Meta Agent Drones do not get their own worktree at spawn; `worktreeBranch` in the create result is whatever the parent had. Auto-merge on completed report is not implemented. `EnsureSessionWorktreeIfNeededAsync` still early-returns when `session.Parent is not null`.
 
 ## Plan tools

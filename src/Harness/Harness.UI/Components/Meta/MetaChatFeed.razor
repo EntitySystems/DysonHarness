@@ -35,7 +35,23 @@
                             }
                         }
                     </div>
-                    <div class="meta-chat__body turn-block__body">@MarkdownRenderer.ToHtml(item.Text)</div>
+                    @if (item.Thumbs.Count > 0 || item.FileNames.Count > 0)
+                    {
+                        <div class="meta-chat__attachments">
+                            @foreach (var thumb in item.Thumbs)
+                            {
+                                <img class="meta-chat__thumb" src="@thumb.Src" alt="@thumb.Alt" />
+                            }
+                            @foreach (var fileName in item.FileNames)
+                            {
+                                <span class="meta-chat__file">@fileName</span>
+                            }
+                        </div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(item.Text))
+                    {
+                        <div class="meta-chat__body turn-block__body">@MarkdownRenderer.ToHtml(item.Text)</div>
+                    }
                 </div>
             }
             @if (SessionBusy)

@@ -663,7 +663,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                             .Select(e => new QueuedPrompt(
                                 e.Id,
                                 e.FirstLine,
-                                e.Turn.Instruction ?? e.Turn.Kind.ToString()))
+                                e.Turn.Instruction ?? e.Turn.Kind.ToString(),
+                                TurnHasQueuedAttachments(e.Turn)))
                             .ToArray();
                     }
                 }
@@ -674,7 +675,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                     return [new QueuedPrompt(
                         peeked.Id,
                         DysonSubagentHostLogic.PromptFirstLine(instruction),
-                        instruction)];
+                        instruction,
+                        TurnHasQueuedAttachments(peeked.Turn))];
                 }
 
                 return [];
@@ -689,7 +691,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                     .Select(e => new QueuedPrompt(
                         e.Id,
                         e.FirstLine,
-                        e.Turn.Instruction ?? e.Turn.Kind.ToString()))
+                        e.Turn.Instruction ?? e.Turn.Kind.ToString(),
+                        TurnHasQueuedAttachments(e.Turn)))
                     .ToArray();
             }
         }
@@ -859,8 +862,10 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
-    /// Decode/compress image bytes, queue vision, and dual-write JPEG under
-    /// <c>.dyson/composer-uploads</c> as a pending path for the next prompt.
+    /// Decode/compress image bytes and queue vision for the next prompt.
+    /// Missing storage holds the bytes and opens the connect modal.
+    /// After upload, the image is queued with no workspace path (no
+    /// <c>.dyson/composer-uploads</c> file).
     /// </summary>
     public async Task<VoidResult<string>> QueuePendingImageFromBytesAsync(
         string? fileName,
@@ -927,16 +932,6 @@ public sealed class DysonUiHost : IAsyncDisposable
             return VoidResult<string>.Success;
         }
 
-        lock (_pendingFilesGate)
-        {
-            if (_pendingFilePaths.Count >= DysonComposerUploads.MaxPendingFiles)
-            {
-                LastError = $"At most {DysonComposerUploads.MaxPendingFiles} files can be attached.";
-                Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
-                return new VoidResult<string>(LastError);
-            }
-        }
-
         var uploaded = await storage
             .EnsureRemoteUrlAsync(attachment, cancellationToken)
             .ConfigureAwait(false);
@@ -947,45 +942,11 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(uploaded.Error);
         }
 
-        var root = await TryResolveCatalogWorkRootAsync(cancellationToken).ConfigureAwait(false);
-        if (root is null)
-        {
-            LastError = "Select a work directory before attaching files.";
-            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
-            return new VoidResult<string>(LastError);
-        }
-
-        var fsResult = await DysonWorkspaceFileSystems
-            .CreateLocalAsync(root, cancellationToken)
-            .ConfigureAwait(false);
-        if (fsResult.IsError)
-        {
-            LastError = fsResult.Error;
-            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
-            return new VoidResult<string>(fsResult.Error);
-        }
-
-        var written = await DysonComposerUploads
-            .WriteAsync(fsResult.Value, attachment.FileName, jpegBytes, cancellationToken)
-            .ConfigureAwait(false);
-        if (written.IsError)
-        {
-            LastError = written.Error;
-            Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
-            return new VoidResult<string>(written.Error);
-        }
-
-        var queued = QueuePendingImage(attachment, written.Value);
-        if (queued.IsError)
-            return queued;
-
-        QueuePendingFilePath(written.Value);
-        LastError = null;
-        Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
-        return VoidResult<string>.Success;
+        // RemoteUrl stays on the attachment. No local file and no pending path.
+        return QueuePendingImage(uploaded.Value);
     }
 
-    /// <summary>Decode a data URL, compress, dual-write, and queue for the next prompt.</summary>
+    /// <summary>Decode a data URL, compress, and queue for the next prompt.</summary>
     public Task<VoidResult<string>> QueuePendingImageFromDataUrlAsync(
         string? fileName,
         string dataUrl,
@@ -1011,7 +972,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return Task.FromResult(new VoidResult<string>(LastError));
         }
 
-        // Re-enter via bytes path so uploads dual-write stays in one place.
+        // Re-enter via the bytes path so upload-or-hold stays in one place.
         // JPEG bytes are already compressed; CreateFromBytes will re-encode (cheap for small thumbs).
         return QueuePendingImageFromBytesAsync(
             created.Value.FileName,
@@ -4367,6 +4328,10 @@ public sealed class DysonUiHost : IAsyncDisposable
             });
         }
 
+        // pendingFiles are local non-images only (uploaded images are not path-queued).
+        if (pendingFiles.Count > 0)
+            turn.HiddenInstruction = FormatLocalAttachedPaths(pendingFiles);
+
         if (pendingSkills.Count == 0)
             return Result<BuiltUserTurn, string>.AsValue(new BuiltUserTurn(turn, pendingFiles));
 
@@ -6737,8 +6702,11 @@ public sealed class DysonUiHost : IAsyncDisposable
                 {
                     var prompt = DysonSubagentHostLogic.BuildSubagentEventContinuationPrompt(
                         interrupt, title);
-                    var eventResult = await PromptOnSessionAsync(
-                            parent, prompt, CancellationToken.None)
+                    var turn = DysonSubagentHostLogic.CreateTurn(prompt);
+                    var eventResult = await ExecutePromptOnSessionAsync(
+                            parent,
+                            (session, token) => session.PromptHarnessTurnAsync(turn, token),
+                            CancellationToken.None)
                         .ConfigureAwait(false);
                     if (eventResult.IsError)
                     {
@@ -7389,6 +7357,23 @@ public sealed class DysonUiHost : IAsyncDisposable
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Path block for <see cref="DysonAgentTurn.HiddenInstruction"/>.
+    /// Same lines as OpenAiCompatibleAgentSession.AppendPathsToLastUser.
+    /// Round 0 skips a second append when this block is already in the user text.
+    /// </summary>
+    private static string FormatLocalAttachedPaths(IReadOnlyList<string> paths)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Attached paths:");
+        foreach (var path in paths)
+            sb.AppendLine($"- {path}");
+        return sb.ToString().TrimEnd();
+    }
+
+    private static bool TurnHasQueuedAttachments(DysonAgentTurn turn) =>
+        turn.UserImages.Count > 0 || !string.IsNullOrWhiteSpace(turn.HiddenInstruction);
+
     private sealed record BuiltUserTurn(
         DysonAgentTurn Turn,
         IReadOnlyList<string> FilePaths);
@@ -7722,8 +7707,17 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 }
 
-/// <summary>Queued composer prompt preview for the active session.</summary>
-public readonly record struct QueuedPrompt(Guid Id, string FirstLine, string Text);
+/// <summary>
+/// Queued composer prompt preview for the active session.
+/// <paramref name="Text"/> is the typed words only (never paths or URLs).
+/// <paramref name="HasAttachments"/> is true when the turn has images or a non-empty
+/// <see cref="DysonAgentTurn.HiddenInstruction"/>, so an attachment-only row still renders.
+/// </summary>
+public readonly record struct QueuedPrompt(
+    Guid Id,
+    string FirstLine,
+    string Text,
+    bool HasAttachments = false);
 
 /// <summary>Pending composer image (JPEG after compress) shown as a dismissible thumbnail.</summary>
 public sealed record PendingComposerImage(
@@ -7735,8 +7729,7 @@ public sealed record PendingComposerImage(
     /// <summary>Optional browser snip DOM ref (empty today; future HTML element hit-test).</summary>
     string? HtmlRef = null,
     /// <summary>
-    /// Workspace-relative path dual-written under <c>.dyson/composer-uploads</c>
-    /// (also queued in <see cref="DysonUiHost.PendingFilePaths"/>; Composer hides the path chip).
+    /// Optional workspace-relative path. Uploaded images leave this null (no local file).
     /// </summary>
     string? AttachedRelativePath = null,
     string? RemoteUrl = null,

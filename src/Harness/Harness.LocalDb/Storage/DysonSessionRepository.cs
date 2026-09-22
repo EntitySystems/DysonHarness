@@ -369,6 +369,7 @@ public sealed class DysonSessionRepository(
                 existing.AgentTitle = turn.AgentTitle;
                 existing.PlanRelativePath = turn.PlanRelativePath;
                 existing.Instruction = turn.Instruction;
+                existing.HiddenInstruction = turn.HiddenInstruction;
                 existing.AssistantText = turn.AssistantText;
                 existing.ReasoningText = turn.ReasoningText;
                 existing.ReasoningLogJson = turn.ReasoningLogJson;

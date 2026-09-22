@@ -78,6 +78,16 @@ public class DysonSubagentHostLogicTests
             throw new InvalidOperationException("Event continuation prompt missing expected fields.");
         }
 
+        var parentEventTurn = DysonSubagentHostLogic.CreateTurn(eventPrompt);
+        if (parentEventTurn.Kind != DysonAgentTurnKind.ParentEvent
+            || parentEventTurn.Instruction is not { } instruction
+            || !instruction.Contains("eventId:", StringComparison.Ordinal)
+            || !instruction.Contains("RespondToSubagentEvent", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "CreateTurn must be ParentEvent and keep eventId: and RespondToSubagentEvent.");
+        }
+
         AssertAskUiRouting();
         AssertUserDialogUiRouting();
         AssertKickOffFailureSummaries();

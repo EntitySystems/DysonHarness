@@ -115,4 +115,141 @@ public class MetaChatItemsTests
 
         Assert.Null(MetaAgentSessionLocator.SelectExisting([work]));
     }
+
+    [Fact]
+    public void Build_user_bubble_text_is_instruction_not_hidden_paths_or_urls()
+    {
+        var turn = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "Ship the plans column",
+            HiddenInstruction = """
+                Attached paths:
+                - .dyson/composer-uploads/notes.txt
+                """,
+        };
+        turn.AddUserImage(new DysonBinaryAttachment
+        {
+            FileName = "shot.jpg",
+            Extension = ".jpg",
+            MimeType = "image/jpeg",
+            Base64Data = "abc",
+            RemoteUrl = "https://bucket.example/shot.jpg",
+        });
+
+        var item = Assert.Single(MetaChatItems.Build([turn], []));
+        Assert.Equal(MetaChatRole.User, item.Role);
+        Assert.Equal("Ship the plans column", item.Text);
+        Assert.DoesNotContain("HiddenInstruction", item.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Attached paths", item.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("notes.txt", item.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain(".dyson", item.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("https://", item.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("shot.jpg", item.Text, StringComparison.Ordinal);
+
+        var thumb = Assert.Single(item.Thumbs);
+        Assert.Equal("https://bucket.example/shot.jpg", thumb.Src);
+        Assert.Equal("shot.jpg", thumb.Alt);
+        Assert.Equal("notes.txt", Assert.Single(item.FileNames));
+    }
+
+    [Fact]
+    public void Build_image_only_and_file_only_turns_each_yield_one_user_item()
+    {
+        var imageOnly = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "   ",
+        };
+        imageOnly.AddUserImage(new DysonBinaryAttachment
+        {
+            FileName = "paste.png",
+            Extension = ".png",
+            MimeType = "image/png",
+            Base64Data = "iVBORw0KGgo",
+        });
+
+        var fileOnly = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            HiddenInstruction = """
+                Attached paths:
+                - .dyson/composer-uploads/notes.txt
+                """,
+        };
+
+        var imageItem = Assert.Single(MetaChatItems.Build([imageOnly], []));
+        Assert.Equal(MetaChatRole.User, imageItem.Role);
+        Assert.Equal("   ", imageItem.Text);
+        Assert.Empty(imageItem.FileNames);
+        var thumb = Assert.Single(imageItem.Thumbs);
+        Assert.Equal("data:image/png;base64,iVBORw0KGgo", thumb.Src);
+        Assert.Equal("paste.png", thumb.Alt);
+
+        var fileItem = Assert.Single(MetaChatItems.Build([fileOnly], []));
+        Assert.Equal(MetaChatRole.User, fileItem.Role);
+        Assert.Equal("", fileItem.Text);
+        Assert.Empty(fileItem.Thumbs);
+        Assert.Equal("notes.txt", Assert.Single(fileItem.FileNames));
+    }
+
+    [Fact]
+    public void Build_attachment_only_queued_row_renders_when_HasAttachments()
+    {
+        var id = Guid.Parse("22222222-2222-2222-2222-222222222222");
+        var shown = MetaChatItems.Build(
+            [],
+            [new QueuedPrompt(id, "", "", HasAttachments: true)]);
+        var item = Assert.Single(shown);
+        Assert.Equal("", item.Text);
+        Assert.True(item.Pending);
+        Assert.Equal(id, item.QueuedId);
+        Assert.Empty(item.Thumbs);
+        Assert.Empty(item.FileNames);
+        Assert.DoesNotContain("http", item.Text, StringComparison.OrdinalIgnoreCase);
+
+        Assert.Empty(MetaChatItems.Build(
+            [],
+            [new QueuedPrompt(id, "", "", HasAttachments: false)]));
+    }
+
+    [Fact]
+    public void Build_drops_parent_event_keeps_user_instruction_and_display_info()
+    {
+        var continuation = DysonSubagentHostLogic.BuildSubagentEventContinuationPrompt(
+            new DysonAgentInterrupt
+            {
+                Kind = DysonAgentInterruptKind.SubagentEvent,
+                SubagentId = 3,
+                EventId = Guid.Parse("11111111-2222-3333-4444-555555555555"),
+                EventKind = "status",
+                Payload = "still working",
+            },
+            title: "Drone A");
+        var parentEvent = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.ParentEvent,
+            Instruction = continuation,
+        };
+        var user = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "Ship the plans column",
+        };
+        var post = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.DisplayInfo,
+            AssistantText = "Dispatched a drone.",
+        };
+
+        var items = MetaChatItems.Build([parentEvent, user, post], []);
+
+        Assert.Equal(2, items.Count);
+        Assert.Equal(MetaChatRole.User, items[0].Role);
+        Assert.Equal("Ship the plans column", items[0].Text);
+        Assert.Equal(MetaChatRole.Agent, items[1].Role);
+        Assert.Equal("Dispatched a drone.", items[1].Text);
+        Assert.DoesNotContain(items, item => item.Text.Contains("eventId:", StringComparison.Ordinal));
+        Assert.DoesNotContain(items, item => item.Text.Contains("RespondToSubagentEvent", StringComparison.Ordinal));
+    }
 }

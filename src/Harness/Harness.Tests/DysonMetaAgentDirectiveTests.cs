@@ -34,6 +34,7 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "blocked inside TriggerParentEvent", "Meta Agent ForMode");
         MustContain(text, "only a status", "Meta Agent ForMode");
         MustContain(text, "Remember the subagentId and eventId", "Meta Agent ForMode");
+        MustContain(text, "Do not mention the continuation", "Meta Agent ForMode");
         MustNotContain(text, "reports failed with the question", "Meta Agent ForMode");
     }
 

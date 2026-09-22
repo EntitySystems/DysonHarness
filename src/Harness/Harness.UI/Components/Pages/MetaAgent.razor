@@ -83,7 +83,46 @@
                         </div>
 
                         <div class="composer meta-composer">
-                            <div class="composer-shell">
+                            <div @ref="_shell"
+                                 class="composer-shell @(_dragOver ? "is-drop-target" : null)">
+                                @if (Host.PendingImages.Count > 0 || Host.PendingFilePaths.Count > 0)
+                                {
+                                    <div class="composer-context" aria-label="Pending attachments">
+                                        @foreach (var filePath in Host.PendingFilePaths)
+                                        {
+                                            if (IsPathAttachedToPendingImage(filePath))
+                                                continue;
+                                            var path = filePath;
+                                            var fileLabel = System.IO.Path.GetFileName(path.Replace('/', System.IO.Path.DirectorySeparatorChar));
+                                            if (string.IsNullOrWhiteSpace(fileLabel))
+                                                fileLabel = path;
+                                            <span class="composer-context__chip" title="@fileLabel">
+                                                <span class="composer-context__label">@fileLabel</span>
+                                                <button type="button"
+                                                        class="composer-context__remove"
+                                                        title="Remove pending file"
+                                                        aria-label="@($"Remove pending file {fileLabel}")"
+                                                        @onclick="() => Host.RemovePendingFilePath(path)">
+                                                    ×
+                                                </button>
+                                            </span>
+                                        }
+                                        @foreach (var image in Host.PendingImages)
+                                        {
+                                            var pending = image;
+                                            <span class="composer-context__thumb" title="@pending.FileName">
+                                                <img src="@pending.DataUrl" alt="@pending.FileName" />
+                                                <button type="button"
+                                                        class="composer-context__remove"
+                                                        title="Remove image"
+                                                        aria-label="@($"Remove image {pending.FileName}")"
+                                                        @onclick="() => Host.RemovePendingImage(pending.Id)">
+                                                    ×
+                                                </button>
+                                            </span>
+                                        }
+                                    </div>
+                                }
                                 <textarea class="meta-composer__prompt"
                                           rows="3"
                                           placeholder="Message the meta agent…"
@@ -91,9 +130,22 @@
                                           @bind="_draft"
                                           @bind:event="oninput"
                                           @onkeydown="OnComposerKeyDown"></textarea>
+                                <InputFile @key="_fileInputKey"
+                                           OnChange="OnFilesSelectedAsync"
+                                           multiple
+                                           class="composer-attach__input"
+                                           disabled="@ComposerDisabled" />
                             </div>
                             <div class="btn-row meta-composer__actions">
                                 <div class="meta-composer__pickers">
+                                    <button type="button"
+                                            class="composer-attach"
+                                            title="Attach files or images"
+                                            aria-label="Attach files or images"
+                                            disabled="@ComposerDisabled"
+                                            @onclick="OpenFilePickerAsync">
+                                        <span class="composer-attach__icon" aria-hidden="true"></span>
+                                    </button>
                                     <ModelSlugPicker @ref="_modelPicker"
                                                      SelectedSlugId="_selectedSlugId"
                                                      SelectedSlugIdChanged="OnSelectedSlugIdChangedAsync" />
@@ -102,7 +154,7 @@
                                                           Disabled="@ComposerDisabled"
                                                           OnPick="OnReasoningEffortChangedAsync" />
                                 </div>
-                                <span class="list-item__meta">Ctrl+Enter to send</span>
+                                <span class="list-item__meta">Ctrl+Enter to send · paste/drop files or images</span>
                                 <ComposerStopMenu />
                                 <button type="button"
                                         class="btn btn-primary"
@@ -172,6 +224,11 @@
     private IDisposable? _hostSub;
     private DotNetObjectReference<DysonUiHost>? _chatLinksRef;
     private bool _tasksOpen;
+    private ElementReference _shell;
+    private bool _imageCaptureBound;
+    private bool _dragOver;
+    private int _fileInputKey;
+    private DotNetObjectReference<MetaAgent>? _imageCaptureRef;
 
     private string? BannerError =>
         !string.IsNullOrEmpty(_error) ? _error : Host.LastError;
@@ -187,7 +244,10 @@
 
     private bool ComposerDisabled => _unknownWorkDirectory || !IsMetaFocused;
 
-    private bool CanSend => !string.IsNullOrWhiteSpace(_draft);
+    private bool CanSend =>
+        !string.IsNullOrWhiteSpace(_draft)
+        || Host.PendingImages.Count > 0
+        || Host.PendingFilePaths.Count > 0;
 
     private IEnumerable<string> EffortOptions =>
         ComposerEffortOptions.Build(_effortModes, _reasoningEffort);
@@ -236,13 +296,29 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender)
+        if (firstRender)
+        {
+            _chatLinksRef ??= DotNetObjectReference.Create(Host);
+            try
+            {
+                await Js.InvokeVoidAsync("dysonChatLinks.install", _chatLinksRef);
+            }
+            catch (JSException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        if (_imageCaptureBound || _unknownWorkDirectory)
             return;
 
-        _chatLinksRef ??= DotNetObjectReference.Create(Host);
         try
         {
-            await Js.InvokeVoidAsync("dysonChatLinks.install", _chatLinksRef);
+            _imageCaptureRef ??= DotNetObjectReference.Create(this);
+            await Js.InvokeVoidAsync("dysonComposer.attachImageCapture", _shell, _imageCaptureRef);
+            _imageCaptureBound = true;
         }
         catch (JSException)
         {
@@ -461,18 +537,89 @@
     private async Task SendAsync()
     {
         var text = _draft.Trim();
-        if (string.IsNullOrWhiteSpace(text) || !IsMetaFocused || Host.Session is null)
+        var hasAttachments = Host.PendingImages.Count > 0 || Host.PendingFilePaths.Count > 0;
+        if ((string.IsNullOrWhiteSpace(text) && !hasAttachments) || !IsMetaFocused || Host.Session is null)
             return;
 
         _error = null;
         _draft = "";
-        // Inject into the in-flight turn when one exists, else prompt (host enqueues while busy).
-        var result = await Host.PromptOrInjectAsync(text, DysonAgentModes.MetaAgent);
+        // Attachments must stay on the same turn as the words, so enqueue via PromptAsync
+        // even while a prompt is in flight. Text-only still injects a comment when busy.
+        var result = hasAttachments
+            ? await Host.PromptAsync(text, DysonAgentModes.MetaAgent)
+            : await Host.PromptOrInjectAsync(text, DysonAgentModes.MetaAgent);
         if (result.IsError)
         {
             _error = result.Error;
             _draft = text;
         }
+    }
+
+    private async Task OpenFilePickerAsync()
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("dysonComposer.openFileInput", _shell);
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private bool IsPathAttachedToPendingImage(string filePath)
+    {
+        foreach (var image in Host.PendingImages)
+        {
+            if (image.AttachedRelativePath is { } attached
+                && string.Equals(attached, filePath, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private async Task OnFilesSelectedAsync(InputFileChangeEventArgs e)
+    {
+        if (ComposerDisabled)
+        {
+            Host.ReportError("Cannot attach files while the composer is busy.");
+            _fileInputKey++;
+            return;
+        }
+
+        var maxCount = Math.Max(DysonUserImageFactory.MaxPendingImages, DysonComposerUploads.MaxPendingFiles);
+        foreach (var file in e.GetMultipleFiles(maxCount))
+        {
+            try
+            {
+                await using var stream = file.OpenReadStream(DysonComposerUploads.MaxRawBytes);
+                using var ms = new MemoryStream();
+                await stream.CopyToAsync(ms);
+                var bytes = ms.ToArray();
+                if (DysonComposerUploads.LooksLikeImage(file.ContentType, file.Name))
+                    await Host.QueuePendingImageFromBytesAsync(file.Name, bytes);
+                else
+                    await Host.QueuePendingFileFromBytesAsync(file.Name, bytes);
+            }
+            catch (Exception ex)
+            {
+                Host.ReportError($"Could not read file: {ex.Message}");
+            }
+        }
+
+        _fileInputKey++;
+    }
+
+    [JSInvokable]
+    public Task SetDragOver(bool value)
+    {
+        if (_dragOver == value)
+            return Task.CompletedTask;
+        _dragOver = value;
+        return InvokeAsync(StateHasChanged);
     }
 
     private Task OnComposerKeyDown(KeyboardEventArgs e)
@@ -573,6 +720,25 @@
     {
         _hostSub?.Dispose();
         _hostSub = null;
+        if (_imageCaptureBound)
+        {
+            try
+            {
+                await Js.InvokeVoidAsync("dysonComposer.detachImageCapture", _shell);
+            }
+            catch (JSException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+
+        _imageCaptureRef?.Dispose();
+        _imageCaptureRef = null;
         try
         {
             await Js.InvokeVoidAsync("dysonChatLinks.uninstall");

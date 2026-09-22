@@ -29,6 +29,7 @@ public class DysonAgentTurnKindDisplayTests
         AssertNumeric(DysonAgentTurnKind.WorktreeCreating, 17);
         AssertNumeric(DysonAgentTurnKind.MetaMaintenance, 18);
         AssertNumeric(DysonAgentTurnKind.ChildReportReminder, 19);
+        AssertNumeric(DysonAgentTurnKind.ParentEvent, 20);
 
         AssertLabel(DysonAgentTurnKind.Normal, "Turn");
         AssertLabel(DysonAgentTurnKind.ExpandThoughtProcess, "Expand thought");
@@ -50,11 +51,12 @@ public class DysonAgentTurnKindDisplayTests
         AssertLabel(DysonAgentTurnKind.WorktreeCreating, "Creating worktree");
         AssertLabel(DysonAgentTurnKind.MetaMaintenance, "Meta maintenance");
         AssertLabel(DysonAgentTurnKind.ChildReportReminder, "Child report reminder");
+        AssertLabel(DysonAgentTurnKind.ParentEvent, "Parent event");
 
         if ((int)DysonAgentTurnKind.DropContext != 13)
             throw new InvalidOperationException("DysonAgentTurnKind.DropContext must stay 13 (append-only).");
 
-        // Append-only after DropContext=13: … WorktreeCreating=17, MetaMaintenance=18, ChildReportReminder=19.
+        // Append-only after DropContext=13: … WorktreeCreating=17, MetaMaintenance=18, ChildReportReminder=19, ParentEvent=20.
 
         foreach (var kind in Enum.GetValues<DysonAgentTurnKind>())
         {

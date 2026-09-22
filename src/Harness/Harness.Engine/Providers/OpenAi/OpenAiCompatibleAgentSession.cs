@@ -1268,31 +1268,76 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     private static bool SkipResponsesFilesUpload(DysonBinaryAttachment attachment) =>
         attachment.IsImage && !string.IsNullOrWhiteSpace(attachment.RemoteUrl);
 
-    private static void AppendPathsToLastUser(
+    /// <summary>
+    /// Round-0 local paths. History already includes the in-flight turn
+    /// (<c>excludeLastIfCurrent</c> is false), and that text already contains
+    /// <see cref="DysonAgentTurn.HiddenInstruction"/>. Skip when the same block
+    /// is present so the model does not see it twice. A multimodal user message
+    /// is the current turn: edit its text part or stop. Do not paint an older turn.
+    /// </summary>
+    internal static void AppendPathsToLastUser(
         System.Text.Json.Nodes.JsonArray messagesOrInput,
         IReadOnlyList<string> filePaths)
     {
+        if (filePaths.Count == 0)
+            return;
+
+        var block = FormatAttachedPathsBlock(filePaths);
         for (var i = messagesOrInput.Count - 1; i >= 0; i--)
         {
             if (messagesOrInput[i] is not System.Text.Json.Nodes.JsonObject msg)
                 continue;
             if (msg["role"]?.GetValue<string>() != "user")
                 continue;
-            if (msg["content"] is not System.Text.Json.Nodes.JsonValue contentVal
-                || !contentVal.TryGetValue<string>(out var text))
+
+            if (msg["content"] is System.Text.Json.Nodes.JsonValue contentVal
+                && contentVal.TryGetValue<string>(out var text))
             {
-                continue;
+                if (text.Contains(block, StringComparison.Ordinal))
+                    return;
+
+                var sb = new System.Text.StringBuilder(text);
+                sb.AppendLine();
+                sb.AppendLine();
+                sb.Append(block);
+                msg["content"] = sb.ToString().TrimEnd();
+                return;
             }
 
-            var sb = new System.Text.StringBuilder(text);
-            sb.AppendLine();
-            sb.AppendLine();
-            sb.AppendLine("Attached paths:");
-            foreach (var path in filePaths)
-                sb.AppendLine($"- {path}");
-            msg["content"] = sb.ToString().TrimEnd();
+            if (msg["content"] is not System.Text.Json.Nodes.JsonArray parts)
+                continue;
+
+            foreach (var part in parts)
+            {
+                if (part is not System.Text.Json.Nodes.JsonObject obj)
+                    continue;
+                var type = obj["type"]?.GetValue<string>();
+                if (type is not ("text" or "input_text"))
+                    continue;
+
+                var partText = obj["text"]?.GetValue<string>() ?? "";
+                if (partText.Contains(block, StringComparison.Ordinal))
+                    return;
+
+                var sb = new System.Text.StringBuilder(partText);
+                sb.AppendLine();
+                sb.AppendLine();
+                sb.Append(block);
+                obj["text"] = sb.ToString().TrimEnd();
+                return;
+            }
+
             return;
         }
+    }
+
+    private static string FormatAttachedPathsBlock(IReadOnlyList<string> filePaths)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Attached paths:");
+        foreach (var path in filePaths)
+            sb.AppendLine($"- {path}");
+        return sb.ToString().TrimEnd();
     }
 
     /// <summary>
