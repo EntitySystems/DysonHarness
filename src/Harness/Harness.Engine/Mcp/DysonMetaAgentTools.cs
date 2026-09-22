@@ -29,13 +29,17 @@ public static class DysonMetaAgentTools
     public static readonly IReadOnlyList<string> AllowedToolNames =
     [
         "BeginBuildPlan",
+        "CanCreateNote",
         "CompactConversation",
         "CreateAsyncMetaAgentDrone",
+        "CreateNote",
         "CreateTodo",
         "DeleteMetaAgent",
+        "DeleteNote",
         "DeletePlan",
         "GetOpenRulesConfig",
         "ListMetaAgentDrones",
+        "ListNotes",
         "ListPlans",
         "ListTodos",
         "LoadSkill",
@@ -48,6 +52,7 @@ public static class DysonMetaAgentTools
         "StartAsyncExploreAgent",
         "StopMetaAgentDrone",
         "SummarizeTurns",
+        "UpdateNote",
         "UpdateTodo",
     ];
 
@@ -490,6 +495,110 @@ public static class DysonMetaAgentTools
                     "reason": { "type": "string", "description": "Why this plan is being deleted." }
                   },
                   "required": ["planId", "reason"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ListNotes",
+            Description =
+                "List your scratch notes. Returns each note's name and token count, never the note text. Call this to see what you already have before you update or delete. This does not say whether a write fits; call CanCreateNote before CreateNote or UpdateNote.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {}
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "CanCreateNote",
+            Description =
+                "Check whether a scratch-note write is allowed. Call this before every CreateNote or UpdateNote. Caps: 20 notes, 1000 tokens each, 20000 tokens total. Optional name and content check that write (a new name is a create, an existing name is an update). With no arguments, reports whether another note can be created, plus the current totals. Returns allowed, reason, noteCount, totalTokens, and the caps. Does not list note names; call ListNotes for that. Does not write.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string", "description": "Optional note name. A new name is a create; an existing name is an update." },
+                    "content": { "type": "string", "description": "Optional proposed full text. May be empty." }
+                  }
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "CreateNote",
+            Description =
+                "Create a new scratch note. Call CanCreateNote first. name is the note's name and must end in .md, for example guidelines.md. content is the full text and may be empty. The text must be at most 1000 tokens. Fails if that name already exists (use UpdateNote), if this would be the 21st note, or if all notes together would pass 20000 tokens. Returns the name and the token count.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string", "description": "Note name ending in .md, for example guidelines.md." },
+                    "content": { "type": "string", "description": "Full text. May be empty." }
+                  },
+                  "required": ["name", "content"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "UpdateNote",
+            Description =
+                "Edit an existing scratch note. Call CanCreateNote first. path is the note name from ListNotes, the same kind of name CreateNote takes, for example guidelines.md. Pass content to replace the whole note, or old_text and new_text, or edits. The note after the edit must be at most 1000 tokens, and all notes together must stay at most 20000. A missing name is an error; use CreateNote.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "path": { "type": "string", "description": "Path of the file to update." },
+                    "old_text": {
+                      "type": "string",
+                      "description": "Text span to replace (single edit). Must be unique unless replace_all. Do not include ReadFile 'N|' prefixes."
+                    },
+                    "new_text": { "type": "string", "description": "Replacement text for old_text." },
+                    "replace_all": {
+                      "type": "boolean",
+                      "description": "If true, replace every occurrence of old_text (default false). Also applies as default for edits[] items unless overridden."
+                    },
+                    "edits": {
+                      "type": "array",
+                      "description": "Ordered list of targeted replacements when multiple hunks are needed.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "old_text": { "type": "string", "description": "Text span to replace. No ReadFile 'N|' prefixes." },
+                          "new_text": { "type": "string" },
+                          "replace_all": { "type": "boolean", "description": "Replace every occurrence for this edit (default: top-level replace_all)." }
+                        },
+                        "required": ["old_text", "new_text"]
+                      }
+                    },
+                    "content": {
+                      "type": "string",
+                      "description": "Full-file rewrite only when targeted edits are impractical."
+                    }
+                  },
+                  "required": ["path"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "DeleteNote",
+            Description =
+                "Delete one scratch note by the name ListNotes showed. Allowed even when you are at 20 notes or a note is over 1000 tokens, so a bad note can be removed. A missing name is an error. No token check.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string", "description": "Note name ending in .md." }
+                  },
+                  "required": ["name"]
                 }
                 """,
         };

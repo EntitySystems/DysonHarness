@@ -33,11 +33,20 @@ Kept:
 | `CompactConversation` | Enqueues `DysonFullSummarizeFlow.CreateTurn()` and **ends the current turn**. |
 | `RemoveTodos` | Runtime `_session.Mode == MetaAgent` check. `DeleteTodo` is not in the catalog. |
 | `ListPlans` / `SetPlanStatus` / `BeginBuildPlan` / `DeletePlan` | Plan tools below. |
+| `ListNotes` | Name and token count only. No body, no caps, no `allowed`. |
+| `CanCreateNote` | Pre-write budget check. Optional `name` and `content`. No roster. Does not write. |
+| `CreateNote` | New note. Fails if the name exists, if this would be note 21, or if a token cap would break. |
+| `UpdateNote` | Same edit arguments as `WriteFile` (`content`, or `old_text`/`new_text`, or `edits`) on an existing note. Missing name is an error. |
+| `DeleteNote` | Deletes one note. No token check. |
 | `GetOpenRulesConfig` / `LoadSkill` | Rules without files. |
 | `SummarizeTurns` / `CreateTodo` / `ListTodos` / `UpdateTodo` | Shared schemas. |
 | Browser tools (`CreateBrowserTools`) | Present only when `BrowserControl` is set and the name survived the denylist. Not in `AllowedToolNames`. `BrowserWaitForSelector` and `BrowserWaitForNavigation` return in this turn, bounded by required `timeoutMs`; they are not a stand-in for `WaitForSubagent`. A long `timeoutMs` stalls the orchestrator until the call returns. |
 
 Todos are the record of dispatches; posted messages are not in later transcripts.
+
+### Scratch notes
+
+Root Meta Agent only (`ListNotes`, `CanCreateNote`, `CreateNote`, `UpdateNote`, `DeleteNote`). Not on the drone, Work, Explore, or Plan catalogs. Files are `.dyson/scratch/*.md` on the session work root, already gitignored by `**/.dyson/`. `DysonScratchNotes.CheckWriteAsync` is the one scan for the roster and the budget: 20 notes, 1000 tokens each (`DysonTiktokenTokenCounter`), 20000 total. `ListNotes` returns `{name, tokens}` sorted by name and nothing else. There is no `ReadNote`, and note text is not copied into the system prompt. `CanCreateNote` returns `allowed`, `reason`, `noteCount`, `totalTokens`, `noteTokens`, and the three caps — no names and no bodies. Create and update call that check; they do not remember that `CanCreateNote` ran. Delete has no cap. The directive still opens with "You cannot touch the filesystem" and does not name this directory.
 
 Structurally absent (not an exhaustive list — see `ExcludedToolNames`): file/shell/search tools, `WaitForSubagent`, `StartSubagent` and the classic subagent quartet, `AskQuestion` / `PromptUserDialog` (they block), completion tools, `SubmitSubagentReport`, `DropTurnContext` / `RestoreTurnContext`, `StartNewTurn` / `ExpandThoughtProcess`, `GetDateTime`, `RenameSession`, `InitializeOpenRules`, `SubmitPlan` / `EditPlan`.
 

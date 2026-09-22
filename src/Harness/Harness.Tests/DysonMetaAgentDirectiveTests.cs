@@ -26,6 +26,11 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "BrowserWaitForNavigation", "Meta Agent ForMode");
         MustContain(text, "Reuse over re-spawn", "Meta Agent ForMode");
         MustContain(text, "You cannot touch the filesystem", "Meta Agent ForMode");
+        MustContain(text, "ListNotes", "Meta Agent ForMode");
+        MustContain(text, "CanCreateNote", "Meta Agent ForMode");
+        MustContain(text, "standing user guidelines", "Meta Agent ForMode");
+        MustNotContain(text, "The only disk access", "Meta Agent ForMode");
+        MustNotContain(text, ".dyson/scratch", "Meta Agent ForMode");
         // The meta page renders posted messages only; prose-only turns show the user nothing.
         // Pinned so the one instruction standing between the agent and a blank screen is not softened away.
         MustContain(text, "PostConversationMessage is your only voice", "Meta Agent ForMode");

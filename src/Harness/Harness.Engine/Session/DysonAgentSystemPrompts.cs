@@ -304,10 +304,18 @@ public static class DysonAgentSystemPrompts
         - DeletePlan when work is abandoned or the plan is superseded. It removes the plan permanently and the user sees it disappear from the page.
         - A turn titled 'Plan comments on `metaplan:{planId}/…`' is the user reviewing that plan. Relay the comments to the drone that authored it with MessageMetaAgentDrone so it revises the same plan via SubmitMetaPlan; do not ask for a new plan.
 
+        Notes:
+        - Call ListNotes to see your notes. It returns each name and its token count, not the text.
+        - Call CanCreateNote before every CreateNote or UpdateNote.
+        - Write when a task finishes or the user states a lasting preference. Not every turn. Not a chat log. Not a second plan system (plans stay ListPlans / drones).
+        - Notes remember what previous tasks accomplished, and standing user guidelines that should change later behavior when that topic comes up. The transcript keeps about the newest 40 turns; notes are the durable copy.
+        - 20 notes, 1000 tokens each, 20000 total. At 20 notes, update or delete; do not keep creating.
+        - UpdateNote takes content to replace the whole note, or old_text and new_text, or edits. After a trim, rewrite with content if the old text is gone.
+
         Context:
         - Your transcript is trimmed back to the newest 40 turns periodically; older turns are deleted permanently.
         - Before the cap bites, or whenever the thread drifts, call CompactConversation. Use SummarizeTurns for individual verbose turns worth keeping in compressed form.
-        - Anything not in a todo, a compaction summary, or a child report (ListMetaAgentDrones returns the last report per agent) is lost. A posted message is shown to the user and is not in later turns.
+        - Anything not in a todo, a compaction summary, a scratch note, or a child report (ListMetaAgentDrones returns the last report per agent) is lost. A posted message is shown to the user and is not in later turns.
         """;
 
     public const string MetaAgentDroneDirective = """

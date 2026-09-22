@@ -944,4 +944,348 @@ public sealed partial class DysonWorkspaceToolExecutor
 
     private static string FormatPlanStatus(DysonPlanStatus status) =>
         status.ToString().ToLowerInvariant();
+
+    private DysonToolCallResult? RejectUnlessMetaAgent(DysonToolCall call, string tool)
+    {
+        if (string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return Error(call, $"{tool} is only available in Meta Agent mode.");
+    }
+
+    // ponytail: per-note WriteFile gate does not serialize the 20-note cap across different names; upgrade = one gate for the scratch directory.
+    private async Task<DysonToolCallResult> WithNoteGateAsync(
+        DysonToolCall call,
+        string relative,
+        Func<CancellationToken, Task<DysonToolCallResult>> body,
+        CancellationToken cancellationToken)
+    {
+        var native = _fs.ResolvePath(relative);
+        if (native.IsError)
+            return Error(call, DysonScratchNotes.RejectedNameMessage);
+
+        var gate = WriteFileGates.GetOrAdd(native.Value, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await body(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<DysonToolCallResult> ListNotesAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var denied = RejectUnlessMetaAgent(call, "ListNotes");
+        if (denied is not null)
+            return denied;
+
+        var check = await DysonScratchNotes.CheckWriteAsync(
+            _fs,
+            new DysonTiktokenTokenCounter(),
+            leafName: null,
+            resultingText: null,
+            DysonScratchNotes.Kind.Probe,
+            cancellationToken).ConfigureAwait(false);
+        if (check.IsError)
+            return Error(call, check.Error);
+
+        var notes = check.Value.Notes.Select(static n => new { name = n.Name, tokens = n.Tokens }).ToArray();
+        return Ok(call, JsonSerializer.Serialize(new { notes }));
+    }
+
+    private async Task<DysonToolCallResult> CanCreateNoteAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var denied = RejectUnlessMetaAgent(call, "CanCreateNote");
+        if (denied is not null)
+            return denied;
+
+        string? name;
+        string? content;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var nameResult = OptionalStringAllowEmpty(doc.RootElement, "name");
+            if (nameResult.IsError)
+                return Error(call, nameResult.Error);
+            var contentResult = OptionalStringAllowEmpty(doc.RootElement, "content");
+            if (contentResult.IsError)
+                return Error(call, contentResult.Error);
+            name = nameResult.Value;
+            content = contentResult.Value;
+        }
+        catch (JsonException)
+        {
+            return Error(call, "CanCreateNote: invalid JSON arguments.");
+        }
+
+        var check = await DysonScratchNotes.CheckWriteAsync(
+            _fs,
+            new DysonTiktokenTokenCounter(),
+            string.IsNullOrWhiteSpace(name) ? null : name,
+            string.IsNullOrWhiteSpace(name) ? null : content,
+            DysonScratchNotes.Kind.Probe,
+            cancellationToken).ConfigureAwait(false);
+        if (check.IsError)
+            return Error(call, check.Error);
+
+        var value = check.Value;
+        return Ok(call, JsonSerializer.Serialize(new
+        {
+            allowed = value.Allowed,
+            reason = value.Reason,
+            noteCount = value.NoteCount,
+            totalTokens = value.TotalTokens,
+            noteTokens = value.NoteTokens,
+            maxNotes = DysonScratchNotes.MaxNotes,
+            maxTokensPerNote = DysonScratchNotes.MaxTokensPerNote,
+            maxTokensTotal = DysonScratchNotes.MaxTokensTotal,
+        }));
+    }
+
+    private async Task<DysonToolCallResult> CreateNoteAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var denied = RejectUnlessMetaAgent(call, "CreateNote");
+        if (denied is not null)
+            return denied;
+
+        string name;
+        string content;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var nameResult = RequireString(doc.RootElement, "name");
+            if (nameResult.IsError)
+                return Error(call, nameResult.Error);
+            var contentResult = RequireStringAllowEmpty(doc.RootElement, "content");
+            if (contentResult.IsError)
+                return Error(call, contentResult.Error);
+            name = nameResult.Value;
+            content = contentResult.Value;
+        }
+        catch (JsonException)
+        {
+            return Error(call, "CreateNote: invalid JSON arguments.");
+        }
+
+        var leaf = DysonScratchNotes.ResolveLeaf(_fs, name);
+        if (leaf.IsError)
+            return Error(call, leaf.Error);
+
+        return await WithNoteGateAsync(call, leaf.Value, async ct =>
+        {
+            var check = await DysonScratchNotes.CheckWriteAsync(
+                _fs,
+                new DysonTiktokenTokenCounter(),
+                name,
+                content,
+                DysonScratchNotes.Kind.Create,
+                ct).ConfigureAwait(false);
+            if (check.IsError)
+                return Error(call, check.Error);
+            if (!check.Value.Allowed)
+                return Error(call, check.Value.Reason ?? DysonScratchNotes.CountReason);
+
+            var written = await _fs.WriteAllTextAsync(leaf.Value, content, ct).ConfigureAwait(false);
+            if (written.IsError)
+                return Error(call, DysonScratchNotes.HideStorageFailure(written.Error));
+
+            return Ok(call, JsonSerializer.Serialize(new
+            {
+                name,
+                tokens = check.Value.NoteTokens ?? 0,
+            }));
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<DysonToolCallResult> UpdateNoteAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var denied = RejectUnlessMetaAgent(call, "UpdateNote");
+        if (denied is not null)
+            return denied;
+
+        string noteName;
+        var contentOnly = false;
+        string fullContent = "";
+        var edits = new List<(string Old, string New, bool ReplaceAll)>();
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var root = doc.RootElement;
+            var path = RequireString(root, "path");
+            if (path.IsError)
+                return Error(call, path.Error);
+            noteName = path.Value;
+
+            var hasOld = root.TryGetProperty("old_text", out _);
+            var hasEdits = root.TryGetProperty("edits", out var editsProp)
+                && editsProp.ValueKind == JsonValueKind.Array;
+            var hasContent = root.TryGetProperty("content", out var contentProp)
+                && contentProp.ValueKind == JsonValueKind.String;
+            if (hasContent && !hasOld && !hasEdits)
+            {
+                contentOnly = true;
+                fullContent = contentProp.GetString() ?? "";
+            }
+            else
+            {
+                var defaultReplaceAll = GetBool(root, "replace_all");
+                if (root.TryGetProperty("old_text", out var oldProp)
+                    && root.TryGetProperty("new_text", out var newProp))
+                {
+                    edits.Add((oldProp.GetString() ?? "", newProp.GetString() ?? "", defaultReplaceAll));
+                }
+
+                if (hasEdits)
+                {
+                    foreach (var edit in editsProp.EnumerateArray())
+                    {
+                        if (!edit.TryGetProperty("old_text", out var o) || !edit.TryGetProperty("new_text", out var n))
+                            continue;
+                        var itemReplaceAll = edit.TryGetProperty("replace_all", out var ra)
+                            ? ra.ValueKind == JsonValueKind.True
+                            : defaultReplaceAll;
+                        edits.Add((o.GetString() ?? "", n.GetString() ?? "", itemReplaceAll));
+                    }
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            return Error(call, "UpdateNote: invalid JSON arguments.");
+        }
+
+        var leaf = DysonScratchNotes.ResolveLeaf(_fs, noteName);
+        if (leaf.IsError)
+            return Error(call, leaf.Error);
+
+        return await WithNoteGateAsync(call, leaf.Value, async ct =>
+        {
+            var exists = await _fs.FileExistsAsync(leaf.Value, ct).ConfigureAwait(false);
+            if (exists.IsError)
+                return Error(call, DysonScratchNotes.HideStorageFailure(exists.Error));
+            if (!exists.Value)
+                return Error(call, DysonScratchNotes.MissingReason);
+
+            string newText;
+            if (contentOnly)
+            {
+                newText = fullContent;
+            }
+            else
+            {
+                if (edits.Count == 0)
+                    return Error(call, "UpdateNote: provide content, or old_text/new_text, or edits[].");
+
+                var read = await _fs.ReadAllTextAsync(leaf.Value, ct).ConfigureAwait(false);
+                if (read.IsError)
+                    return Error(call, DysonScratchNotes.HideStorageFailure(read.Error));
+
+                newText = read.Value;
+                foreach (var (oldText, replacement, replaceAll) in edits)
+                {
+                    if (string.IsNullOrEmpty(oldText))
+                        return Error(call, "UpdateNote: old_text must be non-empty.");
+
+                    var replaced = DysonTextEditApplier.TryReplace(newText, oldText, replacement, replaceAll);
+                    if (replaced.IsError)
+                        return Error(call, "UpdateNote: " + replaced.Error.Message);
+
+                    newText = replaced.Value.Content;
+                }
+            }
+
+            var check = await DysonScratchNotes.CheckWriteAsync(
+                _fs,
+                new DysonTiktokenTokenCounter(),
+                noteName,
+                newText,
+                DysonScratchNotes.Kind.Update,
+                ct).ConfigureAwait(false);
+            if (check.IsError)
+                return Error(call, check.Error);
+            if (!check.Value.Allowed)
+                return Error(call, check.Value.Reason ?? DysonScratchNotes.PerNoteReason);
+
+            var written = await _fs.WriteAllTextAsync(leaf.Value, newText, ct).ConfigureAwait(false);
+            if (written.IsError)
+                return Error(call, DysonScratchNotes.HideStorageFailure(written.Error));
+
+            return Ok(call, JsonSerializer.Serialize(new
+            {
+                name = noteName,
+                tokens = check.Value.NoteTokens ?? 0,
+            }));
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<DysonToolCallResult> DeleteNoteAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var denied = RejectUnlessMetaAgent(call, "DeleteNote");
+        if (denied is not null)
+            return denied;
+
+        string name;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var nameResult = RequireString(doc.RootElement, "name");
+            if (nameResult.IsError)
+                return Error(call, nameResult.Error);
+            name = nameResult.Value;
+        }
+        catch (JsonException)
+        {
+            return Error(call, "DeleteNote: invalid JSON arguments.");
+        }
+
+        var leaf = DysonScratchNotes.ResolveLeaf(_fs, name);
+        if (leaf.IsError)
+            return Error(call, leaf.Error);
+
+        return await WithNoteGateAsync(call, leaf.Value, async ct =>
+        {
+            var exists = await _fs.FileExistsAsync(leaf.Value, ct).ConfigureAwait(false);
+            if (exists.IsError)
+                return Error(call, DysonScratchNotes.HideStorageFailure(exists.Error));
+            if (!exists.Value)
+                return Error(call, DysonScratchNotes.MissingReason);
+
+            var deleted = await _fs.DeleteFileAsync(leaf.Value, ct).ConfigureAwait(false);
+            if (deleted.IsError)
+                return Error(call, DysonScratchNotes.HideStorageFailure(deleted.Error));
+
+            return Ok(call, JsonSerializer.Serialize(new { name, deleted = true }));
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static Result<string, string> RequireStringAllowEmpty(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var prop) || prop.ValueKind != JsonValueKind.String)
+            return Result<string, string>.AsError($"Missing required string field '{name}'.");
+
+        return Result<string, string>.AsValue(prop.GetString() ?? "");
+    }
+
+    private static Result<string?, string> OptionalStringAllowEmpty(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var prop) || prop.ValueKind == JsonValueKind.Null)
+            return Result<string?, string>.AsValue(null);
+        if (prop.ValueKind != JsonValueKind.String)
+            return Result<string?, string>.AsError($"Field '{name}' must be a string.");
+
+        return Result<string?, string>.AsValue(prop.GetString() ?? "");
+    }
 }
