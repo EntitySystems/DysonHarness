@@ -45,6 +45,9 @@
                             @onclick="ToggleTasks">
                         Tasks
                     </button>
+                    <button type="button" class="btn" disabled="@(!IsMetaFocused)" @onclick="OpenVisualizations">
+                        Visualizations
+                    </button>
                     <button type="button"
                             class="btn"
                             disabled="@(!CanOpenFullSession)"
@@ -81,7 +84,8 @@
                                           Queued="ChatQueued"
                                           SessionBusy="IsMetaFocused && Host.IsBusy"
                                           OnRemoveQueued="RemoveQueuedAsync"
-                                          OnConversationAction="OnConversationActionAsync" />
+                                          OnConversationAction="OnConversationActionAsync"
+                                          OnOpenVisualization="OpenFocusedVisualization" />
                         </div>
 
                         <div class="composer meta-composer">
@@ -205,6 +209,11 @@
                    CompleteCount="MetaTodoCompleteCount"
                    OnClose="CloseTasks" />
 
+<SessionVisualizationsModal IsOpen="_vizOpen"
+                             Session="@(IsMetaFocused ? Host.Session : null)"
+                             FocusId="_vizFocusId"
+                             OnClose="CloseVisualizations" />
+
 @code {
     [Parameter] public Guid WorkDirectoryId { get; set; }
 
@@ -227,6 +236,8 @@
     private IDisposable? _hostSub;
     private DotNetObjectReference<DysonUiHost>? _chatLinksRef;
     private bool _tasksOpen;
+    private bool _vizOpen;
+    private Guid? _vizFocusId;
     private ElementReference _shell;
     private bool _imageCaptureBound;
     private bool _dragOver;
@@ -338,6 +349,7 @@
             return;
         _loadedWorkDirectoryId = WorkDirectoryId;
         _tasksOpen = false;
+        _vizOpen = false;
 
         var get = await WorkDirs.GetAsync(WorkDirectoryId);
         _unknownWorkDirectory = get.IsError;
@@ -646,6 +658,20 @@
     private void ToggleTasks() => _tasksOpen = !_tasksOpen;
 
     private void CloseTasks() => _tasksOpen = false;
+
+    private void OpenVisualizations()
+    {
+        _vizFocusId = null;
+        _vizOpen = true;
+    }
+
+    private void CloseVisualizations() => _vizOpen = false;
+
+    private void OpenFocusedVisualization(Guid id)
+    {
+        _vizFocusId = id;
+        _vizOpen = true;
+    }
 
     private async Task OpenFullSessionAsync()
     {

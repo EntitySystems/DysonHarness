@@ -34,6 +34,9 @@ public class DysonMetaAgentDirectiveTests
         // The meta page renders posted messages only; prose-only turns show the user nothing.
         // Pinned so the one instruction standing between the agent and a blank screen is not softened away.
         MustContain(text, "PostConversationMessage is your only voice", "Meta Agent ForMode");
+        MustContain(text, "visualizationId", "Meta Agent ForMode");
+        MustContain(text, "WriteTempFile", "Meta Agent ForMode");
+        MustContain(text, "ReadTempFile", "Meta Agent ForMode");
         // The todo list outlives the roster and the transcript; posted messages do not come back on later turns.
         MustContain(text, "ListTodos before you answer whether work was dispatched", "Meta Agent ForMode");
         MustContain(text, "A posted message is shown to the user and is not in later turns", "Meta Agent ForMode");

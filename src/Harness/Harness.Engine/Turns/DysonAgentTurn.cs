@@ -95,6 +95,12 @@ public sealed class DysonAgentTurn
     /// </summary>
     public IReadOnlyList<DysonConversationAction> ConversationActions => _conversationActions;
 
+    /// <summary>
+    /// Visualization opened by a DisplayInfo bubble. Null on every other turn.
+    /// The visualization body stays on the render turn's tool result.
+    /// </summary>
+    public Guid? VisualizationId { get; set; }
+
     /// <summary>UTC when this turn began (live create or restored from persistence).</summary>
     public DateTime StartedUtc { get; set; }
 

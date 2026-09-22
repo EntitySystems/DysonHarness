@@ -53,6 +53,14 @@ public sealed partial class DysonWorkspaceToolExecutor
     {
         ArgumentNullException.ThrowIfNull(call);
 
+        // These names are absent from every catalog except Meta Agent, so the catalog
+        // gate below would hide the mode error the caller is required to see.
+        if (call.ToolName is "WriteTempFile" or "ReadTempFile"
+            && !string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+        {
+            return Error(call, $"{call.ToolName} is only available in Meta Agent mode.");
+        }
+
         if (!_session.McpPipeline.Tools.ContainsKey(call.ToolName))
         {
             return Error(
@@ -130,6 +138,8 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "ReadFile" => await ReadFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "LoadSkill" => await LoadSkillAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateFile" => await CreateFileAsync(call, cancellationToken).ConfigureAwait(false),
+                "WriteTempFile" => await WriteTempFileAsync(call, cancellationToken).ConfigureAwait(false),
+                "ReadTempFile" => await ReadTempFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "RenderHtmlVisualization" => await RenderHtmlVisualizationAsync(call, cancellationToken).ConfigureAwait(false),
                 "GenerateImage" => await GenerateImageAsync(call, cancellationToken).ConfigureAwait(false),
                 "WriteFile" => await WriteFileAsync(call, cancellationToken).ConfigureAwait(false),
@@ -1837,20 +1847,113 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
     }
 
+    private async Task<DysonToolCallResult> WriteTempFileAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+            return Error(call, "WriteTempFile is only available in Meta Agent mode.");
+
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            if (!doc.RootElement.TryGetProperty("path", out var pathProperty)
+                || pathProperty.ValueKind != JsonValueKind.String)
+            {
+                return Error(call, "WriteTempFile: temporary path must be a non-empty leaf file name.");
+            }
+
+            if (!doc.RootElement.TryGetProperty("content", out var contentProperty)
+                || contentProperty.ValueKind != JsonValueKind.String)
+            {
+                return Error(call, "WriteTempFile: missing required string field 'content'.");
+            }
+
+            return await CreateTemporaryFileAsync(
+                    call,
+                    pathProperty.GetString() ?? "",
+                    contentProperty.GetString() ?? "",
+                    overwrite: false,
+                    cancellationToken,
+                    toolName: "WriteTempFile")
+                .ConfigureAwait(false);
+        }
+        catch (JsonException)
+        {
+            return Error(call, "WriteTempFile: invalid JSON arguments.");
+        }
+    }
+
+    private async Task<DysonToolCallResult> ReadTempFileAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+            return Error(call, "ReadTempFile is only available in Meta Agent mode.");
+
+        cancellationToken.ThrowIfCancellationRequested();
+        string path;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            if (!doc.RootElement.TryGetProperty("path", out var pathProperty)
+                || pathProperty.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(pathProperty.GetString()))
+            {
+                return Error(call, "ReadTempFile: path must be an exact generated file under .dyson/temp/.");
+            }
+
+            path = pathProperty.GetString()!;
+        }
+        catch (JsonException)
+        {
+            return Error(call, "ReadTempFile: invalid JSON arguments.");
+        }
+
+        if (!IsGeneratedTemporaryLeaf(path))
+            return Error(call, "ReadTempFile: path must be an exact generated file under .dyson/temp/.");
+
+        var nativePath = _fs.ResolvePath(path);
+        if (nativePath.IsError)
+            return Error(call, nativePath.Error);
+        if (HasReparsePoint(nativePath.Value))
+            return Error(call, "ReadTempFile: cannot include a symlink or reparse point.");
+
+        const int maxTempBytes = 512 * 1024;
+        var length = await _fs.GetFileLengthAsync(path, cancellationToken).ConfigureAwait(false);
+        if (length.IsError)
+            return Error(call, length.Error);
+        if (length.Value > maxTempBytes)
+            return Error(call, "ReadTempFile: file exceeds the 512 KiB UTF-8 limit.");
+
+        var read = await _fs.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+        if (read.IsError)
+            return Error(call, read.Error);
+
+        return Ok(call, JsonSerializer.Serialize(new
+        {
+            path,
+            content = read.Value,
+            byteLength = length.Value,
+        }));
+    }
+
     private async Task<DysonToolCallResult> CreateTemporaryFileAsync(
         DysonToolCall call,
         string requestedName,
         string content,
         bool overwrite,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string toolName = "CreateFile")
     {
         const int maxTempBytes = 512 * 1024;
         if (overwrite)
-            return Error(call, "CreateFile: overwrite must be omitted or false when isTempFile is true.");
+            return Error(call, $"{toolName}: overwrite must be omitted or false when isTempFile is true.");
         if (Encoding.UTF8.GetByteCount(content) > maxTempBytes)
-            return Error(call, "CreateFile: temporary content exceeds the 512 KiB UTF-8 limit.");
+            return Error(call, $"{toolName}: temporary content exceeds the 512 KiB UTF-8 limit.");
 
-        var sanitizedName = SanitizeTemporaryLeafName(requestedName);
+        var sanitizedName = SanitizeTemporaryLeafName(requestedName, toolName);
         if (sanitizedName.IsError)
             return Error(call, sanitizedName.Error);
 
@@ -1878,10 +1981,10 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Ok(call, acknowledgement);
         }
 
-        return Error(call, "CreateFile: could not allocate a unique temporary file name.");
+        return Error(call, $"{toolName}: could not allocate a unique temporary file name.");
     }
 
-    private static Result<string, string> SanitizeTemporaryLeafName(string requestedName)
+    private static Result<string, string> SanitizeTemporaryLeafName(string requestedName, string toolName = "CreateFile")
     {
         if (string.IsNullOrWhiteSpace(requestedName)
             || Path.IsPathRooted(requestedName)
@@ -1889,19 +1992,19 @@ public sealed partial class DysonWorkspaceToolExecutor
             || requestedName is "." or "..")
         {
             return Result<string, string>.AsError(
-                "CreateFile: temporary path must be a non-empty leaf file name.");
+                $"{toolName}: temporary path must be a non-empty leaf file name.");
         }
 
         var extension = Path.GetExtension(requestedName);
         var stem = Path.GetFileNameWithoutExtension(requestedName);
         if (string.IsNullOrWhiteSpace(stem) || string.IsNullOrWhiteSpace(extension) || extension == ".")
-            return Result<string, string>.AsError("CreateFile: temporary file name must include an extension.");
+            return Result<string, string>.AsError($"{toolName}: temporary file name must include an extension.");
 
         var invalid = Path.GetInvalidFileNameChars();
         var sanitizedStem = new string(stem.Select(c => invalid.Contains(c) ? '-' : c).ToArray()).Trim();
         var sanitizedExtension = new string(extension.Skip(1).Select(c => invalid.Contains(c) ? '-' : c).ToArray()).Trim();
         if (string.IsNullOrWhiteSpace(sanitizedStem) || string.IsNullOrWhiteSpace(sanitizedExtension))
-            return Result<string, string>.AsError("CreateFile: temporary file name is invalid.");
+            return Result<string, string>.AsError($"{toolName}: temporary file name is invalid.");
 
         return Result<string, string>.AsValue(
             $"{sanitizedStem[..Math.Min(sanitizedStem.Length, 96)]}.{sanitizedExtension[..Math.Min(sanitizedExtension.Length, 16)]}");

@@ -5,7 +5,8 @@ using DysonHarness;
 namespace Harness.Tests;
 
 /// <summary>
-/// The Meta Agent catalog contains no file/shell/wait/completion tools.
+/// Excluded file, shell, wait, and completion names stay absent from the Meta Agent catalog.
+/// <c>WriteTempFile</c> and <c>ReadTempFile</c> are the only file tools, and they are temp-scoped.
 /// This is the load-bearing invariant of Meta Agent mode.
 /// </summary>
 public class DysonMetaAgentNoFileAccessTests

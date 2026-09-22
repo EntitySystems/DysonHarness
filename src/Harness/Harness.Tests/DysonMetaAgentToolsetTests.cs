@@ -50,6 +50,8 @@ public class DysonMetaAgentToolsetTests
         Assert.True(pipeline.Tools.ContainsKey("SubmitMetaPlan"));
         Assert.True(pipeline.Tools.ContainsKey("ReadFile"));
         Assert.True(pipeline.Tools.ContainsKey("SubmitSubagentReport"));
+        Assert.False(pipeline.Tools.ContainsKey("WriteTempFile"));
+        Assert.False(pipeline.Tools.ContainsKey("ReadTempFile"));
     }
 
     [Fact]

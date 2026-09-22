@@ -336,9 +336,17 @@ public sealed partial class DysonWorkspaceToolExecutor
             if (actions.IsError)
                 return Error(call, actions.Error);
 
+            var visualizationId = ParseVisualizationId(doc.RootElement);
+            if (visualizationId.IsError)
+                return Error(call, visualizationId.Error);
+
+            if (visualizationId.Value is Guid id && FindSessionVisualization(id) is null)
+                return Error(call, "PostConversationMessage: unknown visualizationId.");
+
             _session.AppendDisplayInfoTurn(
                 messageResult.Value,
-                actions.Value.Count == 0 ? null : actions.Value);
+                actions.Value.Count == 0 ? null : actions.Value,
+                visualizationId.Value);
         }
         catch (JsonException)
         {
@@ -392,6 +400,36 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
 
         return Result<List<DysonConversationAction>, string>.AsValue(list);
+    }
+
+    private static Result<Guid?, string> ParseVisualizationId(JsonElement root)
+    {
+        if (!root.TryGetProperty("visualizationId", out var prop) || prop.ValueKind == JsonValueKind.Null)
+            return Result<Guid?, string>.AsValue(null);
+
+        if (prop.ValueKind != JsonValueKind.String || !Guid.TryParse(prop.GetString(), out var id))
+            return Result<Guid?, string>.AsError("PostConversationMessage: visualizationId must be a GUID.");
+
+        return Result<Guid?, string>.AsValue(id);
+    }
+
+    private DysonHtmlVisualization? FindSessionVisualization(Guid id)
+    {
+        foreach (var turn in _session.Turns)
+        {
+            foreach (var tracked in turn.TrackedToolCalls)
+            {
+                if (tracked.Status != DysonToolCallStatus.Completed)
+                    continue;
+                if (tracked.Result is { IsError: false, HtmlVisualization: { } visualization }
+                    && visualization.Id == id)
+                {
+                    return visualization;
+                }
+            }
+        }
+
+        return null;
     }
 
     private DysonToolCallResult CompactConversation(DysonToolCall call)

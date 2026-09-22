@@ -2,7 +2,8 @@ namespace DysonHarness;
 
 /// <summary>
 /// Meta Agent / Meta Agent Drone catalog: allowlist strip + meta-only tool definitions.
-/// Browser tools are kept when already on the pipeline; file, shell, search, wait, and completion tools stay absent.
+/// Browser tools are kept when already on the pipeline; project file, shell, search, wait, and completion tools stay absent.
+/// <c>WriteTempFile</c> and <c>ReadTempFile</c> are the only file tools, and they only touch generated files under <c>.dyson/temp/</c>.
 /// </summary>
 public static class DysonMetaAgentTools
 {
@@ -25,7 +26,7 @@ public static class DysonMetaAgentTools
         "LoadSkill",
     ];
 
-    /// <summary>Exact Meta Agent catalog when browser tools are not on the pipeline (no file/shell/wait/completion tools). Browser names are not listed here.</summary>
+    /// <summary>Exact Meta Agent catalog when browser tools are not on the pipeline (no project file/shell/wait/completion tools). <c>WriteTempFile</c> and <c>ReadTempFile</c> are temp-scoped. Browser names are not listed here.</summary>
     public static readonly IReadOnlyList<string> AllowedToolNames =
     [
         "BeginBuildPlan",
@@ -46,7 +47,9 @@ public static class DysonMetaAgentTools
         "MessageMetaAgentDrone",
         "PostConversationMessage",
         "ReadMetaAgentDroneLog",
+        "ReadTempFile",
         "RemoveTodos",
+        "RenderHtmlVisualization",
         "RespondToSubagentEvent",
         "SetPlanStatus",
         "StartAsyncExploreAgent",
@@ -54,6 +57,7 @@ public static class DysonMetaAgentTools
         "SummarizeTurns",
         "UpdateNote",
         "UpdateTodo",
+        "WriteTempFile",
     ];
 
     /// <summary>
@@ -362,6 +366,7 @@ public static class DysonMetaAgentTools
                 "Assistant text is not shown; use this for everything the user should see. " +
                 "Optional actions add buttons { name, func } where func is a key registered on this session, not source code. " +
                 "Buttons are not run until the user clicks. Omit actions or pass [] for a plain markdown bubble. " +
+                "visualizationId is separate from actions. " +
                 "Does not end the turn.",
             InputSchemaJson = """
                 {
@@ -380,6 +385,10 @@ public static class DysonMetaAgentTools
                           "func": { "type": "string", "description": "Lookup key. Not source code." }
                         }
                       }
+                    },
+                    "visualizationId": {
+                      "type": "string",
+                      "description": "Optional GUID returned by RenderHtmlVisualization. Adds one button that opens that visualization. Not a func key. Omit or null for no visualization button."
                     }
                   },
                   "required": ["message"]
@@ -599,6 +608,50 @@ public static class DysonMetaAgentTools
                     "name": { "type": "string", "description": "Note name ending in .md." }
                   },
                   "required": ["name"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "WriteTempFile",
+            Description =
+                "Write a temporary visualization asset under .dyson/temp/. path is a leaf file name with an extension, such as chart.html, chart.css, or chart.js. The harness sanitizes it, inserts a random suffix before the extension, and returns the exact workspace-relative path. Pass that path verbatim as a RenderHtmlVisualization tempFile in a later stage. This does not create or overwrite project files.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "Leaf file name with an extension, such as chart.html. Not a directory and not a .dyson/temp/ path."
+                    },
+                    "content": {
+                      "type": "string",
+                      "description": "UTF-8 text to write. Capped at 512 KiB."
+                    }
+                  },
+                  "required": ["path", "content"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ReadTempFile",
+            Description =
+                "Read a temporary file previously returned by WriteTempFile. path must be that exact workspace-relative path under .dyson/temp/. Refuses every other path. Returns JSON with path, content, and byteLength.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "Exact workspace-relative path returned by WriteTempFile. A leaf under .dyson/temp/ with the random suffix."
+                    }
+                  },
+                  "required": ["path"]
                 }
                 """,
         };

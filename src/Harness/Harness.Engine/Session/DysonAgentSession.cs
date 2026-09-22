@@ -2652,6 +2652,7 @@ public abstract class DysonAgentSession
             turn.RestoreUserImages(DysonUserImagesSerializer.Deserialize(row.UserImagesJson));
             turn.RestoreConversationActions(
                 DysonConversationActionsSerializer.Deserialize(row.ConversationActionsJson));
+            turn.VisualizationId = row.VisualizationId;
             DysonTurnToolStateSerializer.ApplyToTurn(turn, row.ToolStateJson);
             turn.FinalizeIncompleteTools(
                 "Tool call did not complete (cancelled or interrupted).");
@@ -3126,7 +3127,8 @@ public abstract class DysonAgentSession
     /// </summary>
     public DysonAgentTurn AppendDisplayInfoTurn(
         string message,
-        IReadOnlyList<DysonConversationAction>? actions = null)
+        IReadOnlyList<DysonConversationAction>? actions = null,
+        Guid? visualizationId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
         var now = DateTime.UtcNow;
@@ -3136,6 +3138,7 @@ public abstract class DysonAgentSession
             AssistantText = message.Trim(),
             StartedUtc = now,
             CompletedUtc = now,
+            VisualizationId = visualizationId,
         };
         if (actions is { Count: > 0 })
             turn.RestoreConversationActions(actions);

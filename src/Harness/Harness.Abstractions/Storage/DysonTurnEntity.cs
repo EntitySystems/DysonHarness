@@ -47,6 +47,12 @@ public sealed class DysonTurnEntity
     /// </summary>
     public string? ConversationActionsJson { get; set; }
 
+    /// <summary>
+    /// Visualization opened from a meta DisplayInfo post. Null on every other turn.
+    /// The visualization body stays in <see cref="ToolStateJson"/> on the render turn.
+    /// </summary>
+    public Guid? VisualizationId { get; set; }
+
     public string ToolStateJson { get; set; } = "{}";
     public bool ToolHistoryOptimized { get; set; }
     public string? CompactToolHistory { get; set; }
