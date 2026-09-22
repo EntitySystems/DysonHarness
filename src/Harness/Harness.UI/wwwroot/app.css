@@ -2714,63 +2714,6 @@ code, .mono {
   border-color: var(--accent);
 }
 
-.session-todos__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.session-todos__item {
-  padding: 4px 0;
-  border-top: 1px solid var(--border);
-}
-
-.session-todos__item:hover {
-  background: var(--bg-hover);
-}
-
-.session-todos__row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.session-todos__name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.session-todos__code {
-  font-size: 11px;
-  color: var(--text-dim);
-}
-
-.session-todos__status {
-  margin-left: auto;
-  text-transform: lowercase;
-  letter-spacing: 0.02em;
-}
-
-.session-todos__status--pending {
-  background: var(--bg-3);
-  color: var(--text-muted);
-}
-
-.session-todos__status--ongoing {
-  background: color-mix(in srgb, var(--warning) 18%, var(--bg-2));
-  color: var(--warning);
-}
-
-.session-todos__status--complete {
-  background: color-mix(in srgb, var(--success) 18%, var(--bg-2));
-  color: var(--success);
-}
-
 .session-log {
   max-height: 240px;
   overflow-y: auto;
@@ -2827,62 +2770,6 @@ code, .mono {
 
 .session-log__row--error .session-log__body {
   color: var(--danger);
-}
-
-.session-todos__comments {
-  list-style: none;
-  margin: 4px 0 0;
-  padding: 0 0 0 2px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.session-todos__comments li {
-  font-size: 12px;
-  color: var(--text-muted);
-  line-height: 1.4;
-}
-
-/* Session todos modal — confirm-dialog shell, same size as subagents */
-.session-todos-modal {
-  width: min(560px, 100%);
-  max-height: min(80vh, 640px);
-}
-
-.session-todos-modal__title-row {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  min-width: 0;
-}
-
-.session-todos-modal__counts {
-  font-size: 12px;
-  font-weight: 450;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.session-todos-modal__close {
-  min-width: 28px;
-  padding: 2px 8px;
-  font-size: 18px;
-  line-height: 1;
-}
-
-.session-todos-modal__body {
-  padding: 12px 14px 14px;
-}
-
-.session-todos-modal .session-todos__item:first-child {
-  border-top: none;
-}
-
-.session-todos-modal__empty {
-  margin: 0;
-  font-size: 13px;
-  color: var(--text-muted);
 }
 
 /* Session subagents modal — confirm-dialog shell, wider for card titles */
