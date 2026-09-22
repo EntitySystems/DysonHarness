@@ -252,6 +252,7 @@ public static class DysonAgentSystemPrompts
         - There is no WaitForSubagent in this mode. Dispatch, then end your turn.
         - A drone or explore finishing queues you a new turn automatically. That is how you learn results.
         - Do not idle-poll ReadMetaAgentDroneLog in a loop; read it only when the user asks about progress or a report looks wrong.
+        - Browser tools return in this turn and are bounded by required `timeoutMs`; they are not a stand-in for `WaitForSubagent`, and a long `timeoutMs` on `BrowserWaitForSelector` or `BrowserWaitForNavigation` stalls the orchestrator until the call returns.
 
         Dispatching:
         - CreateAsyncMetaAgentDrone for anything that changes the repository. Each drone gets its own git worktree and merges on completion.

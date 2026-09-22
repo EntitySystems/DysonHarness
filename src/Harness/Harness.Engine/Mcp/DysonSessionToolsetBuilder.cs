@@ -157,7 +157,8 @@ public static class DysonSessionToolsetBuilder
     }
 
     /// <summary>
-    /// Meta Agent: strip to the allowlist (no file/shell/wait/completion). Meta Agent never completes.
+    /// Meta Agent: strip to the allowlist (no file/shell/wait/completion).
+    /// Browser tools already on the pipeline stay. Meta Agent never completes.
     /// Meta Agent Drone: drop AskQuestionFromParent and PromptUserDialogFromParent
     /// (TriggerParentEvent stays) and add ReadMetaPlan / SubmitMetaPlan.
     /// </summary>

@@ -2,7 +2,7 @@ namespace DysonHarness;
 
 /// <summary>
 /// Meta Agent / Meta Agent Drone catalog: allowlist strip + meta-only tool definitions.
-/// File, shell, browser, search, wait, and completion tools are structurally absent.
+/// Browser tools are kept when already on the pipeline; file, shell, search, wait, and completion tools stay absent.
 /// </summary>
 public static class DysonMetaAgentTools
 {
@@ -25,7 +25,7 @@ public static class DysonMetaAgentTools
         "LoadSkill",
     ];
 
-    /// <summary>Exact Meta Agent catalog (no file/shell/wait/completion tools).</summary>
+    /// <summary>Exact Meta Agent catalog when browser tools are not on the pipeline (no file/shell/wait/completion tools). Browser names are not listed here.</summary>
     public static readonly IReadOnlyList<string> AllowedToolNames =
     [
         "BeginBuildPlan",
@@ -98,8 +98,17 @@ public static class DysonMetaAgentTools
     private static readonly HashSet<string> AllowedToolNameSet = new(AllowedToolNames, StringComparer.Ordinal);
 
     /// <summary>
-    /// Strips everything not in <see cref="AllowedToolNames"/>, restores shared schemas,
-    /// then adds meta-only tools. Authoritative for Meta Agent mode.
+    /// Names from <see cref="DysonMcpPipeline.CreateBrowserTools"/>.
+    /// Kept only when already on the pipeline (<c>BrowserControl</c> set and not denylisted).
+    /// </summary>
+    private static readonly HashSet<string> BrowserToolNameSet = new(
+        DysonMcpPipeline.CreateBrowserTools().Select(static tool => tool.Name),
+        StringComparer.Ordinal);
+
+    /// <summary>
+    /// Strips everything not in <see cref="AllowedToolNames"/>, except browser tools already on the pipeline.
+    /// Restores shared schemas from a no-browser <c>CreateDefault</c>, then adds meta-only tools.
+    /// Authoritative for Meta Agent mode.
     /// </summary>
     public static void ApplyAllowlist(DysonMcpPipeline pipeline)
     {
@@ -107,7 +116,7 @@ public static class DysonMetaAgentTools
 
         foreach (var name in pipeline.Tools.Keys.ToArray())
         {
-            if (!AllowedToolNameSet.Contains(name))
+            if (!AllowedToolNameSet.Contains(name) && !BrowserToolNameSet.Contains(name))
                 pipeline.Tools.Remove(name);
         }
 

@@ -23,6 +23,7 @@ public class DysonMetaAgentDirectiveTests
         var text = Prompt("Meta Agent");
         MustContain(text, DysonAgentSystemPrompts.SharedPreamble.Trim(), "Meta Agent ForMode shared preamble");
         MustContain(text, "never block", "Meta Agent ForMode");
+        MustContain(text, "BrowserWaitForNavigation", "Meta Agent ForMode");
         MustContain(text, "Reuse over re-spawn", "Meta Agent ForMode");
         MustContain(text, "You cannot touch the filesystem", "Meta Agent ForMode");
         // The meta page renders posted messages only; prose-only turns show the user nothing.
