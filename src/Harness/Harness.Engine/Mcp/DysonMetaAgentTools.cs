@@ -369,8 +369,11 @@ public static class DysonMetaAgentTools
             Description =
                 "Post markdown the user should see in the meta conversation. " +
                 "Assistant text is not shown; use this for everything the user should see. " +
-                "Optional actions add buttons { name, func } where func is a key registered on this session, not source code. " +
-                "Buttons are not run until the user clicks. Omit actions or pass [] for a plain markdown bubble. " +
+                "Optional actions add buttons { name, func } where func is one string. " +
+                "open_plan:{planId}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. " +
+                "Buttons are not run until the user clicks. " +
+                "When the message names a plan, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. " +
+                "Omit actions or pass [] for a plain markdown bubble. " +
                 "visualizationId is separate from actions. " +
                 "Does not end the turn.",
             InputSchemaJson = """
@@ -381,7 +384,7 @@ public static class DysonMetaAgentTools
                     "actions": {
                       "type": "array",
                       "maxItems": 8,
-                      "description": "Optional buttons. Not run until the user clicks. Each func is a key already registered on this session, not source code. Omit or [] for a plain markdown bubble.",
+                      "description": "Optional buttons. func is one string. open_plan:{planId}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. Not run until the user clicks. When the message names a plan, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. Omit or [] for a plain markdown bubble.",
                       "items": {
                         "type": "object",
                         "required": ["name", "func"],

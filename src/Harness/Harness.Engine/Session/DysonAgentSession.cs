@@ -3280,8 +3280,9 @@ public abstract class DysonAgentSession
 
     /// <summary>
     /// Runs the func registered for <paramref name="key"/>.
-    /// A blank key, an unknown key, a failed <see cref="Result{TValue, TError}"/>, or a thrown func
-    /// is a failed result. Does not add or remove turns.
+    /// A blank key, a reserved built-in prefix, an unknown key, a failed
+    /// <see cref="Result{TValue, TError}"/>, or a thrown func is a failed result.
+    /// Does not add or remove turns. Reserved prefixes never run a delegate.
     /// </summary>
     public async Task<Result<string, string>> InvokeConversationActionAsync(
         string key,
@@ -3290,6 +3291,9 @@ public abstract class DysonAgentSession
         var trimmed = key?.Trim() ?? "";
         if (trimmed.Length == 0)
             return Result<string, string>.AsError("Conversation action key is required.");
+
+        if (DysonBuiltInConversationActions.IsReservedPrefix(trimmed))
+            return Result<string, string>.AsError($"Conversation action '{trimmed}' is reserved.");
 
         Func<CancellationToken, Task<Result<string, string>>>? func;
         lock (_conversationActionsGate)
