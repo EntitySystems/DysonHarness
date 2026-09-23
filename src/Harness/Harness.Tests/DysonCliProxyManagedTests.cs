@@ -32,9 +32,9 @@ public class DysonCliProxyAssetResolverTests
     public void ResolveDownloadUrl_uses_pinned_download_base()
     {
         var url = DysonCliProxyAssetResolver.ResolveDownloadUrl(
-            "7.2.149", OSPlatform.Windows, Architecture.X64);
+            "7.3.15", OSPlatform.Windows, Architecture.X64);
         Assert.Equal(
-            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.149/CLIProxyAPI_7.2.149_windows_amd64.zip",
+            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.3.15/CLIProxyAPI_7.3.15_windows_amd64.zip",
             url);
     }
 }
@@ -44,10 +44,10 @@ public class DysonThirdPartyResourcesTests
     [Fact]
     public void CliProxyApi_parses_tag_and_version_from_release_url()
     {
-        Assert.Equal("v7.2.149", DysonThirdPartyResources.CliProxyApi.Tag);
-        Assert.Equal("7.2.149", DysonThirdPartyResources.CliProxyApi.Version);
+        Assert.Equal("v7.3.15", DysonThirdPartyResources.CliProxyApi.Tag);
+        Assert.Equal("7.3.15", DysonThirdPartyResources.CliProxyApi.Version);
         Assert.Equal(
-            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.149/",
+            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.3.15/",
             DysonThirdPartyResources.CliProxyApi.DownloadBaseUrl);
     }
 
