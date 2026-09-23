@@ -9,7 +9,7 @@ public static class DysonThirdPartyResources
     {
         /// <summary>Pinned GitHub release tag page. Bump this to retarget downloads.</summary>
         public const string ReleaseTagUrl =
-            "https://github.com/router-for-me/CLIProxyAPI/releases/tag/v7.2.149";
+            "https://github.com/router-for-me/CLIProxyAPI/releases/tag/v7.3.15";
 
         public static string Tag => ParseTag(ReleaseTagUrl);
 
