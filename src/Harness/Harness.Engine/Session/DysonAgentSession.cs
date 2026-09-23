@@ -293,6 +293,12 @@ public abstract class DysonAgentSession
     internal static readonly AsyncLocal<bool?> MetaAgentDroneUseWorktree = new();
 
     /// <summary>
+    /// Sibling of <see cref="MetaAgentDroneUseWorktree"/>. Set only when that flag is false
+    /// and <c>existingWorktreePath</c> is non-empty. Does not change <see cref="CreateChildAsync"/>.
+    /// </summary>
+    internal static readonly AsyncLocal<string?> MetaAgentDroneExistingWorktreePath = new();
+
+    /// <summary>
     /// <c>Isolate</c> forks via <see cref="BindOwnWorktree"/>. <c>Suppress</c> stays on the
     /// registered checkout: no branch, and completion does not merge.
     /// </summary>
@@ -304,6 +310,24 @@ public abstract class DysonAgentSession
         // null or true → fork. Only an explicit false stays on the parent checkout.
         var suppress = MetaAgentDroneUseWorktree.Value == false;
         return (!suppress, suppress);
+    }
+
+    /// <summary>
+    /// Suppress-path work directory: rebound checkout when set, otherwise <paramref name="registeredPath"/>.
+    /// </summary>
+    protected static string ResolveMetaAgentDroneSuppressWorkDirectory(string registeredPath)
+    {
+        var rebound = MetaAgentDroneExistingWorktreePath.Value;
+        return string.IsNullOrWhiteSpace(rebound) ? registeredPath : rebound.Trim();
+    }
+
+    /// <summary>Suppress-path system suffix. Shared checkout unless a rebound path is set.</summary>
+    protected static string MetaAgentDroneSuppressPromptBlock()
+    {
+        var rebound = MetaAgentDroneExistingWorktreePath.Value;
+        return string.IsNullOrWhiteSpace(rebound)
+            ? DysonAgentSystemPrompts.MetaAgentDroneSharedCheckoutPromptBlock
+            : DysonAgentSystemPrompts.BuildMetaAgentDroneReboundCheckoutPrompt(rebound.Trim());
     }
 
     /// <summary>
@@ -1727,12 +1751,97 @@ public abstract class DysonAgentSession
                 $"Worktree merge failed: missing branch or registered work directory. Worktree left at {path}.");
         }
 
-        var merge = DysonSessionWorktree.Merge(anchor, path, branch, forceRemoveIfDirty: false);
+        var merge = DysonSessionWorktree.Merge(
+            anchor, path, branch, forceRemoveIfDirty: false, abortConflict: true);
         if (merge.IsError)
+        {
+            if (merge.Error.StartsWith(DysonSessionWorktree.MergeConflictAbortedPrefix, StringComparison.Ordinal))
+                return (false, BuildMergeConflictAbortedNote(path, branch, anchor, merge.Error));
+
             return (false, $"Worktree merge failed for {branch} at {path}:\n{merge.Error}");
+        }
 
         await ClearWorktreeColumnsOnSelfAndDescendantsAsync(cancellationToken).ConfigureAwait(false);
         return (true, $"Worktree {branch} merged.");
+    }
+
+    private string BuildMergeConflictAbortedNote(
+        string worktreePath,
+        string worktreeBranch,
+        string registeredCheckout,
+        string mergeError)
+    {
+        var paths = mergeError[DysonSessionWorktree.MergeConflictAbortedPrefix.Length..]
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var listed = DysonGitInfo.TryListWorktrees(registeredCheckout);
+        var registeredHead = HeadForListedPath(listed, registeredCheckout);
+        var worktreeHead = HeadForListedPath(listed, worktreePath);
+        var branchRead = DysonGitInfo.TryGetBranch(registeredCheckout);
+        var registeredBranch = branchRead.IsError || string.IsNullOrWhiteSpace(branchRead.Value)
+            ? "unknown"
+            : branchRead.Value.Trim();
+        var pathBullets = paths.Length == 0 ? "  - unknown" : string.Join("\n", paths.Select(p => "  - " + p));
+        var pathLines = paths.Length == 0 ? "unknown" : string.Join("\n", paths);
+
+        return $"""
+            Merge conflict. The harness merge of {worktreeBranch} into {registeredBranch} ({registeredCheckout}) conflicted and was aborted, so that checkout is usable again at {registeredHead}. This worktree was not removed and was not force-pushed. You cannot edit files. Do not resolve this conflict yourself.
+
+            - agentId: {Id}
+            - persistenceId: {PersistenceId:D}
+            - worktreePath: {worktreePath}
+            - worktreeBranch: {worktreeBranch}
+            - worktreeHead: {worktreeHead}
+            - registeredCheckout: {registeredCheckout}
+            - registeredBranch: {registeredBranch}
+            - registeredHead: {registeredHead}
+            - conflictingPaths:
+            {pathBullets}
+
+            Spawn a new Meta Agent Drone to resolve it. Call CreateAsyncMetaAgentDrone with purpose build, useWorktree false, and existingWorktreePath set to {worktreePath}. Do not omit useWorktree. Do not pass useWorktree true. A second isolated worktree cannot see this checkout.
+
+            Task text for that drone, with the facts above filled in:
+
+            Resolve this merge inside the existing worktree only. Your tools are already rooted at {worktreePath} on branch {worktreeBranch} (HEAD {worktreeHead}). Do not create a branch. Do not add a worktree. Do not touch the registered checkout at {registeredCheckout}. Merge {registeredBranch} (HEAD {registeredHead}) into the current branch, fix only these paths:
+            {pathLines}
+            Commit on {worktreeBranch}. Do not remove the worktree. Do not force-push. Then SubmitSubagentReport completed.
+
+            Do not StopMetaAgentDrone agentId {Id}. Do not pass discardWorktree. Do not force-push. Leave that drone’s worktree in place until the resolver has committed.
+
+            When the resolver reports completed, MessageMetaAgentDrone agentId {Id} with exactly: Do not edit files. SubmitSubagentReport completed so the harness merge of {worktreeBranch} runs again. That report is the retry. If it conflicts again, this same note is the result.
+            """;
+
+        static string HeadForListedPath(
+            Result<IReadOnlyList<DysonGitWorktreeEntry>, string> listed,
+            string path)
+        {
+            if (listed.IsError)
+                return "unknown";
+
+            foreach (var entry in listed.Value)
+            {
+                if (!SameGitPath(entry.Path, path))
+                    continue;
+
+                return string.IsNullOrWhiteSpace(entry.Head) ? "unknown" : entry.Head.Trim();
+            }
+
+            return "unknown";
+        }
+
+        static bool SameGitPath(string a, string b)
+        {
+            try
+            {
+                var comparison = OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal;
+                return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), comparison);
+            }
+            catch
+            {
+                return false;
+            }
+        }
     }
 
     private async Task ClearWorktreeColumnsOnSelfAndDescendantsAsync(CancellationToken cancellationToken)
@@ -2238,8 +2347,11 @@ public abstract class DysonAgentSession
             sb.AppendLine(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate.Trim());
             if (MetaAgentDroneUseWorktree.Value == false)
             {
+                var rebound = MetaAgentDroneExistingWorktreePath.Value;
                 sb.AppendLine(
-                    "useWorktree is false: work in the parent's checkout. Do not switch or move branches. Completion does not merge.");
+                    string.IsNullOrWhiteSpace(rebound)
+                        ? "useWorktree is false: work in the parent's checkout. Do not switch or move branches. Completion does not merge."
+                        : $"useWorktree is false: tools are rooted at {rebound.Trim()}. This is not the registered checkout. Do not create a worktree. Completion does not merge or delete one.");
             }
 
             sb.AppendLine();

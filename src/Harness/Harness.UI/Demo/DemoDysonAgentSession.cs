@@ -246,10 +246,10 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             : DysonProviderKinds.Demo;
         var registered = _registeredWorkDirectoryPath ?? _workDirectoryPath ?? "";
         var childWorkDirectory = suppressWorktree && !string.IsNullOrWhiteSpace(registered)
-            ? registered
+            ? ResolveMetaAgentDroneSuppressWorkDirectory(registered)
             : _workDirectoryPath;
         var worktreePrompt = suppressWorktree
-            ? DysonAgentSystemPrompts.MetaAgentDroneSharedCheckoutPromptBlock
+            ? MetaAgentDroneSuppressPromptBlock()
             : DysonAgentSystemPrompts.BuildWorktreePromptBlock(
                 childWorktreeEnabled, childWorktreePath, childWorktreeBranch, registered);
         var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(

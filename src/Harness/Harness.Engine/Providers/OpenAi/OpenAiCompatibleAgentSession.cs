@@ -377,12 +377,14 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         var childWorktreeEnabled = suppressWorktree ? false : isolateWorktree || WorktreeEnabled;
         var childWorktreePath = suppressWorktree || isolateWorktree ? null : WorktreeAbsolutePath;
         var childWorktreeBranch = suppressWorktree || isolateWorktree ? null : WorktreeBranch;
-        var childWorkDirectory = suppressWorktree ? _registeredWorkDirectoryPath : _workDirectoryPath;
+        var childWorkDirectory = suppressWorktree
+            ? ResolveMetaAgentDroneSuppressWorkDirectory(_registeredWorkDirectoryPath)
+            : _workDirectoryPath;
 
         var providerKind = DysonProviderKinds.EffectiveKind(
             childProvider.ProviderKind, childProvider.BaseUrl, childProvider.ApiKey);
         var worktreePrompt = suppressWorktree
-            ? DysonAgentSystemPrompts.MetaAgentDroneSharedCheckoutPromptBlock
+            ? MetaAgentDroneSuppressPromptBlock()
             : DysonAgentSystemPrompts.BuildWorktreePromptBlock(
                 childWorktreeEnabled, childWorktreePath, childWorktreeBranch, _registeredWorkDirectoryPath);
         var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(

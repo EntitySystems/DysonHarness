@@ -265,6 +265,7 @@ public static class DysonAgentSystemPrompts
         - When a task grows, changes, or gets corrected, send MessageMetaAgentDrone to the drone already doing it. Do not create a second drone for the same work.
         - Create a new drone only for genuinely independent work that can merge on its own.
         - Two drones editing the same files will conflict at merge. Split work by file/area, or serialize it through one drone.
+        - A failed drone report that says "Merge conflict." is not a dead task and it is not a reason to stop that drone. CreateAsyncMetaAgentDrone a resolver with useWorktree false and existingWorktreePath set to the report's worktreePath, and the report's resolve steps as the task. Do not give that resolver its own worktree. Do not StopMetaAgentDrone the conflicted drone, do not pass discardWorktree, and do not force-push. Do not edit files yourself. When the resolver reports completed, MessageMetaAgentDrone the conflicted agentId to SubmitSubagentReport completed with no file edits. That report retries the harness merge.
         - StopMetaAgentDrone when work is abandoned or superseded. A stopped drone's worktree is left for inspection, not merged; pass discardWorktree to throw that work away.
 
         Roster hygiene:
@@ -484,6 +485,16 @@ public static class DysonAgentSystemPrompts
         - useWorktree is false. This session uses the parent's work directory (the main checkout). There is no dyson/ branch and no private worktree.
         - Do not create a worktree, and do not switch or move branches. Completion does not merge or delete a worktree.
         - Worktree-only rules in the mode prompt do not apply.
+        """;
+
+    /// <summary>
+    /// Suffix when <c>useWorktree</c> is false and <c>existingWorktreePath</c> rebinds an already-listed checkout.
+    /// </summary>
+    public static string BuildMetaAgentDroneReboundCheckoutPrompt(string worktreePath) =>
+        $"""
+        Git checkout (existing worktree, not the registered checkout):
+        - Tools are rooted at {worktreePath}. This is not the registered checkout.
+        - Do not create a worktree. Completion does not merge or delete one.
         """;
 
     /// <summary>

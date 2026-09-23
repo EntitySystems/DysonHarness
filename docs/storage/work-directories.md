@@ -100,7 +100,7 @@ Layout (engine `DysonSessionWorktree.Ensure` / `Merge` / `Remove`):
 - Branch: `dyson/{first 8 hex of sessionId:N}` from `HEAD`
 - Untracked harness copy (dest-missing only): `openrules.json`, `AGENTS.md`, `.dyson/mcp/`, `.dyson/skills/`. Do not copy `.dyson/plans` or `.dyson/temp`.
 
-Created only on the first **Work**-mode mutating start (`DysonUiHost.PromptAsync` user prompt, or `BuildPendingPlanAsync` before BeginBuildPlan) when the root has `WorktreeEnabled` and no path yet. Plan / Ask / Review never create one. Empty “Start new session” does not leave orphan checkouts. If enabled but the workdir is not a git repo, that send fails with the exact error `Worktree is enabled but this work directory is not a git repository.`
+Created only on the first **Work**-mode mutating start (`DysonUiHost.PromptAsync` user prompt, or `BuildPendingPlanAsync` before BeginBuildPlan) when the root has `WorktreeEnabled` and no path yet. Plan / Ask / Review never create one. A Meta Agent Drone spawn with `useWorktree` true also calls `Ensure` (not only the first Work send). `useWorktree` false does not call `Ensure`. Optional `existingWorktreePath` only changes that child’s work directory; it does not create a worktree or set worktree columns. Empty “Start new session” does not leave orphan checkouts. If enabled but the workdir is not a git repo, that send fails with the exact error `Worktree is enabled but this work directory is not a git repository.`
 
 Custom MCP host stays **workdir-id** keyed (one `.dyson/mcp` config / refcount). Tool cwd is the session filesystem (`NativeRootPath` — worktree when bound).
 

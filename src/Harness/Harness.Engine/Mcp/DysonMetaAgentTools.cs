@@ -164,6 +164,7 @@ public static class DysonMetaAgentTools
                 "Spawn a Meta Agent Drone (non-blocking). " +
                 "File-mutating tasks (writing code, editing the repo) should set useWorktree true; non-coding tasks (ops, testing, CI, pushes, read-and-run) should set useWorktree false. " +
                 "true: own git worktree and branch, merged on completion. false: parent's work directory, no branch, no merge. " +
+                "Optional existingWorktreePath (only with useWorktree false) rebinds to an already-listed worktree without allocating one. " +
                 "Returns immediately with droneId / persistenceId / worktreeBranch (null when useWorktree is false); never waits. " +
                 "purpose=build (default) implements; purpose=plan explores then SubmitMetaPlan. " +
                 "Call ListMetaAgentDrones before dispatching. Reuse an existing drone with MessageMetaAgentDrone " +
@@ -176,6 +177,10 @@ public static class DysonMetaAgentTools
                     "useWorktree": {
                       "type": "boolean",
                       "description": "Required, no default. File-mutating tasks (writing code, editing the repo) should set useWorktree true; non-coding tasks (ops, testing, CI, pushes, read-and-run) should set useWorktree false. true forks a git worktree and merges on completion; false stays on the parent checkout with no branch and no merge."
+                    },
+                    "existingWorktreePath": {
+                      "type": "string",
+                      "description": "Optional. Only with useWorktree false. Absolute path of an already-listed worktree. Rebinds tools there, does not call Ensure, and does not set worktree columns so completion does not merge. Omit to stay on the registered checkout. Error if set with useWorktree true."
                     },
                     "purpose": {
                       "type": "string",

@@ -45,6 +45,9 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "Remember the subagentId and eventId", "Meta Agent ForMode");
         MustContain(text, "Do not mention the continuation", "Meta Agent ForMode");
         MustNotContain(text, "reports failed with the question", "Meta Agent ForMode");
+        MustContain(text, "useWorktree false", "Meta Agent ForMode");
+        MustContain(text, "existingWorktreePath", "Meta Agent ForMode");
+        MustContain(text, "Do not edit files yourself", "Meta Agent ForMode");
     }
 
     private static void AssertMetaAgentDroneForMode()
