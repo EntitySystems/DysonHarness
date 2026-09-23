@@ -52,7 +52,7 @@
                     {
                         <div class="meta-chat__body turn-block__body">@MarkdownRenderer.ToHtml(item.Text)</div>
                     }
-                    @if (item.Actions.Count > 0)
+                    @if (item.Actions.Count > 0 || item.VisualizationId is not null)
                     {
                         var busy = _actionBusy.Contains(item.Key);
                         <div class="meta-chat__actions">
@@ -64,8 +64,14 @@
                                         disabled="@busy"
                                         @onclick="() => InvokeActionAsync(item, index)">@item.Actions[index].Name</button>
                             }
+                            @if (item.VisualizationId is Guid visualizationId)
+                            {
+                                <button type="button"
+                                        class="btn"
+                                        @onclick="() => OnOpenVisualization.InvokeAsync(visualizationId)">View visualization</button>
+                            }
                         </div>
-                        @if (_actionResults.TryGetValue(item.Key, out var actionText))
+                        @if (item.Actions.Count > 0 && _actionResults.TryGetValue(item.Key, out var actionText))
                         {
                             <div class="meta-chat__action-result">@actionText</div>
                         }
@@ -98,6 +104,7 @@
     [Parameter] public string EmptyMessage { get; set; } = "Tell the meta agent what to orchestrate.";
     [Parameter] public EventCallback<Guid> OnRemoveQueued { get; set; }
     [Parameter] public EventCallback<MetaChatActionClick> OnConversationAction { get; set; }
+    [Parameter] public EventCallback<Guid> OnOpenVisualization { get; set; }
 
     /// <summary>
     /// Last click text for a bubble, keyed by item key. Ephemeral: a reload restores buttons, not this.

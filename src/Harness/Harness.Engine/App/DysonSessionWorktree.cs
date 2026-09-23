@@ -127,15 +127,21 @@ public static class DysonSessionWorktree
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> MergeGates =
         new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Prefix on a content-conflict error after <c>git merge --abort</c>.</summary>
+    public const string MergeConflictAbortedPrefix = "Merge conflict aborted:";
+
     /// <summary>
     /// Merges <paramref name="branchName"/> into the registered checkout, then removes the worktree.
-    /// Merge conflicts leave the worktree in place.
+    /// Merge conflicts leave the worktree in place. <paramref name="abortConflict"/> defaults false
+    /// (UI merge keeps conflict markers). When true and unmerged paths exist, aborts that merge
+    /// before releasing the gate and returns <see cref="MergeConflictAbortedPrefix"/> plus those paths.
     /// </summary>
     public static VoidResult<string> Merge(
         string registeredWorkDirectoryAbsolutePath,
         string worktreeAbsolutePath,
         string branchName,
-        bool forceRemoveIfDirty = false)
+        bool forceRemoveIfDirty = false,
+        bool abortConflict = false)
     {
         var repo = DysonGitInfo.TryFindRootMostRepo(registeredWorkDirectoryAbsolutePath);
         if (repo.IsError)
@@ -147,7 +153,7 @@ public static class DysonSessionWorktree
         {
             var merge = DysonGitInfo.TryMergeBranch(repo.Value, branchName);
             if (merge.IsError)
-                return merge;
+                return abortConflict ? AbortContentConflict(repo.Value, merge.Error) : merge;
 
             return DysonGitInfo.TryRemoveWorktree(repo.Value, worktreeAbsolutePath, forceRemoveIfDirty);
         }
@@ -155,6 +161,20 @@ public static class DysonSessionWorktree
         {
             gate.Release();
         }
+    }
+
+    private static VoidResult<string> AbortContentConflict(string repoRoot, string mergeError)
+    {
+        var unmerged = DysonGitInfo.TryListUnmergedPaths(repoRoot);
+        if (unmerged.IsError || unmerged.Value.Count == 0)
+            return VoidResult<string>.AsError(mergeError);
+
+        var abort = DysonGitInfo.TryAbortMerge(repoRoot);
+        if (abort.IsError)
+            return VoidResult<string>.AsError(mergeError + "\n" + abort.Error);
+
+        return VoidResult<string>.AsError(
+            MergeConflictAbortedPrefix + "\n" + string.Join('\n', unmerged.Value));
     }
 
     internal static void CopyUntrackedHarnessFiles(string sourceRoot, string destRoot)

@@ -177,6 +177,10 @@ public class DysonSessionWorktreeTests
             var merge = DysonSessionWorktree.Merge(repo, wt, branch);
             Assert.True(merge.IsError);
             Assert.False(string.IsNullOrWhiteSpace(merge.Error));
+            Assert.DoesNotContain(
+                DysonSessionWorktree.MergeConflictAbortedPrefix,
+                merge.Error,
+                StringComparison.Ordinal);
 
             var listed = DysonGitInfo.TryListWorktrees(repo);
             Assert.True(listed.IsSuccess, listed.IsError ? listed.Error : null);

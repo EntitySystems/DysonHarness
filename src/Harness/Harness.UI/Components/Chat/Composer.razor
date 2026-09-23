@@ -178,7 +178,7 @@
                     <AgentModePicker SelectedMode="@SelectedAgentMode"
                                      SelectedModeChanged="SelectedAgentModeChanged" />
                     <label class="composer-chip composer-worktree @(WorktreeCheckboxDisabled ? "is-muted" : null)"
-                           title="@Host.WorktreeCheckboxTitle">
+                           title="@WorktreeCheckboxTitle">
                         <input type="checkbox"
                                checked="@Host.WorktreeChecked"
                                disabled="@WorktreeCheckboxDisabled"

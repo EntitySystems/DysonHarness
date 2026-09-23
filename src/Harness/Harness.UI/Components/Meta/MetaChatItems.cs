@@ -32,6 +32,9 @@ public readonly record struct MetaChatItem(
 
     /// <summary>Source turn for an agent DisplayInfo bubble. Null for user and queued rows.</summary>
     public Guid? TurnId { get; init; }
+
+    /// <summary>Visualization opened from a DisplayInfo bubble. Null everywhere else.</summary>
+    public Guid? VisualizationId { get; init; }
 }
 
 /// <summary>Click on a meta-chat conversation action button. Index is into that turn's actions.</summary>
@@ -133,6 +136,7 @@ public static class MetaChatItems
                 {
                     Actions = turn.ConversationActions,
                     TurnId = turn.Id,
+                    VisualizationId = turn.VisualizationId,
                 });
             }
         }

@@ -26,9 +26,21 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "BrowserWaitForNavigation", "Meta Agent ForMode");
         MustContain(text, "Reuse over re-spawn", "Meta Agent ForMode");
         MustContain(text, "You cannot touch the filesystem", "Meta Agent ForMode");
+        MustContain(text, "ListNotes", "Meta Agent ForMode");
+        MustContain(text, "CanCreateNote", "Meta Agent ForMode");
+        MustContain(text, "standing user guidelines", "Meta Agent ForMode");
+        MustNotContain(text, "The only disk access", "Meta Agent ForMode");
+        MustNotContain(text, ".dyson/scratch", "Meta Agent ForMode");
         // The meta page renders posted messages only; prose-only turns show the user nothing.
         // Pinned so the one instruction standing between the agent and a blank screen is not softened away.
         MustContain(text, "PostConversationMessage is your only voice", "Meta Agent ForMode");
+        MustContain(
+            text,
+            "Conversation actions are required whenever a posted message names something the user would open. When you PostConversationMessage and the message names a plan, a workspace file, or an http(s) URL the user would reasonably want to open, attach one action per target. Do this on status updates, questions, and results — not only when a plan is first submitted. A message may carry several actions, up to 8 (the tool maximum; do not ask for more). name is a short human label; func is one of these built-in keys and needs no RegisterConversationAction call: open_plan:{planId} opens that plan, open_file:{path} opens a work-relative file, and open_url:{url} opens an http or https link. Do not attach actions for data that is not a plan id, a workspace file, or an http(s) URL. Do not invent func keys.",
+            "Meta Agent ForMode");
+        MustContain(text, "visualizationId", "Meta Agent ForMode");
+        MustContain(text, "WriteTempFile", "Meta Agent ForMode");
+        MustContain(text, "ReadTempFile", "Meta Agent ForMode");
         // The todo list outlives the roster and the transcript; posted messages do not come back on later turns.
         MustContain(text, "ListTodos before you answer whether work was dispatched", "Meta Agent ForMode");
         MustContain(text, "A posted message is shown to the user and is not in later turns", "Meta Agent ForMode");
@@ -37,6 +49,12 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "Remember the subagentId and eventId", "Meta Agent ForMode");
         MustContain(text, "Do not mention the continuation", "Meta Agent ForMode");
         MustNotContain(text, "reports failed with the question", "Meta Agent ForMode");
+        MustContain(text, "useWorktree false", "Meta Agent ForMode");
+        MustContain(text, "existingWorktreePath", "Meta Agent ForMode");
+        MustContain(text, "StartAsyncMetaAgentDrone", "Meta Agent ForMode");
+        MustContain(text, "StartAsyncBugReviewAgent", "Meta Agent ForMode");
+        MustContain(text, "StartAsyncSecurityReviewAgent", "Meta Agent ForMode");
+        MustContain(text, "Do not edit files yourself", "Meta Agent ForMode");
     }
 
     private static void AssertMetaAgentDroneForMode()
@@ -49,6 +67,9 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "TriggerParentEvent is how you talk to the Meta Agent", "Meta Agent Drone ForMode");
         MustContain(text, "when you finish a section of the implementation", "Meta Agent Drone ForMode");
         MustContain(text, "Do not SubmitSubagentReport to ask a question or to give a status", "Meta Agent Drone ForMode");
+        MustContain(text, "StartAsyncBugReviewAgent", "Meta Agent Drone ForMode");
+        MustContain(text, "StartAsyncSecurityReviewAgent", "Meta Agent Drone ForMode");
+        MustContain(text, "StartAsyncMetaAgentDrone", "Meta Agent Drone ForMode");
         MustNotContain(text, "There is no path from you to the user", "Meta Agent Drone ForMode");
     }
 
@@ -83,6 +104,9 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "That is the final state only", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
         MustContain(text, "At each section boundary", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
         MustContain(text, "Never report failed just to ask a question or to give a status", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
+        MustContain(text, "StartAsyncBugReviewAgent", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
+        MustContain(text, "StartAsyncSecurityReviewAgent", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
+        MustContain(text, "contextFiles", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
         MustNotContain(text, "Blocked or needing a decision", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
     }
 

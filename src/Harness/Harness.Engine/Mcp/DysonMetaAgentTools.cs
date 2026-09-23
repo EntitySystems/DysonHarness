@@ -2,7 +2,8 @@ namespace DysonHarness;
 
 /// <summary>
 /// Meta Agent / Meta Agent Drone catalog: allowlist strip + meta-only tool definitions.
-/// Browser tools are kept when already on the pipeline; file, shell, search, wait, and completion tools stay absent.
+/// Browser tools are kept when already on the pipeline; project file, shell, search, wait, and completion tools stay absent.
+/// <c>WriteTempFile</c> and <c>ReadTempFile</c> are the only file tools, and they only touch generated files under <c>.dyson/temp/</c>.
 /// </summary>
 public static class DysonMetaAgentTools
 {
@@ -25,30 +26,40 @@ public static class DysonMetaAgentTools
         "LoadSkill",
     ];
 
-    /// <summary>Exact Meta Agent catalog when browser tools are not on the pipeline (no file/shell/wait/completion tools). Browser names are not listed here.</summary>
+    /// <summary>Exact Meta Agent catalog when browser tools are not on the pipeline (no project file/shell/wait/completion tools). <c>WriteTempFile</c> and <c>ReadTempFile</c> are temp-scoped. Browser names are not listed here.</summary>
     public static readonly IReadOnlyList<string> AllowedToolNames =
     [
         "BeginBuildPlan",
+        "CanCreateNote",
         "CompactConversation",
-        "CreateAsyncMetaAgentDrone",
+        "CreateNote",
         "CreateTodo",
         "DeleteMetaAgent",
+        "DeleteNote",
         "DeletePlan",
         "GetOpenRulesConfig",
         "ListMetaAgentDrones",
+        "ListNotes",
         "ListPlans",
         "ListTodos",
         "LoadSkill",
         "MessageMetaAgentDrone",
         "PostConversationMessage",
         "ReadMetaAgentDroneLog",
+        "ReadTempFile",
         "RemoveTodos",
+        "RenderHtmlVisualization",
         "RespondToSubagentEvent",
         "SetPlanStatus",
+        "StartAsyncBugReviewAgent",
         "StartAsyncExploreAgent",
+        "StartAsyncMetaAgentDrone",
+        "StartAsyncSecurityReviewAgent",
         "StopMetaAgentDrone",
         "SummarizeTurns",
+        "UpdateNote",
         "UpdateTodo",
+        "WriteTempFile",
     ];
 
     /// <summary>
@@ -95,6 +106,22 @@ public static class DysonMetaAgentTools
         "WaitForSeconds",
     ];
 
+    private const string ReadOnlyChildInputSchemaJson = """
+        {
+          "type": "object",
+          "properties": {
+            "task": { "type": "string", "description": "Assigned investigation brief." },
+            "context": { "type": "string", "description": "Optional extra context or constraints." },
+            "contextFiles": {
+              "type": "array",
+              "description": "Optional work-relative file paths preloaded onto the explore's first turn as File context.",
+              "items": { "type": "string", "description": "Work-relative or workspace file path." }
+            }
+          },
+          "required": ["task"]
+        }
+        """;
+
     private static readonly HashSet<string> AllowedToolNameSet = new(AllowedToolNames, StringComparer.Ordinal);
 
     /// <summary>
@@ -133,7 +160,7 @@ public static class DysonMetaAgentTools
 
     /// <summary>
     /// Meta Agent Drone: keep the Work catalog (including <c>TriggerParentEvent</c>),
-    /// drop Ask/dialog FromParent tools, add <c>ReadMetaPlan</c> and a <c>SubmitMetaPlan</c> seam.
+    /// drop Ask/dialog FromParent tools, add the two review tools, <c>ReadMetaPlan</c>, and a <c>SubmitMetaPlan</c> seam.
     /// </summary>
     public static void ApplyDroneAllowlist(DysonMcpPipeline pipeline)
     {
@@ -150,11 +177,13 @@ public static class DysonMetaAgentTools
     {
         yield return new DysonMcpTool
         {
-            Name = "CreateAsyncMetaAgentDrone",
+            Name = "StartAsyncMetaAgentDrone",
             Description =
-                "Spawn a Meta Agent Drone for anything that changes the repository (non-blocking). " +
-                "Each drone gets its own git worktree and merges on completion. " +
-                "Returns immediately with droneId / persistenceId / worktreeBranch; never waits. " +
+                "Spawn a Meta Agent Drone (non-blocking). " +
+                "File-mutating tasks (writing code, editing the repo) should set useWorktree true; non-coding tasks (ops, testing, CI, pushes, read-and-run) should set useWorktree false. " +
+                "true: own git worktree and branch, merged on completion. false: parent's work directory, no branch, no merge. " +
+                "Optional existingWorktreePath (only with useWorktree false) rebinds to an already-listed worktree without allocating one. " +
+                "Returns immediately with droneId / persistenceId / worktreeBranch (null when useWorktree is false); never waits. " +
                 "purpose=build (default) implements; purpose=plan explores then SubmitMetaPlan. " +
                 "Call ListMetaAgentDrones before dispatching. Reuse an existing drone with MessageMetaAgentDrone " +
                 "instead of spawning a second one for the same work.",
@@ -163,6 +192,14 @@ public static class DysonMetaAgentTools
                   "type": "object",
                   "properties": {
                     "task": { "type": "string", "description": "Assigned task brief for the drone. Goal, constraints, and acceptance criteria." },
+                    "useWorktree": {
+                      "type": "boolean",
+                      "description": "Required, no default. File-mutating tasks (writing code, editing the repo) should set useWorktree true; non-coding tasks (ops, testing, CI, pushes, read-and-run) should set useWorktree false. true forks a git worktree and merges on completion; false stays on the parent checkout with no branch and no merge."
+                    },
+                    "existingWorktreePath": {
+                      "type": "string",
+                      "description": "Optional. Only with useWorktree false. Absolute path of an already-listed worktree. Rebinds tools there, does not call Ensure, and does not set worktree columns so completion does not merge. Omit to stay on the registered checkout. Error if set with useWorktree true."
+                    },
                     "purpose": {
                       "type": "string",
                       "enum": ["build", "plan"],
@@ -198,9 +235,14 @@ public static class DysonMetaAgentTools
                     "reasoningEffort": {
                       "type": "string",
                       "description": "Optional freeform reasoning_effort. Omit keeps the parent or slug default."
+                    },
+                    "contextFiles": {
+                      "type": "array",
+                      "description": "Optional work-relative file paths preloaded onto the explore's first turn as File context.",
+                      "items": { "type": "string", "description": "Work-relative or workspace file path." }
                     }
                   },
-                  "required": ["task"]
+                  "required": ["task", "useWorktree"]
                 }
                 """,
         };
@@ -212,28 +254,17 @@ public static class DysonMetaAgentTools
                 "Spawn a read-only Explore agent (non-blocking). Returns immediately with agentId / persistenceId; never waits. " +
                 "Use before briefing a drone when you need a fact about the code. " +
                 "Call ListMetaAgentDrones before dispatching.",
-            InputSchemaJson = """
-                {
-                  "type": "object",
-                  "properties": {
-                    "task": { "type": "string", "description": "Assigned investigation brief." },
-                    "context": { "type": "string", "description": "Optional extra context or constraints." },
-                    "contextFiles": {
-                      "type": "array",
-                      "description": "Optional work-relative file paths preloaded onto the explore's first turn as File context.",
-                      "items": { "type": "string", "description": "Work-relative or workspace file path." }
-                    }
-                  },
-                  "required": ["task"]
-                }
-                """,
+            InputSchemaJson = ReadOnlyChildInputSchemaJson,
         };
+
+        foreach (var tool in CreateReviewTools())
+            yield return tool;
 
         yield return new DysonMcpTool
         {
             Name = "ListMetaAgentDrones",
             Description =
-                "Roster of this session's drones and explores, including last report. " +
+                "Roster of this session's drones, explores, or reviews, including last report. " +
                 "Call before dispatching: old turns are deleted permanently, so an id you cannot see may still be a running drone. " +
                 "Plain stable projection — no notices or counts.",
             InputSchemaJson = """
@@ -248,7 +279,7 @@ public static class DysonMetaAgentTools
         {
             Name = "ReadMetaAgentDroneLog",
             Description =
-                "Read recent log lines for a drone or explore by agentId. " +
+                "Read recent log lines for a drone, explore, or review by agentId. " +
                 "Do not idle-poll; read only when the user asks about progress or a report looks wrong.",
             InputSchemaJson = """
                 {
@@ -257,7 +288,7 @@ public static class DysonMetaAgentTools
                     "agentId": {
                       "type": "integer",
                       "minimum": 1,
-                      "description": "Runtime id of the drone or explore."
+                      "description": "Runtime id of the drone, explore, or review."
                     },
                     "maxLines": {
                       "type": "integer",
@@ -273,7 +304,7 @@ public static class DysonMetaAgentTools
         {
             Name = "StopMetaAgentDrone",
             Description =
-                "Stop a drone or explore. A stopped drone's worktree is left for inspection, not merged; " +
+                "Stop a drone, explore, or review. A stopped drone's worktree is left for inspection, not merged; " +
                 "pass discardWorktree to throw that work away. Non-blocking.",
             InputSchemaJson = """
                 {
@@ -282,7 +313,7 @@ public static class DysonMetaAgentTools
                     "agentId": {
                       "type": "integer",
                       "minimum": 1,
-                      "description": "Runtime id of the drone or explore."
+                      "description": "Runtime id of the drone, explore, or review."
                     },
                     "reason": { "type": "string", "description": "Optional reason recorded on the stopped session." },
                     "discardWorktree": {
@@ -299,7 +330,7 @@ public static class DysonMetaAgentTools
         {
             Name = "MessageMetaAgentDrone",
             Description =
-                "Send a follow-up instruction to an existing drone or explore (reopens a terminal drone). " +
+                "Send a follow-up instruction to an existing drone, explore, or review (reopens a terminal drone). " +
                 "Prefer this over creating a second drone for the same work. Non-blocking.",
             InputSchemaJson = """
                 {
@@ -308,7 +339,7 @@ public static class DysonMetaAgentTools
                     "agentId": {
                       "type": "integer",
                       "minimum": 1,
-                      "description": "Runtime id of the drone or explore."
+                      "description": "Runtime id of the drone, explore, or review."
                     },
                     "message": { "type": "string", "description": "Instruction injected into the child." },
                     "interrupt": {
@@ -325,7 +356,7 @@ public static class DysonMetaAgentTools
         {
             Name = "DeleteMetaAgent",
             Description =
-                "Permanently delete a finished drone or explore and its children. " +
+                "Permanently delete a finished drone, explore, or review and its children. " +
                 "Refuses while the agent or any descendant is still running, and refuses while its worktree is unmerged. " +
                 "Before deleting, keep anything worth keeping in a todo or a posted message.",
             InputSchemaJson = """
@@ -350,8 +381,12 @@ public static class DysonMetaAgentTools
             Description =
                 "Post markdown the user should see in the meta conversation. " +
                 "Assistant text is not shown; use this for everything the user should see. " +
-                "Optional actions add buttons { name, func } where func is a key registered on this session, not source code. " +
-                "Buttons are not run until the user clicks. Omit actions or pass [] for a plain markdown bubble. " +
+                "Optional actions add buttons { name, func } where func is one string. " +
+                "open_plan:{planId}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. " +
+                "Buttons are not run until the user clicks. " +
+                "When the message names a plan, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. " +
+                "Omit actions or pass [] for a plain markdown bubble. " +
+                "visualizationId is separate from actions. " +
                 "Does not end the turn.",
             InputSchemaJson = """
                 {
@@ -361,7 +396,7 @@ public static class DysonMetaAgentTools
                     "actions": {
                       "type": "array",
                       "maxItems": 8,
-                      "description": "Optional buttons. Not run until the user clicks. Each func is a key already registered on this session, not source code. Omit or [] for a plain markdown bubble.",
+                      "description": "Optional buttons. func is one string. open_plan:{planId}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. Not run until the user clicks. When the message names a plan, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. Omit or [] for a plain markdown bubble.",
                       "items": {
                         "type": "object",
                         "required": ["name", "func"],
@@ -370,6 +405,10 @@ public static class DysonMetaAgentTools
                           "func": { "type": "string", "description": "Lookup key. Not source code." }
                         }
                       }
+                    },
+                    "visualizationId": {
+                      "type": "string",
+                      "description": "Optional GUID returned by RenderHtmlVisualization. Adds one button that opens that visualization. Not a func key. Omit or null for no visualization button."
                     }
                   },
                   "required": ["message"]
@@ -488,10 +527,180 @@ public static class DysonMetaAgentTools
                 }
                 """,
         };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ListNotes",
+            Description =
+                "List your scratch notes. Returns each note's name and token count, never the note text. Call this to see what you already have before you update or delete. This does not say whether a write fits; call CanCreateNote before CreateNote or UpdateNote.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {}
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "CanCreateNote",
+            Description =
+                "Check whether a scratch-note write is allowed. Call this before every CreateNote or UpdateNote. Caps: 20 notes, 1000 tokens each, 20000 tokens total. Optional name and content check that write (a new name is a create, an existing name is an update). With no arguments, reports whether another note can be created, plus the current totals. Returns allowed, reason, noteCount, totalTokens, and the caps. Does not list note names; call ListNotes for that. Does not write.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string", "description": "Optional note name. A new name is a create; an existing name is an update." },
+                    "content": { "type": "string", "description": "Optional proposed full text. May be empty." }
+                  }
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "CreateNote",
+            Description =
+                "Create a new scratch note. Call CanCreateNote first. name is the note's name and must end in .md, for example guidelines.md. content is the full text and may be empty. The text must be at most 1000 tokens. Fails if that name already exists (use UpdateNote), if this would be the 21st note, or if all notes together would pass 20000 tokens. Returns the name and the token count.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string", "description": "Note name ending in .md, for example guidelines.md." },
+                    "content": { "type": "string", "description": "Full text. May be empty." }
+                  },
+                  "required": ["name", "content"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "UpdateNote",
+            Description =
+                "Edit an existing scratch note. Call CanCreateNote first. path is the note name from ListNotes, the same kind of name CreateNote takes, for example guidelines.md. Pass content to replace the whole note, or old_text and new_text, or edits. The note after the edit must be at most 1000 tokens, and all notes together must stay at most 20000. A missing name is an error; use CreateNote.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "path": { "type": "string", "description": "Path of the file to update." },
+                    "old_text": {
+                      "type": "string",
+                      "description": "Text span to replace (single edit). Must be unique unless replace_all. Do not include ReadFile 'N|' prefixes."
+                    },
+                    "new_text": { "type": "string", "description": "Replacement text for old_text." },
+                    "replace_all": {
+                      "type": "boolean",
+                      "description": "If true, replace every occurrence of old_text (default false). Also applies as default for edits[] items unless overridden."
+                    },
+                    "edits": {
+                      "type": "array",
+                      "description": "Ordered list of targeted replacements when multiple hunks are needed.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "old_text": { "type": "string", "description": "Text span to replace. No ReadFile 'N|' prefixes." },
+                          "new_text": { "type": "string" },
+                          "replace_all": { "type": "boolean", "description": "Replace every occurrence for this edit (default: top-level replace_all)." }
+                        },
+                        "required": ["old_text", "new_text"]
+                      }
+                    },
+                    "content": {
+                      "type": "string",
+                      "description": "Full-file rewrite only when targeted edits are impractical."
+                    }
+                  },
+                  "required": ["path"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "DeleteNote",
+            Description =
+                "Delete one scratch note by the name ListNotes showed. Allowed even when you are at 20 notes or a note is over 1000 tokens, so a bad note can be removed. A missing name is an error. No token check.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string", "description": "Note name ending in .md." }
+                  },
+                  "required": ["name"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "WriteTempFile",
+            Description =
+                "Write a temporary visualization asset under .dyson/temp/. path is a leaf file name with an extension, such as chart.html, chart.css, or chart.js. The harness sanitizes it, inserts a random suffix before the extension, and returns the exact workspace-relative path. Pass that path verbatim as a RenderHtmlVisualization tempFile in a later stage. This does not create or overwrite project files.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "Leaf file name with an extension, such as chart.html. Not a directory and not a .dyson/temp/ path."
+                    },
+                    "content": {
+                      "type": "string",
+                      "description": "UTF-8 text to write. Capped at 512 KiB."
+                    }
+                  },
+                  "required": ["path", "content"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ReadTempFile",
+            Description =
+                "Read a temporary file previously returned by WriteTempFile. path must be that exact workspace-relative path under .dyson/temp/. Refuses every other path. Returns JSON with path, content, and byteLength.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "Exact workspace-relative path returned by WriteTempFile. A leaf under .dyson/temp/ with the random suffix."
+                    }
+                  },
+                  "required": ["path"]
+                }
+                """,
+        };
+    }
+
+    private static IEnumerable<DysonMcpTool> CreateReviewTools()
+    {
+        yield return new DysonMcpTool
+        {
+            Name = "StartAsyncBugReviewAgent",
+            Description =
+                "Spawn a read-only Bug Review that reports findings, does not implement fixes, returns {agentId, persistenceId}, never waits, and does not get its own worktree.",
+            InputSchemaJson = ReadOnlyChildInputSchemaJson,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "StartAsyncSecurityReviewAgent",
+            Description =
+                "Spawn a read-only Security Review that reports findings, does not implement fixes, returns {agentId, persistenceId}, never waits, and does not get its own worktree.",
+            InputSchemaJson = ReadOnlyChildInputSchemaJson,
+        };
     }
 
     private static IEnumerable<DysonMcpTool> CreateMetaAgentDroneTools()
     {
+        foreach (var tool in CreateReviewTools())
+            yield return tool;
+
         yield return new DysonMcpTool
         {
             Name = "ReadMetaPlan",

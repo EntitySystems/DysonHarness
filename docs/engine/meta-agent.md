@@ -8,8 +8,9 @@ Never-blocking orchestrator plus isolated implementer. Page-launched; not in the
 
 `ValidateSubagentSpawn` (`DysonMetaAgentSpawnGateTests`):
 
-- Meta Agent → Meta Agent Drone or Explore only. Meta Agent itself cannot be a child (`"Meta Agent cannot be used as a subagent mode (page-launched only)."`).
-- Meta Agent Drone → Explore or classic Drone. Nested Meta Agent Drone is rejected (`"No multi-layer Meta Agent Drones; spawn a Drone or Explore."`).
+- Meta Agent → Meta Agent Drone, Explore, Bug Review, or Security Review. Meta Agent itself cannot be a child (`"Meta Agent cannot be used as a subagent mode (page-launched only)."`).
+- Meta Agent Drone → Explore, classic Drone, Bug Review, or Security Review. Nested Meta Agent Drone is rejected (`"No multi-layer Meta Agent Drones; spawn a Drone or Explore."`).
+- Classic Drone is still Explore only (`"Drone may only spawn Explore subagents."`). Explore still cannot spawn, including these reviews (`"Explore cannot spawn subagents."`).
 - Anyone else spawning Meta Agent Drone is rejected (`"Meta Agent Drone may only be spawned by a Meta Agent session."`).
 
 ## Toolset (allowlist strip)
@@ -22,24 +23,38 @@ Kept:
 
 | Tool | Notes |
 | ---- | ----- |
-| `CreateAsyncMetaAgentDrone` | `CreateChildAsync(MetaAgentDrone)`. `purpose` `build` (default) or `plan` (`plan` prepends the explore-then-`SubmitMetaPlan` mandate onto `task`). Returns `{droneId, persistenceId, worktreeBranch}`. No `contextFiles` — the meta agent has no filesystem. Never waits. |
-| `StartAsyncExploreAgent` | `CreateChildAsync(Explore)`. Returns `{agentId, persistenceId}`. Does take `contextFiles`. Never waits. |
+| `StartAsyncMetaAgentDrone` | `CreateChildAsync(MetaAgentDrone)`. Required boolean `useWorktree` (no default): file-mutating tasks (writing code, editing the repo) should set true (own worktree, merge on completion); non-coding tasks (ops, testing, CI, pushes, read-and-run) should set false (parent checkout, no branch, no merge). Optional `existingWorktreePath`: false plus a path rebinds to an already-listed worktree and does not call `Ensure` or set worktree columns; false without it stays on the registered checkout; true still forks; true plus a path errors before spawn. `BeginBuildPlan` still passes true. `purpose` `build` (default) or `plan` (`plan` prepends the explore-then-`SubmitMetaPlan` mandate onto `task`). Returns `{droneId, persistenceId, worktreeBranch}` (`worktreeBranch` null when false). Optional `contextFiles` (the only way the meta agent passes paths; still no filesystem tools). WriteTempFile and ReadTempFile are the only file tools, and they only touch generated files under .dyson/temp/. Never waits. |
+| `StartAsyncExploreAgent` | `CreateChildAsync(Explore)` only. Returns `{agentId, persistenceId}`. Optional `context` and `contextFiles`. Never waits. Does not take `useWorktree` or `existingWorktreePath`. |
+| `StartAsyncBugReviewAgent` | `CreateChildAsync(Bug Review)`. Optional `context` and `contextFiles`. Returns `{agentId, persistenceId}`. Never waits. No `BindOwnWorktree`, no `useWorktree`, no `existingWorktreePath`. |
+| `StartAsyncSecurityReviewAgent` | `CreateChildAsync(Security Review)`. Optional `context` and `contextFiles`. Returns `{agentId, persistenceId}`. Never waits. No `BindOwnWorktree`, no `useWorktree`, no `existingWorktreePath`. |
 | `ListMetaAgentDrones` | `FormatChildRosterJson(includeReports: true)` — `kind` (`drone` / `explore` / `other`), `worktreeBranch` (null for Explore), `lastReport`, `finishedAt`, plus the `ListSubagents` fields. Plain stable projection: no notices or counts (`DysonMetaAgentToolsetTests` byte-identical across calls). Prune pressure lives in the [maintenance tick](README.md#meta-agent-maintenance-tick), not here, so the cached prompt prefix is not busted on every dispatch. |
 | `ReadMetaAgentDroneLog` | `InspectSubagentLog` / `SnapshotLog`. In-memory; empty after process restart even though the child session row survives. |
 | `StopMetaAgentDrone` | `StopSubagentAsync`. Optional `discardWorktree` → `DysonSessionWorktree.Remove(..., force: true)` and clears worktree columns. |
 | `MessageMetaAgentDrone` | `TriggerSubagentEventAsync` (reopens `Completed`/`Failed`). |
 | `DeleteMetaAgent` | Terminal-only (walks descendants); then `_store.DeleteSessionAsync` (unmerged worktree still fails with the existing merge-or-delete message) and `UnregisterSubagent`. |
-| `PostConversationMessage` | `AppendDisplayInfoTurn`. Optional `actions` of `{ name, func }` where `func` is a string key registered on the session. Buttons render on the meta bubble; click invokes that key. A missing key or a failed func is `Result` text on the bubble and the message stays. Still `{ok:true}`. Still does not end the turn. Still not in the provider transcript. Assistant text is not shown on the meta page — this is the user-visible channel. |
+| `PostConversationMessage` | `AppendDisplayInfoTurn`. Optional `actions` of `{ name, func }`. `open_plan:{id}`, `open_file:{path}`, and `open_url:{url}` are built-in and resolved on click without `RegisterConversationAction`. Any other key still uses the in-memory map (empty after restart; not copied to children). A bad id, a path outside the work directory, a non-http(s) URL, an unknown key, or a failed func is `Result` text on the bubble and the message stays. `MetaAgentDirective` (Talking to the user) instructs the model to attach one action per plan, workspace file, or http(s) URL the user would open, on status updates, questions, and results, up to 8. Meta Agent Drone has no `PostConversationMessage`. Optional `visualizationId` is separate from `actions`: a GUID of a successful visualization on this session adds a button that is not a func. Unknown or malformed is a tool error and no turn. Still `{ok:true}` when it posts. Still does not end the turn. Still not in the provider transcript. Assistant text is not shown on the meta page — this is the user-visible channel. |
 | `CompactConversation` | Enqueues `DysonFullSummarizeFlow.CreateTurn()` and **ends the current turn**. |
 | `RemoveTodos` | Runtime `_session.Mode == MetaAgent` check. `DeleteTodo` is not in the catalog. |
 | `ListPlans` / `SetPlanStatus` / `BeginBuildPlan` / `DeletePlan` | Plan tools below. |
+| `ListNotes` | Name and token count only. No body, no caps, no `allowed`. |
+| `CanCreateNote` | Pre-write budget check. Optional `name` and `content`. No roster. Does not write. |
+| `CreateNote` | New note. Fails if the name exists, if this would be note 21, or if a token cap would break. |
+| `UpdateNote` | Same edit arguments as `WriteFile` (`content`, or `old_text`/`new_text`, or `edits`) on an existing note. Missing name is an error. |
+| `DeleteNote` | Deletes one note. No token check. |
+| `RenderHtmlVisualization` | Root allowlist only (the themed pipeline instance, not a second registration). Inline `content` or a `tempFile` whose path came from `WriteTempFile`. Ack JSON includes `visualizationId`. |
+| `WriteTempFile` | Meta Agent only. Writes a generated leaf under `.dyson/temp/` via `CreateTemporaryFileAsync`. Not a project file. |
+| `ReadTempFile` | Meta Agent only. Reads a generated `.dyson/temp/` leaf. Refuses every other path. |
 | `GetOpenRulesConfig` / `LoadSkill` | Rules without files. |
 | `SummarizeTurns` / `CreateTodo` / `ListTodos` / `UpdateTodo` | Shared schemas. |
 | Browser tools (`CreateBrowserTools`) | Present only when `BrowserControl` is set and the name survived the denylist. Not in `AllowedToolNames`. `BrowserWaitForSelector` and `BrowserWaitForNavigation` return in this turn, bounded by required `timeoutMs`; they are not a stand-in for `WaitForSubagent`. A long `timeoutMs` stalls the orchestrator until the call returns. |
 
 Todos are the record of dispatches; posted messages are not in later transcripts.
 
-Structurally absent (not an exhaustive list — see `ExcludedToolNames`): file/shell/search tools, `WaitForSubagent`, `StartSubagent` and the classic subagent quartet, `AskQuestion` / `PromptUserDialog` (they block), completion tools, `SubmitSubagentReport`, `DropTurnContext` / `RestoreTurnContext`, `StartNewTurn` / `ExpandThoughtProcess`, `GetDateTime`, `RenameSession`, `InitializeOpenRules`, `SubmitPlan` / `EditPlan`.
+### Scratch notes
+
+Root Meta Agent only (`ListNotes`, `CanCreateNote`, `CreateNote`, `UpdateNote`, `DeleteNote`). Not on the drone, Work, Explore, or Plan catalogs. Files are `.dyson/scratch/*.md` on the session work root, already gitignored by `**/.dyson/`. `DysonScratchNotes.CheckWriteAsync` is the one scan for the roster and the budget: 20 notes, 1000 tokens each (`DysonTiktokenTokenCounter`), 20000 total. `ListNotes` returns `{name, tokens}` sorted by name and nothing else. There is no `ReadNote`, and note text is not copied into the system prompt. `CanCreateNote` returns `allowed`, `reason`, `noteCount`, `totalTokens`, `noteTokens`, and the three caps — no names and no bodies. Create and update call that check; they do not remember that `CanCreateNote` ran. Delete has no cap. The directive still opens with "You cannot touch the filesystem" and does not name this directory.
+
+Structurally absent (not an exhaustive list — see `ExcludedToolNames`): file/shell/search tools except `WriteTempFile` and `ReadTempFile` (generated `.dyson/temp/` leaves only), `WaitForSubagent`, `StartSubagent` and the classic subagent quartet, `AskQuestion` / `PromptUserDialog` (they block), completion tools, `SubmitSubagentReport`, `DropTurnContext` / `RestoreTurnContext`, `StartNewTurn` / `ExpandThoughtProcess`, `GetDateTime`, `RenameSession`, `InitializeOpenRules`, `SubmitPlan` / `EditPlan`.
 
 ### `LoadSkill` Literal gate
 
@@ -47,11 +62,11 @@ Root + AutoInclude bodies are already in the system prompt. `LoadSkill` still ru
 
 ### Meta Agent Drone catalog
 
-`ApplyDroneAllowlist`: Work catalog minus `AskQuestionFromParent` and `PromptUserDialogFromParent` only (`TriggerParentEvent` stays), plus `ReadMetaPlan` and `SubmitMetaPlan`. Questions and section-boundary status pings go up as `TriggerParentEvent` with kind `message`; the parent answers with `RespondToSubagentEvent` — immediately for a status (and posts it to the user), after the user decides for a question. `SubmitSubagentReport` stays. Covered by `DysonMetaAgentToolsetTests`.
+`ApplyDroneAllowlist`: Work catalog minus `AskQuestionFromParent` and `PromptUserDialogFromParent` only (`TriggerParentEvent` stays), plus `ReadMetaPlan` and `SubmitMetaPlan`. It also adds `StartAsyncBugReviewAgent` and `StartAsyncSecurityReviewAgent` (not `StartAsyncExploreAgent`, not `StartAsyncMetaAgentDrone`). Those reviews use the same `CreateChildAsync` path as Explore and inherit the drone checkout. The drone waits with the `WaitForSubagent` it already has. `StartSubagent` is still how it spawns Explore and classic Drone. The review tools do not take `useWorktree` or `existingWorktreePath`. Questions and section-boundary status pings go up as `TriggerParentEvent` with kind `message`; the parent answers with `RespondToSubagentEvent` — immediately for a status (and posts it to the user), after the user decides for a question. `SubmitSubagentReport` stays. Covered by `DysonMetaAgentToolsetTests`.
 
 A parent-event continuation is kind `ParentEvent` (20): it stays in the session transcript and is not a meta-chat bubble, and a posted message may relay the status or question and must not name the event.
 
-As built, `CreateChildAsync` still **copies the parent's `Worktree*`** onto every child (demo + OpenAI). Meta Agent Drones do not get their own worktree at spawn; `worktreeBranch` in the create result is whatever the parent had. Auto-merge on completed report is not implemented. `EnsureSessionWorktreeIfNeededAsync` still early-returns when `session.Parent is not null`.
+`StartAsyncMetaAgentDrone` requires boolean `useWorktree` (no default). File-mutating tasks should set it true: own git worktree and branch; a completed report merges under `MergeGates`. Non-coding tasks (ops, testing, CI, pushes, read-and-run) should set it false: parent's checkout, no `dyson/` branch, no merge. Optional `existingWorktreePath` is only valid with false: it rebinds tools to an already-listed checkout, does not call `Ensure`, and leaves worktree columns null so that drone's completed report does not merge. False without the path stays on the registered checkout. True still forks. True plus the path errors before spawn. `BeginBuildPlan` still passes true. Explore never merges. Classic drones inherit the parent drone checkout and do not merge on their own report. A content conflict aborts the registered checkout (usable again), leaves the drone worktree, and the failed `SubagentFailed` report is the resolve note. The parent spawns a resolver with `useWorktree` false and `existingWorktreePath` set to that worktree, does not `StopMetaAgentDrone`, does not pass `discardWorktree`, and does not edit files. The conflicted drone stays `Failed` with its columns until the parent messages it to `SubmitSubagentReport` completed, which retries the same merge. The worktree is removed only when that retry succeeds. `EnsureSessionWorktreeIfNeededAsync` still early-returns when `session.Parent is not null`.
 
 ## Plan tools
 
@@ -73,7 +88,7 @@ Accepts `building` / `completed` / `stale` only (`DysonMetaAgentTools.SetPlanSta
 
 `DysonMetaBuildBrief.Build(planId, title, extraInstructions)` — names the `planId` and tells the drone to call `ReadMetaPlan`; **never inlines markdown**. Unrelated to `DysonBeginBuildPlanFlow` (Plan-mode layout-only turn of the same English name). `DysonBeginBuildPlanToolTests` asserts the layout-only Instruction is absent from the brief.
 
-Reuse: `agentId` → `TriggerSubagentEventAsync` with that brief. Otherwise spawn via the same `CreateAsyncMetaAgentDrone` core (`purpose: build`). Then `UpdateAsync(..., status: Building, buildAgentId: persistenceId)`.
+Reuse: `agentId` → `TriggerSubagentEventAsync` with that brief. Otherwise spawn via the same `CreateMetaAgentDroneChildAsync` core (`useWorktree: true`, `purpose: build`). Then `UpdateAsync(..., status: Building, buildAgentId: persistenceId)`.
 
 Second builder: `FindLiveBuilder` refuses a new spawn while a **non-terminal** child still matches `BuildAgentId` (`"Plan {id} is already being built by agent #{n}. Pass that agentId to extend the build, or SetPlanStatus stale first."`). A `Building` row whose builder is already terminal can start a new one. That is the live-builder check, not a `Status == Building` check.
 
@@ -146,6 +161,6 @@ See [README.md](README.md)#meta-agent-maintenance-tick and [sessions.md](../stor
 - Sequential `planId`s are guessable; always pass `_workDirectoryId`.
 - `ReadMetaAgentDroneLog` / reminder counts / `LastReportSummary` die with the process. The child **session** row rehydrates; the log lines do not.
 - `SubagentFailed` after a user Stop is a closed loop, not a failed build. Read `Status`.
-- Meta Agent Drones currently share the parent's worktree columns. Two drones on one checkout will conflict if they both write.
+- `useWorktree: false` without `existingWorktreePath` shares the parent checkout and must not switch branches. `existingWorktreePath` (only with false) rebinds to an already-listed worktree and that drone does not merge on completion. Two `useWorktree: true` drones editing the same files still conflict at merge. A failed report that starts with `Merge conflict.` is the resolve note, not a dead task: spawn the resolver, do not stop the conflicted drone, and do not edit files.
 - `IDysonPlanRepository.UpdateAsync` cannot null `Note` / `BuildAgentId`. `DysonPlanKind.ClassicPlan = 0` is reserved; every row today is `MetaPlan`.
 }

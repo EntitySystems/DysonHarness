@@ -28,6 +28,7 @@ public static class DysonTurnPersistence
             SkillsUsedJson = DysonContextFilesSerializer.Serialize(turn.ContextFiles),
             UserImagesJson = DysonUserImagesSerializer.Serialize(turn.UserImages),
             ConversationActionsJson = DysonConversationActionsSerializer.Serialize(turn.ConversationActions),
+            VisualizationId = turn.VisualizationId,
             ToolStateJson = DysonTurnToolStateSerializer.CaptureFromTurn(turn),
             ToolHistoryOptimized = turn.ToolHistoryOptimized,
             CompactToolHistory = turn.CompactToolHistory,

@@ -3084,17 +3084,17 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
-    /// Invokes the in-process func for one meta-chat button.
+    /// Invokes one meta-chat button. Built-in keys open here; any other key uses the session delegate map.
     /// Does not append or remove turns and does not set <see cref="LastError"/>.
     /// </summary>
-    public Task<Result<string, string>> InvokeMetaConversationActionAsync(
+    public async Task<Result<string, string>> InvokeMetaConversationActionAsync(
         Guid turnId,
         int index,
         CancellationToken cancellationToken = default)
     {
         var session = _session;
         if (session is null)
-            return Task.FromResult(Result<string, string>.AsError("No active session."));
+            return Result<string, string>.AsError("No active session.");
 
         DysonAgentTurn? turn = null;
         foreach (var candidate in session.Turns)
@@ -3107,13 +3107,50 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         if (turn is null)
-            return Task.FromResult(Result<string, string>.AsError("Conversation message was not found."));
+            return Result<string, string>.AsError("Conversation message was not found.");
 
         var actions = turn.ConversationActions;
         if ((uint)index >= (uint)actions.Count)
-            return Task.FromResult(Result<string, string>.AsError("Conversation action index is out of range."));
+            return Result<string, string>.AsError("Conversation action index is out of range.");
 
-        return session.InvokeConversationActionAsync(actions[index].FuncKey, cancellationToken);
+        var funcKey = actions[index].FuncKey;
+        var resolved = await DysonBuiltInConversationActions
+            .TryResolveAsync(funcKey, SessionWorkDirectoryPath(session), cancellationToken)
+            .ConfigureAwait(true);
+        if (resolved is null)
+            return await session.InvokeConversationActionAsync(funcKey, cancellationToken).ConfigureAwait(true);
+
+        if (resolved.IsError)
+            return Result<string, string>.AsError(resolved.Error);
+
+        var intent = resolved.Value;
+        switch (intent.Kind)
+        {
+            case DysonBuiltInConversationKind.OpenPlan:
+            {
+                var workDirectoryId = SessionWorkDirectoryId(session);
+                if (workDirectoryId == Guid.Empty)
+                    return Result<string, string>.AsError("Work directory id is required.");
+
+                var opened = await OpenMetaPlanAsync(intent.PlanId, workDirectoryId, cancellationToken)
+                    .ConfigureAwait(true);
+                return opened.IsError
+                    ? Result<string, string>.AsError(opened.Error)
+                    : Result<string, string>.AsValue("");
+            }
+            case DysonBuiltInConversationKind.OpenFile:
+                await OpenFileViewerAsync(intent.PathOrUrl ?? "", cancellationToken).ConfigureAwait(true);
+                return Result<string, string>.AsValue("");
+            case DysonBuiltInConversationKind.OpenUrl:
+            {
+                var opened = OpenUrlInDefaultBrowser(intent.PathOrUrl ?? "");
+                return opened.IsError
+                    ? Result<string, string>.AsError(opened.Error)
+                    : Result<string, string>.AsValue("");
+            }
+            default:
+                return Result<string, string>.AsError($"Conversation action '{funcKey}' is reserved.");
+        }
     }
 
     /// <summary>

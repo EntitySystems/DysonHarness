@@ -373,27 +373,32 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         if (attached.IsError)
             return Result<DysonStartSubagentResult, string>.AsError(attached.Error);
 
-        var isolateWorktree = string.Equals(
-            agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase);
-        var childWorktreeEnabled = isolateWorktree || WorktreeEnabled;
-        var childWorktreePath = isolateWorktree ? null : WorktreeAbsolutePath;
-        var childWorktreeBranch = isolateWorktree ? null : WorktreeBranch;
+        var (isolateWorktree, suppressWorktree) = ResolveMetaAgentDroneWorktree(agentMode);
+        var childWorktreeEnabled = suppressWorktree ? false : isolateWorktree || WorktreeEnabled;
+        var childWorktreePath = suppressWorktree || isolateWorktree ? null : WorktreeAbsolutePath;
+        var childWorktreeBranch = suppressWorktree || isolateWorktree ? null : WorktreeBranch;
+        var childWorkDirectory = suppressWorktree
+            ? ResolveMetaAgentDroneSuppressWorkDirectory(_registeredWorkDirectoryPath)
+            : _workDirectoryPath;
 
         var providerKind = DysonProviderKinds.EffectiveKind(
             childProvider.ProviderKind, childProvider.BaseUrl, childProvider.ApiKey);
+        var worktreePrompt = suppressWorktree
+            ? MetaAgentDroneSuppressPromptBlock()
+            : DysonAgentSystemPrompts.BuildWorktreePromptBlock(
+                childWorktreeEnabled, childWorktreePath, childWorktreeBranch, _registeredWorkDirectoryPath);
         var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
             await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
-                    _models, providerKind, _workDirectoryPath, cancellationToken)
+                    _models, providerKind, childWorkDirectory, cancellationToken)
                 .ConfigureAwait(false),
-            DysonAgentSystemPrompts.BuildWorktreePromptBlock(
-                childWorktreeEnabled, childWorktreePath, childWorktreeBranch, _registeredWorkDirectoryPath));
+            worktreePrompt);
 
         var child = new OpenAiCompatibleAgentSession(
             agentMode,
             Config,
             childProvider,
             _http,
-            _workDirectoryPath,
+            childWorkDirectory,
             _store,
             _workDirectoryId,
             _models,

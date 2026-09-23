@@ -242,6 +242,7 @@ public sealed class DysonSessionRecoveryService
         turn.RestoreUserImages(DysonUserImagesSerializer.Deserialize(row.UserImagesJson));
         turn.RestoreConversationActions(
             DysonConversationActionsSerializer.Deserialize(row.ConversationActionsJson));
+        turn.VisualizationId = row.VisualizationId;
         DysonTurnToolStateSerializer.ApplyToTurn(turn, row.ToolStateJson);
         return turn;
     }

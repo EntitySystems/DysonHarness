@@ -418,6 +418,54 @@ public static class DysonGitInfo
     }
 
     /// <summary>
+    /// Runs <c>git diff --name-only --diff-filter=U</c> in <paramref name="repoRoot"/>.
+    /// Paths are repo-relative. An empty list means there are no unmerged paths.
+    /// </summary>
+    public static Result<IReadOnlyList<string>, string> TryListUnmergedPaths(string repoRoot)
+    {
+        var root = TryResolveExistingDirectory(repoRoot);
+        if (root.IsError)
+            return Result<IReadOnlyList<string>, string>.AsError(root.Error);
+
+        var run = RunGit(root.Value, ["diff", "--name-only", "--diff-filter=U"], WorktreeCommandTimeout);
+        if (run.IsError)
+            return Result<IReadOnlyList<string>, string>.AsError(run.Error);
+
+        var (exitCode, stdout, stderr) = run.Value;
+        if (exitCode != 0)
+        {
+            return Result<IReadOnlyList<string>, string>.AsError(
+                string.IsNullOrWhiteSpace(stderr) ? "git diff --diff-filter=U failed." : stderr.Trim());
+        }
+
+        var paths = stdout.Split(
+            ['\r', '\n'],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return Result<IReadOnlyList<string>, string>.AsValue(paths);
+    }
+
+    /// <summary>Runs <c>git merge --abort</c> in <paramref name="repoRoot"/>.</summary>
+    public static VoidResult<string> TryAbortMerge(string repoRoot)
+    {
+        var root = TryResolveExistingDirectory(repoRoot);
+        if (root.IsError)
+            return VoidResult<string>.AsError(root.Error);
+
+        var run = RunGit(root.Value, ["merge", "--abort"], WorktreeCommandTimeout);
+        if (run.IsError)
+            return VoidResult<string>.AsError(run.Error);
+
+        var (exitCode, _, stderr) = run.Value;
+        if (exitCode != 0)
+        {
+            return VoidResult<string>.AsError(
+                string.IsNullOrWhiteSpace(stderr) ? "git merge --abort failed." : stderr.Trim());
+        }
+
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
     /// Returns unified-diff hunks for <paramref name="relativePath"/> versus <c>HEAD</c>
     /// (net staged plus unstaged). Git is optional: no repository, no usable git executable,
     /// or no comparable baseline yields an empty list. Invalid or sandbox-escaping paths

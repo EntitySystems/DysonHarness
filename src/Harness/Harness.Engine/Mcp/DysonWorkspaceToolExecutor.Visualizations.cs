@@ -169,24 +169,28 @@ public sealed partial class DysonWorkspaceToolExecutor
                 $"RenderHtmlVisualization: '{propertyName}' exceeds the 256 KiB UTF-8 limit.")
             : Result<string, string>.AsValue(source);
 
-    private static bool IsGeneratedTemporaryPath(string path, IReadOnlyCollection<string> permittedExtensions)
+    private static bool IsGeneratedTemporaryPath(string path, IReadOnlyCollection<string> permittedExtensions) =>
+        IsGeneratedTemporaryLeaf(path) && permittedExtensions.Contains(Path.GetExtension(path));
+
+    /// <summary>
+    /// Leaf under <c>.dyson/temp/</c> whose stem ends with <c>-</c> plus 24 hex digits and whose extension is non-empty.
+    /// Visualization callers still apply their own extension allowlist.
+    /// </summary>
+    private static bool IsGeneratedTemporaryLeaf(string path)
     {
-        if (Path.IsPathRooted(path))
+        if (Path.IsPathRooted(path) || path.Contains('\\'))
             return false;
 
-        if (path.Contains('\\'))
+        const string prefix = ".dyson/temp/";
+        if (!path.StartsWith(prefix, StringComparison.Ordinal))
             return false;
 
-        var normalized = path;
-        if (!normalized.StartsWith(".dyson/temp/", StringComparison.Ordinal)
-            || normalized[".dyson/temp/".Length..].Contains('/'))
-        {
+        var fileName = path[prefix.Length..];
+        if (fileName.Length == 0 || fileName.Contains('/'))
             return false;
-        }
 
-        var fileName = normalized[".dyson/temp/".Length..];
         var extension = Path.GetExtension(fileName);
-        if (!permittedExtensions.Contains(extension))
+        if (string.IsNullOrEmpty(extension) || extension == ".")
             return false;
 
         var stem = Path.GetFileNameWithoutExtension(fileName);
