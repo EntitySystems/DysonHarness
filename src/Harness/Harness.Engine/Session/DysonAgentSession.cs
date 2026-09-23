@@ -287,7 +287,7 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
-    /// Set by <c>CreateAsyncMetaAgentDrone</c> for the duration of that spawn.
+    /// Set by <c>StartAsyncMetaAgentDrone</c> for the duration of that spawn.
     /// Null (direct <see cref="CreateChildAsync"/>) keeps the historical always-fork.
     /// </summary>
     internal static readonly AsyncLocal<bool?> MetaAgentDroneUseWorktree = new();
@@ -765,8 +765,9 @@ public abstract class DysonAgentSession
 
     /// <summary>
     /// Soft spawn policy: Plan banned; Explore never spawns; Drone may spawn Explore only
-    /// (Drone→Drone rejected). Meta Agent may spawn Meta Agent Drone or Explore.
-    /// Meta Agent Drone may spawn Explore or classic Drone (no nested Meta Agent Drone).
+    /// (Drone→Drone rejected). Meta Agent may spawn Meta Agent Drone, Explore, Bug Review,
+    /// or Security Review. Meta Agent Drone may spawn Explore, classic Drone, Bug Review,
+    /// or Security Review (no nested Meta Agent Drone).
     /// Child mode must resolve via <see cref="DysonAgentSystemPrompts.ForMode"/>.
     /// </summary>
     public static VoidResult<string> ValidateSubagentSpawn(
@@ -789,9 +790,11 @@ public abstract class DysonAgentSession
         if (string.Equals(parentMode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
         {
             var allowed = string.Equals(childMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(childMode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase);
+                || string.Equals(childMode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(childMode, DysonAgentModes.BugReview, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(childMode, DysonAgentModes.SecurityReview, StringComparison.OrdinalIgnoreCase);
             if (!allowed)
-                return new VoidResult<string>("Meta Agent may only spawn Meta Agent Drone or Explore subagents.");
+                return new VoidResult<string>("Meta Agent may only spawn Meta Agent Drone, Explore, Bug Review, or Security Review subagents.");
         }
         else if (string.Equals(parentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
         {
@@ -799,9 +802,11 @@ public abstract class DysonAgentSession
                 return new VoidResult<string>("No multi-layer Meta Agent Drones; spawn a Drone or Explore.");
 
             var allowed = string.Equals(childMode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(childMode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase);
+                || string.Equals(childMode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(childMode, DysonAgentModes.BugReview, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(childMode, DysonAgentModes.SecurityReview, StringComparison.OrdinalIgnoreCase);
             if (!allowed)
-                return new VoidResult<string>("Meta Agent Drone may only spawn Explore or Drone subagents.");
+                return new VoidResult<string>("Meta Agent Drone may only spawn Explore, Drone, Bug Review, or Security Review subagents.");
         }
         else if (string.Equals(childMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
         {
@@ -1797,7 +1802,7 @@ public abstract class DysonAgentSession
             - conflictingPaths:
             {pathBullets}
 
-            Spawn a new Meta Agent Drone to resolve it. Call CreateAsyncMetaAgentDrone with purpose build, useWorktree false, and existingWorktreePath set to {worktreePath}. Do not omit useWorktree. Do not pass useWorktree true. A second isolated worktree cannot see this checkout.
+            Spawn a new Meta Agent Drone to resolve it. Call StartAsyncMetaAgentDrone with purpose build, useWorktree false, and existingWorktreePath set to {worktreePath}. Do not omit useWorktree. Do not pass useWorktree true. A second isolated worktree cannot see this checkout.
 
             Task text for that drone, with the facts above filled in:
 

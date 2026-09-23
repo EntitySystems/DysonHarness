@@ -32,7 +32,6 @@ public static class DysonMetaAgentTools
         "BeginBuildPlan",
         "CanCreateNote",
         "CompactConversation",
-        "CreateAsyncMetaAgentDrone",
         "CreateNote",
         "CreateTodo",
         "DeleteMetaAgent",
@@ -52,7 +51,10 @@ public static class DysonMetaAgentTools
         "RenderHtmlVisualization",
         "RespondToSubagentEvent",
         "SetPlanStatus",
+        "StartAsyncBugReviewAgent",
         "StartAsyncExploreAgent",
+        "StartAsyncMetaAgentDrone",
+        "StartAsyncSecurityReviewAgent",
         "StopMetaAgentDrone",
         "SummarizeTurns",
         "UpdateNote",
@@ -104,6 +106,22 @@ public static class DysonMetaAgentTools
         "WaitForSeconds",
     ];
 
+    private const string ReadOnlyChildInputSchemaJson = """
+        {
+          "type": "object",
+          "properties": {
+            "task": { "type": "string", "description": "Assigned investigation brief." },
+            "context": { "type": "string", "description": "Optional extra context or constraints." },
+            "contextFiles": {
+              "type": "array",
+              "description": "Optional work-relative file paths preloaded onto the explore's first turn as File context.",
+              "items": { "type": "string", "description": "Work-relative or workspace file path." }
+            }
+          },
+          "required": ["task"]
+        }
+        """;
+
     private static readonly HashSet<string> AllowedToolNameSet = new(AllowedToolNames, StringComparer.Ordinal);
 
     /// <summary>
@@ -142,7 +160,7 @@ public static class DysonMetaAgentTools
 
     /// <summary>
     /// Meta Agent Drone: keep the Work catalog (including <c>TriggerParentEvent</c>),
-    /// drop Ask/dialog FromParent tools, add <c>ReadMetaPlan</c> and a <c>SubmitMetaPlan</c> seam.
+    /// drop Ask/dialog FromParent tools, add the two review tools, <c>ReadMetaPlan</c>, and a <c>SubmitMetaPlan</c> seam.
     /// </summary>
     public static void ApplyDroneAllowlist(DysonMcpPipeline pipeline)
     {
@@ -159,7 +177,7 @@ public static class DysonMetaAgentTools
     {
         yield return new DysonMcpTool
         {
-            Name = "CreateAsyncMetaAgentDrone",
+            Name = "StartAsyncMetaAgentDrone",
             Description =
                 "Spawn a Meta Agent Drone (non-blocking). " +
                 "File-mutating tasks (writing code, editing the repo) should set useWorktree true; non-coding tasks (ops, testing, CI, pushes, read-and-run) should set useWorktree false. " +
@@ -217,6 +235,11 @@ public static class DysonMetaAgentTools
                     "reasoningEffort": {
                       "type": "string",
                       "description": "Optional freeform reasoning_effort. Omit keeps the parent or slug default."
+                    },
+                    "contextFiles": {
+                      "type": "array",
+                      "description": "Optional work-relative file paths preloaded onto the explore's first turn as File context.",
+                      "items": { "type": "string", "description": "Work-relative or workspace file path." }
                     }
                   },
                   "required": ["task", "useWorktree"]
@@ -231,28 +254,17 @@ public static class DysonMetaAgentTools
                 "Spawn a read-only Explore agent (non-blocking). Returns immediately with agentId / persistenceId; never waits. " +
                 "Use before briefing a drone when you need a fact about the code. " +
                 "Call ListMetaAgentDrones before dispatching.",
-            InputSchemaJson = """
-                {
-                  "type": "object",
-                  "properties": {
-                    "task": { "type": "string", "description": "Assigned investigation brief." },
-                    "context": { "type": "string", "description": "Optional extra context or constraints." },
-                    "contextFiles": {
-                      "type": "array",
-                      "description": "Optional work-relative file paths preloaded onto the explore's first turn as File context.",
-                      "items": { "type": "string", "description": "Work-relative or workspace file path." }
-                    }
-                  },
-                  "required": ["task"]
-                }
-                """,
+            InputSchemaJson = ReadOnlyChildInputSchemaJson,
         };
+
+        foreach (var tool in CreateReviewTools())
+            yield return tool;
 
         yield return new DysonMcpTool
         {
             Name = "ListMetaAgentDrones",
             Description =
-                "Roster of this session's drones and explores, including last report. " +
+                "Roster of this session's drones, explores, or reviews, including last report. " +
                 "Call before dispatching: old turns are deleted permanently, so an id you cannot see may still be a running drone. " +
                 "Plain stable projection — no notices or counts.",
             InputSchemaJson = """
@@ -267,7 +279,7 @@ public static class DysonMetaAgentTools
         {
             Name = "ReadMetaAgentDroneLog",
             Description =
-                "Read recent log lines for a drone or explore by agentId. " +
+                "Read recent log lines for a drone, explore, or review by agentId. " +
                 "Do not idle-poll; read only when the user asks about progress or a report looks wrong.",
             InputSchemaJson = """
                 {
@@ -276,7 +288,7 @@ public static class DysonMetaAgentTools
                     "agentId": {
                       "type": "integer",
                       "minimum": 1,
-                      "description": "Runtime id of the drone or explore."
+                      "description": "Runtime id of the drone, explore, or review."
                     },
                     "maxLines": {
                       "type": "integer",
@@ -292,7 +304,7 @@ public static class DysonMetaAgentTools
         {
             Name = "StopMetaAgentDrone",
             Description =
-                "Stop a drone or explore. A stopped drone's worktree is left for inspection, not merged; " +
+                "Stop a drone, explore, or review. A stopped drone's worktree is left for inspection, not merged; " +
                 "pass discardWorktree to throw that work away. Non-blocking.",
             InputSchemaJson = """
                 {
@@ -301,7 +313,7 @@ public static class DysonMetaAgentTools
                     "agentId": {
                       "type": "integer",
                       "minimum": 1,
-                      "description": "Runtime id of the drone or explore."
+                      "description": "Runtime id of the drone, explore, or review."
                     },
                     "reason": { "type": "string", "description": "Optional reason recorded on the stopped session." },
                     "discardWorktree": {
@@ -318,7 +330,7 @@ public static class DysonMetaAgentTools
         {
             Name = "MessageMetaAgentDrone",
             Description =
-                "Send a follow-up instruction to an existing drone or explore (reopens a terminal drone). " +
+                "Send a follow-up instruction to an existing drone, explore, or review (reopens a terminal drone). " +
                 "Prefer this over creating a second drone for the same work. Non-blocking.",
             InputSchemaJson = """
                 {
@@ -327,7 +339,7 @@ public static class DysonMetaAgentTools
                     "agentId": {
                       "type": "integer",
                       "minimum": 1,
-                      "description": "Runtime id of the drone or explore."
+                      "description": "Runtime id of the drone, explore, or review."
                     },
                     "message": { "type": "string", "description": "Instruction injected into the child." },
                     "interrupt": {
@@ -344,7 +356,7 @@ public static class DysonMetaAgentTools
         {
             Name = "DeleteMetaAgent",
             Description =
-                "Permanently delete a finished drone or explore and its children. " +
+                "Permanently delete a finished drone, explore, or review and its children. " +
                 "Refuses while the agent or any descendant is still running, and refuses while its worktree is unmerged. " +
                 "Before deleting, keep anything worth keeping in a todo or a posted message.",
             InputSchemaJson = """
@@ -665,8 +677,30 @@ public static class DysonMetaAgentTools
         };
     }
 
+    private static IEnumerable<DysonMcpTool> CreateReviewTools()
+    {
+        yield return new DysonMcpTool
+        {
+            Name = "StartAsyncBugReviewAgent",
+            Description =
+                "Spawn a read-only Bug Review that reports findings, does not implement fixes, returns {agentId, persistenceId}, never waits, and does not get its own worktree.",
+            InputSchemaJson = ReadOnlyChildInputSchemaJson,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "StartAsyncSecurityReviewAgent",
+            Description =
+                "Spawn a read-only Security Review that reports findings, does not implement fixes, returns {agentId, persistenceId}, never waits, and does not get its own worktree.",
+            InputSchemaJson = ReadOnlyChildInputSchemaJson,
+        };
+    }
+
     private static IEnumerable<DysonMcpTool> CreateMetaAgentDroneTools()
     {
+        foreach (var tool in CreateReviewTools())
+            yield return tool;
+
         yield return new DysonMcpTool
         {
             Name = "ReadMetaPlan",

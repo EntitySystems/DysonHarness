@@ -51,6 +51,9 @@ public class DysonMetaAgentDirectiveTests
         MustNotContain(text, "reports failed with the question", "Meta Agent ForMode");
         MustContain(text, "useWorktree false", "Meta Agent ForMode");
         MustContain(text, "existingWorktreePath", "Meta Agent ForMode");
+        MustContain(text, "StartAsyncMetaAgentDrone", "Meta Agent ForMode");
+        MustContain(text, "StartAsyncBugReviewAgent", "Meta Agent ForMode");
+        MustContain(text, "StartAsyncSecurityReviewAgent", "Meta Agent ForMode");
         MustContain(text, "Do not edit files yourself", "Meta Agent ForMode");
     }
 
@@ -64,6 +67,9 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "TriggerParentEvent is how you talk to the Meta Agent", "Meta Agent Drone ForMode");
         MustContain(text, "when you finish a section of the implementation", "Meta Agent Drone ForMode");
         MustContain(text, "Do not SubmitSubagentReport to ask a question or to give a status", "Meta Agent Drone ForMode");
+        MustContain(text, "StartAsyncBugReviewAgent", "Meta Agent Drone ForMode");
+        MustContain(text, "StartAsyncSecurityReviewAgent", "Meta Agent Drone ForMode");
+        MustContain(text, "StartAsyncMetaAgentDrone", "Meta Agent Drone ForMode");
         MustNotContain(text, "There is no path from you to the user", "Meta Agent Drone ForMode");
     }
 
@@ -98,6 +104,9 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "That is the final state only", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
         MustContain(text, "At each section boundary", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
         MustContain(text, "Never report failed just to ask a question or to give a status", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
+        MustContain(text, "StartAsyncBugReviewAgent", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
+        MustContain(text, "StartAsyncSecurityReviewAgent", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
+        MustContain(text, "contextFiles", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
         MustNotContain(text, "Blocked or needing a decision", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
     }
 

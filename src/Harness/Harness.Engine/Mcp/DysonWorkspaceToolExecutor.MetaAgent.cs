@@ -6,7 +6,7 @@ public sealed partial class DysonWorkspaceToolExecutor
 {
     private readonly IDysonPlanRepository? _plans;
 
-    private async Task<DysonToolCallResult> CreateAsyncMetaAgentDroneAsync(
+    private async Task<DysonToolCallResult> StartAsyncMetaAgentDroneAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
@@ -18,6 +18,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         var purpose = "build";
         bool useWorktree;
         string? existingWorktreePath;
+        IReadOnlyList<string>? contextFiles;
         try
         {
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
@@ -28,12 +29,16 @@ public sealed partial class DysonWorkspaceToolExecutor
             task = taskResult.Value;
             var useWorktreeResult = RequireBool(root, "useWorktree");
             if (useWorktreeResult.IsError)
-                return Error(call, "CreateAsyncMetaAgentDrone: " + useWorktreeResult.Error);
+                return Error(call, "StartAsyncMetaAgentDrone: " + useWorktreeResult.Error);
             useWorktree = useWorktreeResult.Value;
             existingWorktreePath = GetOptionalString(root, "existingWorktreePath");
             context = GetOptionalString(root, "context");
             modelSlug = GetOptionalString(root, "modelSlug");
             reasoningEffort = GetOptionalString(root, "reasoningEffort");
+            var files = TryParseOptionalStringArray(root, "contextFiles");
+            if (files.IsError)
+                return Error(call, files.Error);
+            contextFiles = files.Value;
 
             var purposeRaw = GetOptionalString(root, "purpose");
             if (purposeRaw is not null)
@@ -43,7 +48,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 else if (string.Equals(purposeRaw, "build", StringComparison.OrdinalIgnoreCase))
                     purpose = "build";
                 else
-                    return Error(call, "CreateAsyncMetaAgentDrone: purpose must be 'build' or 'plan'.");
+                    return Error(call, "StartAsyncMetaAgentDrone: purpose must be 'build' or 'plan'.");
             }
 
             var todos = TryParseTodoSeedItems(root, "todos");
@@ -53,14 +58,14 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
         catch (JsonException)
         {
-            return Error(call, "CreateAsyncMetaAgentDrone: invalid JSON arguments.");
+            return Error(call, "StartAsyncMetaAgentDrone: invalid JSON arguments.");
         }
 
         if (existingWorktreePath is not null && useWorktree)
         {
             return Error(
                 call,
-                "CreateAsyncMetaAgentDrone: existingWorktreePath requires useWorktree false.");
+                "StartAsyncMetaAgentDrone: existingWorktreePath requires useWorktree false.");
         }
 
         if (existingWorktreePath is not null)
@@ -86,7 +91,8 @@ public sealed partial class DysonWorkspaceToolExecutor
                 reasoningEffort,
                 useWorktree,
                 cancellationToken,
-                existingWorktreePath)
+                existingWorktreePath,
+                contextFiles)
             .ConfigureAwait(false);
         if (started.IsError)
             return Error(call, started.Error);
@@ -101,8 +107,14 @@ public sealed partial class DysonWorkspaceToolExecutor
         }));
     }
 
-    private async Task<DysonToolCallResult> StartAsyncExploreAgentAsync(
+    private Task<DysonToolCallResult> StartAsyncExploreAgentAsync(
         DysonToolCall call,
+        CancellationToken cancellationToken)
+        => StartAsyncReadOnlyAgentAsync(call, DysonAgentModes.Explore, cancellationToken);
+
+    private async Task<DysonToolCallResult> StartAsyncReadOnlyAgentAsync(
+        DysonToolCall call,
+        string childMode,
         CancellationToken cancellationToken)
     {
         string task;
@@ -124,11 +136,11 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
         catch (JsonException)
         {
-            return Error(call, "StartAsyncExploreAgent: invalid JSON arguments.");
+            return Error(call, call.ToolName + ": invalid JSON arguments.");
         }
 
         var started = await _session.CreateChildAsync(
-                DysonAgentModes.Explore,
+                childMode,
                 task,
                 context,
                 initialTodos: null,
@@ -950,7 +962,8 @@ public sealed partial class DysonWorkspaceToolExecutor
         string? reasoningEffort,
         bool useWorktree,
         CancellationToken cancellationToken,
-        string? existingWorktreePath = null)
+        string? existingWorktreePath = null,
+        IReadOnlyList<string>? contextFiles = null)
     {
         // Explicit per call. AsyncLocal so both session implementations share one spawn path.
         DysonAgentSession.MetaAgentDroneUseWorktree.Value = useWorktree;
@@ -967,7 +980,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                     initialTodos,
                     modelSlug,
                     reasoningEffort,
-                    contextFiles: null,
+                    contextFiles,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -988,7 +1001,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         catch (Exception ex)
         {
             return Result<string, string>.AsError(
-                "CreateAsyncMetaAgentDrone: existingWorktreePath is invalid: " + ex.Message);
+                "StartAsyncMetaAgentDrone: existingWorktreePath is invalid: " + ex.Message);
         }
 
         var anchor = _session.RegisteredWorkDirectoryAbsolutePath;
@@ -997,7 +1010,7 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         var listed = DysonGitInfo.TryListWorktrees(anchor);
         if (listed.IsError)
-            return Result<string, string>.AsError("CreateAsyncMetaAgentDrone: " + listed.Error);
+            return Result<string, string>.AsError("StartAsyncMetaAgentDrone: " + listed.Error);
 
         var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
@@ -1019,7 +1032,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
 
         return Result<string, string>.AsError(
-            "CreateAsyncMetaAgentDrone: existingWorktreePath is not an existing worktree.");
+            "StartAsyncMetaAgentDrone: existingWorktreePath is not an existing worktree.");
     }
 
     private DysonAgentSession? FindLiveBuilder(Guid? buildAgentId)

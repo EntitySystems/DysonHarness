@@ -88,7 +88,7 @@ public class DysonMetaAgentDroneWorktreeTests
         var pipeline = DysonSessionToolsetBuilder.Build(
             new DysonAgentSessionConfig(),
             DysonAgentModes.MetaAgent);
-        var tool = pipeline.Tools["CreateAsyncMetaAgentDrone"];
+        var tool = pipeline.Tools["StartAsyncMetaAgentDrone"];
         const string guidance =
             "File-mutating tasks (writing code, editing the repo) should set useWorktree true; non-coding tasks (ops, testing, CI, pushes, read-and-run) should set useWorktree false.";
         Assert.Contains(guidance, tool.Description, StringComparison.Ordinal);
@@ -105,7 +105,8 @@ public class DysonMetaAgentDroneWorktreeTests
 
         var prompt = DysonAgentSystemPrompts.ForMode(DysonAgentModes.MetaAgent);
         Assert.False(prompt.IsError);
-        Assert.Contains(guidance, prompt.Value, StringComparison.Ordinal);
+        Assert.Contains("File-mutating tasks should set useWorktree true", prompt.Value, StringComparison.Ordinal);
+        Assert.Contains("Non-coding tasks should set useWorktree false", prompt.Value, StringComparison.Ordinal);
 
         var parent = CreateTempDir();
         var repo = Path.Combine(parent, "repo");
@@ -402,7 +403,7 @@ public class DysonMetaAgentDroneWorktreeTests
             Assert.Contains(wt, drone.LastReportSummary, StringComparison.Ordinal);
             Assert.Contains(branch, drone.LastReportSummary, StringComparison.Ordinal);
             Assert.Contains("file.txt", drone.LastReportSummary, StringComparison.Ordinal);
-            Assert.Contains("CreateAsyncMetaAgentDrone", drone.LastReportSummary, StringComparison.Ordinal);
+            Assert.Contains("StartAsyncMetaAgentDrone", drone.LastReportSummary, StringComparison.Ordinal);
             Assert.Contains("useWorktree false", drone.LastReportSummary, StringComparison.Ordinal);
             Assert.Contains("existingWorktreePath", drone.LastReportSummary, StringComparison.Ordinal);
             Assert.Contains("Do not StopMetaAgentDrone", drone.LastReportSummary, StringComparison.Ordinal);
@@ -625,7 +626,7 @@ public class DysonMetaAgentDroneWorktreeTests
     private static DysonToolCall DroneCall(string callId, string argumentsJson) => new()
     {
         CallId = callId,
-        ToolName = "CreateAsyncMetaAgentDrone",
+        ToolName = "StartAsyncMetaAgentDrone",
         Stage = 0,
         ArgumentsJson = argumentsJson,
     };

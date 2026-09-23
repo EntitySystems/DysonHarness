@@ -5,7 +5,7 @@ using DysonHarness;
 namespace Harness.Tests;
 
 /// <summary>
-/// BeginBuildPlan dispatches via CreateAsyncMetaAgentDrone, sets Building + BuildAgentId,
+/// BeginBuildPlan dispatches via CreateMetaAgentDroneChildAsync, sets Building + BuildAgentId,
 /// refuses a second concurrent builder, and does not use DysonBeginBuildPlanFlow.
 /// </summary>
 public class DysonBeginBuildPlanToolTests
