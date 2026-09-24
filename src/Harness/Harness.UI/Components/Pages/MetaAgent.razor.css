@@ -66,13 +66,26 @@
 .meta-agents {
   display: flex;
   flex-direction: column;
-  gap: 8px;
   min-width: 0;
   min-height: 0;
-  padding: 16px 12px;
   border-left: 1px solid var(--border);
   background: var(--surface-chrome);
-  overflow: auto;
+  overflow: hidden;
+}
+
+.rail-tabs__body--agents {
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 4px 0 8px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.rail-tabs__body--agents > .meta-agents__list {
+  flex: 0 0 auto;
+  width: 100%;
+  min-height: auto;
 }
 
 .meta-agents__list {
