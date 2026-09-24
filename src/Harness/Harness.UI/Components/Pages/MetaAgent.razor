@@ -741,13 +741,35 @@
     // The switcher re-reads ActiveWorkDirectoryId after the callback and reports
     // "Could not switch work directory" when it did not change; the route Guid only
     // updates once navigation lands, so hold the selection locally first.
-    private void OnWorkDirectoryChanged(Guid? id)
+    private async Task OnWorkDirectoryChanged(Guid? id)
     {
-        if (id is not Guid wd || wd == WorkDirectoryId)
+        if (id is Guid wd && wd == WorkDirectoryId)
             return;
 
-        _activeWorkDirectoryId = wd;
-        Nav.NavigateTo($"/meta/{wd}");
+        await PersistWorkDirectoryAsync(id);
+
+        if (id is not Guid next)
+        {
+            _activeWorkDirectoryId = null;
+            return;
+        }
+
+        _activeWorkDirectoryId = next;
+        Nav.NavigateTo($"/meta/{next}");
+    }
+
+    private async Task PersistWorkDirectoryAsync(Guid? id)
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("dysonWorkdir.set", id?.ToString());
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
     }
 
     public async ValueTask DisposeAsync()

@@ -156,4 +156,4 @@ Current limitation: project package inspection/enablement/uninstall APIs exist i
 
 ## UI
 
-Sidebar `WorkDirectorySwitcher` lists registered dirs, persists active id in `localStorage` (`dyson-workdir`), filters `SessionList` by that id. Right-rail **Files** tree: right-click a **folder** for Rename (inline; `await` workspace `MoveAsync`) or Open in Explorer / Finder / file manager (`DysonUiHost.OpenFolderInFileManager`). See [docs/ui/README.md](../ui/README.md).
+Sidebar `WorkDirectorySwitcher` lists registered dirs and filters `SessionList` by the active id. Both `Home` and the meta page write `localStorage` key `dyson-workdir` on switch; `Home.HydrateWorkDirectoryAsync` reapplies that key when Home mounts. The switcher itself does not write the key. Right-rail **Files** tree: right-click a **folder** for Rename (inline; `await` workspace `MoveAsync`) or Open in Explorer / Finder / file manager (`DysonUiHost.OpenFolderInFileManager`). See [docs/ui/README.md](../ui/README.md).
