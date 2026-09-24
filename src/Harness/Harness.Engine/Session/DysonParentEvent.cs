@@ -21,6 +21,12 @@ public sealed class DysonParentEvent
     public DysonParentEventStatus Status { get; set; } = DysonParentEventStatus.Pending;
     public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;
 
+    /// <summary>Forgotten meta auto-turns for this process. Not persisted.</summary>
+    public int ForgottenAutoTurns { get; set; }
+
+    /// <summary>Root posted DisplayInfo and is waiting on the user. Not persisted. Cleared when the event leaves Pending.</summary>
+    public bool AwaitingUserAnswer { get; set; }
+
     internal TaskCompletionSource<Result<string, string>> ReplyTcs { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 }

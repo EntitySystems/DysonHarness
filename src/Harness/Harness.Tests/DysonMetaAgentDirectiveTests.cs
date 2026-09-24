@@ -45,8 +45,10 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "ListTodos before you answer whether work was dispatched", "Meta Agent ForMode");
         MustContain(text, "A posted message is shown to the user and is not in later turns", "Meta Agent ForMode");
         MustContain(text, "blocked inside TriggerParentEvent", "Meta Agent ForMode");
-        MustContain(text, "only a status", "Meta Agent ForMode");
-        MustContain(text, "Remember the subagentId and eventId", "Meta Agent ForMode");
+        MustContain(
+            text,
+            "a parent-event continuation is mandatory. Before that turn ends, call RespondToSubagentEvent unless this is a question only the user can answer. Status (what landed, what is next): ack the same turn and PostConversationMessage that status. A question you already know: answer the same turn; do not ask the user. A question only the user can decide: PostConversationMessage the question, do not respond yet, keep subagentId and eventId; the next user message will carry the same event; then RespondToSubagentEvent with their answer. Do not start another drone for the same question. Do not end a status turn without the ack.",
+            "Meta Agent ForMode");
         MustContain(text, "Do not mention the continuation", "Meta Agent ForMode");
         MustNotContain(text, "reports failed with the question", "Meta Agent ForMode");
         MustContain(text, "useWorktree false", "Meta Agent ForMode");
@@ -67,6 +69,10 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "TriggerParentEvent is how you talk to the Meta Agent", "Meta Agent Drone ForMode");
         MustContain(text, "when you finish a section of the implementation", "Meta Agent Drone ForMode");
         MustContain(text, "Do not SubmitSubagentReport to ask a question or to give a status", "Meta Agent Drone ForMode");
+        MustContain(
+            text,
+            "you are the parent of events from your own children. RespondToSubagentEvent before the turn ends. Status: short ack the same turn. A question you know: answer the same turn. A question you do not know: TriggerParentEvent to your parent with kind message, wait for that reply, then RespondToSubagentEvent to the child with the answer. You cannot PostConversationMessage. Do not spawn another agent for the same question. Do not use kind askQuestion or promptUserDialog.",
+            "Meta Agent Drone ForMode");
         MustContain(text, "StartAsyncBugReviewAgent", "Meta Agent Drone ForMode");
         MustContain(text, "StartAsyncSecurityReviewAgent", "Meta Agent Drone ForMode");
         MustContain(text, "StartAsyncMetaAgentDrone", "Meta Agent Drone ForMode");
@@ -108,6 +114,10 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "StartAsyncSecurityReviewAgent", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
         MustContain(text, "contextFiles", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
         MustNotContain(text, "Blocked or needing a decision", nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
+        MustContain(
+            text,
+            "you are the parent of events from your own children. RespondToSubagentEvent before the turn ends. Status: short ack the same turn. A question you know: answer the same turn. A question you do not know: TriggerParentEvent to your parent with kind message, wait for that reply, then RespondToSubagentEvent to the child with the answer. You cannot PostConversationMessage. Do not spawn another agent for the same question. Do not use kind askQuestion or promptUserDialog.",
+            nameof(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate));
     }
 
     private static string Prompt(string mode)

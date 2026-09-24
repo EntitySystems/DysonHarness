@@ -978,12 +978,24 @@ public abstract class DysonAgentSession
                 "] and cannot address new events (deadlock guard).");
         }
 
+        var trimmedKind = kind.Trim();
+        if (ComputeDepth() > 1
+            && (string.Equals(trimmedKind, DysonAskQuestion.AskQuestionKind, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(
+                    trimmedKind,
+                    DysonPromptUserDialog.PromptUserDialogKind,
+                    StringComparison.OrdinalIgnoreCase)))
+        {
+            return Result<string, string>.AsError(
+                "TriggerParentEvent: kind askQuestion and promptUserDialog are L1 only. Use kind message.");
+        }
+
         var evt = new DysonParentEvent
         {
             EventId = Guid.NewGuid(),
             SubagentId = Id,
             PersistenceId = PersistenceId == Guid.Empty ? null : PersistenceId,
-            Kind = kind.Trim(),
+            Kind = trimmedKind,
             Payload = payload,
         };
 
@@ -1075,12 +1087,39 @@ public abstract class DysonAgentSession
         evt.ReplyTcs.TrySetResult(Result<string, string>.AsValue(reply));
         RaiseParentEventsChanged();
 
+        evt.AwaitingUserAnswer = false;
         return Result<string, string>.AsValue(JsonSerializer.Serialize(new
         {
             eventId = evt.EventId,
             subagentId = evt.SubagentId,
             status = "addressed",
         }));
+    }
+
+    /// <summary>
+    /// Unblocks a still-pending child event with an error. Not a tool.
+    /// Already-finished events return <see cref="Result{TValue,TError}.AsError"/> and are not completed again.
+    /// </summary>
+    public Result<string, string> FailPendingParentEvent(Guid eventId, string error)
+    {
+        if (eventId == Guid.Empty)
+            return Result<string, string>.AsError("FailPendingParentEvent: eventId is required.");
+
+        if (!_pendingParentEvents.TryGetValue(eventId, out var evt))
+            return Result<string, string>.AsError($"FailPendingParentEvent: unknown eventId {eventId:D}.");
+
+        if (evt.Status != DysonParentEventStatus.Pending)
+        {
+            return Result<string, string>.AsError(
+                $"FailPendingParentEvent: eventId {eventId:D} is already {evt.Status}.");
+        }
+
+        error ??= "";
+        evt.Status = DysonParentEventStatus.Cancelled;
+        evt.AwaitingUserAnswer = false;
+        evt.ReplyTcs.TrySetResult(Result<string, string>.AsError(error));
+        RaiseParentEventsChanged();
+        return Result<string, string>.AsValue(error);
     }
 
     /// <summary>

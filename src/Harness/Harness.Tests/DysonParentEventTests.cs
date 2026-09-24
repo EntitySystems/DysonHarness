@@ -1,6 +1,7 @@
 using System.Linq;
 
 using DysonHarness;
+using Harness.UI.Demo;
 
 namespace Harness.Tests;
 
@@ -23,6 +24,8 @@ public class DysonParentEventTests
         await AssertNonInterruptFailsWhileWaiting();
         await AssertInjectAfterCompletedReportWaitsForSecond();
         await AssertWaitConsumeMarker();
+        await AssertMetaParentEventRetryThenFail();
+        await AssertDeepAskQuestionFailsFast();
     }
 
     private static void AssertLayerGating()
@@ -430,6 +433,107 @@ public class DysonParentEventTests
         }
     }
 
+    private static async Task AssertMetaParentEventRetryThenFail()
+    {
+        if (DysonSubagentHostLogic.DecideMetaParentEventAfterTurn(
+                metaParent: true,
+                stillPending: true,
+                rootMeta: false,
+                postedDisplayInfoThisTurn: false,
+                forgottenAutoTurns: 0) != MetaParentEventAfterTurn.Retry)
+        {
+            throw new InvalidOperationException("forgotten 0 must retry.");
+        }
+
+        if (DysonSubagentHostLogic.DecideMetaParentEventAfterTurn(
+                metaParent: true,
+                stillPending: true,
+                rootMeta: false,
+                postedDisplayInfoThisTurn: false,
+                forgottenAutoTurns: DysonSubagentHostLogic.MetaParentEventRetryCap) != MetaParentEventAfterTurn.Fail)
+        {
+            throw new InvalidOperationException("forgotten at the cap must fail.");
+        }
+
+        if (DysonSubagentHostLogic.DecideMetaParentEventAfterTurn(
+                metaParent: true,
+                stillPending: true,
+                rootMeta: true,
+                postedDisplayInfoThisTurn: true,
+                forgottenAutoTurns: 0) != MetaParentEventAfterTurn.Park)
+        {
+            throw new InvalidOperationException("root DisplayInfo must park.");
+        }
+
+        var parent = new StubSession(DysonAgentModes.MetaAgentDrone);
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+
+        const string askJson = """{"questions":[{"prompt":"Name?","options":["A","B"]}]} """;
+        var triggerTask = child.TriggerParentEventAsync(
+            DysonAskQuestion.AskQuestionKind, askJson, CancellationToken.None);
+        await Task.Delay(25).ConfigureAwait(false);
+
+        var pending = parent.PendingOrRecentParentEvents
+            .Single(e => e.Status == DysonParentEventStatus.Pending && e.SubagentId == child.Id);
+        var failed = parent.FailPendingParentEvent(pending.EventId, "Parent did not answer this event.");
+        if (failed.IsError)
+            throw new InvalidOperationException("FailPendingParentEvent should succeed: " + failed.Error);
+
+        var triggerResult = await triggerTask.ConfigureAwait(false);
+        if (!triggerResult.IsError
+            || triggerResult.Error.IndexOf("Parent did not answer this event.", StringComparison.Ordinal) < 0)
+        {
+            throw new InvalidOperationException(
+                "Child should see the unanswered error: " +
+                (triggerResult.IsError ? triggerResult.Error : triggerResult.Value));
+        }
+
+        if (parent.PendingOrRecentParentEvents.Any(
+                e => e.EventId == pending.EventId && e.Status == DysonParentEventStatus.Pending))
+        {
+            throw new InvalidOperationException("Failed event must not stay Pending.");
+        }
+    }
+
+    private static async Task AssertDeepAskQuestionFailsFast()
+    {
+        var root = new StubSession();
+        var mid = new StubSession();
+        var deep = new StubSession();
+        root.RegisterForTest(mid);
+        mid.RegisterForTest(deep);
+        if (deep.ComputeDepth() <= 1)
+            throw new InvalidOperationException("Expected depth > 1.");
+
+        var ask = await deep.TriggerParentEventAsync(
+                DysonAskQuestion.AskQuestionKind,
+                """{"questions":[{"prompt":"Name?","options":["A"]}]} """,
+                CancellationToken.None)
+            .ConfigureAwait(false);
+        if (!ask.IsError || ask.Error.IndexOf("L1 only", StringComparison.Ordinal) < 0)
+        {
+            throw new InvalidOperationException(
+                "Depth > 1 askQuestion must fail fast: " + (ask.IsError ? ask.Error : ask.Value));
+        }
+
+        if (mid.PendingOrRecentParentEvents.Any(e => e.Status == DysonParentEventStatus.Pending))
+            throw new InvalidOperationException("Failed askQuestion must not register a pending event.");
+
+        var messageTask = deep.TriggerParentEventAsync("message", "hello", CancellationToken.None);
+        await Task.Delay(25).ConfigureAwait(false);
+        var pending = mid.PendingOrRecentParentEvents
+            .Single(e => e.Status == DysonParentEventStatus.Pending);
+        mid.RespondToSubagentEvent(deep.Id, pending.EventId, "ok");
+        var message = await messageTask.ConfigureAwait(false);
+        if (message.IsError || message.Value != "ok")
+        {
+            throw new InvalidOperationException(
+                "Depth > 1 message must still register: " +
+                (message.IsError ? message.Error : message.Value));
+        }
+    }
+
     private static void AssertHas(DysonMcpPipeline pipeline, string name)
     {
         if (!pipeline.Tools.ContainsKey(name))
@@ -444,8 +548,8 @@ public class DysonParentEventTests
 
     private sealed class StubProvider : DysonAgentProvider;
 
-    private class StubSession() : DysonAgentSession(
-        DysonAgentModes.Work,
+    private class StubSession(string mode = DysonAgentModes.Work) : DysonAgentSession(
+        mode,
         new DysonAgentSessionConfig { AvailableShells = [new DysonConfiguredShellSpec("Cmd", "cmd.exe")] },
         new StubProvider())
     {
