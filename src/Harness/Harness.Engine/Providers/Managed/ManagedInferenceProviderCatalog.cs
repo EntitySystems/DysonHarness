@@ -16,6 +16,7 @@ public sealed class ManagedInferenceProviderCatalog
             new ManagedAntigravityInferenceProvider(host, http, models, subjectSettings),
             new ManagedKimiInferenceProvider(host, http, models, subjectSettings),
             new ManagedClaudeInferenceProvider(host, http, models, subjectSettings),
+            new ManagedMetaInferenceProvider(host, http, models, subjectSettings),
         ];
         Direct =
         [
