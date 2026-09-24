@@ -2136,6 +2136,10 @@ public sealed partial class DysonWorkspaceToolExecutor
     private const int ConvertImageMaxBytes = 50 * 1024 * 1024;
     private const int GrepBinarySniffBytes = 512;
 
+    // ponytail: fixed IO depth per Grep call, not per disk; upgrade = measured depth if this clamp shows up in profiles.
+    private static readonly int GrepIoConcurrency =
+        Math.Clamp(Environment.ProcessorCount * 2, 8, 64);
+
     private static readonly HashSet<string> GrepExcludedDirNames = new(StringComparer.OrdinalIgnoreCase)
     {
         ".git", "bin", "obj", "node_modules", ".vs", "packages", ".idea", "dist",
@@ -2194,20 +2198,27 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Error(call, $"Invalid regex: {ex.Message}");
         }
 
-        IEnumerable<string> files;
+        var literal = !caseInsensitive && IsGrepLiteralPattern(pattern.Value);
+        using var io = new SemaphoreSlim(GrepIoConcurrency, GrepIoConcurrency);
+
+        List<string> paths;
         var fileExists = await _fs.FileExistsAsync(searchPath, cancellationToken).ConfigureAwait(false);
         var dirExists = await _fs.DirectoryExistsAsync(searchPath, cancellationToken).ConfigureAwait(false);
         if (fileExists.IsSuccess && fileExists.Value)
         {
-            files = [resolved.Value];
+            var relResult = _fs.GetRelativePath(resolved.Value);
+            if (relResult.IsError)
+                return Error(call, relResult.Error);
+            paths = [relResult.Value];
         }
         else if (dirExists.IsSuccess && dirExists.Value)
         {
-            var enumerated = await EnumerateFilesSkippingExcludedAsync(searchPath, glob, cancellationToken)
+            var bag = new ConcurrentBag<string>();
+            var globPattern = string.IsNullOrWhiteSpace(glob) ? "*" : glob;
+            await WalkGrepFilesAsync(searchPath, globPattern, bag, io, cancellationToken)
                 .ConfigureAwait(false);
-            if (enumerated.IsError)
-                return Error(call, enumerated.Error);
-            files = enumerated.Value;
+            paths = [.. bag];
+            paths.Sort(StringComparer.Ordinal);
         }
         else
         {
@@ -2218,75 +2229,95 @@ public sealed partial class DysonWorkspaceToolExecutor
         var matches = 0;
         var binaryHits = 0;
         var cappedByChars = false;
+        using var capCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-        foreach (var file in files)
+        for (var offset = 0; offset < paths.Count && matches < maxMatches && !cappedByChars; offset += GrepIoConcurrency)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var under = _fs.ResolvePath(file);
-            if (under.IsError)
-                continue;
+            var count = Math.Min(GrepIoConcurrency, paths.Count - offset);
+            var slotHits = new List<GrepHit>[count];
+            var slotDone = new bool[count];
+            var nextSlot = 0;
+            var gate = new object();
 
-            var relResult = _fs.GetRelativePath(under.Value);
-            if (relResult.IsError)
-                continue;
-            var rel = relResult.Value;
-            var kind = await ClassifyGrepFileAsync(rel, cancellationToken).ConfigureAwait(false);
-            if (kind is GrepFileKind.Binary or GrepFileKind.Image)
+            void Drain()
             {
-                // Path-only: never inline binary/image bytes. Emit when the relative path matches.
-                if (!regex.IsMatch(rel))
-                    continue;
-
-                var label = kind == GrepFileKind.Image ? "image" : "binary";
-                var line = $"{label}\t{rel}";
-                if (sb.Length + line.Length + 1 > GrepMaxResultChars)
+                while (nextSlot < count && slotDone[nextSlot])
                 {
-                    cappedByChars = true;
-                    break;
+                    var slot = slotHits[nextSlot] ?? [];
+                    foreach (var hit in slot)
+                    {
+                        if (matches >= maxMatches)
+                        {
+                            capCts.Cancel();
+                            return;
+                        }
+
+                        var formatted = FormatGrepHit(hit);
+                        if (sb.Length + formatted.Length + 1 > GrepMaxResultChars)
+                        {
+                            cappedByChars = true;
+                            capCts.Cancel();
+                            return;
+                        }
+
+                        sb.AppendLine(formatted);
+                        matches++;
+                        if (hit.Kind != GrepFileKind.Text)
+                            binaryHits++;
+                        if (matches >= maxMatches)
+                        {
+                            capCts.Cancel();
+                            return;
+                        }
+                    }
+
+                    nextSlot++;
+                }
+            }
+
+            var window = new Task[count];
+            for (var i = 0; i < count; i++)
+            {
+                var index = i;
+                var rel = paths[offset + index];
+                window[index] = ScanSlotAsync(rel, index);
+            }
+
+            await WhenAllGrepAsync(window, cancellationToken, ignoreCapCancellation: true)
+                .ConfigureAwait(false);
+
+            lock (gate)
+                Drain();
+
+            async Task ScanSlotAsync(string rel, int index)
+            {
+                List<GrepHit> found;
+                try
+                {
+                    found = await SearchGrepFileAsync(
+                            rel,
+                            literal,
+                            pattern.Value,
+                            regex,
+                            maxMatches,
+                            io,
+                            cancellationToken,
+                            capCts.Token)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    found = [];
                 }
 
-                sb.AppendLine(line);
-                matches++;
-                binaryHits++;
-                if (matches >= maxMatches)
-                    break;
-                continue;
-            }
-
-            var read = await _fs.ReadAllTextAsync(rel, cancellationToken).ConfigureAwait(false);
-            if (read.IsError)
-                continue;
-
-            var lines = read.Value.Replace("\r\n", "\n").Split('\n');
-            if (read.Value.Length > 0
-                && (read.Value.EndsWith('\n') || read.Value.EndsWith('\r'))
-                && lines.Length > 0
-                && lines[^1].Length == 0)
-            {
-                lines = lines[..^1];
-            }
-
-            for (var i = 0; i < lines.Length; i++)
-            {
-                if (!regex.IsMatch(lines[i]))
-                    continue;
-
-                var content = TruncateGrepLine(lines[i], GrepMaxLineChars);
-                var line = $"{rel}:{i + 1}:{content}";
-                if (sb.Length + line.Length + 1 > GrepMaxResultChars)
+                lock (gate)
                 {
-                    cappedByChars = true;
-                    break;
+                    slotHits[index] = found;
+                    slotDone[index] = true;
+                    Drain();
                 }
-
-                sb.AppendLine(line);
-                matches++;
-                if (matches >= maxMatches)
-                    break;
             }
-
-            if (matches >= maxMatches || cappedByChars)
-                break;
         }
 
         if (matches == 0)
@@ -2303,6 +2334,180 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         return Ok(call, text);
     }
+
+    private async Task WalkGrepFilesAsync(
+        string relativeDir,
+        string globPattern,
+        ConcurrentBag<string> files,
+        SemaphoreSlim io,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await io.WaitAsync(cancellationToken).ConfigureAwait(false);
+        Result<IReadOnlyList<DysonWorkspaceEntry>, string> entries;
+        try
+        {
+            entries = await _fs.EnumerateEntriesAsync(relativeDir, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            io.Release();
+        }
+
+        if (entries.IsError)
+            return;
+
+        var children = new List<Task>();
+        foreach (var entry in entries.Value)
+        {
+            var childRel = CombineWorkspaceRelative(relativeDir, entry.Name);
+            if (entry.IsDirectory)
+            {
+                if (GrepExcludedDirNames.Contains(entry.Name))
+                    continue;
+                children.Add(WalkGrepFilesAsync(childRel, globPattern, files, io, cancellationToken));
+                continue;
+            }
+
+            if (!MatchesSimpleGlob(entry.Name, globPattern))
+                continue;
+
+            var resolved = _fs.ResolvePath(childRel);
+            if (resolved.IsSuccess)
+                files.Add(childRel);
+        }
+
+        if (children.Count > 0)
+            await WhenAllGrepAsync(children, cancellationToken, ignoreCapCancellation: false)
+                .ConfigureAwait(false);
+    }
+
+    private async Task<List<GrepHit>> SearchGrepFileAsync(
+        string rel,
+        bool literal,
+        string pattern,
+        Regex regex,
+        int maxMatches,
+        SemaphoreSlim io,
+        CancellationToken callerToken,
+        CancellationToken capToken)
+    {
+        var entered = false;
+        var hits = new List<GrepHit>();
+        try
+        {
+            await io.WaitAsync(capToken).ConfigureAwait(false);
+            entered = true;
+            callerToken.ThrowIfCancellationRequested();
+
+            var kind = await ClassifyGrepFileAsync(rel, capToken).ConfigureAwait(false);
+            if (kind is GrepFileKind.Binary or GrepFileKind.Image)
+            {
+                if (!GrepLineMatches(literal, pattern, regex, rel))
+                    return [];
+                return [new GrepHit(rel, 0, "", kind)];
+            }
+
+            var localChars = 0;
+            var read = await _fs.ForEachTextLineAsync(rel, (lineNumber, line) =>
+            {
+                if (callerToken.IsCancellationRequested)
+                    callerToken.ThrowIfCancellationRequested();
+                if (capToken.IsCancellationRequested)
+                    return false;
+                if (!GrepLineMatches(literal, pattern, regex, line))
+                    return true;
+
+                var content = TruncateGrepLine(line, GrepMaxLineChars);
+                hits.Add(new GrepHit(rel, lineNumber, content, GrepFileKind.Text));
+                localChars += rel.Length + content.Length + 8;
+                return hits.Count < maxMatches && localChars <= GrepMaxResultChars;
+            }, capToken).ConfigureAwait(false);
+
+            if (read.IsError)
+                return [];
+            return hits;
+        }
+        catch (OperationCanceledException)
+        {
+            if (callerToken.IsCancellationRequested)
+                throw;
+            return hits;
+        }
+        finally
+        {
+            if (entered)
+                io.Release();
+        }
+    }
+
+    private static async Task WhenAllGrepAsync(
+        IEnumerable<Task> tasks,
+        CancellationToken callerToken,
+        bool ignoreCapCancellation)
+    {
+        try
+        {
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Exception? timeout = null;
+            Exception? other = null;
+            var sawCancel = false;
+            foreach (var inner in FlattenGrepExceptions(ex))
+            {
+                if (inner is RegexMatchTimeoutException)
+                    timeout ??= inner;
+                else if (inner is OperationCanceledException)
+                    sawCancel = true;
+                else
+                    other ??= inner;
+            }
+
+            if (timeout is not null)
+                throw timeout;
+            if (other is not null)
+                throw other;
+            if (callerToken.IsCancellationRequested || !ignoreCapCancellation || !sawCancel)
+                throw new OperationCanceledException(callerToken);
+        }
+    }
+
+    private static IEnumerable<Exception> FlattenGrepExceptions(Exception ex)
+    {
+        if (ex is AggregateException aggregate)
+        {
+            foreach (var inner in aggregate.Flatten().InnerExceptions)
+                yield return inner;
+            yield break;
+        }
+
+        yield return ex;
+    }
+
+    private static bool IsGrepLiteralPattern(string pattern)
+    {
+        foreach (var c in pattern)
+        {
+            if (c is '.' or '^' or '$' or '*' or '+' or '?' or '(' or ')' or '[' or ']' or '{' or '}' or '\\' or '|')
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool GrepLineMatches(bool literal, string pattern, Regex regex, string text) =>
+        literal
+            ? text.Contains(pattern, StringComparison.Ordinal)
+            : regex.IsMatch(text);
+
+    private readonly record struct GrepHit(string Rel, int Line, string Text, GrepFileKind Kind);
+
+    private static string FormatGrepHit(GrepHit hit) =>
+        hit.Kind == GrepFileKind.Text
+            ? $"{hit.Rel}:{hit.Line}:{hit.Text}"
+            : $"{(hit.Kind == GrepFileKind.Image ? "image" : "binary")}\t{hit.Rel}";
 
     private async Task<DysonToolCallResult> LoadBinaryAsync(
         DysonToolCall call,
@@ -2579,50 +2784,6 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
 
         return false;
-    }
-
-    private async Task<Result<IReadOnlyList<string>, string>> EnumerateFilesSkippingExcludedAsync(
-        string rootDirRelative,
-        string? glob,
-        CancellationToken cancellationToken)
-    {
-        var pattern = string.IsNullOrWhiteSpace(glob) ? "*" : glob;
-        var stack = new Stack<string>();
-        stack.Push(rootDirRelative);
-        var files = new List<string>();
-
-        while (stack.Count > 0)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var dir = stack.Pop();
-            var entries = await _fs.EnumerateEntriesAsync(dir, cancellationToken).ConfigureAwait(false);
-            if (entries.IsError)
-                continue;
-
-            foreach (var entry in entries.Value)
-            {
-                var childRel = string.IsNullOrEmpty(dir) || dir is "." or "./"
-                    ? entry.Name
-                    : $"{dir.TrimEnd('/').Replace('\\', '/')}/{entry.Name}";
-
-                if (entry.IsDirectory)
-                {
-                    if (GrepExcludedDirNames.Contains(entry.Name))
-                        continue;
-                    stack.Push(childRel);
-                    continue;
-                }
-
-                if (!MatchesSimpleGlob(entry.Name, pattern))
-                    continue;
-
-                var resolved = _fs.ResolvePath(childRel);
-                if (resolved.IsSuccess)
-                    files.Add(resolved.Value);
-            }
-        }
-
-        return Result<IReadOnlyList<string>, string>.AsValue(files);
     }
 
     /// <summary>Minimal <c>*</c> / <c>?</c> matcher for file names (same role as Directory.EnumerateFiles pattern).</summary>

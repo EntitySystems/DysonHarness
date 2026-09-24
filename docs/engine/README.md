@@ -276,6 +276,7 @@ Workspace text search uses **.NET** `System.Text.RegularExpressions` — not a l
 - `glob` is **filename-only** (`*` / `?`, matched against the file name, not the path). Put the directory in `path` and the name pattern in `glob`. `**` and path globs like `**/*.cs` do **not** work.
 - Default `maxMatches` is **100**. Results are also capped at **48KiB** / **400** chars per line.
 - Text-only: never returns binary/image bytes. Binary/image hits are path-only lines. Skips `.git` / `bin` / `obj` / `node_modules` / `.vs` and similar.
+- Directory walk is one task per directory. File reads are capped at `clamp(ProcessorCount * 2, 8, 64)` per call and streamed by line (not `ReadAllText`). Hits are emitted in relative-path then line order. `maxMatches` / 48KiB stops further file reads after the current IO window; directory names are still listed so that order stays stable. Skip list and path jail are unchanged.
 
 ### ShellExecute
 

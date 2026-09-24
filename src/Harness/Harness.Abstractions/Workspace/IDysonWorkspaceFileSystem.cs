@@ -66,6 +66,16 @@ public interface IDysonWorkspaceFileSystem
         int maxLineChars,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Reads UTF-8 text one line at a time (1-based). Returning false from
+    /// <paramref name="onLine"/> stops the read. IO failures are a
+    /// <see cref="VoidResult{TError}"/>; cancellation is thrown.
+    /// </summary>
+    Task<VoidResult<string>> ForEachTextLineAsync(
+        string path,
+        Func<int, string, bool> onLine,
+        CancellationToken cancellationToken = default);
+
     Task<VoidResult<string>> WriteAllTextAsync(
         string path,
         string contents,

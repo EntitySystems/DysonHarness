@@ -282,6 +282,40 @@ public class DysonLocalWorkspaceFileSystemTests
     }
 
     [Fact]
+    public async Task ForEachTextLine_StopsWhenVisitorReturnsFalse()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            var created = await DysonWorkspaceFileSystems.CreateLocalAsync(root);
+            Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+            var fs = created.Value;
+
+            var body = string.Join('\n', Enumerable.Range(1, 5).Select(i => $"line-{i}"));
+            Assert.True((await fs.WriteAllTextAsync("lines.txt", body)).IsSuccess);
+
+            var seen = new List<int>();
+            var read = await fs.ForEachTextLineAsync("lines.txt", (lineNumber, _) =>
+            {
+                seen.Add(lineNumber);
+                return lineNumber < 2;
+            });
+            Assert.True(read.IsSuccess, read.IsError ? read.Error : null);
+            Assert.Equal(new[] { 1, 2 }, seen);
+
+            var missing = await fs.ForEachTextLineAsync("missing.txt", (_, _) => true);
+            Assert.True(missing.IsError);
+
+            var directory = await fs.ForEachTextLineAsync(".", (_, _) => true);
+            Assert.True(directory.IsError);
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    [Fact]
     public async Task ReadLineSlice_missing_file()
     {
         var root = CreateTempDir();
