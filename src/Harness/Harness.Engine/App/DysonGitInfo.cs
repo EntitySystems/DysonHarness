@@ -34,17 +34,23 @@ public static class DysonGitInfo
 
     /// <summary>
     /// Runs <c>git -C path rev-parse --abbrev-ref HEAD</c>. Failure means no usable git repo.
+    /// The 2s budget covers the process and both pipes.
     /// </summary>
-    public static Result<string, string> TryGetBranch(IDysonWorkspaceFileSystem workspaceFileSystem)
+    public static Task<Result<string, string>> TryGetBranchAsync(
+        IDysonWorkspaceFileSystem workspaceFileSystem,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(workspaceFileSystem);
-        return TryGetBranch(workspaceFileSystem.NativeRootPath);
+        return TryGetBranchAsync(workspaceFileSystem.NativeRootPath, cancellationToken);
     }
 
     /// <summary>
     /// Runs <c>git -C path rev-parse --abbrev-ref HEAD</c>. Failure means no usable git repo.
+    /// The 2s budget covers the process and both pipes.
     /// </summary>
-    public static Result<string, string> TryGetBranch(string absolutePath)
+    public static async Task<Result<string, string>> TryGetBranchAsync(
+        string absolutePath,
+        CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(absolutePath))
             return Result<string, string>.AsError("Path is empty.");
@@ -62,7 +68,8 @@ public static class DysonGitInfo
         if (!Directory.Exists(fullPath))
             return Result<string, string>.AsError("Directory does not exist.");
 
-        var run = RunGit(fullPath, ["rev-parse", "--abbrev-ref", "HEAD"], Timeout);
+        var run = await RunGitAsync(fullPath, ["rev-parse", "--abbrev-ref", "HEAD"], Timeout, cancellationToken)
+            .ConfigureAwait(false);
         if (run.IsError)
             return Result<string, string>.AsError(run.Error);
 
@@ -81,17 +88,35 @@ public static class DysonGitInfo
     /// Walks parents from the workspace native root and returns the outermost directory
     /// that contains a <c>.git</c> file or directory.
     /// </summary>
-    public static Result<string, string> TryFindRootMostRepo(IDysonWorkspaceFileSystem workspaceFileSystem)
+    public static Task<Result<string, string>> TryFindRootMostRepoAsync(
+        IDysonWorkspaceFileSystem workspaceFileSystem,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(workspaceFileSystem);
-        return TryFindRootMostRepo(workspaceFileSystem.NativeRootPath);
+        return TryFindRootMostRepoAsync(workspaceFileSystem.NativeRootPath, cancellationToken);
     }
 
     /// <summary>
     /// Walks parents from <paramref name="absolutePath"/> and returns the outermost directory
-    /// that contains a <c>.git</c> file or directory.
+    /// that contains a <c>.git</c> file or directory. The walk runs off the caller.
     /// </summary>
-    public static Result<string, string> TryFindRootMostRepo(string absolutePath)
+    public static async Task<Result<string, string>> TryFindRootMostRepoAsync(
+        string absolutePath,
+        CancellationToken cancellationToken = default)
+    {
+        // ponytail: Directory.Exists / File.Exists have no TAP and cannot be cancelled.
+        // Upgrade is a native probe with a timeout if a network root still hangs the pool.
+        try
+        {
+            return await Task.Run(() => FindRootMostRepo(absolutePath), cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return Result<string, string>.AsError("Cancelled.");
+        }
+    }
+
+    private static Result<string, string> FindRootMostRepo(string absolutePath)
     {
         if (string.IsNullOrWhiteSpace(absolutePath))
             return Result<string, string>.AsError("Path is empty.");
@@ -148,25 +173,31 @@ public static class DysonGitInfo
 
     /// <summary>
     /// Runs <c>git remote get-url origin</c> against the outermost repo from
-    /// <see cref="TryFindRootMostRepo(IDysonWorkspaceFileSystem)"/>.
+    /// <see cref="TryFindRootMostRepoAsync(IDysonWorkspaceFileSystem, CancellationToken)"/>.
     /// </summary>
-    public static Result<string, string> TryGetOrigin(IDysonWorkspaceFileSystem workspaceFileSystem)
+    public static Task<Result<string, string>> TryGetOriginAsync(
+        IDysonWorkspaceFileSystem workspaceFileSystem,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(workspaceFileSystem);
-        return TryGetOrigin(workspaceFileSystem.NativeRootPath);
+        return TryGetOriginAsync(workspaceFileSystem.NativeRootPath, cancellationToken);
     }
 
     /// <summary>
     /// Runs <c>git remote get-url origin</c> against the outermost repo from
-    /// <see cref="TryFindRootMostRepo(string)"/> so nested workdirs see the outer remote.
+    /// <see cref="TryFindRootMostRepoAsync(string, CancellationToken)"/> so nested workdirs see the outer remote.
+    /// The 2s budget covers the process and both pipes.
     /// </summary>
-    public static Result<string, string> TryGetOrigin(string absolutePath)
+    public static async Task<Result<string, string>> TryGetOriginAsync(
+        string absolutePath,
+        CancellationToken cancellationToken = default)
     {
-        var root = TryFindRootMostRepo(absolutePath);
+        var root = await TryFindRootMostRepoAsync(absolutePath, cancellationToken).ConfigureAwait(false);
         if (root.IsError)
             return Result<string, string>.AsError(root.Error);
 
-        var run = RunGit(root.Value, ["remote", "get-url", "origin"], Timeout);
+        var run = await RunGitAsync(root.Value, ["remote", "get-url", "origin"], Timeout, cancellationToken)
+            .ConfigureAwait(false);
         if (run.IsError)
             return Result<string, string>.AsError(run.Error);
 
@@ -234,19 +265,23 @@ public static class DysonGitInfo
 
     /// <summary>
     /// Runs <c>git -C</c> against the workspace native root with <c>status --porcelain=v1 -uall</c>.
-    /// Prefer resolving the repo root via <see cref="TryFindRootMostRepo(IDysonWorkspaceFileSystem)"/> first.
+    /// Prefer resolving the repo root via <see cref="TryFindRootMostRepoAsync(IDysonWorkspaceFileSystem, CancellationToken)"/> first.
     /// </summary>
-    public static Result<IReadOnlyList<DysonGitStatusEntry>, string> TryGetStatusPorcelain(
-        IDysonWorkspaceFileSystem workspaceFileSystem)
+    public static Task<Result<IReadOnlyList<DysonGitStatusEntry>, string>> TryGetStatusPorcelainAsync(
+        IDysonWorkspaceFileSystem workspaceFileSystem,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(workspaceFileSystem);
-        return TryGetStatusPorcelain(workspaceFileSystem.NativeRootPath);
+        return TryGetStatusPorcelainAsync(workspaceFileSystem.NativeRootPath, cancellationToken);
     }
 
     /// <summary>
     /// Runs <c>git -C repoRoot status --porcelain=v1 -uall</c> and parses A/M/D/?? entries.
+    /// The 2s budget covers the process and both pipes.
     /// </summary>
-    public static Result<IReadOnlyList<DysonGitStatusEntry>, string> TryGetStatusPorcelain(string repoRoot)
+    public static async Task<Result<IReadOnlyList<DysonGitStatusEntry>, string>> TryGetStatusPorcelainAsync(
+        string repoRoot,
+        CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(repoRoot))
             return Result<IReadOnlyList<DysonGitStatusEntry>, string>.AsError("Path is empty.");
@@ -264,7 +299,8 @@ public static class DysonGitInfo
         if (!Directory.Exists(fullPath))
             return Result<IReadOnlyList<DysonGitStatusEntry>, string>.AsError("Directory does not exist.");
 
-        var run = RunGit(fullPath, ["status", "--porcelain=v1", "-uall"], Timeout);
+        var run = await RunGitAsync(fullPath, ["status", "--porcelain=v1", "-uall"], Timeout, cancellationToken)
+            .ConfigureAwait(false);
         if (run.IsError)
             return Result<IReadOnlyList<DysonGitStatusEntry>, string>.AsError(run.Error);
 
@@ -281,10 +317,11 @@ public static class DysonGitInfo
     /// <summary>
     /// Runs <c>git worktree add -b {branch} {path} HEAD</c> from <paramref name="repoRoot"/>.
     /// </summary>
-    public static Result<string, string> TryAddWorktree(
+    public static async Task<Result<string, string>> TryAddWorktreeAsync(
         string repoRoot,
         string worktreeAbsolutePath,
-        string branchName)
+        string branchName,
+        CancellationToken cancellationToken = default)
     {
         var root = TryResolveExistingDirectory(repoRoot);
         if (root.IsError)
@@ -306,10 +343,12 @@ public static class DysonGitInfo
             return Result<string, string>.AsError($"Invalid path: {ex.Message}");
         }
 
-        var run = RunGit(
-            root.Value,
-            ["worktree", "add", "-b", branchName.Trim(), fullWorktree, "HEAD"],
-            WorktreeCommandTimeout);
+        var run = await RunGitAsync(
+                root.Value,
+                ["worktree", "add", "-b", branchName.Trim(), fullWorktree, "HEAD"],
+                WorktreeCommandTimeout,
+                cancellationToken)
+            .ConfigureAwait(false);
         if (run.IsError)
             return Result<string, string>.AsError(run.Error);
 
@@ -326,10 +365,11 @@ public static class DysonGitInfo
     /// <summary>
     /// Runs <c>git worktree remove</c> (with <c>--force</c> when <paramref name="force"/> is true).
     /// </summary>
-    public static VoidResult<string> TryRemoveWorktree(
+    public static async Task<VoidResult<string>> TryRemoveWorktreeAsync(
         string repoRoot,
         string worktreeAbsolutePath,
-        bool force = false)
+        bool force = false,
+        CancellationToken cancellationToken = default)
     {
         var root = TryResolveExistingDirectory(repoRoot);
         if (root.IsError)
@@ -352,7 +392,8 @@ public static class DysonGitInfo
             ? ["worktree", "remove", "--force", fullWorktree]
             : ["worktree", "remove", fullWorktree];
 
-        var run = RunGit(root.Value, args, WorktreeCommandTimeout);
+        var run = await RunGitAsync(root.Value, args, WorktreeCommandTimeout, cancellationToken)
+            .ConfigureAwait(false);
         if (run.IsError)
             return VoidResult<string>.AsError(run.Error);
 
@@ -370,13 +411,20 @@ public static class DysonGitInfo
     /// Runs <c>git worktree list --porcelain</c> and parses path, HEAD, and branch
     /// (null when detached).
     /// </summary>
-    public static Result<IReadOnlyList<DysonGitWorktreeEntry>, string> TryListWorktrees(string repoRoot)
+    public static async Task<Result<IReadOnlyList<DysonGitWorktreeEntry>, string>> TryListWorktreesAsync(
+        string repoRoot,
+        CancellationToken cancellationToken = default)
     {
         var root = TryResolveExistingDirectory(repoRoot);
         if (root.IsError)
             return Result<IReadOnlyList<DysonGitWorktreeEntry>, string>.AsError(root.Error);
 
-        var run = RunGit(root.Value, ["worktree", "list", "--porcelain"], WorktreeCommandTimeout);
+        var run = await RunGitAsync(
+                root.Value,
+                ["worktree", "list", "--porcelain"],
+                WorktreeCommandTimeout,
+                cancellationToken)
+            .ConfigureAwait(false);
         if (run.IsError)
             return Result<IReadOnlyList<DysonGitWorktreeEntry>, string>.AsError(run.Error);
 
@@ -394,7 +442,10 @@ public static class DysonGitInfo
     /// Runs <c>git merge --no-edit {branch}</c> in <paramref name="repoRoot"/>.
     /// Conflicts and other non-zero exits are Result errors (stderr).
     /// </summary>
-    public static VoidResult<string> TryMergeBranch(string repoRoot, string branchName)
+    public static async Task<VoidResult<string>> TryMergeBranchAsync(
+        string repoRoot,
+        string branchName,
+        CancellationToken cancellationToken = default)
     {
         var root = TryResolveExistingDirectory(repoRoot);
         if (root.IsError)
@@ -403,7 +454,12 @@ public static class DysonGitInfo
         if (string.IsNullOrWhiteSpace(branchName))
             return VoidResult<string>.AsError("Branch name is empty.");
 
-        var run = RunGit(root.Value, ["merge", "--no-edit", branchName.Trim()], WorktreeCommandTimeout);
+        var run = await RunGitAsync(
+                root.Value,
+                ["merge", "--no-edit", branchName.Trim()],
+                WorktreeCommandTimeout,
+                cancellationToken)
+            .ConfigureAwait(false);
         if (run.IsError)
             return VoidResult<string>.AsError(run.Error);
 
@@ -421,13 +477,20 @@ public static class DysonGitInfo
     /// Runs <c>git diff --name-only --diff-filter=U</c> in <paramref name="repoRoot"/>.
     /// Paths are repo-relative. An empty list means there are no unmerged paths.
     /// </summary>
-    public static Result<IReadOnlyList<string>, string> TryListUnmergedPaths(string repoRoot)
+    public static async Task<Result<IReadOnlyList<string>, string>> TryListUnmergedPathsAsync(
+        string repoRoot,
+        CancellationToken cancellationToken = default)
     {
         var root = TryResolveExistingDirectory(repoRoot);
         if (root.IsError)
             return Result<IReadOnlyList<string>, string>.AsError(root.Error);
 
-        var run = RunGit(root.Value, ["diff", "--name-only", "--diff-filter=U"], WorktreeCommandTimeout);
+        var run = await RunGitAsync(
+                root.Value,
+                ["diff", "--name-only", "--diff-filter=U"],
+                WorktreeCommandTimeout,
+                cancellationToken)
+            .ConfigureAwait(false);
         if (run.IsError)
             return Result<IReadOnlyList<string>, string>.AsError(run.Error);
 
@@ -445,13 +508,16 @@ public static class DysonGitInfo
     }
 
     /// <summary>Runs <c>git merge --abort</c> in <paramref name="repoRoot"/>.</summary>
-    public static VoidResult<string> TryAbortMerge(string repoRoot)
+    public static async Task<VoidResult<string>> TryAbortMergeAsync(
+        string repoRoot,
+        CancellationToken cancellationToken = default)
     {
         var root = TryResolveExistingDirectory(repoRoot);
         if (root.IsError)
             return VoidResult<string>.AsError(root.Error);
 
-        var run = RunGit(root.Value, ["merge", "--abort"], WorktreeCommandTimeout);
+        var run = await RunGitAsync(root.Value, ["merge", "--abort"], WorktreeCommandTimeout, cancellationToken)
+            .ConfigureAwait(false);
         if (run.IsError)
             return VoidResult<string>.AsError(run.Error);
 
@@ -487,7 +553,7 @@ public static class DysonGitInfo
         if (resolved.IsError)
             return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsError(resolved.Error);
 
-        var repo = TryFindRootMostRepo(workspaceFileSystem);
+        var repo = await TryFindRootMostRepoAsync(workspaceFileSystem, cancellationToken).ConfigureAwait(false);
         if (repo.IsError)
             return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue([]);
 
@@ -498,10 +564,12 @@ public static class DysonGitInfo
         if (Directory.Exists(resolved.Value))
             return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue([]);
 
-        var statusRun = RunGit(
-            repo.Value,
-            ["status", "--porcelain=v1", "-uall", "--", repoRelative.Value],
-            Timeout);
+        var statusRun = await RunGitAsync(
+                repo.Value,
+                ["status", "--porcelain=v1", "-uall", "--", repoRelative.Value],
+                Timeout,
+                cancellationToken)
+            .ConfigureAwait(false);
         if (statusRun.IsError)
             return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue([]);
 
@@ -512,7 +580,7 @@ public static class DysonGitInfo
         var statusEntries = ParsePorcelain(statusStdout);
         var isUntracked = statusEntries.Any(static e => e.Kind == DysonGitChangeKind.Untracked);
         var isNewlyAdded = statusEntries.Any(static e => e.Kind == DysonGitChangeKind.Added);
-        var hasHead = HasComparableHead(repo.Value);
+        var hasHead = await HasComparableHeadAsync(repo.Value, cancellationToken).ConfigureAwait(false);
 
         if (isUntracked || (!hasHead && isNewlyAdded))
         {
@@ -524,10 +592,12 @@ public static class DysonGitInfo
         if (!hasHead)
             return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue([]);
 
-        var diffRun = RunGit(
-            repo.Value,
-            ["diff", "--no-color", "--no-ext-diff", "--unified=0", "HEAD", "--", repoRelative.Value],
-            Timeout);
+        var diffRun = await RunGitAsync(
+                repo.Value,
+                ["diff", "--no-color", "--no-ext-diff", "--unified=0", "HEAD", "--", repoRelative.Value],
+                Timeout,
+                cancellationToken)
+            .ConfigureAwait(false);
         if (diffRun.IsError)
             return Result<IReadOnlyList<DysonGitDiffAnnotation>, string>.AsValue([]);
 
@@ -680,13 +750,11 @@ public static class DysonGitInfo
         return count;
     }
 
-    private static bool HasComparableHead(string repoRoot)
+    private static async Task<bool> HasComparableHeadAsync(string repoRoot, CancellationToken cancellationToken)
     {
-        var run = RunGit(repoRoot, ["rev-parse", "--verify", "HEAD"], Timeout);
-        if (run.IsError)
-            return false;
-
-        return run.Value.ExitCode == 0;
+        var run = await RunGitAsync(repoRoot, ["rev-parse", "--verify", "HEAD"], Timeout, cancellationToken)
+            .ConfigureAwait(false);
+        return run.IsSuccess && run.Value.ExitCode == 0;
     }
 
     private static Result<string, string> TryGetRepoRelativePath(string repoRoot, string absoluteTarget)
@@ -811,17 +879,23 @@ public static class DysonGitInfo
     }
 
     /// <summary>
-    /// Starts git with redirected pipes and drains stdout/stderr while waiting so large
-    /// porcelain output cannot fill the OS pipe buffer and deadlock.
+    /// Starts git with redirected pipes and drains stdout/stderr concurrently with exit
+    /// so large porcelain output cannot fill the OS pipe buffer and deadlock.
+    /// <paramref name="timeout"/> covers the process and both pipes.
     /// </summary>
-    private static Result<(int ExitCode, string Stdout, string Stderr), string> RunGit(
+    private static async Task<Result<(int ExitCode, string Stdout, string Stderr), string>> RunGitAsync(
         string workingDirectory,
-        IEnumerable<string> args,
-        TimeSpan timeout)
+        IReadOnlyList<string> args,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
+        if (cancellationToken.IsCancellationRequested)
+            return Result<(int, string, string), string>.AsError("git cancelled.");
+
+        Process? process = null;
         try
         {
-            using var process = new Process
+            process = new Process
             {
                 StartInfo = new ProcessStartInfo
                 {
@@ -841,11 +915,21 @@ public static class DysonGitInfo
             if (!process.Start())
                 return Result<(int, string, string), string>.AsError("Failed to start git.");
 
-            // Drain concurrently with WaitForExit — reading after exit deadlocks when output > pipe buffer.
-            var stdoutTask = process.StandardOutput.ReadToEndAsync();
-            var stderrTask = process.StandardError.ReadToEndAsync();
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(timeout);
+            var token = timeoutCts.Token;
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(token);
+            var stderrTask = process.StandardError.ReadToEndAsync(token);
 
-            if (!process.WaitForExit((int)timeout.TotalMilliseconds))
+            string stdout;
+            string stderr;
+            try
+            {
+                await process.WaitForExitAsync(token).ConfigureAwait(false);
+                stdout = await stdoutTask.ConfigureAwait(false);
+                stderr = await stderrTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
             {
                 try
                 {
@@ -856,25 +940,37 @@ public static class DysonGitInfo
                     // Best-effort kill on timeout.
                 }
 
-                try
-                {
-                    Task.WhenAll(stdoutTask, stderrTask).GetAwaiter().GetResult();
-                }
-                catch
-                {
-                    // Drain best-effort after kill.
-                }
-
-                return Result<(int, string, string), string>.AsError("git timed out.");
+                // ponytail: 250ms post-kill drain. stderr may still be empty if the pipe outlives the cap.
+                // Upgrade is a cancellable Process wrapper if kill does not reap.
+                await ObservePipesAsync(stdoutTask, stderrTask).ConfigureAwait(false);
+                return Result<(int, string, string), string>.AsError(
+                    cancellationToken.IsCancellationRequested ? "git cancelled." : "git timed out.");
             }
 
-            Task.WhenAll(stdoutTask, stderrTask).GetAwaiter().GetResult();
-            return Result<(int, string, string), string>.AsValue(
-                (process.ExitCode, stdoutTask.Result, stderrTask.Result));
+            return Result<(int, string, string), string>.AsValue((process.ExitCode, stdout, stderr));
         }
         catch (Exception ex)
         {
             return Result<(int, string, string), string>.AsError($"git failed: {ex.Message}");
+        }
+        finally
+        {
+            process?.Dispose();
+        }
+    }
+
+    private static async Task ObservePipesAsync(Task stdout, Task stderr)
+    {
+        try
+        {
+            var pending = Task.WhenAll(stdout, stderr);
+            var finished = await Task.WhenAny(pending, Task.Delay(250)).ConfigureAwait(false);
+            if (ReferenceEquals(finished, pending))
+                await pending.ConfigureAwait(false);
+        }
+        catch
+        {
+            // Drain best-effort after kill.
         }
     }
 

@@ -196,7 +196,7 @@
                                         <button type="button"
                                                 class="btn btn-ghost btn-sm"
                                                 disabled="@Busy"
-                                                @onclick="() => { if (!ctx.IsExiting) BeginEdit(status.ServerId); }">
+                                                @onclick="async () => { if (!ctx.IsExiting) await BeginEditAsync(status.ServerId); }">
                                             Edit
                                         </button>
                                         <button type="button"
@@ -473,7 +473,7 @@
             ? b
             : string.Equals(args.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
 
-        var result = DysonCustomMcpConfigLoader.SetDisabled(
+        var result = await DysonCustomMcpConfigLoader.SetDisabledAsync(
             WorkDirectory.AbsolutePath, serverId, disabled: !enabled);
         if (result.IsError)
             _error = result.Error;
@@ -493,7 +493,7 @@
         _editJson = DefaultStubJson;
     }
 
-    private void BeginEdit(string serverId)
+    private async Task BeginEditAsync(string serverId)
     {
         if (WorkDirectory is null)
             return;
@@ -502,15 +502,16 @@
         _editingServerId = serverId;
         _editServerId = serverId;
         var path = DysonCustomMcpConfigLoader.GetServerPath(WorkDirectory.AbsolutePath, serverId);
-        try
+        var read = await DysonCustomMcpConfigLoader.ReadTextAsync(path);
+        if (read.IsError)
         {
-            _editJson = File.Exists(path) ? File.ReadAllText(path) : DefaultStubJson;
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
             _editJson = DefaultStubJson;
+            if (!read.Error.StartsWith("File not found:", StringComparison.Ordinal))
+                _error = read.Error;
+            return;
         }
+
+        _editJson = read.Value;
     }
 
     private void OnEditServerIdInput(ChangeEventArgs e) =>
@@ -531,7 +532,7 @@
 
         _error = null;
         var id = _editingServerId ?? _editServerId.Trim();
-        var write = DysonCustomMcpConfigLoader.Write(WorkDirectory.AbsolutePath, id, _editJson);
+        var write = await DysonCustomMcpConfigLoader.WriteAsync(WorkDirectory.AbsolutePath, id, _editJson);
         if (write.IsError)
         {
             _error = write.Error;

@@ -184,35 +184,68 @@ public static partial class DysonCustomMcpConfigLoader
         string serverId,
         string rawJson)
     {
-        var idCheck = ValidateServerId(serverId);
-        if (idCheck.IsError)
-            return idCheck;
-
-        // Validate parse before writing.
-        var parsed = Parse(workRoot, serverId.Trim(), rawJson);
-        if (parsed.IsError)
-            return new VoidResult<string>(parsed.Error);
-
-        var ensure = EnsureDirectory(workRoot);
-        if (ensure.IsError)
-            return ensure;
+        var prepared = PrepareWrite(workRoot, serverId, rawJson);
+        if (prepared.IsError)
+            return new VoidResult<string>(prepared.Error);
 
         try
         {
-            // Pretty-print when possible.
-            string toWrite;
-            try
-            {
-                var node = JsonNode.Parse(rawJson) ?? new JsonObject();
-                toWrite = node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n";
-            }
-            catch
-            {
-                toWrite = rawJson;
-            }
-
-            File.WriteAllText(GetServerPath(workRoot, serverId.Trim()), toWrite);
+            File.WriteAllText(prepared.Value.Path, prepared.Value.Text);
             return VoidResult<string>.Success;
+        }
+        catch (Exception ex)
+        {
+            return new VoidResult<string>($"Failed to write MCP server file: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Reads a file off the caller. A missing file is a Result error (UI maps that to the editor stub).
+    /// </summary>
+    public static async Task<Result<string, string>> ReadTextAsync(
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return Result<string, string>.AsError("Path is empty.");
+
+        try
+        {
+            if (!File.Exists(path))
+                return Result<string, string>.AsError($"File not found: {path}");
+
+            var text = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+            return Result<string, string>.AsValue(text);
+        }
+        catch (OperationCanceledException)
+        {
+            return Result<string, string>.AsError("Cancelled.");
+        }
+        catch (Exception ex)
+        {
+            return Result<string, string>.AsError(ex.Message);
+        }
+    }
+
+    public static async Task<VoidResult<string>> WriteAsync(
+        string workRoot,
+        string serverId,
+        string rawJson,
+        CancellationToken cancellationToken = default)
+    {
+        var prepared = PrepareWrite(workRoot, serverId, rawJson);
+        if (prepared.IsError)
+            return new VoidResult<string>(prepared.Error);
+
+        try
+        {
+            await File.WriteAllTextAsync(prepared.Value.Path, prepared.Value.Text, cancellationToken)
+                .ConfigureAwait(false);
+            return VoidResult<string>.Success;
+        }
+        catch (OperationCanceledException)
+        {
+            return new VoidResult<string>("Cancelled.");
         }
         catch (Exception ex)
         {
@@ -277,6 +310,84 @@ public static partial class DysonCustomMcpConfigLoader
             obj.Remove("disabled");
 
         return Write(workRoot, serverId.Trim(), obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    /// <summary>Sets or clears the <c>disabled</c> flag without blocking the caller on disk.</summary>
+    public static async Task<VoidResult<string>> SetDisabledAsync(
+        string workRoot,
+        string serverId,
+        bool disabled,
+        CancellationToken cancellationToken = default)
+    {
+        var idCheck = ValidateServerId(serverId);
+        if (idCheck.IsError)
+            return idCheck;
+
+        var path = GetServerPath(workRoot, serverId.Trim());
+        var read = await ReadTextAsync(path, cancellationToken).ConfigureAwait(false);
+        if (read.IsError)
+        {
+            return new VoidResult<string>(
+                read.Error.StartsWith("File not found:", StringComparison.Ordinal)
+                    ? $"MCP server file not found: {serverId.Trim()}.json"
+                    : $"Failed to read server file: {read.Error}");
+        }
+
+        JsonNode? node;
+        try
+        {
+            node = JsonNode.Parse(string.IsNullOrWhiteSpace(read.Value) ? "{}" : read.Value);
+        }
+        catch (Exception ex)
+        {
+            return new VoidResult<string>($"Invalid JSON: {ex.Message}");
+        }
+
+        if (node is not JsonObject obj)
+            return new VoidResult<string>("Server config must be a JSON object.");
+
+        if (disabled)
+            obj["disabled"] = true;
+        else
+            obj.Remove("disabled");
+
+        return await WriteAsync(
+                workRoot,
+                serverId.Trim(),
+                obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static Result<(string Path, string Text), string> PrepareWrite(
+        string workRoot,
+        string serverId,
+        string rawJson)
+    {
+        var idCheck = ValidateServerId(serverId);
+        if (idCheck.IsError)
+            return Result<(string, string), string>.AsError(idCheck.Error);
+
+        var parsed = Parse(workRoot, serverId.Trim(), rawJson);
+        if (parsed.IsError)
+            return Result<(string, string), string>.AsError(parsed.Error);
+
+        var ensure = EnsureDirectory(workRoot);
+        if (ensure.IsError)
+            return Result<(string, string), string>.AsError(ensure.Error);
+
+        string toWrite;
+        try
+        {
+            var node = JsonNode.Parse(rawJson) ?? new JsonObject();
+            toWrite = node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n";
+        }
+        catch
+        {
+            toWrite = rawJson;
+        }
+
+        return Result<(string, string), string>.AsValue((GetServerPath(workRoot, serverId.Trim()), toWrite));
     }
 
     internal static Result<DysonCustomMcpTransportKind, string> InferTransport(

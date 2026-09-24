@@ -97,6 +97,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly List<string> _pendingSnipPromptLines = [];
     private readonly object _pendingSnipPromptLinesGate = new();
     private Guid? _composerWorkDirectoryId;
+    private string? _composerRepoCheckedPath;
     private bool _activeWorkDirectoryIsGitRepo;
     private string _worktreeDisabledReason = "Select a work directory.";
     private bool _forkWorktreeDefault;
@@ -1792,8 +1793,6 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
         }
 
-        var gitDiffAnnotations = await TryGetGitDiffAnnotationsAsync(fs, path, cancellationToken)
-            .ConfigureAwait(true);
         IReadOnlyList<DysonFileViewerMarkdownBlock> markdownBlocks = [];
         if (isMd)
         {
@@ -1803,7 +1802,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 .ConfigureAwait(true);
         }
 
-        SetFileViewer(new DysonFileViewerState
+        var viewerEpoch = Interlocked.Increment(ref _fileViewerEpoch);
+        DysonFileViewerState ViewerState(IReadOnlyList<DysonGitDiffAnnotation> annotations) => new()
         {
             RelativePath = path,
             Title = title,
@@ -1813,8 +1813,13 @@ public sealed class DysonUiHost : IAsyncDisposable
             CanOpenInDefaultEditor = absolutePath is not null,
             MarkdownBlocks = markdownBlocks,
             Actions = actionList,
-            GitDiffAnnotations = gitDiffAnnotations,
-        });
+            GitDiffAnnotations = annotations,
+        };
+
+        SetFileViewer(ViewerState([]), viewerEpoch);
+        var gitDiffAnnotations = await TryGetGitDiffAnnotationsAsync(fs, path, cancellationToken)
+            .ConfigureAwait(true);
+        SetFileViewer(ViewerState(gitDiffAnnotations), viewerEpoch);
     }
 
     /// <summary>
@@ -2108,18 +2113,14 @@ public sealed class DysonUiHost : IAsyncDisposable
         actions is { Count: > 0 } ? actions : [];
 
     /// <summary>
-    /// Optional Git hunks for a workspace text file. Offloads git WaitForExit (still sync in
-    /// <see cref="DysonGitInfo"/>) so the Blazor circuit does not stall while the overlay opens.
-    /// API errors and unavailable metadata become an empty list so readable files still open.
+    /// Optional Git hunks for a workspace text file. Failure becomes an empty list so readable files still open.
     /// </summary>
     private static async Task<IReadOnlyList<DysonGitDiffAnnotation>> TryGetGitDiffAnnotationsAsync(
         IDysonWorkspaceFileSystem fs,
         string relativePath,
         CancellationToken cancellationToken)
     {
-        var result = await Task.Run(
-                () => DysonGitInfo.TryGetFileDiffAnnotationsAsync(fs, relativePath, cancellationToken),
-                cancellationToken)
+        var result = await DysonGitInfo.TryGetFileDiffAnnotationsAsync(fs, relativePath, cancellationToken)
             .ConfigureAwait(true);
         return result.IsSuccess ? result.Value : [];
     }
@@ -2882,6 +2883,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         var id = CatalogWorkDirectoryId;
         if (id is not Guid wd || wd == Guid.Empty)
         {
+            _composerRepoCheckedPath = null;
             _activeWorkDirectoryIsGitRepo = false;
             _worktreeDisabledReason = "Select a work directory.";
             _forkWorktreeDefault = false;
@@ -2891,19 +2893,38 @@ public sealed class DysonUiHost : IAsyncDisposable
         var dir = await _workDirectories.GetAsync(wd, cancellationToken).ConfigureAwait(false);
         if (dir.IsError)
         {
+            _composerRepoCheckedPath = null;
             _activeWorkDirectoryIsGitRepo = false;
             _worktreeDisabledReason = dir.Error;
             _forkWorktreeDefault = false;
             return;
         }
 
-        var repo = DysonGitInfo.TryFindRootMostRepo(dir.Value.AbsolutePath);
-        _activeWorkDirectoryIsGitRepo = repo.IsSuccess;
-        _worktreeDisabledReason = repo.IsError
-            ? (string.Equals(repo.Error, "No git repository.", StringComparison.Ordinal)
-                ? "Not a git repository"
-                : repo.Error)
-            : "";
+        string checkedPath;
+        try
+        {
+            checkedPath = Path.GetFullPath(dir.Value.AbsolutePath);
+        }
+        catch
+        {
+            checkedPath = dir.Value.AbsolutePath;
+        }
+
+        var pathComparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (!string.Equals(checkedPath, _composerRepoCheckedPath, pathComparison))
+        {
+            var repo = await DysonGitInfo.TryFindRootMostRepoAsync(dir.Value.AbsolutePath, cancellationToken)
+                .ConfigureAwait(false);
+            _composerRepoCheckedPath = checkedPath;
+            _activeWorkDirectoryIsGitRepo = repo.IsSuccess;
+            _worktreeDisabledReason = repo.IsError
+                ? (string.Equals(repo.Error, "No git repository.", StringComparison.Ordinal)
+                    ? "Not a git repository"
+                    : repo.Error)
+                : "";
+        }
 
         var cfg = await _workDirectoryConfigurations.GetAsync(wd, cancellationToken)
             .ConfigureAwait(false);
@@ -3006,8 +3027,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (registered.IsError)
             return FailWorktree(registered.Error);
 
-        var merge = DysonSessionWorktree.Merge(
-            registered.Value.AbsolutePath, path, branch, forceRemoveIfDirty);
+        var merge = await DysonSessionWorktree.MergeAsync(
+                registered.Value.AbsolutePath, path, branch, forceRemoveIfDirty, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
         if (merge.IsError)
             return FailWorktree(merge.Error);
 
@@ -3039,7 +3061,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (registered.IsError)
             return FailWorktree(registered.Error);
 
-        var removed = DysonSessionWorktree.Remove(registered.Value.AbsolutePath, path, force);
+        var removed = await DysonSessionWorktree.RemoveAsync(
+                registered.Value.AbsolutePath, path, force, cancellationToken)
+            .ConfigureAwait(false);
         if (removed.IsError)
             return FailWorktree(removed.Error);
 
@@ -5500,7 +5524,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         var turn = session.BeginWorktreeCreatingTurn();
         Notify(DysonHostChangeKind.Transcript);
 
-        var ensured = DysonSessionWorktree.Ensure(registered, session.PersistenceId);
+        var ensured = await DysonSessionWorktree.EnsureAsync(registered, session.PersistenceId, cancellationToken)
+            .ConfigureAwait(false);
         if (ensured.IsError)
         {
             session.FailWorktreeCreatingTurn(turn, ensured.Error);
@@ -6337,11 +6362,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (workDirectory.IsError)
             return $"Diagnostic: worktree scope could not be determined: {workDirectory.Error}";
 
-        var root = DysonGitInfo.TryFindRootMostRepo(workDirectory.Value.AbsolutePath);
+        var root = await DysonGitInfo.TryFindRootMostRepoAsync(workDirectory.Value.AbsolutePath)
+            .ConfigureAwait(false);
         if (root.IsError)
             return $"Diagnostic: worktree scope could not be determined: {root.Error}";
 
-        var status = DysonGitInfo.TryGetStatusPorcelain(root.Value);
+        var status = await DysonGitInfo.TryGetStatusPorcelainAsync(root.Value).ConfigureAwait(false);
         if (status.IsError)
             return $"Diagnostic: git status failed; determine review scope directly: {status.Error}";
 

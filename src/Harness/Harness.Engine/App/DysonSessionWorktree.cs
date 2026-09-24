@@ -60,14 +60,17 @@ public static class DysonSessionWorktree
     /// Creates the session worktree if missing (idempotent when already listed).
     /// Copies untracked harness files from the registered checkout when dest is missing.
     /// </summary>
-    public static Result<DysonSessionWorktreeLocation, string> Ensure(
+    public static async Task<Result<DysonSessionWorktreeLocation, string>> EnsureAsync(
         string registeredWorkDirectoryAbsolutePath,
-        Guid sessionId)
+        Guid sessionId,
+        CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(registeredWorkDirectoryAbsolutePath))
             return Result<DysonSessionWorktreeLocation, string>.AsError("Path is empty.");
 
-        var repo = DysonGitInfo.TryFindRootMostRepo(registeredWorkDirectoryAbsolutePath);
+        var repo = await DysonGitInfo.TryFindRootMostRepoAsync(
+                registeredWorkDirectoryAbsolutePath, cancellationToken)
+            .ConfigureAwait(false);
         if (repo.IsError)
             return Result<DysonSessionWorktreeLocation, string>.AsError(NotAGitRepositoryMessage);
 
@@ -79,7 +82,8 @@ public static class DysonSessionWorktree
         var branch = FormatBranch(sessionId);
         var location = new DysonSessionWorktreeLocation(worktreePath, branch);
 
-        var listed = DysonGitInfo.TryListWorktrees(repo.Value);
+        var listed = await DysonGitInfo.TryListWorktreesAsync(repo.Value, cancellationToken)
+            .ConfigureAwait(false);
         if (listed.IsError)
             return Result<DysonSessionWorktreeLocation, string>.AsError(listed.Error);
 
@@ -99,7 +103,8 @@ public static class DysonSessionWorktree
                 "Worktree destination already exists but is not a registered git worktree.");
         }
 
-        var added = DysonGitInfo.TryAddWorktree(repo.Value, worktreePath, branch);
+        var added = await DysonGitInfo.TryAddWorktreeAsync(repo.Value, worktreePath, branch, cancellationToken)
+            .ConfigureAwait(false);
         if (added.IsError)
             return Result<DysonSessionWorktreeLocation, string>.AsError(added.Error);
 
@@ -110,22 +115,34 @@ public static class DysonSessionWorktree
     /// <summary>
     /// Removes the worktree checkout. Leaves the <c>dyson/…</c> branch. Does not persist.
     /// </summary>
-    public static VoidResult<string> Remove(
+    public static async Task<VoidResult<string>> RemoveAsync(
         string registeredWorkDirectoryAbsolutePath,
         string worktreeAbsolutePath,
-        bool force = false)
+        bool force = false,
+        CancellationToken cancellationToken = default)
     {
-        var repo = DysonGitInfo.TryFindRootMostRepo(registeredWorkDirectoryAbsolutePath);
+        var repo = await DysonGitInfo.TryFindRootMostRepoAsync(
+                registeredWorkDirectoryAbsolutePath, cancellationToken)
+            .ConfigureAwait(false);
         if (repo.IsError)
             return VoidResult<string>.AsError(repo.Error);
 
-        return DysonGitInfo.TryRemoveWorktree(repo.Value, worktreeAbsolutePath, force);
+        return await DysonGitInfo.TryRemoveWorktreeAsync(
+                repo.Value, worktreeAbsolutePath, force, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     // ponytail: one lock per repo anchor serializes concurrent drone merges; fine for tens of drones.
     // Upgrade to a per-branch queue if hundreds of drones finish together and wait on each other.
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> MergeGates =
+    internal static readonly ConcurrentDictionary<string, SemaphoreSlim> MergeGates =
         new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// How long <see cref="MergeAsync"/> waits to enter <see cref="MergeGates"/>.
+    /// One in-flight merge holds the gate across merge, unmerged-list, abort, and remove
+    /// (each git command is separately capped at 30s). 90s bounds that wait; it is not a sum of every call.
+    /// </summary>
+    internal static readonly TimeSpan MergeGateWaitTimeout = TimeSpan.FromSeconds(90);
 
     /// <summary>Prefix on a content-conflict error after <c>git merge --abort</c>.</summary>
     public const string MergeConflictAbortedPrefix = "Merge conflict aborted:";
@@ -135,27 +152,51 @@ public static class DysonSessionWorktree
     /// Merge conflicts leave the worktree in place. <paramref name="abortConflict"/> defaults false
     /// (UI merge keeps conflict markers). When true and unmerged paths exist, aborts that merge
     /// before releasing the gate and returns <see cref="MergeConflictAbortedPrefix"/> plus those paths.
+    /// Waiting on <see cref="MergeGates"/> is bounded by <see cref="MergeGateWaitTimeout"/>.
     /// </summary>
-    public static VoidResult<string> Merge(
+    public static async Task<VoidResult<string>> MergeAsync(
         string registeredWorkDirectoryAbsolutePath,
         string worktreeAbsolutePath,
         string branchName,
         bool forceRemoveIfDirty = false,
-        bool abortConflict = false)
+        bool abortConflict = false,
+        CancellationToken cancellationToken = default)
     {
-        var repo = DysonGitInfo.TryFindRootMostRepo(registeredWorkDirectoryAbsolutePath);
+        var repo = await DysonGitInfo.TryFindRootMostRepoAsync(
+                registeredWorkDirectoryAbsolutePath, cancellationToken)
+            .ConfigureAwait(false);
         if (repo.IsError)
             return VoidResult<string>.AsError(repo.Error);
 
         var gate = MergeGates.GetOrAdd(repo.Value, static _ => new SemaphoreSlim(1, 1));
-        gate.Wait();
+        var entered = false;
         try
         {
-            var merge = DysonGitInfo.TryMergeBranch(repo.Value, branchName);
-            if (merge.IsError)
-                return abortConflict ? AbortContentConflict(repo.Value, merge.Error) : merge;
+            entered = await gate.WaitAsync(MergeGateWaitTimeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return VoidResult<string>.AsError("Worktree merge cancelled.");
+        }
 
-            return DysonGitInfo.TryRemoveWorktree(repo.Value, worktreeAbsolutePath, forceRemoveIfDirty);
+        if (!entered)
+            return VoidResult<string>.AsError("Worktree merge timed out waiting for another merge.");
+
+        try
+        {
+            var merge = await DysonGitInfo.TryMergeBranchAsync(repo.Value, branchName, cancellationToken)
+                .ConfigureAwait(false);
+            if (merge.IsError)
+            {
+                return abortConflict
+                    ? await AbortContentConflictAsync(repo.Value, merge.Error, cancellationToken)
+                        .ConfigureAwait(false)
+                    : merge;
+            }
+
+            return await DysonGitInfo.TryRemoveWorktreeAsync(
+                    repo.Value, worktreeAbsolutePath, forceRemoveIfDirty, cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {
@@ -163,13 +204,17 @@ public static class DysonSessionWorktree
         }
     }
 
-    private static VoidResult<string> AbortContentConflict(string repoRoot, string mergeError)
+    private static async Task<VoidResult<string>> AbortContentConflictAsync(
+        string repoRoot,
+        string mergeError,
+        CancellationToken cancellationToken)
     {
-        var unmerged = DysonGitInfo.TryListUnmergedPaths(repoRoot);
+        var unmerged = await DysonGitInfo.TryListUnmergedPathsAsync(repoRoot, cancellationToken)
+            .ConfigureAwait(false);
         if (unmerged.IsError || unmerged.Value.Count == 0)
             return VoidResult<string>.AsError(mergeError);
 
-        var abort = DysonGitInfo.TryAbortMerge(repoRoot);
+        var abort = await DysonGitInfo.TryAbortMergeAsync(repoRoot, cancellationToken).ConfigureAwait(false);
         if (abort.IsError)
             return VoidResult<string>.AsError(mergeError + "\n" + abort.Error);
 

@@ -70,7 +70,8 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         if (existingWorktreePath is not null)
         {
-            var listed = RequireListedWorktree(existingWorktreePath);
+            var listed = await RequireListedWorktreeAsync(existingWorktreePath, cancellationToken)
+                .ConfigureAwait(false);
             if (listed.IsError)
                 return Error(call, listed.Error);
             existingWorktreePath = listed.Value;
@@ -230,7 +231,9 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         if (discardWorktree && !string.IsNullOrWhiteSpace(child.WorktreeAbsolutePath))
         {
-            var removed = DysonSessionWorktree.Remove(WorkRoot, child.WorktreeAbsolutePath, force: true);
+            var removed = await DysonSessionWorktree.RemoveAsync(
+                    WorkRoot, child.WorktreeAbsolutePath, force: true, cancellationToken)
+                .ConfigureAwait(false);
             if (removed.IsError)
                 return Error(call, removed.Error);
 
@@ -991,7 +994,9 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
     }
 
-    private Result<string, string> RequireListedWorktree(string path)
+    private async Task<Result<string, string>> RequireListedWorktreeAsync(
+        string path,
+        CancellationToken cancellationToken)
     {
         string full;
         try
@@ -1008,7 +1013,8 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (string.IsNullOrWhiteSpace(anchor))
             anchor = WorkRoot;
 
-        var listed = DysonGitInfo.TryListWorktrees(anchor);
+        var listed = await DysonGitInfo.TryListWorktreesAsync(anchor, cancellationToken)
+            .ConfigureAwait(false);
         if (listed.IsError)
             return Result<string, string>.AsError("StartAsyncMetaAgentDrone: " + listed.Error);
 

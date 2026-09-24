@@ -214,12 +214,9 @@ public sealed class DysonGitChangesService : IDisposable
                 state.WorkAbsolutePath = nativeRoot;
             }
 
-            var root = await Task.Run(
-                    () => treeMatches
-                        ? DysonGitInfo.TryFindRootMostRepo(tree!.FileSystem)
-                        : DysonGitInfo.TryFindRootMostRepo(nativeRoot),
-                    ct)
-                .ConfigureAwait(false);
+            var root = treeMatches
+                ? await DysonGitInfo.TryFindRootMostRepoAsync(tree!.FileSystem, ct).ConfigureAwait(false)
+                : await DysonGitInfo.TryFindRootMostRepoAsync(nativeRoot, ct).ConfigureAwait(false);
 
             if (root.IsError)
             {
@@ -236,9 +233,7 @@ public sealed class DysonGitChangesService : IDisposable
             // Watch as soon as a repo exists so porcelain failures still live-refresh.
             _ = _publisher.Watch(state.WorkDirectoryId, state.RepoRoot);
 
-            var status = await Task.Run(
-                    () => DysonGitInfo.TryGetStatusPorcelain(root.Value),
-                    ct)
+            var status = await DysonGitInfo.TryGetStatusPorcelainAsync(root.Value, ct)
                 .ConfigureAwait(false);
 
             if (status.IsError)

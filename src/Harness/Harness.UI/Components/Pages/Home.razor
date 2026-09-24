@@ -525,11 +525,9 @@
 
         var fs = await DysonWorkspaceFileSystems.CreateLocalAsync(absolutePath);
 
-        // DysonGitInfo spawns git and blocks on WaitForExit plus a sync pipe drain
-        // (GetResult). Running that on the Blazor sync context deadlocks the circuit.
-        var branch = await Task.Run(() => fs.IsError
-            ? DysonGitInfo.TryGetBranch(absolutePath)
-            : DysonGitInfo.TryGetBranch(fs.Value));
+        var branch = fs.IsError
+            ? await DysonGitInfo.TryGetBranchAsync(absolutePath)
+            : await DysonGitInfo.TryGetBranchAsync(fs.Value);
         _gitBranch = branch.IsSuccess ? branch.Value : null;
     }
 

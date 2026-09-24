@@ -69,7 +69,7 @@ Result-pattern functional repository (current subject only; cross-subject get-by
 
 ## Git origin refresh (`DysonWorkDirectoryService`)
 
-Concrete Engine type (no extra interface). `RefreshGitOriginAsync` runs `DysonGitInfo.TryGetOrigin` on the registered `AbsolutePath`, classifies with `ClassifyProvider` / `ToStoredSlug`, and writes both columns via `UpdateGitMetadataAsync`. Detection failure (no git, timeout, no origin) writes `null`/`null` so a removed remote does not stay `github`. `GetAsync` failure is returned as-is (no invented row).
+Concrete Engine type (no extra interface). `RefreshGitOriginAsync` runs `DysonGitInfo.TryGetOriginAsync` on the registered `AbsolutePath`, classifies with `ClassifyProvider` / `ToStoredSlug`, and writes both columns via `UpdateGitMetadataAsync`. Detection failure (no git, timeout, no origin) writes `null`/`null` so a removed remote does not stay `github`. `GetAsync` failure is returned as-is (no invented row).
 
 Refresh is **activation-only**, not every `GetAsync` (file tree, git rail, and settings stay hot reads):
 
@@ -86,7 +86,7 @@ Refresh is **activation-only**, not every `GetAsync` (file tree, git rail, and s
 
 ## Git branch (UI)
 
-`DysonGitInfo.TryGetBranch` accepts a native absolute path or an initialized `IDysonWorkspaceFileSystem` (uses `NativeRootPath`). Runs `git -C path rev-parse --abbrev-ref HEAD` (≈2s timeout). Used for the composer branch chip; unrelated to build-time `DysonBuildInfo.BranchName`. When a session is focused, the chip (and the Files / Git rails) follow that session’s workspace root — the bound worktree path if set, otherwise the registered `AbsolutePath` — not only the work-directory row.
+`DysonGitInfo.TryGetBranchAsync` accepts a native absolute path or an initialized `IDysonWorkspaceFileSystem` (uses `NativeRootPath`). Runs `git -C path rev-parse --abbrev-ref HEAD`. The ≈2s budget covers the process and the stdout/stderr pipe drain (not only `WaitForExit`). Used for the composer branch chip; unrelated to build-time `DysonBuildInfo.BranchName`. When a session is focused, the chip (and the Files / Git rails) follow that session’s workspace root — the bound worktree path if set, otherwise the registered `AbsolutePath` — not only the work-directory row.
 
 ## Session git worktrees
 
@@ -94,13 +94,13 @@ A session may fork a **private git worktree** of the registered checkout. Projec
 
 Do **not** register the worktree as another `work_directories` row. Do **not** mutate `work_directories.AbsolutePath`.
 
-Layout (engine `DysonSessionWorktree.Ensure` / `Merge` / `Remove`):
+Layout (engine `DysonSessionWorktree.EnsureAsync` / `MergeAsync` / `RemoveAsync`):
 
 - Path: sibling `{parentOfRepo}/{repoName}.dyson-worktrees/{sessionId:N}` (git refuses a worktree inside the main tree)
 - Branch: `dyson/{first 8 hex of sessionId:N}` from `HEAD`
 - Untracked harness copy (dest-missing only): `openrules.json`, `AGENTS.md`, `.dyson/mcp/`, `.dyson/skills/`. Do not copy `.dyson/plans` or `.dyson/temp`.
 
-Created only on the first **Work**-mode mutating start (`DysonUiHost.PromptAsync` user prompt, or `BuildPendingPlanAsync` before BeginBuildPlan) when the root has `WorktreeEnabled` and no path yet. Plan / Ask / Review never create one. A Meta Agent Drone spawn with `useWorktree` true also calls `Ensure` (not only the first Work send). `useWorktree` false does not call `Ensure`. Optional `existingWorktreePath` only changes that child’s work directory; it does not create a worktree or set worktree columns. Empty “Start new session” does not leave orphan checkouts. If enabled but the workdir is not a git repo, that send fails with the exact error `Worktree is enabled but this work directory is not a git repository.`
+Created only on the first **Work**-mode mutating start (`DysonUiHost.PromptAsync` user prompt, or `BuildPendingPlanAsync` before BeginBuildPlan) when the root has `WorktreeEnabled` and no path yet. Plan / Ask / Review never create one. A Meta Agent Drone spawn with `useWorktree` true also calls `EnsureAsync` (not only the first Work send). `useWorktree` false does not call `EnsureAsync`. Optional `existingWorktreePath` only changes that child’s work directory; it does not create a worktree or set worktree columns. Empty “Start new session” does not leave orphan checkouts. If enabled but the workdir is not a git repo, that send fails with the exact error `Worktree is enabled but this work directory is not a git repository.`
 
 Custom MCP host stays **workdir-id** keyed (one `.dyson/mcp` config / refcount). Tool cwd is the session filesystem (`NativeRootPath` — worktree when bound).
 

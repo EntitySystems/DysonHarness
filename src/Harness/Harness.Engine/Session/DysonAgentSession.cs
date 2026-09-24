@@ -266,7 +266,9 @@ public abstract class DysonAgentSession
     /// Forks this session onto its own git worktree keyed by <see cref="PersistenceId"/>.
     /// Meta Agent Drone spawn calls this instead of copying the parent worktree.
     /// </summary>
-    public VoidResult<string> BindOwnWorktree(string registeredWorkDirectoryAbsolutePath)
+    public async Task<VoidResult<string>> BindOwnWorktreeAsync(
+        string registeredWorkDirectoryAbsolutePath,
+        CancellationToken cancellationToken = default)
     {
         if (PersistenceId == Guid.Empty)
             return new VoidResult<string>("Session must be persisted before creating a worktree.");
@@ -274,7 +276,9 @@ public abstract class DysonAgentSession
         if (string.IsNullOrWhiteSpace(registeredWorkDirectoryAbsolutePath))
             return new VoidResult<string>("Registered work directory is required.");
 
-        var ensured = DysonSessionWorktree.Ensure(registeredWorkDirectoryAbsolutePath, PersistenceId);
+        var ensured = await DysonSessionWorktree.EnsureAsync(
+                registeredWorkDirectoryAbsolutePath, PersistenceId, cancellationToken)
+            .ConfigureAwait(false);
         if (ensured.IsError)
             return new VoidResult<string>(ensured.Error);
 
@@ -299,7 +303,7 @@ public abstract class DysonAgentSession
     internal static readonly AsyncLocal<string?> MetaAgentDroneExistingWorktreePath = new();
 
     /// <summary>
-    /// <c>Isolate</c> forks via <see cref="BindOwnWorktree"/>. <c>Suppress</c> stays on the
+    /// <c>Isolate</c> forks via <see cref="BindOwnWorktreeAsync"/>. <c>Suppress</c> stays on the
     /// registered checkout: no branch, and completion does not merge.
     /// </summary>
     protected static (bool Isolate, bool Suppress) ResolveMetaAgentDroneWorktree(string agentMode)
@@ -581,7 +585,8 @@ public abstract class DysonAgentSession
             if (string.IsNullOrWhiteSpace(anchor))
                 anchor = RegisteredWorkDirectoryAbsolutePath;
             if (!string.IsNullOrWhiteSpace(anchor))
-                DysonSessionWorktree.Remove(anchor, worktreePath!, force: true);
+                await DysonSessionWorktree.RemoveAsync(anchor, worktreePath!, force: true, cancellationToken)
+                    .ConfigureAwait(false);
         }
 
         if (SessionStore is null || persisted == Guid.Empty)
@@ -1795,12 +1800,17 @@ public abstract class DysonAgentSession
                 $"Worktree merge failed: missing branch or registered work directory. Worktree left at {path}.");
         }
 
-        var merge = DysonSessionWorktree.Merge(
-            anchor, path, branch, forceRemoveIfDirty: false, abortConflict: true);
+        var merge = await DysonSessionWorktree.MergeAsync(
+                anchor, path, branch, forceRemoveIfDirty: false, abortConflict: true, cancellationToken)
+            .ConfigureAwait(false);
         if (merge.IsError)
         {
             if (merge.Error.StartsWith(DysonSessionWorktree.MergeConflictAbortedPrefix, StringComparison.Ordinal))
-                return (false, BuildMergeConflictAbortedNote(path, branch, anchor, merge.Error));
+            {
+                return (false, await BuildMergeConflictAbortedNoteAsync(
+                        path, branch, anchor, merge.Error, cancellationToken)
+                    .ConfigureAwait(false));
+            }
 
             return (false, $"Worktree merge failed for {branch} at {path}:\n{merge.Error}");
         }
@@ -1809,18 +1819,21 @@ public abstract class DysonAgentSession
         return (true, $"Worktree {branch} merged.");
     }
 
-    private string BuildMergeConflictAbortedNote(
+    private async Task<string> BuildMergeConflictAbortedNoteAsync(
         string worktreePath,
         string worktreeBranch,
         string registeredCheckout,
-        string mergeError)
+        string mergeError,
+        CancellationToken cancellationToken)
     {
         var paths = mergeError[DysonSessionWorktree.MergeConflictAbortedPrefix.Length..]
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var listed = DysonGitInfo.TryListWorktrees(registeredCheckout);
+        var listed = await DysonGitInfo.TryListWorktreesAsync(registeredCheckout, cancellationToken)
+            .ConfigureAwait(false);
         var registeredHead = HeadForListedPath(listed, registeredCheckout);
         var worktreeHead = HeadForListedPath(listed, worktreePath);
-        var branchRead = DysonGitInfo.TryGetBranch(registeredCheckout);
+        var branchRead = await DysonGitInfo.TryGetBranchAsync(registeredCheckout, cancellationToken)
+            .ConfigureAwait(false);
         var registeredBranch = branchRead.IsError || string.IsNullOrWhiteSpace(branchRead.Value)
             ? "unknown"
             : branchRead.Value.Trim();

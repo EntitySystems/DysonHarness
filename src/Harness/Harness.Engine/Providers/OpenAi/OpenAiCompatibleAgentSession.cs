@@ -450,7 +450,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         if (isolateWorktree)
         {
-            var bound = child.BindOwnWorktree(_registeredWorkDirectoryPath);
+            var bound = await child.BindOwnWorktreeAsync(_registeredWorkDirectoryPath, cancellationToken)
+                .ConfigureAwait(false);
             if (bound.IsError)
                 return await FailRegisteredChild(bound.Error).ConfigureAwait(false);
 

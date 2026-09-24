@@ -77,7 +77,7 @@ public class DysonMetaAgentDroneWorktreeTests
         }
         finally
         {
-            CleanupWorktrees(repo);
+            await CleanupWorktrees(repo);
             DeleteQuiet(parent);
         }
     }
@@ -147,7 +147,7 @@ public class DysonMetaAgentDroneWorktreeTests
             Assert.True(notBool.IsError);
             Assert.Contains("useWorktree", notBool.Content, StringComparison.Ordinal);
             Assert.Empty(meta.SubSessions);
-            AssertNoDroneWorktree(repo);
+            await AssertNoDroneWorktree(repo);
 
             var shared = await executor.ExecuteAsync(DroneCall("shared", """{"task":"run tests","useWorktree":false}"""));
             Assert.False(shared.IsError, shared.Content);
@@ -159,7 +159,7 @@ public class DysonMetaAgentDroneWorktreeTests
             Assert.Null(drone.WorktreeBranch);
             Assert.True(SamePath(repo, drone.WorkDirectoryPath!));
             Assert.Contains("no private worktree", drone.SystemPrompt, StringComparison.Ordinal);
-            AssertNoDroneWorktree(repo);
+            await AssertNoDroneWorktree(repo);
             using (var body = JsonDocument.Parse(shared.Content))
             {
                 Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("worktreeBranch").ValueKind);
@@ -172,7 +172,7 @@ public class DysonMetaAgentDroneWorktreeTests
             Assert.Null(drone.WorktreeAbsolutePath);
             Assert.False(drone.WorktreeEnabled);
             Assert.Equal("base\n", File.ReadAllText(Path.Combine(repo, "file.txt")));
-            AssertNoDroneWorktree(repo);
+            await AssertNoDroneWorktree(repo);
 
             var owned = await executor.ExecuteAsync(DroneCall("owned", """{"task":"edit the repo","useWorktree":true}"""));
             Assert.False(owned.IsError, owned.Content);
@@ -186,7 +186,7 @@ public class DysonMetaAgentDroneWorktreeTests
         }
         finally
         {
-            CleanupWorktrees(repo);
+            await CleanupWorktrees(repo);
             DeleteQuiet(parent);
         }
     }
@@ -209,7 +209,7 @@ public class DysonMetaAgentDroneWorktreeTests
             RunGitOrThrow(repo, ["commit", "-m", "init"]);
 
             var listedId = Guid.NewGuid();
-            var ensured = DysonSessionWorktree.Ensure(repo, listedId);
+            var ensured = await DysonSessionWorktree.EnsureAsync(repo, listedId);
             Assert.True(ensured.IsSuccess, ensured.IsError ? ensured.Error : null);
             var wt = ensured.Value.AbsolutePath;
 
@@ -243,7 +243,7 @@ public class DysonMetaAgentDroneWorktreeTests
             Assert.False(resolver.WorktreeEnabled);
             Assert.Contains(wt, resolver.SystemPrompt, StringComparison.Ordinal);
             Assert.DoesNotContain("main checkout", resolver.SystemPrompt, StringComparison.Ordinal);
-            AssertListedWorktreeCount(repo, 2);
+            await AssertListedWorktreeCount(repo, 2);
 
             var shared = await executor.ExecuteAsync(
                 DroneCall("shared", """{"task":"run tests","useWorktree":false}"""));
@@ -251,7 +251,7 @@ public class DysonMetaAgentDroneWorktreeTests
             var plain = Assert.IsType<DemoDysonAgentSession>(meta.SubSessions[1]);
             Assert.True(SamePath(repo, plain.WorkDirectoryPath!));
             Assert.Null(plain.WorktreeAbsolutePath);
-            AssertListedWorktreeCount(repo, 2);
+            await AssertListedWorktreeCount(repo, 2);
 
             var both = JsonSerializer.Serialize(new
             {
@@ -281,7 +281,7 @@ public class DysonMetaAgentDroneWorktreeTests
             Assert.True(forked.WorktreeEnabled);
             Assert.False(string.IsNullOrWhiteSpace(forked.WorktreeAbsolutePath));
             Assert.False(SamePath(wt, forked.WorktreeAbsolutePath!));
-            AssertListedWorktreeCount(repo, 3);
+            await AssertListedWorktreeCount(repo, 3);
 
             var owned = await executor.ExecuteAsync(
                 DroneCall("owned", """{"task":"edit the repo","useWorktree":true}"""));
@@ -289,11 +289,11 @@ public class DysonMetaAgentDroneWorktreeTests
             var isolated = Assert.IsType<DemoDysonAgentSession>(meta.SubSessions[3]);
             Assert.True(isolated.WorktreeEnabled);
             Assert.False(string.IsNullOrWhiteSpace(isolated.WorktreeAbsolutePath));
-            AssertListedWorktreeCount(repo, 4);
+            await AssertListedWorktreeCount(repo, 4);
         }
         finally
         {
-            CleanupWorktrees(repo);
+            await CleanupWorktrees(repo);
             DeleteQuiet(parent);
         }
     }
@@ -312,7 +312,7 @@ public class DysonMetaAgentDroneWorktreeTests
             RunGitOrThrow(repo, ["commit", "-m", "init"]);
 
             var droneId = Guid.NewGuid();
-            var ensured = DysonSessionWorktree.Ensure(repo, droneId);
+            var ensured = await DysonSessionWorktree.EnsureAsync(repo, droneId);
             Assert.True(ensured.IsSuccess, ensured.IsError ? ensured.Error : null);
             var wt = ensured.Value.AbsolutePath;
             var branch = ensured.Value.Branch;
@@ -346,13 +346,13 @@ public class DysonMetaAgentDroneWorktreeTests
             Assert.False(explore.WorktreeEnabled);
             Assert.Equal("from-drone\n", File.ReadAllText(Path.Combine(repo, "file.txt")));
 
-            var listed = DysonGitInfo.TryListWorktrees(repo);
+            var listed = await DysonGitInfo.TryListWorktreesAsync(repo);
             Assert.True(listed.IsSuccess, listed.IsError ? listed.Error : null);
             Assert.DoesNotContain(listed.Value, e => SamePath(e.Path, wt));
         }
         finally
         {
-            CleanupWorktrees(repo);
+            await CleanupWorktrees(repo);
             DeleteQuiet(parent);
         }
     }
@@ -371,7 +371,7 @@ public class DysonMetaAgentDroneWorktreeTests
             RunGitOrThrow(repo, ["commit", "-m", "init"]);
 
             var droneId = Guid.NewGuid();
-            var ensured = DysonSessionWorktree.Ensure(repo, droneId);
+            var ensured = await DysonSessionWorktree.EnsureAsync(repo, droneId);
             Assert.True(ensured.IsSuccess, ensured.IsError ? ensured.Error : null);
             var wt = ensured.Value.AbsolutePath;
             var branch = ensured.Value.Branch;
@@ -418,7 +418,7 @@ public class DysonMetaAgentDroneWorktreeTests
 
             Assert.Equal("from-main\n", File.ReadAllText(Path.Combine(repo, "file.txt")));
 
-            var listed = DysonGitInfo.TryListWorktrees(repo);
+            var listed = await DysonGitInfo.TryListWorktreesAsync(repo);
             Assert.True(listed.IsSuccess, listed.IsError ? listed.Error : null);
             Assert.Contains(listed.Value, e => SamePath(e.Path, wt));
 
@@ -443,7 +443,7 @@ public class DysonMetaAgentDroneWorktreeTests
                 // ignore if no merge in progress
             }
 
-            CleanupWorktrees(repo);
+            await CleanupWorktrees(repo);
             DeleteQuiet(parent);
         }
     }
@@ -462,7 +462,7 @@ public class DysonMetaAgentDroneWorktreeTests
             RunGitOrThrow(repo, ["commit", "-m", "init"]);
 
             var droneId = Guid.NewGuid();
-            var ensured = DysonSessionWorktree.Ensure(repo, droneId);
+            var ensured = await DysonSessionWorktree.EnsureAsync(repo, droneId);
             Assert.True(ensured.IsSuccess, ensured.IsError ? ensured.Error : null);
             var wt = ensured.Value.AbsolutePath;
             var branch = ensured.Value.Branch;
@@ -485,14 +485,14 @@ public class DysonMetaAgentDroneWorktreeTests
             Assert.Equal(wt, drone.WorktreeAbsolutePath);
             Assert.Equal(branch, drone.WorktreeBranch);
 
-            var listed = DysonGitInfo.TryListWorktrees(repo);
+            var listed = await DysonGitInfo.TryListWorktreesAsync(repo);
             Assert.True(listed.IsSuccess, listed.IsError ? listed.Error : null);
             Assert.Contains(listed.Value, e => SamePath(e.Path, wt));
             Assert.Equal("base\n", File.ReadAllText(Path.Combine(repo, "file.txt")));
         }
         finally
         {
-            CleanupWorktrees(repo);
+            await CleanupWorktrees(repo);
             DeleteQuiet(parent);
         }
     }
@@ -543,13 +543,13 @@ public class DysonMetaAgentDroneWorktreeTests
             Assert.True(children.IsSuccess, children.IsError ? children.Error : null);
             Assert.Empty(children.Value);
 
-            var listed = DysonGitInfo.TryListWorktrees(repo);
+            var listed = await DysonGitInfo.TryListWorktreesAsync(repo);
             Assert.True(listed.IsSuccess, listed.IsError ? listed.Error : null);
             Assert.DoesNotContain(listed.Value, e => !SamePath(e.Path, repo));
         }
         finally
         {
-            CleanupWorktrees(repo);
+            await CleanupWorktrees(repo);
             DeleteQuiet(parent);
         }
     }
@@ -631,16 +631,16 @@ public class DysonMetaAgentDroneWorktreeTests
         ArgumentsJson = argumentsJson,
     };
 
-    private static void AssertListedWorktreeCount(string repo, int expected)
+    private static async Task AssertListedWorktreeCount(string repo, int expected)
     {
-        var listed = DysonGitInfo.TryListWorktrees(repo);
+        var listed = await DysonGitInfo.TryListWorktreesAsync(repo);
         Assert.True(listed.IsSuccess, listed.IsError ? listed.Error : null);
         Assert.Equal(expected, listed.Value.Count);
     }
 
-    private static void AssertNoDroneWorktree(string repo)
+    private static async Task AssertNoDroneWorktree(string repo)
     {
-        var listed = DysonGitInfo.TryListWorktrees(repo);
+        var listed = await DysonGitInfo.TryListWorktreesAsync(repo);
         Assert.True(listed.IsSuccess, listed.IsError ? listed.Error : null);
         Assert.DoesNotContain(listed.Value, e => !SamePath(e.Path, repo));
         Assert.True(string.IsNullOrWhiteSpace(RunGitOrThrow(repo, ["branch", "--list", "dyson/*"])));
@@ -673,12 +673,12 @@ public class DysonMetaAgentDroneWorktreeTests
         }
     }
 
-    private static void CleanupWorktrees(string repo)
+    private static async Task CleanupWorktrees(string repo)
     {
         if (!Directory.Exists(repo))
             return;
 
-        var listed = DysonGitInfo.TryListWorktrees(repo);
+        var listed = await DysonGitInfo.TryListWorktreesAsync(repo);
         if (listed.IsError)
             return;
 
@@ -686,7 +686,7 @@ public class DysonMetaAgentDroneWorktreeTests
         {
             if (SamePath(entry.Path, repo))
                 continue;
-            _ = DysonGitInfo.TryRemoveWorktree(repo, entry.Path, force: true);
+            _ = await DysonGitInfo.TryRemoveWorktreeAsync(repo, entry.Path, force: true);
         }
     }
 

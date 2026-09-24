@@ -24,7 +24,8 @@ public sealed class DysonWorkDirectoryService(IDysonWorkDirectoryRepository work
         if (get.IsError)
             return VoidResult<string>.AsError(get.Error);
 
-        var origin = DysonGitInfo.TryGetOrigin(get.Value.AbsolutePath);
+        var origin = await DysonGitInfo.TryGetOriginAsync(get.Value.AbsolutePath, cancellationToken)
+            .ConfigureAwait(false);
         string? gitOrigin = null;
         string? gitProvider = null;
         if (origin.IsSuccess)

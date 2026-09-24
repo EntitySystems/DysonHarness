@@ -309,7 +309,8 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
 
         if (isolateWorktree)
         {
-            var bound = child.BindOwnWorktree(registered);
+            var bound = await child.BindOwnWorktreeAsync(registered, cancellationToken)
+                .ConfigureAwait(false);
             if (bound.IsError)
                 return await FailRegisteredChild(bound.Error).ConfigureAwait(false);
 
