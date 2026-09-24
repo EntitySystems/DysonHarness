@@ -329,6 +329,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         if (_session?.InFlightPromptTurn is { } inFlight)
         {
+            AppendAwaitingUserAnswerReminders(inFlight, _session);
             var injected = InjectTurnComment(inFlight.Id, text);
             if (injected.IsSuccess)
                 return Task.FromResult(injected);
@@ -4457,6 +4458,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (pendingFiles.Count > 0)
             turn.HiddenInstruction = FormatLocalAttachedPaths(pendingFiles);
 
+        if (_session is { } activeSession)
+            AppendAwaitingUserAnswerReminders(turn, activeSession);
+
         if (pendingSkills.Count == 0)
             return Result<BuiltUserTurn, string>.AsValue(new BuiltUserTurn(turn, pendingFiles));
 
@@ -6037,7 +6041,8 @@ public sealed class DysonUiHost : IAsyncDisposable
             Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Overlay | DysonHostChangeKind.Busy);
 
             // Ask / Dialog UI only when kind+payload parse; otherwise enqueue a parent auto-turn.
-            if (!DysonSubagentHostLogic.RequiresParentAutoTurn(interrupt.EventKind, interrupt.Payload))
+            if (!DysonSubagentHostLogic.RequiresParentAutoTurn(
+                    interrupt.EventKind, interrupt.Payload, parent.Mode))
                 return;
 
             if (parent.PersistenceId == Guid.Empty)
@@ -6826,13 +6831,19 @@ public sealed class DysonUiHost : IAsyncDisposable
                 if (interrupt.Kind == DysonAgentInterruptKind.SubagentEvent)
                 {
                     var prompt = DysonSubagentHostLogic.BuildSubagentEventContinuationPrompt(
-                        interrupt, title);
+                        interrupt, title, parent.Mode);
                     var turn = DysonSubagentHostLogic.CreateTurn(prompt);
                     var eventResult = await ExecutePromptOnSessionAsync(
                             parent,
                             (session, token) => session.PromptHarnessTurnAsync(turn, token),
                             CancellationToken.None)
                         .ConfigureAwait(false);
+                    if (FollowUpMetaParentEvent(parent, interrupt, turn.StartedUtc)
+                        == MetaParentEventAfterTurn.Retry)
+                    {
+                        queue.Enqueue(interrupt);
+                    }
+
                     if (eventResult.IsError)
                     {
                         LastError = eventResult.Error;
@@ -6922,6 +6933,161 @@ public sealed class DysonUiHost : IAsyncDisposable
             _ = DrainAutoTurnsAsync(parentPersistenceId);
         }
     }
+
+    private const string ParentDidNotAnswerEvent = "Parent did not answer this event.";
+
+    private const string UnansweredParentEventNotice =
+        "A child was waiting on a reply that never arrived. The wait was closed so it can continue.";
+
+    private MetaParentEventAfterTurn FollowUpMetaParentEvent(
+        DysonAgentSession parent,
+        DysonAgentInterrupt interrupt,
+        DateTime promptStartedUtc)
+    {
+        if (!DysonSubagentHostLogic.IsMetaSessionMode(parent.Mode)
+            || interrupt.EventId is not Guid eventId
+            || eventId == Guid.Empty)
+        {
+            return MetaParentEventAfterTurn.Done;
+        }
+
+        DysonParentEvent? evt = null;
+        foreach (var candidate in parent.PendingOrRecentParentEvents)
+        {
+            if (candidate.EventId == eventId)
+            {
+                evt = candidate;
+                break;
+            }
+        }
+
+        var stillPending = evt is { Status: DysonParentEventStatus.Pending };
+        var rootMeta = string.Equals(
+            parent.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase);
+        var decision = DysonSubagentHostLogic.DecideMetaParentEventAfterTurn(
+            metaParent: true,
+            stillPending,
+            rootMeta,
+            PostedDisplayInfoSince(parent, promptStartedUtc),
+            evt?.ForgottenAutoTurns ?? 0);
+
+        switch (decision)
+        {
+            case MetaParentEventAfterTurn.Retry:
+                evt!.ForgottenAutoTurns = evt.ForgottenAutoTurns + 1;
+                break;
+            case MetaParentEventAfterTurn.Park:
+                evt!.AwaitingUserAnswer = true;
+                break;
+            case MetaParentEventAfterTurn.Fail:
+                if (parent.FailPendingParentEvent(eventId, ParentDidNotAnswerEvent).IsSuccess)
+                    NoteUnansweredParentEvent(parent);
+                break;
+        }
+
+        return decision;
+    }
+
+    private void FollowUpParkedMetaEventsAfterUserTurn(DysonAgentSession session, DateTime promptStartedUtc)
+    {
+        if (!string.Equals(session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase)
+            || session.PersistenceId == Guid.Empty)
+        {
+            return;
+        }
+
+        var retry = false;
+        foreach (var evt in session.PendingOrRecentParentEvents)
+        {
+            if (evt.Status != DysonParentEventStatus.Pending || !evt.AwaitingUserAnswer)
+                continue;
+
+            var interrupt = ParentEventInterrupt(evt);
+            if (FollowUpMetaParentEvent(session, interrupt, promptStartedUtc) != MetaParentEventAfterTurn.Retry)
+                continue;
+
+            var eventQueue = _pendingReportsByParent.GetOrAdd(
+                session.PersistenceId,
+                _ => new ConcurrentQueue<DysonAgentInterrupt>());
+            eventQueue.Enqueue(interrupt);
+            retry = true;
+        }
+
+        if (retry)
+            _ = DrainAutoTurnsAsync(session.PersistenceId);
+    }
+
+    private void NoteUnansweredParentEvent(DysonAgentSession failingParent)
+    {
+        DysonAgentSession? meta = null;
+        for (var cursor = failingParent; cursor is not null; cursor = cursor.Parent)
+        {
+            if (string.Equals(cursor.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+            {
+                meta = cursor;
+                break;
+            }
+        }
+
+        var live = meta is not null
+            && meta.PersistenceId != Guid.Empty
+            && _sessionsById.ContainsKey(meta.PersistenceId);
+        if (live)
+        {
+            meta!.AppendDisplayInfoTurn(UnansweredParentEventNotice);
+            return;
+        }
+
+        failingParent.AppendLog(UnansweredParentEventNotice);
+    }
+
+    private static bool PostedDisplayInfoSince(DysonAgentSession session, DateTime promptStartedUtc)
+    {
+        foreach (var turn in session.Turns)
+        {
+            if (turn.Kind == DysonAgentTurnKind.DisplayInfo && turn.StartedUtc >= promptStartedUtc)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void AppendAwaitingUserAnswerReminders(DysonAgentTurn turn, DysonAgentSession session)
+    {
+        if (!string.Equals(session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        foreach (var evt in session.PendingOrRecentParentEvents)
+        {
+            if (evt.Status != DysonParentEventStatus.Pending || !evt.AwaitingUserAnswer)
+                continue;
+
+            var eventId = evt.EventId.ToString("D");
+            if (turn.HiddenInstruction?.Contains(eventId, StringComparison.Ordinal) == true)
+                continue;
+
+            string? title = null;
+            if (session.TryGetSubagent(evt.SubagentId, out var child))
+                title = child.DisplayTitle;
+
+            var block = DysonSubagentHostLogic.BuildParkedParentEventReminder(ParentEventInterrupt(evt), title);
+            turn.HiddenInstruction = string.IsNullOrWhiteSpace(turn.HiddenInstruction)
+                ? block
+                : turn.HiddenInstruction + "\n\n" + block;
+        }
+    }
+
+    private static DysonAgentInterrupt ParentEventInterrupt(DysonParentEvent evt) =>
+        new()
+        {
+            Kind = DysonAgentInterruptKind.SubagentEvent,
+            SubagentId = evt.SubagentId,
+            PersistenceId = evt.PersistenceId,
+            Summary = evt.Kind,
+            EventId = evt.EventId,
+            EventKind = evt.Kind,
+            Payload = evt.Payload,
+        };
 
     private async Task<VoidResult<string>> PromptOnSessionAsync(
         DysonAgentSession session,
@@ -7394,7 +7560,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(turn);
         ArgumentNullException.ThrowIfNull(filePaths);
 
-        return await ExecutePromptOnSessionAsync(
+        var result = await ExecutePromptOnSessionAsync(
                 session,
                 async (s, token) =>
                 {
@@ -7423,6 +7589,11 @@ public sealed class DysonUiHost : IAsyncDisposable
                 },
                 cancellationToken)
             .ConfigureAwait(false);
+
+        if (turn.Kind == DysonAgentTurnKind.Normal)
+            FollowUpParkedMetaEventsAfterUserTurn(session, turn.StartedUtc);
+
+        return result;
     }
 
     private async Task PersistStoppedSessionAsync(DysonAgentSession session)

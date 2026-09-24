@@ -67,6 +67,7 @@ Conceptual overview: [README.md](README.md).
 | `ManagedAntigravityInferenceProvider` | Antigravity managed path (`ManagedSource=cliproxy-antigravity`, `antigravity-auth-url?is_webui=true`, OAuth port 51121 preflight) |
 | `ManagedKimiInferenceProvider` | Kimi managed path (`ManagedSource=cliproxy-kimi`, `kimi-auth-url`) |
 | `ManagedClaudeInferenceProvider` | Claude Code managed path (`ManagedSource=cliproxy-claude`, `anthropic-auth-url?is_webui=true`, OAuth port 54545 preflight; OpenAI/Responses via proxy) |
+| `ManagedMetaInferenceProvider` | Meta Muse managed path (`ManagedSource=cliproxy-meta`, `meta-auth-url` device code; no callback-port preflight) |
 | `ManagedInferenceProviderCatalog` | DI catalog: `Direct` is `IReadOnlyList<IManagedInferenceProvider>` containing OpenRouter then OrcaRouter; `All` remains the CLIProxy `ManagedInferenceProviderBase` list; `FindBySource` resolves CLIProxy entries and `FindDirectBySource` resolves Direct providers |
 | `ManagedConnectionBegin` / `Complete` / `Verify` | Connection-flow DTOs |
 | `DysonCliProxyHost` | Local CLIProxy process host (`IsInstalled`, `EnsureInstalledAsync`, `EnsureRunningAsync`, `RestartAsync`, `ReinstallAndRestartAsync`, `LocalBaseUrl`; shared loopback secrets `DefaultApiKey` / `DefaultManagementKey`). `ReinstallAndRestartAsync` force-redownloads the pin and prunes leftover version dirs; it does not delete `auths/` OAuth files or rotate loopback keys. Session resolve calls `EnsureRunningAsync` only for `IsCliProxy` sources, never for direct OpenRouter / OrcaRouter |

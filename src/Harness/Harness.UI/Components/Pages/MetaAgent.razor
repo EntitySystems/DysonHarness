@@ -1,5 +1,6 @@
 @page "/meta/{WorkDirectoryId:guid}"
 @using DysonHarness
+@using Harness.UI.Components.Files
 @using Harness.UI.Components.Meta
 @using Harness.UI.Demo
 @implements IAsyncDisposable
@@ -172,28 +173,52 @@
                         </div>
                     </div>
 
-                    <section class="meta-agents" aria-label="Agents">
-                        <div class="sidebar__section-label">Agents</div>
-                        <div class="meta-agents__list">
-                            @{
-                                var childIds = ChildIds;
-                            }
-                            @if (childIds.Count == 0)
-                            {
-                                <div class="meta-agents__empty">
-                                    <p class="meta-agents__empty-title">No agents yet</p>
-                                    <p class="meta-agents__empty-hint">Drones and explores appear here when the meta agent dispatches them.</p>
-                                </div>
-                            }
-                            else
-                            {
-                                @foreach (var id in childIds)
+                    <section class="meta-agents" aria-label="Agents and files">
+                        <div class="tool-panel rail-tabs">
+                            <div class="rail-tabs__tabs" role="tablist" aria-label="Agents and files">
+                                <button type="button" role="tab"
+                                        class="rail-tabs__tab@(_metaRailTab == MetaRailTab.Agents ? " rail-tabs__tab--active" : null)"
+                                        aria-selected="@(_metaRailTab == MetaRailTab.Agents)"
+                                        @onclick="() => SelectMetaRail(MetaRailTab.Agents)">
+                                    Agents
+                                </button>
+                                <button type="button" role="tab"
+                                        class="rail-tabs__tab@(_metaRailTab == MetaRailTab.Files ? " rail-tabs__tab--active" : null)"
+                                        aria-selected="@(_metaRailTab == MetaRailTab.Files)"
+                                        @onclick="() => SelectMetaRail(MetaRailTab.Files)">
+                                    Files
+                                </button>
+                            </div>
+                            <div class="rail-tabs__body@(MetaRailBodyClass)" role="tabpanel">
+                                @if (_metaRailTab == MetaRailTab.Agents)
                                 {
-                                    <SubagentCard @key="id"
-                                                  PersistenceId="id"
-                                                  AfterNavigate="InspectChildAsync" />
+                                    <div class="meta-agents__list">
+                                        @{
+                                            var childIds = ChildIds;
+                                        }
+                                        @if (childIds.Count == 0)
+                                        {
+                                            <div class="meta-agents__empty">
+                                                <p class="meta-agents__empty-title">No agents yet</p>
+                                                <p class="meta-agents__empty-hint">Drones and explores appear here when the meta agent dispatches them.</p>
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            @foreach (var id in childIds)
+                                            {
+                                                <SubagentCard @key="id"
+                                                              PersistenceId="id"
+                                                              AfterNavigate="InspectChildAsync" />
+                                            }
+                                        }
+                                    </div>
                                 }
-                            }
+                                else
+                                {
+                                    <FileTreePanel ActiveWorkDirectoryId="WorkDirectoryId" />
+                                }
+                            </div>
                         </div>
                     </section>
                 </div>
@@ -219,6 +244,7 @@
 
     private IReadOnlyList<DysonSessionSummary> _sessions = [];
     private Guid? _activeWorkDirectoryId;
+    private MetaRailTab _metaRailTab = MetaRailTab.Agents;
     private string? _error;
     private string? _workDirectoryName;
     private bool _unknownWorkDirectory;
@@ -738,16 +764,45 @@
         await RefreshSessionsAsync();
     }
 
+    private enum MetaRailTab { Agents, Files }
+
+    private void SelectMetaRail(MetaRailTab tab) => _metaRailTab = tab;
+
+    private string MetaRailBodyClass =>
+        _metaRailTab == MetaRailTab.Files ? " rail-tabs__body--files" : " rail-tabs__body--agents";
+
     // The switcher re-reads ActiveWorkDirectoryId after the callback and reports
     // "Could not switch work directory" when it did not change; the route Guid only
     // updates once navigation lands, so hold the selection locally first.
-    private void OnWorkDirectoryChanged(Guid? id)
+    private async Task OnWorkDirectoryChanged(Guid? id)
     {
-        if (id is not Guid wd || wd == WorkDirectoryId)
+        if (id is Guid wd && wd == WorkDirectoryId)
             return;
 
-        _activeWorkDirectoryId = wd;
-        Nav.NavigateTo($"/meta/{wd}");
+        await PersistWorkDirectoryAsync(id);
+
+        if (id is not Guid next)
+        {
+            _activeWorkDirectoryId = null;
+            return;
+        }
+
+        _activeWorkDirectoryId = next;
+        Nav.NavigateTo($"/meta/{next}");
+    }
+
+    private async Task PersistWorkDirectoryAsync(Guid? id)
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("dysonWorkdir.set", id?.ToString());
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
     }
 
     public async ValueTask DisposeAsync()
