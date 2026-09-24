@@ -37,6 +37,8 @@ dotnet run --project src/Harness/Harness.UI --urls http://localhost:5180
 5. External http(s) navigations and popups → OS default browser (`ExternalNavigationHandlers`); in-CEF navigation cancelled.
 6. On main window close: cancel web host, `Cef.Shutdown`, exit.
 
+The shell OSR view’s right-click menu is Chromium’s default WPF menu plus a top **Reload page** item. **F5** and **Ctrl+F5** call `ChromiumWebBrowser.Reload` from `MainWindow.PreviewKeyDown` while the browser has focus (`Ctrl+F5` passes ignore-cache). Both are browser-process reloads, not page script. The agent-window toolbar reload is unchanged. Reload is a full navigation to the loopback URL: the document and SignalR circuit are discarded (in-flight engine work keeps running; reload does not stop it), the new circuit restores the work directory from `localStorage` key `dyson-workdir`, and the previously focused session is not selected — click it again to resume. A wedged renderer may block the context menu (the renderer requests it) but not F5, which the WPF window sees before the key is sent to the renderer. If the CEF browser UI thread is wedged, neither works; restart the app.
+
 ## Snip → agent composer
 
 Agent browser chrome has a **Snip** button to the right of the address bar. Agent tabs are **HwndHost** (windowed CEF), so a live WPF rubber-band cannot sit on top of the HWND (airspace). Snip therefore uses a **CDP screenshot-backed overlay**:

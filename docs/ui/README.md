@@ -12,6 +12,8 @@ From repo root:
 dotnet run --project src/Harness/DysonHarness.UI.Windows
 ```
 
+If the circuit dies, F5 or right-click “Reload page” reloads the loopback page in-process (new circuit, same runtime).
+
 **Browser-based Blazor (all platforms):**
 
 ```bash
