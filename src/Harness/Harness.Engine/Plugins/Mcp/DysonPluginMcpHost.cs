@@ -16,6 +16,7 @@ public sealed class DysonPluginMcpHost : IAsyncDisposable
     private readonly ConcurrentDictionary<string, DysonMcpTool> _pipelineTools = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<DysonAgentSession, byte> _sessions = new();
     private readonly List<DysonPluginDiagnostic> _diagnostics = [];
+    private readonly CancellationTokenSource _hostCancellation = new();
     private HashSet<string> _reservedNames = new(StringComparer.Ordinal);
     private int _disposed;
 
@@ -73,82 +74,121 @@ public sealed class DysonPluginMcpHost : IAsyncDisposable
         }
     }
 
-    public async Task<Result<DysonPluginMcpHostSnapshot, string>> RefreshAsync(
+    public Task<Result<DysonPluginMcpHostSnapshot, string>> RefreshAsync(
         DysonEffectivePluginCatalog catalog,
         DysonPluginMcpRuntimeActivation? activation = null,
         IReadOnlySet<string>? reservedToolNames = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(catalog);
-        activation ??= DysonPluginMcpRuntimeActivation.DenyAll;
-        var activationValidation = activation.Validate();
+        var grantedActivation = activation ?? DysonPluginMcpRuntimeActivation.DenyAll;
+        var activationValidation = grantedActivation.Validate();
         if (activationValidation.IsError)
-            return Result<DysonPluginMcpHostSnapshot, string>.AsError(activationValidation.Error);
+            return Task.FromResult(Result<DysonPluginMcpHostSnapshot, string>.AsError(activationValidation.Error));
         if (_disposed != 0)
-            return Result<DysonPluginMcpHostSnapshot, string>.AsError("Plugin MCP host is disposed.");
+            return Task.FromResult(Result<DysonPluginMcpHostSnapshot, string>.AsError("Plugin MCP host is disposed."));
 
-        var resolved = _resolver.Resolve(catalog);
-        if (resolved.IsError)
-            return Result<DysonPluginMcpHostSnapshot, string>.AsError(resolved.Error);
-
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        CancellationTokenSource linked;
         try
         {
-            await DisconnectAllLockedAsync().ConfigureAwait(false);
-            _slots.Clear();
-            _tools.Clear();
-            _diagnostics.Clear();
-            _diagnostics.AddRange(resolved.Value.Diagnostics);
-            _reservedNames = reservedToolNames is null
-                ? new HashSet<string>(StringComparer.Ordinal)
-                : new HashSet<string>(reservedToolNames, StringComparer.Ordinal);
-
-            var namespaceOwners = new Dictionary<string, ServerKey>(StringComparer.Ordinal);
-            foreach (var declaration in resolved.Value.Servers)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var key = ServerKey.From(declaration);
-                var granted = declaration.Transport != DysonPluginMcpTransportKind.Unknown &&
-                              activation.IsGranted(
-                                  declaration.InstallationId, declaration.ServerId, declaration.Transport);
-                var slot = new ServerSlot(declaration, granted);
-                _slots[key] = slot;
-
-                if (!declaration.IsAvailable)
-                {
-                    slot.State = DysonPluginMcpServerState.Unavailable;
-                    slot.LastError = declaration.UnavailableReason;
-                    continue;
-                }
-                if (!granted)
-                {
-                    slot.State = DysonPluginMcpServerState.Denied;
-                    slot.LastError = "Runtime activation grant is required; installation enablement alone is not sufficient.";
-                    continue;
-                }
-
-                var namespacePrefix = CatalogName(declaration.PluginId, declaration.ServerId, "");
-                if (namespaceOwners.TryGetValue(namespacePrefix, out var owner))
-                {
-                    slot.State = DysonPluginMcpServerState.Unavailable;
-                    slot.LastError =
-                        $"Plugin MCP namespace collides with installation '{owner.InstallationId}', server '{owner.ServerId}'.";
-                    _diagnostics.Add(CollisionDiagnostic(declaration, slot.LastError));
-                    continue;
-                }
-                namespaceOwners[namespacePrefix] = key;
-
-                await ConnectSlotLockedAsync(key, slot, cancellationToken).ConfigureAwait(false);
-            }
-
-            var snapshot = BuildSnapshotLocked();
-            SyncPipelineToolsLocked(snapshot.Tools);
-            ApplyToAttachedSessions();
-            return Result<DysonPluginMcpHostSnapshot, string>.AsValue(snapshot);
+            linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _hostCancellation.Token);
         }
-        finally
+        catch (ObjectDisposedException)
         {
-            _gate.Release();
+            return Task.FromResult(Result<DysonPluginMcpHostSnapshot, string>.AsError("Plugin MCP host is disposed."));
+        }
+
+        // Pool hop before resolve/connect. ConfigureAwait(false) does not leave the Blazor circuit.
+        var refresh = Task.Run(() => RefreshCoreAsync(linked.Token), cancellationToken);
+        _ = refresh.ContinueWith(
+            static (_, state) => ((CancellationTokenSource)state!).Dispose(),
+            linked,
+            CancellationToken.None,
+            TaskContinuationOptions.None,
+            TaskScheduler.Default);
+        return refresh;
+
+        async Task<Result<DysonPluginMcpHostSnapshot, string>> RefreshCoreAsync(CancellationToken linkedToken)
+        {
+            try
+            {
+                linkedToken.ThrowIfCancellationRequested();
+                var resolved = _resolver.Resolve(catalog);
+                if (resolved.IsError)
+                    return Result<DysonPluginMcpHostSnapshot, string>.AsError(resolved.Error);
+
+                await _gate.WaitAsync(linkedToken).ConfigureAwait(false);
+                try
+                {
+                    await DisconnectAllLockedAsync().ConfigureAwait(false);
+                    _slots.Clear();
+                    _tools.Clear();
+                    _diagnostics.Clear();
+                    _diagnostics.AddRange(resolved.Value.Diagnostics);
+                    _reservedNames = reservedToolNames is null
+                        ? new HashSet<string>(StringComparer.Ordinal)
+                        : new HashSet<string>(reservedToolNames, StringComparer.Ordinal);
+
+                    var namespaceOwners = new Dictionary<string, ServerKey>(StringComparer.Ordinal);
+                    foreach (var declaration in resolved.Value.Servers)
+                    {
+                        linkedToken.ThrowIfCancellationRequested();
+                        var key = ServerKey.From(declaration);
+                        var granted = declaration.Transport != DysonPluginMcpTransportKind.Unknown &&
+                                      grantedActivation.IsGranted(
+                                          declaration.InstallationId, declaration.ServerId, declaration.Transport);
+                        var slot = new ServerSlot(declaration, granted);
+                        _slots[key] = slot;
+
+                        if (!declaration.IsAvailable)
+                        {
+                            slot.State = DysonPluginMcpServerState.Unavailable;
+                            slot.LastError = declaration.UnavailableReason;
+                            continue;
+                        }
+                        if (!granted)
+                        {
+                            slot.State = DysonPluginMcpServerState.Denied;
+                            slot.LastError = "Runtime activation grant is required; installation enablement alone is not sufficient.";
+                            continue;
+                        }
+
+                        var namespacePrefix = CatalogName(declaration.PluginId, declaration.ServerId, "");
+                        if (namespaceOwners.TryGetValue(namespacePrefix, out var owner))
+                        {
+                            slot.State = DysonPluginMcpServerState.Unavailable;
+                            slot.LastError =
+                                $"Plugin MCP namespace collides with installation '{owner.InstallationId}', server '{owner.ServerId}'.";
+                            _diagnostics.Add(CollisionDiagnostic(declaration, slot.LastError));
+                            continue;
+                        }
+                        namespaceOwners[namespacePrefix] = key;
+
+                        await ConnectSlotLockedAsync(key, slot, linkedToken).ConfigureAwait(false);
+                    }
+
+                    var snapshot = BuildSnapshotLocked();
+                    SyncPipelineToolsLocked(snapshot.Tools);
+                    ApplyToAttachedSessions();
+                    return Result<DysonPluginMcpHostSnapshot, string>.AsValue(snapshot);
+                }
+                finally
+                {
+                    _gate.Release();
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                return Result<DysonPluginMcpHostSnapshot, string>.AsError("Plugin MCP host is disposed.");
+            }
+            catch (ObjectDisposedException) when (_disposed != 0 || _hostCancellation.IsCancellationRequested)
+            {
+                return Result<DysonPluginMcpHostSnapshot, string>.AsError("Plugin MCP host is disposed.");
+            }
         }
     }
 
@@ -502,6 +542,10 @@ public sealed class DysonPluginMcpHost : IAsyncDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
+
+        // Unblock a handshake that still holds _gate before waiting out the init timeout.
+        _hostCancellation.Cancel();
+
         await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -518,6 +562,7 @@ public sealed class DysonPluginMcpHost : IAsyncDisposable
         {
             _gate.Release();
             _gate.Dispose();
+            _hostCancellation.Dispose();
         }
     }
 

@@ -364,6 +364,63 @@ public sealed class DysonPluginMcpTests
         Assert.Equal(2, connector.ConnectCount);
     }
 
+    [Fact]
+    public async Task Host_invokes_connect_off_the_caller_synchronization_context()
+    {
+        using var fixture = new PluginFixture("sync-context");
+        fixture.WriteExecutable("bin/server.exe");
+        fixture.WriteMcp(StdioJson("demo"));
+        var connector = new FakeConnector();
+        var callerContext = new SynchronizationContext();
+        var previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(callerContext);
+        var callerThread = Thread.CurrentThread;
+        try
+        {
+            await using var host = new DysonPluginMcpHost(connector: connector);
+            var refreshed = await host.RefreshAsync(
+                Catalog(fixture.Contribution("demo")),
+                Activation(fixture.InstallationId, "demo"));
+
+            Assert.True(refreshed.IsSuccess, refreshed.IsError ? refreshed.Error : null);
+            Assert.Equal(1, connector.ConnectCount);
+            Assert.NotNull(connector.ObservedThread);
+            Assert.NotSame(callerThread, connector.ObservedThread);
+            Assert.Null(connector.ObservedSynchronizationContext);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+    }
+
+    [Fact]
+    public async Task Host_dispose_cancels_in_flight_connect_holding_the_gate()
+    {
+        using var fixture = new PluginFixture("dispose-cancel");
+        fixture.WriteExecutable("bin/server.exe");
+        fixture.WriteMcp(StdioJson("demo"));
+        var connector = new FakeConnector { WaitForCancellation = true };
+        var host = new DysonPluginMcpHost(connector: connector);
+        var refresh = host.RefreshAsync(
+            Catalog(fixture.Contribution("demo")),
+            Activation(fixture.InstallationId, "demo"));
+        await connector.ConnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var dispose = host.DisposeAsync().AsTask();
+        try
+        {
+            await Task.WhenAll(refresh, dispose).WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch (TimeoutException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // Refresh may cancel or fail once dispose drops the connect. Do not pin that error.
+        }
+    }
+
     private static DysonEffectivePluginCatalog Catalog(params DysonPluginActiveContribution[] contributions) => new()
     {
         ActiveContributions = contributions,
@@ -476,22 +533,48 @@ public sealed class DysonPluginMcpTests
         public HashSet<string> FailServers { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, IReadOnlyList<DysonPluginMcpRemoteTool>> ToolsByServer { get; } =
             new(StringComparer.Ordinal);
+        public bool WaitForCancellation { get; init; }
+        public SynchronizationContext? ObservedSynchronizationContext { get; private set; }
+        public Thread? ObservedThread { get; private set; }
+        public TaskCompletionSource ConnectStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<Result<IDysonPluginMcpConnection, string>> ConnectAsync(
             DysonPluginMcpServerDeclaration declaration,
             CancellationToken cancellationToken = default)
         {
             ConnectCount++;
+            ObservedSynchronizationContext = SynchronizationContext.Current;
+            ObservedThread = Thread.CurrentThread;
+            if (WaitForCancellation)
+            {
+                ConnectStarted.TrySetResult();
+                return WaitForCancellationAsync(cancellationToken);
+            }
+
+            return Task.FromResult(ConnectCore(declaration));
+        }
+
+        private async Task<Result<IDysonPluginMcpConnection, string>> WaitForCancellationAsync(
+            CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+            return Result<IDysonPluginMcpConnection, string>.AsError("Connect was not cancelled.");
+        }
+
+        private Result<IDysonPluginMcpConnection, string> ConnectCore(
+            DysonPluginMcpServerDeclaration declaration)
+        {
             if (FailServers.Contains(declaration.ServerId))
             {
-                return Task.FromResult(Result<IDysonPluginMcpConnection, string>.AsError(
-                    $"fixture connect failure: {declaration.ServerId}"));
+                return Result<IDysonPluginMcpConnection, string>.AsError(
+                    $"fixture connect failure: {declaration.ServerId}");
             }
 
             ToolsByServer.TryGetValue(declaration.ServerId, out var tools);
             tools ??= [new DysonPluginMcpRemoteTool { Name = "tool" }];
-            return Task.FromResult(Result<IDysonPluginMcpConnection, string>.AsValue(
-                new FakeConnection(declaration.ServerId, tools, () => DisposeCount++)));
+            return Result<IDysonPluginMcpConnection, string>.AsValue(
+                new FakeConnection(declaration.ServerId, tools, () => DisposeCount++));
         }
     }
 

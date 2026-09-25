@@ -22,6 +22,7 @@ Write engine code as if it may run embedded on a server, headless, or behind ano
 - Persistence policy
 - Multi-session ownership / cancel / drain / ask-wait
 - Any helper another host would have to copy
+- Blocking or sync I/O on the circuit — [rules/rules_blazor_circuit.md](rules_blazor_circuit.md)
 
 Engine and Abstractions must never reference UI assemblies.
 

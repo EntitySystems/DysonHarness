@@ -5064,20 +5064,12 @@ public sealed class DysonUiHost : IAsyncDisposable
                 LastError = $"Plugin MCP grants were unavailable: {activation.Error}";
 
             var pluginHost = new DysonPluginMcpHost(_pluginMcpResolver);
-            var refreshed = await pluginHost.RefreshAsync(
+            config.PluginMcpHost = pluginHost;
+            _ = pluginHost.RefreshAsync(
                 pluginCatalog.Value,
                 effectiveActivation,
                 BuildPluginMcpReservedNames(config),
-                cancellationToken).ConfigureAwait(false);
-            if (refreshed.IsError)
-            {
-                LastError = $"Plugin MCP runtime was unavailable: {refreshed.Error}";
-                await pluginHost.DisposeAsync().ConfigureAwait(false);
-            }
-            else
-            {
-                config.PluginMcpHost = pluginHost;
-            }
+                CancellationToken.None);
         }
 
         await TryHydrateFileStorageAsync(config, cancellationToken).ConfigureAwait(false);

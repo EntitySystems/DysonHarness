@@ -50,6 +50,8 @@ Apply this checklist when writing or reviewing C# in this repo (`net10.0`, names
 - Name awaitable-returning methods with `Async` suffix.
 - Pass `CancellationToken` on public async APIs.
 - Prefer `ConfigureAwait(false)` unless the continuation must resume on a captured context (CA2007).
+- `ConfigureAwait(false)` does not move sync work off a Blazor circuit.
+- Circuit callers follow [rules/rules_blazor_circuit.md](../../rules/rules_blazor_circuit.md).
 
 ## Naming
 
