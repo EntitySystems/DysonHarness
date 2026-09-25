@@ -46,6 +46,18 @@ public enum DysonAgentTurnKind
     /// spin until git finishes; omitted from provider transcripts (like DisplayInfo, unlike ModeSwitch).
     /// </summary>
     WorktreeCreating = 17,
+    /// <summary>
+    /// Meta Agent maintenance tick: prune finished agents and/or evict old turns.
+    /// </summary>
+    MetaMaintenance = 18,
+    /// <summary>
+    /// Child session ended a turn without SubmitSubagentReport; harness reminder to report or continue.
+    /// </summary>
+    ChildReportReminder = 19,
+    /// <summary>
+    /// Harness parent-event continuation; included in provider transcripts; not a user message.
+    /// </summary>
+    ParentEvent = 20,
 }
 
 public static class DysonAgentTurnKindRules

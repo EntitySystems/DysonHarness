@@ -72,10 +72,27 @@ public class DysonSubagentHostLogicTests
             title: "Drone A");
 
         if (!eventPrompt.Contains("eventId: 11111111-2222-3333-4444-555555555555", StringComparison.Ordinal)
-            || !eventPrompt.Contains("RespondToSubagentEvent", StringComparison.Ordinal)
-            || !eventPrompt.Contains("{\"ok\":true}", StringComparison.Ordinal))
+            || !eventPrompt.Contains("subagentId: 3", StringComparison.Ordinal)
+            || !eventPrompt.Contains("Ack a status", StringComparison.Ordinal)
+            || !eventPrompt.Contains("Answer a question", StringComparison.Ordinal)
+            || !eventPrompt.Contains("RespondToSubagentEvent(subagentId, eventId, reply)", StringComparison.Ordinal)
+            || !eventPrompt.Contains("{\"ok\":true}", StringComparison.Ordinal)
+            || eventPrompt.Contains("PostConversationMessage", StringComparison.Ordinal)
+            || eventPrompt.Contains("TriggerParentEvent", StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Event continuation prompt missing expected fields.");
+        }
+
+        AssertParentEventReplyContracts();
+
+        var parentEventTurn = DysonSubagentHostLogic.CreateTurn(eventPrompt);
+        if (parentEventTurn.Kind != DysonAgentTurnKind.ParentEvent
+            || parentEventTurn.Instruction is not { } instruction
+            || !instruction.Contains("eventId:", StringComparison.Ordinal)
+            || !instruction.Contains("RespondToSubagentEvent", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "CreateTurn must be ParentEvent and keep eventId: and RespondToSubagentEvent.");
         }
 
         AssertAskUiRouting();
@@ -209,10 +226,21 @@ public class DysonSubagentHostLogicTests
 
         if (!DysonSubagentHostLogic.TryBuildAskUi(DysonAskQuestion.AskQuestionKind, validQuestions, out var qs)
             || qs.Count != 1
-            || DysonSubagentHostLogic.RequiresParentAutoTurn(DysonAskQuestion.AskQuestionKind, validQuestions))
+            || DysonSubagentHostLogic.RequiresParentAutoTurn(DysonAskQuestion.AskQuestionKind, validQuestions)
+            || DysonSubagentHostLogic.RequiresParentAutoTurn(
+                DysonAskQuestion.AskQuestionKind, validQuestions, DysonAgentModes.Work))
         {
             throw new InvalidOperationException(
                 "Valid askQuestion questions JSON should open Ask UI and skip auto-turn.");
+        }
+
+        if (!DysonSubagentHostLogic.RequiresParentAutoTurn(
+                DysonAskQuestion.AskQuestionKind, validQuestions, DysonAgentModes.MetaAgent)
+            || !DysonSubagentHostLogic.RequiresParentAutoTurn(
+                DysonAskQuestion.AskQuestionKind, validQuestions, DysonAgentModes.MetaAgentDrone))
+        {
+            throw new InvalidOperationException(
+                "Meta parents must auto-turn valid askQuestion JSON.");
         }
 
         const string plainText = "What should the sleepy robot's name be?";
@@ -245,6 +273,73 @@ public class DysonSubagentHostLogicTests
         {
             throw new InvalidOperationException(
                 "Plain-text askQuestion auto-turn prompt must include eventId + RespondToSubagentEvent.");
+        }
+    }
+
+    private static void AssertParentEventReplyContracts()
+    {
+        var interrupt = new DysonAgentInterrupt
+        {
+            Kind = DysonAgentInterruptKind.SubagentEvent,
+            SubagentId = 3,
+            EventId = Guid.Parse("11111111-2222-3333-4444-555555555555"),
+            EventKind = "status",
+            Payload = "{\"ok\":true}",
+        };
+
+        var meta = DysonSubagentHostLogic.BuildSubagentEventContinuationPrompt(
+            interrupt, "Drone A", DysonAgentModes.MetaAgent);
+        var metaAgain = DysonSubagentHostLogic.BuildSubagentEventContinuationPrompt(
+            interrupt, "Drone A", DysonAgentModes.MetaAgent);
+        if (!string.Equals(meta, metaAgain, StringComparison.Ordinal))
+            throw new InvalidOperationException("Meta Agent continuation must be stable across calls.");
+
+        if (!meta.Contains("PostConversationMessage the status", StringComparison.Ordinal)
+            || !meta.Contains("only the user can decide", StringComparison.Ordinal)
+            || !meta.Contains("Do not start another drone", StringComparison.Ordinal)
+            || !meta.Contains("RespondToSubagentEvent(subagentId, eventId, reply)", StringComparison.Ordinal)
+            || !meta.Contains("subagentId: 3", StringComparison.Ordinal)
+            || !meta.Contains("eventId: 11111111-2222-3333-4444-555555555555", StringComparison.Ordinal)
+            || meta.Contains("TriggerParentEvent", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Meta Agent continuation missing reply contract.");
+        }
+
+        var drone = DysonSubagentHostLogic.BuildSubagentEventContinuationPrompt(
+            interrupt, "Drone A", DysonAgentModes.MetaAgentDrone);
+        if (!drone.Contains("short ack", StringComparison.Ordinal)
+            || !drone.Contains("TriggerParentEvent", StringComparison.Ordinal)
+            || !drone.Contains("You cannot PostConversationMessage", StringComparison.Ordinal)
+            || !drone.Contains("askQuestion", StringComparison.Ordinal)
+            || !drone.Contains("RespondToSubagentEvent(subagentId, eventId, reply)", StringComparison.Ordinal)
+            || !drone.Contains("subagentId: 3", StringComparison.Ordinal)
+            || !drone.Contains("eventId: 11111111-2222-3333-4444-555555555555", StringComparison.Ordinal)
+            || drone.Contains("PostConversationMessage the status", StringComparison.Ordinal)
+            || drone.Contains("PostConversationMessage the question", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Meta Agent Drone continuation missing reply contract.");
+        }
+
+        var work = DysonSubagentHostLogic.BuildSubagentEventContinuationPrompt(
+            interrupt, "Drone A", DysonAgentModes.Work);
+        if (!work.Contains("Ack a status", StringComparison.Ordinal)
+            || !work.Contains("Answer a question", StringComparison.Ordinal)
+            || !work.Contains("RespondToSubagentEvent(subagentId, eventId, reply)", StringComparison.Ordinal)
+            || !work.Contains("subagentId: 3", StringComparison.Ordinal)
+            || !work.Contains("eventId: 11111111-2222-3333-4444-555555555555", StringComparison.Ordinal)
+            || work.Contains("PostConversationMessage", StringComparison.Ordinal)
+            || work.Contains("TriggerParentEvent", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Work continuation must stay generic.");
+        }
+
+        var reminder = DysonSubagentHostLogic.BuildParkedParentEventReminder(interrupt, "Drone A");
+        if (!reminder.Contains(
+                "Still pending. The user message is their answer. Call RespondToSubagentEvent with that answer for this same eventId. Do not ask again.",
+                StringComparison.Ordinal)
+            || !reminder.Contains(meta, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Parked reminder must embed the Meta Agent continuation.");
         }
     }
 

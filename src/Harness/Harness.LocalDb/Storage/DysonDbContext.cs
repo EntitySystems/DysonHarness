@@ -20,6 +20,7 @@ public sealed class DysonDbContext : DbContext
     public DbSet<DysonWorkDirectoryEntity> WorkDirectories => Set<DysonWorkDirectoryEntity>();
     public DbSet<DysonWorkDirectoryConfigurationEntity> WorkDirectoryConfigurations =>
         Set<DysonWorkDirectoryConfigurationEntity>();
+    public DbSet<DysonPlanEntity> Plans => Set<DysonPlanEntity>();
     public DbSet<DysonSessionEntity> Sessions => Set<DysonSessionEntity>();
     public DbSet<DysonTurnEntity> Turns => Set<DysonTurnEntity>();
     public DbSet<DysonSessionLogEntry> SessionLogs => Set<DysonSessionLogEntry>();
@@ -116,6 +117,23 @@ public sealed class DysonDbContext : DbContext
             e.HasOne(x => x.WorkDirectory)
                 .WithOne()
                 .HasForeignKey<DysonWorkDirectoryConfigurationEntity>(x => x.WorkDirectoryId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DysonPlanEntity>(e =>
+        {
+            e.ToTable("plans");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.WorkDirectoryId).IsRequired();
+            e.Property(x => x.Title).IsRequired();
+            e.Property(x => x.Kind).HasConversion<int>();
+            e.Property(x => x.Status).HasConversion<int>();
+            e.HasIndex(x => new { x.WorkDirectoryId, x.PlanRelativePath })
+                .IsUnique()
+                .HasFilter("\"PlanRelativePath\" IS NOT NULL");
+            e.HasOne(x => x.WorkDirectory)
+                .WithMany()
+                .HasForeignKey(x => x.WorkDirectoryId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

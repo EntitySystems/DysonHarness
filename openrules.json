@@ -32,6 +32,11 @@
       "Description": "New UI CSS lives in <Component>.razor.css; what must stay global in app.css"
     },
     {
+      "Path": "rules/rules_blazor_circuit.md",
+      "Mode": "AgentOptional",
+      "Description": "Blazor circuit must not run or await sync/blocking work without a thread-pool hop"
+    },
+    {
       "Path": "rules/rules_ponytail.md",
       "Mode": "AutoInclude",
       "Description": "Ponytail lazy-senior efficiency ladder (mandatory)"

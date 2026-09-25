@@ -241,6 +241,30 @@
                 Leave as “Use session model” to inherit the parent chat model.
             </p>
         </div>
+
+        <div class="settings-page__picker-group">
+            <div class="settings-page__picker-row">
+                <label>Meta Agent Drone default model</label>
+                <label>Effort</label>
+                <ModelSlugPicker SelectedSlugId="_metaAgentDroneSlugId"
+                             SelectedSlugIdChanged="OnMetaAgentDroneSlugChangedAsync"
+                             AllowEmpty="true"
+                             EmptyLabel="Use session model" />
+                <ComposerEffortPicker Options="EffortModesFor(_metaAgentDroneSlugId)"
+                                  Value="@_metaAgentDroneEffort"
+                                  Disabled="@(_metaAgentDroneSlugId is null)"
+                                  EmptyLabel="Default"
+                                  SectionLabel="Reasoning effort"
+                                  Title="Reasoning effort (Default uses the slug default)"
+                                  ShowTriggerLabel="false"
+                                  OpenUp="false"
+                                  OnPick="OnMetaAgentDroneEffortPickedAsync" />
+                </div>
+            <p class="settings-page__copy">
+                Default model for Meta Agent Drone subagents when the spawning tool omits modelSlug.
+                Leave as “Use session model” to inherit the parent chat model.
+            </p>
+        </div>
         </div>
 
         @if (_saved)
@@ -262,6 +286,7 @@
     private Guid? _droneSlugId;
     private Guid? _securityReviewSlugId;
     private Guid? _bugReviewSlugId;
+    private Guid? _metaAgentDroneSlugId;
     private string _fallbackChatEffort = "";
     private string _turnSummarizerEffort = "";
     private string _webSearchSummarizerEffort = "";
@@ -269,6 +294,7 @@
     private string _droneEffort = "";
     private string _securityReviewEffort = "";
     private string _bugReviewEffort = "";
+    private string _metaAgentDroneEffort = "";
     private string? _error;
     private bool _saved;
 
@@ -308,6 +334,8 @@
             return;
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.BugReviewModelSlugId, v => _bugReviewSlugId = v))
             return;
+        if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.MetaAgentDroneModelSlugId, v => _metaAgentDroneSlugId = v))
+            return;
 
         if (!await TryLoadSlugModesAsync())
             return;
@@ -325,6 +353,8 @@
         if (!await TryLoadEffortSettingAsync(_securityReviewSlugId, DysonAppSettingKeys.SecurityReviewReasoningEffort, v => _securityReviewEffort = v))
             return;
         if (!await TryLoadEffortSettingAsync(_bugReviewSlugId, DysonAppSettingKeys.BugReviewReasoningEffort, v => _bugReviewEffort = v))
+            return;
+        if (!await TryLoadEffortSettingAsync(_metaAgentDroneSlugId, DysonAppSettingKeys.MetaAgentDroneReasoningEffort, v => _metaAgentDroneEffort = v))
             return;
     }
 
@@ -544,6 +574,15 @@
             DysonAppSettingKeys.BugReviewModelSlugId,
             DysonAppSettingKeys.BugReviewReasoningEffort);
 
+    private Task OnMetaAgentDroneSlugChangedAsync(Guid? id) =>
+        SaveSlugSettingAsync(
+            id,
+            _metaAgentDroneSlugId,
+            v => _metaAgentDroneSlugId = v,
+            v => _metaAgentDroneEffort = v,
+            DysonAppSettingKeys.MetaAgentDroneModelSlugId,
+            DysonAppSettingKeys.MetaAgentDroneReasoningEffort);
+
     private Task OnFallbackChatEffortPickedAsync(string? effort) =>
         SaveEffortSettingAsync(effort, v => _fallbackChatEffort = v, DysonAppSettingKeys.FallbackChatReasoningEffort);
 
@@ -564,6 +603,9 @@
 
     private Task OnBugReviewEffortPickedAsync(string? effort) =>
         SaveEffortSettingAsync(effort, v => _bugReviewEffort = v, DysonAppSettingKeys.BugReviewReasoningEffort);
+
+    private Task OnMetaAgentDroneEffortPickedAsync(string? effort) =>
+        SaveEffortSettingAsync(effort, v => _metaAgentDroneEffort = v, DysonAppSettingKeys.MetaAgentDroneReasoningEffort);
 
     private async Task SaveSlugSettingAsync(
         Guid? id,

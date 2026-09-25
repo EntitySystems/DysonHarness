@@ -455,6 +455,9 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
             if (_disposed != 0)
                 return VoidResult<string>.AsError("Session runtime has been disposed.");
 
+            if (await IsMetaAgentSessionAsync(sessionId, cancellationToken).ConfigureAwait(false))
+                return FailVoid(DysonSessionPolicy.CannotDeleteMessage);
+
             await UnregisterSessionTreeAsync(sessionId).ConfigureAwait(false);
 
             var deleted = await _sessions.DeleteSessionAsync(sessionId, cancellationToken)
@@ -470,6 +473,22 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         {
             _graphGate.Release();
         }
+    }
+
+    /// <summary>
+    /// Loaded live mode, else the persisted row. Missing rows are not Meta Agent
+    /// (delete then returns not-found).
+    /// </summary>
+    private async Task<bool> IsMetaAgentSessionAsync(
+        Guid sessionId,
+        CancellationToken cancellationToken)
+    {
+        if (TryGetSession(sessionId, out var live))
+            return DysonSessionPolicy.IsMetaAgent(live.Mode);
+
+        var full = await _sessions.GetFullSessionAsync(sessionId, cancellationToken)
+            .ConfigureAwait(false);
+        return full.IsSuccess && DysonSessionPolicy.IsMetaAgent(full.Value.Session.AgentMode);
     }
 
     public void ReportError(string message)
@@ -641,6 +660,9 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
                         .ConfigureAwait(false);
                     if (persistDropped.IsError)
                         return persistDropped;
+
+                    await session.ApplyChildReportWatchAsync(token).ConfigureAwait(false);
+                    await session.ApplyMetaMaintenanceTickAsync(last, token).ConfigureAwait(false);
 
                     RaiseChanged(DysonRuntimeChangeKind.SessionGraph, sessionId);
                 }
@@ -1109,7 +1131,10 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         var entity = DysonTurnPersistence.ToEntity(turn, sessionId, sequence);
         var upsert = await PersistAsync(() => _sessions.UpsertTurnAsync(entity)).ConfigureAwait(false);
         if (upsert.IsError)
+        {
+            ReportError(upsert.Error);
             return;
+        }
 
         var started = DysonTurnPersistence.CreateTurnStartedLog(sessionId, turn);
         await PersistAsync(() => _sessions.AppendLogAsync(started)).ConfigureAwait(false);
@@ -1137,7 +1162,10 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
 
         var sequence = IndexOfTurn(session, turn);
         var entity = DysonTurnPersistence.ToEntity(turn, sessionId, sequence);
-        await PersistAsync(() => _sessions.UpsertTurnAsync(entity)).ConfigureAwait(false);
+        var upsert = await PersistAsync(() => _sessions.UpsertTurnAsync(entity)).ConfigureAwait(false);
+        if (upsert.IsError)
+            ReportError(upsert.Error);
+
         RaiseChanged(DysonRuntimeChangeKind.SessionGraph, sessionId);
     }
 

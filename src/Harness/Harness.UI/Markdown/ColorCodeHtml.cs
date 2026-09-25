@@ -1,5 +1,8 @@
+using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using ColorCode;
+using ColorCode.Compilation;
 using ColorCode.Styling;
 
 namespace Harness.UI.Markdown;
@@ -8,26 +11,102 @@ internal static class ColorCodeHtml
 {
     internal const int MaxHighlightedChars = 64 * 1024;
 
+    private static readonly TimeSpan HighlightTimeout = TimeSpan.FromSeconds(1);
+
     // ponytail: StyleDictionary.DefaultDark allocates on every get; HtmlClassFormatter.Writer is
     // instance state, so one formatter + lock (upgrade: per-call formatter if chat volume needs it).
     private static readonly StyleDictionary DarkStyles = StyleDictionary.DefaultDark;
     private static readonly HtmlClassFormatter Formatter = new(DarkStyles);
     private static readonly object FormatterGate = new();
+    private static readonly HashSet<string> TimeoutInstalled = new(StringComparer.Ordinal);
+
+    // ponytail: exact + prefix failure memory. A streaming fence grows by append, so one timeout
+    // suppresses the rest of that fence. Ceiling: a different fence that starts with a remembered
+    // failure stays plain. Upgrade: key failures by fence identity.
+    private static readonly List<string> HighlightFailures = [];
 
     internal static string? TryFormat(string source, ILanguage language)
     {
         if (source.Length > MaxHighlightedChars)
             return null;
 
-        try
+        lock (FormatterGate)
         {
-            lock (FormatterGate)
+            if (IsKnownHighlightFailure(source))
+                return null;
+
+            try
+            {
+                // ColorCode 2.0.15 compiles language regexes with an infinite match timeout.
+                // Missing private fields fail closed: do not match unbounded on the circuit.
+                if (!TryEnsureMatchTimeout(language))
+                    return null;
+
                 return Formatter.GetHtmlString(source, language);
+            }
+            catch (Exception ex) when (ex is RegexMatchTimeoutException
+                                       || ex.InnerException is RegexMatchTimeoutException)
+            {
+                RememberHighlightFailure(source);
+                return null;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
         }
-        catch (Exception)
+    }
+
+    private static bool TryEnsureMatchTimeout(ILanguage language)
+    {
+        if (TimeoutInstalled.Contains(language.Id))
+            return true;
+
+        var parser = typeof(HtmlClassFormatter).GetField(
+            "languageParser",
+            BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(Formatter);
+        var compiler = parser?.GetType().GetField(
+            "languageCompiler",
+            BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(parser);
+        if (compiler is not ILanguageCompiler languageCompiler)
+            return false;
+
+        var compiled = languageCompiler.Compile(language);
+        var regex = compiled.Regex;
+        if (regex.MatchTimeout == HighlightTimeout)
         {
-            return null;
+            TimeoutInstalled.Add(language.Id);
+            return true;
         }
+
+        if (regex.MatchTimeout != Regex.InfiniteMatchTimeout)
+            return false;
+
+        compiled.Regex = new Regex(regex.ToString(), regex.Options, HighlightTimeout);
+        if (compiled.Regex.MatchTimeout != HighlightTimeout)
+            return false;
+
+        TimeoutInstalled.Add(language.Id);
+        return true;
+    }
+
+    private static bool IsKnownHighlightFailure(string source)
+    {
+        foreach (var failed in HighlightFailures)
+        {
+            if (source.StartsWith(failed, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void RememberHighlightFailure(string source)
+    {
+        if (source.Length == 0 || IsKnownHighlightFailure(source))
+            return;
+
+        HighlightFailures.Add(source);
     }
 
     /// <summary>ColorCode 2.0.15 envelope: &lt;div class="…"&gt;&lt;pre&gt;…&lt;/pre&gt;&lt;/div&gt;.</summary>

@@ -8,6 +8,7 @@ public static class DysonManagedSources
     public const string CliProxyAntigravity = "cliproxy-antigravity";
     public const string CliProxyKimi = "cliproxy-kimi";
     public const string CliProxyClaude = "cliproxy-claude";
+    public const string CliProxyMeta = "cliproxy-meta";
     public const string OpenRouter = "openrouter";
     public const string OrcaRouter = "orcarouter";
 

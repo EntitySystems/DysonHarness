@@ -84,6 +84,12 @@ public class DysonAgentSessionConfig
     public DysonAgentProvider? BugReviewDefaultProvider { get; set; }
 
     /// <summary>
+    /// Optional default provider for Meta Agent Drone subagents when <c>StartSubagent.modelSlug</c> is omitted.
+    /// Null ⇒ inherit the parent session provider.
+    /// </summary>
+    public DysonAgentProvider? MetaAgentDroneDefaultProvider { get; set; }
+
+    /// <summary>
     /// Dedicated direct-OpenAI provider identity for image generation.
     /// Null means <c>GenerateImage</c> is unavailable; it never falls back to the session chat provider.
     /// </summary>
@@ -98,7 +104,8 @@ public class DysonAgentSessionConfig
     public DysonS3FileStorage? FileStorage { get; set; }
 
     /// <summary>
-    /// Settings default provider for Explore / Drone / Security Review / Bug Review; other modes ⇒ null (inherit).
+    /// Settings default provider for Explore / Drone / Security Review / Bug Review / Meta Agent Drone;
+    /// other modes ⇒ null (inherit).
     /// </summary>
     public DysonAgentProvider? TryGetSubagentDefaultProvider(string? agentMode)
     {
@@ -113,6 +120,8 @@ public class DysonAgentSessionConfig
             return SecurityReviewDefaultProvider;
         if (string.Equals(agentMode, DysonAgentModes.BugReview, StringComparison.OrdinalIgnoreCase))
             return BugReviewDefaultProvider;
+        if (string.Equals(agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
+            return MetaAgentDroneDefaultProvider;
 
         return null;
     }
@@ -135,6 +144,13 @@ public class DysonAgentSessionConfig
     /// Null ⇒ browser MCP tools are omitted from the catalog.
     /// </summary>
     public IDysonBrowserControl? BrowserControl { get; set; }
+
+    /// <summary>
+    /// Optional process-wide message bus. Plan mutations publish
+    /// <see cref="DysonPlansChangedEvent"/> on <see cref="DysonBusScopes.WorkDirectory"/>.
+    /// Null ⇒ publish is a silent no-op. Children share this config instance.
+    /// </summary>
+    public DysonMessageBus? Bus { get; set; }
 
     /// <summary>
     /// Optional workdir-scoped custom MCP host (<c>.dyson/mcp</c>).

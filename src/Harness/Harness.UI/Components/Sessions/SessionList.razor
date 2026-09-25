@@ -32,6 +32,14 @@
                 @onclick="OnRefreshAsync">
             <img src="icons/refresh.svg" alt="" />
         </button>
+        <button type="button"
+                class="btn btn-ghost btn-icon"
+                title="Meta agent mode"
+                aria-label="Meta agent mode"
+                disabled="@(!OnOpenMetaAgent.HasDelegate)"
+                @onclick="OnOpenMetaAgentAsync">
+            <img src="icons/meta-agent.svg" alt="" />
+        </button>
     </div>
 
     @if (!string.IsNullOrEmpty(Error))
@@ -89,6 +97,7 @@
     [Parameter] public EventCallback<Guid> OnDelete { get; set; }
     [Parameter] public EventCallback OnDeleteInactive { get; set; }
     [Parameter] public EventCallback OnRefresh { get; set; }
+    [Parameter] public EventCallback OnOpenMetaAgent { get; set; }
 
     private bool HasDeletableSessions =>
         Sessions.Any(s =>
@@ -103,6 +112,8 @@
     private Task OnResumeAsync(Guid id) => OnResume.InvokeAsync(id);
 
     private Task OnRefreshAsync() => OnRefresh.InvokeAsync();
+
+    private Task OnOpenMetaAgentAsync() => OnOpenMetaAgent.InvokeAsync();
 
     private async Task OnDeleteClickAsync(Guid id, string title)
     {

@@ -1,6 +1,8 @@
 using System.Windows;
+using System.Windows.Input;
 using CefSharp;
 using CefSharp.Wpf;
+using CefSharp.Wpf.Handler;
 
 namespace DysonHarness.UI.Windows;
 
@@ -37,12 +39,24 @@ public partial class MainWindow : Window
         var handlers = new ExternalNavigationHandlers(_appUrl);
         browser.LifeSpanHandler = handlers;
         browser.RequestHandler = handlers;
+        browser.MenuHandler = new ShellContextMenuHandler();
         browser.FrameLoadEnd += OnFrameLoadEnd;
         browser.Address = _appUrl.AbsoluteUri;
 
         Root.Children.Add(browser);
         // Default dark until the page reports (matches ThemeService default).
         WindowChromeTheme.Apply(this, _chromeTheme);
+        PreviewKeyDown += OnPreviewKeyDown;
+    }
+
+    private void OnPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.F5 || e.IsRepeat || _browser is null)
+            return;
+
+        e.Handled = true;
+        var ignoreCache = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
+        _browser.Reload(ignoreCache);
     }
 
     internal void ApplyChromeTheme(string? theme)
@@ -92,5 +106,35 @@ public partial class MainWindow : Window
         return string.Equals(uri.Scheme, _appUrl.Scheme, StringComparison.OrdinalIgnoreCase)
             && string.Equals(uri.Host, _appUrl.Host, StringComparison.OrdinalIgnoreCase)
             && uri.Port == _appUrl.Port;
+    }
+
+    /// <summary>
+    /// Chromium's default WPF menu plus a top "Reload page" item.
+    /// Click runs <see cref="IBrowser.Reload"/> on the browser process, not page script.
+    /// </summary>
+    private sealed class ShellContextMenuHandler : ContextMenuHandler
+    {
+        protected override void OnBeforeContextMenu(
+            IWebBrowser chromiumWebBrowser,
+            IBrowser browser,
+            IFrame frame,
+            IContextMenuParams parameters,
+            IMenuModel model)
+        {
+            model.InsertItemAt(0, CefMenuCommand.UserFirst, "Reload page");
+            model.InsertSeparatorAt(1);
+            base.OnBeforeContextMenu(chromiumWebBrowser, browser, frame, parameters, model);
+        }
+
+        protected override void ExecuteCommand(IBrowser browser, ContextMenuExecuteModel model)
+        {
+            if (model.MenuCommand == CefMenuCommand.UserFirst)
+            {
+                browser.Reload();
+                return;
+            }
+
+            base.ExecuteCommand(browser, model);
+        }
     }
 }

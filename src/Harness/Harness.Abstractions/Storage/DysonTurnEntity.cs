@@ -12,6 +12,12 @@ public sealed class DysonTurnEntity
     public string? PlanRelativePath { get; set; }
 
     public string? Instruction { get; set; }
+
+    /// <summary>
+    /// Model-only local paths for files that were not uploaded. Not shown in chat.
+    /// </summary>
+    public string? HiddenInstruction { get; set; }
+
     public string? AssistantText { get; set; }
 
     /// <summary>
@@ -34,6 +40,18 @@ public sealed class DysonTurnEntity
     /// User-attached images this turn (JSON). Re-emitted in provider multimodal transcripts on restore.
     /// </summary>
     public string? UserImagesJson { get; set; }
+
+    /// <summary>
+    /// Meta-chat buttons for this turn (name + func key). Null or empty means no buttons.
+    /// The in-process delegate map is not stored.
+    /// </summary>
+    public string? ConversationActionsJson { get; set; }
+
+    /// <summary>
+    /// Visualization opened from a meta DisplayInfo post. Null on every other turn.
+    /// The visualization body stays in <see cref="ToolStateJson"/> on the render turn.
+    /// </summary>
+    public Guid? VisualizationId { get; set; }
 
     public string ToolStateJson { get; set; } = "{}";
     public bool ToolHistoryOptimized { get; set; }

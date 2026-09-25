@@ -12,6 +12,12 @@ public abstract class DysonAgentSession
     private readonly ConcurrentQueue<string> _logLines = new();
     private readonly List<DysonSessionTodo> _todos = [];
     private readonly object _todosGate = new();
+    // ponytail: one lock around the in-process action map; upgrade only if registration becomes hot.
+    private readonly object _conversationActionsGate = new();
+    private readonly Dictionary<string, Func<CancellationToken, Task<Result<string, string>>>> _conversationActions =
+        new(StringComparer.Ordinal);
+    private readonly List<DysonAgentSession> _subSessions = [];
+    private readonly object _subSessionsGate = new();
     private readonly object _terminalGate = new();
     private TaskCompletionSource<(DysonSessionStatus Status, string? Summary)> _terminalTcs =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -37,6 +43,9 @@ public abstract class DysonAgentSession
     private int _cachedOutgoingContextTokens;
     private int _cachedOutgoingContextTokensGeneration = -1;
     private int _outgoingContextTokensRefreshInFlight;
+    private int _childReportRemindersSent;
+    private int _turnsSinceMetaMaintenance;
+    private bool _subagentReportAccepted;
 
     protected DysonAgentSession(
         string agentMode,
@@ -46,7 +55,6 @@ public abstract class DysonAgentSession
     {
         Config = config ?? throw new ArgumentNullException(nameof(config));
         Provider = provider ?? throw new ArgumentNullException(nameof(provider));
-        SubSessions = new List<DysonAgentSession>();
 
         var prompt = DysonAgentSystemPrompts.ForMode(agentMode, config.CustomAgents);
         if (prompt.IsError)
@@ -176,6 +184,24 @@ public abstract class DysonAgentSession
     /// <summary>Last SubmitSubagentReport / stop / fail summary when terminal.</summary>
     public string? LastReportSummary { get; private set; }
 
+    /// <summary>
+    /// Child-report reminder count for this process. Not persisted: restart recovery
+    /// synthesizes immediately for Interrupted descendants.
+    /// </summary>
+    public int ChildReportRemindersSent => _childReportRemindersSent;
+
+    /// <summary>
+    /// Completed non-<see cref="DysonAgentTurnKind.MetaMaintenance"/> turns since the
+    /// last meta-maintenance tick. In-memory only (like <see cref="ChildReportRemindersSent"/>):
+    /// a restart re-counts from zero, which at worst delays one tick. A stored counter
+    /// would add a column for no behavioural gain.
+    /// </summary>
+    public int TurnsSinceMetaMaintenance
+    {
+        get => _turnsSinceMetaMaintenance;
+        internal set => _turnsSinceMetaMaintenance = value;
+    }
+
     public bool IsTerminal =>
         Status is DysonSessionStatus.Completed
             or DysonSessionStatus.Stopped
@@ -226,6 +252,87 @@ public abstract class DysonAgentSession
 
     /// <summary>Worktree branch name (e.g. <c>dyson/{8-hex}</c>); null until created.</summary>
     public string? WorktreeBranch { get; set; }
+
+    /// <summary>
+    /// Registered work-directory checkout (not a session worktree). Git ensure/merge anchor.
+    /// </summary>
+    public string? RegisteredWorkDirectoryAbsolutePath { get; set; }
+
+    /// <summary>Rebinds native workspace root (registered checkout vs session worktree).</summary>
+    public virtual void RebindWorkDirectoryPath(string absolutePath) =>
+        ArgumentException.ThrowIfNullOrWhiteSpace(absolutePath);
+
+    /// <summary>
+    /// Forks this session onto its own git worktree keyed by <see cref="PersistenceId"/>.
+    /// Meta Agent Drone spawn calls this instead of copying the parent worktree.
+    /// </summary>
+    public async Task<VoidResult<string>> BindOwnWorktreeAsync(
+        string registeredWorkDirectoryAbsolutePath,
+        CancellationToken cancellationToken = default)
+    {
+        if (PersistenceId == Guid.Empty)
+            return new VoidResult<string>("Session must be persisted before creating a worktree.");
+
+        if (string.IsNullOrWhiteSpace(registeredWorkDirectoryAbsolutePath))
+            return new VoidResult<string>("Registered work directory is required.");
+
+        var ensured = await DysonSessionWorktree.EnsureAsync(
+                registeredWorkDirectoryAbsolutePath, PersistenceId, cancellationToken)
+            .ConfigureAwait(false);
+        if (ensured.IsError)
+            return new VoidResult<string>(ensured.Error);
+
+        WorktreeEnabled = true;
+        WorktreeAbsolutePath = ensured.Value.AbsolutePath;
+        WorktreeBranch = ensured.Value.Branch;
+        RegisteredWorkDirectoryAbsolutePath = Path.GetFullPath(registeredWorkDirectoryAbsolutePath);
+        RebindWorkDirectoryPath(ensured.Value.AbsolutePath);
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Set by <c>StartAsyncMetaAgentDrone</c> for the duration of that spawn.
+    /// Null (direct <see cref="CreateChildAsync"/>) keeps the historical always-fork.
+    /// </summary>
+    internal static readonly AsyncLocal<bool?> MetaAgentDroneUseWorktree = new();
+
+    /// <summary>
+    /// Sibling of <see cref="MetaAgentDroneUseWorktree"/>. Set only when that flag is false
+    /// and <c>existingWorktreePath</c> is non-empty. Does not change <see cref="CreateChildAsync"/>.
+    /// </summary>
+    internal static readonly AsyncLocal<string?> MetaAgentDroneExistingWorktreePath = new();
+
+    /// <summary>
+    /// <c>Isolate</c> forks via <see cref="BindOwnWorktreeAsync"/>. <c>Suppress</c> stays on the
+    /// registered checkout: no branch, and completion does not merge.
+    /// </summary>
+    protected static (bool Isolate, bool Suppress) ResolveMetaAgentDroneWorktree(string agentMode)
+    {
+        if (!string.Equals(agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
+            return (false, false);
+
+        // null or true → fork. Only an explicit false stays on the parent checkout.
+        var suppress = MetaAgentDroneUseWorktree.Value == false;
+        return (!suppress, suppress);
+    }
+
+    /// <summary>
+    /// Suppress-path work directory: rebound checkout when set, otherwise <paramref name="registeredPath"/>.
+    /// </summary>
+    protected static string ResolveMetaAgentDroneSuppressWorkDirectory(string registeredPath)
+    {
+        var rebound = MetaAgentDroneExistingWorktreePath.Value;
+        return string.IsNullOrWhiteSpace(rebound) ? registeredPath : rebound.Trim();
+    }
+
+    /// <summary>Suppress-path system suffix. Shared checkout unless a rebound path is set.</summary>
+    protected static string MetaAgentDroneSuppressPromptBlock()
+    {
+        var rebound = MetaAgentDroneExistingWorktreePath.Value;
+        return string.IsNullOrWhiteSpace(rebound)
+            ? DysonAgentSystemPrompts.MetaAgentDroneSharedCheckoutPromptBlock
+            : DysonAgentSystemPrompts.BuildMetaAgentDroneReboundCheckoutPrompt(rebound.Trim());
+    }
 
     /// <summary>
     /// Bumped by <see cref="ApplyAgentMode"/> so OpenAI <c>prompt_cache_key</c> invalidates
@@ -316,7 +423,18 @@ public abstract class DysonAgentSession
         set => field = value ?? throw new ArgumentNullException(nameof(value));
     }
 
-    public IList<DysonAgentSession> SubSessions { get; }
+    /// <summary>
+    /// Direct children. Each read copies the list so UI enumeration cannot race unregister.
+    /// </summary>
+    // ponytail: per-read array; cache the snapshot if drone counts make this alloc hot
+    public IReadOnlyList<DysonAgentSession> SubSessions
+    {
+        get
+        {
+            lock (_subSessionsGate)
+                return _subSessions.ToArray();
+        }
+    }
 
     /// <summary>Parent lookup for Wait/Inspect/Stop. Keyed by subagent Id.</summary>
     protected Dictionary<int, DysonAgentSession> SubagentsById { get; } = new();
@@ -332,15 +450,19 @@ public abstract class DysonAgentSession
     {
         ArgumentNullException.ThrowIfNull(child);
 
-        if (child.Id != 0 || SubagentsById.ContainsValue(child) || SubSessions.Contains(child))
-            throw new InvalidOperationException("Subagent is already registered.");
+        lock (_subSessionsGate)
+        {
+            if (child.Id != 0 || SubagentsById.ContainsValue(child) || _subSessions.Contains(child))
+                throw new InvalidOperationException("Subagent is already registered.");
 
-        var id = AllocateSubagentId();
-        child.Id = id;
-        child.Parent = this;
-        ApplyChildStructuralGates(child);
-        SubagentsById[id] = child;
-        SubSessions.Add(child);
+            var id = AllocateSubagentId();
+            child.Id = id;
+            child.Parent = this;
+            ApplyChildStructuralGates(child);
+            SubagentsById[id] = child;
+            _subSessions.Add(child);
+        }
+
         SubagentSpawned?.Invoke(this, child);
     }
 
@@ -359,28 +481,31 @@ public abstract class DysonAgentSession
         if (child.Id < 1)
             throw new InvalidOperationException("Restored subagent must already have RuntimeId ≥ 1.");
 
-        if (SubagentsById.TryGetValue(child.Id, out var existingById))
+        lock (_subSessionsGate)
         {
-            if (!ReferenceEquals(existingById, child))
+            if (SubagentsById.TryGetValue(child.Id, out var existingById))
             {
-                throw new InvalidOperationException(
-                    $"Subagent id {child.Id} is already registered to a different session.");
+                if (!ReferenceEquals(existingById, child))
+                {
+                    throw new InvalidOperationException(
+                        $"Subagent id {child.Id} is already registered to a different session.");
+                }
+
+                child.Parent = this;
+                ApplyChildStructuralGates(child);
+                BumpNextSubagentId(child.Id);
+                return;
             }
+
+            if (SubagentsById.ContainsValue(child) || _subSessions.Contains(child))
+                throw new InvalidOperationException("Subagent is already registered under a different id.");
 
             child.Parent = this;
             ApplyChildStructuralGates(child);
+            SubagentsById[child.Id] = child;
+            _subSessions.Add(child);
             BumpNextSubagentId(child.Id);
-            return;
         }
-
-        if (SubagentsById.ContainsValue(child) || SubSessions.Contains(child))
-            throw new InvalidOperationException("Subagent is already registered under a different id.");
-
-        child.Parent = this;
-        ApplyChildStructuralGates(child);
-        SubagentsById[child.Id] = child;
-        SubSessions.Add(child);
-        BumpNextSubagentId(child.Id);
     }
 
     /// <summary>
@@ -411,28 +536,146 @@ public abstract class DysonAgentSession
         child.Config.PluginMcpHost?.AttachSession(child);
     }
 
-    public bool TryGetSubagent(int subagentId, out DysonAgentSession child) =>
-        SubagentsById.TryGetValue(subagentId, out child!);
+    public bool TryGetSubagent(int subagentId, out DysonAgentSession child)
+    {
+        lock (_subSessionsGate)
+            return SubagentsById.TryGetValue(subagentId, out child!);
+    }
+
+    /// <summary>
+    /// Drops a direct child from <see cref="SubagentsById"/> / <see cref="SubSessions"/>
+    /// after <c>DeleteMetaAgent</c> (or equivalent) removed its row.
+    /// </summary>
+    public bool UnregisterSubagent(int subagentId)
+    {
+        lock (_subSessionsGate)
+        {
+            if (!SubagentsById.Remove(subagentId, out var child))
+                return false;
+
+            _subSessions.Remove(child);
+            child.Parent = null;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Drops a child <see cref="CreateChildAsync"/> already registered when a later step fails.
+    /// A worktree this child owns is removed and its columns cleared so delete is not refused.
+    /// An inherited parent worktree is not removed. Cleanup errors are ignored.
+    /// </summary>
+    protected async Task AbandonRegisteredChildAsync(
+        DysonAgentSession child,
+        CancellationToken cancellationToken)
+    {
+        var persisted = child.PersistenceId;
+        var worktreePath = child.WorktreeAbsolutePath;
+        var ownsWorktree = persisted != Guid.Empty
+            && !string.IsNullOrWhiteSpace(worktreePath)
+            && string.Equals(
+                child.WorktreeBranch,
+                DysonSessionWorktree.FormatBranch(persisted),
+                StringComparison.Ordinal);
+
+        UnregisterSubagent(child.Id);
+
+        if (ownsWorktree)
+        {
+            var anchor = child.RegisteredWorkDirectoryAbsolutePath;
+            if (string.IsNullOrWhiteSpace(anchor))
+                anchor = RegisteredWorkDirectoryAbsolutePath;
+            if (!string.IsNullOrWhiteSpace(anchor))
+                await DysonSessionWorktree.RemoveAsync(anchor, worktreePath!, force: true, cancellationToken)
+                    .ConfigureAwait(false);
+        }
+
+        if (SessionStore is null || persisted == Guid.Empty)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(worktreePath))
+        {
+            await SessionStore.UpdateSessionMetaAsync(
+                    new DysonSessionMetaUpdate
+                    {
+                        SessionId = persisted,
+                        UpdateWorktreeEnabled = true,
+                        WorktreeEnabled = false,
+                        UpdateWorktreeLocation = true,
+                        WorktreeAbsolutePath = null,
+                        WorktreeBranch = null,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        await SessionStore.DeleteSessionAsync(persisted, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// JSON array of direct children for the <c>ListSubagents</c> MCP tool
     /// (<c>subagentId</c>, <c>persistenceId</c>, <c>agentMode</c>, <c>title</c>, <c>status</c>, optional <c>modelLabel</c>).
     /// </summary>
-    public string FormatListSubagentsJson()
+    public string FormatListSubagentsJson() => FormatChildRosterJson(includeReports: false);
+
+    /// <summary>
+    /// Shared child-roster projection. When <paramref name="includeReports"/> is false the shape
+    /// matches <see cref="FormatListSubagentsJson"/>. When true, adds <c>kind</c>,
+    /// <c>worktreeBranch</c>, <c>lastReport</c>, and <c>finishedAt</c> (plain, stable — no notices).
+    /// </summary>
+    public string FormatChildRosterJson(bool includeReports)
     {
         var items = SubSessions
             .OrderBy(c => c.Id)
-            .Select(c => new
-            {
-                subagentId = c.Id,
-                persistenceId = c.PersistenceId,
-                agentMode = c.Mode,
-                title = c.DisplayTitle,
-                status = c.Status.ToString(),
-                modelLabel = FormatSubagentModelLabel(c.Provider),
-            });
+            .Select(c => includeReports ? ProjectChildRosterWithReports(c) : ProjectChildRoster(c));
 
         return JsonSerializer.Serialize(items);
+    }
+
+    private static object ProjectChildRoster(DysonAgentSession c) => new
+    {
+        subagentId = c.Id,
+        persistenceId = c.PersistenceId,
+        agentMode = c.Mode,
+        title = c.DisplayTitle,
+        status = c.Status.ToString(),
+        modelLabel = FormatSubagentModelLabel(c.Provider),
+    };
+
+    private static object ProjectChildRosterWithReports(DysonAgentSession c) => new
+    {
+        subagentId = c.Id,
+        persistenceId = c.PersistenceId,
+        agentMode = c.Mode,
+        title = c.DisplayTitle,
+        status = c.Status.ToString(),
+        modelLabel = FormatSubagentModelLabel(c.Provider),
+        kind = RosterKind(c.Mode),
+        worktreeBranch = string.Equals(c.Mode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase)
+            ? null
+            : c.WorktreeBranch,
+        lastReport = c.LastReportSummary,
+        finishedAt = c.IsTerminal ? RosterFinishedAt(c) : null,
+    };
+
+    private static string RosterKind(string mode)
+    {
+        if (string.Equals(mode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
+            return "drone";
+        if (string.Equals(mode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase))
+            return "explore";
+        return "other";
+    }
+
+    private static DateTime? RosterFinishedAt(DysonAgentSession child)
+    {
+        DateTime? latest = null;
+        foreach (var turn in child.Turns)
+        {
+            if (turn.CompletedUtc is { } completed && (latest is null || completed > latest))
+                latest = completed;
+        }
+
+        return latest;
     }
 
     private static string? FormatSubagentModelLabel(DysonAgentProvider? provider) =>
@@ -527,7 +770,10 @@ public abstract class DysonAgentSession
 
     /// <summary>
     /// Soft spawn policy: Plan banned; Explore never spawns; Drone may spawn Explore only
-    /// (Drone→Drone rejected). Child mode must resolve via <see cref="DysonAgentSystemPrompts.ForMode"/>.
+    /// (Drone→Drone rejected). Meta Agent may spawn Meta Agent Drone, Explore, Bug Review,
+    /// or Security Review. Meta Agent Drone may spawn Explore, classic Drone, Bug Review,
+    /// or Security Review (no nested Meta Agent Drone).
+    /// Child mode must resolve via <see cref="DysonAgentSystemPrompts.ForMode"/>.
     /// </summary>
     public static VoidResult<string> ValidateSubagentSpawn(
         string parentMode,
@@ -543,7 +789,35 @@ public abstract class DysonAgentSession
         if (string.Equals(childMode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase))
             return new VoidResult<string>("Plan cannot be used as a subagent mode (top-level only).");
 
-        if (string.Equals(parentMode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(childMode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+            return new VoidResult<string>("Meta Agent cannot be used as a subagent mode (page-launched only).");
+
+        if (string.Equals(parentMode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+        {
+            var allowed = string.Equals(childMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(childMode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(childMode, DysonAgentModes.BugReview, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(childMode, DysonAgentModes.SecurityReview, StringComparison.OrdinalIgnoreCase);
+            if (!allowed)
+                return new VoidResult<string>("Meta Agent may only spawn Meta Agent Drone, Explore, Bug Review, or Security Review subagents.");
+        }
+        else if (string.Equals(parentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.Equals(childMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
+                return new VoidResult<string>("No multi-layer Meta Agent Drones; spawn a Drone or Explore.");
+
+            var allowed = string.Equals(childMode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(childMode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(childMode, DysonAgentModes.BugReview, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(childMode, DysonAgentModes.SecurityReview, StringComparison.OrdinalIgnoreCase);
+            if (!allowed)
+                return new VoidResult<string>("Meta Agent Drone may only spawn Explore, Drone, Bug Review, or Security Review subagents.");
+        }
+        else if (string.Equals(childMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
+        {
+            return new VoidResult<string>("Meta Agent Drone may only be spawned by a Meta Agent session.");
+        }
+        else if (string.Equals(parentMode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase))
         {
             if (string.Equals(childMode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase))
                 return new VoidResult<string>("Drone cannot spawn another Drone by default; spawn Explore instead.");
@@ -654,7 +928,7 @@ public abstract class DysonAgentSession
         }));
     }
 
-    public Task<Result<string, string>> StopSubagentAsync(
+    public async Task<Result<string, string>> StopSubagentAsync(
         int subagentId,
         string? reason = null,
         CancellationToken cancellationToken = default)
@@ -662,7 +936,7 @@ public abstract class DysonAgentSession
         cancellationToken.ThrowIfCancellationRequested();
 
         if (!TryGetSubagent(subagentId, out var child))
-            return Task.FromResult(Result<string, string>.AsError($"Unknown subagentId {subagentId}."));
+            return Result<string, string>.AsError($"Unknown subagentId {subagentId}.");
 
         // Terminal-first: mark Stopped before cancelling so KickOffChildPrompt cannot
         // drain a pending turn onto a new CTS (restart race).
@@ -671,15 +945,17 @@ public abstract class DysonAgentSession
         var marked = child.TryMarkTerminal(DysonSessionStatus.Stopped, summary);
         child.CancelBackgroundRun();
         if (marked)
-            NotifySubagentStopped(child.Id, summary, child.PersistenceId == Guid.Empty ? null : child.PersistenceId);
+        {
+            await child.SubmitSyntheticReportAsync(summary, cancellationToken).ConfigureAwait(false);
+        }
 
-        return Task.FromResult(Result<string, string>.AsValue(JsonSerializer.Serialize(new
+        return Result<string, string>.AsValue(JsonSerializer.Serialize(new
         {
             subagentId,
             persistenceId = child.PersistenceId,
             status = child.Status.ToString(),
             summary = child.LastReportSummary,
-        })));
+        }));
     }
 
     /// <summary>
@@ -707,12 +983,24 @@ public abstract class DysonAgentSession
                 "] and cannot address new events (deadlock guard).");
         }
 
+        var trimmedKind = kind.Trim();
+        if (ComputeDepth() > 1
+            && (string.Equals(trimmedKind, DysonAskQuestion.AskQuestionKind, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(
+                    trimmedKind,
+                    DysonPromptUserDialog.PromptUserDialogKind,
+                    StringComparison.OrdinalIgnoreCase)))
+        {
+            return Result<string, string>.AsError(
+                "TriggerParentEvent: kind askQuestion and promptUserDialog are L1 only. Use kind message.");
+        }
+
         var evt = new DysonParentEvent
         {
             EventId = Guid.NewGuid(),
             SubagentId = Id,
             PersistenceId = PersistenceId == Guid.Empty ? null : PersistenceId,
-            Kind = kind.Trim(),
+            Kind = trimmedKind,
             Payload = payload,
         };
 
@@ -804,12 +1092,39 @@ public abstract class DysonAgentSession
         evt.ReplyTcs.TrySetResult(Result<string, string>.AsValue(reply));
         RaiseParentEventsChanged();
 
+        evt.AwaitingUserAnswer = false;
         return Result<string, string>.AsValue(JsonSerializer.Serialize(new
         {
             eventId = evt.EventId,
             subagentId = evt.SubagentId,
             status = "addressed",
         }));
+    }
+
+    /// <summary>
+    /// Unblocks a still-pending child event with an error. Not a tool.
+    /// Already-finished events return <see cref="Result{TValue,TError}.AsError"/> and are not completed again.
+    /// </summary>
+    public Result<string, string> FailPendingParentEvent(Guid eventId, string error)
+    {
+        if (eventId == Guid.Empty)
+            return Result<string, string>.AsError("FailPendingParentEvent: eventId is required.");
+
+        if (!_pendingParentEvents.TryGetValue(eventId, out var evt))
+            return Result<string, string>.AsError($"FailPendingParentEvent: unknown eventId {eventId:D}.");
+
+        if (evt.Status != DysonParentEventStatus.Pending)
+        {
+            return Result<string, string>.AsError(
+                $"FailPendingParentEvent: eventId {eventId:D} is already {evt.Status}.");
+        }
+
+        error ??= "";
+        evt.Status = DysonParentEventStatus.Cancelled;
+        evt.AwaitingUserAnswer = false;
+        evt.ReplyTcs.TrySetResult(Result<string, string>.AsError(error));
+        RaiseParentEventsChanged();
+        return Result<string, string>.AsValue(error);
     }
 
     /// <summary>
@@ -1227,10 +1542,14 @@ public abstract class DysonAgentSession
 
     /// <summary>
     /// Cascade: session override if set → slug default if set → harness 100K.
-    /// 0 means Off / unlimited (no inject).
+    /// 0 means Off / unlimited (no inject). Meta Agent is pinned to
+    /// <see cref="DysonMaxTargetContextTokens.HarnessDefault"/> and ignores the
+    /// session/slug values (composer stepper cannot move it).
     /// </summary>
     public int ResolveEffectiveMaxTargetContextTokens() =>
-        DysonMaxTargetContextTokens.Resolve(MaxTargetContextTokens, SlugDefaultMaxTargetContextTokens);
+        string.Equals(Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase)
+            ? DysonMaxTargetContextTokens.HarnessDefault
+            : DysonMaxTargetContextTokens.Resolve(MaxTargetContextTokens, SlugDefaultMaxTargetContextTokens);
 
     /// <summary>
     /// Estimated tokens for the outbound Completions/Responses payload (idle: no in-flight rounds).
@@ -1368,12 +1687,25 @@ public abstract class DysonAgentSession
         string summary,
         bool failed = false,
         CancellationToken cancellationToken = default,
-        bool bypassIncompleteTodos = false)
+        bool bypassIncompleteTodos = false) =>
+        SubmitSubagentReportAsync(
+            summary,
+            failed,
+            cancellationToken,
+            bypassIncompleteTodos,
+            allowStoppedOrInterrupted: false);
+
+    private async Task<Result<string, string>> SubmitSubagentReportAsync(
+        string summary,
+        bool failed,
+        CancellationToken cancellationToken,
+        bool bypassIncompleteTodos,
+        bool allowStoppedOrInterrupted)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
         if (string.IsNullOrWhiteSpace(summary))
-            return Task.FromResult(Result<string, string>.AsError("SubmitSubagentReport: summary is required."));
+            return Result<string, string>.AsError("SubmitSubagentReport: summary is required.");
 
         var incomplete = Todos
             .Where(t => t.Status is DysonSessionTodoStatus.Pending or DysonSessionTodoStatus.Ongoing)
@@ -1383,36 +1715,53 @@ public abstract class DysonAgentSession
         // Failed reports may leave todos incomplete (blocker handoff). Successful reports require all Complete.
         if (incomplete.Length > 0 && !failed && !bypassIncompleteTodos)
         {
-            return Task.FromResult(Result<string, string>.AsError(
-                "SubmitSubagentReport: incomplete todos: " + string.Join("; ", incomplete)));
+            return Result<string, string>.AsError(
+                "SubmitSubagentReport: incomplete todos: " + string.Join("; ", incomplete));
         }
 
         var trimmed = summary.Trim();
-        var status = failed ? DysonSessionStatus.Failed : DysonSessionStatus.Completed;
-
-        // Terminal handoff already accepted: reject retries (Failed→Completed supersede still allowed).
-        if (Status == DysonSessionStatus.Completed
-            || (Status == DysonSessionStatus.Failed && failed)
-            || Status == DysonSessionStatus.Stopped)
+        var failedReport = failed;
+        if (!failedReport)
         {
-            return Task.FromResult(Result<string, string>.AsError(
-                Status == DysonSessionStatus.Stopped
-                    ? $"SubmitSubagentReport: session already {Status}. {TerminalReportRejectHint}"
-                    : $"SubmitSubagentReport: already submitted. {TerminalReportRejectHint}"));
+            var mergeOutcome = await TryMergeMetaAgentDroneWorktreeAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (mergeOutcome is not null)
+            {
+                trimmed = trimmed + "\n\n" + mergeOutcome.Value.Note;
+                if (!mergeOutcome.Value.Succeeded)
+                    failedReport = true;
+            }
         }
 
-        if (!TryAcceptSubagentReport(status, trimmed))
+        var status = failedReport ? DysonSessionStatus.Failed : DysonSessionStatus.Completed;
+
+        // Terminal handoff already accepted: reject retries (Failed→Completed supersede still allowed).
+        // allowStoppedOrInterrupted is the harness synthetic path only: the Stopped/Interrupted
+        // rejection exists to stop the agent retrying after a stop, not to stop the harness
+        // closing the loop. Completed / Failed-already-failed still reject (idempotency).
+        if (Status == DysonSessionStatus.Completed
+            || (Status == DysonSessionStatus.Failed && failedReport)
+            || (Status == DysonSessionStatus.Stopped && !allowStoppedOrInterrupted)
+            || (Status == DysonSessionStatus.Interrupted && !allowStoppedOrInterrupted))
+        {
+            return Result<string, string>.AsError(
+                Status is DysonSessionStatus.Stopped or DysonSessionStatus.Interrupted
+                    ? $"SubmitSubagentReport: session already {Status}. {TerminalReportRejectHint}"
+                    : $"SubmitSubagentReport: already submitted. {TerminalReportRejectHint}");
+        }
+
+        if (!TryAcceptSubagentReport(status, trimmed, allowStoppedOrInterrupted))
         {
             // Race: another thread accepted between the check and TryAccept.
-            return Task.FromResult(Result<string, string>.AsError(
+            return Result<string, string>.AsError(
                 Status is DysonSessionStatus.Completed or DysonSessionStatus.Failed
                     ? $"SubmitSubagentReport: already submitted. {TerminalReportRejectHint}"
-                    : $"SubmitSubagentReport: session already {Status}. {TerminalReportRejectHint}"));
+                    : $"SubmitSubagentReport: session already {Status}. {TerminalReportRejectHint}");
         }
 
         if (Parent is not null)
         {
-            if (failed)
+            if (failedReport)
                 Parent.NotifySubagentFailed(Id, trimmed, PersistenceId == Guid.Empty ? null : PersistenceId);
             else
                 Parent.NotifySubagentCompleted(Id, trimmed, PersistenceId == Guid.Empty ? null : PersistenceId);
@@ -1425,8 +1774,295 @@ public abstract class DysonAgentSession
             status = Status.ToString(),
             summary = trimmed,
         });
-        return Task.FromResult(Result<string, string>.AsValue(
-            acceptedJson + "\n\n" + AcceptedReportEndTurnHint));
+        return Result<string, string>.AsValue(
+            acceptedJson + "\n\n" + AcceptedReportEndTurnHint);
+    }
+
+    /// <summary>
+    /// Meta Agent Drone completed-report merge. Null when this session is not a drone with a worktree
+    /// (failed/Stopped reports never merge). Success clears columns; conflict leaves the worktree.
+    /// </summary>
+    private async Task<(bool Succeeded, string Note)?> TryMergeMetaAgentDroneWorktreeAsync(
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(Mode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        if (string.IsNullOrWhiteSpace(WorktreeAbsolutePath))
+            return null;
+
+        var path = WorktreeAbsolutePath;
+        var branch = WorktreeBranch;
+        var anchor = RegisteredWorkDirectoryAbsolutePath;
+        if (string.IsNullOrWhiteSpace(branch) || string.IsNullOrWhiteSpace(anchor))
+        {
+            return (false,
+                $"Worktree merge failed: missing branch or registered work directory. Worktree left at {path}.");
+        }
+
+        var merge = await DysonSessionWorktree.MergeAsync(
+                anchor, path, branch, forceRemoveIfDirty: false, abortConflict: true, cancellationToken)
+            .ConfigureAwait(false);
+        if (merge.IsError)
+        {
+            if (merge.Error.StartsWith(DysonSessionWorktree.MergeConflictAbortedPrefix, StringComparison.Ordinal))
+            {
+                return (false, await BuildMergeConflictAbortedNoteAsync(
+                        path, branch, anchor, merge.Error, cancellationToken)
+                    .ConfigureAwait(false));
+            }
+
+            return (false, $"Worktree merge failed for {branch} at {path}:\n{merge.Error}");
+        }
+
+        await ClearWorktreeColumnsOnSelfAndDescendantsAsync(cancellationToken).ConfigureAwait(false);
+        return (true, $"Worktree {branch} merged.");
+    }
+
+    private async Task<string> BuildMergeConflictAbortedNoteAsync(
+        string worktreePath,
+        string worktreeBranch,
+        string registeredCheckout,
+        string mergeError,
+        CancellationToken cancellationToken)
+    {
+        var paths = mergeError[DysonSessionWorktree.MergeConflictAbortedPrefix.Length..]
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var listed = await DysonGitInfo.TryListWorktreesAsync(registeredCheckout, cancellationToken)
+            .ConfigureAwait(false);
+        var registeredHead = HeadForListedPath(listed, registeredCheckout);
+        var worktreeHead = HeadForListedPath(listed, worktreePath);
+        var branchRead = await DysonGitInfo.TryGetBranchAsync(registeredCheckout, cancellationToken)
+            .ConfigureAwait(false);
+        var registeredBranch = branchRead.IsError || string.IsNullOrWhiteSpace(branchRead.Value)
+            ? "unknown"
+            : branchRead.Value.Trim();
+        var pathBullets = paths.Length == 0 ? "  - unknown" : string.Join("\n", paths.Select(p => "  - " + p));
+        var pathLines = paths.Length == 0 ? "unknown" : string.Join("\n", paths);
+
+        return $"""
+            Merge conflict. The harness merge of {worktreeBranch} into {registeredBranch} ({registeredCheckout}) conflicted and was aborted, so that checkout is usable again at {registeredHead}. This worktree was not removed and was not force-pushed. You cannot edit files. Do not resolve this conflict yourself.
+
+            - agentId: {Id}
+            - persistenceId: {PersistenceId:D}
+            - worktreePath: {worktreePath}
+            - worktreeBranch: {worktreeBranch}
+            - worktreeHead: {worktreeHead}
+            - registeredCheckout: {registeredCheckout}
+            - registeredBranch: {registeredBranch}
+            - registeredHead: {registeredHead}
+            - conflictingPaths:
+            {pathBullets}
+
+            Spawn a new Meta Agent Drone to resolve it. Call StartAsyncMetaAgentDrone with purpose build, useWorktree false, and existingWorktreePath set to {worktreePath}. Do not omit useWorktree. Do not pass useWorktree true. A second isolated worktree cannot see this checkout.
+
+            Task text for that drone, with the facts above filled in:
+
+            Resolve this merge inside the existing worktree only. Your tools are already rooted at {worktreePath} on branch {worktreeBranch} (HEAD {worktreeHead}). Do not create a branch. Do not add a worktree. Do not touch the registered checkout at {registeredCheckout}. Merge {registeredBranch} (HEAD {registeredHead}) into the current branch, fix only these paths:
+            {pathLines}
+            Commit on {worktreeBranch}. Do not remove the worktree. Do not force-push. Then SubmitSubagentReport completed.
+
+            Do not StopMetaAgentDrone agentId {Id}. Do not pass discardWorktree. Do not force-push. Leave that drone’s worktree in place until the resolver has committed.
+
+            When the resolver reports completed, MessageMetaAgentDrone agentId {Id} with exactly: Do not edit files. SubmitSubagentReport completed so the harness merge of {worktreeBranch} runs again. That report is the retry. If it conflicts again, this same note is the result.
+            """;
+
+        static string HeadForListedPath(
+            Result<IReadOnlyList<DysonGitWorktreeEntry>, string> listed,
+            string path)
+        {
+            if (listed.IsError)
+                return "unknown";
+
+            foreach (var entry in listed.Value)
+            {
+                if (!SameGitPath(entry.Path, path))
+                    continue;
+
+                return string.IsNullOrWhiteSpace(entry.Head) ? "unknown" : entry.Head.Trim();
+            }
+
+            return "unknown";
+        }
+
+        static bool SameGitPath(string a, string b)
+        {
+            try
+            {
+                var comparison = OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal;
+                return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), comparison);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
+
+    private async Task ClearWorktreeColumnsOnSelfAndDescendantsAsync(CancellationToken cancellationToken)
+    {
+        ClearWorktreeColumns(this);
+        await PersistWorktreeClearAsync(this, cancellationToken).ConfigureAwait(false);
+
+        var pending = new Queue<DysonAgentSession>(SubSessions);
+        while (pending.Count > 0)
+        {
+            var child = pending.Dequeue();
+            ClearWorktreeColumns(child);
+            await PersistWorktreeClearAsync(child, cancellationToken).ConfigureAwait(false);
+            foreach (var grandchild in child.SubSessions)
+                pending.Enqueue(grandchild);
+        }
+
+        if (SessionStore is null || PersistenceId == Guid.Empty)
+            return;
+
+        var ids = new Queue<Guid>();
+        ids.Enqueue(PersistenceId);
+        while (ids.Count > 0)
+        {
+            var parentId = ids.Dequeue();
+            var children = await SessionStore.ListChildSessionsAsync(parentId, cancellationToken)
+                .ConfigureAwait(false);
+            if (children.IsError)
+                continue;
+
+            foreach (var row in children.Value)
+            {
+                ids.Enqueue(row.Id);
+                if (row.Id == PersistenceId)
+                    continue;
+
+                await SessionStore.UpdateSessionMetaAsync(
+                        new DysonSessionMetaUpdate
+                        {
+                            SessionId = row.Id,
+                            UpdateWorktreeEnabled = true,
+                            WorktreeEnabled = false,
+                            UpdateWorktreeLocation = true,
+                            WorktreeAbsolutePath = null,
+                            WorktreeBranch = null,
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static void ClearWorktreeColumns(DysonAgentSession session)
+    {
+        session.WorktreeEnabled = false;
+        session.WorktreeAbsolutePath = null;
+        session.WorktreeBranch = null;
+    }
+
+    private static async Task PersistWorktreeClearAsync(
+        DysonAgentSession session,
+        CancellationToken cancellationToken)
+    {
+        var store = session.SessionStore;
+        if (store is null || session.PersistenceId == Guid.Empty)
+            return;
+
+        await store.UpdateSessionMetaAsync(
+                new DysonSessionMetaUpdate
+                {
+                    SessionId = session.PersistenceId,
+                    UpdateWorktreeEnabled = true,
+                    WorktreeEnabled = false,
+                    UpdateWorktreeLocation = true,
+                    WorktreeAbsolutePath = null,
+                    WorktreeBranch = null,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Harness-generated failed report when a child went terminal or idle-without-report
+    /// after reminders. Skips the <see cref="DysonSessionStatus.Stopped"/> (and Interrupted)
+    /// rejection in <see cref="SubmitSubagentReportAsync"/> because that guard exists to stop
+    /// the agent retrying after a stop, not to stop the harness closing the loop. Does not skip
+    /// Completed / already-Failed rejection — that guard is the idempotency bookkeeping.
+    /// Bypasses incomplete-todo checks. Reuses TryAccept → NotifySubagentFailed → EnqueueInterrupt.
+    /// </summary>
+    internal async Task<Result<string, string>> SubmitSyntheticReportAsync(
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        var summary = string.IsNullOrWhiteSpace(reason)
+            ? DysonChildReportWatch.IdleWithoutReportReason
+            : reason.Trim();
+
+        var submitted = await SubmitSubagentReportAsync(
+                summary,
+                failed: true,
+                cancellationToken,
+                bypassIncompleteTodos: true,
+                allowStoppedOrInterrupted: true)
+            .ConfigureAwait(false);
+
+        if (!submitted.IsError)
+        {
+            await PersistTerminalChildStatusAsync(
+                    this,
+                    Status,
+                    LastReportSummary ?? summary)
+                .ConfigureAwait(false);
+        }
+
+        return submitted;
+    }
+
+    /// <summary>
+    /// After a child turn completes with nothing queued: remind (max 2) or synthesize a failed report.
+    /// No-op for roots, already-reported children, or sessions with pending work.
+    /// </summary>
+    public async Task ApplyChildReportWatchAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var action = DysonChildReportWatch.Evaluate(
+            isChild: Parent is not null,
+            status: Status,
+            hasReported: Status is DysonSessionStatus.Completed or DysonSessionStatus.Failed,
+            hasPendingWork: HasPendingTurn || InFlightPromptTurn is not null,
+            remindersSent: _childReportRemindersSent);
+
+        switch (action)
+        {
+            case DysonChildReportAction.Remind:
+                EnqueuePendingTurn(DysonChildReportWatch.CreateReminderTurn());
+                _childReportRemindersSent++;
+                break;
+            case DysonChildReportAction.Synthesize:
+                await SubmitSyntheticReportAsync(
+                        Status is DysonSessionStatus.Stopped or DysonSessionStatus.Interrupted
+                            ? (LastReportSummary ?? DysonChildReportWatch.ApplicationRestartReason)
+                            : DysonChildReportWatch.IdleWithoutReportReason,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// After a completed turn is persisted: Meta Agent 15-turn maintenance tick
+    /// (evict older than 40 + enqueue one <see cref="DysonAgentTurnKind.MetaMaintenance"/>).
+    /// No-op outside Meta Agent mode.
+    /// </summary>
+    public Task<VoidResult<string>> ApplyMetaMaintenanceTickAsync(
+        DysonAgentTurn completedTurn,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(completedTurn);
+        return DysonMetaMaintenanceTick.ApplyAfterCompletedTurnAsync(
+            this,
+            completedTurn,
+            SessionStore,
+            cancellationToken);
     }
 
     /// <summary>
@@ -1650,9 +2286,16 @@ public abstract class DysonAgentSession
     /// <summary>
     /// Accepts a child <c>SubmitSubagentReport</c>: first terminal mark, or supersede
     /// <see cref="DysonSessionStatus.Failed"/> with <see cref="DysonSessionStatus.Completed"/> only.
-    /// Completed/Stopped stay locked; Failed→Failed is rejected.
+    /// Completed stays locked; Failed→Failed is rejected. Stopped/Interrupted stay locked unless
+    /// <paramref name="allowStoppedOrInterrupted"/> (harness synthetic path only), and even then
+    /// they <em>keep</em> that status: a deliberate halt is not a failure. The synthetic report
+    /// still lands (summary, terminal signal, parent notification) — it closes the parent's loop
+    /// rather than relabelling why the child ended.
     /// </summary>
-    public bool TryAcceptSubagentReport(DysonSessionStatus status, string? summary)
+    public bool TryAcceptSubagentReport(
+        DysonSessionStatus status,
+        string? summary,
+        bool allowStoppedOrInterrupted = false)
     {
         if (status is not (DysonSessionStatus.Completed or DysonSessionStatus.Failed))
             throw new ArgumentOutOfRangeException(nameof(status), status, "Must be Completed or Failed.");
@@ -1663,19 +2306,31 @@ public abstract class DysonAgentSession
         var changed = false;
         lock (_terminalGate)
         {
-            if (Status is DysonSessionStatus.Completed
-                or DysonSessionStatus.Stopped
-                or DysonSessionStatus.Interrupted)
+            if (Status == DysonSessionStatus.Completed)
                 return false;
 
-            // Failed may only be superseded by Completed (harness premature fail → agent handoff).
-            if (Status == DysonSessionStatus.Failed && status == DysonSessionStatus.Failed)
+            if (Status is DysonSessionStatus.Stopped or DysonSessionStatus.Interrupted)
+            {
+                // One synthetic report only: StopSubagentAsync and the cancelled-run error path in
+                // KickOffChildPrompt both reach here for the same stop, and the parent must not be
+                // told twice.
+                if (!allowStoppedOrInterrupted || status != DysonSessionStatus.Failed || _subagentReportAccepted)
+                    return false;
+            }
+            else if (Status == DysonSessionStatus.Failed && status == DysonSessionStatus.Failed)
+            {
                 return false;
+            }
 
             previous = Status;
-            Status = status;
+            // A user/parent halt keeps Stopped (likewise Interrupted); only a child that was still
+            // Active takes the reported status.
+            Status = previous is DysonSessionStatus.Stopped or DysonSessionStatus.Interrupted
+                ? previous
+                : status;
+            _subagentReportAccepted = true;
             LastReportSummary = summary;
-            _terminalTcs.TrySetResult((status, summary));
+            _terminalTcs.TrySetResult((Status, summary));
             next = Status;
             raisedSummary = LastReportSummary;
             changed = true;
@@ -1726,7 +2381,7 @@ public abstract class DysonAgentSession
 
     /// <summary>
     /// Builds the first-turn prompt for a spawned child. All modes get
-    /// <see cref="DysonAgentSystemPrompts.SubagentReportRequiredMandate"/>; Explore/Drone get extras.
+    /// <see cref="DysonAgentSystemPrompts.SubagentReportRequiredMandate"/>; Explore/Drone/MetaAgentDrone get extras.
     /// </summary>
     protected static string BuildChildFirstPrompt(string agentMode, string task, string? context)
     {
@@ -1742,6 +2397,20 @@ public abstract class DysonAgentSession
         else if (string.Equals(agentMode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase))
         {
             sb.AppendLine(DysonAgentSystemPrompts.DroneFirstTurnContextMandate.Trim());
+            sb.AppendLine();
+        }
+        else if (string.Equals(agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
+        {
+            sb.AppendLine(DysonAgentSystemPrompts.MetaAgentDroneFirstTurnMandate.Trim());
+            if (MetaAgentDroneUseWorktree.Value == false)
+            {
+                var rebound = MetaAgentDroneExistingWorktreePath.Value;
+                sb.AppendLine(
+                    string.IsNullOrWhiteSpace(rebound)
+                        ? "useWorktree is false: work in the parent's checkout. Do not switch or move branches. Completion does not merge."
+                        : $"useWorktree is false: tools are rooted at {rebound.Trim()}. This is not the registered checkout. Do not create a worktree. Completion does not merge or delete one.");
+            }
+
             sb.AppendLine();
         }
 
@@ -1816,7 +2485,8 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
-    /// Fire-and-forget child turn; on unexpected failure marks Failed, persists, and notifies parent.
+    /// Fire-and-forget child turn. Idle-without-report reminds twice then synthesizes;
+    /// provider/exception failures synthesize immediately through <see cref="SubmitSyntheticReportAsync"/>.
     /// </summary>
     protected static void KickOffChildPrompt(
         DysonAgentSession child,
@@ -1846,8 +2516,8 @@ public abstract class DysonAgentSession
                     return;
 
                 // A child with unfinished todos gets one harness reflection before its
-                // ordinary missing-SubmitSubagentReport failure gate. If that reflection
-                // itself does not report, this same path retains the existing failure behavior.
+                // ordinary missing-SubmitSubagentReport watch. If that reflection itself
+                // does not report, the watch still reminds then synthesizes.
                 if (DysonTaskEndReflectFlow.TryCreateForChild(child, out var reflection)
                     && reflection is not null)
                 {
@@ -1856,19 +2526,17 @@ public abstract class DysonAgentSession
                         return;
                 }
 
-                var failSummary = ResolveKickOffFailureSummary(child, result);
-                if (child.TryMarkTerminal(DysonSessionStatus.Failed, failSummary))
+                if (result.IsError)
                 {
-                    await PersistTerminalChildStatusAsync(
-                            child,
-                            DysonSessionStatus.Failed,
-                            failSummary)
+                    await child.SubmitSyntheticReportAsync(
+                            ResolveKickOffFailureSummary(child, result),
+                            CancellationToken.None)
                         .ConfigureAwait(false);
-                    child.Parent?.NotifySubagentFailed(
-                        child.Id,
-                        failSummary,
-                        child.PersistenceId == Guid.Empty ? null : child.PersistenceId);
+                    return;
                 }
+
+                await child.ApplyChildReportWatchAsync(CancellationToken.None).ConfigureAwait(false);
+                TryDrainPendingTurn(child);
             }
             catch (OperationCanceledException) when (runCts.IsCancellationRequested)
             {
@@ -1876,19 +2544,10 @@ public abstract class DysonAgentSession
             }
             catch (Exception ex)
             {
-                var failSummary = FormatKickOffExceptionSummary(ex);
-                if (child.TryMarkTerminal(DysonSessionStatus.Failed, failSummary))
-                {
-                    await PersistTerminalChildStatusAsync(
-                            child,
-                            DysonSessionStatus.Failed,
-                            failSummary)
-                        .ConfigureAwait(false);
-                    child.Parent?.NotifySubagentFailed(
-                        child.Id,
-                        failSummary,
-                        child.PersistenceId == Guid.Empty ? null : child.PersistenceId);
-                }
+                await child.SubmitSyntheticReportAsync(
+                        FormatKickOffExceptionSummary(ex),
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
             }
             finally
             {
@@ -2096,6 +2755,21 @@ public abstract class DysonAgentSession
         TurnAdded?.Invoke(this, turn);
     }
 
+    /// <summary>Hard-removes turns from in-memory history (meta-maintenance eviction).</summary>
+    internal void RemoveTurnsFromHistory(IReadOnlyList<DysonAgentTurn> turns)
+    {
+        ArgumentNullException.ThrowIfNull(turns);
+        if (turns.Count == 0)
+            return;
+
+        var ids = new HashSet<Guid>(turns.Count);
+        foreach (var turn in turns)
+            ids.Add(turn.Id);
+
+        if (TurnHistory.RemoveAll(t => ids.Contains(t.Id)) > 0)
+            BumpTranscriptGeneration();
+    }
+
     /// <summary>
     /// Hydrates this session from a full DB aggregate: sets <see cref="PersistenceId"/> /
     /// runtime <see cref="Id"/>, rebuilds turns (including tool state), restores LogLine text,
@@ -2129,6 +2803,7 @@ public abstract class DysonAgentSession
                 Id = row.Id,
                 Kind = row.Kind,
                 Instruction = row.Instruction,
+                HiddenInstruction = row.HiddenInstruction,
                 AgentTitle = row.AgentTitle,
                 PlanRelativePath = row.PlanRelativePath,
                 AssistantText = row.AssistantText,
@@ -2144,6 +2819,9 @@ public abstract class DysonAgentSession
                 DysonReasoningLogSerializer.DeserializeOrSynthesize(row.ReasoningLogJson, row.ReasoningText));
             turn.RestoreContextFiles(DysonContextFilesSerializer.Deserialize(row.SkillsUsedJson));
             turn.RestoreUserImages(DysonUserImagesSerializer.Deserialize(row.UserImagesJson));
+            turn.RestoreConversationActions(
+                DysonConversationActionsSerializer.Deserialize(row.ConversationActionsJson));
+            turn.VisualizationId = row.VisualizationId;
             DysonTurnToolStateSerializer.ApplyToTurn(turn, row.ToolStateJson);
             turn.FinalizeIncompleteTools(
                 "Tool call did not complete (cancelled or interrupted).");
@@ -2616,7 +3294,10 @@ public abstract class DysonAgentSession
     /// Appends a completed UI-only <see cref="DysonAgentTurnKind.DisplayInfo"/> turn
     /// (message in <see cref="DysonAgentTurn.AssistantText"/>). No inference.
     /// </summary>
-    public DysonAgentTurn AppendDisplayInfoTurn(string message)
+    public DysonAgentTurn AppendDisplayInfoTurn(
+        string message,
+        IReadOnlyList<DysonConversationAction>? actions = null,
+        Guid? visualizationId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
         var now = DateTime.UtcNow;
@@ -2626,9 +3307,70 @@ public abstract class DysonAgentSession
             AssistantText = message.Trim(),
             StartedUtc = now,
             CompletedUtc = now,
+            VisualizationId = visualizationId,
         };
+        if (actions is { Count: > 0 })
+            turn.RestoreConversationActions(actions);
         AddTurn(turn);
         return turn;
+    }
+
+    /// <summary>
+    /// Binds <paramref name="key"/> to an in-process func. Same key replaces.
+    /// Not persisted and not copied onto child sessions.
+    /// </summary>
+    public VoidResult<string> RegisterConversationAction(
+        string key,
+        Func<CancellationToken, Task<Result<string, string>>> func)
+    {
+        var trimmed = key?.Trim() ?? "";
+        if (trimmed.Length == 0)
+            return VoidResult<string>.AsError("Conversation action key is required.");
+        if (func is null)
+            return VoidResult<string>.AsError("Conversation action func is required.");
+
+        lock (_conversationActionsGate)
+            _conversationActions[trimmed] = func;
+
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Runs the func registered for <paramref name="key"/>.
+    /// A blank key, a reserved built-in prefix, an unknown key, a failed
+    /// <see cref="Result{TValue, TError}"/>, or a thrown func is a failed result.
+    /// Does not add or remove turns. Reserved prefixes never run a delegate.
+    /// </summary>
+    public async Task<Result<string, string>> InvokeConversationActionAsync(
+        string key,
+        CancellationToken cancellationToken)
+    {
+        var trimmed = key?.Trim() ?? "";
+        if (trimmed.Length == 0)
+            return Result<string, string>.AsError("Conversation action key is required.");
+
+        if (DysonBuiltInConversationActions.IsReservedPrefix(trimmed))
+            return Result<string, string>.AsError($"Conversation action '{trimmed}' is reserved.");
+
+        Func<CancellationToken, Task<Result<string, string>>>? func;
+        lock (_conversationActionsGate)
+        {
+            if (!_conversationActions.TryGetValue(trimmed, out func))
+                return Result<string, string>.AsError($"Conversation action '{trimmed}' is not registered.");
+        }
+
+        try
+        {
+            var result = await func(cancellationToken).ConfigureAwait(false);
+            return result ?? Result<string, string>.AsError("Conversation action returned no result.");
+        }
+        catch (Exception ex)
+        {
+            var message = string.IsNullOrWhiteSpace(ex.Message)
+                ? "Conversation action failed."
+                : ex.Message;
+            return Result<string, string>.AsError(message, ex);
+        }
     }
 
     /// <summary>

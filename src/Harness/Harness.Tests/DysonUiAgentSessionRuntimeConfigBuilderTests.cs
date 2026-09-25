@@ -135,6 +135,9 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
         var drone = await harness.Settings.SetSettingAsync(
             DysonAppSettingKeys.DroneModelSlugId, catalog.DemoSlugId.ToString("D"));
         Assert.False(drone.IsError, drone.IsError ? drone.Error : null);
+        var metaDrone = await harness.Settings.SetSettingAsync(
+            DysonAppSettingKeys.MetaAgentDroneModelSlugId, catalog.OpenAiSlugId.ToString("D"));
+        Assert.False(metaDrone.IsError, metaDrone.IsError ? metaDrone.Error : null);
         var fallback = await harness.Settings.SetSettingAsync(
             DysonAppSettingKeys.FallbackChatModelSlugId, catalog.OpenAiSlugId.ToString("D"));
         Assert.False(fallback.IsError, fallback.IsError ? fallback.Error : null);
@@ -150,6 +153,8 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
         Assert.Equal(catalog.OpenAiSlugId, exploreProvider.SlugId);
         var fallbackProvider = Assert.IsType<OpenAiCompatibleAgentProvider>(lease.Config.FallbackChatProvider);
         Assert.Equal(catalog.OpenAiSlugId, fallbackProvider.SlugId);
+        var metaDroneProvider = Assert.IsType<OpenAiCompatibleAgentProvider>(lease.Config.MetaAgentDroneDefaultProvider);
+        Assert.Equal(catalog.OpenAiSlugId, metaDroneProvider.SlugId);
         Assert.Null(lease.Config.DroneDefaultProvider);
         Assert.Null(lease.Config.TurnSummarizerProvider);
 

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Harness.UI.Markdown;
 
 namespace Harness.Tests;
@@ -95,4 +96,73 @@ public class MarkdownRendererTests
 
         Assert.Equal(earlyHtml, rerendered);
     }
+
+    [Fact]
+    public void ToHtml_highlights_json_fences()
+    {
+        var html = MarkdownRenderer.ToHtml("```json\n{ \"a\": 1 }\n```").Value;
+
+        Assert.Contains("language-json", html, StringComparison.Ordinal);
+        Assert.Contains("<span", html, StringComparison.Ordinal);
+        Assert.Contains("<pre><code class=\"language-json\">", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ToHtml_bounds_catastrophic_json_highlight_and_skips_a_longer_fence()
+    {
+        var first = Stopwatch.StartNew();
+        var html = MarkdownRenderer.ToHtml(JsonFence(CatastrophicJson)).Value;
+        first.Stop();
+
+        Assert.True(
+            first.Elapsed < TimeSpan.FromSeconds(3),
+            $"catastrophic json fence took {first.Elapsed.TotalMilliseconds:0} ms");
+        Assert.Contains("<pre><code", html, StringComparison.Ordinal);
+        Assert.Contains("netsend_physical_pooled_provision_e2e", html, StringComparison.Ordinal);
+
+        var csharp = MarkdownRenderer.ToHtml("```csharp\npublic class Foo {}\n```").Value;
+        Assert.Contains("language-csharp", csharp, StringComparison.Ordinal);
+        Assert.True(
+            csharp.Contains("class=\"keyword\"", StringComparison.Ordinal)
+            || csharp.Contains("class=\"controlKeyword\"", StringComparison.Ordinal),
+            csharp);
+
+        var second = Stopwatch.StartNew();
+        var longer = MarkdownRenderer.ToHtml(JsonFence(CatastrophicJson + "\n\"extra\": true")).Value;
+        second.Stop();
+
+        Assert.True(
+            second.Elapsed < TimeSpan.FromMilliseconds(500),
+            $"extended fence took {second.Elapsed.TotalMilliseconds:0} ms");
+        Assert.Contains("netsend_physical_pooled_provision_e2e", longer, StringComparison.Ordinal);
+        Assert.Contains("extra", longer, StringComparison.Ordinal);
+    }
+
+    private static string JsonFence(string body) => $"```json\n{body}\n```";
+
+    /// <summary>
+    /// ColorCode's JSON string rule backtracks on this fence (escaped quotes inside a prepare array).
+    /// </summary>
+    private const string CatastrophicJson = """
+        "netsend_physical_pooled_provision_e2e": {
+          "display": "NetSend physical pooled provision",
+          "description": "Manual only: live DigitalOcean + Cloudflare pooled provision (new VM, co-placement, reboot, idle stop/warm-up, purge + scale-in). Excluded from merge gates.",
+          "prepare": ["dbmigrate --database postgres_dev", "python DevelopmentEnvironment/scripts/netsend_e2e_tunnel.py check (timeout 180)", "dotnet build CashTrack.E2E.Tests.csproj"],
+          "argv": "dotnet run --no-build -- --flow \"NetSend physical pooled provision\"",
+          "timeout_seconds": 7200,
+          "managed_services": ["CashTrackServer", "CashTrackServerOfficeApi", "CashTrackServerOfficeWorker"],
+          "restart_managed_services": true,
+          "depends_on_env_profiles": ["cashtrack_server_dev"],
+          "env": "same as paid set",
+          "managed_service_env": {
+            "CASHTRACK_STRIPE_POLL_INTERVAL_SECONDS": "15",
+            "CASHTRACK_NETSEND_DESIRED_IMAGE_TAG": "local-build",
+            "CASHTRACK_NETSEND_POOL_MIN_NODE_LIFETIME_MINUTES": "5"
+          },
+          "database_connection_env": {
+            "CASHTRACK_E2E_OTP_DB_CONNECTION_STRING": {"database": "postgres_dev", "format": "dotnet"},
+            "CASHTRACK_OFFICE_NETSEND_AZURESQL_STR": {"database": "office_netsend_sql_dev", "format": "dotnet"}
+          }
+        }
+        """;
 }

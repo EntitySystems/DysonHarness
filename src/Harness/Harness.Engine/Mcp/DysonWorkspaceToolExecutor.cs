@@ -32,7 +32,8 @@ public sealed partial class DysonWorkspaceToolExecutor
         IDysonWorkspaceFileSystem workspaceFileSystem,
         HttpClient http,
         IDysonSessionRepository? store = null,
-        Guid workDirectoryId = default)
+        Guid workDirectoryId = default,
+        IDysonPlanRepository? plans = null)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _fs = workspaceFileSystem ?? throw new ArgumentNullException(nameof(workspaceFileSystem));
@@ -41,6 +42,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         _workDirectoryId = workDirectoryId;
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _store = store;
+        _plans = plans;
     }
 
     private string WorkRoot => _fs.NativeRootPath;
@@ -50,6 +52,14 @@ public sealed partial class DysonWorkspaceToolExecutor
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(call);
+
+        // These names are absent from every catalog except Meta Agent, so the catalog
+        // gate below would hide the mode error the caller is required to see.
+        if (call.ToolName is "WriteTempFile" or "ReadTempFile"
+            && !string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+        {
+            return Error(call, $"{call.ToolName} is only available in Meta Agent mode.");
+        }
 
         if (!_session.McpPipeline.Tools.ContainsKey(call.ToolName))
         {
@@ -78,6 +88,29 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "SubmitPlan" => await SubmitPlanAsync(call, cancellationToken).ConfigureAwait(false),
                 "StartSubagent" => await StartSubagentAsync(call, cancellationToken).ConfigureAwait(false),
                 "ListSubagents" => await ListSubagentsAsync(call, cancellationToken).ConfigureAwait(false),
+                "StartAsyncMetaAgentDrone" => await StartAsyncMetaAgentDroneAsync(call, cancellationToken).ConfigureAwait(false),
+                "StartAsyncExploreAgent" => await StartAsyncExploreAgentAsync(call, cancellationToken).ConfigureAwait(false),
+                "StartAsyncBugReviewAgent" => await StartAsyncReadOnlyAgentAsync(call, DysonAgentModes.BugReview, cancellationToken).ConfigureAwait(false),
+                "StartAsyncSecurityReviewAgent" => await StartAsyncReadOnlyAgentAsync(call, DysonAgentModes.SecurityReview, cancellationToken).ConfigureAwait(false),
+                "ListMetaAgentDrones" => await ListMetaAgentDronesAsync(call, cancellationToken).ConfigureAwait(false),
+                "ReadMetaAgentDroneLog" => await ReadMetaAgentDroneLogAsync(call, cancellationToken).ConfigureAwait(false),
+                "StopMetaAgentDrone" => await StopMetaAgentDroneAsync(call, cancellationToken).ConfigureAwait(false),
+                "MessageMetaAgentDrone" => await MessageMetaAgentDroneAsync(call, cancellationToken).ConfigureAwait(false),
+                "DeleteMetaAgent" => await DeleteMetaAgentAsync(call, cancellationToken).ConfigureAwait(false),
+                "PostConversationMessage" => PostConversationMessage(call),
+                "CompactConversation" => CompactConversation(call),
+                "RemoveTodos" => await RemoveTodosAsync(call, cancellationToken).ConfigureAwait(false),
+                "ListPlans" => await ListPlansAsync(call, cancellationToken).ConfigureAwait(false),
+                "SetPlanStatus" => await SetPlanStatusAsync(call, cancellationToken).ConfigureAwait(false),
+                "BeginBuildPlan" => await BeginBuildPlanAsync(call, cancellationToken).ConfigureAwait(false),
+                "DeletePlan" => await DeletePlanAsync(call, cancellationToken).ConfigureAwait(false),
+                "ListNotes" => await ListNotesAsync(call, cancellationToken).ConfigureAwait(false),
+                "CanCreateNote" => await CanCreateNoteAsync(call, cancellationToken).ConfigureAwait(false),
+                "CreateNote" => await CreateNoteAsync(call, cancellationToken).ConfigureAwait(false),
+                "UpdateNote" => await UpdateNoteAsync(call, cancellationToken).ConfigureAwait(false),
+                "DeleteNote" => await DeleteNoteAsync(call, cancellationToken).ConfigureAwait(false),
+                "ReadMetaPlan" => await ReadMetaPlanAsync(call, cancellationToken).ConfigureAwait(false),
+                "SubmitMetaPlan" => await SubmitMetaPlanAsync(call, cancellationToken).ConfigureAwait(false),
                 "WaitForSubagent" => await WaitForSubagentAsync(call, cancellationToken).ConfigureAwait(false),
                 "InspectSubagentLog" => await InspectSubagentLogAsync(call, cancellationToken).ConfigureAwait(false),
                 "StopSubagent" => await StopSubagentAsync(call, cancellationToken).ConfigureAwait(false),
@@ -107,6 +140,8 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "ReadFile" => await ReadFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "LoadSkill" => await LoadSkillAsync(call, cancellationToken).ConfigureAwait(false),
                 "CreateFile" => await CreateFileAsync(call, cancellationToken).ConfigureAwait(false),
+                "WriteTempFile" => await WriteTempFileAsync(call, cancellationToken).ConfigureAwait(false),
+                "ReadTempFile" => await ReadTempFileAsync(call, cancellationToken).ConfigureAwait(false),
                 "RenderHtmlVisualization" => await RenderHtmlVisualizationAsync(call, cancellationToken).ConfigureAwait(false),
                 "GenerateImage" => await GenerateImageAsync(call, cancellationToken).ConfigureAwait(false),
                 "WriteFile" => await WriteFileAsync(call, cancellationToken).ConfigureAwait(false),
@@ -1746,6 +1781,12 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (loaded.IsError)
             return Error(call, loaded.Error);
 
+        if (string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase)
+            && loaded.Value.Source == DysonSkillSource.Literal)
+        {
+            return Error(call, DysonMetaAgentTools.LoadSkillLiteralRejectedMessage);
+        }
+
         var turn = _session.Turns.Count > 0 ? _session.Turns[^1] : null;
         if (turn is not null && turn.CompletedUtc is null)
             turn.AttachContextFile(loaded.Value, DysonContextFileKind.Skill);
@@ -1808,20 +1849,113 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
     }
 
+    private async Task<DysonToolCallResult> WriteTempFileAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+            return Error(call, "WriteTempFile is only available in Meta Agent mode.");
+
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            if (!doc.RootElement.TryGetProperty("path", out var pathProperty)
+                || pathProperty.ValueKind != JsonValueKind.String)
+            {
+                return Error(call, "WriteTempFile: temporary path must be a non-empty leaf file name.");
+            }
+
+            if (!doc.RootElement.TryGetProperty("content", out var contentProperty)
+                || contentProperty.ValueKind != JsonValueKind.String)
+            {
+                return Error(call, "WriteTempFile: missing required string field 'content'.");
+            }
+
+            return await CreateTemporaryFileAsync(
+                    call,
+                    pathProperty.GetString() ?? "",
+                    contentProperty.GetString() ?? "",
+                    overwrite: false,
+                    cancellationToken,
+                    toolName: "WriteTempFile")
+                .ConfigureAwait(false);
+        }
+        catch (JsonException)
+        {
+            return Error(call, "WriteTempFile: invalid JSON arguments.");
+        }
+    }
+
+    private async Task<DysonToolCallResult> ReadTempFileAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+            return Error(call, "ReadTempFile is only available in Meta Agent mode.");
+
+        cancellationToken.ThrowIfCancellationRequested();
+        string path;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            if (!doc.RootElement.TryGetProperty("path", out var pathProperty)
+                || pathProperty.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(pathProperty.GetString()))
+            {
+                return Error(call, "ReadTempFile: path must be an exact generated file under .dyson/temp/.");
+            }
+
+            path = pathProperty.GetString()!;
+        }
+        catch (JsonException)
+        {
+            return Error(call, "ReadTempFile: invalid JSON arguments.");
+        }
+
+        if (!IsGeneratedTemporaryLeaf(path))
+            return Error(call, "ReadTempFile: path must be an exact generated file under .dyson/temp/.");
+
+        var nativePath = _fs.ResolvePath(path);
+        if (nativePath.IsError)
+            return Error(call, nativePath.Error);
+        if (HasReparsePoint(nativePath.Value))
+            return Error(call, "ReadTempFile: cannot include a symlink or reparse point.");
+
+        const int maxTempBytes = 512 * 1024;
+        var length = await _fs.GetFileLengthAsync(path, cancellationToken).ConfigureAwait(false);
+        if (length.IsError)
+            return Error(call, length.Error);
+        if (length.Value > maxTempBytes)
+            return Error(call, "ReadTempFile: file exceeds the 512 KiB UTF-8 limit.");
+
+        var read = await _fs.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+        if (read.IsError)
+            return Error(call, read.Error);
+
+        return Ok(call, JsonSerializer.Serialize(new
+        {
+            path,
+            content = read.Value,
+            byteLength = length.Value,
+        }));
+    }
+
     private async Task<DysonToolCallResult> CreateTemporaryFileAsync(
         DysonToolCall call,
         string requestedName,
         string content,
         bool overwrite,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string toolName = "CreateFile")
     {
         const int maxTempBytes = 512 * 1024;
         if (overwrite)
-            return Error(call, "CreateFile: overwrite must be omitted or false when isTempFile is true.");
+            return Error(call, $"{toolName}: overwrite must be omitted or false when isTempFile is true.");
         if (Encoding.UTF8.GetByteCount(content) > maxTempBytes)
-            return Error(call, "CreateFile: temporary content exceeds the 512 KiB UTF-8 limit.");
+            return Error(call, $"{toolName}: temporary content exceeds the 512 KiB UTF-8 limit.");
 
-        var sanitizedName = SanitizeTemporaryLeafName(requestedName);
+        var sanitizedName = SanitizeTemporaryLeafName(requestedName, toolName);
         if (sanitizedName.IsError)
             return Error(call, sanitizedName.Error);
 
@@ -1849,10 +1983,10 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Ok(call, acknowledgement);
         }
 
-        return Error(call, "CreateFile: could not allocate a unique temporary file name.");
+        return Error(call, $"{toolName}: could not allocate a unique temporary file name.");
     }
 
-    private static Result<string, string> SanitizeTemporaryLeafName(string requestedName)
+    private static Result<string, string> SanitizeTemporaryLeafName(string requestedName, string toolName = "CreateFile")
     {
         if (string.IsNullOrWhiteSpace(requestedName)
             || Path.IsPathRooted(requestedName)
@@ -1860,19 +1994,19 @@ public sealed partial class DysonWorkspaceToolExecutor
             || requestedName is "." or "..")
         {
             return Result<string, string>.AsError(
-                "CreateFile: temporary path must be a non-empty leaf file name.");
+                $"{toolName}: temporary path must be a non-empty leaf file name.");
         }
 
         var extension = Path.GetExtension(requestedName);
         var stem = Path.GetFileNameWithoutExtension(requestedName);
         if (string.IsNullOrWhiteSpace(stem) || string.IsNullOrWhiteSpace(extension) || extension == ".")
-            return Result<string, string>.AsError("CreateFile: temporary file name must include an extension.");
+            return Result<string, string>.AsError($"{toolName}: temporary file name must include an extension.");
 
         var invalid = Path.GetInvalidFileNameChars();
         var sanitizedStem = new string(stem.Select(c => invalid.Contains(c) ? '-' : c).ToArray()).Trim();
         var sanitizedExtension = new string(extension.Skip(1).Select(c => invalid.Contains(c) ? '-' : c).ToArray()).Trim();
         if (string.IsNullOrWhiteSpace(sanitizedStem) || string.IsNullOrWhiteSpace(sanitizedExtension))
-            return Result<string, string>.AsError("CreateFile: temporary file name is invalid.");
+            return Result<string, string>.AsError($"{toolName}: temporary file name is invalid.");
 
         return Result<string, string>.AsValue(
             $"{sanitizedStem[..Math.Min(sanitizedStem.Length, 96)]}.{sanitizedExtension[..Math.Min(sanitizedExtension.Length, 16)]}");
@@ -2002,6 +2136,10 @@ public sealed partial class DysonWorkspaceToolExecutor
     private const int ConvertImageMaxBytes = 50 * 1024 * 1024;
     private const int GrepBinarySniffBytes = 512;
 
+    // ponytail: fixed IO depth per Grep call, not per disk; upgrade = measured depth if this clamp shows up in profiles.
+    private static readonly int GrepIoConcurrency =
+        Math.Clamp(Environment.ProcessorCount * 2, 8, 64);
+
     private static readonly HashSet<string> GrepExcludedDirNames = new(StringComparer.OrdinalIgnoreCase)
     {
         ".git", "bin", "obj", "node_modules", ".vs", "packages", ".idea", "dist",
@@ -2060,20 +2198,27 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Error(call, $"Invalid regex: {ex.Message}");
         }
 
-        IEnumerable<string> files;
+        var literal = !caseInsensitive && IsGrepLiteralPattern(pattern.Value);
+        using var io = new SemaphoreSlim(GrepIoConcurrency, GrepIoConcurrency);
+
+        List<string> paths;
         var fileExists = await _fs.FileExistsAsync(searchPath, cancellationToken).ConfigureAwait(false);
         var dirExists = await _fs.DirectoryExistsAsync(searchPath, cancellationToken).ConfigureAwait(false);
         if (fileExists.IsSuccess && fileExists.Value)
         {
-            files = [resolved.Value];
+            var relResult = _fs.GetRelativePath(resolved.Value);
+            if (relResult.IsError)
+                return Error(call, relResult.Error);
+            paths = [relResult.Value];
         }
         else if (dirExists.IsSuccess && dirExists.Value)
         {
-            var enumerated = await EnumerateFilesSkippingExcludedAsync(searchPath, glob, cancellationToken)
+            var bag = new ConcurrentBag<string>();
+            var globPattern = string.IsNullOrWhiteSpace(glob) ? "*" : glob;
+            await WalkGrepFilesAsync(searchPath, globPattern, bag, io, cancellationToken)
                 .ConfigureAwait(false);
-            if (enumerated.IsError)
-                return Error(call, enumerated.Error);
-            files = enumerated.Value;
+            paths = [.. bag];
+            paths.Sort(StringComparer.Ordinal);
         }
         else
         {
@@ -2084,75 +2229,95 @@ public sealed partial class DysonWorkspaceToolExecutor
         var matches = 0;
         var binaryHits = 0;
         var cappedByChars = false;
+        using var capCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-        foreach (var file in files)
+        for (var offset = 0; offset < paths.Count && matches < maxMatches && !cappedByChars; offset += GrepIoConcurrency)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var under = _fs.ResolvePath(file);
-            if (under.IsError)
-                continue;
+            var count = Math.Min(GrepIoConcurrency, paths.Count - offset);
+            var slotHits = new List<GrepHit>[count];
+            var slotDone = new bool[count];
+            var nextSlot = 0;
+            var gate = new object();
 
-            var relResult = _fs.GetRelativePath(under.Value);
-            if (relResult.IsError)
-                continue;
-            var rel = relResult.Value;
-            var kind = await ClassifyGrepFileAsync(rel, cancellationToken).ConfigureAwait(false);
-            if (kind is GrepFileKind.Binary or GrepFileKind.Image)
+            void Drain()
             {
-                // Path-only: never inline binary/image bytes. Emit when the relative path matches.
-                if (!regex.IsMatch(rel))
-                    continue;
-
-                var label = kind == GrepFileKind.Image ? "image" : "binary";
-                var line = $"{label}\t{rel}";
-                if (sb.Length + line.Length + 1 > GrepMaxResultChars)
+                while (nextSlot < count && slotDone[nextSlot])
                 {
-                    cappedByChars = true;
-                    break;
+                    var slot = slotHits[nextSlot] ?? [];
+                    foreach (var hit in slot)
+                    {
+                        if (matches >= maxMatches)
+                        {
+                            capCts.Cancel();
+                            return;
+                        }
+
+                        var formatted = FormatGrepHit(hit);
+                        if (sb.Length + formatted.Length + 1 > GrepMaxResultChars)
+                        {
+                            cappedByChars = true;
+                            capCts.Cancel();
+                            return;
+                        }
+
+                        sb.AppendLine(formatted);
+                        matches++;
+                        if (hit.Kind != GrepFileKind.Text)
+                            binaryHits++;
+                        if (matches >= maxMatches)
+                        {
+                            capCts.Cancel();
+                            return;
+                        }
+                    }
+
+                    nextSlot++;
+                }
+            }
+
+            var window = new Task[count];
+            for (var i = 0; i < count; i++)
+            {
+                var index = i;
+                var rel = paths[offset + index];
+                window[index] = ScanSlotAsync(rel, index);
+            }
+
+            await WhenAllGrepAsync(window, cancellationToken, ignoreCapCancellation: true)
+                .ConfigureAwait(false);
+
+            lock (gate)
+                Drain();
+
+            async Task ScanSlotAsync(string rel, int index)
+            {
+                List<GrepHit> found;
+                try
+                {
+                    found = await SearchGrepFileAsync(
+                            rel,
+                            literal,
+                            pattern.Value,
+                            regex,
+                            maxMatches,
+                            io,
+                            cancellationToken,
+                            capCts.Token)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    found = [];
                 }
 
-                sb.AppendLine(line);
-                matches++;
-                binaryHits++;
-                if (matches >= maxMatches)
-                    break;
-                continue;
-            }
-
-            var read = await _fs.ReadAllTextAsync(rel, cancellationToken).ConfigureAwait(false);
-            if (read.IsError)
-                continue;
-
-            var lines = read.Value.Replace("\r\n", "\n").Split('\n');
-            if (read.Value.Length > 0
-                && (read.Value.EndsWith('\n') || read.Value.EndsWith('\r'))
-                && lines.Length > 0
-                && lines[^1].Length == 0)
-            {
-                lines = lines[..^1];
-            }
-
-            for (var i = 0; i < lines.Length; i++)
-            {
-                if (!regex.IsMatch(lines[i]))
-                    continue;
-
-                var content = TruncateGrepLine(lines[i], GrepMaxLineChars);
-                var line = $"{rel}:{i + 1}:{content}";
-                if (sb.Length + line.Length + 1 > GrepMaxResultChars)
+                lock (gate)
                 {
-                    cappedByChars = true;
-                    break;
+                    slotHits[index] = found;
+                    slotDone[index] = true;
+                    Drain();
                 }
-
-                sb.AppendLine(line);
-                matches++;
-                if (matches >= maxMatches)
-                    break;
             }
-
-            if (matches >= maxMatches || cappedByChars)
-                break;
         }
 
         if (matches == 0)
@@ -2169,6 +2334,180 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         return Ok(call, text);
     }
+
+    private async Task WalkGrepFilesAsync(
+        string relativeDir,
+        string globPattern,
+        ConcurrentBag<string> files,
+        SemaphoreSlim io,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await io.WaitAsync(cancellationToken).ConfigureAwait(false);
+        Result<IReadOnlyList<DysonWorkspaceEntry>, string> entries;
+        try
+        {
+            entries = await _fs.EnumerateEntriesAsync(relativeDir, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            io.Release();
+        }
+
+        if (entries.IsError)
+            return;
+
+        var children = new List<Task>();
+        foreach (var entry in entries.Value)
+        {
+            var childRel = CombineWorkspaceRelative(relativeDir, entry.Name);
+            if (entry.IsDirectory)
+            {
+                if (GrepExcludedDirNames.Contains(entry.Name))
+                    continue;
+                children.Add(WalkGrepFilesAsync(childRel, globPattern, files, io, cancellationToken));
+                continue;
+            }
+
+            if (!MatchesSimpleGlob(entry.Name, globPattern))
+                continue;
+
+            var resolved = _fs.ResolvePath(childRel);
+            if (resolved.IsSuccess)
+                files.Add(childRel);
+        }
+
+        if (children.Count > 0)
+            await WhenAllGrepAsync(children, cancellationToken, ignoreCapCancellation: false)
+                .ConfigureAwait(false);
+    }
+
+    private async Task<List<GrepHit>> SearchGrepFileAsync(
+        string rel,
+        bool literal,
+        string pattern,
+        Regex regex,
+        int maxMatches,
+        SemaphoreSlim io,
+        CancellationToken callerToken,
+        CancellationToken capToken)
+    {
+        var entered = false;
+        var hits = new List<GrepHit>();
+        try
+        {
+            await io.WaitAsync(capToken).ConfigureAwait(false);
+            entered = true;
+            callerToken.ThrowIfCancellationRequested();
+
+            var kind = await ClassifyGrepFileAsync(rel, capToken).ConfigureAwait(false);
+            if (kind is GrepFileKind.Binary or GrepFileKind.Image)
+            {
+                if (!GrepLineMatches(literal, pattern, regex, rel))
+                    return [];
+                return [new GrepHit(rel, 0, "", kind)];
+            }
+
+            var localChars = 0;
+            var read = await _fs.ForEachTextLineAsync(rel, (lineNumber, line) =>
+            {
+                if (callerToken.IsCancellationRequested)
+                    callerToken.ThrowIfCancellationRequested();
+                if (capToken.IsCancellationRequested)
+                    return false;
+                if (!GrepLineMatches(literal, pattern, regex, line))
+                    return true;
+
+                var content = TruncateGrepLine(line, GrepMaxLineChars);
+                hits.Add(new GrepHit(rel, lineNumber, content, GrepFileKind.Text));
+                localChars += rel.Length + content.Length + 8;
+                return hits.Count < maxMatches && localChars <= GrepMaxResultChars;
+            }, capToken).ConfigureAwait(false);
+
+            if (read.IsError)
+                return [];
+            return hits;
+        }
+        catch (OperationCanceledException)
+        {
+            if (callerToken.IsCancellationRequested)
+                throw;
+            return hits;
+        }
+        finally
+        {
+            if (entered)
+                io.Release();
+        }
+    }
+
+    private static async Task WhenAllGrepAsync(
+        IEnumerable<Task> tasks,
+        CancellationToken callerToken,
+        bool ignoreCapCancellation)
+    {
+        try
+        {
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Exception? timeout = null;
+            Exception? other = null;
+            var sawCancel = false;
+            foreach (var inner in FlattenGrepExceptions(ex))
+            {
+                if (inner is RegexMatchTimeoutException)
+                    timeout ??= inner;
+                else if (inner is OperationCanceledException)
+                    sawCancel = true;
+                else
+                    other ??= inner;
+            }
+
+            if (timeout is not null)
+                throw timeout;
+            if (other is not null)
+                throw other;
+            if (callerToken.IsCancellationRequested || !ignoreCapCancellation || !sawCancel)
+                throw new OperationCanceledException(callerToken);
+        }
+    }
+
+    private static IEnumerable<Exception> FlattenGrepExceptions(Exception ex)
+    {
+        if (ex is AggregateException aggregate)
+        {
+            foreach (var inner in aggregate.Flatten().InnerExceptions)
+                yield return inner;
+            yield break;
+        }
+
+        yield return ex;
+    }
+
+    private static bool IsGrepLiteralPattern(string pattern)
+    {
+        foreach (var c in pattern)
+        {
+            if (c is '.' or '^' or '$' or '*' or '+' or '?' or '(' or ')' or '[' or ']' or '{' or '}' or '\\' or '|')
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool GrepLineMatches(bool literal, string pattern, Regex regex, string text) =>
+        literal
+            ? text.Contains(pattern, StringComparison.Ordinal)
+            : regex.IsMatch(text);
+
+    private readonly record struct GrepHit(string Rel, int Line, string Text, GrepFileKind Kind);
+
+    private static string FormatGrepHit(GrepHit hit) =>
+        hit.Kind == GrepFileKind.Text
+            ? $"{hit.Rel}:{hit.Line}:{hit.Text}"
+            : $"{(hit.Kind == GrepFileKind.Image ? "image" : "binary")}\t{hit.Rel}";
 
     private async Task<DysonToolCallResult> LoadBinaryAsync(
         DysonToolCall call,
@@ -2445,50 +2784,6 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
 
         return false;
-    }
-
-    private async Task<Result<IReadOnlyList<string>, string>> EnumerateFilesSkippingExcludedAsync(
-        string rootDirRelative,
-        string? glob,
-        CancellationToken cancellationToken)
-    {
-        var pattern = string.IsNullOrWhiteSpace(glob) ? "*" : glob;
-        var stack = new Stack<string>();
-        stack.Push(rootDirRelative);
-        var files = new List<string>();
-
-        while (stack.Count > 0)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var dir = stack.Pop();
-            var entries = await _fs.EnumerateEntriesAsync(dir, cancellationToken).ConfigureAwait(false);
-            if (entries.IsError)
-                continue;
-
-            foreach (var entry in entries.Value)
-            {
-                var childRel = string.IsNullOrEmpty(dir) || dir is "." or "./"
-                    ? entry.Name
-                    : $"{dir.TrimEnd('/').Replace('\\', '/')}/{entry.Name}";
-
-                if (entry.IsDirectory)
-                {
-                    if (GrepExcludedDirNames.Contains(entry.Name))
-                        continue;
-                    stack.Push(childRel);
-                    continue;
-                }
-
-                if (!MatchesSimpleGlob(entry.Name, pattern))
-                    continue;
-
-                var resolved = _fs.ResolvePath(childRel);
-                if (resolved.IsSuccess)
-                    files.Add(resolved.Value);
-            }
-        }
-
-        return Result<IReadOnlyList<string>, string>.AsValue(files);
     }
 
     /// <summary>Minimal <c>*</c> / <c>?</c> matcher for file names (same role as Directory.EnumerateFiles pattern).</summary>
@@ -3302,6 +3597,17 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var i))
             return i;
         if (prop.ValueKind == JsonValueKind.String && int.TryParse(prop.GetString(), out var parsed))
+            return parsed;
+        return null;
+    }
+
+    private static long? GetInt64(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var prop))
+            return null;
+        if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt64(out var l))
+            return l;
+        if (prop.ValueKind == JsonValueKind.String && long.TryParse(prop.GetString(), out var parsed))
             return parsed;
         return null;
     }

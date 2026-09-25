@@ -178,7 +178,7 @@
                     <AgentModePicker SelectedMode="@SelectedAgentMode"
                                      SelectedModeChanged="SelectedAgentModeChanged" />
                     <label class="composer-chip composer-worktree @(WorktreeCheckboxDisabled ? "is-muted" : null)"
-                           title="@Host.WorktreeCheckboxTitle">
+                           title="@WorktreeCheckboxTitle">
                         <input type="checkbox"
                                checked="@Host.WorktreeChecked"
                                disabled="@WorktreeCheckboxDisabled"
@@ -214,19 +214,25 @@
                 </div>
             </div>
             <div class="composer__footer-secondary">
-                <div class="composer-context-limit" title="Max target context (0 = Off). DropContext injects when estimated outgoing tokens exceed this.">
+                <div class="composer-context-limit" title="@(ContextLimitLocked ? "Meta Agent context is fixed at 100K" : "Max target context (0 = Off). DropContext injects when estimated outgoing tokens exceed this.")">
                     <span class="composer-effort__label">Context</span>
-                    <button type="button"
-                            class="composer-context-limit__step"
-                            disabled="@Disabled"
-                            aria-label="Decrease max target context by 10K"
-                            @onclick="() => StepMaxTargetAsync(-DysonMaxTargetContextTokens.Step)">−</button>
+                    @if (!ContextLimitLocked)
+                    {
+                        <button type="button"
+                                class="composer-context-limit__step"
+                                disabled="@Disabled"
+                                aria-label="Decrease max target context by 10K"
+                                @onclick="() => StepMaxTargetAsync(-DysonMaxTargetContextTokens.Step)">−</button>
+                    }
                     <span class="composer-context-limit__value">@DysonMaxTargetContextTokens.FormatCompact(MaxTargetContextTokens, zeroAsOff: true)</span>
-                    <button type="button"
-                            class="composer-context-limit__step"
-                            disabled="@Disabled"
-                            aria-label="Increase max target context by 10K"
-                            @onclick="() => StepMaxTargetAsync(DysonMaxTargetContextTokens.Step)">+</button>
+                    @if (!ContextLimitLocked)
+                    {
+                        <button type="button"
+                                class="composer-context-limit__step"
+                                disabled="@Disabled"
+                                aria-label="Increase max target context by 10K"
+                                @onclick="() => StepMaxTargetAsync(DysonMaxTargetContextTokens.Step)">+</button>
+                    }
                     <span class="composer-chip composer-chip--context"
                           title="@(LastReportedPromptTokens is int reported
                               ? $"Estimated outgoing / max (last reported prompt: {DysonMaxTargetContextTokens.FormatCompact(reported)})"
@@ -293,6 +299,9 @@
     [Parameter] public DysonAskUiState? Ask { get; set; }
     [Parameter] public EventCallback<IReadOnlyList<DysonAskQuestionAnswer>> OnAskSubmit { get; set; }
 
+    private bool ContextLimitLocked =>
+        string.Equals(SelectedAgentMode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase);
+
     private string _effortDraft = "";
     private readonly Dictionary<Guid, IReadOnlyList<string>> _slugReasoningModes = new();
 
@@ -301,28 +310,13 @@
         || Host.PendingImages.Count > 0
         || Host.PendingFilePaths.Count > 0;
 
-    private IEnumerable<string> EffortOptions
-    {
-        get
-        {
-            IReadOnlyList<string> modes = [];
-            if (SelectedSlugId is Guid slugId
-                && _slugReasoningModes.TryGetValue(slugId, out var registered))
-            {
-                modes = registered;
-            }
-
-            foreach (var mode in modes)
-                yield return mode;
-
-            var current = string.IsNullOrWhiteSpace(ReasoningEffort) ? null : ReasoningEffort.Trim();
-            if (current is not null
-                && !modes.Contains(current, StringComparer.Ordinal))
-            {
-                yield return current;
-            }
-        }
-    }
+    private IEnumerable<string> EffortOptions =>
+        ComposerEffortOptions.Build(
+            SelectedSlugId is Guid slugId
+                && _slugReasoningModes.TryGetValue(slugId, out var registered)
+                ? registered
+                : [],
+            ReasoningEffort);
 
     protected override void OnInitialized()
     {
@@ -351,6 +345,9 @@
 
     private async Task StepMaxTargetAsync(int delta)
     {
+        if (ContextLimitLocked)
+            return;
+
         var next = Math.Clamp(
             MaxTargetContextTokens + delta,
             0,

@@ -66,7 +66,10 @@ public static class DysonSubagentHostLogic
     public static string BuildSubagentReportContinuationPrompt(DysonAgentInterrupt interrupt, string? title) =>
         DysonSubagentReportPrompt.BuildContinuationPrompt(interrupt, title);
 
-    public static string BuildSubagentEventContinuationPrompt(DysonAgentInterrupt interrupt, string? title)
+    public static string BuildSubagentEventContinuationPrompt(
+        DysonAgentInterrupt interrupt,
+        string? title,
+        string? parentMode = null)
     {
         ArgumentNullException.ThrowIfNull(interrupt);
 
@@ -82,8 +85,6 @@ public static class DysonSubagentHostLogic
 
         return
             $"""
-            Harness continuation: a subagent triggered a parent event. Address it with RespondToSubagentEvent, then continue.
-
             - subagentId: {interrupt.SubagentId}
             - persistenceId: {persistence}
             - title: {titleLine}
@@ -93,9 +94,65 @@ public static class DysonSubagentHostLogic
             ## Payload
             {payload}
 
-            Call RespondToSubagentEvent with subagentId, eventId, and your reply string so the child can unblock.
+            {ParentEventReplyContract(parentMode)}
             """;
     }
+
+    /// <summary>Lead line plus the Meta Agent continuation. Same text as the auto-turn and the one retry.</summary>
+    public static string BuildParkedParentEventReminder(DysonAgentInterrupt interrupt, string? title) =>
+        "Still pending. The user message is their answer. Call RespondToSubagentEvent with that answer for this same eventId. Do not ask again.\n"
+        + BuildSubagentEventContinuationPrompt(interrupt, title, DysonAgentModes.MetaAgent);
+
+    private static string ParentEventReplyContract(string? parentMode)
+    {
+        if (string.Equals(parentMode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
+        {
+            return
+                """
+                These instructions are the reply contract for this event. Do not rely on an earlier system prompt.
+
+                Call RespondToSubagentEvent before this turn ends, unless only the user can decide.
+                Status (what landed, what is next): ack on this same turn and PostConversationMessage the status.
+                A question you already know: answer on this same turn.
+                A question only the user can decide: PostConversationMessage the question, do not respond yet, keep this subagentId and eventId, and RespondToSubagentEvent when the user answers. Do not start another drone for the same question.
+                Example: RespondToSubagentEvent(subagentId, eventId, reply)
+                """;
+        }
+
+        if (string.Equals(parentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
+        {
+            return
+                """
+                These instructions are the reply contract for this event. Do not rely on an earlier system prompt.
+
+                You are the parent of this event. Call RespondToSubagentEvent before this turn ends.
+                Status: short ack on this same turn.
+                A question you know: answer on this same turn.
+                A question you do not know: TriggerParentEvent to your own parent with kind message, wait for that reply, then RespondToSubagentEvent to this child. You cannot PostConversationMessage. Do not use kind askQuestion or promptUserDialog.
+                Example: RespondToSubagentEvent(subagentId, eventId, reply)
+                """;
+        }
+
+        return
+            """
+            These instructions are the reply contract for this event.
+
+            Call RespondToSubagentEvent before this turn ends. Ack a status. Answer a question.
+            Example: RespondToSubagentEvent(subagentId, eventId, reply)
+            """;
+    }
+
+    /// <summary>
+    /// Wraps <see cref="BuildSubagentEventContinuationPrompt"/> as a
+    /// <see cref="DysonAgentTurnKind.ParentEvent"/> turn (not a user message).
+    /// </summary>
+    public static DysonAgentTurn CreateTurn(string prompt) =>
+        new()
+        {
+            Kind = DysonAgentTurnKind.ParentEvent,
+            Instruction = prompt,
+            StartedUtc = DateTime.UtcNow,
+        };
 
     /// <summary>
     /// True only when kind is askQuestion and payload parses as AskQuestion questions JSON (Ask UI path).
@@ -143,9 +200,43 @@ public static class DysonSubagentHostLogic
         return true;
     }
 
-    /// <summary>Parent must enqueue DrainAutoTurnsAsync whenever Ask / Dialog UI is not opened for this event.</summary>
-    public static bool RequiresParentAutoTurn(string? eventKind, string? payload) =>
-        !TryBuildAskUi(eventKind, payload, out _) && !TryBuildUserDialogUi(eventKind, payload, out _);
+    /// <summary>
+    /// Meta parents always auto-turn. Other modes skip the turn when Ask / Dialog UI can open.
+    /// </summary>
+    public static bool RequiresParentAutoTurn(string? eventKind, string? payload, string? parentMode = null)
+    {
+        if (IsMetaSessionMode(parentMode))
+            return true;
+
+        return !TryBuildAskUi(eventKind, payload, out _)
+            && !TryBuildUserDialogUi(eventKind, payload, out _);
+    }
+
+    public static bool IsMetaSessionMode(string? mode) =>
+        string.Equals(mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(mode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// ponytail: one re-inject after a forgotten meta auto-turn. The next forgotten turn fails the child.
+    /// Upgrade path: raise <see cref="MetaParentEventRetryCap"/> if one nudge is not enough.
+    /// </summary>
+    public const int MetaParentEventRetryCap = 1;
+
+    public static MetaParentEventAfterTurn DecideMetaParentEventAfterTurn(
+        bool metaParent,
+        bool stillPending,
+        bool rootMeta,
+        bool postedDisplayInfoThisTurn,
+        int forgottenAutoTurns)
+    {
+        if (!metaParent || !stillPending)
+            return MetaParentEventAfterTurn.Done;
+        if (rootMeta && postedDisplayInfoThisTurn)
+            return MetaParentEventAfterTurn.Park;
+        if (forgottenAutoTurns >= MetaParentEventRetryCap)
+            return MetaParentEventAfterTurn.Fail;
+        return MetaParentEventAfterTurn.Retry;
+    }
 
     /// <summary>First non-empty line of a prompt (queue popover preview).</summary>
     public static string PromptFirstLine(string prompt)
@@ -214,6 +305,14 @@ public sealed class DysonUserDialogUiState
     public Guid? EventId { get; init; }
     public int? SubagentId { get; init; }
     public required DysonPromptUserDialogRequest Dialog { get; init; }
+}
+
+public enum MetaParentEventAfterTurn
+{
+    Done = 0,
+    Retry = 1,
+    Park = 2,
+    Fail = 3,
 }
 
 public sealed class DysonSubagentEventUiItem

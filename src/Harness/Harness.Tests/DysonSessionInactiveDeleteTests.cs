@@ -187,16 +187,35 @@ public class DysonSessionInactiveDeleteTests
         Assert.Empty(selected);
     }
 
+    [Fact]
+    public void DeadMetaAgentRoot_Omitted_DeadWorkAndEmptyMode_Selected()
+    {
+        var meta = Guid.NewGuid();
+        var work = Guid.NewGuid();
+        var emptyMode = Guid.NewGuid();
+
+        var selected = DysonSessionInactiveDelete.SelectDeletableRootIds(
+        [
+            Summary(meta, DysonSessionStatus.Completed, agentMode: "meta agent"),
+            Summary(work, DysonSessionStatus.Completed),
+            Summary(emptyMode, DysonSessionStatus.Stopped, agentMode: ""),
+        ]);
+
+        Assert.Equal([work, emptyMode], selected);
+    }
+
     private static DysonSessionSummary Summary(
         Guid id,
         DysonSessionStatus status,
         Guid? parentSessionId = null,
-        bool hasWorktree = false) =>
+        bool hasWorktree = false,
+        string agentMode = DysonAgentModes.Work) =>
         new()
         {
             Id = id,
             ParentSessionId = parentSessionId,
             Status = status,
             HasWorktree = hasWorktree,
+            AgentMode = agentMode,
         };
 }

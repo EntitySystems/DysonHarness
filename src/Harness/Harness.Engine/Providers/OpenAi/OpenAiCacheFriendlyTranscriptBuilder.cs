@@ -299,7 +299,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             // In-progress current turn: user content may get ephemeral rename / Plan mandates;
             // tool rounds come from inFlightRounds. PlanResult may append after the live turn.
             var incompleteCurrent = i == incompleteIndex;
-            if (!string.IsNullOrEmpty(turn.Instruction) || turn.UserImages.Count > 0)
+            if (HasTurnUserContent(turn))
             {
                 messages.Add(new JsonObject
                 {
@@ -400,7 +400,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             }
 
             var incompleteCurrent = i == incompleteIndex;
-            if (!string.IsNullOrEmpty(turn.Instruction) || turn.UserImages.Count > 0)
+            if (HasTurnUserContent(turn))
             {
                 input.Add(new JsonObject
                 {
@@ -795,6 +795,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     /// (<c>USER INJECTED COMMENT:</c>) when present. Incomplete current turn may
     /// append ephemeral mandates (chrome-skipped rename review; first Plan-stint
     /// Explore) and must not splice comments here (they go out as currentUserPrompt).
+    /// After the instruction, appends <see cref="DysonAgentTurn.HiddenInstruction"/>
+    /// (local paths only) and live <c>Attached urls:</c> lines from
+    /// <see cref="DysonAgentTurn.UserImages"/>.
     /// </summary>
     private static string FormatTurnUserContent(
         DysonAgentSession session,
@@ -808,6 +811,17 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         sb.AppendLine("]");
         if (!string.IsNullOrEmpty(turn.Instruction))
             sb.Append(turn.Instruction);
+
+        // Column is already "Attached paths:" lines. Do not wrap it again or add URLs.
+        if (!string.IsNullOrWhiteSpace(turn.HiddenInstruction))
+        {
+            if (sb.Length > 0 && sb[^1] != '\n')
+                sb.AppendLine();
+            sb.AppendLine();
+            sb.Append(turn.HiddenInstruction.Trim());
+        }
+
+        AppendLiveImageUrls(sb, turn);
 
         if (turn.UserImages.Count > 0)
         {
@@ -850,6 +864,43 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         }
 
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// Instruction, local-path column, or images. Empty instruction still emits when either attachment is set.
+    /// </summary>
+    private static bool HasTurnUserContent(DysonAgentTurn turn) =>
+        !string.IsNullOrEmpty(turn.Instruction)
+        || !string.IsNullOrWhiteSpace(turn.HiddenInstruction)
+        || turn.UserImages.Count > 0;
+
+    /// <summary>
+    /// <c>Attached urls:</c> from each user image whose <see cref="DysonBinaryAttachment.RemoteUrl"/>
+    /// is set right now. Skips images with no URL. Does not write the URL into
+    /// <see cref="DysonAgentTurn.HiddenInstruction"/> or clear <see cref="DysonBinaryAttachment.Base64Data"/>.
+    /// </summary>
+    private static void AppendLiveImageUrls(StringBuilder sb, DysonAgentTurn turn)
+    {
+        var wroteHeader = false;
+        foreach (var image in turn.UserImages)
+        {
+            if (string.IsNullOrWhiteSpace(image.RemoteUrl))
+                continue;
+
+            if (!wroteHeader)
+            {
+                if (sb.Length > 0 && sb[^1] != '\n')
+                    sb.AppendLine();
+                sb.AppendLine();
+                sb.AppendLine("Attached urls:");
+                wroteHeader = true;
+            }
+
+            sb.Append("- ");
+            sb.Append(image.FileName);
+            sb.Append(' ');
+            sb.AppendLine(image.RemoteUrl.Trim());
+        }
     }
 
     /// <summary>

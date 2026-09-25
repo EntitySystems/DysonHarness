@@ -1,0 +1,234 @@
+@namespace Harness.UI.Components.Meta
+@using DysonHarness
+@using Harness.UI.Demo
+@implements IDisposable
+@inject IDysonPlanRepository Plans
+@inject DysonUiHost Host
+@inject DysonMessageBus Bus
+
+<div class="meta-plan-list">
+    <div class="sidebar__section-label">Plans</div>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="error-banner">@_error</div>
+    }
+
+    @if (_plans.Count == 0 && string.IsNullOrEmpty(_error))
+    {
+        <div class="meta-plan-list__empty">
+            <p class="meta-plan-list__empty-title">No plans yet</p>
+            <p class="meta-plan-list__empty-hint">Plans appear here once a drone submits one.</p>
+        </div>
+    }
+    else if (_plans.Count > 0)
+    {
+        <div class="meta-plan-list__rows">
+            @foreach (var plan in _plans)
+            {
+                var canBuild = DysonMetaPlanDisplayPath.CanBuild(plan.Status, CanBuildPlans);
+                var buildTitle = plan.Status == DysonPlanStatus.Building
+                    ? "A build is already live"
+                    : CanBuildPlans
+                        ? "Ask the meta agent to begin this plan"
+                        : "Meta agent session is not ready";
+                <div @key="plan.Id"
+                     class="meta-plan-row"
+                     role="button"
+                     tabindex="0"
+                     title="@plan.Title"
+                     @onclick="() => OpenAsync(plan)"
+                     @onkeydown="e => OnRowKeyDown(e, plan)">
+                    <div class="meta-plan-row__header">
+                        <div class="meta-plan-row__title">
+                            @(string.IsNullOrWhiteSpace(plan.Title) ? "Untitled" : plan.Title)
+                        </div>
+                        <button type="button"
+                                class="btn meta-plan-row__build"
+                                disabled="@(!canBuild || _busy)"
+                                title="@buildTitle"
+                                @onclick="() => BuildAsync(plan)"
+                                @onclick:stopPropagation="true">
+                            Build
+                        </button>
+                    </div>
+                    <div class="meta-plan-row__meta">
+                        <span class="meta-plan-row__status @StatusClass(plan.Status)"
+                              title="@plan.Status">
+                            @StatusIndicator(plan.Status)
+                            <span>@plan.Status</span>
+                        </span>
+                        <span class="meta-plan-row__time mono">@FormatRelative(plan.UpdatedUtc)</span>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public Guid WorkDirectoryId { get; set; }
+
+    /// <summary>True when the focused Meta Agent session runtime is attached.</summary>
+    [Parameter] public bool CanBuildPlans { get; set; }
+
+    private IReadOnlyList<DysonPlan> _plans = [];
+    private string? _error;
+    private bool _busy;
+    private Guid? _subscribedWorkDirectoryId;
+    private IDisposable? _sub;
+
+    protected override void OnParametersSet()
+    {
+        if (WorkDirectoryId == _subscribedWorkDirectoryId)
+            return;
+
+        DisposeSubscription();
+        _subscribedWorkDirectoryId = WorkDirectoryId;
+        SubscribeIfNeeded();
+    }
+
+    protected override Task OnParametersSetAsync() => RefreshAsync();
+
+    public async Task RefreshAsync()
+    {
+        _error = null;
+        if (WorkDirectoryId == Guid.Empty)
+        {
+            _plans = [];
+            return;
+        }
+
+        var list = await Plans.ListAsync(WorkDirectoryId);
+        if (list.IsError)
+        {
+            _error = list.Error;
+            return;
+        }
+
+        _plans = list.Value;
+    }
+
+    private void SubscribeIfNeeded()
+    {
+        if (WorkDirectoryId == Guid.Empty)
+            return;
+
+        var sub = Bus.Subscribe<DysonPlansChangedEvent>(
+            DysonBusScopes.WorkDirectory(WorkDirectoryId),
+            OnPlansChanged);
+        if (sub.IsSuccess)
+            _sub = sub.Value;
+    }
+
+    private void OnPlansChanged(DysonPlansChangedEvent evt) => _ = InvokeAsync(async () =>
+    {
+        if (evt.WorkDirectoryId != WorkDirectoryId)
+            return;
+
+        await RefreshAsync();
+        StateHasChanged();
+    });
+
+    private void DisposeSubscription()
+    {
+        _sub?.Dispose();
+        _sub = null;
+    }
+
+    public void Dispose() => DisposeSubscription();
+
+    private Task OnRowKeyDown(KeyboardEventArgs e, DysonPlan plan)
+    {
+        if (e.Key == "Enter")
+            return OpenAsync(plan);
+        return Task.CompletedTask;
+    }
+
+    private async Task OpenAsync(DysonPlan plan)
+    {
+        if (_busy)
+            return;
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var opened = await Host.OpenMetaPlanAsync(plan.Id, WorkDirectoryId);
+            if (opened.IsError)
+                _error = opened.Error;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task BuildAsync(DysonPlan plan)
+    {
+        if (_busy || !DysonMetaPlanDisplayPath.CanBuild(plan.Status, CanBuildPlans))
+            return;
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var built = await Host.PromptMetaPlanBuildAsync(plan.Id, plan.Title);
+            if (built.IsError)
+                _error = built.Error;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string StatusClass(DysonPlanStatus status) => status switch
+    {
+        DysonPlanStatus.Building => "meta-plan-row__status--building",
+        DysonPlanStatus.Completed => "meta-plan-row__status--completed",
+        DysonPlanStatus.Stale => "meta-plan-row__status--stale",
+        _ => "meta-plan-row__status--draft",
+    };
+
+    private static RenderFragment StatusIndicator(DysonPlanStatus status) => status switch
+    {
+        // Spinner keys off Status only — BuildAgentId can linger after a build ends.
+        DysonPlanStatus.Building => SpinnerIndicator,
+        DysonPlanStatus.Completed => CompletedIndicator,
+        DysonPlanStatus.Stale => StaleIndicator,
+        _ => DraftIndicator,
+    };
+
+    private static readonly RenderFragment SpinnerIndicator = @<span class="subagent-card__spinner" aria-hidden="true"></span>;
+
+    private static readonly RenderFragment DraftIndicator = @<svg class="meta-plan-row__icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
+        <path d="M4 2.5h5.2L12.5 6v7.5H4z" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" />
+        <path d="M9.2 2.5V6H12.5" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" />
+        <path d="M6 8.5h4M6 11h3" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" />
+    </svg>;
+
+    private static readonly RenderFragment CompletedIndicator = @<svg class="meta-plan-row__icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
+        <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.25" />
+        <path d="M5.2 8.2 7.1 10.1 10.8 6.2" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>;
+
+    private static readonly RenderFragment StaleIndicator = @<svg class="meta-plan-row__icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
+        <path d="M4 2.5h5.2L12.5 6v7.5H4z" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" />
+        <path d="M9.2 2.5V6H12.5" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" />
+        <path d="M3.25 3.25 12.75 12.75" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+    </svg>;
+
+    private static string FormatRelative(DateTime utc)
+    {
+        var when = utc.Kind == DateTimeKind.Unspecified
+            ? DateTime.SpecifyKind(utc, DateTimeKind.Utc)
+            : utc.ToUniversalTime();
+        var elapsed = DateTime.UtcNow - when;
+        if (elapsed.TotalSeconds < 45) return "just now";
+        if (elapsed.TotalMinutes < 60) return $"{Math.Max(1, (int)elapsed.TotalMinutes)}m ago";
+        if (elapsed.TotalHours < 24) return $"{(int)elapsed.TotalHours}h ago";
+        if (elapsed.TotalDays < 7) return $"{(int)elapsed.TotalDays}d ago";
+        return when.ToLocalTime().ToString("d");
+    }
+}

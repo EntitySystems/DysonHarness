@@ -39,12 +39,12 @@ public class DysonSessionWorktreeTests
     }
 
     [Fact]
-    public void Ensure_fails_when_workdir_is_not_a_git_repo()
+    public async Task Ensure_fails_when_workdir_is_not_a_git_repo()
     {
         var root = CreateTempDir();
         try
         {
-            var result = DysonSessionWorktree.Ensure(root, Guid.NewGuid());
+            var result = await DysonSessionWorktree.EnsureAsync(root, Guid.NewGuid());
             Assert.True(result.IsError);
             Assert.Equal(DysonSessionWorktree.NotAGitRepositoryMessage, result.Error);
         }
@@ -55,7 +55,7 @@ public class DysonSessionWorktreeTests
     }
 
     [Fact]
-    public void Ensure_adds_worktree_copies_untracked_harness_files_and_is_idempotent()
+    public async Task Ensure_adds_worktree_copies_untracked_harness_files_and_is_idempotent()
     {
         var parent = CreateTempDir();
         var repo = Path.Combine(parent, "repo");
@@ -75,11 +75,11 @@ public class DysonSessionWorktreeTests
             WriteAllLf(Path.Combine(repo, ".dyson", "skills", "foo", "SKILL.md"), "# skill\n");
             WriteAllLf(Path.Combine(repo, ".dyson", "plans", "secret.md"), "plan\n");
 
-            var first = DysonSessionWorktree.Ensure(repo, sessionId);
+            var first = await DysonSessionWorktree.EnsureAsync(repo, sessionId);
             Assert.True(first.IsSuccess, first.IsError ? first.Error : null);
             Assert.Equal(DysonSessionWorktree.FormatBranch(sessionId), first.Value.Branch);
 
-            var listed = DysonGitInfo.TryListWorktrees(repo);
+            var listed = await DysonGitInfo.TryListWorktreesAsync(repo);
             Assert.True(listed.IsSuccess, listed.IsError ? listed.Error : null);
             Assert.Contains(listed.Value, e => SamePath(e.Path, first.Value.AbsolutePath));
 
@@ -91,7 +91,7 @@ public class DysonSessionWorktreeTests
             Assert.False(File.Exists(Path.Combine(wt, ".dyson", "plans", "secret.md")));
             Assert.Equal("{}\n", File.ReadAllText(Path.Combine(wt, "openrules.json")));
 
-            var second = DysonSessionWorktree.Ensure(repo, sessionId);
+            var second = await DysonSessionWorktree.EnsureAsync(repo, sessionId);
             Assert.True(second.IsSuccess, second.IsError ? second.Error : null);
             Assert.True(SamePath(first.Value.AbsolutePath, second.Value.AbsolutePath));
             Assert.Equal(first.Value.Branch, second.Value.Branch);
@@ -100,13 +100,13 @@ public class DysonSessionWorktreeTests
         {
             var path = DysonSessionWorktree.ResolveWorktreeAbsolutePath(repo, sessionId);
             if (path.IsSuccess)
-                _ = DysonGitInfo.TryRemoveWorktree(repo, path.Value, force: true);
+                _ = await DysonGitInfo.TryRemoveWorktreeAsync(repo, path.Value, force: true);
             DeleteQuiet(parent);
         }
     }
 
     [Fact]
-    public void Merge_success_removes_worktree_and_updates_main_tree()
+    public async Task Merge_success_removes_worktree_and_updates_main_tree()
     {
         var parent = CreateTempDir();
         var repo = Path.Combine(parent, "repo");
@@ -120,7 +120,7 @@ public class DysonSessionWorktreeTests
             RunGitOrThrow(repo, ["add", "-A"]);
             RunGitOrThrow(repo, ["commit", "-m", "init"]);
 
-            var ensured = DysonSessionWorktree.Ensure(repo, sessionId);
+            var ensured = await DysonSessionWorktree.EnsureAsync(repo, sessionId);
             Assert.True(ensured.IsSuccess, ensured.IsError ? ensured.Error : null);
             var wt = ensured.Value.AbsolutePath;
             var branch = ensured.Value.Branch;
@@ -129,11 +129,11 @@ public class DysonSessionWorktreeTests
             RunGitOrThrow(wt, ["add", "-A"]);
             RunGitOrThrow(wt, ["commit", "-m", "wt"]);
 
-            var merge = DysonSessionWorktree.Merge(repo, wt, branch);
+            var merge = await DysonSessionWorktree.MergeAsync(repo, wt, branch);
             Assert.True(merge.IsSuccess, merge.IsError ? merge.Error : null);
             Assert.Equal("from-wt\n", File.ReadAllText(Path.Combine(repo, "file.txt")));
 
-            var after = DysonGitInfo.TryListWorktrees(repo);
+            var after = await DysonGitInfo.TryListWorktreesAsync(repo);
             Assert.True(after.IsSuccess, after.IsError ? after.Error : null);
             Assert.DoesNotContain(after.Value, e => SamePath(e.Path, wt));
         }
@@ -141,13 +141,13 @@ public class DysonSessionWorktreeTests
         {
             var path = DysonSessionWorktree.ResolveWorktreeAbsolutePath(repo, sessionId);
             if (path.IsSuccess)
-                _ = DysonGitInfo.TryRemoveWorktree(repo, path.Value, force: true);
+                _ = await DysonGitInfo.TryRemoveWorktreeAsync(repo, path.Value, force: true);
             DeleteQuiet(parent);
         }
     }
 
     [Fact]
-    public void Merge_conflict_is_error_and_worktree_stays_listed()
+    public async Task Merge_conflict_is_error_and_worktree_stays_listed()
     {
         var parent = CreateTempDir();
         var repo = Path.Combine(parent, "repo");
@@ -161,7 +161,7 @@ public class DysonSessionWorktreeTests
             RunGitOrThrow(repo, ["add", "-A"]);
             RunGitOrThrow(repo, ["commit", "-m", "init"]);
 
-            var ensured = DysonSessionWorktree.Ensure(repo, sessionId);
+            var ensured = await DysonSessionWorktree.EnsureAsync(repo, sessionId);
             Assert.True(ensured.IsSuccess, ensured.IsError ? ensured.Error : null);
             var wt = ensured.Value.AbsolutePath;
             var branch = ensured.Value.Branch;
@@ -174,11 +174,15 @@ public class DysonSessionWorktreeTests
             RunGitOrThrow(repo, ["add", "-A"]);
             RunGitOrThrow(repo, ["commit", "-m", "main"]);
 
-            var merge = DysonSessionWorktree.Merge(repo, wt, branch);
+            var merge = await DysonSessionWorktree.MergeAsync(repo, wt, branch);
             Assert.True(merge.IsError);
             Assert.False(string.IsNullOrWhiteSpace(merge.Error));
+            Assert.DoesNotContain(
+                DysonSessionWorktree.MergeConflictAbortedPrefix,
+                merge.Error,
+                StringComparison.Ordinal);
 
-            var listed = DysonGitInfo.TryListWorktrees(repo);
+            var listed = await DysonGitInfo.TryListWorktreesAsync(repo);
             Assert.True(listed.IsSuccess, listed.IsError ? listed.Error : null);
             Assert.Contains(listed.Value, e => SamePath(e.Path, wt));
         }
@@ -195,13 +199,13 @@ public class DysonSessionWorktreeTests
 
             var path = DysonSessionWorktree.ResolveWorktreeAbsolutePath(repo, sessionId);
             if (path.IsSuccess)
-                _ = DysonGitInfo.TryRemoveWorktree(repo, path.Value, force: true);
+                _ = await DysonGitInfo.TryRemoveWorktreeAsync(repo, path.Value, force: true);
             DeleteQuiet(parent);
         }
     }
 
     [Fact]
-    public void Remove_force_clears_dirty_worktree()
+    public async Task Remove_force_clears_dirty_worktree()
     {
         var parent = CreateTempDir();
         var repo = Path.Combine(parent, "repo");
@@ -215,18 +219,18 @@ public class DysonSessionWorktreeTests
             RunGitOrThrow(repo, ["add", "-A"]);
             RunGitOrThrow(repo, ["commit", "-m", "init"]);
 
-            var ensured = DysonSessionWorktree.Ensure(repo, sessionId);
+            var ensured = await DysonSessionWorktree.EnsureAsync(repo, sessionId);
             Assert.True(ensured.IsSuccess, ensured.IsError ? ensured.Error : null);
             var wt = ensured.Value.AbsolutePath;
             WriteAllLf(Path.Combine(wt, "file.txt"), "dirty\n");
 
-            var withoutForce = DysonSessionWorktree.Remove(repo, wt);
+            var withoutForce = await DysonSessionWorktree.RemoveAsync(repo, wt);
             Assert.True(withoutForce.IsError);
 
-            var withForce = DysonSessionWorktree.Remove(repo, wt, force: true);
+            var withForce = await DysonSessionWorktree.RemoveAsync(repo, wt, force: true);
             Assert.True(withForce.IsSuccess, withForce.IsError ? withForce.Error : null);
 
-            var after = DysonGitInfo.TryListWorktrees(repo);
+            var after = await DysonGitInfo.TryListWorktreesAsync(repo);
             Assert.True(after.IsSuccess, after.IsError ? after.Error : null);
             Assert.DoesNotContain(after.Value, e => SamePath(e.Path, wt));
         }
@@ -234,7 +238,44 @@ public class DysonSessionWorktreeTests
         {
             var path = DysonSessionWorktree.ResolveWorktreeAbsolutePath(repo, sessionId);
             if (path.IsSuccess)
-                _ = DysonGitInfo.TryRemoveWorktree(repo, path.Value, force: true);
+                _ = await DysonGitInfo.TryRemoveWorktreeAsync(repo, path.Value, force: true);
+            DeleteQuiet(parent);
+        }
+    }
+
+    [Fact]
+    public async Task MergeAsync_when_gate_held_honors_cancellation()
+    {
+        var parent = CreateTempDir();
+        var repo = Path.Combine(parent, "repo");
+        Directory.CreateDirectory(repo);
+        try
+        {
+            GitInit(repo);
+            var root = await DysonGitInfo.TryFindRootMostRepoAsync(repo);
+            Assert.True(root.IsSuccess, root.IsError ? root.Error : null);
+
+            var gate = DysonSessionWorktree.MergeGates.GetOrAdd(
+                root.Value, static _ => new SemaphoreSlim(1, 1));
+            Assert.True(await gate.WaitAsync(0));
+            try
+            {
+                using var cts = new CancellationTokenSource();
+                var pending = DysonSessionWorktree.MergeAsync(
+                    repo, repo, "no-such-branch", cancellationToken: cts.Token);
+                await Task.Delay(200);
+                cts.Cancel();
+                var result = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.True(result.IsError, result.IsError ? result.Error : "expected an error");
+                Assert.Contains("cancel", result.Error, StringComparison.OrdinalIgnoreCase);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+        finally
+        {
             DeleteQuiet(parent);
         }
     }

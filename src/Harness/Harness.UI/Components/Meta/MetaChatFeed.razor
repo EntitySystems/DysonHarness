@@ -1,0 +1,169 @@
+@namespace Harness.UI.Components.Meta
+@using DysonHarness
+@using Harness.UI.Demo
+@using Harness.UI.Markdown
+@inject IJSRuntime Js
+
+<div @ref="_feedEl" class="meta-chat-feed" role="log" aria-label="Meta agent transcript" aria-live="polite">
+    @if (_items.Count == 0 && !SessionBusy)
+    {
+        <div class="empty-state">
+            <p class="empty-state__message">@EmptyMessage</p>
+        </div>
+    }
+    else
+    {
+        <div class="meta-chat-feed__list">
+            @foreach (var item in _items)
+            {
+                <div @key="item.Key"
+                     class="meta-chat__msg @(item.Role == MetaChatRole.User ? "meta-chat__msg--user" : "meta-chat__msg--agent") @(item.Pending ? "meta-chat__msg--pending" : null)">
+                    <div class="meta-chat__msg-bar">
+                        <span class="meta-chat__msg-role">@(item.Role == MetaChatRole.User ? "You" : "Meta agent")</span>
+                        @if (item.Pending)
+                        {
+                            <span class="subagent-card__spinner" title="Queued" aria-label="Queued"></span>
+                            @if (item.QueuedId is Guid queuedId && OnRemoveQueued.HasDelegate)
+                            {
+                                <button type="button"
+                                        class="meta-chat__unsend"
+                                        title="Remove from queue"
+                                        aria-label="Remove queued message"
+                                        @onclick="() => OnRemoveQueued.InvokeAsync(queuedId)">
+                                    ×
+                                </button>
+                            }
+                        }
+                    </div>
+                    @if (item.Thumbs.Count > 0 || item.FileNames.Count > 0)
+                    {
+                        <div class="meta-chat__attachments">
+                            @foreach (var thumb in item.Thumbs)
+                            {
+                                <img class="meta-chat__thumb" src="@thumb.Src" alt="@thumb.Alt" />
+                            }
+                            @foreach (var fileName in item.FileNames)
+                            {
+                                <span class="meta-chat__file">@fileName</span>
+                            }
+                        </div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(item.Text))
+                    {
+                        <div class="meta-chat__body turn-block__body">@MarkdownRenderer.ToHtml(item.Text)</div>
+                    }
+                    @if (item.Actions.Count > 0 || item.VisualizationId is not null)
+                    {
+                        var busy = _actionBusy.Contains(item.Key);
+                        <div class="meta-chat__actions">
+                            @for (var i = 0; i < item.Actions.Count; i++)
+                            {
+                                var index = i;
+                                <button type="button"
+                                        class="btn"
+                                        disabled="@busy"
+                                        @onclick="() => InvokeActionAsync(item, index)">@item.Actions[index].Name</button>
+                            }
+                            @if (item.VisualizationId is Guid visualizationId)
+                            {
+                                <button type="button"
+                                        class="btn"
+                                        @onclick="() => OnOpenVisualization.InvokeAsync(visualizationId)">View visualization</button>
+                            }
+                        </div>
+                        @if (item.Actions.Count > 0 && _actionResults.TryGetValue(item.Key, out var actionText))
+                        {
+                            <div class="meta-chat__action-result">@actionText</div>
+                        }
+                    }
+                </div>
+            }
+            @if (SessionBusy)
+            {
+                <div class="meta-chat__working" aria-live="polite">
+                    <span class="subagent-card__spinner" aria-hidden="true"></span>
+                    <span>Working…</span>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private ElementReference _feedEl;
+    private bool _attached;
+    private int _renderVersion;
+    private int _lastScrolledRenderVersion = -1;
+    private IReadOnlyList<MetaChatItem> _items = [];
+    private readonly HashSet<string> _actionBusy = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _actionResults = new(StringComparer.Ordinal);
+
+    [Parameter] public IReadOnlyList<DysonAgentTurn> Turns { get; set; } = [];
+    [Parameter] public IReadOnlyList<QueuedPrompt> Queued { get; set; } = [];
+    [Parameter] public bool SessionBusy { get; set; }
+    [Parameter] public string EmptyMessage { get; set; } = "Tell the meta agent what to orchestrate.";
+    [Parameter] public EventCallback<Guid> OnRemoveQueued { get; set; }
+    [Parameter] public EventCallback<MetaChatActionClick> OnConversationAction { get; set; }
+    [Parameter] public EventCallback<Guid> OnOpenVisualization { get; set; }
+
+    /// <summary>
+    /// Last click text for a bubble, keyed by item key. Ephemeral: a reload restores buttons, not this.
+    /// </summary>
+    public void NoteConversationActionResult(Guid turnId, Result<string, string> result)
+    {
+        var key = $"a:{turnId:D}";
+        if (result.IsError)
+            _actionResults[key] = result.Error ?? "";
+        else if (!string.IsNullOrWhiteSpace(result.Value))
+            _actionResults[key] = result.Value;
+        else
+            _actionResults.Remove(key);
+    }
+
+    private async Task InvokeActionAsync(MetaChatItem item, int index)
+    {
+        if (item.TurnId is not Guid turnId || _actionBusy.Contains(item.Key))
+            return;
+
+        _actionBusy.Add(item.Key);
+        StateHasChanged();
+        try
+        {
+            await OnConversationAction.InvokeAsync(new MetaChatActionClick(turnId, index));
+        }
+        finally
+        {
+            _actionBusy.Remove(item.Key);
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        _items = MetaChatItems.Build(Turns, Queued);
+        _renderVersion++;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        try
+        {
+            if (!_attached)
+            {
+                await Js.InvokeVoidAsync("dysonChat.attach", _feedEl);
+                _attached = true;
+            }
+
+            if (_renderVersion != _lastScrolledRenderVersion)
+            {
+                _lastScrolledRenderVersion = _renderVersion;
+                await Js.InvokeVoidAsync("dysonChat.scrollToBottom", _feedEl);
+            }
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+}

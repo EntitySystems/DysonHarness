@@ -32,9 +32,9 @@ public class DysonCliProxyAssetResolverTests
     public void ResolveDownloadUrl_uses_pinned_download_base()
     {
         var url = DysonCliProxyAssetResolver.ResolveDownloadUrl(
-            "7.2.149", OSPlatform.Windows, Architecture.X64);
+            "7.3.15", OSPlatform.Windows, Architecture.X64);
         Assert.Equal(
-            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.149/CLIProxyAPI_7.2.149_windows_amd64.zip",
+            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.3.15/CLIProxyAPI_7.3.15_windows_amd64.zip",
             url);
     }
 }
@@ -44,10 +44,10 @@ public class DysonThirdPartyResourcesTests
     [Fact]
     public void CliProxyApi_parses_tag_and_version_from_release_url()
     {
-        Assert.Equal("v7.2.149", DysonThirdPartyResources.CliProxyApi.Tag);
-        Assert.Equal("7.2.149", DysonThirdPartyResources.CliProxyApi.Version);
+        Assert.Equal("v7.3.15", DysonThirdPartyResources.CliProxyApi.Tag);
+        Assert.Equal("7.3.15", DysonThirdPartyResources.CliProxyApi.Version);
         Assert.Equal(
-            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.149/",
+            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.3.15/",
             DysonThirdPartyResources.CliProxyApi.DownloadBaseUrl);
     }
 
@@ -79,6 +79,7 @@ public class ManagedSlugSyncTests
             new ManagedModelInfo("gpt-5.4 (pro)", "codex", "codex-pro", "GPT 5.4"),
             new ManagedModelInfo("gpt-5.4", "openai", null, null),
             new ManagedModelInfo("claude-sonnet", "anthropic", "claude", null),
+            new ManagedModelInfo("muse-spark-1.3", "meta", "meta", "Muse Spark 1.3"),
             new ManagedModelInfo("grok-4", "xai", "xai", "Grok 4"),
             new ManagedModelInfo("gemini-2.5-pro", "google", "gemini", null),
             new ManagedModelInfo("antigravity-flash", "antigravity", null, null),
@@ -104,6 +105,9 @@ public class ManagedSlugSyncTests
 
         var claude = ManagedInferenceProviderBase.MapModelsToSlugs(models, ["claude", "anthropic"]);
         Assert.Equal(["claude-sonnet"], claude.Select(s => s.Slug).ToArray());
+
+        var meta = ManagedInferenceProviderBase.MapModelsToSlugs(models, ["meta", "muse"]);
+        Assert.Equal(["muse-spark-1.3"], meta.Select(s => s.Slug).ToArray());
     }
 
     [Fact]
@@ -371,11 +375,24 @@ public class DysonCliProxySharedSecretsTests
     }
 }
 
+public class ManagedMetaAuthTests
+{
+    [Fact]
+    public void Source_and_auth_url_match_upstream_meta_device_flow()
+    {
+        Assert.Equal("cliproxy-meta", DysonManagedSources.CliProxyMeta);
+        Assert.Equal("meta-auth-url", ManagedMetaInferenceProvider.MetaAuthUrlPath);
+        Assert.True(DysonManagedSources.IsCliProxy(DysonManagedSources.CliProxyMeta));
+        Assert.False(DysonManagedSources.IsDirectManaged(DysonManagedSources.CliProxyMeta));
+    }
+}
+
 public class DysonManagedSourcesTests
 {
     [Theory]
     [InlineData("cliproxy-codex", true)]
     [InlineData("cliproxy-grok", true)]
+    [InlineData("cliproxy-meta", true)]
     [InlineData("openrouter", false)]
     [InlineData("orcarouter", false)]
     [InlineData(null, false)]

@@ -27,6 +27,9 @@ public static class DysonSessionInactiveDelete
             if (root.HasWorktree)
                 continue;
 
+            if (DysonSessionPolicy.IsMetaAgent(root.AgentMode))
+                continue;
+
             if (SubtreeHasLive(root, children, liveActiveIds))
                 continue;
 

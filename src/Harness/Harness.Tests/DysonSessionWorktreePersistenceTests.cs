@@ -69,6 +69,50 @@ public sealed class DysonSessionWorktreePersistenceTests
             throw new InvalidOperationException("Session must be gone after delete once path is cleared.");
     }
 
+    [Fact]
+    public void DeleteSession_MetaAgentRefused_WorkStillDeletes()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var sessions = DysonTempDb.Sessions(accessor);
+
+        var meta = sessions.CreateSessionAsync(new DysonSessionCreateRequest
+        {
+            RuntimeId = 1,
+            AgentMode = DysonAgentModes.MetaAgent,
+            SystemPromptSnapshot = "meta-delete",
+        }).GetAwaiter().GetResult();
+        if (meta.IsError)
+            throw new InvalidOperationException(meta.Error);
+
+        var work = sessions.CreateSessionAsync(new DysonSessionCreateRequest
+        {
+            RuntimeId = 2,
+            AgentMode = DysonAgentModes.Work,
+            SystemPromptSnapshot = "work-delete",
+        }).GetAwaiter().GetResult();
+        if (work.IsError)
+            throw new InvalidOperationException(work.Error);
+
+        var blocked = sessions.DeleteSessionAsync(meta.Value).GetAwaiter().GetResult();
+        if (!blocked.IsError)
+            throw new InvalidOperationException("Delete must fail for a Meta Agent session.");
+        if (blocked.Error != "Meta Agent sessions cannot be deleted.")
+            throw new InvalidOperationException($"Unexpected delete error: {blocked.Error}");
+
+        var stillThere = sessions.GetFullSessionAsync(meta.Value).GetAwaiter().GetResult();
+        if (stillThere.IsError)
+            throw new InvalidOperationException("Meta Agent session must remain after refused delete.");
+
+        var deleted = sessions.DeleteSessionAsync(work.Value).GetAwaiter().GetResult();
+        if (deleted.IsError)
+            throw new InvalidOperationException(deleted.Error);
+
+        var gone = sessions.GetFullSessionAsync(work.Value).GetAwaiter().GetResult();
+        if (!gone.IsError)
+            throw new InvalidOperationException("Work session must be gone after delete.");
+    }
+
     private static void AssertCreateEnabledRoundTrip()
     {
         var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);

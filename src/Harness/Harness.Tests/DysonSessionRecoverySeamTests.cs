@@ -52,8 +52,8 @@ namespace Harness.Tests;
 /// <c>FinalizeIncompleteTools</c>; stamp turn complete + persist repaired
 /// <c>ToolStateJson</c> + <c>InterruptionReason</c>; append
 /// <c>TurnInterrupted</c> log; root stays <c>Active</c> (not busy, no
-/// replay); active child → <c>Interrupted</c> (no synthesized parent
-/// report); sweep is idempotent. Storage primitives already locked in
+/// replay); active child → <c>Interrupted</c> plus one synthetic failed
+/// parent Interrupt log; sweep is idempotent. Storage primitives already locked in
 /// <c>DysonTurnInterruptionPersistenceTests</c>.
 /// </item>
 /// <item>

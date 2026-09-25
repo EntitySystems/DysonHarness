@@ -18,6 +18,7 @@ internal static class DysonWorkspaceTestFs
         string workRoot,
         HttpClient http,
         IDysonSessionRepository? store = null,
-        Guid workDirectoryId = default) =>
-        new(session, await CreateLocalAsync(workRoot), http, store, workDirectoryId);
+        Guid workDirectoryId = default,
+        IDysonPlanRepository? plans = null) =>
+        new(session, await CreateLocalAsync(workRoot), http, store, workDirectoryId, plans);
 }

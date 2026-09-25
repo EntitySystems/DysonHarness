@@ -4,8 +4,16 @@ namespace Harness.UI.Components.Chat;
 
 public partial class Composer
 {
+    private bool WorktreeOffForParentless =>
+        Host.Session is null || Host.Session.Parent is null;
+
     private bool WorktreeCheckboxDisabled =>
-        Disabled || !Host.WorktreeCheckboxEnabled || Host.WorktreeLocked;
+        Disabled || !Host.WorktreeCheckboxEnabled || Host.WorktreeLocked || WorktreeOffForParentless;
+
+    private string WorktreeCheckboxTitle =>
+        WorktreeOffForParentless
+            ? "Worktree is off for sessions with no parent."
+            : Host.WorktreeCheckboxTitle;
 
     private async Task OnWorktreeChangedAsync(ChangeEventArgs e)
     {

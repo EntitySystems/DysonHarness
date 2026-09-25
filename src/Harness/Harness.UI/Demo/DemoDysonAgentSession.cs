@@ -33,6 +33,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         _registeredWorkDirectoryPath = string.IsNullOrWhiteSpace(registeredWorkDirectoryAbsolutePath)
             ? _workDirectoryPath
             : Path.GetFullPath(registeredWorkDirectoryAbsolutePath);
+        RegisteredWorkDirectoryAbsolutePath = _registeredWorkDirectoryPath;
     }
 
     public Guid WorkDirectoryId => _workDirectoryId;
@@ -40,7 +41,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
     public string? WorkDirectoryPath => _workDirectoryPath;
 
     /// <summary>Rebinds native workspace root (registered checkout vs session worktree).</summary>
-    public void RebindWorkDirectoryPath(string absolutePath)
+    public override void RebindWorkDirectoryPath(string absolutePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(absolutePath);
         _workDirectoryPath = Path.GetFullPath(absolutePath);
@@ -235,25 +236,42 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         if (attached.IsError)
             return Result<DysonStartSubagentResult, string>.AsError(attached.Error);
 
+        var (isolateWorktree, suppressWorktree) = ResolveMetaAgentDroneWorktree(agentMode);
+        var childWorktreeEnabled = suppressWorktree ? false : isolateWorktree || WorktreeEnabled;
+        var childWorktreePath = suppressWorktree || isolateWorktree ? null : WorktreeAbsolutePath;
+        var childWorktreeBranch = suppressWorktree || isolateWorktree ? null : WorktreeBranch;
+
         var providerKind = childProvider is DemoDysonAgentProvider demoKind
             ? DysonProviderKinds.EffectiveKind(demoKind.ProviderKind, demoKind.BaseUrl, demoKind.ApiKey)
             : DysonProviderKinds.Demo;
         var registered = _registeredWorkDirectoryPath ?? _workDirectoryPath ?? "";
+        var childWorkDirectory = suppressWorktree && !string.IsNullOrWhiteSpace(registered)
+            ? ResolveMetaAgentDroneSuppressWorkDirectory(registered)
+            : _workDirectoryPath;
+        var worktreePrompt = suppressWorktree
+            ? MetaAgentDroneSuppressPromptBlock()
+            : DysonAgentSystemPrompts.BuildWorktreePromptBlock(
+                childWorktreeEnabled, childWorktreePath, childWorktreeBranch, registered);
         var suffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
             await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
-                    _models, providerKind, _workDirectoryPath, cancellationToken)
+                    _models, providerKind, childWorkDirectory, cancellationToken)
                 .ConfigureAwait(false),
-            DysonAgentSystemPrompts.BuildWorktreePromptBlock(
-                WorktreeEnabled, WorktreeAbsolutePath, WorktreeBranch, registered));
+            worktreePrompt);
 
         var child = new DemoDysonAgentSession(
             agentMode, Config, childProvider, _store, _workDirectoryId, _models, suffix,
-            _workDirectoryPath,
+            childWorkDirectory,
             registeredWorkDirectoryAbsolutePath: _registeredWorkDirectoryPath);
-        child.WorktreeEnabled = WorktreeEnabled;
-        child.WorktreeAbsolutePath = WorktreeAbsolutePath;
-        child.WorktreeBranch = WorktreeBranch;
+        child.WorktreeEnabled = childWorktreeEnabled;
+        child.WorktreeAbsolutePath = childWorktreePath;
+        child.WorktreeBranch = childWorktreeBranch;
         RegisterSubagent(child);
+
+        async Task<Result<DysonStartSubagentResult, string>> FailRegisteredChild(string error)
+        {
+            await AbandonRegisteredChildAsync(child, cancellationToken).ConfigureAwait(false);
+            return Result<DysonStartSubagentResult, string>.AsError(error);
+        }
 
         var title = TitleFromTask(task);
         child.SetDisplayTitle(title);
@@ -278,22 +296,54 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
                 Title = title,
                 SystemPromptSnapshot = child.SystemPrompt,
                 Status = DysonSessionStatus.Active,
-                WorktreeEnabled = WorktreeEnabled,
-                WorktreeAbsolutePath = WorktreeAbsolutePath,
-                WorktreeBranch = WorktreeBranch,
+                WorktreeEnabled = childWorktreeEnabled,
+                WorktreeAbsolutePath = childWorktreePath,
+                WorktreeBranch = childWorktreeBranch,
             },
             cancellationToken).ConfigureAwait(false);
 
         if (create.IsError)
-            return Result<DysonStartSubagentResult, string>.AsError(create.Error);
+            return await FailRegisteredChild(create.Error).ConfigureAwait(false);
 
         child.SetPersistenceId(create.Value);
+
+        if (isolateWorktree)
+        {
+            var bound = await child.BindOwnWorktreeAsync(registered, cancellationToken)
+                .ConfigureAwait(false);
+            if (bound.IsError)
+                return await FailRegisteredChild(bound.Error).ConfigureAwait(false);
+
+            var reboundSuffix = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+                await DysonAgentSystemPrompts.BuildSessionSystemPromptSuffixAsync(
+                        _models, providerKind, child.WorkDirectoryPath, cancellationToken)
+                    .ConfigureAwait(false),
+                DysonAgentSystemPrompts.BuildWorktreePromptBlock(
+                    true, child.WorktreeAbsolutePath, child.WorktreeBranch, registered));
+            child.ReplaceSystemPromptSuffix(reboundSuffix);
+
+            var persist = await _store.UpdateSessionMetaAsync(
+                    new DysonSessionMetaUpdate
+                    {
+                        SessionId = child.PersistenceId,
+                        UpdateWorktreeEnabled = true,
+                        WorktreeEnabled = true,
+                        UpdateWorktreeLocation = true,
+                        WorktreeAbsolutePath = child.WorktreeAbsolutePath,
+                        WorktreeBranch = child.WorktreeBranch,
+                        SystemPromptSnapshot = child.SystemPrompt,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (persist.IsError)
+                return await FailRegisteredChild(persist.Error).ConfigureAwait(false);
+        }
 
         if (initialTodos is { Count: > 0 })
         {
             var seeded = await child.ReplaceTodosAsync(initialTodos, cancellationToken).ConfigureAwait(false);
             if (seeded.IsError)
-                return Result<DysonStartSubagentResult, string>.AsError(seeded.Error);
+                return await FailRegisteredChild(seeded.Error).ConfigureAwait(false);
         }
 
         var createdLog = DysonSessionLogPayload.CreateEntry(
@@ -303,7 +353,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
 
         var append = await _store.AppendLogAsync(createdLog, cancellationToken).ConfigureAwait(false);
         if (append.IsError)
-            return Result<DysonStartSubagentResult, string>.AsError(append.Error);
+            return await FailRegisteredChild(append.Error).ConfigureAwait(false);
 
         var runCts = new CancellationTokenSource();
         child.AttachBackgroundRun(runCts);

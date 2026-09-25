@@ -9,6 +9,8 @@ public static class DysonAgentModes
     public const string Drone = "Drone";
     public const string SecurityReview = "Security Review";
     public const string BugReview = "Bug Review";
+    public const string MetaAgent = DysonSessionPolicy.MetaAgentMode;
+    public const string MetaAgentDrone = "Meta Agent Drone";
     /// <summary>Category label; lookup uses Config.CustomAgents keys, not this literal.</summary>
     public const string Custom = "Custom";
 
@@ -22,9 +24,14 @@ public static class DysonAgentModes
         Drone,
         SecurityReview,
         BugReview,
+        MetaAgent,
+        MetaAgentDrone,
     ];
 
-    /// <summary>Modes shown in the composer AgentModePicker. Explore/Drone are spawn-only.</summary>
+    /// <summary>
+    /// Modes shown in the composer AgentModePicker. Explore/Drone/Meta Agent Drone are spawn-only;
+    /// Meta Agent is page-launched.
+    /// </summary>
     public static IReadOnlyList<string> ComposerSelectable { get; } =
     [
         Ask,

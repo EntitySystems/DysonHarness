@@ -29,36 +29,112 @@
             </div>
 
             <div class="confirm-dialog__body session-todos-modal__body">
-                @if (Todos.Count == 0)
-                {
-                    <p class="session-todos-modal__empty">No tasks for this session.</p>
+                @{
+                    var pending = Todos.Where(t => t.Status == DysonSessionTodoStatus.Pending).ToList();
+                    var ongoing = Todos.Where(t => t.Status == DysonSessionTodoStatus.Ongoing).ToList();
+                    var complete = Todos.Where(t => t.Status == DysonSessionTodoStatus.Complete).ToList();
                 }
-                else
-                {
-                    <ul class="session-todos__list">
-                        @foreach (var todo in Todos)
-                        {
-                            <li class="session-todos__item">
-                                <div class="session-todos__row">
-                                    <span class="session-todos__name">@todo.DisplayName</span>
-                                    <span class="session-todos__code mono">@todo.TaskCode</span>
-                                    <span class="badge session-todos__status session-todos__status--@StatusClass(todo.Status)">
-                                        @StatusLabel(todo.Status)
-                                    </span>
-                                </div>
-                                @if (todo.Comments.Count > 0)
-                                {
-                                    <ul class="session-todos__comments">
-                                        @foreach (var comment in todo.Comments)
-                                        {
-                                            <li>@comment</li>
-                                        }
-                                    </ul>
-                                }
-                            </li>
-                        }
-                    </ul>
-                }
+                <div class="session-todos__board">
+                    <section class="session-todos__column" aria-label="pending">
+                        <header class="session-todos__column-header session-todos__column-header--pending">
+                            pending
+                            <span class="session-todos__column-count">@pending.Count</span>
+                        </header>
+                        <div class="session-todos__column-body">
+                            @if (pending.Count == 0)
+                            {
+                                <p class="session-todos__column-empty">None</p>
+                            }
+                            else
+                            {
+                                <ul class="session-todos__list">
+                                    @foreach (var todo in pending)
+                                    {
+                                        <li class="session-todos__item">
+                                            <span class="session-todos__name">@todo.DisplayName</span>
+                                            <span class="session-todos__code mono">@todo.TaskCode</span>
+                                            @if (todo.Comments.Count > 0)
+                                            {
+                                                <ul class="session-todos__comments">
+                                                    @foreach (var comment in todo.Comments)
+                                                    {
+                                                        <li>@comment</li>
+                                                    }
+                                                </ul>
+                                            }
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                        </div>
+                    </section>
+                    <section class="session-todos__column" aria-label="ongoing">
+                        <header class="session-todos__column-header session-todos__column-header--ongoing">
+                            ongoing
+                            <span class="session-todos__column-count">@ongoing.Count</span>
+                        </header>
+                        <div class="session-todos__column-body">
+                            @if (ongoing.Count == 0)
+                            {
+                                <p class="session-todos__column-empty">None</p>
+                            }
+                            else
+                            {
+                                <ul class="session-todos__list">
+                                    @foreach (var todo in ongoing)
+                                    {
+                                        <li class="session-todos__item">
+                                            <span class="session-todos__name">@todo.DisplayName</span>
+                                            <span class="session-todos__code mono">@todo.TaskCode</span>
+                                            @if (todo.Comments.Count > 0)
+                                            {
+                                                <ul class="session-todos__comments">
+                                                    @foreach (var comment in todo.Comments)
+                                                    {
+                                                        <li>@comment</li>
+                                                    }
+                                                </ul>
+                                            }
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                        </div>
+                    </section>
+                    <section class="session-todos__column" aria-label="complete">
+                        <header class="session-todos__column-header session-todos__column-header--complete">
+                            complete
+                            <span class="session-todos__column-count">@complete.Count</span>
+                        </header>
+                        <div class="session-todos__column-body">
+                            @if (complete.Count == 0)
+                            {
+                                <p class="session-todos__column-empty">None</p>
+                            }
+                            else
+                            {
+                                <ul class="session-todos__list">
+                                    @foreach (var todo in complete)
+                                    {
+                                        <li class="session-todos__item">
+                                            <span class="session-todos__name">@todo.DisplayName</span>
+                                            <span class="session-todos__code mono">@todo.TaskCode</span>
+                                            @if (todo.Comments.Count > 0)
+                                            {
+                                                <ul class="session-todos__comments">
+                                                    @foreach (var comment in todo.Comments)
+                                                    {
+                                                        <li>@comment</li>
+                                                    }
+                                                </ul>
+                                            }
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                        </div>
+                    </section>
+                </div>
             </div>
         </div>
     </div>
@@ -88,20 +164,4 @@
         if (args.Key == "Escape")
             _ = CloseAsync();
     }
-
-    private static string StatusLabel(DysonSessionTodoStatus status) => status switch
-    {
-        DysonSessionTodoStatus.Pending => "pending",
-        DysonSessionTodoStatus.Ongoing => "ongoing",
-        DysonSessionTodoStatus.Complete => "complete",
-        _ => status.ToString().ToLowerInvariant(),
-    };
-
-    private static string StatusClass(DysonSessionTodoStatus status) => status switch
-    {
-        DysonSessionTodoStatus.Pending => "pending",
-        DysonSessionTodoStatus.Ongoing => "ongoing",
-        DysonSessionTodoStatus.Complete => "complete",
-        _ => "pending",
-    };
 }

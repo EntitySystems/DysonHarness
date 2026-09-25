@@ -65,7 +65,8 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
     DysonPluginCatalogService pluginCatalog,
     DysonPluginContributionResolver pluginContributions,
     DysonPluginMcpGrantService pluginMcpGrants,
-    DysonPluginMcpResolver pluginMcpResolver)
+    DysonPluginMcpResolver pluginMcpResolver,
+    DysonMessageBus? bus = null)
 {
     private readonly IDysonWorkDirectoryRepository _workDirectories =
         workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
@@ -85,6 +86,7 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
         pluginMcpGrants ?? throw new ArgumentNullException(nameof(pluginMcpGrants));
     private readonly DysonPluginMcpResolver _pluginMcpResolver =
         pluginMcpResolver ?? throw new ArgumentNullException(nameof(pluginMcpResolver));
+    private readonly DysonMessageBus? _bus = bus;
 
     public async Task<Result<DysonUiAgentSessionRuntimeConfigLease, string>> BuildAsync(
         DysonUiAgentSessionRuntimeConfigRequest request,
@@ -115,6 +117,7 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
         {
             PluginContributions = contributions,
             UiTheme = request.Theme,
+            Bus = _bus,
         };
         MergePluginCustomAgents(config, contributions);
         if (request.McpAccessMode is { } mode)
@@ -182,20 +185,12 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
                     diagnostics.Add($"Plugin MCP grants were unavailable: {activation.Error}");
 
                 var pluginHost = new DysonPluginMcpHost(_pluginMcpResolver);
-                var refreshed = await pluginHost.RefreshAsync(
+                config.PluginMcpHost = pluginHost;
+                _ = pluginHost.RefreshAsync(
                     pluginCatalog.Value,
                     effectiveActivation,
                     BuildPluginMcpReservedNames(config),
-                    cancellationToken).ConfigureAwait(false);
-                if (refreshed.IsError)
-                {
-                    diagnostics.Add($"Plugin MCP runtime was unavailable: {refreshed.Error}");
-                    await pluginHost.DisposeAsync().ConfigureAwait(false);
-                }
-                else
-                {
-                    config.PluginMcpHost = pluginHost;
-                }
+                    CancellationToken.None);
             }
 
             await TryHydrateFileStorageSettingAsync(config, cancellationToken)
@@ -244,6 +239,12 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
                     DysonAppSettingKeys.BugReviewModelSlugId,
                     DysonAppSettingKeys.BugReviewReasoningEffort,
                     p => config.BugReviewDefaultProvider = p,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            await TryHydrateOpenAiProviderSettingAsync(
+                    DysonAppSettingKeys.MetaAgentDroneModelSlugId,
+                    DysonAppSettingKeys.MetaAgentDroneReasoningEffort,
+                    p => config.MetaAgentDroneDefaultProvider = p,
                     cancellationToken)
                 .ConfigureAwait(false);
 

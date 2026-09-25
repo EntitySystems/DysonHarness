@@ -399,6 +399,53 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
         }
     }
 
+    public async Task<VoidResult<string>> ForEachTextLineAsync(
+        string path,
+        Func<int, string, bool> onLine,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(onLine);
+
+        var resolved = ResolvePath(path);
+        if (resolved.IsError)
+            return VoidResult<string>.AsError(resolved.Error);
+
+        try
+        {
+            await using var stream = new FileStream(
+                resolved.Value,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 4096,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            var lineNumber = 0;
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+                if (line is null)
+                    break;
+
+                lineNumber++;
+                if (!onLine(lineNumber, line))
+                    break;
+            }
+
+            return VoidResult<string>.Success;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return VoidResult<string>.AsError($"Failed to read file: {ex.Message}");
+        }
+    }
+
     public async Task<VoidResult<string>> WriteAllTextAsync(
         string path,
         string contents,

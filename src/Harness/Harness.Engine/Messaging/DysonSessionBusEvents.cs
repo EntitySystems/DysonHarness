@@ -38,3 +38,6 @@ public sealed record DysonHostStateChangedEvent(
 
 public sealed record DysonGitRepoChangedEvent(Guid WorkDirectoryId, string RepoRoot)
     : IDysonMessageBusEvent;
+
+public sealed record DysonPlansChangedEvent(Guid WorkDirectoryId, long PlanId)
+    : IDysonMessageBusEvent;

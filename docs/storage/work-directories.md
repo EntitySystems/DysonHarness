@@ -69,7 +69,7 @@ Result-pattern functional repository (current subject only; cross-subject get-by
 
 ## Git origin refresh (`DysonWorkDirectoryService`)
 
-Concrete Engine type (no extra interface). `RefreshGitOriginAsync` runs `DysonGitInfo.TryGetOrigin` on the registered `AbsolutePath`, classifies with `ClassifyProvider` / `ToStoredSlug`, and writes both columns via `UpdateGitMetadataAsync`. Detection failure (no git, timeout, no origin) writes `null`/`null` so a removed remote does not stay `github`. `GetAsync` failure is returned as-is (no invented row).
+Concrete Engine type (no extra interface). `RefreshGitOriginAsync` runs `DysonGitInfo.TryGetOriginAsync` on the registered `AbsolutePath`, classifies with `ClassifyProvider` / `ToStoredSlug`, and writes both columns via `UpdateGitMetadataAsync`. Detection failure (no git, timeout, no origin) writes `null`/`null` so a removed remote does not stay `github`. `GetAsync` failure is returned as-is (no invented row).
 
 Refresh is **activation-only**, not every `GetAsync` (file tree, git rail, and settings stay hot reads):
 
@@ -86,7 +86,7 @@ Refresh is **activation-only**, not every `GetAsync` (file tree, git rail, and s
 
 ## Git branch (UI)
 
-`DysonGitInfo.TryGetBranch` accepts a native absolute path or an initialized `IDysonWorkspaceFileSystem` (uses `NativeRootPath`). Runs `git -C path rev-parse --abbrev-ref HEAD` (≈2s timeout). Used for the composer branch chip; unrelated to build-time `DysonBuildInfo.BranchName`. When a session is focused, the chip (and the Files / Git rails) follow that session’s workspace root — the bound worktree path if set, otherwise the registered `AbsolutePath` — not only the work-directory row.
+`DysonGitInfo.TryGetBranchAsync` accepts a native absolute path or an initialized `IDysonWorkspaceFileSystem` (uses `NativeRootPath`). Runs `git -C path rev-parse --abbrev-ref HEAD`. The ≈2s budget covers the process and the stdout/stderr pipe drain (not only `WaitForExit`). Used for the composer branch chip; unrelated to build-time `DysonBuildInfo.BranchName`. When a session is focused, the chip (and the Files / Git rails) follow that session’s workspace root — the bound worktree path if set, otherwise the registered `AbsolutePath` — not only the work-directory row.
 
 ## Session git worktrees
 
@@ -94,13 +94,13 @@ A session may fork a **private git worktree** of the registered checkout. Projec
 
 Do **not** register the worktree as another `work_directories` row. Do **not** mutate `work_directories.AbsolutePath`.
 
-Layout (engine `DysonSessionWorktree.Ensure` / `Merge` / `Remove`):
+Layout (engine `DysonSessionWorktree.EnsureAsync` / `MergeAsync` / `RemoveAsync`):
 
 - Path: sibling `{parentOfRepo}/{repoName}.dyson-worktrees/{sessionId:N}` (git refuses a worktree inside the main tree)
 - Branch: `dyson/{first 8 hex of sessionId:N}` from `HEAD`
 - Untracked harness copy (dest-missing only): `openrules.json`, `AGENTS.md`, `.dyson/mcp/`, `.dyson/skills/`. Do not copy `.dyson/plans` or `.dyson/temp`.
 
-Created only on the first **Work**-mode mutating start (`DysonUiHost.PromptAsync` user prompt, or `BuildPendingPlanAsync` before BeginBuildPlan) when the root has `WorktreeEnabled` and no path yet. Plan / Ask / Review never create one. Empty “Start new session” does not leave orphan checkouts. If enabled but the workdir is not a git repo, that send fails with the exact error `Worktree is enabled but this work directory is not a git repository.`
+Created only on the first **Work**-mode mutating start (`DysonUiHost.PromptAsync` user prompt, or `BuildPendingPlanAsync` before BeginBuildPlan) when the root has `WorktreeEnabled` and no path yet. Plan / Ask / Review never create one. A Meta Agent Drone spawn with `useWorktree` true also calls `EnsureAsync` (not only the first Work send). `useWorktree` false does not call `EnsureAsync`. Optional `existingWorktreePath` only changes that child’s work directory; it does not create a worktree or set worktree columns. Empty “Start new session” does not leave orphan checkouts. If enabled but the workdir is not a git repo, that send fails with the exact error `Worktree is enabled but this work directory is not a git repository.`
 
 Custom MCP host stays **workdir-id** keyed (one `.dyson/mcp` config / refcount). Tool cwd is the session filesystem (`NativeRootPath` — worktree when bound).
 
@@ -135,7 +135,7 @@ Cloud or multi-tenant hosts **must implement** their own `IDysonWorkspaceFileSys
 
 Plan mode publishes markdown under `{workRoot}/.dyson/plans/{slug}-{hash}.md` via `DysonFileManager` (constructed from an initialized workspace FS) / `SubmitPlan`. Paths stay sandboxed under the work root. See [engine README](../engine/README.md) (Plan artifacts).
 
-`CreateFile(isTempFile: true)` creates visualization source artifacts under `{workRoot}/.dyson/temp/`. Temp mode accepts only a requested leaf name with an extension, sanitizes it, adds a cryptographically random 24-hex-character suffix before that extension, and returns the resulting workspace-relative path (for example, `.dyson/temp/chart-<random>.html`). The directory is git-ignored; files are bounded to 512 KiB UTF-8 each and are **not automatically cleaned up**. A later `RenderHtmlVisualization` call must use the exact returned path verbatim as its matching `tempFile`; it cannot infer or construct a temp path. There is no `CreateTempFile` MCP tool or automatic cleanup service.
+`CreateFile(isTempFile: true)` creates visualization source artifacts under `{workRoot}/.dyson/temp/`. Temp mode accepts only a requested leaf name with an extension, sanitizes it, adds a cryptographically random 24-hex-character suffix before that extension, and returns the resulting workspace-relative path (for example, `.dyson/temp/chart-<random>.html`). The directory is git-ignored; files are bounded to 512 KiB UTF-8 each and are **not automatically cleaned up**. A later `RenderHtmlVisualization` call must use the exact returned path verbatim as its matching `tempFile`; it cannot infer or construct a temp path. There is no `CreateTempFile` MCP tool or automatic cleanup service. `WriteTempFile` is the Meta Agent-only caller of that same writer, and `ReadTempFile` reads only those generated paths.
 
 Agent skills may live under `{workRoot}/.dyson/skills/{name}/` (entry `SKILL.md` or first `*.md`). `LoadSkill` / composer `/skill-` resolve **included** embedded `Resources/Skills` first, then `.dyson/skills`, then a literal work-relative path, then **openrules.json `AgentOptional`** Rules/Skills (local or http(s) `Path`; optional `Providers` filter). See [docs/openrules/README.md](../openrules/README.md). Work-root `openrules.json` (or implicit `AGENTS.md`) injects the raw `openrules.json` file (or a `(missing: openrules.json)` warning when implicit Root still applies) **before** Root and provider-filtered `AutoInclude` bodies into the session system prompt on create/load/mode change. MCP **`InitializeOpenRules`** creates a default manifest (EntitySystems openrules `SKILL.md` URL, no `Providers`) when the file is missing. Workdir settings (`WorkDirectorySettingsModal`) can flip Mode on existing Rules/Skills rows (`AgentOptional` ↔ `AutoInclude`) via `DysonOpenRules.SetEntryModeAsync`.
 
@@ -156,4 +156,4 @@ Current limitation: project package inspection/enablement/uninstall APIs exist i
 
 ## UI
 
-Sidebar `WorkDirectorySwitcher` lists registered dirs, persists active id in `localStorage` (`dyson-workdir`), filters `SessionList` by that id. Right-rail **Files** tree: right-click a **folder** for Rename (inline; `await` workspace `MoveAsync`) or Open in Explorer / Finder / file manager (`DysonUiHost.OpenFolderInFileManager`). See [docs/ui/README.md](../ui/README.md).
+Sidebar `WorkDirectorySwitcher` lists registered dirs and filters `SessionList` by the active id. Both `Home` and the meta page write `localStorage` key `dyson-workdir` on switch; `Home.HydrateWorkDirectoryAsync` reapplies that key when Home mounts. The switcher itself does not write the key. Right-rail **Files** tree: right-click a **folder** for Rename (inline; `await` workspace `MoveAsync`) or Open in Explorer / Finder / file manager (`DysonUiHost.OpenFolderInFileManager`). See [docs/ui/README.md](../ui/README.md).

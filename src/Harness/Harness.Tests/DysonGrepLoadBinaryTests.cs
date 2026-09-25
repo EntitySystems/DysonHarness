@@ -23,6 +23,178 @@ public class DysonGrepLoadBinaryTests
         AssertRemoteUrlLoadBinaryImageUsesHttpsAndReemits();
     }
 
+    [Fact]
+    public async Task Grep_NestedDirectories_FindsAllMatches_InStableOrder()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dyson-grep-order-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "a", "b"));
+            Directory.CreateDirectory(Path.Combine(root, "b"));
+            File.WriteAllText(Path.Combine(root, "a", "m.txt"), "hit\n");
+            File.WriteAllText(Path.Combine(root, "a", "b", "n.txt"), "hit\n");
+            File.WriteAllText(Path.Combine(root, "b", "z.txt"), "hit\n");
+
+            var expected = string.Join('\n',
+            [
+                "a/b/n.txt:1:hit",
+                "a/m.txt:1:hit",
+                "b/z.txt:1:hit",
+            ]);
+
+            var first = NormalizeNewlines(await GrepWorkspaceAsync(root, """{"pattern":"hit","path":"."}"""));
+            var second = NormalizeNewlines(await GrepWorkspaceAsync(root, """{"pattern":"hit","path":"."}"""));
+            if (first != expected || second != expected)
+            {
+                throw new InvalidOperationException(
+                    $"Grep order mismatch.{Environment.NewLine}first:{Environment.NewLine}{first}{Environment.NewLine}second:{Environment.NewLine}{second}");
+            }
+        }
+        finally
+        {
+            TryDeleteDir(root);
+        }
+    }
+
+    [Fact]
+    public async Task Grep_MaxMatches_ReturnsExactlyCap_InPathOrder()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dyson-grep-cap-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            for (var i = 0; i < 10; i++)
+                File.WriteAllText(Path.Combine(root, $"m{i}.txt"), $"hit-{i}\n");
+
+            var content = NormalizeNewlines(await GrepWorkspaceAsync(root, """{"pattern":"hit-","path":".","maxMatches":3}"""));
+            var lines = content.Split('\n');
+            if (lines.Length != 4
+                || lines[0] != "m0.txt:1:hit-0"
+                || lines[1] != "m1.txt:1:hit-1"
+                || lines[2] != "m2.txt:1:hit-2"
+                || lines[3] != "… capped at 3 matches"
+                || content.Contains("m3", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Grep cap mismatch:{Environment.NewLine}{content}");
+            }
+        }
+        finally
+        {
+            TryDeleteDir(root);
+        }
+    }
+
+    [Fact]
+    public async Task Grep_Cancellation_ReturnsPromptly()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dyson-grep-cancel-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "one.txt"), "hit\n");
+            var session = new StubSession();
+            var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
+            var call = new DysonToolCall
+            {
+                CallId = "grep-pre",
+                ToolName = "Grep",
+                Stage = 0,
+                ArgumentsJson = """{"pattern":"hit","path":"."}""",
+            };
+
+            var pre = await executor.ExecuteAsync(call, new CancellationToken(canceled: true));
+            if (pre.Content != "Tool execution was cancelled."
+                || pre.Content.Contains("Grep failed:", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Pre-cancelled Grep returned: {pre.Content}");
+            }
+
+            for (var i = 0; i < 400; i++)
+            {
+                var dir = Path.Combine(root, "d" + (i % 40));
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(Path.Combine(dir, $"f{i}.txt"), "hit\n");
+            }
+
+            using var cts = new CancellationTokenSource();
+            var running = executor.ExecuteAsync(call, cts.Token);
+            cts.Cancel();
+            var finished = await Task.WhenAny(running, Task.Delay(TimeSpan.FromSeconds(5)));
+            if (!ReferenceEquals(finished, running))
+                throw new InvalidOperationException("Grep cancellation did not return within 5s.");
+
+            var result = await running;
+            if (result.Content != "Tool execution was cancelled."
+                || result.Content.Contains("Grep failed:", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Cancelled Grep returned: {result.Content}");
+            }
+        }
+        finally
+        {
+            TryDeleteDir(root);
+        }
+    }
+
+    [Fact]
+    public async Task Grep_SkipsExcludedDirectories()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dyson-grep-skip-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "nested"));
+            Directory.CreateDirectory(Path.Combine(root, "nested", "obj"));
+            Directory.CreateDirectory(Path.Combine(root, "node_modules", "pkg"));
+            File.WriteAllText(Path.Combine(root, "nested", "keep.txt"), "hit\n");
+            File.WriteAllText(Path.Combine(root, "nested", "obj", "secret.txt"), "hit\n");
+            File.WriteAllText(Path.Combine(root, "node_modules", "pkg", "x.txt"), "hit\n");
+
+            var content = await GrepWorkspaceAsync(root, """{"pattern":"hit","path":"."}""");
+            if (!content.Contains("nested/keep.txt:1:hit", StringComparison.Ordinal)
+                || content.Contains("secret.txt", StringComparison.Ordinal)
+                || content.Contains("node_modules", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Grep skip mismatch:{Environment.NewLine}{content}");
+            }
+        }
+        finally
+        {
+            TryDeleteDir(root);
+        }
+    }
+
+    private static string NormalizeNewlines(string text) => text.Replace("\r\n", "\n");
+
+    private static async Task<string> GrepWorkspaceAsync(string root, string argumentsJson)
+    {
+        var session = new StubSession();
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, root, new HttpClient());
+        var result = await executor.ExecuteAsync(new DysonToolCall
+        {
+            CallId = "grep",
+            ToolName = "Grep",
+            Stage = 0,
+            ArgumentsJson = argumentsJson,
+        });
+        if (result.IsError)
+            throw new InvalidOperationException($"Grep failed: {result.Content}");
+        return result.Content;
+    }
+
+    private static void TryDeleteDir(string root)
+    {
+        try
+        {
+            Directory.Delete(root, recursive: true);
+        }
+        catch
+        {
+            // best-effort temp cleanup
+        }
+    }
+
     private static void AssertCatalog()
     {
         var pipeline = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess);

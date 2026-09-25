@@ -45,7 +45,7 @@ public class DysonGitInfoTests
     }
 
     [Fact]
-    public void TryFindRootMostRepo_picks_outermost_git()
+    public async Task TryFindRootMostRepo_picks_outermost_git()
     {
         var outer = Path.Combine(Path.GetTempPath(), "dyson-git-" + Guid.NewGuid().ToString("N"));
         var mid = Path.Combine(outer, "mid");
@@ -56,11 +56,11 @@ public class DysonGitInfoTests
 
         try
         {
-            var fromInner = DysonGitInfo.TryFindRootMostRepo(inner);
+            var fromInner = await DysonGitInfo.TryFindRootMostRepoAsync(inner);
             Assert.True(fromInner.IsSuccess, fromInner.IsError ? fromInner.Error : null);
             Assert.Equal(Path.GetFullPath(outer), Path.GetFullPath(fromInner.Value));
 
-            var fromMid = DysonGitInfo.TryFindRootMostRepo(mid);
+            var fromMid = await DysonGitInfo.TryFindRootMostRepoAsync(mid);
             Assert.True(fromMid.IsSuccess, fromMid.IsError ? fromMid.Error : null);
             Assert.Equal(Path.GetFullPath(outer), Path.GetFullPath(fromMid.Value));
         }
@@ -78,7 +78,7 @@ public class DysonGitInfoTests
     }
 
     [Fact]
-    public void TryFindRootMostRepo_accepts_gitfile_marker()
+    public async Task TryFindRootMostRepo_accepts_gitfile_marker()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-gitfile-" + Guid.NewGuid().ToString("N"));
         var nested = Path.Combine(root, "nested");
@@ -87,7 +87,7 @@ public class DysonGitInfoTests
 
         try
         {
-            var found = DysonGitInfo.TryFindRootMostRepo(nested);
+            var found = await DysonGitInfo.TryFindRootMostRepoAsync(nested);
             Assert.True(found.IsSuccess, found.IsError ? found.Error : null);
             Assert.Equal(Path.GetFullPath(root), Path.GetFullPath(found.Value));
         }
@@ -105,14 +105,14 @@ public class DysonGitInfoTests
     }
 
     [Fact]
-    public void TryFindRootMostRepo_errors_when_no_git()
+    public async Task TryFindRootMostRepo_errors_when_no_git()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-nogit-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
 
         try
         {
-            var found = DysonGitInfo.TryFindRootMostRepo(root);
+            var found = await DysonGitInfo.TryFindRootMostRepoAsync(root);
             Assert.True(found.IsError);
             Assert.Contains("No git", found.Error, StringComparison.OrdinalIgnoreCase);
         }
@@ -176,7 +176,7 @@ public class DysonGitInfoTests
     }
 
     [Fact]
-    public void TryGetOrigin_reads_outermost_remote()
+    public async Task TryGetOrigin_reads_outermost_remote()
     {
         var outer = Path.Combine(Path.GetTempPath(), "dyson-git-origin-" + Guid.NewGuid().ToString("N"));
         var inner = Path.Combine(outer, "nested");
@@ -187,7 +187,7 @@ public class DysonGitInfoTests
             RunGitOrThrow(outer, ["init"]);
             RunGitOrThrow(outer, ["remote", "add", "origin", "https://github.com/acme/repo.git"]);
 
-            var fromInner = DysonGitInfo.TryGetOrigin(inner);
+            var fromInner = await DysonGitInfo.TryGetOriginAsync(inner);
             Assert.True(fromInner.IsSuccess, fromInner.IsError ? fromInner.Error : null);
             Assert.Equal("https://github.com/acme/repo.git", fromInner.Value);
             Assert.Equal(DysonGitProvider.GitHub, DysonGitInfo.ClassifyProvider(fromInner.Value));
@@ -206,7 +206,7 @@ public class DysonGitInfoTests
     }
 
     [Fact]
-    public void TryGetOrigin_errors_when_no_origin()
+    public async Task TryGetOrigin_errors_when_no_origin()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-git-no-origin-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -214,7 +214,7 @@ public class DysonGitInfoTests
         try
         {
             RunGitOrThrow(root, ["init"]);
-            var origin = DysonGitInfo.TryGetOrigin(root);
+            var origin = await DysonGitInfo.TryGetOriginAsync(root);
             Assert.True(origin.IsError);
         }
         finally
@@ -231,7 +231,7 @@ public class DysonGitInfoTests
     }
 
     [Fact]
-    public void TryGetStatusPorcelain_large_output_succeeds_without_pipe_deadlock()
+    public async Task TryGetStatusPorcelain_large_output_succeeds_without_pipe_deadlock()
     {
         // Enough untracked lines to exceed a typical OS pipe buffer (~4KB) if reads waited
         // until after WaitForExit — classic Process redirect deadlock.
@@ -245,7 +245,7 @@ public class DysonGitInfoTests
             for (var i = 0; i < fileCount; i++)
                 File.WriteAllText(Path.Combine(root, $"u{i:D4}.txt"), "x");
 
-            var status = DysonGitInfo.TryGetStatusPorcelain(root);
+            var status = await DysonGitInfo.TryGetStatusPorcelainAsync(root);
             Assert.True(status.IsSuccess, status.IsError ? status.Error : null);
             Assert.True(status.Value.Count >= fileCount, $"expected >= {fileCount} entries, got {status.Value.Count}");
             Assert.All(status.Value, e => Assert.Equal(DysonGitChangeKind.Untracked, e.Kind));
@@ -522,6 +522,16 @@ public class DysonGitInfoTests
     }
 
     [Fact]
+    public async Task TryGetBranchAsync_cancelled_token_returns_error()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var result = await DysonGitInfo.TryGetBranchAsync(Path.GetTempPath(), cts.Token);
+        Assert.True(result.IsError);
+        Assert.Contains("cancel", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void ParseWorktreePorcelain_branch_and_detached()
     {
         var stdout = """
@@ -549,7 +559,7 @@ public class DysonGitInfoTests
     }
 
     [Fact]
-    public void TryAddWorktree_list_merge_and_remove()
+    public async Task TryAddWorktree_list_merge_and_remove()
     {
         var parent = CreateTempDir();
         var repo = Path.Combine(parent, "repo");
@@ -564,12 +574,12 @@ public class DysonGitInfoTests
             RunGitOrThrow(repo, ["commit", "-m", "init"]);
 
             var branch = "dyson/test" + Guid.NewGuid().ToString("N")[..8];
-            var added = DysonGitInfo.TryAddWorktree(repo, worktree, branch);
+            var added = await DysonGitInfo.TryAddWorktreeAsync(repo, worktree, branch);
             Assert.True(added.IsSuccess, added.IsError ? added.Error : null);
             Assert.True(SamePath(added.Value, worktree));
             Assert.True(Directory.Exists(worktree));
 
-            var listed = DysonGitInfo.TryListWorktrees(repo);
+            var listed = await DysonGitInfo.TryListWorktreesAsync(repo);
             Assert.True(listed.IsSuccess, listed.IsError ? listed.Error : null);
             var wt = Assert.Single(listed.Value, e => SamePath(e.Path, worktree));
             Assert.Equal(branch, wt.Branch);
@@ -579,26 +589,26 @@ public class DysonGitInfoTests
             RunGitOrThrow(worktree, ["add", "-A"]);
             RunGitOrThrow(worktree, ["commit", "-m", "wt"]);
 
-            var merge = DysonGitInfo.TryMergeBranch(repo, branch);
+            var merge = await DysonGitInfo.TryMergeBranchAsync(repo, branch);
             Assert.True(merge.IsSuccess, merge.IsError ? merge.Error : null);
             Assert.Equal("from-wt\n", File.ReadAllText(Path.Combine(repo, "file.txt")));
 
-            var removed = DysonGitInfo.TryRemoveWorktree(repo, worktree);
+            var removed = await DysonGitInfo.TryRemoveWorktreeAsync(repo, worktree);
             Assert.True(removed.IsSuccess, removed.IsError ? removed.Error : null);
 
-            var after = DysonGitInfo.TryListWorktrees(repo);
+            var after = await DysonGitInfo.TryListWorktreesAsync(repo);
             Assert.True(after.IsSuccess, after.IsError ? after.Error : null);
             Assert.DoesNotContain(after.Value, e => SamePath(e.Path, worktree));
         }
         finally
         {
-            _ = DysonGitInfo.TryRemoveWorktree(repo, worktree, force: true);
+            _ = await DysonGitInfo.TryRemoveWorktreeAsync(repo, worktree, force: true);
             DeleteQuiet(parent);
         }
     }
 
     [Fact]
-    public void TryRemoveWorktree_force_removes_dirty()
+    public async Task TryRemoveWorktree_force_removes_dirty()
     {
         var parent = CreateTempDir();
         var repo = Path.Combine(parent, "repo");
@@ -613,29 +623,29 @@ public class DysonGitInfoTests
             RunGitOrThrow(repo, ["commit", "-m", "init"]);
 
             var branch = "dyson/test" + Guid.NewGuid().ToString("N")[..8];
-            var added = DysonGitInfo.TryAddWorktree(repo, worktree, branch);
+            var added = await DysonGitInfo.TryAddWorktreeAsync(repo, worktree, branch);
             Assert.True(added.IsSuccess, added.IsError ? added.Error : null);
             WriteAllLf(Path.Combine(worktree, "file.txt"), "dirty\n");
 
-            var withoutForce = DysonGitInfo.TryRemoveWorktree(repo, worktree);
+            var withoutForce = await DysonGitInfo.TryRemoveWorktreeAsync(repo, worktree);
             Assert.True(withoutForce.IsError);
 
-            var withForce = DysonGitInfo.TryRemoveWorktree(repo, worktree, force: true);
+            var withForce = await DysonGitInfo.TryRemoveWorktreeAsync(repo, worktree, force: true);
             Assert.True(withForce.IsSuccess, withForce.IsError ? withForce.Error : null);
 
-            var after = DysonGitInfo.TryListWorktrees(repo);
+            var after = await DysonGitInfo.TryListWorktreesAsync(repo);
             Assert.True(after.IsSuccess, after.IsError ? after.Error : null);
             Assert.DoesNotContain(after.Value, e => SamePath(e.Path, worktree));
         }
         finally
         {
-            _ = DysonGitInfo.TryRemoveWorktree(repo, worktree, force: true);
+            _ = await DysonGitInfo.TryRemoveWorktreeAsync(repo, worktree, force: true);
             DeleteQuiet(parent);
         }
     }
 
     [Fact]
-    public void TryMergeBranch_conflict_is_error()
+    public async Task TryMergeBranch_conflict_is_error()
     {
         var parent = CreateTempDir();
         var repo = Path.Combine(parent, "repo");
@@ -650,7 +660,7 @@ public class DysonGitInfoTests
             RunGitOrThrow(repo, ["commit", "-m", "init"]);
 
             var branch = "dyson/test" + Guid.NewGuid().ToString("N")[..8];
-            var added = DysonGitInfo.TryAddWorktree(repo, worktree, branch);
+            var added = await DysonGitInfo.TryAddWorktreeAsync(repo, worktree, branch);
             Assert.True(added.IsSuccess, added.IsError ? added.Error : null);
 
             WriteAllLf(Path.Combine(worktree, "file.txt"), "from-wt\n");
@@ -661,7 +671,7 @@ public class DysonGitInfoTests
             RunGitOrThrow(repo, ["add", "-A"]);
             RunGitOrThrow(repo, ["commit", "-m", "main"]);
 
-            var merge = DysonGitInfo.TryMergeBranch(repo, branch);
+            var merge = await DysonGitInfo.TryMergeBranchAsync(repo, branch);
             Assert.True(merge.IsError);
             Assert.False(string.IsNullOrWhiteSpace(merge.Error));
         }
@@ -676,7 +686,7 @@ public class DysonGitInfoTests
                 // ignore if no merge in progress
             }
 
-            _ = DysonGitInfo.TryRemoveWorktree(repo, worktree, force: true);
+            _ = await DysonGitInfo.TryRemoveWorktreeAsync(repo, worktree, force: true);
             DeleteQuiet(parent);
         }
     }

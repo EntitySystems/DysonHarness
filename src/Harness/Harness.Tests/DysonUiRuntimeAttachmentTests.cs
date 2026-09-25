@@ -323,6 +323,12 @@ public class DysonUiRuntimeAttachmentTests
             CancellationToken cancellationToken = default) =>
             UnusedVoid();
 
+        public Task<VoidResult<string>> DeleteTurnsAsync(
+            Guid sessionId,
+            IReadOnlyList<Guid> turnIds,
+            CancellationToken ct = default) =>
+            UnusedVoid();
+
         public Task<VoidResult<string>> AppendLogAsync(
             DysonSessionLogEntry entry,
             CancellationToken cancellationToken = default) =>
@@ -423,6 +429,12 @@ public class DysonUiRuntimeAttachmentTests
         public Task<VoidResult<string>> UpsertTurnAsync(
             DysonTurnEntity turn,
             CancellationToken cancellationToken = default) =>
+            UnusedVoid();
+
+        public Task<VoidResult<string>> DeleteTurnsAsync(
+            Guid sessionId,
+            IReadOnlyList<Guid> turnIds,
+            CancellationToken ct = default) =>
             UnusedVoid();
 
         public Task<VoidResult<string>> AppendLogAsync(

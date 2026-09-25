@@ -100,7 +100,10 @@ public static class DysonCustomMcpClientFactory
                 }
             }
 
-            var client = await McpClient.CreateAsync(transport, cancellationToken: cancellationToken)
+            var client = await McpClient.CreateAsync(
+                    transport,
+                    new McpClientOptions { InitializationTimeout = TimeSpan.FromSeconds(30) },
+                    cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
             return Result<McpClient, string>.AsValue(client);
         }
