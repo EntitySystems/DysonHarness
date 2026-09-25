@@ -63,6 +63,8 @@ public static class MarkdownRenderer
         // now keeps every turn's body mounted, so one render pass touches every turn's instruction,
         // reply and reasoning bodies — at ~13 renders/sec a 64-entry cache would thrash and re-run
         // Markdig + ColorCode for the whole transcript on every delta.
+        // A document whose fences were skipped because the render highlight budget was already spent
+        // stays plain until this entry is evicted.
         if (HtmlCache.Count >= 256)
         {
             var oldest = HtmlCache.OrderBy(static entry => entry.Value.Seq).Take(64);

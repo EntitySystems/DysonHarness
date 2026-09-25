@@ -8,6 +8,7 @@ public class MarkdownRendererTests
     [Fact]
     public void ToHtml_highlights_csharp_fences_without_colorcode_wrapper()
     {
+        ColorCodeHtml.ResetHighlightBurst();
         var html = MarkdownRenderer.ToHtml("```csharp\npublic class Foo {}\n```").Value;
 
         Assert.Contains("language-csharp", html, StringComparison.Ordinal);
@@ -44,6 +45,7 @@ public class MarkdownRendererTests
     [Fact]
     public void ToHtml_escapes_html_inside_highlighted_fences()
     {
+        ColorCodeHtml.ResetHighlightBurst();
         var html = MarkdownRenderer.ToHtml("```csharp\n<img src=x onerror=alert(1)>\n```").Value;
 
         Assert.Contains("language-csharp", html, StringComparison.Ordinal);
@@ -100,6 +102,7 @@ public class MarkdownRendererTests
     [Fact]
     public void ToHtml_highlights_json_fences()
     {
+        ColorCodeHtml.ResetHighlightBurst();
         var html = MarkdownRenderer.ToHtml("```json\n{ \"a\": 1 }\n```").Value;
 
         Assert.Contains("language-json", html, StringComparison.Ordinal);
@@ -110,6 +113,7 @@ public class MarkdownRendererTests
     [Fact]
     public void ToHtml_bounds_catastrophic_json_highlight_and_skips_a_longer_fence()
     {
+        ColorCodeHtml.ResetHighlightBurst();
         var first = Stopwatch.StartNew();
         var html = MarkdownRenderer.ToHtml(JsonFence(CatastrophicJson)).Value;
         first.Stop();
@@ -120,6 +124,8 @@ public class MarkdownRendererTests
         Assert.Contains("<pre><code", html, StringComparison.Ordinal);
         Assert.Contains("netsend_physical_pooled_provision_e2e", html, StringComparison.Ordinal);
 
+        // The fence above spends the render budget. Reset so this still checks the formatter.
+        ColorCodeHtml.ResetHighlightBurst();
         var csharp = MarkdownRenderer.ToHtml("```csharp\npublic class Foo {}\n```").Value;
         Assert.Contains("language-csharp", csharp, StringComparison.Ordinal);
         Assert.True(
@@ -138,7 +144,54 @@ public class MarkdownRendererTests
         Assert.Contains("extra", longer, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ToHtml_skips_later_catastrophic_fences_after_the_render_budget()
+    {
+        ColorCodeHtml.ResetHighlightBurst();
+        var total = Stopwatch.StartNew();
+
+        var firstElapsed = RenderFence("alpha_flow_key");
+        Assert.True(
+            firstElapsed > TimeSpan.FromMilliseconds(500),
+            $"first fence returned in {firstElapsed.TotalMilliseconds:0} ms");
+
+        var secondElapsed = RenderFence("beta_flow_key", expectPlain: true);
+        var thirdElapsed = RenderFence("gamma_flow_key", expectPlain: true);
+
+        total.Stop();
+        Assert.True(
+            secondElapsed < TimeSpan.FromMilliseconds(500),
+            $"second fence took {secondElapsed.TotalMilliseconds:0} ms");
+        Assert.True(
+            thirdElapsed < TimeSpan.FromMilliseconds(500),
+            $"third fence took {thirdElapsed.TotalMilliseconds:0} ms");
+        Assert.True(
+            total.Elapsed < TimeSpan.FromSeconds(2),
+            $"three fences took {total.Elapsed.TotalMilliseconds:0} ms");
+    }
+
+    private static TimeSpan RenderFence(string key, bool expectPlain = false)
+    {
+        var body = CatastrophicJsonFor(key);
+        var elapsed = Stopwatch.StartNew();
+        var html = MarkdownRenderer.ToHtml(JsonFence(body)).Value;
+        elapsed.Stop();
+
+        Assert.Contains("<pre><code", html, StringComparison.Ordinal);
+        Assert.Contains(key, html, StringComparison.Ordinal);
+        if (expectPlain)
+            Assert.DoesNotContain("<span", html, StringComparison.Ordinal);
+
+        return elapsed.Elapsed;
+    }
+
     private static string JsonFence(string body) => $"```json\n{body}\n```";
+
+    private static string CatastrophicJsonFor(string key) =>
+        CatastrophicJson.Replace(
+            "netsend_physical_pooled_provision_e2e",
+            key,
+            StringComparison.Ordinal);
 
     /// <summary>
     /// ColorCode's JSON string rule backtracks on this fence (escaped quotes inside a prepare array).

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -12,13 +13,19 @@ internal static class ColorCodeHtml
     internal const int MaxHighlightedChars = 64 * 1024;
 
     private static readonly TimeSpan HighlightTimeout = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan RenderHighlightBudget = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan RenderBurstGap = TimeSpan.FromMilliseconds(50);
 
     // ponytail: StyleDictionary.DefaultDark allocates on every get; HtmlClassFormatter.Writer is
     // instance state, so one formatter + lock (upgrade: per-call formatter if chat volume needs it).
     private static readonly StyleDictionary DarkStyles = StyleDictionary.DefaultDark;
     private static readonly HtmlClassFormatter Formatter = new(DarkStyles);
     private static readonly object FormatterGate = new();
-    private static readonly HashSet<string> TimeoutInstalled = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, CompiledLanguage> CompiledLanguages = new(StringComparer.Ordinal);
+
+    // One render stays on the calling thread. Other circuits must not share its budget.
+    [ThreadStatic] private static TimeSpan _burstSpent;
+    [ThreadStatic] private static long _lastFormatEnd;
 
     // ponytail: exact + prefix failure memory. A streaming fence grows by append, so one timeout
     // suppresses the rest of that fence. Ceiling: a different fence that starts with a remembered
@@ -32,14 +39,36 @@ internal static class ColorCodeHtml
 
         lock (FormatterGate)
         {
-            if (IsKnownHighlightFailure(source))
-                return null;
+            OpenBurstIfIdle();
 
+            if (IsKnownHighlightFailure(source))
+            {
+                _lastFormatEnd = Stopwatch.GetTimestamp();
+                return null;
+            }
+
+            if (_burstSpent >= RenderHighlightBudget)
+            {
+                _lastFormatEnd = Stopwatch.GetTimestamp();
+                return null;
+            }
+
+            var remaining = RenderHighlightBudget - _burstSpent;
+            var matchTimeout = remaining < HighlightTimeout ? remaining : HighlightTimeout;
+            if (matchTimeout < TimeSpan.FromMilliseconds(1))
+            {
+                _lastFormatEnd = Stopwatch.GetTimestamp();
+                return null;
+            }
+
+            var started = Stopwatch.GetTimestamp();
+            var applied = false;
             try
             {
                 // ColorCode 2.0.15 compiles language regexes with an infinite match timeout.
                 // Missing private fields fail closed: do not match unbounded on the circuit.
-                if (!TryEnsureMatchTimeout(language))
+                applied = TryApplyMatchTimeout(language, matchTimeout);
+                if (!applied)
                     return null;
 
                 return Formatter.GetHtmlString(source, language);
@@ -54,14 +83,57 @@ internal static class ColorCodeHtml
             {
                 return null;
             }
+            finally
+            {
+                _burstSpent += Stopwatch.GetElapsedTime(started);
+                _lastFormatEnd = Stopwatch.GetTimestamp();
+                if (applied && matchTimeout != HighlightTimeout)
+                    TryApplyMatchTimeout(language, HighlightTimeout);
+            }
         }
     }
 
-    private static bool TryEnsureMatchTimeout(ILanguage language)
+    /// <summary>Drops leftover burst time so tests do not share a render budget.</summary>
+    internal static void ResetHighlightBurst()
     {
-        if (TimeoutInstalled.Contains(language.Id))
+        lock (FormatterGate)
+        {
+            _burstSpent = TimeSpan.Zero;
+            _lastFormatEnd = 0;
+        }
+    }
+
+    private static void OpenBurstIfIdle()
+    {
+        var now = Stopwatch.GetTimestamp();
+        if (_lastFormatEnd == 0 || Stopwatch.GetElapsedTime(_lastFormatEnd, now) > RenderBurstGap)
+            _burstSpent = TimeSpan.Zero;
+    }
+
+    private static bool TryApplyMatchTimeout(ILanguage language, TimeSpan timeout)
+    {
+        if (!CompiledLanguages.TryGetValue(language.Id, out var compiled))
+        {
+            compiled = CompileLanguage(language);
+            if (compiled is null)
+                return false;
+
+            CompiledLanguages[language.Id] = compiled;
+        }
+
+        var regex = compiled.Regex;
+        if (regex is null)
+            return false;
+
+        if (regex.MatchTimeout == timeout)
             return true;
 
+        compiled.Regex = new Regex(regex.ToString(), regex.Options, timeout);
+        return compiled.Regex.MatchTimeout == timeout;
+    }
+
+    private static CompiledLanguage? CompileLanguage(ILanguage language)
+    {
         var parser = typeof(HtmlClassFormatter).GetField(
             "languageParser",
             BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(Formatter);
@@ -69,25 +141,9 @@ internal static class ColorCodeHtml
             "languageCompiler",
             BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(parser);
         if (compiler is not ILanguageCompiler languageCompiler)
-            return false;
+            return null;
 
-        var compiled = languageCompiler.Compile(language);
-        var regex = compiled.Regex;
-        if (regex.MatchTimeout == HighlightTimeout)
-        {
-            TimeoutInstalled.Add(language.Id);
-            return true;
-        }
-
-        if (regex.MatchTimeout != Regex.InfiniteMatchTimeout)
-            return false;
-
-        compiled.Regex = new Regex(regex.ToString(), regex.Options, HighlightTimeout);
-        if (compiled.Regex.MatchTimeout != HighlightTimeout)
-            return false;
-
-        TimeoutInstalled.Add(language.Id);
-        return true;
+        return languageCompiler.Compile(language);
     }
 
     private static bool IsKnownHighlightFailure(string source)
