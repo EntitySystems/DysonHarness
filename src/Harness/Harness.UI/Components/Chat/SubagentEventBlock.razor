@@ -98,6 +98,12 @@
         catch (InvalidOperationException)
         {
         }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     private static string ShortId(Guid id) => id.ToString("N")[..8];

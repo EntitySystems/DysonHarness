@@ -710,6 +710,9 @@
         catch (JSDisconnectedException)
         {
         }
+        catch (OperationCanceledException)
+        {
+        }
 
         _chatLinksRef?.Dispose();
         _chatLinksRef = null;

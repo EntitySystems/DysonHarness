@@ -987,6 +987,12 @@
         catch (InvalidOperationException)
         {
         }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     [JSInvokable]
@@ -1011,6 +1017,12 @@
         {
         }
         catch (InvalidOperationException)
+        {
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (OperationCanceledException)
         {
         }
     }

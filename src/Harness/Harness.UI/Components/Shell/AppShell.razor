@@ -174,8 +174,10 @@
         {
             try { await _viewport.InvokeVoidAsync("dispose"); }
             catch (JSDisconnectedException) { /* circuit gone */ }
+            catch (OperationCanceledException) { /* circuit gone */ }
             try { await _viewport.DisposeAsync(); }
             catch (JSDisconnectedException) { /* circuit gone */ }
+            catch (OperationCanceledException) { /* circuit gone */ }
             _viewport = null;
         }
 
