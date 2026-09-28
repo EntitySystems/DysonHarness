@@ -101,6 +101,12 @@ public sealed class DysonAgentTurn
     /// </summary>
     public Guid? VisualizationId { get; set; }
 
+    /// <summary>
+    /// Question card on a DisplayInfo bubble. Null on every other turn.
+    /// Answer is stored on the same object; a non-null answer locks the card.
+    /// </summary>
+    public DysonUserQuestion? UserQuestion { get; set; }
+
     /// <summary>UTC when this turn began (live create or restored from persistence).</summary>
     public DateTime StartedUtc { get; set; }
 

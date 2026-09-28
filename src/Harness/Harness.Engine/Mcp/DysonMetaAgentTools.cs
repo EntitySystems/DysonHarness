@@ -45,6 +45,7 @@ public static class DysonMetaAgentTools
         "LoadSkill",
         "MessageMetaAgentDrone",
         "PostConversationMessage",
+        "PostUserQuestion",
         "ReadMetaAgentDroneLog",
         "ReadTempFile",
         "RemoveTodos",
@@ -380,6 +381,7 @@ public static class DysonMetaAgentTools
             Name = "PostConversationMessage",
             Description =
                 "Post markdown the user should see in the meta conversation. " +
+                "Do not use this to ask the user a question. A question goes through PostUserQuestion, with a custom message. " +
                 "Assistant text is not shown; use this for everything the user should see. " +
                 "Optional actions add buttons { name, func } where func is one string. " +
                 "open_plan:{planId}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. " +
@@ -412,6 +414,54 @@ public static class DysonMetaAgentTools
                     }
                   },
                   "required": ["message"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "PostUserQuestion",
+            Description =
+                "Post a question card inside a meta-chat bubble. " +
+                "When asking the user a question, do not use PostConversationMessage; use PostUserQuestion instead, with a custom message. " +
+                "Does not block and does not end the turn. " +
+                "The answer comes back later as a user turn.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string", "description": "Markdown bubble body. Required so the bubble is not dropped." },
+                    "question": { "type": "string", "description": "Card title. Not the bubble body." },
+                    "choices": {
+                      "type": "array",
+                      "minItems": 2,
+                      "maxItems": 12,
+                      "description": "Choices the user can pick. At least 2, at most 12. Each entry is a non-empty unique string.",
+                      "items": { "type": "string" }
+                    },
+                    "multiSelect": {
+                      "type": "boolean",
+                      "description": "When true, more than one choice may apply. Default false."
+                    },
+                    "allowCustomAnswer": {
+                      "type": "boolean",
+                      "description": "When true, the user may type a custom answer. Default true."
+                    },
+                    "actions": {
+                      "type": "array",
+                      "maxItems": 8,
+                      "description": "Optional buttons. func is one string. open_plan:{planId}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. Not run until the user clicks. When the message names a plan, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. Omit or [] for no buttons.",
+                      "items": {
+                        "type": "object",
+                        "required": ["name", "func"],
+                        "properties": {
+                          "name": { "type": "string", "description": "Button label." },
+                          "func": { "type": "string", "description": "Lookup key. Not source code." }
+                        }
+                      }
+                    }
+                  },
+                  "required": ["message", "question", "choices"]
                 }
                 """,
         };

@@ -49,6 +49,7 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `UserImagesJson` | User-attached composer images this turn; JSON array of `DysonBinaryAttachment` fields (no `FileId`; includes `base64Data` for thumbs plus optional `remoteUrl` / `objectKey` / `remoteUrlExpiresUtc`). Re-emitted as multimodal Completions/Responses parts on restore |
 | `ToolStateJson` | Full snapshot of tool calls + results (restore fidelity). Visualization bodies stay here on the render turn |
 | `VisualizationId` | `Guid?`. Set only on a meta `DisplayInfo` post. Null otherwise. The viz body stays in `ToolStateJson` |
+| `UserQuestionJson` | string?. Meta `DisplayInfo` question card (question and answer in one JSON blob). Null on every other turn. `answeredUtc` inside the blob is UTC `DateTime`, not its own column |
 | `ToolHistoryOptimized` | bool |
 | `CompactToolHistory` | string? |
 | `CreatedUtc`, `CompletedUtc`? | `DateTime` UTC |

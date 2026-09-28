@@ -98,6 +98,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "MessageMetaAgentDrone" => await MessageMetaAgentDroneAsync(call, cancellationToken).ConfigureAwait(false),
                 "DeleteMetaAgent" => await DeleteMetaAgentAsync(call, cancellationToken).ConfigureAwait(false),
                 "PostConversationMessage" => PostConversationMessage(call),
+                "PostUserQuestion" => PostUserQuestion(call),
                 "CompactConversation" => CompactConversation(call),
                 "RemoveTodos" => await RemoveTodosAsync(call, cancellationToken).ConfigureAwait(false),
                 "ListPlans" => await ListPlansAsync(call, cancellationToken).ConfigureAwait(false),

@@ -33,10 +33,14 @@ public class DysonMetaAgentDirectiveTests
         MustNotContain(text, ".dyson/scratch", "Meta Agent ForMode");
         // The meta page renders posted messages only; prose-only turns show the user nothing.
         // Pinned so the one instruction standing between the agent and a blank screen is not softened away.
-        MustContain(text, "PostConversationMessage is your only voice", "Meta Agent ForMode");
+        MustContain(text, "PostConversationMessage is your voice for status, results, and anything that is not a question", "Meta Agent ForMode");
         MustContain(
             text,
-            "Conversation actions are required whenever a posted message names something the user would open. When you PostConversationMessage and the message names a plan, a workspace file, or an http(s) URL the user would reasonably want to open, attach one action per target. Do this on status updates, questions, and results — not only when a plan is first submitted. A message may carry several actions, up to 8 (the tool maximum; do not ask for more). name is a short human label; func is one of these built-in keys and needs no RegisterConversationAction call: open_plan:{planId} opens that plan, open_file:{path} opens a work-relative file, and open_url:{url} opens an http or https link. Do not attach actions for data that is not a plan id, a workspace file, or an http(s) URL. Do not invent func keys.",
+            "A question to the user goes through PostUserQuestion, not PostConversationMessage. Give choices when the options are known, and set multiSelect when more than one can apply.",
+            "Meta Agent ForMode");
+        MustContain(
+            text,
+            "Conversation actions are required whenever a posted message names something the user would open. When you PostConversationMessage or PostUserQuestion and the message names a plan, a workspace file, or an http(s) URL the user would reasonably want to open, attach one action per target. Do this on status updates, questions, and results — not only when a plan is first submitted. A message may carry several actions, up to 8 (the tool maximum; do not ask for more). name is a short human label; func is one of these built-in keys and needs no RegisterConversationAction call: open_plan:{planId} opens that plan, open_file:{path} opens a work-relative file, and open_url:{url} opens an http or https link. Do not attach actions for data that is not a plan id, a workspace file, or an http(s) URL. Do not invent func keys.",
             "Meta Agent ForMode");
         MustContain(text, "visualizationId", "Meta Agent ForMode");
         MustContain(text, "WriteTempFile", "Meta Agent ForMode");
@@ -47,7 +51,7 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "blocked inside TriggerParentEvent", "Meta Agent ForMode");
         MustContain(
             text,
-            "a parent-event continuation is mandatory. Before that turn ends, call RespondToSubagentEvent unless this is a question only the user can answer. Status (what landed, what is next): ack the same turn and PostConversationMessage that status. A question you already know: answer the same turn; do not ask the user. A question only the user can decide: PostConversationMessage the question, do not respond yet, keep subagentId and eventId; the next user message will carry the same event; then RespondToSubagentEvent with their answer. Do not start another drone for the same question. Do not end a status turn without the ack.",
+            "a parent-event continuation is mandatory. Before that turn ends, call RespondToSubagentEvent unless this is a question only the user can answer. Status (what landed, what is next): ack the same turn and PostConversationMessage that status. A question you already know: answer the same turn; do not ask the user. A question only the user can decide: PostUserQuestion the question, do not respond yet, keep subagentId and eventId; the answer arrives on the next user turn and carries the same event; then RespondToSubagentEvent with their answer. Do not start another drone for the same question. Do not end a status turn without the ack.",
             "Meta Agent ForMode");
         MustContain(text, "Do not mention the continuation", "Meta Agent ForMode");
         MustNotContain(text, "reports failed with the question", "Meta Agent ForMode");

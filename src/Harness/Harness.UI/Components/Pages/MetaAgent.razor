@@ -85,6 +85,7 @@
                                           SessionBusy="IsMetaFocused && Host.IsBusy"
                                           OnRemoveQueued="RemoveQueuedAsync"
                                           OnConversationAction="OnConversationActionAsync"
+                                          OnUserQuestion="OnUserQuestionAsync"
                                           OnOpenVisualization="OpenFocusedVisualization" />
                         </div>
 
@@ -649,6 +650,16 @@
     {
         var result = await Host.InvokeMetaConversationActionAsync(click.TurnId, click.Index);
         _chatFeed?.NoteConversationActionResult(click.TurnId, result);
+    }
+
+    private async Task OnUserQuestionAsync(MetaChatQuestionSubmit submit)
+    {
+        var result = await Host.SubmitMetaUserQuestionAnswerAsync(
+            submit.QuestionId,
+            submit.Selected,
+            submit.CustomText);
+        if (result.IsError)
+            _chatFeed?.NoteUserQuestionError(submit.QuestionId, result.Error);
     }
 
     private void ToggleTasks() => _tasksOpen = !_tasksOpen;

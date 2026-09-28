@@ -53,6 +53,11 @@ public sealed class DysonTurnEntity
     /// </summary>
     public Guid? VisualizationId { get; set; }
 
+    /// <summary>
+    /// Meta DisplayInfo question card (question and answer in one JSON blob). Null on every other turn.
+    /// </summary>
+    public string? UserQuestionJson { get; set; }
+
     public string ToolStateJson { get; set; } = "{}";
     public bool ToolHistoryOptimized { get; set; }
     public string? CompactToolHistory { get; set; }

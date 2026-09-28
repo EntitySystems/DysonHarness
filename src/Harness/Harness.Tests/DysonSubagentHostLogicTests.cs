@@ -295,11 +295,14 @@ public class DysonSubagentHostLogicTests
             throw new InvalidOperationException("Meta Agent continuation must be stable across calls.");
 
         if (!meta.Contains("PostConversationMessage the status", StringComparison.Ordinal)
+            || !meta.Contains("PostUserQuestion the question", StringComparison.Ordinal)
+            || !meta.Contains("The answer arrives on the next user turn", StringComparison.Ordinal)
             || !meta.Contains("only the user can decide", StringComparison.Ordinal)
             || !meta.Contains("Do not start another drone", StringComparison.Ordinal)
             || !meta.Contains("RespondToSubagentEvent(subagentId, eventId, reply)", StringComparison.Ordinal)
             || !meta.Contains("subagentId: 3", StringComparison.Ordinal)
             || !meta.Contains("eventId: 11111111-2222-3333-4444-555555555555", StringComparison.Ordinal)
+            || meta.Contains("PostConversationMessage the question", StringComparison.Ordinal)
             || meta.Contains("TriggerParentEvent", StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Meta Agent continuation missing reply contract.");
@@ -315,7 +318,8 @@ public class DysonSubagentHostLogicTests
             || !drone.Contains("subagentId: 3", StringComparison.Ordinal)
             || !drone.Contains("eventId: 11111111-2222-3333-4444-555555555555", StringComparison.Ordinal)
             || drone.Contains("PostConversationMessage the status", StringComparison.Ordinal)
-            || drone.Contains("PostConversationMessage the question", StringComparison.Ordinal))
+            || drone.Contains("PostConversationMessage the question", StringComparison.Ordinal)
+            || drone.Contains("PostUserQuestion the question", StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Meta Agent Drone continuation missing reply contract.");
         }
@@ -328,6 +332,7 @@ public class DysonSubagentHostLogicTests
             || !work.Contains("subagentId: 3", StringComparison.Ordinal)
             || !work.Contains("eventId: 11111111-2222-3333-4444-555555555555", StringComparison.Ordinal)
             || work.Contains("PostConversationMessage", StringComparison.Ordinal)
+            || work.Contains("PostUserQuestion", StringComparison.Ordinal)
             || work.Contains("TriggerParentEvent", StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Work continuation must stay generic.");

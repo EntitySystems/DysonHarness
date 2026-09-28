@@ -114,7 +114,7 @@ public static class DysonSubagentHostLogic
                 Call RespondToSubagentEvent before this turn ends, unless only the user can decide.
                 Status (what landed, what is next): ack on this same turn and PostConversationMessage the status.
                 A question you already know: answer on this same turn.
-                A question only the user can decide: PostConversationMessage the question, do not respond yet, keep this subagentId and eventId, and RespondToSubagentEvent when the user answers. Do not start another drone for the same question.
+                A question only the user can decide: PostUserQuestion the question, do not respond yet, keep this subagentId and eventId, and RespondToSubagentEvent when the user answers. The answer arrives on the next user turn. Do not start another drone for the same question.
                 Example: RespondToSubagentEvent(subagentId, eventId, reply)
                 """;
         }
