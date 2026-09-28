@@ -275,32 +275,24 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        try
+        var attached = _attached;
+        if (!_attached && await DysonCircuitJs.InvokeVoidAsync(Js, "dysonChat.attach", _turnsEl) is null)
         {
-            if (!_attached)
-            {
-                await Js.InvokeVoidAsync("dysonChat.attach", _turnsEl);
-                _attached = true;
-            }
-
-            if (_forceStick)
-            {
-                _forceStick = false;
-                await Js.InvokeVoidAsync("dysonChat.setStick", _turnsEl, true);
-            }
-
-            if (_renderVersion != _lastScrolledRenderVersion)
-            {
-                _lastScrolledRenderVersion = _renderVersion;
-                // JS owns stick; no-op when user has scrolled away.
-                await Js.InvokeVoidAsync("dysonChat.scrollToBottom", _turnsEl);
-            }
+            _attached = true;
+            attached = true;
         }
-        catch (JSException)
+
+        if (attached && _forceStick)
         {
+            _forceStick = false;
+            await DysonCircuitJs.InvokeVoidAsync(Js, "dysonChat.setStick", _turnsEl, true);
         }
-        catch (InvalidOperationException)
+
+        if (attached && _renderVersion != _lastScrolledRenderVersion)
         {
+            _lastScrolledRenderVersion = _renderVersion;
+            // JS owns stick; no-op when user has scrolled away.
+            await DysonCircuitJs.InvokeVoidAsync(Js, "dysonChat.scrollToBottom", _turnsEl);
         }
 
         // Scroll first (above), fade second: scrollToBottom reads scrollHeight synchronously, and

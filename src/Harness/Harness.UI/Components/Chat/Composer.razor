@@ -379,35 +379,15 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!_textareaBound)
-        {
-            try
-            {
-                await Js.InvokeVoidAsync("dysonComposer.attachSlashGuard", _textarea);
-                _textareaBound = true;
-            }
-            catch (JSException)
-            {
-            }
-            catch (InvalidOperationException)
-            {
-            }
-        }
+        if (!_textareaBound
+            && await DysonCircuitJs.InvokeVoidAsync(Js, "dysonComposer.attachSlashGuard", _textarea) is null)
+            _textareaBound = true;
 
         if (!_imageCaptureBound)
         {
-            try
-            {
-                _dotNetRef ??= DotNetObjectReference.Create(this);
-                await Js.InvokeVoidAsync("dysonComposer.attachImageCapture", _shell, _dotNetRef);
+            _dotNetRef ??= DotNetObjectReference.Create(this);
+            if (await DysonCircuitJs.InvokeVoidAsync(Js, "dysonComposer.attachImageCapture", _shell, _dotNetRef) is null)
                 _imageCaptureBound = true;
-            }
-            catch (JSException)
-            {
-            }
-            catch (InvalidOperationException)
-            {
-            }
         }
     }
 
@@ -754,19 +734,8 @@
         _highlight = 0;
     }
 
-    private async Task OpenFilePickerAsync()
-    {
-        try
-        {
-            await Js.InvokeVoidAsync("dysonComposer.openFileInput", _shell);
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-        }
-    }
+    private Task OpenFilePickerAsync() =>
+        DysonCircuitJs.InvokeVoidAsync(Js, "dysonComposer.openFileInput", _shell).AsTask();
 
     private Task OpenPendingFileAsync(string path) => Host.OpenFileViewerAsync(path);
 
@@ -878,7 +847,16 @@
     public void OpenHelp() => _helpModal?.Open();
 
     /// <summary>Focuses the prompt textarea (empty-state CTAs).</summary>
-    public ValueTask FocusPromptAsync() => _textarea.FocusAsync();
+    public async ValueTask FocusPromptAsync()
+    {
+        try
+        {
+            await _textarea.FocusAsync();
+        }
+        catch (Exception ex) when (DysonCircuitJs.IsBenign(ex))
+        {
+        }
+    }
 
     public async ValueTask DisposeAsync()
     {
@@ -886,24 +864,7 @@
         _hostSub = null;
         DisposeParentEvents();
         if (_imageCaptureBound)
-        {
-            try
-            {
-                await Js.InvokeVoidAsync("dysonComposer.detachImageCapture", _shell);
-            }
-            catch (JSException)
-            {
-            }
-            catch (InvalidOperationException)
-            {
-            }
-            catch (JSDisconnectedException)
-            {
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        }
+            await DysonCircuitJs.InvokeVoidAsync(Js, "dysonComposer.detachImageCapture", _shell);
 
         _dotNetRef?.Dispose();
         _dotNetRef = null;

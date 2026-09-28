@@ -18,7 +18,6 @@
 @inject ThemeService Theme
 @inject IJSRuntime Js
 @inject ILogger<Home> Logger
-@inject NavigationManager Nav
 
 <AppShell>
     <Sidebar>
@@ -231,7 +230,12 @@
     {
         try
         {
-            await Js.InvokeAsync<bool>("dysonBoot.waitUntilResponsive", ClientReadyMaxWaitMs);
+            await DysonCircuitJs.InvokeAsync<bool>(
+                Js,
+                "dysonBoot.waitUntilResponsive",
+                TimeSpan.FromMilliseconds(ClientReadyMaxWaitMs),
+                CancellationToken.None,
+                ClientReadyMaxWaitMs);
         }
         catch (Exception)
         {
@@ -242,45 +246,27 @@
     private async Task InstallChatExternalLinksAsync()
     {
         _chatLinksRef ??= DotNetObjectReference.Create(Host);
-        try
-        {
-            await Js.InvokeVoidAsync("dysonChatLinks.install", _chatLinksRef);
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-        }
+        await DysonCircuitJs.InvokeVoidAsync(Js, "dysonChatLinks.install", _chatLinksRef);
     }
 
     private async Task HydrateWorkDirectoryAsync()
     {
-        try
+        var stored = await DysonCircuitJs.InvokeAsync<string?>(Js, "dysonWorkdir.get");
+        if (!string.IsNullOrWhiteSpace(stored) && Guid.TryParse(stored, out var id))
         {
-            var stored = await Js.InvokeAsync<string?>("dysonWorkdir.get");
-            if (!string.IsNullOrWhiteSpace(stored) && Guid.TryParse(stored, out var id))
+            var get = await WorkDirs.GetAsync(id);
+            if (get.IsSuccess)
             {
-                var get = await WorkDirs.GetAsync(id);
-                if (get.IsSuccess)
-                {
-                    _activeWorkDirectoryId = id;
-                    _registeredWorkDirectoryPath = get.Value.AbsolutePath;
-                    Host.SetComposerWorkDirectoryId(id);
-                    _pendingBootWorkDirectoryId = id;
-                    _pendingBootWorkDirectoryPath = get.Value.AbsolutePath;
-                    await ApplyOperatorWorkspaceAsync();
-                    await RefreshSessionsAsync();
-                    StateHasChanged();
-                    return;
-                }
+                _activeWorkDirectoryId = id;
+                _registeredWorkDirectoryPath = get.Value.AbsolutePath;
+                Host.SetComposerWorkDirectoryId(id);
+                _pendingBootWorkDirectoryId = id;
+                _pendingBootWorkDirectoryPath = get.Value.AbsolutePath;
+                await ApplyOperatorWorkspaceAsync();
+                await RefreshSessionsAsync();
+                StateHasChanged();
+                return;
             }
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
         }
 
         var list = await WorkDirs.ListAsync();
@@ -531,19 +517,8 @@
         _gitBranch = branch.IsSuccess ? branch.Value : null;
     }
 
-    private async Task PersistWorkDirectoryAsync(Guid? id)
-    {
-        try
-        {
-            await Js.InvokeVoidAsync("dysonWorkdir.set", id?.ToString());
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-        }
-    }
+    private Task PersistWorkDirectoryAsync(Guid? id) =>
+        DysonCircuitJs.InvokeVoidAsync(Js, "dysonWorkdir.set", id?.ToString()).AsTask();
 
     private async Task RefreshSessionsAsync()
     {
@@ -609,7 +584,7 @@
             _activeTitle = null;
     }
 
-    private void OpenMetaAgentMode()
+    private async Task OpenMetaAgentMode()
     {
         if (_activeWorkDirectoryId is not Guid id)
         {
@@ -617,7 +592,7 @@
             return;
         }
 
-        Nav.NavigateTo($"/meta/{id}");
+        await DysonCircuitJs.NavigateAsync(Js, $"/meta/{id}");
     }
 
     private async Task StartNewAsync()
@@ -697,22 +672,7 @@
         _hostSub?.Dispose();
         _hostSub = null;
         Theme.Changed -= OnThemeChanged;
-        try
-        {
-            await Js.InvokeVoidAsync("dysonChatLinks.uninstall");
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-        }
-        catch (JSDisconnectedException)
-        {
-        }
-        catch (OperationCanceledException)
-        {
-        }
+        await DysonCircuitJs.InvokeVoidAsync(Js, "dysonChatLinks.uninstall");
 
         _chatLinksRef?.Dispose();
         _chatLinksRef = null;

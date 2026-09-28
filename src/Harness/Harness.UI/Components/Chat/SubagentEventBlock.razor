@@ -69,17 +69,8 @@
         if (_stickyAttached)
             return;
 
-        try
-        {
-            await Js.InvokeVoidAsync("dysonStickyHeader.attach", _stickySentinel, _headerEl);
+        if (await DysonCircuitJs.InvokeVoidAsync(Js, "dysonStickyHeader.attach", _stickySentinel, _headerEl) is null)
             _stickyAttached = true;
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-        }
     }
 
     public async ValueTask DisposeAsync()
@@ -88,22 +79,7 @@
             return;
 
         _stickyAttached = false;
-        try
-        {
-            await Js.InvokeVoidAsync("dysonStickyHeader.detach", _headerEl);
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-        }
-        catch (JSDisconnectedException)
-        {
-        }
-        catch (OperationCanceledException)
-        {
-        }
+        await DysonCircuitJs.InvokeVoidAsync(Js, "dysonStickyHeader.detach", _headerEl);
     }
 
     private static string ShortId(Guid id) => id.ToString("N")[..8];

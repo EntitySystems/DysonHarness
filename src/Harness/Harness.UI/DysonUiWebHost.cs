@@ -182,6 +182,8 @@ public static class DysonUiWebHost
         builder.Services.Configure<Microsoft.AspNetCore.Components.Server.CircuitOptions>(o =>
         {
             o.DetailedErrors = hostingMode != DysonHostingMode.Cloud;
+            // Framework calls we do not own (hash scroll) must not pin the circuit for a minute.
+            o.JSInteropDefaultCallTimeout = DysonCircuitJs.Timeout;
         });
 
         var app = builder.Build();

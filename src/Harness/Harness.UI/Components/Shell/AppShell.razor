@@ -72,25 +72,17 @@
         if (!firstRender || _hydrated)
             return;
 
-        try
-        {
-            _narrow = await Js.InvokeAsync<bool>("dysonUi.isNarrow", NarrowBreakpointPx);
-            await LoadChromePrefsAsync();
-            // Desktop: restore saved rail. Narrow: closed drawer (avoid overlay flash).
-            _railOpen = _narrow ? false : _savedRailOpen;
-            _selfRef = DotNetObjectReference.Create(this);
-            _viewport = await Js.InvokeAsync<IJSObjectReference>(
-                "dysonUi.watchNarrow",
-                NarrowBreakpointPx,
-                _selfRef);
-        }
-        catch (JSException)
-        {
-            // Keep desktop-expanded defaults if JS is unavailable.
-            _narrow = false;
-            await LoadChromePrefsAsync();
-            _railOpen = _savedRailOpen;
-        }
+        _narrow = await DysonCircuitJs.InvokeAsync<bool>(Js, "dysonUi.isNarrow", NarrowBreakpointPx);
+        await LoadChromePrefsAsync();
+        // Desktop: restore saved rail. Narrow: closed drawer (avoid overlay flash).
+        // A failed measure returns false, which is the desktop default.
+        _railOpen = _narrow ? false : _savedRailOpen;
+        _selfRef = DotNetObjectReference.Create(this);
+        _viewport = await DysonCircuitJs.InvokeAsync<IJSObjectReference>(
+            Js,
+            "dysonUi.watchNarrow",
+            NarrowBreakpointPx,
+            _selfRef);
 
         _hydrated = true;
         await InvokeAsync(StateHasChanged);
@@ -172,12 +164,15 @@
     {
         if (_viewport is not null)
         {
-            try { await _viewport.InvokeVoidAsync("dispose"); }
-            catch (JSDisconnectedException) { /* circuit gone */ }
-            catch (OperationCanceledException) { /* circuit gone */ }
-            try { await _viewport.DisposeAsync(); }
-            catch (JSDisconnectedException) { /* circuit gone */ }
-            catch (OperationCanceledException) { /* circuit gone */ }
+            await DysonCircuitJs.InvokeVoidAsync(_viewport, "dispose");
+            try
+            {
+                await _viewport.DisposeAsync();
+            }
+            catch (Exception ex) when (DysonCircuitJs.IsBenign(ex))
+            {
+            }
+
             _viewport = null;
         }
 

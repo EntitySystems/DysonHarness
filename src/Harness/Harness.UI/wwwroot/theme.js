@@ -142,6 +142,16 @@ window.dysonBoot = {
   }
 };
 
+// Called after blazor.web.js. Client navigateTo never enters server NavigateToCore,
+// so a canceled interop cannot tear the circuit down.
+window.dysonNav = {
+  go: function (uri, replace) {
+    if (!window.Blazor || typeof Blazor.navigateTo !== "function")
+      return;
+    Blazor.navigateTo(uri, { forceLoad: false, replaceHistoryEntry: !!replace });
+  }
+};
+
 /** Prevent textarea default for overlay nav keys while data-slash-open is set. */
 window.dysonComposer = {
   attachSlashGuard: function (el) {

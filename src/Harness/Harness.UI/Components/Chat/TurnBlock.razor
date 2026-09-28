@@ -888,10 +888,7 @@
             {
                 await _injectInput.FocusAsync();
             }
-            catch (JSException)
-            {
-            }
-            catch (InvalidOperationException)
+            catch (Exception ex) when (DysonCircuitJs.IsBenign(ex))
             {
             }
         }
@@ -906,18 +903,9 @@
         if (_resizerAttached)
             return;
 
-        try
-        {
-            _dotNetRef ??= DotNetObjectReference.Create(this);
-            await Js.InvokeVoidAsync("dysonToolsCol.attach", _resizerEl, _contentEl, _dotNetRef);
+        _dotNetRef ??= DotNetObjectReference.Create(this);
+        if (await DysonCircuitJs.InvokeVoidAsync(Js, "dysonToolsCol.attach", _resizerEl, _contentEl, _dotNetRef) is null)
             _resizerAttached = true;
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-        }
     }
 
     /// <summary>
@@ -931,25 +919,19 @@
         if (_streamTextUnavailable)
             return;
 
-        try
-        {
-            if (ShowsAssistantStream)
-                await Js.InvokeVoidAsync("dysonStreamText.paint", _streamEl, Turn.StreamingPreview);
+        Exception? failure = null;
+        if (ShowsAssistantStream)
+            failure = await DysonCircuitJs.InvokeVoidAsync(Js, "dysonStreamText.paint", _streamEl, Turn.StreamingPreview);
 
-            if (ShowsReasoningStream)
-                await Js.InvokeVoidAsync("dysonStreamText.paint", _reasoningStreamEl, Turn.ReasoningStreamingPreview);
-        }
-        catch (JSException)
+        if (failure is not JSException && ShowsReasoningStream)
+            failure = await DysonCircuitJs.InvokeVoidAsync(Js, "dysonStreamText.paint", _reasoningStreamEl, Turn.ReasoningStreamingPreview);
+
+        if (failure is JSException)
         {
+            // Module never loaded. Plain text still shows; only the per-chunk fade is lost.
+            // Cancel / prerender stay on the JS path so a later render can retry.
             _streamTextUnavailable = true;
             StateHasChanged();
-        }
-        catch (JSDisconnectedException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-            // Prerender: interop is unavailable, not broken. Keep the JS-owned path.
         }
     }
 
@@ -958,17 +940,8 @@
         if (_stickyAttached)
             return;
 
-        try
-        {
-            await Js.InvokeVoidAsync("dysonStickyHeader.attach", _stickySentinel, _headerEl);
+        if (await DysonCircuitJs.InvokeVoidAsync(Js, "dysonStickyHeader.attach", _stickySentinel, _headerEl) is null)
             _stickyAttached = true;
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-        }
     }
 
     private async Task DetachStickyHeaderAsync()
@@ -977,22 +950,7 @@
             return;
 
         _stickyAttached = false;
-        try
-        {
-            await Js.InvokeVoidAsync("dysonStickyHeader.detach", _headerEl);
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-        }
-        catch (JSDisconnectedException)
-        {
-        }
-        catch (OperationCanceledException)
-        {
-        }
+        await DysonCircuitJs.InvokeVoidAsync(Js, "dysonStickyHeader.detach", _headerEl);
     }
 
     [JSInvokable]
@@ -1009,22 +967,7 @@
             return;
 
         _resizerAttached = false;
-        try
-        {
-            await Js.InvokeVoidAsync("dysonToolsCol.detach", _resizerEl);
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-        }
-        catch (JSDisconnectedException)
-        {
-        }
-        catch (OperationCanceledException)
-        {
-        }
+        await DysonCircuitJs.InvokeVoidAsync(Js, "dysonToolsCol.detach", _resizerEl);
     }
 
     public async ValueTask DisposeAsync()
