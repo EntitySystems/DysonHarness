@@ -1,41 +1,40 @@
-@namespace Harness.UI.Components.Chat
-@using DysonHarness
+@namespace Harness.UI.Components.Meta
+@using Harness.UI.Components.Chat
 @using Harness.UI.Demo
 @implements IDisposable
 @inject DysonUiHost Host
 @inject DysonMessageBus Bus
 
-@if (PersistenceId != Guid.Empty)
+@if (_state is not null)
 {
-    var icon = ResolveModeIcon(_state?.AgentMode);
+    var icon = SubagentCard.ResolveModeIcon(_state.AgentMode);
+    var title = string.IsNullOrWhiteSpace(_state.Title) ? "Subagent" : _state.Title;
+    var statusText = DysonSubagentHostLogic.NestedStatusText(_state.LatestTurnStepTitle, _state.Status);
+    var showModel = DysonSubagentHostLogic.ShowNestedModelLabel(_state.ModelLabel, ParentModelLabel);
     <button type="button"
-            class="subagent-card"
-            title="@CardAccessibleName"
-            aria-label="@CardAccessibleName"
+            class="meta-child-row"
+            title="@AccessibleName"
+            aria-label="@AccessibleName"
             @onclick="NavigateAsync">
-        <span class="subagent-card__icon @icon.ColorClass"
+        <span class="meta-child-row__icon @icon.ColorClass"
               style="--subagent-mode-icon: url('@icon.Url')"
               aria-hidden="true"></span>
-        <div class="subagent-card__text">
-            <div class="subagent-card__title">
-                <span class="subagent-card__name">@(_state?.Title ?? "Subagent")</span>
-                @if (_state is { RuntimeId: > 0 })
-                {
-                    <span class="subagent-card__id mono">#@_state.RuntimeId</span>
-                }
-                @if (!string.IsNullOrWhiteSpace(_state?.LatestTurnStepTitle))
-                {
-                    <span class="subagent-card__step">@_state.LatestTurnStepTitle</span>
-                }
-            </div>
-            @if (!string.IsNullOrWhiteSpace(_state?.ModelLabel))
-            {
-                <div class="subagent-card__model">@_state.ModelLabel</div>
-            }
-        </div>
-        @if (_state?.IsRunning == true)
+        <span class="meta-child-row__name">@title</span>
+        @if (_state.RuntimeId > 0)
         {
-            <span class="subagent-card__spinner" aria-hidden="true"></span>
+            <span class="meta-child-row__id mono">#@_state.RuntimeId</span>
+        }
+        @if (statusText is not null)
+        {
+            <span class="meta-child-row__step">@statusText</span>
+        }
+        @if (showModel)
+        {
+            <span class="meta-child-row__model">@_state.ModelLabel</span>
+        }
+        @if (_state.IsRunning)
+        {
+            <span class="subagent-card__spinner meta-child-row__spinner" aria-hidden="true"></span>
         }
     </button>
 }
@@ -43,35 +42,48 @@
 @code {
     [Parameter, EditorRequired] public Guid PersistenceId { get; set; }
 
-    /// <summary>Invoked after a successful navigate (e.g. close a parent modal).</summary>
+    [Parameter] public string? ParentModelLabel { get; set; }
+
     [Parameter] public EventCallback AfterNavigate { get; set; }
 
     private DysonSubagentCardState? _state;
     private Guid? _boundPersistenceId;
     private IDisposable? _sub;
 
-    private string CardAccessibleName
+    private string AccessibleName
     {
         get
         {
             var name = string.IsNullOrWhiteSpace(_state?.Title) ? "Subagent" : _state.Title.Trim();
             if (_state is { RuntimeId: > 0 })
                 name += $" #{_state.RuntimeId}";
-            if (!string.IsNullOrWhiteSpace(_state?.LatestTurnStepTitle))
-                name += $" {_state.LatestTurnStepTitle.Trim()}";
+            if (_state is not null)
+            {
+                var status = DysonSubagentHostLogic.NestedStatusText(_state.LatestTurnStepTitle, _state.Status);
+                if (!string.IsNullOrWhiteSpace(status))
+                    name += $" {status}";
+            }
+
+            if (_state is not null
+                && DysonSubagentHostLogic.ShowNestedModelLabel(_state.ModelLabel, ParentModelLabel))
+            {
+                name += $" {_state.ModelLabel!.Trim()}";
+            }
+
             return name;
         }
     }
 
     protected override void OnParametersSet()
     {
-        if (PersistenceId == _boundPersistenceId)
-            return;
+        if (PersistenceId != _boundPersistenceId)
+        {
+            DisposeSubscriptions();
+            _boundPersistenceId = PersistenceId;
+            SubscribeIfNeeded();
+        }
 
-        DisposeSubscriptions();
-        _boundPersistenceId = PersistenceId;
         RefreshState();
-        SubscribeIfNeeded();
     }
 
     private void RefreshState() =>
@@ -155,29 +167,6 @@
 
         await Host.NavigateToSessionAsync(PersistenceId);
         await AfterNavigate.InvokeAsync();
-    }
-
-    internal static (string Url, string ColorClass) ResolveModeIcon(string? agentMode)
-    {
-        if (string.IsNullOrWhiteSpace(agentMode))
-            return ("icons/agent-modes/custom.svg", "subagent-card__icon--other");
-
-        if (string.Equals(agentMode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase))
-            return ("icons/agent-modes/explore.svg", "subagent-card__icon--explore");
-        if (string.Equals(agentMode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase))
-            return ("icons/agent-modes/drone.svg", "subagent-card__icon--drone");
-        if (string.Equals(agentMode, DysonAgentModes.SecurityReview, StringComparison.OrdinalIgnoreCase))
-            return ("icons/agent-modes/security-review.svg", "subagent-card__icon--review");
-        if (string.Equals(agentMode, DysonAgentModes.BugReview, StringComparison.OrdinalIgnoreCase))
-            return ("icons/agent-modes/bug-review.svg", "subagent-card__icon--review");
-        if (string.Equals(agentMode, DysonAgentModes.Ask, StringComparison.OrdinalIgnoreCase))
-            return ("icons/agent-modes/ask.svg", "subagent-card__icon--other");
-        if (string.Equals(agentMode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase))
-            return ("icons/agent-modes/plan.svg", "subagent-card__icon--other");
-        if (string.Equals(agentMode, DysonAgentModes.Work, StringComparison.OrdinalIgnoreCase))
-            return ("icons/agent-modes/work.svg", "subagent-card__icon--other");
-
-        return ("icons/agent-modes/custom.svg", "subagent-card__icon--other");
     }
 
     private void DisposeSubscriptions()

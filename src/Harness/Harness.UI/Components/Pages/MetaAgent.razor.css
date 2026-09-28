@@ -95,6 +95,31 @@
   min-height: 0;
 }
 
+.meta-agents__item {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  overflow: hidden;
+}
+
+.meta-agents__item ::deep .subagent-card,
+.meta-agents__item ::deep .subagent-card:hover {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.meta-agents__item ::deep .subagent-card {
+  background: transparent;
+}
+
+.meta-agents__item ::deep .subagent-card:hover {
+  background: var(--bg-hover);
+}
+
 .meta-agents__empty {
   display: flex;
   flex-direction: column;

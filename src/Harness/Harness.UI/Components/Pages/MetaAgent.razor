@@ -207,9 +207,12 @@
                                         {
                                             @foreach (var id in childIds)
                                             {
-                                                <SubagentCard @key="id"
-                                                              PersistenceId="id"
-                                                              AfterNavigate="InspectChildAsync" />
+                                                <div class="meta-agents__item" @key="id">
+                                                    <SubagentCard PersistenceId="id"
+                                                                  AfterNavigate="InspectChildAsync" />
+                                                    <MetaAgentChildRows ParentPersistenceId="id"
+                                                                        AfterNavigate="InspectChildAsync" />
+                                                </div>
                                             }
                                         }
                                     </div>
@@ -306,19 +309,19 @@
     private int MetaTodoCompleteCount =>
         MetaTodos.Count(t => t.Status == DysonSessionTodoStatus.Complete);
 
-    private IReadOnlyList<Guid> ChildIds
-    {
-        get
-        {
-            if (!IsMetaFocused || Host.Session is null)
-                return [];
+    private IReadOnlyList<Guid> ChildIds =>
+        IsMetaFocused ? OrderedDirectChildIds(Host.Session) : [];
 
-            return Host.Session.SubSessions
-                .Where(child => child is not null && child.PersistenceId != Guid.Empty)
-                .OrderByDescending(child => child.Id)
-                .Select(child => child.PersistenceId)
-                .ToList();
-        }
+    internal static IReadOnlyList<Guid> OrderedDirectChildIds(DysonAgentSession? session)
+    {
+        if (session is null)
+            return [];
+
+        return session.SubSessions
+            .Where(child => child is not null && child.PersistenceId != Guid.Empty)
+            .OrderByDescending(child => child.Id)
+            .Select(child => child.PersistenceId)
+            .ToList();
     }
 
     protected override async Task OnInitializedAsync()

@@ -256,6 +256,41 @@ public static class DysonSubagentHostLogic
                 $"{oai.DisplayAlias} · {oai.ProviderDisplayName} / {oai.Slug}",
             _ => null,
         };
+
+    /// <summary>Agents-tab nested rows shown before <c>+N more</c>.</summary>
+    public const int NestedAgentRowCap = 4;
+
+    /// <summary>
+    /// First <see cref="NestedAgentRowCap"/> items, or <paramref name="rows"/> itself when it already fits.
+    /// Does not reorder.
+    /// </summary>
+    public static (IReadOnlyList<T> Visible, int HiddenCount) CapNestedRows<T>(IReadOnlyList<T> rows)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        if (rows.Count <= NestedAgentRowCap)
+            return (rows, 0);
+
+        var visible = new T[NestedAgentRowCap];
+        for (var i = 0; i < NestedAgentRowCap; i++)
+            visible[i] = rows[i];
+        return (visible, rows.Count - NestedAgentRowCap);
+    }
+
+    /// <summary>
+    /// Step text for a nested row: trimmed step when present, else null while
+    /// <see cref="DysonSessionStatus.Active"/>, else the status name (<c>Stopped</c> stays <c>Stopped</c>).
+    /// </summary>
+    public static string? NestedStatusText(string? latestStepTitle, DysonSessionStatus status)
+    {
+        if (!string.IsNullOrWhiteSpace(latestStepTitle))
+            return latestStepTitle.Trim();
+        return status == DysonSessionStatus.Active ? null : status.ToString();
+    }
+
+    /// <summary>True when the child model label is shown because it is not the parent's.</summary>
+    public static bool ShowNestedModelLabel(string? childLabel, string? parentLabel) =>
+        !string.IsNullOrWhiteSpace(childLabel)
+        && !string.Equals(childLabel, parentLabel, StringComparison.Ordinal);
 }
 
 /// <summary>Live snapshot for parent <c>SubagentCard</c> UI.</summary>

@@ -1,0 +1,74 @@
+@namespace Harness.UI.Components.Meta
+@using Harness.UI.Components.Pages
+@using Harness.UI.Demo
+@inject DysonUiHost Host
+
+@{
+    var parent = ResolveParent();
+    IReadOnlyList<Guid> rows = parent is null ? [] : MetaAgent.OrderedDirectChildIds(parent);
+    var parentModelLabel = ParentPersistenceId == Guid.Empty
+        ? null
+        : Host.GetSubagentCardState(ParentPersistenceId)?.ModelLabel;
+    var expanded = _expanded && rows.Count > DysonSubagentHostLogic.NestedAgentRowCap;
+    var visible = rows;
+    var hiddenCount = 0;
+    if (!expanded && rows.Count > 0)
+        (visible, hiddenCount) = DysonSubagentHostLogic.CapNestedRows(rows);
+}
+
+@if (rows.Count > 0)
+{
+    <div class="meta-child-rows">
+        @foreach (var id in visible)
+        {
+            <MetaAgentChildRow @key="id"
+                               PersistenceId="id"
+                               ParentModelLabel="@parentModelLabel"
+                               AfterNavigate="AfterNavigate" />
+        }
+        @if (hiddenCount > 0)
+        {
+            <button type="button" class="meta-child-row meta-child-row--more" @onclick="Expand">+@hiddenCount more</button>
+        }
+        else if (expanded)
+        {
+            <button type="button" class="meta-child-row meta-child-row--more" @onclick="Collapse">Show less</button>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public Guid ParentPersistenceId { get; set; }
+
+    [Parameter] public EventCallback AfterNavigate { get; set; }
+
+    private bool _expanded;
+    private Guid _boundParentId;
+
+    protected override void OnParametersSet()
+    {
+        if (ParentPersistenceId == _boundParentId)
+            return;
+
+        _boundParentId = ParentPersistenceId;
+        _expanded = false;
+    }
+
+    private DysonAgentSession? ResolveParent()
+    {
+        if (ParentPersistenceId == Guid.Empty || Host.Session is not { } session)
+            return null;
+
+        foreach (var child in session.SubSessions)
+        {
+            if (child is not null && child.PersistenceId == ParentPersistenceId)
+                return child;
+        }
+
+        return null;
+    }
+
+    private void Expand() => _expanded = true;
+
+    private void Collapse() => _expanded = false;
+}
