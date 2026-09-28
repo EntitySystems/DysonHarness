@@ -145,25 +145,17 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        try
+        var attached = _attached;
+        if (!_attached && await DysonCircuitJs.InvokeVoidAsync(Js, "dysonChat.attach", _feedEl) is null)
         {
-            if (!_attached)
-            {
-                await Js.InvokeVoidAsync("dysonChat.attach", _feedEl);
-                _attached = true;
-            }
+            _attached = true;
+            attached = true;
+        }
 
-            if (_renderVersion != _lastScrolledRenderVersion)
-            {
-                _lastScrolledRenderVersion = _renderVersion;
-                await Js.InvokeVoidAsync("dysonChat.scrollToBottom", _feedEl);
-            }
-        }
-        catch (JSException)
+        if (attached && _renderVersion != _lastScrolledRenderVersion)
         {
-        }
-        catch (InvalidOperationException)
-        {
+            _lastScrolledRenderVersion = _renderVersion;
+            await DysonCircuitJs.InvokeVoidAsync(Js, "dysonChat.scrollToBottom", _feedEl);
         }
     }
 }

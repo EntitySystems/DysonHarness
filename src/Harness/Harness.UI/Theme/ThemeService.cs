@@ -1,5 +1,6 @@
 using System.Globalization;
 using DysonHarness;
+using Harness.UI;
 using Microsoft.JSInterop;
 
 namespace Harness.UI.Theme;
@@ -66,19 +67,8 @@ public sealed class ThemeService(IJSRuntime js, IDysonSubjectSettingsRepository?
             ThemePreference? stored = null;
             if (!themeFromDb || !accentFromDb)
             {
-                try
-                {
-                    stored = await _js.InvokeAsync<ThemePreference?>("dysonTheme.get", cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                catch (JSException)
-                {
-                    // Prerender / JS not ready — keep defaults (or DB values) until interactive.
-                }
-                catch (InvalidOperationException)
-                {
-                    // JS interop unavailable during static render.
-                }
+                stored = await DysonCircuitJs.InvokeAsync<ThemePreference?>(_js, "dysonTheme.get", cancellationToken)
+                    .ConfigureAwait(false);
 
                 if (stored is not null)
                 {
@@ -102,13 +92,9 @@ public sealed class ThemeService(IJSRuntime js, IDysonSubjectSettingsRepository?
             // set (not apply) so localStorage + Windows dysonShell.notifyTheme match DB restore.
             await PersistDomAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (JSException)
+        catch (Exception ex) when (DysonCircuitJs.IsBenign(ex))
         {
             // Apply interop unavailable — in-memory (and DB) values still win.
-        }
-        catch (InvalidOperationException)
-        {
-            // Apply interop unavailable during static render.
         }
 
         _initialized = true;
@@ -143,28 +129,17 @@ public sealed class ThemeService(IJSRuntime js, IDysonSubjectSettingsRepository?
     {
         await InitializeAsync(cancellationToken).ConfigureAwait(false);
 
-        try
+        var resolved = await DysonCircuitJs.InvokeAsync<ThemeResolvedSnapshot?>(
+                _js, "dysonTheme.getResolved", cancellationToken)
+            .ConfigureAwait(false);
+        if (resolved is null
+            || !TryNormalizeTheme(resolved.Theme, out var theme)
+            || !TryNormalizeAccentHex(resolved.AccentHex, out var accentHex))
         {
-            var resolved = await _js.InvokeAsync<ThemeResolvedSnapshot?>(
-                    "dysonTheme.getResolved", cancellationToken)
-                .ConfigureAwait(false);
-            if (resolved is null
-                || !TryNormalizeTheme(resolved.Theme, out var theme)
-                || !TryNormalizeAccentHex(resolved.AccentHex, out var accentHex))
-            {
-                return DysonUiThemeSnapshot.Default;
-            }
+            return DysonUiThemeSnapshot.Default;
+        }
 
-            return new DysonUiThemeSnapshot(theme, accentHex);
-        }
-        catch (JSException)
-        {
-            return DysonUiThemeSnapshot.Default;
-        }
-        catch (InvalidOperationException)
-        {
-            return DysonUiThemeSnapshot.Default;
-        }
+        return new DysonUiThemeSnapshot(theme, accentHex);
     }
 
     private async Task PersistAndApplyAsync(CancellationToken cancellationToken)
@@ -178,35 +153,13 @@ public sealed class ThemeService(IJSRuntime js, IDysonSubjectSettingsRepository?
 
     private async Task PersistDomAsync(CancellationToken cancellationToken)
     {
-        try
-        {
-            await _js.InvokeVoidAsync("dysonTheme.set", cancellationToken, Theme, Accent)
-                .ConfigureAwait(false);
-        }
-        catch (JSException)
-        {
+        if (await DysonCircuitJs.InvokeVoidAsync(_js, "dysonTheme.set", cancellationToken, Theme, Accent)
+                .ConfigureAwait(false) is JSException)
             await ApplyAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (InvalidOperationException)
-        {
-            // Ignore when JS is unavailable.
-        }
     }
 
-    private async Task ApplyAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            await _js.InvokeVoidAsync("dysonTheme.apply", cancellationToken, Theme, Accent)
-                .ConfigureAwait(false);
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-        }
-    }
+    private Task ApplyAsync(CancellationToken cancellationToken) =>
+        DysonCircuitJs.InvokeVoidAsync(_js, "dysonTheme.apply", cancellationToken, Theme, Accent).AsTask();
 
     private async Task TryPersistSettingAsync(
         string key,

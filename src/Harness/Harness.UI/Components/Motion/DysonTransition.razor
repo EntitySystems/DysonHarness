@@ -100,14 +100,7 @@
         if (!firstRender)
             return;
 
-        try
-        {
-            _reducedMotion = await Js.InvokeAsync<bool>("dysonUi.prefersReducedMotion");
-        }
-        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
-        {
-            // Prerender / torn-down circuit: keep the animated defaults (CSS still suppresses motion).
-        }
+        _reducedMotion = await DysonCircuitJs.InvokeAsync<bool>(Js, "dysonUi.prefersReducedMotion");
     }
 
     private async Task RunEnterAsync(CancellationToken ct)
@@ -152,26 +145,14 @@
 
     private async Task CaptureFocusAsync()
     {
-        try
-        {
-            await Js.InvokeVoidAsync("dysonUi.captureFocus");
+        if (await DysonCircuitJs.InvokeVoidAsync(Js, "dysonUi.captureFocus") is null)
             _focusCaptured = true;
-        }
-        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
-        {
-        }
     }
 
     private async Task RestoreFocusAsync()
     {
         _focusCaptured = false;
-        try
-        {
-            await Js.InvokeVoidAsync("dysonUi.restoreFocus");
-        }
-        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
-        {
-        }
+        await DysonCircuitJs.InvokeVoidAsync(Js, "dysonUi.restoreFocus");
     }
 
     private CancellationToken Restart()

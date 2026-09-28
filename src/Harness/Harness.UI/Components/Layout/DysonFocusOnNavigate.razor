@@ -1,0 +1,33 @@
+@inject IJSRuntime Js
+
+@code {
+    private const string FocusBySelector = "Blazor._internal.domWrapper.focusBySelector";
+
+    [Parameter, EditorRequired] public RouteData RouteData { get; set; } = default!;
+
+    [Parameter, EditorRequired] public string Selector { get; set; } = "";
+
+    private Type? _lastPageType;
+    private bool _hasPage;
+    private bool _focusAfterRender;
+
+    protected override void OnParametersSet()
+    {
+        var pageType = RouteData.PageType;
+        if (_hasPage && pageType == _lastPageType)
+            return;
+
+        _hasPage = true;
+        _lastPageType = pageType;
+        _focusAfterRender = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_focusAfterRender || string.IsNullOrWhiteSpace(Selector))
+            return;
+
+        _focusAfterRender = false;
+        await DysonCircuitJs.InvokeVoidAsync(Js, FocusBySelector, Selector);
+    }
+}

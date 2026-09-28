@@ -8,7 +8,6 @@
 @inject DysonMessageBus Bus
 @inject IDysonWorkDirectoryRepository WorkDirs
 @inject IDysonModelRepository ModelStore
-@inject NavigationManager Nav
 @inject IJSRuntime Js
 
 <PageTitle>Meta agent — @(_workDirectoryName ?? "DysonHarness")</PageTitle>
@@ -339,33 +338,15 @@
         if (firstRender)
         {
             _chatLinksRef ??= DotNetObjectReference.Create(Host);
-            try
-            {
-                await Js.InvokeVoidAsync("dysonChatLinks.install", _chatLinksRef);
-            }
-            catch (JSException)
-            {
-            }
-            catch (InvalidOperationException)
-            {
-            }
+            await DysonCircuitJs.InvokeVoidAsync(Js, "dysonChatLinks.install", _chatLinksRef);
         }
 
         if (_imageCaptureBound || _unknownWorkDirectory)
             return;
 
-        try
-        {
-            _imageCaptureRef ??= DotNetObjectReference.Create(this);
-            await Js.InvokeVoidAsync("dysonComposer.attachImageCapture", _shell, _imageCaptureRef);
+        _imageCaptureRef ??= DotNetObjectReference.Create(this);
+        if (await DysonCircuitJs.InvokeVoidAsync(Js, "dysonComposer.attachImageCapture", _shell, _imageCaptureRef) is null)
             _imageCaptureBound = true;
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-        }
     }
 
     protected override async Task OnParametersSetAsync()
@@ -595,19 +576,8 @@
         }
     }
 
-    private async Task OpenFilePickerAsync()
-    {
-        try
-        {
-            await Js.InvokeVoidAsync("dysonComposer.openFileInput", _shell);
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-        }
-    }
+    private Task OpenFilePickerAsync() =>
+        DysonCircuitJs.InvokeVoidAsync(Js, "dysonComposer.openFileInput", _shell).AsTask();
 
     private bool IsPathAttachedToPendingImage(string filePath)
     {
@@ -714,14 +684,11 @@
             }
         }
 
-        Nav.NavigateTo("/");
+        await DysonCircuitJs.NavigateAsync(Js, "/");
     }
 
-    private Task InspectChildAsync()
-    {
-        Nav.NavigateTo("/");
-        return Task.CompletedTask;
-    }
+    private Task InspectChildAsync() =>
+        DysonCircuitJs.NavigateAsync(Js, "/").AsTask();
 
     // Acting on a session is a session-shell concern — do it, then hand off to "/".
     private async Task StartNewAsync()
@@ -733,7 +700,7 @@
             return;
         }
 
-        Nav.NavigateTo("/");
+        await DysonCircuitJs.NavigateAsync(Js, "/");
     }
 
     private async Task ResumeAsync(Guid sessionId)
@@ -745,7 +712,7 @@
             return;
         }
 
-        Nav.NavigateTo("/");
+        await DysonCircuitJs.NavigateAsync(Js, "/");
     }
 
     private async Task DeleteAsync(Guid sessionId)
@@ -788,59 +755,22 @@
         }
 
         _activeWorkDirectoryId = next;
-        Nav.NavigateTo($"/meta/{next}");
+        await DysonCircuitJs.NavigateAsync(Js, $"/meta/{next}");
     }
 
-    private async Task PersistWorkDirectoryAsync(Guid? id)
-    {
-        try
-        {
-            await Js.InvokeVoidAsync("dysonWorkdir.set", id?.ToString());
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-        }
-    }
+    private Task PersistWorkDirectoryAsync(Guid? id) =>
+        DysonCircuitJs.InvokeVoidAsync(Js, "dysonWorkdir.set", id?.ToString()).AsTask();
 
     public async ValueTask DisposeAsync()
     {
         _hostSub?.Dispose();
         _hostSub = null;
         if (_imageCaptureBound)
-        {
-            try
-            {
-                await Js.InvokeVoidAsync("dysonComposer.detachImageCapture", _shell);
-            }
-            catch (JSException)
-            {
-            }
-            catch (InvalidOperationException)
-            {
-            }
-            catch (JSDisconnectedException)
-            {
-            }
-        }
+            await DysonCircuitJs.InvokeVoidAsync(Js, "dysonComposer.detachImageCapture", _shell);
 
         _imageCaptureRef?.Dispose();
         _imageCaptureRef = null;
-        try
-        {
-            await Js.InvokeVoidAsync("dysonChatLinks.uninstall");
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
-        }
-        catch (JSDisconnectedException)
-        {
-        }
+        await DysonCircuitJs.InvokeVoidAsync(Js, "dysonChatLinks.uninstall");
 
         _chatLinksRef?.Dispose();
         _chatLinksRef = null;
