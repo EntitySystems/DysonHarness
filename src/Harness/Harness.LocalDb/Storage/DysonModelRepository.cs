@@ -305,6 +305,61 @@ public sealed class DysonModelRepository(
         }, cancellationToken);
     }
 
+    public Task<Result<Guid, string>> ConvertManagedSourceAsync(
+        string fromSource,
+        string toSource,
+        string displayName,
+        string baseUrl,
+        string apiKey,
+        string openAiApiMode,
+        bool shared = false,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(fromSource) || string.IsNullOrWhiteSpace(toSource))
+            return Task.FromResult(Result<Guid, string>.AsError("Both managed sources are required."));
+        if (string.IsNullOrWhiteSpace(displayName) || string.IsNullOrWhiteSpace(baseUrl))
+            return Task.FromResult(Result<Guid, string>.AsError("Display name and base URL are required."));
+        if (shared && !_access.Can(DysonPermission.ManageSharedProviders))
+            return Task.FromResult(Result<Guid, string>.AsError("Permission denied: ManageSharedProviders."));
+
+        var subjectId = shared ? DysonSubjects.Shared : _subjectContext.SubjectId;
+        var from = fromSource.Trim();
+        var to = toSource.Trim();
+
+        return _accessor.RunAsync(async (db, cancellationToken) =>
+        {
+            try
+            {
+                var rows = await db.ModelProviders
+                    .Where(p => p.SubjectId == subjectId && (p.ManagedSource == from || p.ManagedSource == to))
+                    .ToListAsync(cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (rows.Any(p => p.ManagedSource == to))
+                    return Result<Guid, string>.AsError($"A '{to}' provider already exists.");
+
+                var row = rows.FirstOrDefault(p => p.ManagedSource == from);
+                if (row is null)
+                    return Result<Guid, string>.AsError($"No '{from}' provider to convert.");
+
+                row.ManagedSource = to;
+                row.DisplayName = displayName.Trim();
+                row.ProviderKind = KindOpenAICompatible;
+                row.BaseUrl = baseUrl.Trim();
+                row.ApiKey = apiKey;
+                row.OpenAiApiMode = DysonOpenAiApiModes.Normalize(openAiApiMode);
+                row.UpdatedUtc = DateTime.UtcNow;
+
+                await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
+                return Result<Guid, string>.AsValue(row.Id);
+            }
+            catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+            {
+                return Result<Guid, string>.AsError($"Failed to convert managed provider: {ex.Message}", ex);
+            }
+        }, cancellationToken);
+    }
+
     public Task<Result<Guid, string>> UpsertManagedSlugAsync(
         Guid providerId,
         ManagedSlugSpec spec,

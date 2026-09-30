@@ -119,6 +119,10 @@ public sealed class OpenAiFilesClient(HttpClient http)
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(attachments);
 
+        // xAI chat-proxy has no known /files endpoint: skip the guaranteed-failing upload (data-URL fallback).
+        if (DysonManagedSources.IsXaiGrok(provider.ManagedSource))
+            return;
+
         OpenAiFilesClient? client = null;
         foreach (var attachment in attachments)
         {

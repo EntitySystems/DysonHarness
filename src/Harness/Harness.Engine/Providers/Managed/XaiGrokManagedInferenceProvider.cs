@@ -5,6 +5,9 @@ namespace DysonHarness;
 /// <summary>Read-only facts the Models card shows for the native xAI provider.</summary>
 public sealed record XaiGrokAccountSummary(bool Connected, string Email, string ClientVersion);
 
+/// <summary>Outcome of <see cref="XaiGrokManagedInferenceProvider.SwitchFromCliProxyAsync"/>.</summary>
+public sealed record XaiSwitchOutcome(Guid ProviderId, bool LoginImported, string Note);
+
 /// <summary>
 /// Native xAI/Grok Build provider for Settings → Models (no CLIProxy). Scoped: needs the subject for the
 /// provider row and the consent flag. Tokens live in <see cref="XaiGrokAuthService"/>; the provider row only
@@ -146,6 +149,92 @@ public sealed class XaiGrokManagedInferenceProvider(
             note));
     }
 
+    /// <summary>
+    /// Convert the legacy <c>cliproxy-grok</c> row to native IN PLACE (provider/slug ids, enabled flags, efforts and
+    /// favorites survive). Tries to adopt the CLIProxy <c>xai-*.json</c> login (disk read off the circuit, one native
+    /// refresh to validate); when that is not possible the row is still converted and the user signs in with Connect.
+    /// Caveat: a rotated refresh token leaves CLIProxy's copy unusable. The CLIProxy file is never deleted.
+    /// </summary>
+    public async Task<Result<XaiSwitchOutcome, string>> SwitchFromCliProxyAsync(
+        string? authsDirectory = null,
+        CancellationToken cancellationToken = default)
+    {
+        var legacy = await FindRowAsync(cancellationToken, DysonManagedSources.CliProxyGrok).ConfigureAwait(false);
+        if (legacy.IsError)
+            return Result<XaiSwitchOutcome, string>.AsError(legacy.Error);
+        if (legacy.Value is null)
+            return Result<XaiSwitchOutcome, string>.AsError("There is no legacy Grok Build (CLIProxy) provider to switch.");
+
+        var existing = await FindRowAsync(cancellationToken).ConfigureAwait(false);
+        if (existing.IsError)
+            return Result<XaiSwitchOutcome, string>.AsError(existing.Error);
+        if (existing.Value is not null)
+            return Result<XaiSwitchOutcome, string>.AsError($"{DisplayName} already exists; delete it first.");
+
+        var credentialId = Guid.NewGuid();
+        var note = "No CLIProxy xAI login found; use Connect to sign in.";
+        var imported = false;
+
+        var file = await ReadCliProxyCredentialAsync(authsDirectory ?? DysonCliProxyPaths.AuthsDirectory, cancellationToken)
+            .ConfigureAwait(false);
+        if (file.IsSuccess)
+        {
+            var adopt = await _auth
+                .ImportCredentialAsync(credentialId, _subject.SubjectId, file.Value, cancellationToken)
+                .ConfigureAwait(false);
+            imported = adopt.IsSuccess;
+            note = imported
+                ? "Imported the CLIProxy xAI login."
+                : $"CLIProxy xAI login could not be refreshed ({adopt.Error}); use Connect to sign in.";
+        }
+
+        var handle = XaiGrokAuthService.HandleFor(credentialId);
+        var converted = await _models.ConvertManagedSourceAsync(
+                DysonManagedSources.CliProxyGrok,
+                ManagedSource,
+                DisplayName,
+                XaiGrokClientProfile.ChatProxyBaseUrl,
+                handle,
+                DysonOpenAiApiModes.Responses,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        if (converted.IsError)
+        {
+            if (imported)
+                await _auth.DisconnectAsync(handle, CancellationToken.None).ConfigureAwait(false);
+            return Result<XaiSwitchOutcome, string>.AsError(converted.Error);
+        }
+
+        return Result<XaiSwitchOutcome, string>.AsValue(new XaiSwitchOutcome(converted.Value, imported, note));
+    }
+
+    /// <summary>Newest parseable <c>xai-*.json</c> in <paramref name="authsDirectory"/>; disk work runs on the pool.</summary>
+    private static Task<Result<XaiCredential, string>> ReadCliProxyCredentialAsync(
+        string authsDirectory,
+        CancellationToken cancellationToken) =>
+        Task.Run(() =>
+        {
+            try
+            {
+                if (!Directory.Exists(authsDirectory))
+                    return Result<XaiCredential, string>.AsError("No CLIProxy auths directory.");
+
+                foreach (var path in Directory.GetFiles(authsDirectory, "xai-*.json")
+                             .OrderByDescending(File.GetLastWriteTimeUtc))
+                {
+                    var parsed = XaiCredential.TryParse(File.ReadAllText(path));
+                    if (parsed.IsSuccess && string.Equals(parsed.Value.Type, "xai", StringComparison.OrdinalIgnoreCase))
+                        return parsed;
+                }
+
+                return Result<XaiCredential, string>.AsError("No CLIProxy xai-*.json file.");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return Result<XaiCredential, string>.AsError($"Could not read the CLIProxy auths directory: {ex.Message}");
+            }
+        }, cancellationToken);
+
     /// <summary>Forget a pending device flow (user pressed Cancel).</summary>
     public void CancelConnection(string state) => _auth.CancelFlow(state);
 
@@ -182,14 +271,17 @@ public sealed class XaiGrokManagedInferenceProvider(
 
     // ---- internals ------------------------------------------------------------------------------------
 
-    private async Task<Result<DysonModelProviderEntity?, string>> FindRowAsync(CancellationToken cancellationToken)
+    private async Task<Result<DysonModelProviderEntity?, string>> FindRowAsync(
+        CancellationToken cancellationToken,
+        string? source = null)
     {
+        source ??= ManagedSource;
         var list = await _models.ListProvidersAsync(cancellationToken).ConfigureAwait(false);
         if (list.IsError)
             return Result<DysonModelProviderEntity?, string>.AsError(list.Error);
 
         return Result<DysonModelProviderEntity?, string>.AsValue(
-            list.Value.FirstOrDefault(p => string.Equals(p.ManagedSource, ManagedSource, StringComparison.Ordinal)));
+            list.Value.FirstOrDefault(p => string.Equals(p.ManagedSource, source, StringComparison.Ordinal)));
     }
 
     private async Task<Result<string, string>> ResolveHandleAsync(CancellationToken cancellationToken)

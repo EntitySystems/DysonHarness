@@ -189,6 +189,151 @@ public class XaiGrokManagedInferenceProviderTests
         Assert.False((await rig.Provider.GetAccountSummaryAsync()).Value.Connected);
     }
 
+    private static async Task<Guid> SeedLegacyAsync(Rig rig)
+    {
+        var id = (await rig.Models.UpsertManagedProviderAsync(
+            DysonManagedSources.CliProxyGrok,
+            "Grok Build (CLIProxy)",
+            "http://127.0.0.1:8317/v1",
+            "cliproxy-key",
+            DysonOpenAiApiModes.Responses,
+            [new ManagedSlugSpec("grok-4.7", "Grok 4.7", "high", ["low", "medium", "high", "xhigh"])])).Value;
+        var row = (await rig.Models.ListProvidersAsync()).Value.Single(p => p.Id == id);
+        Assert.True((await rig.Models.SetDefaultSlugAsync(row.Slugs.Single().Id)).IsSuccess);
+        return id;
+    }
+
+    [Fact]
+    public async Task Switch_converts_in_place_keeping_ids_and_adopts_the_cliproxy_login()
+    {
+        using var rig = CreateRig();
+        var providerId = await SeedLegacyAsync(rig);
+        var slugId = (await rig.Models.ListProvidersAsync()).Value.Single().Slugs.Single().Id;
+        var dir = Directory.CreateTempSubdirectory("xai-auths").FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "xai-me.json"), """
+                {"type":"xai","access_token":"old-at","refresh_token":"old-rt","expired":"2026-09-30T11:00:00Z",
+                 "email":"me@x.ai","base_url":"https://api.x.ai/v1","token_endpoint":"https://auth.x.ai/t",
+                 "headers":{"x-grok-client-version":"0.2.120"}}
+                """);
+            await rig.Provider.AcceptConsentAsync();
+
+            var outcome = await rig.Provider.SwitchFromCliProxyAsync(dir);
+
+            Assert.True(outcome.IsSuccess, outcome.IsError ? outcome.Error : null);
+            Assert.True(outcome.Value.LoginImported);
+            Assert.Equal(providerId, outcome.Value.ProviderId);
+
+            var rows = (await rig.Models.ListProvidersAsync()).Value;
+            var row = Assert.Single(rows);
+            Assert.Equal(providerId, row.Id);
+            Assert.Equal(DysonManagedSources.XaiGrok, row.ManagedSource);
+            Assert.Equal(XaiGrokClientProfile.ChatProxyBaseUrl, row.BaseUrl);
+            var slug = Assert.Single(row.Slugs);
+            Assert.Equal(slugId, slug.Id);
+            Assert.True(slug.IsDefault);
+            Assert.True(slug.IsEnabled);
+
+            XaiGrokAuthService.TryParseHandle(row.ApiKey, out var credentialId);
+            var stored = XaiCredential.TryParse(rig.Store.Peek(credentialId)).Value;
+            Assert.Equal("at", stored.AccessToken);
+            Assert.Equal("rt", stored.RefreshToken);
+            Assert.Equal("me@x.ai", stored.Email);
+            Assert.Equal(XaiGrokClientProfile.ChatProxyBaseUrl, stored.BaseUrl);
+            Assert.DoesNotContain("0.2.120", rig.Store.Peek(credentialId));
+            Assert.True(File.Exists(Path.Combine(dir, "xai-me.json")));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Switch_without_a_cliproxy_login_still_converts_and_asks_for_connect()
+    {
+        using var rig = CreateRig();
+        await SeedLegacyAsync(rig);
+        var emptyDir = Directory.CreateTempSubdirectory("xai-auths-empty").FullName;
+        try
+        {
+            var outcome = await rig.Provider.SwitchFromCliProxyAsync(emptyDir);
+
+            Assert.True(outcome.IsSuccess);
+            Assert.False(outcome.Value.LoginImported);
+            Assert.Contains("Connect", outcome.Value.Note);
+            Assert.Equal(
+                DysonManagedSources.XaiGrok,
+                (await rig.Models.ListProvidersAsync()).Value.Single().ManagedSource);
+            Assert.False((await rig.Provider.GetAccountSummaryAsync()).Value.Connected);
+        }
+        finally
+        {
+            Directory.Delete(emptyDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Switch_errors_without_a_legacy_row_or_when_native_already_exists()
+    {
+        using var rig = CreateRig();
+        Assert.True((await rig.Provider.SwitchFromCliProxyAsync("missing-dir")).IsError);
+
+        await SeedLegacyAsync(rig);
+        await rig.Provider.ImportAsync();
+        var both = await rig.Provider.SwitchFromCliProxyAsync("missing-dir");
+        Assert.True(both.IsError);
+        Assert.Contains("already exists", both.Error);
+    }
+
+    [Fact]
+    public async Task ConvertManagedSource_errors_when_target_exists_or_source_missing()
+    {
+        using var rig = CreateRig();
+        Assert.True((await rig.Models.ConvertManagedSourceAsync(
+            "cliproxy-grok", "xai-grok", "n", "https://x", "k", DysonOpenAiApiModes.Responses)).IsError);
+
+        await rig.Models.UpsertManagedProviderAsync(
+            "cliproxy-grok", "a", "http://127.0.0.1:8317/v1", "k", DysonOpenAiApiModes.Responses, []);
+        await rig.Models.UpsertManagedProviderAsync(
+            "xai-grok", "b", "https://x", "k", DysonOpenAiApiModes.Responses, []);
+
+        var clash = await rig.Models.ConvertManagedSourceAsync(
+            "cliproxy-grok", "xai-grok", "n", "https://x", "k", DysonOpenAiApiModes.Responses);
+        Assert.True(clash.IsError);
+        Assert.Contains("already exists", clash.Error);
+    }
+
+    [Fact]
+    public async Task Files_upload_is_skipped_for_xai_grok_but_attempted_for_other_managed_providers()
+    {
+        var calls = 0;
+        var http = new HttpClient(new FakeXaiHttpHandler(_ =>
+        {
+            Interlocked.Increment(ref calls);
+            return FakeXaiHttpHandler.Json("""{"id":"file_1"}""");
+        }));
+        static OpenAiCompatibleAgentProvider Make(string source) => new(
+            new DysonModelProviderEntity
+            {
+                Id = Guid.NewGuid(), DisplayName = "P", ProviderKind = DysonProviderKinds.OpenAICompatible,
+                BaseUrl = "https://example.invalid/v1", ApiKey = "k", ManagedSource = source,
+                OpenAiApiMode = DysonOpenAiApiModes.Responses,
+            },
+            null);
+        var attachment = new DysonBinaryAttachment
+        {
+            FileName = "a.png", Extension = ".png", MimeType = "image/png", Base64Data = Convert.ToBase64String([1, 2, 3]),
+        };
+
+        await OpenAiFilesClient.EnsureBinaryFileIdsAsync(http, Make(DysonManagedSources.XaiGrok), [attachment]);
+        Assert.Equal(0, calls);
+
+        await OpenAiFilesClient.EnsureBinaryFileIdsAsync(http, Make(DysonManagedSources.CliProxyCodex), [attachment]);
+        Assert.Equal(1, calls);
+    }
+
     [Fact]
     public void Catalog_lists_the_native_provider_next_to_the_legacy_cliproxy_one()
     {

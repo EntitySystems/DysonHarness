@@ -52,6 +52,11 @@
         }
     }
 
+    @if (IsLegacyGrok)
+    {
+        <div class="list-item__meta">Legacy CLIProxy route (deprecated). Native Grok needs no CLIProxy binary.</div>
+    }
+
     @if (IsCliProxy && !CliProxyInstalled)
     {
         <div class="error-banner">
@@ -154,6 +159,11 @@
                     @onclick="OnVerify">
                 @(VerifyBusy ? "Verifying…" : "Verify / Refresh models")
             </button>
+            @if (IsLegacyGrok)
+            {
+                <button type="button" class="btn btn--sm"
+                        @onclick="OnSwitchToNative">Switch to native Grok</button>
+            }
             <button type="button" class="btn btn-ghost btn--sm"
                     @onclick="OnDisconnect">Disconnect</button>
             <button type="button" class="btn btn-ghost btn--sm"
@@ -223,6 +233,11 @@
     [Parameter] public XaiGrokAccountSummary? XaiSummary { get; set; }
 
     [Parameter] public EventCallback OnCancelConnect { get; set; }
+
+    /// <summary>Legacy <c>cliproxy-grok</c> card: offers the in-place switch to native Grok.</summary>
+    public bool IsLegacyGrok => string.Equals(Provider.ManagedSource, DysonManagedSources.CliProxyGrok, StringComparison.Ordinal);
+
+    [Parameter] public EventCallback OnSwitchToNative { get; set; }
 
     /// <summary>Direct API-key managed provider (OpenRouter / OrcaRouter).</summary>
     public bool IsDirectManaged => DysonManagedSources.IsDirectManaged(Provider.ManagedSource);

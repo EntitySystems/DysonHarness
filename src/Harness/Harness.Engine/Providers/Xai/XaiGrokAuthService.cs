@@ -217,6 +217,48 @@ public sealed class XaiGrokAuthService(
         }
     }
 
+    /// <summary>
+    /// Adopt an existing credential (e.g. a CLIProxy <c>xai-*.json</c>): one native refresh validates it, then the
+    /// refreshed tokens are persisted under <paramref name="credentialId"/>. Returns the account email (may be empty).
+    /// Note: if xAI rotates refresh tokens, this invalidates the donor copy.
+    /// </summary>
+    public async Task<Result<string, string>> ImportCredentialAsync(
+        Guid credentialId,
+        string subjectId,
+        XaiCredential credential,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(credential);
+        if (credentialId == Guid.Empty || string.IsNullOrWhiteSpace(subjectId))
+            return Result<string, string>.AsError("Credential id and subject id are required.");
+        if (string.IsNullOrWhiteSpace(credential.RefreshToken))
+            return Result<string, string>.AsError("The credential has no refresh token.");
+
+        var gate = _gates.GetOrAdd(credentialId, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var refreshed = await _oauth
+                .RefreshAsync(credential.RefreshToken, credential.TokenEndpoint, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (refreshed.IsError)
+                return Result<string, string>.AsError(refreshed.Error);
+
+            var next = credential.WithTokens(refreshed.Value, _clock.GetUtcNow(), credential.TokenEndpoint)
+                with { BaseUrl = XaiGrokClientProfile.ChatProxyBaseUrl };
+            var saved = await _store
+                .SaveAsync(credentialId, subjectId.Trim(), next.ToJson(), CancellationToken.None)
+                .ConfigureAwait(false);
+            return saved.IsError
+                ? Result<string, string>.AsError($"Could not save the imported xAI sign-in: {saved.Error}")
+                : Result<string, string>.AsValue(next.Email ?? "");
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     /// <summary>Signed-in account email (may be empty) for UI display.</summary>
     public async Task<Result<string, string>> GetEmailAsync(string handle, CancellationToken cancellationToken = default)
     {

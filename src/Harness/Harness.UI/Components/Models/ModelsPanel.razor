@@ -134,6 +134,7 @@
                               OnVerify="() => VerifyManagedAsync(p)"
                               OnDisconnect="() => DisconnectManagedAsync(p)"
                               OnCancelConnect="CancelNativeConnect"
+                              OnSwitchToNative="SwitchToNativeAsync"
                               OnDelete="() => ConfirmDeleteProviderAsync(p)"
                               OnBrowseModels="() => OpenDirectBrowse(p)"
                               OnUpdateApiKey="() => OpenDirectUpdateKey(p)"
@@ -528,6 +529,52 @@
     }
 
     private void CancelNativeConnect() => _pollCts?.Cancel();
+
+    private async Task SwitchToNativeAsync()
+    {
+        if (!await EnsureXaiConsentAsync())
+            return;
+
+        var confirmed = await ConfirmDialog.ConfirmAsync(
+            title: "Switch to native Grok",
+            message: "Convert the legacy Grok Build (CLIProxy) provider to the native xAI provider. Slugs, favorites and session links are kept. "
+                + "Dyson will try to reuse the CLIProxy xAI login; if xAI rotates refresh tokens, CLIProxy's copy of that login stops working. "
+                + "The CLIProxy auth file is not deleted.",
+            confirmLabel: "Switch",
+            cancelLabel: "Cancel",
+            danger: false);
+        if (!confirmed)
+            return;
+
+        _error = null;
+        _status = null;
+        _busy = true;
+        try
+        {
+            var switched = await ManagedCatalog.XaiGrok.SwitchFromCliProxyAsync();
+            if (switched.IsError)
+            {
+                _error = switched.Error;
+                return;
+            }
+
+            _status = $"Switched to native Grok. {switched.Value.Note}";
+            if (switched.Value.LoginImported)
+            {
+                var verify = await ManagedCatalog.XaiGrok.VerifyConnectionAsync();
+                _status = verify.IsError
+                    ? $"Switched to native Grok. {switched.Value.Note} Verify failed: {verify.Error}"
+                    : $"Switched to native Grok. {VerifyStatus(ManagedCatalog.XaiGrok, verify.Value)}";
+            }
+
+            await RefreshAsync();
+            await OnChanged.InvokeAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
 
     private async Task<bool> EnsureXaiConsentAsync()
     {
