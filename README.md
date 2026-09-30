@@ -30,7 +30,7 @@ Website: [dysonharness.com](https://dysonharness.com/)
 - Claude Sonnet 5
 - Claude Opus 5
 - Claude Fable 5.1
-- Grok 4.6
+- Grok 4.6 (native xAI sign-in, no CLIProxy: Settings → Models → Grok Build (xAI))
 
 ## Usage guidance
 

@@ -31,6 +31,7 @@ The channels are retained independently. For each older selected release, cleanu
 
 - Releases: https://github.com/EntitySystems/DysonHarness/releases
 - Prefer the latest **stable** (non-prerelease) MSI for production installs; preview builds are marked as GitHub pre-releases
+- Every publish output (so every zip and the MSI payload) also contains `LICENSE` and `THIRD-PARTY-NOTICES.md` (MIT attribution for the CLIProxyAPI-derived native xAI provider).
 - Asset names: `DysonHarness-{version}-{rid}.zip` (all RIDs); `DysonHarness-{version}-win-x64.msi` (Windows installer)
 
 | RID | Runner / OS | Notes |
