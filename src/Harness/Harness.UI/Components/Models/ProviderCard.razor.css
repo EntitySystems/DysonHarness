@@ -1,0 +1,16 @@
+/* Device-code panel for the native xAI sign-in (scoped to ProviderCard). */
+.provider-card__device {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 6px 0;
+    padding: 8px 10px;
+    border: 1px solid var(--border, #333);
+    border-radius: 6px;
+}
+
+.provider-card__device-code {
+    font-size: 1.4rem;
+    letter-spacing: 0.15em;
+    user-select: all;
+}

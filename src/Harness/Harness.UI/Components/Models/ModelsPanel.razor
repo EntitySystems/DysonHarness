@@ -1,6 +1,7 @@
 @namespace Harness.UI.Components.Models
 @using DysonHarness
 @using Harness.UI.Services
+@implements IDisposable
 @inject IDysonModelRepository ModelStore
 @inject DysonCliProxyHost CliProxy
 @inject ManagedInferenceProviderCatalog ManagedCatalog
@@ -36,7 +37,7 @@
     <div class="models-panel__managed" style="margin:10px 0 12px;padding:8px 0;border-bottom:1px solid var(--border, #333);">
         <div class="tool-panel__title" style="font-size:12px;">Third-party managed providers</div>
         <div class="list-item__meta" style="margin:4px 0 8px;">
-            ChatGPT Codex, Grok Build, Antigravity, Kimi, Claude Code, and Meta Muse via local CLIProxyAPI (OAuth). Rows are view-only; use Connect / Verify to sync models.
+            Grok Build (xAI) signs in natively (device code, no CLIProxy). ChatGPT Codex, Antigravity, Kimi, Claude Code, Meta Muse and the legacy Grok Build (CLIProxy) row use local CLIProxyAPI (OAuth). Rows are view-only; use Connect / Verify to sync models.
         </div>
 
         @if (!_cliProxyInstalled)
@@ -125,12 +126,14 @@
                               VerifyBusy="IsVerifyBusy(p)"
                               PendingUserCode="PendingAuth(p)?.UserCode"
                               PendingAuthUrl="PendingAuth(p)?.AuthUrl"
+                              XaiSummary="_xaiSummary"
                               DownloadProgress="CardDownloadProgress(p)"
                               ContextStepBusySlugId="_contextStepBusySlugId"
                               OnConnect="() => ConnectManagedAsync(p)"
                               OnComplete="() => CompleteManagedAsync(p)"
                               OnVerify="() => VerifyManagedAsync(p)"
                               OnDisconnect="() => DisconnectManagedAsync(p)"
+                              OnCancelConnect="CancelNativeConnect"
                               OnDelete="() => ConfirmDeleteProviderAsync(p)"
                               OnBrowseModels="() => OpenDirectBrowse(p)"
                               OnUpdateApiKey="() => OpenDirectUpdateKey(p)"
@@ -179,6 +182,8 @@
     private bool _busy;
     private CliProxyDownloadProgress? _downloadProgress;
     private readonly Dictionary<string, ManagedConnectionBegin> _pendingAuth = new(StringComparer.Ordinal);
+    private XaiGrokAccountSummary? _xaiSummary;
+    private CancellationTokenSource? _pollCts;
 
     // Per-source busy tracking so Connect/Verify spinners don't freeze the whole panel.
     private string? _connectingSource;
@@ -221,6 +226,21 @@
         }
 
         _providers = result.Value.ToList();
+
+        _xaiSummary = null;
+        if (_providers.Any(p => DysonManagedSources.IsXaiGrok(p.ManagedSource)))
+        {
+            var summary = await ManagedCatalog.XaiGrok.GetAccountSummaryAsync();
+            if (summary.IsSuccess)
+                _xaiSummary = summary.Value;
+        }
+    }
+
+    public void Dispose()
+    {
+        // Stops the native device-code poll loop when the panel goes away.
+        _pollCts?.Cancel();
+        _pollCts?.Dispose();
     }
 
     private void ClearStatus() => _status = null;
@@ -293,7 +313,7 @@
 
     // --- Managed provider flow ---
 
-    private async Task ImportManagedAsync(ManagedInferenceProviderBase managed)
+    private async Task ImportManagedAsync(IManagedConnectionProvider managed)
     {
         _error = null;
         _status = null;
@@ -333,13 +353,18 @@
             return;
         }
 
+        var native = DysonManagedSources.IsXaiGrok(managed.ManagedSource);
+        if (native && !await EnsureXaiConsentAsync())
+            return;
+
         _error = null;
         _status = null;
         _connectingSource = managed.ManagedSource;
         _downloadProgress = null;
         try
         {
-            var begin = await managed.BeginConnectionAsync(openBrowser: true, CreateDownloadProgress());
+            // Native: the engine never opens a browser; the card renders the verification link.
+            var begin = await managed.BeginConnectionAsync(openBrowser: !native, CreateDownloadProgress());
             if (begin.IsError)
             {
                 _error = begin.Error;
@@ -348,6 +373,14 @@
             }
 
             _pendingAuth[managed.ManagedSource] = begin.Value;
+            if (native)
+            {
+                // Cancel button takes over from the busy spinner while the user approves in the browser.
+                _connectingSource = null;
+                await PollNativeAsync(managed, begin.Value);
+                return;
+            }
+
             _status = string.IsNullOrWhiteSpace(begin.Value.UserCode)
                 ? $"Browser opened for {managed.DisplayName}. Click Complete when finished signing in."
                 : $"Enter device code {begin.Value.UserCode} in the browser, then Complete.";
@@ -372,7 +405,7 @@
                     break;
                 }
 
-                _status = $"{managed.DisplayName}: synced {verify.Value.SlugCount} model slug(s).";
+                _status = VerifyStatus(managed, verify.Value);
                 await RefreshAsync();
                 await OnChanged.InvokeAsync();
                 return;
@@ -427,7 +460,7 @@
                 return;
             }
 
-            _status = $"{managed.DisplayName}: synced {verify.Value.SlugCount} model slug(s).";
+            _status = VerifyStatus(managed, verify.Value);
             await RefreshAsync();
             await OnChanged.InvokeAsync();
         }
@@ -459,7 +492,7 @@
                 return;
             }
 
-            _status = $"{managed.DisplayName}: synced {verify.Value.SlugCount} model slug(s).";
+            _status = VerifyStatus(managed, verify.Value);
             _cliProxyInstalled = CliProxy.IsInstalled;
             await RefreshAsync();
             await OnChanged.InvokeAsync();
@@ -471,14 +504,126 @@
         }
     }
 
-    private Task DisconnectManagedAsync(DysonModelProviderEntity provider)
+    private async Task DisconnectManagedAsync(DysonModelProviderEntity provider)
     {
         if (!string.IsNullOrWhiteSpace(provider.ManagedSource))
             _pendingAuth.Remove(provider.ManagedSource);
 
+        if (DysonManagedSources.IsXaiGrok(provider.ManagedSource))
+        {
+            _pollCts?.Cancel();
+            var signOut = await ManagedCatalog.XaiGrok.DisconnectAsync();
+            if (signOut.IsError)
+            {
+                _error = signOut.Error;
+                return;
+            }
+
+            _status = $"{provider.DisplayName}: signed out (stored credential deleted). Slugs are kept — Connect to sign in again.";
+            await RefreshAsync();
+            return;
+        }
+
         _status = $"{provider.DisplayName}: disconnected local auth session tracking. Proxy credentials are kept — use Connect to sign in again.";
-        return Task.CompletedTask;
     }
+
+    private void CancelNativeConnect() => _pollCts?.Cancel();
+
+    private async Task<bool> EnsureXaiConsentAsync()
+    {
+        if (await ManagedCatalog.XaiGrok.HasConsentAsync())
+            return true;
+
+        var confirmed = await ConfirmDialog.ConfirmAsync(
+            title: "Sign in to xAI (unofficial)",
+            message: "Dyson will identify itself to xAI as the Grok CLI, using the public Grok CLI OAuth client id. "
+                + "This is unofficial and may violate xAI's terms or be blocked. "
+                + "Your sign-in tokens are stored unencrypted in Dyson's local database on this machine (like other provider API keys).",
+            confirmLabel: "I understand",
+            cancelLabel: "Cancel",
+            danger: false);
+        if (!confirmed)
+            return false;
+
+        var saved = await ManagedCatalog.XaiGrok.AcceptConsentAsync();
+        if (saved.IsError)
+        {
+            _error = saved.Error;
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>Async device-code poll at xAI's interval; Task.Delay only, never blocks the circuit.</summary>
+    private async Task PollNativeAsync(IManagedConnectionProvider managed, ManagedConnectionBegin begin)
+    {
+        _pollCts?.Cancel();
+        _pollCts?.Dispose();
+        var cts = _pollCts = new CancellationTokenSource();
+        var ct = cts.Token;
+        var delay = TimeSpan.FromSeconds(Math.Max(1, begin.PollIntervalSeconds ?? 5));
+        var completed = false;
+        _status = $"Enter code {begin.UserCode} on the xAI page and approve — waiting…";
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(delay, ct);
+                var complete = await managed.CompleteConnectionAsync(begin.State, ct);
+                if (complete.IsError)
+                {
+                    _error = complete.Error;
+                    return;
+                }
+
+                if (!complete.Value.IsComplete)
+                {
+                    if (string.Equals(complete.Value.Status, "slow_down", StringComparison.Ordinal))
+                        delay += TimeSpan.FromSeconds(5);
+                    continue;
+                }
+
+                completed = true;
+                _pendingAuth.Remove(managed.ManagedSource);
+                _status = $"{managed.DisplayName} connected. Refreshing models…";
+                await InvokeAsync(StateHasChanged);
+                var verify = await managed.VerifyConnectionAsync(cancellationToken: ct);
+                if (verify.IsError)
+                {
+                    _error = verify.Error;
+                    return;
+                }
+
+                _status = VerifyStatus(managed, verify.Value);
+                await RefreshAsync();
+                await OnChanged.InvokeAsync();
+                return;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            _status = "xAI sign-in cancelled.";
+        }
+        finally
+        {
+            if (!completed)
+            {
+                _pendingAuth.Remove(managed.ManagedSource);
+                ManagedCatalog.XaiGrok.CancelConnection(begin.State);
+            }
+
+            if (ReferenceEquals(_pollCts, cts))
+                _pollCts = null;
+            cts.Dispose();
+        }
+    }
+
+    private static string VerifyStatus(IManagedConnectionProvider managed, ManagedConnectionVerify verify) =>
+        $"{managed.DisplayName}: synced {verify.SlugCount} model slug(s)"
+        + (string.IsNullOrWhiteSpace(verify.Note) ? "." : $" ({verify.Note}).");
 
     private void OpenDirectImport(IManagedInferenceProvider direct)
     {
@@ -704,6 +849,7 @@
 
     private async Task ConfirmDeleteProviderAsync(DysonModelProviderEntity provider)
     {
+        var nativeXai = DysonManagedSources.IsXaiGrok(provider.ManagedSource);
         var confirmed = await ConfirmDialog.ConfirmAsync(
             title: "Delete provider",
             message: $"Delete provider '{provider.DisplayName}' and all its slugs? This cannot be undone.",
@@ -716,6 +862,13 @@
         _busy = true;
         try
         {
+            // Native xAI: also drop the stored sign-in so no orphaned token row is left behind.
+            if (nativeXai)
+            {
+                _pollCts?.Cancel();
+                await ManagedCatalog.XaiGrok.DisconnectAsync();
+            }
+
             await DeleteProviderAsync(provider.Id);
         }
         finally
