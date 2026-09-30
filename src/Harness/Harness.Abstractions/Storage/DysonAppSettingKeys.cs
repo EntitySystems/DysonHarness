@@ -207,4 +207,10 @@ public static class DysonAppSettingKeys
     /// (<c>IDysonXaiCredentialStore</c>), never by subject. Never log the value.
     /// </summary>
     public const string XaiGrokCredentialPrefix = "xai_grok_credential:";
+
+    /// <summary>
+    /// <c>"true"</c> once this subject accepted the native xAI/Grok sign-in notice (unofficial Grok CLI identity,
+    /// plaintext token storage). Missing ⇒ Connect is refused until accepted.
+    /// </summary>
+    public const string XaiGrokConsentAccepted = "xai_grok_consent_accepted";
 }

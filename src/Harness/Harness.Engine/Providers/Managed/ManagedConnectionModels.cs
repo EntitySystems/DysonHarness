@@ -11,7 +11,8 @@ public sealed record ManagedConnectionBegin(
     string State,
     string? UserCode = null,
     string? Flow = null,
-    int? ExpiresIn = null);
+    int? ExpiresIn = null,
+    int? PollIntervalSeconds = null);
 
 public sealed record ManagedConnectionComplete(
     string Status,
@@ -21,4 +22,5 @@ public sealed record ManagedConnectionComplete(
 public sealed record ManagedConnectionVerify(
     Guid ProviderId,
     int SlugCount,
-    IReadOnlyList<string> Slugs);
+    IReadOnlyList<string> Slugs,
+    string? Note = null);
