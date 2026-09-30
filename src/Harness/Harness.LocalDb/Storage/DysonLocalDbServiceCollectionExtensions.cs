@@ -24,6 +24,9 @@ public static class DysonLocalDbServiceCollectionExtensions
                 sp.GetRequiredService<IDbContextFactory<DysonDbContext>>(),
                 databasePath));
 
+        // Singleton: used from IHttpClientFactory handlers, which have no circuit/subject scope.
+        services.AddSingleton<IDysonXaiCredentialStore, DysonXaiCredentialStore>();
+
         services.AddScoped<IDysonSessionRepository, DysonSessionRepository>();
         services.AddScoped<IDysonWorkDirectoryRepository, DysonWorkDirectoryRepository>();
         services.AddScoped<IDysonWorkDirectoryConfigurationRepository, DysonWorkDirectoryConfigurationRepository>();
