@@ -83,4 +83,4 @@ See [AGENTS.md](AGENTS.md) for contributor and agent rules. Short index: [C#](ru
 
 ## License
 
-Copyright (C) 2026 EntitySystems. Licensed under [AGPL-3.0](LICENSE).
+Copyright (C) 2026 EntitySystems. Licensed under [AGPL-3.0](LICENSE). Third-party code notices (including the MIT-licensed CLIProxyAPI port behind the native xAI provider): [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
