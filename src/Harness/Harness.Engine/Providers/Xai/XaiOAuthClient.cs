@@ -334,9 +334,10 @@ public sealed class XaiOAuthClient(
         {
             return Result<HttpReply, string>.AsError($"{what} was cancelled");
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException ex)
         {
-            return Result<HttpReply, string>.AsError($"{what} timed out");
+            // Exception attached so callers can tell a transient timeout from a protocol error.
+            return Result<HttpReply, string>.AsError($"{what} timed out", ex);
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException)
         {

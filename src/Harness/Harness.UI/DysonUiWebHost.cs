@@ -131,6 +131,21 @@ public static class DysonUiWebHost
             var factory = sp.GetRequiredService<IHttpClientFactory>();
             return factory.CreateClient();
         });
+        // Native xAI/Grok: host-level client identity overrides (config Dyson:XaiGrok), a plain "xai-oauth" client for
+        // the OAuth endpoints, and XaiGrokRequestHandler on the DEFAULT client (acts only on dyson-xai:<guid> bearers).
+        builder.Services.AddSingleton(
+            builder.Configuration.GetSection(XaiGrokClientOptions.SectionName).Get<XaiGrokClientOptions>()
+            ?? new XaiGrokClientOptions());
+        builder.Services.AddHttpClient("xai-oauth");
+        builder.Services.AddSingleton(sp =>
+        {
+            var factory = sp.GetRequiredService<IHttpClientFactory>();
+            return new XaiOAuthClient(() => factory.CreateClient("xai-oauth"));
+        });
+        builder.Services.AddSingleton<XaiGrokAuthService>();
+        builder.Services.AddTransient<XaiGrokRequestHandler>();
+        builder.Services.AddHttpClient(Microsoft.Extensions.Options.Options.DefaultName)
+            .AddHttpMessageHandler<XaiGrokRequestHandler>();
         builder.Services.AddScoped<ManagedInferenceProviderCatalog>();
 #if WINDOWS
         builder.Services.AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>();

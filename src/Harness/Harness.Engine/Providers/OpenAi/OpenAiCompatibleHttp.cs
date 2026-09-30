@@ -166,6 +166,10 @@ public static class OpenAiCompatibleHttp
         if (error.Contains("cancelled", StringComparison.Ordinal))
             return false;
 
+        // xAI plan quota: a 429 that retrying cannot fix (see XaiGrokRequestHandler).
+        if (error.Contains("free-usage-exhausted", StringComparison.Ordinal))
+            return false;
+
         const string apiPrefix = "OpenAI API ";
         if (error.StartsWith(apiPrefix, StringComparison.Ordinal))
         {

@@ -9,12 +9,17 @@ public static class DysonManagedSources
     public const string CliProxyKimi = "cliproxy-kimi";
     public const string CliProxyClaude = "cliproxy-claude";
     public const string CliProxyMeta = "cliproxy-meta";
+    /// <summary>Native xAI/Grok Build OAuth provider (no CLIProxy); see <c>Providers/Xai/</c>.</summary>
+    public const string XaiGrok = "xai-grok";
     public const string OpenRouter = "openrouter";
     public const string OrcaRouter = "orcarouter";
 
     public static bool IsCliProxy(string? source) =>
         !string.IsNullOrWhiteSpace(source)
         && source.StartsWith("cliproxy-", StringComparison.Ordinal);
+
+    public static bool IsXaiGrok(string? source) =>
+        string.Equals(source, XaiGrok, StringComparison.Ordinal);
 
     public static bool IsOpenRouter(string? source) =>
         string.Equals(source, OpenRouter, StringComparison.Ordinal);

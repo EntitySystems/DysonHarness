@@ -28,6 +28,9 @@ public sealed class OpenAiResponsesClient(HttpClient http)
         string? responseId = null;
         JsonObject? completedResponse = null;
         string? streamError = null;
+        // xAI: response.completed may carry an empty output; rebuild it from output_item.done items.
+        var isXai = DysonManagedSources.IsXaiGrok(provider.ManagedSource);
+        var doneItems = new SortedDictionary<int, JsonObject>();
 
         await foreach (var payload in OpenAiCompatibleHttp
             .ReadSseJsonPayloadsAsync(_http, HttpMethod.Post, url, provider.ApiKey, body, cancellationToken)
@@ -175,6 +178,9 @@ public sealed class OpenAiResponsesClient(HttpClient http)
             }
             else if (string.Equals(eventType, "response.output_item.done", StringComparison.Ordinal))
             {
+                if (isXai && obj["item"] is JsonObject doneItem)
+                    doneItems[obj["output_index"]?.GetValue<int>() ?? doneItems.Count] = (JsonObject)doneItem.DeepClone();
+
                 if (obj["item"] is JsonObject item
                     && string.Equals(item["type"]?.GetValue<string>(), "function_call", StringComparison.Ordinal))
                 {
@@ -207,6 +213,14 @@ public sealed class OpenAiResponsesClient(HttpClient http)
         {
             yield return Result<OpenAiStreamChunk, string>.AsError(streamError);
             yield break;
+        }
+
+        if (isXai
+            && completedResponse is not null
+            && completedResponse["output"] is not JsonArray { Count: > 0 }
+            && doneItems.Count > 0)
+        {
+            completedResponse["output"] = new JsonArray(doneItems.Values.Select(i => (JsonNode?)i).ToArray());
         }
 
         var toolCalls = MergeToolCalls(functionCalls, completedResponse);
@@ -289,6 +303,9 @@ public sealed class OpenAiResponsesClient(HttpClient http)
 
         if (!string.IsNullOrWhiteSpace(provider.ReasoningEffort))
             body["reasoning"] = new JsonObject { ["effort"] = provider.ReasoningEffort.Trim() };
+
+        if (DysonManagedSources.IsXaiGrok(provider.ManagedSource))
+            XaiResponsesRequestSanitizer.Apply(body, XaiGrokModelCatalog.Find(provider.Slug));
 
         return body;
     }
