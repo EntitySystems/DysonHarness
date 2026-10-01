@@ -781,7 +781,7 @@ public static class DysonMetaAgentTools
         {
             Name = "EditMetaPlan",
             Description =
-                "Edit an existing meta plan in place, like WriteFile on a plan (same planId, same row, the open plan page updates live). " +
+                "Edit an existing meta plan in place, like WriteFile on a plan (same planId, same row; the plan list refreshes live, a plan viewer already open keeps the text it loaded until reopened). " +
                 "Use it for targeted revisions, new sections, wording fixes, and applying user review comments. " +
                 "Pass old_text and new_text, or edits (ordered; each applies to the result of the previous one), or content to replace the whole body — exactly one mode per call. " +
                 "old_text must match exactly once unless replace_all; copy it from ReadMetaPlan's markdown field. " +

@@ -37,6 +37,7 @@ Kept:
 | `CompactConversation` | Enqueues `DysonFullSummarizeFlow.CreateTurn()` and **ends the current turn**. |
 | `RemoveTodos` | Runtime `_session.Mode == MetaAgent` check. `DeleteTodo` is not in the catalog. |
 | `ListPlans` / `SetPlanStatus` / `BeginBuildPlan` / `DeletePlan` | Plan tools below. |
+| `ReadMetaPlan` / `EditMetaPlan` | Plan-body tools, shared with the drone (one `CreatePlanBodyTools()` definition). The root cannot match `old_text` without the text, so it reads bodies on demand; `ListPlans` still never carries a body. Neither schema takes a `path`. See [Plan tools](#plan-tools). |
 | `ListNotes` | Name and token count only. No body, no caps, no `allowed`. |
 | `CanCreateNote` | Pre-write budget check. Optional `name` and `content`. No roster. Does not write. |
 | `CreateNote` | New note. Fails if the name exists, if this would be note 21, or if a token cap would break. |
@@ -63,7 +64,7 @@ Root + AutoInclude bodies are already in the system prompt. `LoadSkill` still ru
 
 ### Meta Agent Drone catalog
 
-`ApplyDroneAllowlist`: Work catalog minus `AskQuestionFromParent` and `PromptUserDialogFromParent` only (`TriggerParentEvent` stays), plus `ReadMetaPlan` and `SubmitMetaPlan`. `PostUserQuestion` is not on the drone. It also adds `StartAsyncBugReviewAgent` and `StartAsyncSecurityReviewAgent` (not `StartAsyncExploreAgent`, not `StartAsyncMetaAgentDrone`). Those reviews use the same `CreateChildAsync` path as Explore and inherit the drone checkout. The drone waits with the `WaitForSubagent` it already has. `StartSubagent` is still how it spawns Explore and classic Drone. The review tools do not take `useWorktree` or `existingWorktreePath`. Questions and section-boundary status pings go up as `TriggerParentEvent` with kind `message`; the parent answers with `RespondToSubagentEvent` — immediately for a status (and posts it to the user), after the user decides for a question. `SubmitSubagentReport` stays. Covered by `DysonMetaAgentToolsetTests`.
+`ApplyDroneAllowlist`: Work catalog minus `AskQuestionFromParent` and `PromptUserDialogFromParent` only (`TriggerParentEvent` stays), plus `ReadMetaPlan`, `EditMetaPlan`, and `SubmitMetaPlan`. `PostUserQuestion` is not on the drone. It also adds `StartAsyncBugReviewAgent` and `StartAsyncSecurityReviewAgent` (not `StartAsyncExploreAgent`, not `StartAsyncMetaAgentDrone`). Those reviews use the same `CreateChildAsync` path as Explore and inherit the drone checkout. The drone waits with the `WaitForSubagent` it already has. `StartSubagent` is still how it spawns Explore and classic Drone. The review tools do not take `useWorktree` or `existingWorktreePath`. Questions and section-boundary status pings go up as `TriggerParentEvent` with kind `message`; the parent answers with `RespondToSubagentEvent` — immediately for a status (and posts it to the user), after the user decides for a question. `SubmitSubagentReport` stays. Covered by `DysonMetaAgentToolsetTests`.
 
 Meta parents (`Meta Agent` and `Meta Agent Drone`) always auto-turn every child event, including `askQuestion` and `promptUserDialog`. The focused card may still open and is not the only delivery. Work, Ask, and Plan stay card-only for valid Ask/Dialog JSON. One re-inject (`DysonSubagentHostLogic.MetaParentEventRetryCap = 1`) then the child gets `Parent did not answer this event.` and the root Meta Agent gets a `DisplayInfo` turn. A root `DisplayInfo` parks the event until the next user message carries that same event in `HiddenInstruction`. Depth greater than 1 `askQuestion` / `promptUserDialog` fails fast (`Use kind message.`); the deadlock guard is unchanged. `BuildSubagentEventContinuationPrompt` carries the reply contract on every delivery (the first auto-turn, the one retry, and the parked `HiddenInstruction`), chosen from the receiving session's mode. The system-prompt parent-event sentences are only a backstop.
 
@@ -76,6 +77,8 @@ A parent-event continuation is kind `ParentEvent` (20): it stays in the session 
 Every executor call is scoped by `_workDirectoryId` (the session's work-directory Guid, not the live worktree path). `IDysonPlanRepository.GetAsync` / `UpdateAsync` / `DeleteAsync` look up `Id == planId && WorkDirectoryId == workDirectoryId`. A `planId` alone can never cross work directories. That is load-bearing: `planId` is a sequential `long` (globally unique across the table), so `4` is guessable in a way a Guid is not. `planId <= 0` is rejected with `DysonMetaAgentTools.PlanIdMustBePositiveMessage` before the query. Runtime mode checks (`MetaAgent` vs `MetaAgentDrone`) sit in the executor — the catalog is not the security boundary.
 
 Meta plan bodies live in the `plans` table against that work directory, not as `.dyson/plans/*.md` on a drone branch. `SubmitPlan` is unchanged (Plan-mode only).
+
+Who does what: a plan is **authored** by a plan drone (`purpose: plan`: explore, then `SubmitMetaPlan`). It is **revised** with `EditMetaPlan` by the authoring drone, a build drone that finds the plan wrong or outdated, or the root Meta Agent for small comment-driven fixes (substantive revisions are relayed to the authoring drone with `MessageMetaAgentDrone`). The root prompt, the drone directive and mandate, the `purpose: plan` brief, `DysonMetaBuildBrief`, the `Plan comments on metaplan:…` turn (`DysonFileViewerComments.FormatPrompt`), and the `SubmitMetaPlan` / `EditMetaPlan` catalog descriptions all say so; `DysonEditMetaPlanTests.Prompts_briefs_and_descriptions_name_EditMetaPlan` pins that each names the tool.
 
 ### `ListPlans` JSON contract
 
@@ -99,13 +102,32 @@ Second builder: `FindLiveBuilder` refuses a new spawn while a **non-terminal** c
 
 Refuses while `Status == Building` (`"Call SetPlanStatus with stale, or stop the builder first."`). Status is the delete gate; `BuildAgentId` is not consulted.
 
-### `SubmitMetaPlan` / `ReadMetaPlan` (drone-only)
+### `SubmitMetaPlan` (drone-only) / `ReadMetaPlan` / `EditMetaPlan` (root and drone)
 
-`SubmitMetaPlan` inserts `Kind = MetaPlan`, `Status = Draft` (or overwrites `Title`/`Markdown` in place when `planId` is given). Returns `{planId, title, status}`. Writes **no file**. Cross-workdir `planId` is `"Plan '{id}' not found."`. Empty markdown is a Result error. After a successful create or revise (and after `SetPlanStatus` / `BeginBuildPlan` / `DeletePlan` succeed), the executor publishes `DysonPlansChangedEvent` on `DysonBusScopes.WorkDirectory` so an already-open meta page can refresh `MetaPlanList` without a reload.
+`SubmitMetaPlan` inserts `Kind = MetaPlan`, `Status = Draft`, or overwrites `Title`/`Markdown` of the **existing row in place** when `planId` is given (`UpdateAsync` on the same id; it never creates a second row, and a cross-workdir id is not found). Its description tells the model to prefer `EditMetaPlan` for revisions and to create large plans from a short skeleton. Returns `{planId, title, status}`. Writes **no file**. Cross-workdir `planId` is `"Plan '{id}' not found."`. Empty markdown is a Result error. After a successful create or revise (and after `SetPlanStatus` / `BeginBuildPlan` / `DeletePlan` succeed), the executor publishes `DysonPlansChangedEvent` on `DysonBusScopes.WorkDirectory` so an already-open meta page can refresh `MetaPlanList` without a reload.
 
 It is **not** a report: no `EndsCurrentTurn`, does not call `SubmitSubagentReportAsync`, does not enqueue a parent interrupt. The drone must still `SubmitSubagentReport`. A plan-authoring drone that stops after `SubmitMetaPlan` is caught by the existing unfinished-work / child-report watch. Covered by `DysonSubmitMetaPlanTests`.
 
-`ReadMetaPlan` returns `{planId, title, markdown, status}` for a row in **this** work directory.
+`ReadMetaPlan` returns `{planId, title, markdown, status}` for a row in **this** work directory, to the root Meta Agent and to drones. The `markdown` string is exactly what `EditMetaPlan` matches `old_text` against (no line-number prefixes, stored EOLs kept).
+
+`EditMetaPlan` edits an existing plan in place, mirroring `WriteFile` with `planId` in place of `path`:
+
+```json
+{ "planId": 49,
+  "old_text": "...", "new_text": "...", "replace_all": false,
+  "edits": [ { "old_text": "...", "new_text": "...", "replace_all": false } ],
+  "content": "...",
+  "title": "optional rename", "summary": "optional revision note" }
+```
+
+- Exactly one of `content`, `old_text`+`new_text`, or `edits[]` per call; a mixture is rejected (`exactly one of`). `title` alone renames. Unlike `WriteFile`, `old_text` plus `edits[]` is rejected instead of concatenated, items in `edits[]` missing a string `old_text`/`new_text` are an error instead of skipped, and there is no `path`.
+- Edits run through `DysonTextEditApplier.TryApplyEdits`, the same ordered all-or-nothing applier `WriteFile` and `UpdateNote` use: each edit sees the previous edit's result, `old_text` must match exactly once unless `replace_all`, and the first failure aborts with `edits[i]` and the match count (`old_text` for the single form). Nothing is written on failure (`Plan {id} is unchanged`).
+- Persistence is `UpdateAsync` on the same row: `Markdown` (and `Title` when given) change, `UpdatedUtc` bumps, `Status` / `Note` / `BuildAgentId` are untouched. There is no revision counter or history column, so none is returned. `DysonPlansChangedEvent` is published once on success. An open `FileViewerOverlay` keeps the text it loaded; only `MetaPlanList` refreshes.
+- Same-stage calls run concurrently, so read-modify-write runs under a per-`planId` gate (static dictionary in `DysonWorkspaceToolExecutor`, shared with `SubmitMetaPlan` revisions): two edits to one plan compose. The catalog description still asks for at most one call per plan per stage, with multiple hunks in `edits[]`.
+- Result: `{planId, title, status, updatedUtc, mode, edits:[{index, replacements}], chars, lines}`. Errors are `Result` text: unknown or foreign `planId` (`Plan '{id}' not found.`), mixed modes, bad edit shape, not-found / ambiguous, or the repository's non-empty-`Markdown` rule.
+- Review comments: `FileViewerOverlay` comments hold no stored anchor (an excerpt of the clicked block plus text, in memory until sent as a turn), so an edit cannot break one. See [plans.md](../storage/plans.md).
+
+A `SubmitMetaPlan` / `EditMetaPlan` argument that is not valid JSON returns `"{tool}: invalid JSON arguments: {parser reason + position} ({n} chars received[, and they do not end with '}' ...]). Send a smaller payload ..."` pointing at `EditMetaPlan`. Provider adapters parse arguments once (`OpenAiCompatibleHttp.SplitStageFromArguments`); if that parse fails the raw text, still containing `"stage"`, reaches the executor, which is why a long truncated body surfaces here.
 
 ### Status vs `BuildAgentId`
 
@@ -159,7 +181,8 @@ See [README.md](README.md)#meta-agent-maintenance-tick and [sessions.md](../stor
 
 - `ListPlans` JSON is a closed property set. Adding `markdown` / `path` / `note` / a prune `notice` is a contract break (`DysonPlanStatusTests`).
 - `LoadSkill` with a file path in Meta Agent mode is the silent hole; the Literal post-filter is the whole no-filesystem design (`DysonMetaAgentLoadSkillTests`).
-- `SubmitMetaPlan` is not a report. A drone that returns after it leaves the parent waiting until the child-report watch fires.
+- `SubmitMetaPlan` is not a report. A drone that returns after it leaves the parent waiting until the child-report watch fires. Neither is `EditMetaPlan`.
+- Resubmitting a whole large plan to revise it is the failure mode `EditMetaPlan` exists to avoid: one malformed or cut-off JSON argument loses the entire revision.
 - `BuildAgentId` lingering after a completed/stale plan is expected. UI and `DeletePlan` use `Status`.
 - Sequential `planId`s are guessable; always pass `_workDirectoryId`.
 - `ReadMetaAgentDroneLog` / reminder counts / `LastReportSummary` die with the process. The child **session** row rehydrates; the log lines do not.
