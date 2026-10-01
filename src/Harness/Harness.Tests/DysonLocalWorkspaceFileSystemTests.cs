@@ -7,6 +7,15 @@ namespace Harness.Tests;
 public class DysonLocalWorkspaceFileSystemTests
 {
     [Fact]
+    public async Task RunIoAsync_runs_off_the_thread_pool()
+    {
+        var onPool = await DysonLocalWorkspaceFileSystem.RunIoAsync(
+            () => Thread.CurrentThread.IsThreadPoolThread,
+            CancellationToken.None);
+        Assert.False(onPool);
+    }
+
+    [Fact]
     public async Task Initialize_local_fs_required_and_wrong_subject_rejected()
     {
         var root = CreateTempDir();
