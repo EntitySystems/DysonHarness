@@ -47,6 +47,7 @@ public class DysonMetaAgentToolsetTests
         Assert.False(pipeline.Tools.ContainsKey("PromptUserDialogFromParent"));
         Assert.True(pipeline.Tools.ContainsKey("TriggerParentEvent"));
         Assert.True(pipeline.Tools.ContainsKey("ReadMetaPlan"));
+        Assert.True(pipeline.Tools.ContainsKey("EditMetaPlan"));
         Assert.True(pipeline.Tools.ContainsKey("SubmitMetaPlan"));
         Assert.True(pipeline.Tools.ContainsKey("ReadFile"));
         Assert.True(pipeline.Tools.ContainsKey("SubmitSubagentReport"));

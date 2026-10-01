@@ -111,6 +111,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "UpdateNote" => await UpdateNoteAsync(call, cancellationToken).ConfigureAwait(false),
                 "DeleteNote" => await DeleteNoteAsync(call, cancellationToken).ConfigureAwait(false),
                 "ReadMetaPlan" => await ReadMetaPlanAsync(call, cancellationToken).ConfigureAwait(false),
+                "EditMetaPlan" => await EditMetaPlanAsync(call, cancellationToken).ConfigureAwait(false),
                 "SubmitMetaPlan" => await SubmitMetaPlanAsync(call, cancellationToken).ConfigureAwait(false),
                 "WaitForSubagent" => await WaitForSubagentAsync(call, cancellationToken).ConfigureAwait(false),
                 "InspectSubagentLog" => await InspectSubagentLogAsync(call, cancellationToken).ConfigureAwait(false),
@@ -2072,13 +2073,13 @@ public sealed partial class DysonWorkspaceToolExecutor
                 return Error(call, read.Error);
 
             var text = read.Value;
-            var edits = new List<(string Old, string New, bool ReplaceAll)>();
+            var edits = new List<DysonTextEditApplier.Edit>();
             var defaultReplaceAll = GetBool(doc.RootElement, "replace_all");
 
             if (doc.RootElement.TryGetProperty("old_text", out var oldProp)
                 && doc.RootElement.TryGetProperty("new_text", out var newProp))
             {
-                edits.Add((oldProp.GetString() ?? "", newProp.GetString() ?? "", defaultReplaceAll));
+                edits.Add(new(oldProp.GetString() ?? "", newProp.GetString() ?? "", defaultReplaceAll));
             }
 
             if (doc.RootElement.TryGetProperty("edits", out var editsArr)
@@ -2091,31 +2092,27 @@ public sealed partial class DysonWorkspaceToolExecutor
                     var itemReplaceAll = edit.TryGetProperty("replace_all", out var ra)
                         ? ra.ValueKind == JsonValueKind.True
                         : defaultReplaceAll;
-                    edits.Add((o.GetString() ?? "", n.GetString() ?? "", itemReplaceAll));
+                    edits.Add(new(o.GetString() ?? "", n.GetString() ?? "", itemReplaceAll));
                 }
             }
 
             if (edits.Count == 0)
                 return Error(call, "WriteFile: provide content, or old_text/new_text, or edits[].");
 
-            var appliedEdits = 0;
-            var replacementCount = 0;
-            foreach (var (oldText, newText, replaceAll) in edits)
+            var batch = DysonTextEditApplier.TryApplyEdits(text, edits);
+            if (batch.IsError)
             {
-                if (string.IsNullOrEmpty(oldText))
-                    return Error(call, "WriteFile: old_text must be non-empty.");
-
-                var result = DysonTextEditApplier.TryReplace(text, oldText, newText, replaceAll);
-                if (result.IsError)
-                {
-                    var failure = result.Error;
-                    return Error(call, $"WriteFile: {failure.Message} ({path.Value})");
-                }
-
-                text = result.Value.Content;
-                appliedEdits++;
-                replacementCount += result.Value.ReplacementCount;
+                var failure = batch.Error.Failure;
+                return Error(
+                    call,
+                    failure.Kind == DysonTextEditApplier.FailureKind.EmptyOldText
+                        ? "WriteFile: old_text must be non-empty."
+                        : $"WriteFile: {failure.Message} ({path.Value})");
             }
+
+            text = batch.Value.Content;
+            var appliedEdits = edits.Count;
+            var replacementCount = batch.Value.ReplacementCount;
 
             var saved = await _fs.WriteAllTextAsync(path.Value, text, cancellationToken).ConfigureAwait(false);
             if (saved.IsError)

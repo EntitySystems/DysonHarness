@@ -14,7 +14,8 @@ public static class DysonMetaBuildBrief
             : $"plan {planId} ({title.Trim()})";
         var brief =
             $"Build {heading}. Call ReadMetaPlan with planId {planId} before you start — " +
-            "it is the authoritative brief and it is kept current. Do not rely on this message for the plan body.";
+            "it is the authoritative brief and it is kept current. Do not rely on this message for the plan body. " +
+            "If the plan turns out wrong or outdated while you build, correct it in place with EditMetaPlan (small targeted edits).";
 
         return string.IsNullOrWhiteSpace(extraInstructions)
             ? brief

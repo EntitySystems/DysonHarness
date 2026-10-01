@@ -17,6 +17,7 @@ public static class DysonTextEditApplier
         Identical,
         NotFound,
         Ambiguous,
+        EmptyOldText,
     }
 
     public sealed class Failure
@@ -30,6 +31,76 @@ public static class DysonTextEditApplier
     {
         public required string Content { get; init; }
         public int ReplacementCount { get; init; }
+    }
+
+    /// <summary>One targeted replacement in an ordered batch.</summary>
+    public readonly record struct Edit(string OldText, string NewText, bool ReplaceAll);
+
+    public sealed class BatchSuccess
+    {
+        public required string Content { get; init; }
+
+        /// <summary>Replacements made by each edit, in edit order.</summary>
+        public required IReadOnlyList<int> ReplacementCounts { get; init; }
+
+        public int ReplacementCount => ReplacementCounts.Sum();
+    }
+
+    public sealed class BatchFailure
+    {
+        /// <summary>Zero-based index of the edit that failed.</summary>
+        public required int EditIndex { get; init; }
+
+        public required Failure Failure { get; init; }
+    }
+
+    /// <summary>
+    /// Applies <paramref name="edits"/> in order, each to the text the previous edit produced.
+    /// All-or-nothing: the first failure returns its index and no content. WriteFile, UpdateNote and
+    /// EditMetaPlan share this so match rules and error wording stay identical.
+    /// </summary>
+    public static Result<BatchSuccess, BatchFailure> TryApplyEdits(string content, IReadOnlyList<Edit> edits)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(edits);
+
+        var text = content;
+        var counts = new List<int>(edits.Count);
+        for (var i = 0; i < edits.Count; i++)
+        {
+            var edit = edits[i];
+            if (string.IsNullOrEmpty(edit.OldText))
+            {
+                return Result<BatchSuccess, BatchFailure>.AsError(new BatchFailure
+                {
+                    EditIndex = i,
+                    Failure = new Failure
+                    {
+                        Kind = FailureKind.EmptyOldText,
+                        Message = "old_text must be non-empty.",
+                    },
+                });
+            }
+
+            var replaced = TryReplace(text, edit.OldText, edit.NewText ?? "", edit.ReplaceAll);
+            if (replaced.IsError)
+            {
+                return Result<BatchSuccess, BatchFailure>.AsError(new BatchFailure
+                {
+                    EditIndex = i,
+                    Failure = replaced.Error,
+                });
+            }
+
+            text = replaced.Value.Content;
+            counts.Add(replaced.Value.ReplacementCount);
+        }
+
+        return Result<BatchSuccess, BatchFailure>.AsValue(new BatchSuccess
+        {
+            Content = text,
+            ReplacementCounts = counts,
+        });
     }
 
     /// <summary>
