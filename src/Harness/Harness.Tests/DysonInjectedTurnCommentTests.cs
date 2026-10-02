@@ -144,6 +144,22 @@ public class DysonInjectedTurnCommentTests
     }
 
     [Fact]
+    public void Injected_comment_is_logged_in_full_apart_from_the_prompt_line()
+    {
+        var session = new StubSession();
+        var running = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        session.AddTurnForTest(running);
+        var text = new string('c', 200) + " keep the tail";
+        using (session.BeginInFlightPrompt(running))
+            ExpectSuccess(session.InjectTurnComment(running.Id, text), "logged inject");
+
+        var line = session.SnapshotLog().Single(l => l.StartsWith("USER COMMENT (injected mid-turn", StringComparison.Ordinal));
+        if (!line.EndsWith(": " + text, StringComparison.Ordinal)
+            || !line.Contains(running.Id.ToString("N")[..8], StringComparison.Ordinal))
+            throw new InvalidOperationException($"Log line must carry the turn id and untruncated text, got '{line}'.");
+    }
+
+    [Fact]
     public void Drain_stamps_comment_with_current_tool_call_count()
     {
         var turn = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };

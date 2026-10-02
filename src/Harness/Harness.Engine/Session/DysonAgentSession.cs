@@ -1159,12 +1159,25 @@ public abstract class DysonAgentSession
         if (reopened)
             await child.PersistReopenAsync("parent TriggerSubagentEvent").ConfigureAwait(false);
 
+        // Full text (the prompt: line is truncated); persisted as a LogLine and shown by InspectSubagentLog.
+        child.AppendLog($"PARENT MESSAGE: {trimmed}");
+
         if (interruptSubagent)
         {
             child.CancelPendingParentEventWait(
                 "cancelled by parent TriggerSubagentEvent");
             child.CancelBackgroundRun();
-            child.ClearPendingTurns();
+            // Drop queued harness follow-ups, but keep earlier parent messages: they run after
+            // the interrupt turn instead of being silently discarded.
+            var queuedParentMessages = new List<DysonAgentTurn>();
+            while (child.TryDequeuePendingTurn(out var queued))
+            {
+                if (queued.Instruction?.StartsWith(InjectedSubagentPromptPrefix, StringComparison.Ordinal) == true)
+                    queuedParentMessages.Add(queued);
+            }
+
+            foreach (var queued in queuedParentMessages)
+                child.EnqueuePendingTurn(queued);
             var runCts = new CancellationTokenSource();
             child.AttachBackgroundRun(runCts);
             KickOffChildPrompt(child, CreateInjectedSubagentTurn(trimmed, reportReenabled: reopened), runCts);
@@ -1436,8 +1449,14 @@ public abstract class DysonAgentSession
     {
         foreach (var turn in _inFlightPromptStack)
         {
-            if (turn.Id == turnId)
-                return turn.EnqueueUserComment(comment);
+            if (turn.Id != turnId)
+                continue;
+
+            var queued = turn.EnqueueUserComment(comment);
+            // Full text, never truncated (the prompt: line is): rail Session log + InspectSubagentLog.
+            if (queued.IsSuccess)
+                AppendLog($"USER COMMENT (injected mid-turn, turn {turn.Id.ToString("N")[..8]}): {comment.Trim()}");
+            return queued;
         }
 
         return VoidResult<string>.AsError("Turn is not currently running.");
@@ -1644,19 +1663,22 @@ public abstract class DysonAgentSession
 
     private void RaiseParentEventsChanged() => ParentEventsChanged?.Invoke(this, EventArgs.Empty);
 
+    private const string InjectedSubagentPromptPrefix =
+        "Harness injection: the parent sent instructions via TriggerSubagentEvent.";
+
     private static string BuildInjectedSubagentPrompt(string payload, bool reportReenabled)
     {
         var body = payload.Trim();
         if (reportReenabled)
         {
             return
-                "Harness injection: the parent sent instructions via TriggerSubagentEvent. Follow them and continue your task.\n"
+                InjectedSubagentPromptPrefix + " Follow them and continue your task.\n"
                 + "SubmitSubagentReport is enabled again for this assignment and must be called when the new work is done or blocked.\n\n"
                 + body;
         }
 
         return
-            "Harness injection: the parent sent instructions via TriggerSubagentEvent. Follow them and continue your task.\n\n"
+            InjectedSubagentPromptPrefix + " Follow them and continue your task.\n\n"
             + body;
     }
 
