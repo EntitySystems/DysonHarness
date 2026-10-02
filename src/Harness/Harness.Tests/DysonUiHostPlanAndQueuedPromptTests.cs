@@ -157,6 +157,48 @@ public class DysonUiHostPlanAndQueuedPromptTests
         }
     }
 
+    [Fact]
+    public async Task Late_comment_after_intake_closes_is_queued_as_a_prompt_not_dropped()
+    {
+        await using var ctx = await HostContext.CreateAsync();
+        var workRoot = Path.Combine(Path.GetTempPath(), $"dyson-host-late-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workRoot);
+        try
+        {
+            var wd = await ctx.WorkDirectories.CreateAsync(workRoot, "LateComment");
+            Assert.True(wd.IsSuccess, wd.IsError ? wd.Error : null);
+            var create = await ctx.Models.CreateProviderAsync(new DysonModelProviderEntity
+            {
+                DisplayName = "Demo Local",
+                ProviderKind = DysonProviderKinds.Demo,
+            });
+            Assert.True(create.IsSuccess, create.IsError ? create.Error : null);
+            var slug = await ctx.Models.AddSlugAsync(create.Value, "demo-a", "Demo A");
+            Assert.True(slug.IsSuccess, slug.IsError ? slug.Error : null);
+            var started = await ctx.Host.StartNewSessionAsync(DysonAgentModes.Work, slug.Value, wd.Value);
+            Assert.True(started.IsSuccess, started.IsError ? started.Error : null);
+
+            var session = ctx.Host.Session
+                ?? throw new InvalidOperationException("Expected focused session.");
+            ctx.Host.MarkSessionBusyForTests(session.PersistenceId);
+
+            var finishing = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal, Instruction = "finishing" };
+            using (session.BeginInFlightPrompt(finishing))
+            {
+                Assert.True(finishing.TryCloseCommentIntake());
+
+                var sent = await ctx.Host.PromptOrInjectAsync("said in the last second");
+                Assert.True(sent.IsSuccess, sent.IsError ? sent.Error : null);
+                Assert.Equal("said in the last second", Assert.Single(ctx.Host.QueuedPrompts).Text);
+                Assert.Empty(DysonInjectedUserComments.From(finishing.ReasoningLog));
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(workRoot, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
     private sealed class HostContext : IAsyncDisposable
     {
         private readonly SqliteConnection _conn;

@@ -178,6 +178,10 @@ public sealed class DysonAgentTurn
 
     private const int MaxUserCommentLength = 16 * 1024;
     private readonly ConcurrentQueue<string> _pendingUserComments = new();
+    private bool _commentIntakeClosed;
+
+    /// <summary>Error returned by <see cref="EnqueueUserComment"/> once intake is closed.</summary>
+    public const string CommentIntakeClosedError = "Turn is no longer accepting comments.";
 
     /// <summary>
     /// When true, tool history for this turn has been compacted and must not be rewritten
@@ -487,6 +491,10 @@ public sealed class DysonAgentTurn
         // Queue + segment under one gate so a concurrent drain always finds the segment to stamp.
         lock (_reasoningLogGate)
         {
+            // Closed: caller (PromptOrInjectAsync) falls back to a queued new prompt turn.
+            if (_commentIntakeClosed)
+                return VoidResult<string>.AsError(CommentIntakeClosedError);
+
             _pendingUserComments.Enqueue(trimmed);
             var roundIndex = _reasoningLog.Count > 0 ? _reasoningLog[^1].RoundIndex : 0;
             _reasoningLog.Add(new DysonReasoningSegment(
@@ -537,6 +545,35 @@ public sealed class DysonAgentTurn
 
     /// <summary>True when at least one injected comment is still waiting to drain into the tool loop.</summary>
     public bool HasPendingUserComments => !_pendingUserComments.IsEmpty;
+
+    /// <summary>
+    /// Closes comment intake before the turn finalizes, atomically with the pending check:
+    /// false (intake stays open) when a comment is still pending, so the loop runs another round
+    /// to deliver it. After a true return every <see cref="EnqueueUserComment"/> fails with
+    /// <see cref="CommentIntakeClosedError"/>.
+    /// </summary>
+    public bool TryCloseCommentIntake()
+    {
+        lock (_reasoningLogGate)
+        {
+            if (!_pendingUserComments.IsEmpty)
+                return false;
+
+            _commentIntakeClosed = true;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Unconditional close when the prompt ends any other way (end-turn tool, error, cancel).
+    /// Accepted-but-undelivered comments stay in <see cref="ReasoningLog"/> with a null anchor
+    /// and replay after the turn's tools in later requests.
+    /// </summary>
+    public void CloseCommentIntake()
+    {
+        lock (_reasoningLogGate)
+            _commentIntakeClosed = true;
+    }
 
     /// <summary>
     /// After the model has seen them: keep slim RemoteUrl image attachments (JPEG bytes dropped),

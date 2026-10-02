@@ -931,16 +931,6 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     continue;
                 }
 
-                // Comment arrived during this stream — inject on the next round instead of finalizing.
-                if (turn.HasPendingUserComments)
-                {
-                    CommitReasoningRound(turn, reply, round, isFinalAssistant: true);
-                    turn.ClearStreamingPreview();
-                    turn.ClearReasoningPreview();
-                    previousResponseId = null;
-                    continue;
-                }
-
                 var text = ResolveFinalAssistantContent(reply.Content);
 
                 if (Parent is not null && !TurnHasSubmitSubagentReport(turn))
@@ -965,6 +955,17 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     turn.FinalizeIncompleteTools(incompleteToolReason);
                     AppendLog("child report gate: missing SubmitSubagentReport after nudge");
                     return new VoidResult<string>(childReportMissing);
+                }
+
+                // Comment arrived during this stream — deliver it next round instead of finalizing.
+                // Atomic with the pending check: a comment after this point is rejected and
+                // PromptOrInjectAsync queues it as a new prompt turn (never silently dropped).
+                if (!turn.TryCloseCommentIntake())
+                {
+                    CommitReasoningRound(turn, reply, round, isFinalAssistant: true);
+                    turn.ClearStreamingPreview();
+                    turn.ClearReasoningPreview();
+                    continue;
                 }
 
                 // Title parse only at finalize — preview stays raw (incl. mid-stream H1) until then.
@@ -994,6 +995,12 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             turn.ClearReasoningPreview();
             turn.FinalizeIncompleteTools(incompleteToolReason);
             return new VoidResult<string>("Prompt was cancelled.");
+        }
+        finally
+        {
+            // Every other exit (end-turn tool, soft-pause, error, cancel) closes intake before the
+            // in-flight scope pops, so a late comment takes the queued-prompt fallback.
+            turn.CloseCommentIntake();
         }
     }
 

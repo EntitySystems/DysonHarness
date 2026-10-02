@@ -127,6 +127,23 @@ public class DysonInjectedTurnCommentTests
     }
 
     [Fact]
+    public void Close_intake_fails_while_a_comment_is_pending_then_rejects_new_comments()
+    {
+        var turn = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        ExpectSuccess(turn.EnqueueUserComment("pending"), "pending enqueue");
+        if (turn.TryCloseCommentIntake())
+            throw new InvalidOperationException("TryCloseCommentIntake must be false while a comment is pending.");
+
+        turn.TryDequeueUserComments();
+        if (!turn.TryCloseCommentIntake())
+            throw new InvalidOperationException("TryCloseCommentIntake must succeed once drained.");
+
+        ExpectErrorMessage(turn.EnqueueUserComment("too late"), DysonAgentTurn.CommentIntakeClosedError, "closed intake");
+        if (DysonInjectedUserComments.From(turn.ReasoningLog).Count != 1)
+            throw new InvalidOperationException("A rejected late comment must not add a segment.");
+    }
+
+    [Fact]
     public void Drain_stamps_comment_with_current_tool_call_count()
     {
         var turn = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
@@ -154,6 +171,37 @@ public class DysonInjectedTurnCommentTests
     }
 
     [Fact]
+    public void Legacy_comment_json_replays_as_marked_message_after_tools_before_reply()
+    {
+        foreach (var responses in new[] { false, true })
+        {
+            var session = new StubSession();
+            var turn = new DysonAgentTurn
+            {
+                Kind = DysonAgentTurnKind.Normal,
+                Instruction = "legacy turn",
+                AssistantText = "legacy reply",
+                StartedUtc = DateTime.UtcNow,
+                CompletedUtc = DateTime.UtcNow,
+            };
+            turn.ToolCalls.Add(Call("old1"));
+            turn.ResponseLog.Enqueue(Result("old1"));
+            turn.RestoreReasoningLog(DysonReasoningLogSerializer.Deserialize(
+                """[{"kind":2,"text":"legacy steer","roundIndex":0}]"""));
+            session.AddTurnForTest(turn);
+
+            var items = Build(session, [], responses);
+            var commentIdx = IndexOfUserContent(items, Msg("legacy steer"));
+            if (commentIdx <= IndexOfCallItem(items, "old1", result: true)
+                || commentIdx >= IndexOfAssistantText(items, "legacy reply"))
+            {
+                throw new InvalidOperationException(
+                    $"{(responses ? "Responses" : "Completions")}: legacy comment must replay after tools, before the reply.");
+            }
+        }
+    }
+
+    [Fact]
     public void Responses_delta_is_skipped_only_in_a_round_that_delivers_comments()
     {
         var turn = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
@@ -163,6 +211,8 @@ public class DysonInjectedTurnCommentTests
         ExpectSuccess(turn.EnqueueUserComment("steer"), "delta enqueue");
         if (OpenAiCompatibleAgentSession.DeliverPendingUserComments(turn, "resp_1") is not null)
             throw new InvalidOperationException("Comment round must force the full rebuild.");
+        if (OpenAiCompatibleAgentSession.DeliverPendingUserComments(turn, "resp_2") != "resp_2")
+            throw new InvalidOperationException("The round after delivery must chain (delta) again.");
     }
 
     private static DysonToolCall Call(string id) => new()
