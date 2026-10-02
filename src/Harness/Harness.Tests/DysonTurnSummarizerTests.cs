@@ -58,7 +58,7 @@ public class DysonTurnSummarizerTests
         }
 
         if (!body.Contains("User comments:", StringComparison.Ordinal)
-            || !body.Contains("USER INJECTED COMMENT: focus on jwt", StringComparison.Ordinal))
+            || !body.Contains(DysonInjectedUserComments.FormatMessage("focus on jwt"), StringComparison.Ordinal))
         {
             throw new InvalidOperationException("FormatTurnBody must include a User comments section.");
         }
@@ -74,13 +74,13 @@ public class DysonTurnSummarizerTests
         if (!stub.Contains($"[turnId={turn.Id:D}]", StringComparison.Ordinal)
             || !stub.Contains("[contextSummary]", StringComparison.Ordinal)
             || !stub.Contains("Auth uses JwtBearer.", StringComparison.Ordinal)
-            || !stub.Contains("USER INJECTED COMMENT: focus on jwt", StringComparison.Ordinal))
+            || !stub.Contains(DysonInjectedUserComments.FormatMessage("focus on jwt"), StringComparison.Ordinal))
         {
             throw new InvalidOperationException("FormatSummaryStub must include turnId + summary + comments.");
         }
 
         var summaryIdx = stub.IndexOf("Auth uses JwtBearer.", StringComparison.Ordinal);
-        var commentIdx = stub.IndexOf("USER INJECTED COMMENT: focus on jwt", StringComparison.Ordinal);
+        var commentIdx = stub.IndexOf(DysonInjectedUserComments.FormatMessage("focus on jwt"), StringComparison.Ordinal);
         if (summaryIdx < 0 || commentIdx <= summaryIdx)
             throw new InvalidOperationException("FormatSummaryStub must append comments after ContextSummary.");
     }

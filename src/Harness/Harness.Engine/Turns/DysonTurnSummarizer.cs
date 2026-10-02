@@ -53,7 +53,7 @@ public static class DysonTurnSummarizer
             }
         }
 
-        var comments = turn.FormatInjectedUserCommentsForTranscript();
+        var comments = DysonInjectedUserComments.FormatPlainText(turn.ReasoningLog);
         if (!string.IsNullOrEmpty(comments))
         {
             if (sb.Length > 0)
@@ -152,7 +152,7 @@ public static class DysonTurnSummarizer
         sb.Append("[contextSummary]");
         sb.AppendLine();
         sb.Append(turn.ContextSummary?.Trim() ?? "");
-        var comments = turn.FormatInjectedUserCommentsForTranscript();
+        var comments = DysonInjectedUserComments.FormatPlainText(turn.ReasoningLog);
         if (!string.IsNullOrEmpty(comments))
         {
             sb.AppendLine();

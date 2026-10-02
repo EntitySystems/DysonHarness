@@ -730,7 +730,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             for (var round = 0; round < maxRounds; round++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                DrainPendingUserCommentsIntoFollowUp(turn, ref harnessFollowUp);
+                previousResponseId = DeliverPendingUserComments(turn, previousResponseId);
 
                 async Task<Result<OpenAiModelReply, string>> ConsumeCurrentProviderRoundAsync()
                 {
@@ -843,8 +843,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     return new VoidResult<string>(replyResult.Error);
                 }
 
-                // This round already sent comments / child-report nudge as currentUserPrompt.
-                // Clear so later rounds do not re-emit them (new comments drain at loop start).
+                // This round already sent the child-report nudge as currentUserPrompt.
+                // Clear so later rounds do not re-emit it. (User comments are replayed by the
+                // transcript builder at their delivery anchor, not via this follow-up.)
                 harnessFollowUp = null;
 
                 var reply = replyResult.Value;
@@ -1553,42 +1554,14 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     }
 
     /// <summary>
-    /// Drains in-flight user comments into <paramref name="harnessFollowUp"/> (comments first,
-    /// then any existing child-report nudge). No-op when the queue is empty.
+    /// Round start: drains pending user comments and stamps them with the turn's tool-call count
+    /// (<see cref="DysonAgentTurn.TryDequeueUserComments"/>); the transcript builder replays them
+    /// at that anchor in this and every later request. Returns null when any were delivered so
+    /// the Responses delta path (previous_response_id + new outputs only) is skipped and the full
+    /// rebuild carries the comment; otherwise returns <paramref name="previousResponseId"/>.
     /// </summary>
-    private static void DrainPendingUserCommentsIntoFollowUp(DysonAgentTurn turn, ref string? harnessFollowUp)
-    {
-        if (!turn.HasPendingUserComments)
-            return;
-
-        var formatted = FormatDrainedUserComments(turn.TryDequeueUserComments());
-        if (formatted.Length == 0)
-            return;
-
-        harnessFollowUp = string.IsNullOrEmpty(harnessFollowUp)
-            ? formatted
-            : formatted + Environment.NewLine + harnessFollowUp;
-    }
-
-    /// <summary>
-    /// Formats drained queue text as <c>USER INJECTED COMMENT:</c> blocks (blank line between).
-    /// Matches <see cref="DysonAgentTurn.FormatInjectedUserCommentsForTranscript"/> layout.
-    /// </summary>
-    private static string FormatDrainedUserComments(string[] comments)
-    {
-        var sb = new System.Text.StringBuilder();
-        foreach (var comment in comments)
-        {
-            if (string.IsNullOrWhiteSpace(comment))
-                continue;
-            if (sb.Length > 0)
-                sb.AppendLine();
-            sb.Append("USER INJECTED COMMENT: ");
-            sb.AppendLine(comment);
-        }
-
-        return sb.ToString();
-    }
+    internal static string? DeliverPendingUserComments(DysonAgentTurn turn, string? previousResponseId) =>
+        turn.TryDequeueUserComments().Length > 0 ? null : previousResponseId;
 
     /// <summary>
     /// Final no-tool-call round body: drop pure compact-history echoes; otherwise empty → harness note.

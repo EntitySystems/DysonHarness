@@ -18,9 +18,224 @@ public class DysonInjectedTurnCommentTests
         AssertDrainFormatsAndLeavesReasoningSegments();
         AssertPersistRestoreUserComment();
         AssertCompletedTurnHistoryEmitsComments();
-        AssertInFlightDoesNotSpliceCommentsOntoInstruction();
-        AssertCompactedTurnKeepsCommentsOnInstruction();
+        AssertInFlightCommentEmitsOnlyOnceDelivered();
+        AssertCompactedTurnEmitsCommentsAfterCompactStub();
         AssertSummarizedStubKeepsComments();
+    }
+
+    private static string Msg(string text) => DysonInjectedUserComments.FormatMessage(text);
+
+    [Fact]
+    public void InFlight_comment_stays_between_round_results_and_next_tool_calls_in_every_later_request()
+    {
+        // Incident regression: comment delivered after round 1 must be in the requests for
+        // rounds 2, 3 and 4 at the same position, and each request extends the previous one.
+        foreach (var responses in new[] { false, true })
+        {
+            var session = new StubSession();
+            var live = new DysonAgentTurn
+            {
+                Kind = DysonAgentTurnKind.Normal,
+                Instruction = "long meta turn",
+                StartedUtc = DateTime.UtcNow,
+            };
+            session.AddTurnForTest(live);
+
+            var rounds = new List<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound>();
+            void RunRound(string id, int calls)
+            {
+                var callList = Enumerable.Range(0, calls).Select(i => Call($"{id}_{i}")).ToList();
+                live.ToolCalls.AddRange(callList);
+                rounds.Add(new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound(
+                    callList,
+                    callList.Select(c => Result(c.CallId)).ToList()));
+            }
+
+            RunRound("r1", 2);
+            ExpectSuccess(live.EnqueueUserComment("Remember: plan 54 needs X"), "incident enqueue");
+            if (OpenAiCompatibleAgentSession.DeliverPendingUserComments(live, "resp_1") is not null)
+                throw new InvalidOperationException("Delivering a comment must drop previous_response_id.");
+
+            string? previousJson = null;
+            foreach (var nextRound in new[] { "r2", "r3", "r4" })
+            {
+                var items = Build(session, rounds, responses);
+                var label = $"{(responses ? "Responses" : "Completions")} before {nextRound}";
+                var commentIdx = IndexOfUserContent(items, Msg("Remember: plan 54 needs X"));
+                if (commentIdx < 0 || CountUserMessagesContaining(items, DysonInjectedUserComments.Marker) != 1)
+                    throw new InvalidOperationException($"{label}: exactly one marked comment message expected.");
+
+                var lastR1 = IndexOfCallItem(items, "r1_1", result: true);
+                var firstR2 = IndexOfCallItem(items, "r2_0", result: false);
+                if (lastR1 < 0 || commentIdx <= lastR1 || (firstR2 >= 0 && commentIdx >= firstR2))
+                    throw new InvalidOperationException($"{label}: comment must sit after round 1 results and before round 2 calls.");
+
+                var json = items.ToJsonString();
+                if (previousJson is not null && !json.StartsWith(previousJson[..^1], StringComparison.Ordinal))
+                    throw new InvalidOperationException($"{label}: request must only append after the previous one.");
+                previousJson = json;
+
+                RunRound(nextRound, 1);
+            }
+        }
+    }
+
+    [Fact]
+    public void Completed_turn_history_splits_tools_at_comment_anchors()
+    {
+        foreach (var responses in new[] { false, true })
+        {
+            var session = new StubSession();
+            var turn = new DysonAgentTurn
+            {
+                Kind = DysonAgentTurnKind.Normal,
+                Instruction = "split me",
+                StartedUtc = DateTime.UtcNow,
+            };
+            ExpectSuccess(turn.EnqueueUserComment("at zero"), "anchor 0 enqueue");
+            turn.TryDequeueUserComments();
+            turn.ToolCalls.AddRange([Call("c1"), Call("c2")]);
+            ExpectSuccess(turn.EnqueueUserComment("after two"), "anchor 2 enqueue");
+            turn.TryDequeueUserComments();
+            turn.ToolCalls.Add(Call("c3"));
+            ExpectSuccess(turn.EnqueueUserComment("never delivered"), "null anchor enqueue");
+            foreach (var id in new[] { "c1", "c2", "c3" })
+                turn.ResponseLog.Enqueue(Result(id));
+            turn.AssistantText = "final words";
+            turn.CompletedUtc = DateTime.UtcNow;
+            session.AddTurnForTest(turn);
+
+            var items = Build(session, [], responses);
+            var label = responses ? "Responses" : "Completions";
+            var order = new[]
+            {
+                IndexOfUserContent(items, Msg("at zero")),
+                IndexOfCallItem(items, "c2", result: true),
+                IndexOfUserContent(items, Msg("after two")),
+                IndexOfCallItem(items, "c3", result: false),
+                IndexOfCallItem(items, "c3", result: true),
+                IndexOfUserContent(items, Msg("never delivered")),
+                IndexOfAssistantText(items, "final words"),
+            };
+            if (order.Any(i => i < 0) || !order.SequenceEqual(order.Order()))
+                throw new InvalidOperationException($"{label}: wrong split order [{string.Join(",", order)}].");
+            if (FindTurnUserContent(items, turn.Id)!.Contains(DysonInjectedUserComments.Marker, StringComparison.Ordinal))
+                throw new InvalidOperationException($"{label}: comments must not be spliced onto the instruction.");
+            if (IndexOfCallItem(items, "c1", result: false) <= order[0])
+                throw new InvalidOperationException($"{label}: anchor-0 comment must precede the first tool call.");
+        }
+    }
+
+    [Fact]
+    public void Drain_stamps_comment_with_current_tool_call_count()
+    {
+        var turn = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        turn.ToolCalls.AddRange([Call("a"), Call("b"), Call("c")]);
+        ExpectSuccess(turn.EnqueueUserComment("stamp me"), "stamp enqueue");
+        if (turn.ReasoningLog[0].DeliveredAfterToolCalls is not null)
+            throw new InvalidOperationException("Pending comment must have no anchor.");
+
+        turn.TryDequeueUserComments();
+        if (turn.ReasoningLog[0].DeliveredAfterToolCalls != 3)
+            throw new InvalidOperationException("Drain must stamp ToolCalls.Count.");
+    }
+
+    [Fact]
+    public void Comment_anchor_round_trips_json_and_legacy_json_reads_null()
+    {
+        var json = DysonReasoningLogSerializer.Serialize(
+            [new DysonReasoningSegment(DysonReasoningSegmentKind.UserComment, "x", 0, DeliveredAfterToolCalls: 4)]);
+        if (DysonReasoningLogSerializer.Deserialize(json)[0].DeliveredAfterToolCalls != 4)
+            throw new InvalidOperationException($"Anchor lost in round trip: {json}");
+
+        var legacy = DysonReasoningLogSerializer.Deserialize("""[{"kind":2,"text":"old","roundIndex":0}]""");
+        if (legacy.Count != 1 || legacy[0].DeliveredAfterToolCalls is not null)
+            throw new InvalidOperationException("Legacy UserComment JSON must deserialize with a null anchor.");
+    }
+
+    [Fact]
+    public void Responses_delta_is_skipped_only_in_a_round_that_delivers_comments()
+    {
+        var turn = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
+        if (OpenAiCompatibleAgentSession.DeliverPendingUserComments(turn, "resp_1") != "resp_1")
+            throw new InvalidOperationException("No comment: previous_response_id must be kept for the delta path.");
+
+        ExpectSuccess(turn.EnqueueUserComment("steer"), "delta enqueue");
+        if (OpenAiCompatibleAgentSession.DeliverPendingUserComments(turn, "resp_1") is not null)
+            throw new InvalidOperationException("Comment round must force the full rebuild.");
+    }
+
+    private static DysonToolCall Call(string id) => new()
+    {
+        CallId = id,
+        ToolName = "ListTodos",
+        Stage = 0,
+        ArgumentsJson = "{}",
+    };
+
+    private static DysonToolCallResult Result(string id) => new()
+    {
+        CallId = id,
+        ToolName = "ListTodos",
+        Stage = 0,
+        Content = $"ok {id}",
+    };
+
+    private static JsonArray Build(
+        DysonAgentSession session,
+        IReadOnlyList<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound> rounds,
+        bool responses) =>
+        responses
+            ? OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(session, null, null, rounds).Input
+            : OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(session, null, null, rounds).Messages;
+
+    private static int IndexOfUserContent(JsonArray items, string exact)
+    {
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (items[i] is JsonObject obj
+                && obj["role"]?.GetValue<string>() == "user"
+                && TryGetStringContent(obj) == exact)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static int IndexOfAssistantText(JsonArray items, string needle)
+    {
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (items[i] is JsonObject obj
+                && obj["role"]?.GetValue<string>() == "assistant"
+                && (TryGetStringContent(obj) ?? "").Contains(needle, StringComparison.Ordinal))
+                return i;
+        }
+
+        return -1;
+    }
+
+    /// <summary>Completions tool_calls/tool or Responses function_call/function_call_output index for a call id.</summary>
+    private static int IndexOfCallItem(JsonArray items, string callId, bool result)
+    {
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (items[i] is not JsonObject obj)
+                continue;
+
+            var type = obj["type"]?.GetValue<string>();
+            var role = obj["role"]?.GetValue<string>();
+            var hit = result
+                ? (role == "tool" && obj["tool_call_id"]?.GetValue<string>() == callId)
+                  || (type == "function_call_output" && obj["call_id"]?.GetValue<string>() == callId)
+                : (role == "assistant" && obj["tool_calls"] is JsonArray calls
+                   && calls.Any(c => c?["id"]?.GetValue<string>() == callId))
+                  || (type == "function_call" && obj["call_id"]?.GetValue<string>() == callId);
+            if (hit)
+                return i;
+        }
+
+        return -1;
     }
 
     private static void AssertEnqueueValidationAndFlush()
@@ -182,7 +397,7 @@ public class DysonInjectedTurnCommentTests
         ExpectSuccess(turn.EnqueueUserComment("first"), "drain first enqueue");
         ExpectSuccess(turn.EnqueueUserComment("second"), "drain second enqueue");
 
-        if (turn.FormatInjectedUserCommentsForTranscript().Length == 0)
+        if (DysonInjectedUserComments.FormatPlainText(turn.ReasoningLog).Length == 0)
             throw new InvalidOperationException("Formatter must emit comments from ReasoningLog before drain.");
 
         var drained = turn.TryDequeueUserComments();
@@ -200,24 +415,24 @@ public class DysonInjectedTurnCommentTests
             throw new InvalidOperationException("Drain must leave UserComment reasoning segments.");
         }
 
-        var formatted = turn.FormatInjectedUserCommentsForTranscript();
+        var formatted = DysonInjectedUserComments.FormatPlainText(turn.ReasoningLog);
         var normalized = formatted.Replace("\r\n", "\n", StringComparison.Ordinal);
-        if (!normalized.Contains("USER INJECTED COMMENT: first", StringComparison.Ordinal)
-            || !normalized.Contains("USER INJECTED COMMENT: second", StringComparison.Ordinal))
+        if (!normalized.Contains(Msg("first"), StringComparison.Ordinal)
+            || !normalized.Contains(Msg("second"), StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"Formatter must keep USER INJECTED COMMENT blocks after drain, got '{formatted}'.");
+                $"Formatter must keep marked comment blocks after drain, got '{formatted}'.");
         }
 
-        var firstIdx = normalized.IndexOf("USER INJECTED COMMENT: first", StringComparison.Ordinal);
-        var secondIdx = normalized.IndexOf("USER INJECTED COMMENT: second", StringComparison.Ordinal);
+        var firstIdx = normalized.IndexOf(Msg("first"), StringComparison.Ordinal);
+        var secondIdx = normalized.IndexOf(Msg("second"), StringComparison.Ordinal);
         if (secondIdx <= firstIdx)
             throw new InvalidOperationException("Formatter must emit comments in log order.");
         var between = normalized[firstIdx..secondIdx];
         if (!between.Contains("\n\n", StringComparison.Ordinal))
             throw new InvalidOperationException("Formatter must put a blank line between comment blocks.");
 
-        if (new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal }.FormatInjectedUserCommentsForTranscript() != "")
+        if (DysonInjectedUserComments.FormatPlainText(new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal }.ReasoningLog) != "")
             throw new InvalidOperationException("Formatter must return empty string when there are no comments.");
     }
 
@@ -257,8 +472,8 @@ public class DysonInjectedTurnCommentTests
         if (restored.HasPendingUserComments)
             throw new InvalidOperationException("Pending drain queue must not round-trip via ReasoningLogJson.");
 
-        var formatted = restored.FormatInjectedUserCommentsForTranscript();
-        if (!formatted.Contains("USER INJECTED COMMENT: persisted steer", StringComparison.Ordinal))
+        var formatted = DysonInjectedUserComments.FormatPlainText(restored.ReasoningLog);
+        if (!formatted.Contains(Msg("persisted steer"), StringComparison.Ordinal))
             throw new InvalidOperationException("Restored UserComment must still format for transcripts.");
     }
 
@@ -314,18 +529,22 @@ public class DysonInjectedTurnCommentTests
                 $"{label}: instruction must remain on the [turnId] user message.");
         }
 
-        if (!content.Contains("USER INJECTED COMMENT: steer the next round", StringComparison.Ordinal))
+        if (content.Contains(DysonInjectedUserComments.Marker, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"{label}: comments must sit on the [turnId] user message, not a separate role.");
+                $"{label}: comments must not be spliced onto the [turnId] user message.");
         }
 
-        var commentUserCount = CountUserMessagesContaining(items, "USER INJECTED COMMENT:");
-        if (commentUserCount != 1)
+        var commentIdx = IndexOfUserContent(items, Msg("steer the next round"));
+        var commentUserCount = CountUserMessagesContaining(items, DysonInjectedUserComments.Marker);
+        if (commentIdx < 0 || commentUserCount != 1)
         {
             throw new InvalidOperationException(
-                $"{label}: expected comments on exactly one user message, got {commentUserCount}.");
+                $"{label}: expected the comment as exactly one marked user message, got {commentUserCount}.");
         }
+
+        if (commentIdx >= IndexOfAssistantText(items, "previous assistant unique-hist"))
+            throw new InvalidOperationException($"{label}: undelivered comment must precede the assistant reply.");
 
         var json = items.ToJsonString();
         foreach (var secret in new[] { "SECRET_THOUGHT_TOKEN", "SECRET_INTERIM_TOKEN" })
@@ -338,7 +557,7 @@ public class DysonInjectedTurnCommentTests
         }
     }
 
-    private static void AssertInFlightDoesNotSpliceCommentsOntoInstruction()
+    private static void AssertInFlightCommentEmitsOnlyOnceDelivered()
     {
         var session = new StubSession();
         var live = new DysonAgentTurn
@@ -349,7 +568,6 @@ public class DysonInjectedTurnCommentTests
         };
         ExpectSuccess(live.EnqueueUserComment("in-flight steer"), "in-flight enqueue");
         session.AddTurnForTest(live);
-        var formatted = live.FormatInjectedUserCommentsForTranscript();
 
         AssertInFlightInstructionOmitsComments(
             OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
@@ -368,22 +586,23 @@ public class DysonInjectedTurnCommentTests
             live,
             "Responses null follow-up");
 
+        live.TryDequeueUserComments();
         AssertInFlightFollowUpEmitsComments(
             OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
                 session,
-                currentUserPrompt: formatted,
+                currentUserPrompt: null,
                 currentFilePaths: null,
                 inFlightRounds: []).Messages,
             live,
-            "Completions follow-up");
+            "Completions delivered");
         AssertInFlightFollowUpEmitsComments(
             OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
                 session,
-                currentUserPrompt: formatted,
+                currentUserPrompt: null,
                 currentFilePaths: null,
                 inFlightRounds: []).Input,
             live,
-            "Responses follow-up");
+            "Responses delivered");
     }
 
     private static void AssertInFlightInstructionOmitsComments(
@@ -395,16 +614,16 @@ public class DysonInjectedTurnCommentTests
             ?? throw new InvalidOperationException($"{label}: missing in-flight [turnId] user message.");
         if (!instruction.Contains("live instruction unique-inflight", StringComparison.Ordinal))
             throw new InvalidOperationException($"{label}: instruction missing from in-flight user content.");
-        if (instruction.Contains("USER INJECTED COMMENT:", StringComparison.Ordinal))
+        if (instruction.Contains(DysonInjectedUserComments.Marker, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 $"{label}: incomplete current must not splice comments onto the instruction user message.");
         }
 
-        if (CountUserMessagesContaining(items, "USER INJECTED COMMENT:") != 0)
+        if (CountUserMessagesContaining(items, DysonInjectedUserComments.Marker) != 0)
         {
             throw new InvalidOperationException(
-                $"{label}: comments must not appear without currentUserPrompt.");
+                $"{label}: a pending (undelivered) comment must not appear yet.");
         }
     }
 
@@ -415,41 +634,28 @@ public class DysonInjectedTurnCommentTests
     {
         var instruction = FindTurnUserContent(items, live.Id)
             ?? throw new InvalidOperationException($"{label}: missing in-flight [turnId] user message.");
-        if (instruction.Contains("USER INJECTED COMMENT:", StringComparison.Ordinal))
+        if (instruction.Contains(DysonInjectedUserComments.Marker, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"{label}: follow-up comments must not merge into the instruction user message.");
+                $"{label}: delivered comments must not merge into the instruction user message.");
         }
 
         var header = $"[turnId={live.Id:D}]";
-        JsonObject? followUp = null;
-        foreach (var node in items)
+        var instructionIdx = -1;
+        for (var i = 0; i < items.Count; i++)
         {
-            if (node is not JsonObject obj)
-                continue;
-            if (obj["role"]?.GetValue<string>() != "user")
-                continue;
-
-            var text = TryGetStringContent(obj);
-            if (text is null
-                || !text.Contains("USER INJECTED COMMENT: in-flight steer", StringComparison.Ordinal)
-                || text.Contains(header, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            followUp = obj;
-            break;
+            if (items[i] is JsonObject obj && (TryGetStringContent(obj) ?? "").Contains(header, StringComparison.Ordinal))
+                instructionIdx = i;
         }
 
-        if (followUp is null)
+        if (IndexOfUserContent(items, Msg("in-flight steer")) != instructionIdx + 1)
         {
             throw new InvalidOperationException(
-                $"{label}: formatted comments must appear as a follow-up user message after history.");
+                $"{label}: comment delivered before any tool call must follow the instruction as its own user message.");
         }
     }
 
-    private static void AssertCompactedTurnKeepsCommentsOnInstruction()
+    private static void AssertCompactedTurnEmitsCommentsAfterCompactStub()
     {
         const string compact = "[compact] Grep unique-compact-payload";
         var session = new StubSession();
@@ -495,10 +701,10 @@ public class DysonInjectedTurnCommentTests
         var instruction = FindTurnUserContent(items, turn.Id)
             ?? throw new InvalidOperationException($"{label}: missing compacted [turnId] user message.");
         if (!instruction.Contains("run grep unique-compact", StringComparison.Ordinal)
-            || !instruction.Contains("USER INJECTED COMMENT: compact-surviving steer", StringComparison.Ordinal))
+            || instruction.Contains(DysonInjectedUserComments.Marker, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"{label}: compacted turns must keep comments on the instruction user message.");
+                $"{label}: compacted turns keep the instruction alone on the [turnId] message.");
         }
 
         if (instruction.Contains(compact, StringComparison.Ordinal)
@@ -533,6 +739,9 @@ public class DysonInjectedTurnCommentTests
             throw new InvalidOperationException(
                 $"{label}: compact payload must still be present as a role=user harness summary.");
         }
+
+        if (IndexOfUserContent(items, Msg("compact-surviving steer")) != items.IndexOf(compactMsg) + 1)
+            throw new InvalidOperationException($"{label}: comment must follow the compact stub as its own user message.");
     }
 
     private static void AssertSummarizedStubKeepsComments()
@@ -585,7 +794,8 @@ public class DysonInjectedTurnCommentTests
         if (!json.Contains($"[turnId={summarized.Id:D}]", StringComparison.Ordinal)
             || !json.Contains("[contextSummary]", StringComparison.Ordinal)
             || !json.Contains("compact facts only unique-sum", StringComparison.Ordinal)
-            || !json.Contains("USER INJECTED COMMENT: summarized steer unique-sum", StringComparison.Ordinal))
+            || !json.Contains("summarized steer unique-sum", StringComparison.Ordinal)
+            || !json.Contains(DysonInjectedUserComments.Marker, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 $"{label}: summarized stub must include turnId + summary + comment blocks.");
@@ -608,7 +818,7 @@ public class DysonInjectedTurnCommentTests
         var stub = FindTurnUserContent(items, summarized.Id)
             ?? throw new InvalidOperationException($"{label}: missing summarized [turnId] stub.");
         var summaryIdx = stub.IndexOf("compact facts only unique-sum", StringComparison.Ordinal);
-        var commentIdx = stub.IndexOf("USER INJECTED COMMENT: summarized steer unique-sum", StringComparison.Ordinal);
+        var commentIdx = stub.IndexOf(Msg("summarized steer unique-sum"), StringComparison.Ordinal);
         if (summaryIdx < 0 || commentIdx <= summaryIdx)
         {
             throw new InvalidOperationException(

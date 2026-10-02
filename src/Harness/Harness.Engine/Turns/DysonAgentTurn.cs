@@ -61,7 +61,7 @@ public sealed class DysonAgentTurn
     /// Ordered thought + interim-text + user-comment segments for this turn.
     /// Thought/InterimText are UI + DB only (omitted from transcripts).
     /// UserComment is re-emitted as user-role history via
-    /// <see cref="FormatInjectedUserCommentsForTranscript"/>.
+    /// <see cref="DysonInjectedUserComments"/>.
     /// Returns a snapshot so UI enumeration cannot race Append/Restore mutations.
     /// </summary>
     public IReadOnlyList<DysonReasoningSegment> ReasoningLog
@@ -484,10 +484,10 @@ public sealed class DysonAgentTurn
         if (trimmed.Length > MaxUserCommentLength)
             return VoidResult<string>.AsError($"Comment exceeds the {MaxUserCommentLength} character limit.");
 
-        _pendingUserComments.Enqueue(trimmed);
-
+        // Queue + segment under one gate so a concurrent drain always finds the segment to stamp.
         lock (_reasoningLogGate)
         {
+            _pendingUserComments.Enqueue(trimmed);
             var roundIndex = _reasoningLog.Count > 0 ? _reasoningLog[^1].RoundIndex : 0;
             _reasoningLog.Add(new DysonReasoningSegment(
                 DysonReasoningSegmentKind.UserComment,
@@ -499,45 +499,44 @@ public sealed class DysonAgentTurn
         return VoidResult<string>.Success;
     }
 
-    /// <summary>Drains the in-memory comment queue (ReasoningLog segments remain).</summary>
+    /// <summary>
+    /// Drains the in-memory comment queue and stamps each drained UserComment segment with
+    /// <see cref="DysonReasoningSegment.DeliveredAfterToolCalls"/> = current
+    /// <see cref="ToolCalls"/> count (the tool loop drains at a round start, so this is a round
+    /// boundary). ReasoningLog segments remain; transcripts replay them at that anchor.
+    /// </summary>
     public string[] TryDequeueUserComments()
     {
-        if (_pendingUserComments.IsEmpty)
-            return [];
+        lock (_reasoningLogGate)
+        {
+            if (_pendingUserComments.IsEmpty)
+                return [];
 
-        var drained = new List<string>();
-        while (_pendingUserComments.TryDequeue(out var comment))
-            drained.Add(comment);
-        return [.. drained];
+            var drained = new List<string>();
+            while (_pendingUserComments.TryDequeue(out var comment))
+                drained.Add(comment);
+
+            // FIFO queue and log append order match (both under this gate): stamp the oldest
+            // undelivered UserComment segments, one per drained comment.
+            var anchor = ToolCalls.Count;
+            var toStamp = drained.Count;
+            for (var i = 0; i < _reasoningLog.Count && toStamp > 0; i++)
+            {
+                var segment = _reasoningLog[i];
+                if (segment.Kind != DysonReasoningSegmentKind.UserComment
+                    || segment.DeliveredAfterToolCalls is not null)
+                    continue;
+
+                _reasoningLog[i] = segment with { DeliveredAfterToolCalls = anchor };
+                toStamp--;
+            }
+
+            return [.. drained];
+        }
     }
 
     /// <summary>True when at least one injected comment is still waiting to drain into the tool loop.</summary>
     public bool HasPendingUserComments => !_pendingUserComments.IsEmpty;
-
-    /// <summary>
-    /// Joins persisted <see cref="DysonReasoningSegmentKind.UserComment"/> segments as
-    /// <c>USER INJECTED COMMENT:</c> blocks (blank line between). Empty string when none.
-    /// Uses the reasoning log, not the in-memory drain queue.
-    /// </summary>
-    public string FormatInjectedUserCommentsForTranscript()
-    {
-        StringBuilder? sb = null;
-        foreach (var segment in ReasoningLog)
-        {
-            if (segment.Kind != DysonReasoningSegmentKind.UserComment)
-                continue;
-            if (string.IsNullOrWhiteSpace(segment.Text))
-                continue;
-
-            sb ??= new StringBuilder();
-            if (sb.Length > 0)
-                sb.AppendLine();
-            sb.Append("USER INJECTED COMMENT: ");
-            sb.AppendLine(segment.Text);
-        }
-
-        return sb is null ? "" : sb.ToString();
-    }
 
     /// <summary>
     /// After the model has seen them: keep slim RemoteUrl image attachments (JPEG bytes dropped),

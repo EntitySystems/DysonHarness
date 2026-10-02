@@ -81,6 +81,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
         AppendHistoryMessages(messages, session, excludeLastIfCurrent: false);
 
+        var liveComments = LiveAnchoredComments(session);
+        var nextComment = 0;
+        var cumulativeCalls = 0;
         if (inFlightRounds is not null)
         {
             for (var i = 0; i < inFlightRounds.Count; i++)
@@ -91,8 +94,12 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                     messages,
                     inFlightRounds[i],
                     includeBinaryAttachments: i == inFlightRounds.Count - 1);
+                cumulativeCalls += inFlightRounds[i].Calls.Count;
+                nextComment = AppendLiveCommentsUpTo(messages, liveComments, nextComment, cumulativeCalls);
             }
         }
+
+        AppendLiveCommentsUpTo(messages, liveComments, nextComment, int.MaxValue);
 
         // After in-flight rounds so harness follow-ups (e.g. SubmitSubagentReport nudge) land last.
         if (!string.IsNullOrEmpty(currentUserPrompt))
@@ -131,6 +138,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
         AppendHistoryAsResponsesInput(input, session);
 
+        var liveComments = LiveAnchoredComments(session);
+        var nextComment = 0;
+        var cumulativeCalls = 0;
         if (inFlightRounds is not null)
         {
             for (var i = 0; i < inFlightRounds.Count; i++)
@@ -139,8 +149,12 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                     input,
                     inFlightRounds[i],
                     includeBinaryAttachments: i == inFlightRounds.Count - 1);
+                cumulativeCalls += inFlightRounds[i].Calls.Count;
+                nextComment = AppendLiveCommentsUpTo(input, liveComments, nextComment, cumulativeCalls);
             }
         }
+
+        AppendLiveCommentsUpTo(input, liveComments, nextComment, int.MaxValue);
 
         // After in-flight rounds so harness follow-ups (e.g. SubmitSubagentReport nudge) land last.
         if (!string.IsNullOrEmpty(currentUserPrompt))
@@ -310,6 +324,11 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
             AppendContextFileUserMessages(messages, turn);
 
+            var comments = DysonInjectedUserComments.From(turn.ReasoningLog);
+            DysonInjectedUserComments.AppendMessages(
+                messages,
+                comments.Where(c => c.DeliveredAfterToolCalls == 0));
+
             if (incompleteCurrent)
                 continue;
 
@@ -320,40 +339,15 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                     ["role"] = "user",
                     ["content"] = FormatCompactToolHistoryUserContent(turn.CompactToolHistory),
                 });
+                // Position inside compacted tools is not recoverable: comments follow the stub.
+                DysonInjectedUserComments.AppendMessages(
+                    messages,
+                    comments.Where(c => c.DeliveredAfterToolCalls != 0));
                 continue;
             }
 
-            if (turn.ToolCalls.Count > 0)
-            {
-                var toolCalls = new JsonArray();
-                foreach (var call in turn.ToolCalls)
-                {
-                    toolCalls.Add(new JsonObject
-                    {
-                        ["id"] = call.CallId,
-                        ["type"] = "function",
-                        ["function"] = new JsonObject
-                        {
-                            ["name"] = call.ToolName,
-                            ["arguments"] = MergeStageIntoArgs(call),
-                        },
-                    });
-                }
-
-                messages.Add(new JsonObject
-                {
-                    ["role"] = "assistant",
-                    ["content"] = (string?)null,
-                    ["tool_calls"] = toolCalls,
-                });
-
-                // History: data-URL / Files stay off; RemoteUrl images still re-emit.
-                AppendPairedToolResultsCompletions(
-                    messages,
-                    turn.ToolCalls,
-                    turn.ResponseLog,
-                    includeBinaryAttachments: false);
-            }
+            // History: data-URL / Files stay off; RemoteUrl images still re-emit.
+            AppendTurnToolsWithComments(messages, turn, comments, responses: false);
 
             if (!string.IsNullOrEmpty(turn.AssistantText))
             {
@@ -411,6 +405,11 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
             AppendContextFileUserMessages(input, turn);
 
+            var comments = DysonInjectedUserComments.From(turn.ReasoningLog);
+            DysonInjectedUserComments.AppendMessages(
+                input,
+                comments.Where(c => c.DeliveredAfterToolCalls == 0));
+
             if (incompleteCurrent)
                 continue;
 
@@ -421,28 +420,13 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                     ["role"] = "user",
                     ["content"] = FormatCompactToolHistoryUserContent(turn.CompactToolHistory),
                 });
+                DysonInjectedUserComments.AppendMessages(
+                    input,
+                    comments.Where(c => c.DeliveredAfterToolCalls != 0));
                 continue;
             }
 
-            if (turn.ToolCalls.Count > 0)
-            {
-                foreach (var call in turn.ToolCalls)
-                {
-                    input.Add(new JsonObject
-                    {
-                        ["type"] = "function_call",
-                        ["call_id"] = call.CallId,
-                        ["name"] = call.ToolName,
-                        ["arguments"] = MergeStageIntoArgs(call),
-                    });
-                }
-
-                AppendPairedToolResultsResponses(
-                    input,
-                    turn.ToolCalls,
-                    turn.ResponseLog,
-                    includeBinaryAttachments: false);
-            }
+            AppendTurnToolsWithComments(input, turn, comments, responses: true);
 
             if (!string.IsNullOrEmpty(turn.AssistantText))
             {
@@ -455,13 +439,106 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         }
     }
 
+    /// <summary>
+    /// In-flight current turn: comments delivered after one or more tool calls, in anchor order.
+    /// Anchor 0 sits in history right after the turn instruction; null anchors are still pending
+    /// (they drain and get stamped at the next round start).
+    /// </summary>
+    private static List<DysonReasoningSegment> LiveAnchoredComments(DysonAgentSession session)
+    {
+        var turns = session.Turns;
+        var index = FindIncompleteCurrentIndex(turns);
+        if (index < 0)
+            return [];
+
+        return DysonInjectedUserComments.From(turns[index].ReasoningLog)
+            .Where(c => c.DeliveredAfterToolCalls is > 0)
+            .OrderBy(c => c.DeliveredAfterToolCalls)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Emits live comments whose anchor is reached by <paramref name="cumulativeCalls"/>, so a comment
+    /// lands right after the round results the model had seen when it was delivered. Later rounds
+    /// only append after it (prefix-stable). Returns the next unemitted index.
+    /// </summary>
+    private static int AppendLiveCommentsUpTo(
+        JsonArray target,
+        List<DysonReasoningSegment> comments,
+        int next,
+        int cumulativeCalls)
+    {
+        var start = next;
+        while (next < comments.Count && comments[next].DeliveredAfterToolCalls <= cumulativeCalls)
+            next++;
+
+        DysonInjectedUserComments.AppendMessages(target, comments.Skip(start).Take(next - start));
+        return next;
+    }
+
+    /// <summary>
+    /// Completed turn tools split at comment anchors: each chunk is tool calls + paired results,
+    /// followed by the comments delivered at that call count. Null anchors (never delivered or
+    /// legacy rows) follow all tools, before the final assistant text. No comments → one chunk,
+    /// byte-identical to the unsplit history.
+    /// </summary>
+    private static void AppendTurnToolsWithComments(
+        JsonArray target,
+        DysonAgentTurn turn,
+        List<DysonReasoningSegment> comments,
+        bool responses)
+    {
+        var calls = turn.ToolCalls;
+        var start = 0;
+        foreach (var group in comments
+                     .Where(c => c.DeliveredAfterToolCalls is > 0)
+                     .GroupBy(c => c.DeliveredAfterToolCalls!.Value)
+                     .OrderBy(g => g.Key))
+        {
+            var end = Math.Min(group.Key, calls.Count);
+            AppendHistoryToolChunk(target, turn, start, end, responses);
+            start = Math.Max(start, end);
+            DysonInjectedUserComments.AppendMessages(target, group);
+        }
+
+        AppendHistoryToolChunk(target, turn, start, calls.Count, responses);
+        DysonInjectedUserComments.AppendMessages(
+            target,
+            comments.Where(c => c.DeliveredAfterToolCalls is null));
+    }
+
+    private static void AppendHistoryToolChunk(
+        JsonArray target,
+        DysonAgentTurn turn,
+        int start,
+        int end,
+        bool responses)
+    {
+        if (end <= start)
+            return;
+
+        var chunk = turn.ToolCalls.GetRange(start, end - start);
+        if (responses)
+            AppendToolCallBlockResponses(target, chunk, turn.ResponseLog, includeBinaryAttachments: false);
+        else
+            AppendToolCallBlockCompletions(target, chunk, turn.ResponseLog, includeBinaryAttachments: false);
+    }
+
     private static void AppendToolRoundCompletions(
         JsonArray messages,
         InFlightToolRound round,
+        bool includeBinaryAttachments) =>
+        AppendToolCallBlockCompletions(messages, round.Calls, round.Results, includeBinaryAttachments);
+
+    /// <summary>Assistant <c>tool_calls</c> message + consecutive paired <c>role: tool</c> results.</summary>
+    private static void AppendToolCallBlockCompletions(
+        JsonArray messages,
+        IReadOnlyList<DysonToolCall> calls,
+        IEnumerable<DysonToolCallResult> results,
         bool includeBinaryAttachments)
     {
         var toolCalls = new JsonArray();
-        foreach (var call in round.Calls)
+        foreach (var call in calls)
         {
             toolCalls.Add(new JsonObject
             {
@@ -484,8 +561,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
         AppendPairedToolResultsCompletions(
             messages,
-            round.Calls,
-            round.Results,
+            calls,
+            results,
             includeBinaryAttachments);
     }
 
@@ -501,7 +578,17 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 input.Add(item.DeepClone());
         }
 
-        foreach (var call in round.Calls)
+        AppendToolCallBlockResponses(input, round.Calls, round.Results, includeBinaryAttachments);
+    }
+
+    /// <summary><c>function_call</c> items + consecutive paired <c>function_call_output</c> items.</summary>
+    private static void AppendToolCallBlockResponses(
+        JsonArray input,
+        IReadOnlyList<DysonToolCall> calls,
+        IEnumerable<DysonToolCallResult> results,
+        bool includeBinaryAttachments)
+    {
+        foreach (var call in calls)
         {
             input.Add(new JsonObject
             {
@@ -514,8 +601,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
         AppendPairedToolResultsResponses(
             input,
-            round.Calls,
-            round.Results,
+            calls,
+            results,
             includeBinaryAttachments);
     }
 
@@ -791,10 +878,10 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
     /// <summary>
     /// History turns send <see cref="DysonAgentTurn.Instruction"/> with a
-    /// <c>[turnId=…]</c> header, plus persisted UserComment blocks
-    /// (<c>USER INJECTED COMMENT:</c>) when present. Incomplete current turn may
-    /// append ephemeral mandates (chrome-skipped rename review; first Plan-stint
-    /// Explore) and must not splice comments here (they go out as currentUserPrompt).
+    /// <c>[turnId=…]</c> header. Mid-turn user comments are never spliced here: they are
+    /// separate <see cref="DysonInjectedUserComments"/> messages at their delivery anchor.
+    /// Incomplete current turn may append ephemeral mandates (chrome-skipped rename review;
+    /// first Plan-stint Explore).
     /// After the instruction, appends <see cref="DysonAgentTurn.HiddenInstruction"/>
     /// (local paths only) and live <c>Attached urls:</c> lines from
     /// <see cref="DysonAgentTurn.UserImages"/>.
@@ -834,18 +921,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         }
 
         if (!incompleteCurrent)
-        {
-            var comments = turn.FormatInjectedUserCommentsForTranscript();
-            if (!string.IsNullOrEmpty(comments))
-            {
-                if (sb.Length > 0 && sb[^1] != '\n')
-                    sb.AppendLine();
-                sb.AppendLine();
-                sb.Append(comments);
-            }
-
             return sb.ToString().TrimEnd();
-        }
 
         if (ShouldAppendPlanFirstTurnMandate(
                 session, session.Turns, zeroBasedIndex, turn, incompleteCurrent))
