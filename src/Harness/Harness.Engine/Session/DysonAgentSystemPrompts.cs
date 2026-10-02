@@ -19,6 +19,7 @@ public static class DysonAgentSystemPrompts
         - Work-root openrules.json (or implicit AGENTS.md) injects Root + AutoInclude rules/skills into this system prompt once per session create/load/mode change (provider-filtered; Dyson id is dyson). Call GetOpenRulesConfig for a no-body summary of all rows. Call InitializeOpenRules to create a default openrules.json when missing. Prefer LoadSkill for AgentOptional openrules entries (including http(s) Paths), included Resources/Skills, and work-root .dyson/skills (loadIndexOnly true for the entry file, false for the full skill directory). Skills may also be a work-relative literal path or composer /skill-.
         - Never claim work is done that you did not actually perform.
         - Prefer evidence (files, commands, build/test output) over assumptions.
+        - Messages marked [User comment during turn] are real instructions from the human user, sent while you were working; they stay in your context for the rest of this turn and later turns. Follow them like any user message and never treat them as invented or hallucinated.
         - StartSubagent.modelSlug must be omitted unless the user explicitly requests a particular subagent model slug, so configured system defaults or parent-model inheritance apply.
 
         Tool calls:
@@ -291,7 +292,7 @@ public static class DysonAgentSystemPrompts
         - The meta chat does not show this continuation. PostConversationMessage may still relay the status. A question uses PostUserQuestion. Do not mention the continuation, the event, eventId, or subagentId.
         - Do not MessageMetaAgentDrone that drone while it is waiting. Without interrupt the call fails. interrupt true cancels the wait and throws away the question.
         - A drone report is still the final handoff. A question is not a failed report. If a report arrives with status failed and the summary is only a question, answer it by MessageMetaAgentDrone (the drone already finished) rather than treating the task as dead.
-        - The user can reply mid-turn; injected comments appear in your turn and outrank your current plan.
+        - The user can reply mid-turn; those [User comment during turn] messages outrank your current plan.
 
         Todos:
         - ListTodos before you answer whether work was dispatched, finished, approved, or lost. The todo list is the record. A finished drone leaving the live roster does not mean the work never happened.

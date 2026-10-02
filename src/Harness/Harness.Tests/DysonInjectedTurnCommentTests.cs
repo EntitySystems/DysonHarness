@@ -220,6 +220,15 @@ public class DysonInjectedTurnCommentTests
     }
 
     [Fact]
+    public void Shared_preamble_names_the_comment_marker_as_real_user_instructions()
+    {
+        var preamble = DysonAgentSystemPrompts.SharedPreamble;
+        if (!preamble.Contains(DysonInjectedUserComments.Marker, StringComparison.Ordinal)
+            || !preamble.Contains("hallucinated", StringComparison.Ordinal))
+            throw new InvalidOperationException("SharedPreamble must name the comment marker as real user instructions.");
+    }
+
+    [Fact]
     public void Drain_stamps_comment_with_current_tool_call_count()
     {
         var turn = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };
