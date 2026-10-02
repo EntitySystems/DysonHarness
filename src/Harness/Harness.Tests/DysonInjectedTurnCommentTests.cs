@@ -160,6 +160,66 @@ public class DysonInjectedTurnCommentTests
     }
 
     [Fact]
+    public void Undelivered_comment_survives_close_on_cancel_and_replays_in_history()
+    {
+        var session = new StubSession();
+        var turn = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal, Instruction = "cancelled", StartedUtc = DateTime.UtcNow };
+        session.AddTurnForTest(turn);
+        ExpectSuccess(turn.EnqueueUserComment("said before cancel"), "pre-cancel enqueue");
+
+        turn.CloseCommentIntake(); // what PromptWithTurnAsync's finally does on cancel / error / soft-pause
+        turn.AssistantText = "cancelled";
+        turn.CompletedUtc = DateTime.UtcNow;
+
+        foreach (var responses in new[] { false, true })
+        {
+            if (IndexOfUserContent(Build(session, [], responses), Msg("said before cancel")) < 0)
+                throw new InvalidOperationException("An accepted but undelivered comment must replay after the turn closes.");
+        }
+    }
+
+    [Fact]
+    public void Excluded_and_summarized_turns_each_emit_their_comment_exactly_once()
+    {
+        foreach (var responses in new[] { false, true })
+        {
+            var session = new StubSession();
+            var dropped = new DysonAgentTurn
+            {
+                Kind = DysonAgentTurnKind.Normal,
+                Instruction = "DROPPED_BODY",
+                AssistantText = "DROPPED_REPLY",
+                StartedUtc = DateTime.UtcNow,
+                CompletedUtc = DateTime.UtcNow,
+                IsExcludedFromContext = true,
+            };
+            ExpectSuccess(dropped.EnqueueUserComment("kept from dropped"), "dropped enqueue");
+            var summarized = new DysonAgentTurn
+            {
+                Kind = DysonAgentTurnKind.Normal,
+                Instruction = "SUMMARIZED_BODY",
+                AssistantText = "SUMMARIZED_REPLY",
+                ContextSummary = "short",
+                StartedUtc = DateTime.UtcNow,
+                CompletedUtc = DateTime.UtcNow,
+            };
+            ExpectSuccess(summarized.EnqueueUserComment("kept from summary"), "summarized enqueue");
+            session.AddTurnForTest(dropped);
+            session.AddTurnForTest(summarized);
+
+            var items = Build(session, [], responses);
+            var json = items.ToJsonString();
+            if (json.Contains("DROPPED_BODY", StringComparison.Ordinal) || json.Contains("DROPPED_REPLY", StringComparison.Ordinal))
+                throw new InvalidOperationException("Excluded turn body must stay out of the transcript.");
+            if (IndexOfUserContent(items, Msg("kept from dropped")) < 0)
+                throw new InvalidOperationException("Excluded turn must still emit its comment as a marked message.");
+            if (CountUserMessagesContaining(items, "kept from dropped") != 1
+                || CountUserMessagesContaining(items, "kept from summary") != 1)
+                throw new InvalidOperationException("Each comment must reach the model exactly once (stub OR re-emission).");
+        }
+    }
+
+    [Fact]
     public void Drain_stamps_comment_with_current_tool_call_count()
     {
         var turn = new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal };

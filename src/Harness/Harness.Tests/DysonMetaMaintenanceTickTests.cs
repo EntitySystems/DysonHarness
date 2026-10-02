@@ -215,6 +215,92 @@ public class DysonMetaMaintenanceTickTests
         Assert.Equal(maxSequence + 1, stored.Sequence);
     }
 
+    [Fact]
+    public async Task Tick_logs_evicted_user_text_before_delete()
+    {
+        var (session, store, sessionId) = await SeedPersistedMetaAsync(55);
+        var evictedTurn = session.Turns[0];
+        ExpectSuccess(evictedTurn.EnqueueUserComment("remember plan 54 needs X"));
+
+        session.TurnsSinceMetaMaintenance = 14;
+        var tick = await session.ApplyMetaMaintenanceTickAsync(session.Turns[^1]);
+        Assert.True(tick.IsSuccess, tick.IsError ? tick.Error : null);
+
+        var full = await store.GetFullSessionAsync(sessionId);
+        Assert.True(full.IsSuccess, full.IsError ? full.Error : null);
+        var log = Assert.Single(full.Value.Logs, l => l.TurnId == evictedTurn.Id);
+        Assert.Contains($"EVICTED TURN {evictedTurn.Id:D}", log.PayloadJson, StringComparison.Ordinal);
+        Assert.Contains("USER PROMPT: t-0", log.PayloadJson, StringComparison.Ordinal);
+        Assert.Contains("remember plan 54 needs X", log.PayloadJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Tick_skips_delete_when_the_evicted_text_log_write_fails()
+    {
+        var (session, store, sessionId) = await SeedPersistedMetaAsync(55);
+        session.BindForTest(sessionId, FailingLogStore.Wrap(store));
+
+        session.TurnsSinceMetaMaintenance = 14;
+        var tick = await session.ApplyMetaMaintenanceTickAsync(session.Turns[^1]);
+
+        Assert.True(tick.IsError);
+        Assert.Equal(55, session.Turns.Count);
+        Assert.Equal(15, session.TurnsSinceMetaMaintenance); // not reset: next completed turn retries
+        var full = await store.GetFullSessionAsync(sessionId);
+        Assert.True(full.IsSuccess, full.IsError ? full.Error : null);
+        Assert.Equal(55, full.Value.Turns.Count);
+    }
+
+    private static async Task<(StubSession Session, IDysonSessionRepository Store, Guid Id)> SeedPersistedMetaAsync(int count)
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        _keepAliveConnections.Add(conn);
+        var store = DysonTempDb.Sessions(accessor);
+        var created = await store.CreateSessionAsync(new DysonSessionCreateRequest
+        {
+            RuntimeId = 0,
+            AgentMode = DysonAgentModes.MetaAgent,
+            SystemPromptSnapshot = "meta",
+        });
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+
+        var session = new StubSession(DysonAgentModes.MetaAgent);
+        session.BindForTest(created.Value, store);
+        for (var i = 0; i < count; i++)
+        {
+            var turn = Completed($"t-{i}");
+            session.AddTurnForTest(turn);
+            var upsert = await store.UpsertTurnAsync(DysonTurnPersistence.ToEntity(turn, created.Value, i));
+            Assert.True(upsert.IsSuccess, upsert.IsError ? upsert.Error : null);
+        }
+
+        return (session, store, created.Value);
+    }
+
+    // ponytail: in-memory SQLite lives as long as its connection; tests are short-lived.
+    private static readonly System.Collections.Concurrent.ConcurrentBag<IDisposable> _keepAliveConnections = [];
+
+    private static void ExpectSuccess(VoidResult<string> result) =>
+        Assert.True(result.IsSuccess, result.IsError ? result.Error : null);
+
+    /// <summary>Forwards every repository call except AppendLogAsync, which fails.</summary>
+    public class FailingLogStore : System.Reflection.DispatchProxy
+    {
+        private IDysonSessionRepository _inner = null!;
+
+        public static IDysonSessionRepository Wrap(IDysonSessionRepository inner)
+        {
+            var proxy = Create<IDysonSessionRepository, FailingLogStore>();
+            ((FailingLogStore)(object)proxy)._inner = inner;
+            return proxy;
+        }
+
+        protected override object? Invoke(System.Reflection.MethodInfo? targetMethod, object?[]? args) =>
+            targetMethod!.Name == nameof(IDysonSessionRepository.AppendLogAsync)
+                ? Task.FromResult(VoidResult<string>.AsError("log write failed"))
+                : targetMethod.Invoke(_inner, args);
+    }
+
     private static StubSession SeedMeta(int count) => Seed(DysonAgentModes.MetaAgent, count);
 
     private static StubSession Seed(string mode, int count)

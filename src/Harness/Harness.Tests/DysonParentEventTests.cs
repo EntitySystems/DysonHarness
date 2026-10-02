@@ -40,11 +40,15 @@ public class DysonParentEventTests
             await child.PromptStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
             Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "queued second")).IsSuccess);
             child.EnqueuePendingTurn(DysonAgentSession.CreateNormalTurn("stale harness follow-up"));
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "queued third")).IsSuccess);
 
-            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "urgent third", interruptSubagent: true)).IsSuccess);
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "urgent fourth", interruptSubagent: true)).IsSuccess);
 
+            // FIFO, no duplicates, harness follow-up dropped; the interrupt turn itself is not queued.
             Assert.True(child.TryDequeuePendingTurn(out var kept));
             Assert.EndsWith("queued second", kept.Instruction, StringComparison.Ordinal);
+            Assert.True(child.TryDequeuePendingTurn(out var keptNext));
+            Assert.EndsWith("queued third", keptNext.Instruction, StringComparison.Ordinal);
             Assert.False(child.HasPendingTurn);
         }
         finally

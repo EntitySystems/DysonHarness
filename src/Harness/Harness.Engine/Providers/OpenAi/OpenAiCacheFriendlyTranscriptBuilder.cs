@@ -285,9 +285,14 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 break;
 
             var turn = turns[i];
-            if (turn.IsExcludedFromContext
-                || turn.Kind is DysonAgentTurnKind.DisplayInfo or DysonAgentTurnKind.WorktreeCreating)
+            if (turn.Kind is DysonAgentTurnKind.DisplayInfo or DysonAgentTurnKind.WorktreeCreating)
                 continue;
+
+            if (turn.IsExcludedFromContext)
+            {
+                AppendExcludedTurnComments(messages, turn, i == incompleteIndex);
+                continue;
+            }
 
             if (turn.Kind == DysonAgentTurnKind.ModeSwitch)
             {
@@ -369,9 +374,14 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         for (var i = 0; i < turns.Count; i++)
         {
             var turn = turns[i];
-            if (turn.IsExcludedFromContext
-                || turn.Kind is DysonAgentTurnKind.DisplayInfo or DysonAgentTurnKind.WorktreeCreating)
+            if (turn.Kind is DysonAgentTurnKind.DisplayInfo or DysonAgentTurnKind.WorktreeCreating)
                 continue;
+
+            if (turn.IsExcludedFromContext)
+            {
+                AppendExcludedTurnComments(input, turn, i == incompleteIndex);
+                continue;
+            }
 
             if (turn.Kind == DysonAgentTurnKind.ModeSwitch)
             {
@@ -437,6 +447,19 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 });
             }
         }
+    }
+
+    /// <summary>
+    /// DropTurnContext / FullSummarize exclude the turn body, never its user comments: they are
+    /// user instructions. Emitted as marked messages at the turn's slot. For the in-flight turn
+    /// only anchor-0 comments go here (later anchors come from <see cref="LiveAnchoredComments"/>).
+    /// </summary>
+    private static void AppendExcludedTurnComments(JsonArray target, DysonAgentTurn turn, bool incompleteCurrent)
+    {
+        var comments = DysonInjectedUserComments.From(turn.ReasoningLog);
+        DysonInjectedUserComments.AppendMessages(
+            target,
+            incompleteCurrent ? comments.Where(c => c.DeliveredAfterToolCalls == 0) : comments);
     }
 
     /// <summary>
