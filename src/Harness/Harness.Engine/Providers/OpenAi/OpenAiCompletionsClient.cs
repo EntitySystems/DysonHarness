@@ -49,6 +49,7 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
         var toolSlots = new Dictionary<int, CompletionsToolSlot>();
         string? responseId = null;
         JsonObject? usageResponse = null;
+        string? finishReason = null;
 
         await foreach (var payload in OpenAiCompatibleHttp
             .ReadSseJsonPayloadsAsync(_http, HttpMethod.Post, url, provider.ApiKey, body, cancellationToken)
@@ -58,6 +59,13 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
             {
                 yield return Result<OpenAiStreamChunk, string>.AsError(payload.Error);
                 yield break;
+            }
+
+            if (string.Equals(payload.Value, OpenAiCompatibleHttp.SseDonePayload, StringComparison.Ordinal))
+            {
+                // [DONE] is a valid terminator even when a compat server omits finish_reason.
+                finishReason ??= "done";
+                continue;
             }
 
             JsonNode? node;
@@ -93,6 +101,9 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
             var choice = choices[0] as JsonObject;
             if (choice is null)
                 continue;
+
+            if (TryGetString(choice["finish_reason"]) is { Length: > 0 } reason)
+                finishReason = reason;
 
             // Final usage-only chunk (stream_options.include_usage) has empty choices or no delta.
             if (choice["delta"] is not JsonObject delta)
@@ -167,7 +178,18 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
             }
         }
 
-        var toolCalls = BuildToolCalls(toolSlots);
+        var incompleteReason = OpenAiCompatibleHttp.DescribeIncompleteStream(finishReason);
+        var toolCalls = BuildToolCalls(toolSlots, incompleteReason);
+        var streamEndedError = OpenAiCompatibleHttp.StreamEndedError(
+            finishReason,
+            toolCalls.Count,
+            content.Length + reasoning.Length);
+        if (streamEndedError is not null)
+        {
+            yield return Result<OpenAiStreamChunk, string>.AsError(streamEndedError);
+            yield break;
+        }
+
         var usageHint = usageResponse is not null
             ? OpenAiCompatibleHttp.FormatUsageCacheHint(usageResponse)
             : null;
@@ -189,6 +211,7 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
                 Content = content.Length == 0 ? null : content.ToString(),
                 ReasoningContent = reasoning.Length == 0 ? null : reasoning.ToString(),
                 ToolCalls = toolCalls,
+                IncompleteReason = incompleteReason,
                 ResponseId = responseId,
                 UsageCacheHint = usageHint,
                 PromptTokens = promptTokens,
@@ -228,6 +251,11 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
         if (message is null)
             return Result<OpenAiModelReply, string>.AsError("Completions choice had no message.");
 
+        // Non-streaming: a missing finish_reason is just an omitted field, only an explicit limit counts.
+        var incompleteReason = TryGetString(choices[0]?["finish_reason"]) is { Length: > 0 } finish
+            ? OpenAiCompatibleHttp.DescribeIncompleteStream(finish)
+            : null;
+
         var content = message["content"]?.GetValue<string>();
         var reasoningContent = TryGetString(message["reasoning_content"]);
         var toolCalls = new List<DysonToolCall>();
@@ -245,14 +273,11 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
                 if (string.IsNullOrWhiteSpace(name))
                     continue;
 
-                var (stage, argsClean) = OpenAiCompatibleHttp.SplitStageFromArguments(args);
-                toolCalls.Add(new DysonToolCall
-                {
-                    CallId = string.IsNullOrEmpty(id) ? Guid.NewGuid().ToString("N") : id,
-                    ToolName = name,
-                    Stage = stage,
-                    ArgumentsJson = argsClean,
-                });
+                toolCalls.Add(OpenAiCompatibleHttp.BuildToolCall(
+                    string.IsNullOrEmpty(id) ? Guid.NewGuid().ToString("N") : id,
+                    name,
+                    args,
+                    incompleteReason));
             }
         }
 
@@ -261,6 +286,7 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
             Content = content,
             ReasoningContent = reasoningContent,
             ToolCalls = toolCalls,
+            IncompleteReason = incompleteReason,
             ResponseId = response["id"]?.GetValue<string>(),
             UsageCacheHint = OpenAiCompatibleHttp.FormatUsageCacheHint(response),
             PromptTokens = OpenAiCompatibleHttp.TryParsePromptTokens(response),
@@ -268,7 +294,7 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
         });
     }
 
-    private static List<DysonToolCall> BuildToolCalls(Dictionary<int, CompletionsToolSlot> slots)
+    private static List<DysonToolCall> BuildToolCalls(Dictionary<int, CompletionsToolSlot> slots, string? incompleteReason)
     {
         var toolCalls = new List<DysonToolCall>();
         foreach (var (_, slot) in slots.OrderBy(kv => kv.Key))
@@ -277,14 +303,11 @@ public sealed class OpenAiCompletionsClient(HttpClient http)
                 continue;
 
             var args = slot.Arguments.Length == 0 ? "{}" : slot.Arguments.ToString();
-            var (stage, argsClean) = OpenAiCompatibleHttp.SplitStageFromArguments(args);
-            toolCalls.Add(new DysonToolCall
-            {
-                CallId = string.IsNullOrEmpty(slot.CallId) ? Guid.NewGuid().ToString("N") : slot.CallId,
-                ToolName = slot.ToolName,
-                Stage = stage,
-                ArgumentsJson = argsClean,
-            });
+            toolCalls.Add(OpenAiCompatibleHttp.BuildToolCall(
+                string.IsNullOrEmpty(slot.CallId) ? Guid.NewGuid().ToString("N") : slot.CallId,
+                slot.ToolName,
+                args,
+                incompleteReason));
         }
 
         return toolCalls;

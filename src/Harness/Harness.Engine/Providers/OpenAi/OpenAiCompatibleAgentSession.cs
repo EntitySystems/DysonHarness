@@ -1510,26 +1510,49 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         return $"OpenAI transient {code} — retry {retryIndex}/{retryCount} after {delayMs / 1000}s";
     }
 
-    private static async Task<Result<OpenAiModelReply, string>> ConsumeStreamAsync(
+    private async Task<Result<OpenAiModelReply, string>> ConsumeStreamAsync(
         IAsyncEnumerable<Result<OpenAiStreamChunk, string>> stream,
         DysonAgentTurn turn,
         CancellationToken cancellationToken)
     {
         OpenAiModelReply? completed = null;
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        long charsReceived = 0;
+
+        // Metadata only (model, size, elapsed), never the arguments themselves.
+        void LogIncomplete(string reason) =>
+            AppendLog(
+                $"stream incomplete: {reason}; model={OpenAiProvider.Slug}; {charsReceived} chars received in {started.Elapsed.TotalSeconds:0.#}s");
 
         try
         {
             await foreach (var item in stream.WithCancellation(cancellationToken).ConfigureAwait(false))
             {
                 if (item.IsError)
+                {
+                    if (item.Error.StartsWith(OpenAiCompatibleHttp.StreamEndedErrorPrefix, StringComparison.Ordinal))
+                        LogIncomplete(OpenAiCompatibleHttp.DescribeIncompleteStream(null)!);
                     return Result<OpenAiModelReply, string>.AsError(item.Error);
+                }
 
                 var chunk = item.Value;
                 if (!string.IsNullOrEmpty(chunk.TextDelta))
+                {
+                    charsReceived += chunk.TextDelta.Length;
                     turn.AppendStreamingDelta(chunk.TextDelta);
+                }
 
                 if (!string.IsNullOrEmpty(chunk.ReasoningDelta))
+                {
+                    charsReceived += chunk.ReasoningDelta.Length;
                     turn.AppendReasoningDelta(chunk.ReasoningDelta);
+                }
+
+                if (chunk.ToolCallDeltas is { } toolDeltas)
+                {
+                    foreach (var toolDelta in toolDeltas)
+                        charsReceived += toolDelta.ArgumentsDelta?.Length ?? 0;
+                }
 
                 if (chunk.IsRoundComplete)
                     completed = chunk.CompletedReply;
@@ -1541,7 +1564,10 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         }
 
         if (completed is null)
-            return Result<OpenAiModelReply, string>.AsError("OpenAI stream ended without a completed reply.");
+            return Result<OpenAiModelReply, string>.AsError(OpenAiCompatibleHttp.StreamEndedErrorPrefix);
+
+        if (completed.IncompleteReason is { } incompleteReason)
+            LogIncomplete(incompleteReason);
 
         return Result<OpenAiModelReply, string>.AsValue(completed);
     }

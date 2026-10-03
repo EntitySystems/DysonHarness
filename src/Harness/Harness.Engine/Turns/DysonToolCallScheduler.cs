@@ -72,7 +72,18 @@ public static class DysonToolCallScheduler
         Func<DysonToolCall, CancellationToken, Task<DysonToolCallResult>> execute,
         CancellationToken cancellationToken)
     {
-        var result = await execute(tracked.Call, cancellationToken).ConfigureAwait(false);
+        var call = tracked.Call;
+        // Cut-off arguments (see DysonToolCall.ArgumentsError) never reach a tool: every tool gets the same clear error.
+        var result = call.ArgumentsError is { } argumentsError
+            ? new DysonToolCallResult
+            {
+                CallId = call.CallId,
+                ToolName = call.ToolName,
+                Stage = call.Stage,
+                IsError = true,
+                Content = argumentsError,
+            }
+            : await execute(call, cancellationToken).ConfigureAwait(false);
 
         if (result.IsError)
             tracked.SetFailed(result);
@@ -96,6 +107,7 @@ public static class DysonToolCallScheduler
                 ToolName = call.ToolName,
                 Stage = call.Stage,
                 ArgumentsJson = call.ArgumentsJson,
+                ArgumentsError = call.ArgumentsError,
             };
         }
     }

@@ -11,6 +11,12 @@ public static class OpenAiCompatibleHttp
 {
     public const string DefaultBaseUrl = "https://api.openai.com/v1";
 
+    /// <summary>Start of the transient error for a stream that ended without a terminal signal.</summary>
+    internal const string StreamEndedErrorPrefix = "OpenAI stream ended without a completed reply.";
+
+    /// <summary>SSE terminator payload (<c>data: [DONE]</c>).</summary>
+    public const string SseDonePayload = "[DONE]";
+
     public static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -190,7 +196,7 @@ public static class OpenAiCompatibleHttp
         if (error.StartsWith("OpenAI Responses stream error", StringComparison.Ordinal))
             return true;
 
-        if (error.StartsWith("OpenAI stream ended without a completed reply.", StringComparison.Ordinal))
+        if (error.StartsWith(StreamEndedErrorPrefix, StringComparison.Ordinal))
             return true;
 
         return false;
@@ -388,6 +394,82 @@ public static class OpenAiCompatibleHttp
         }
     }
 
+    /// <summary>
+    /// Why a model round stopped before the model finished, or null when it finished. <paramref name="finishReason"/> is the
+    /// terminal signal the client saw: Completions <c>finish_reason</c> (or <c>done</c> after <c>[DONE]</c>), Responses
+    /// <c>completed</c> / the <c>response.incomplete</c> reason, or null/empty when the stream simply ended (a cut connection
+    /// or proxy timeout). Any other finish reason (stop, tool_calls, content_filter, ...) counts as finished.
+    /// </summary>
+    internal static string? DescribeIncompleteStream(string? finishReason) => finishReason switch
+    {
+        null or "" => "the stream ended before the model finished",
+        "length" or "max_tokens" or "max_output_tokens" => "the model reached its output-token limit",
+        "incomplete" => "the server marked the response incomplete",
+        _ => null,
+    };
+
+    /// <summary>
+    /// Error for a stream that ended with no terminal signal and nothing the harness can act on (no tool call).
+    /// Starts with the transient prefix so <see cref="IsTransientServerError"/> retries it. Null otherwise: a round that
+    /// hit the output limit keeps its (truncated) text, and a round with tool calls carries them on to the scheduler.
+    /// </summary>
+    internal static string? StreamEndedError(string? finishReason, int toolCallCount, int charsReceived) =>
+        string.IsNullOrEmpty(finishReason) && toolCallCount == 0
+            ? $"{StreamEndedErrorPrefix} ({DescribeIncompleteStream(finishReason)}; {charsReceived} chars received)"
+            : null;
+
+    /// <summary>
+    /// One tool call from streamed or parsed arguments: stage split out of the JSON. When the round was cut off
+    /// (<paramref name="incompleteReason"/> non-null) and the arguments are not a complete JSON object, the call carries
+    /// <see cref="DysonToolCall.ArgumentsError"/> (never run) and empty <c>{}</c> arguments, so a half-written payload
+    /// is not replayed to the model. Complete calls in a cut round run normally.
+    /// </summary>
+    internal static DysonToolCall BuildToolCall(string callId, string toolName, string? arguments, string? incompleteReason = null)
+    {
+        if (incompleteReason is not null && !IsJsonObject(arguments))
+        {
+            return new DysonToolCall
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Stage = 0,
+                ArgumentsError = FormatCutOffArgumentsError(toolName, arguments?.Length ?? 0, incompleteReason),
+            };
+        }
+
+        var (stage, argsClean) = SplitStageFromArguments(arguments);
+        return new DysonToolCall
+        {
+            CallId = callId,
+            ToolName = toolName,
+            Stage = stage,
+            ArgumentsJson = argsClean,
+        };
+    }
+
+    internal static string FormatCutOffArgumentsError(string toolName, int charsReceived, string incompleteReason)
+    {
+        var hint = toolName is "SubmitMetaPlan" or "EditMetaPlan"
+            ? "Submit a short skeleton with SubmitMetaPlan, then grow it with EditMetaPlan edits[] (a few sections per call)."
+            : "Retry with a much smaller payload; split large content across several calls.";
+        return $"{toolName}: the call was not run. Its arguments were cut off at {charsReceived} chars because {incompleteReason}. {hint}";
+    }
+
+    private static bool IsJsonObject(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return true; // empty arguments mean {}
+
+        try
+        {
+            return JsonNode.Parse(json) is JsonObject;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     public static string? FormatUsageCacheHint(JsonObject response)
     {
         var usage = response["usage"] as JsonObject;
@@ -524,8 +606,10 @@ public static class OpenAiCompatibleHttp
     }
 
     /// <summary>
-    /// POST JSON and read Server-Sent Events <c>data:</c> payloads until <c>[DONE]</c>.
-    /// Yields each JSON payload string; first item may be an error Result.
+    /// POST JSON and read Server-Sent Events <c>data:</c> payloads until <c>[DONE]</c> or EOF.
+    /// Yields each JSON payload string; first item may be an error Result. A <c>[DONE]</c> line is yielded
+    /// last as <see cref="SseDonePayload"/> so callers can tell a finished stream from one that was cut.
+    /// Clients must skip it when parsing payloads.
     /// </summary>
     public static async IAsyncEnumerable<Result<string, string>> ReadSseJsonPayloadsAsync(
         HttpClient http,
@@ -625,8 +709,11 @@ public static class OpenAiCompatibleHttp
                 if (payload.Length == 0)
                     continue;
 
-                if (string.Equals(payload, "[DONE]", StringComparison.Ordinal))
+                if (string.Equals(payload, SseDonePayload, StringComparison.Ordinal))
+                {
+                    yield return Result<string, string>.AsValue(SseDonePayload);
                     break;
+                }
 
                 yield return Result<string, string>.AsValue(payload);
             }

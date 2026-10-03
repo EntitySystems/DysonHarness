@@ -28,6 +28,8 @@ public sealed class OpenAiResponsesClient(HttpClient http)
         string? responseId = null;
         JsonObject? completedResponse = null;
         string? streamError = null;
+        // response.completed -> "completed"; response.incomplete -> its reason; null = the stream just ended.
+        string? finishReason = null;
         // xAI: response.completed may carry an empty output; rebuild it from output_item.done items.
         var isXai = DysonManagedSources.IsXaiGrok(provider.ManagedSource);
         var doneItems = new SortedDictionary<int, JsonObject>();
@@ -41,6 +43,10 @@ public sealed class OpenAiResponsesClient(HttpClient http)
                 yield return Result<OpenAiStreamChunk, string>.AsError(payload.Error);
                 yield break;
             }
+
+            // The Responses protocol ends with response.completed / response.incomplete, never [DONE].
+            if (string.Equals(payload.Value, OpenAiCompatibleHttp.SseDonePayload, StringComparison.Ordinal))
+                continue;
 
             JsonNode? node;
             string? parseError = null;
@@ -196,6 +202,13 @@ public sealed class OpenAiResponsesClient(HttpClient http)
             {
                 completedResponse = obj["response"] as JsonObject;
                 responseId ??= completedResponse?["id"]?.GetValue<string>();
+                finishReason = "completed";
+            }
+            else if (string.Equals(eventType, "response.incomplete", StringComparison.Ordinal))
+            {
+                completedResponse = obj["response"] as JsonObject;
+                responseId ??= completedResponse?["id"]?.GetValue<string>();
+                finishReason = IncompleteResponseReason(completedResponse);
             }
 
             if (textDelta is not null || reasoningDelta is not null || toolDeltas is { Count: > 0 })
@@ -223,7 +236,18 @@ public sealed class OpenAiResponsesClient(HttpClient http)
             completedResponse["output"] = new JsonArray(doneItems.Values.Select(i => (JsonNode?)i).ToArray());
         }
 
-        var toolCalls = MergeToolCalls(functionCalls, completedResponse);
+        var incompleteReason = OpenAiCompatibleHttp.DescribeIncompleteStream(finishReason);
+        var toolCalls = MergeToolCalls(functionCalls, completedResponse, incompleteReason);
+        var streamEndedError = OpenAiCompatibleHttp.StreamEndedError(
+            finishReason,
+            toolCalls.Count,
+            content.Length + reasoning.Length + functionCalls.Values.Sum(s => s.Arguments.Length));
+        if (streamEndedError is not null)
+        {
+            yield return Result<OpenAiStreamChunk, string>.AsError(streamEndedError);
+            yield break;
+        }
+
         var reasoningItems = ExtractRawReasoningItems(completedResponse);
         var usageHint = completedResponse is not null
             ? OpenAiCompatibleHttp.FormatUsageCacheHint(completedResponse)
@@ -251,6 +275,7 @@ public sealed class OpenAiResponsesClient(HttpClient http)
                 Content = content.Length == 0 ? null : content.ToString(),
                 ReasoningContent = reasoningContent,
                 ToolCalls = toolCalls,
+                IncompleteReason = incompleteReason,
                 ResponseId = responseId,
                 UsageCacheHint = usageHint,
                 PromptTokens = promptTokens,
@@ -322,6 +347,9 @@ public sealed class OpenAiResponsesClient(HttpClient http)
         var reasoningParts = new List<string>();
         var toolCalls = new List<DysonToolCall>();
         var reasoningItems = new List<JsonObject>();
+        var incompleteReason = string.Equals(TryGetString(response["status"]), "incomplete", StringComparison.Ordinal)
+            ? OpenAiCompatibleHttp.DescribeIncompleteStream(IncompleteResponseReason(response))
+            : null;
 
         foreach (var item in output)
         {
@@ -361,14 +389,7 @@ public sealed class OpenAiResponsesClient(HttpClient http)
                 if (string.IsNullOrWhiteSpace(name) || callId is null)
                     continue;
 
-                var (stage, argsClean) = OpenAiCompatibleHttp.SplitStageFromArguments(args);
-                toolCalls.Add(new DysonToolCall
-                {
-                    CallId = callId,
-                    ToolName = name,
-                    Stage = stage,
-                    ArgumentsJson = argsClean,
-                });
+                toolCalls.Add(OpenAiCompatibleHttp.BuildToolCall(callId, name, args, incompleteReason));
             }
         }
 
@@ -379,6 +400,7 @@ public sealed class OpenAiResponsesClient(HttpClient http)
             Content = content,
             ReasoningContent = reasoningContent,
             ToolCalls = toolCalls,
+            IncompleteReason = incompleteReason,
             ResponseId = response["id"]?.GetValue<string>(),
             UsageCacheHint = OpenAiCompatibleHttp.FormatUsageCacheHint(response),
             PromptTokens = OpenAiCompatibleHttp.TryParsePromptTokens(response),
@@ -386,6 +408,12 @@ public sealed class OpenAiResponsesClient(HttpClient http)
             Usage = OpenAiCompatibleHttp.TryParseUsage(response, out var parsed) ? parsed : null,
         });
     }
+
+    /// <summary><c>incomplete_details.reason</c> when it is the output limit; any other incomplete response is just "incomplete".</summary>
+    private static string IncompleteResponseReason(JsonObject? response) =>
+        TryGetString(response?["incomplete_details"]?["reason"]) is "max_output_tokens"
+            ? "max_output_tokens"
+            : "incomplete";
 
     private static string? ExtractReasoningFromResponse(JsonObject? response)
     {
@@ -516,7 +544,8 @@ public sealed class OpenAiResponsesClient(HttpClient http)
     /// </summary>
     private static List<DysonToolCall> MergeToolCalls(
         Dictionary<string, ResponsesFunctionSlot> slots,
-        JsonObject? completedResponse)
+        JsonObject? completedResponse,
+        string? incompleteReason)
     {
         if (completedResponse?["output"] is JsonArray output)
         {
@@ -534,24 +563,19 @@ public sealed class OpenAiResponsesClient(HttpClient http)
                     continue;
 
                 var args = TryGetString(obj["arguments"]) ?? "{}";
-                var (stage, argsClean) = OpenAiCompatibleHttp.SplitStageFromArguments(args);
-                fromCompleted.Add(new DysonToolCall
-                {
-                    CallId = callId,
-                    ToolName = name,
-                    Stage = stage,
-                    ArgumentsJson = argsClean,
-                });
+                fromCompleted.Add(OpenAiCompatibleHttp.BuildToolCall(callId, name, args, incompleteReason));
             }
 
             if (fromCompleted.Count > 0)
                 return fromCompleted;
         }
 
-        return BuildToolCallsFromSlots(slots);
+        return BuildToolCallsFromSlots(slots, incompleteReason);
     }
 
-    private static List<DysonToolCall> BuildToolCallsFromSlots(Dictionary<string, ResponsesFunctionSlot> slots)
+    private static List<DysonToolCall> BuildToolCallsFromSlots(
+        Dictionary<string, ResponsesFunctionSlot> slots,
+        string? incompleteReason)
     {
         var ordered = slots.Values
             .OrderBy(s => s.OutputIndex)
@@ -566,14 +590,7 @@ public sealed class OpenAiResponsesClient(HttpClient http)
                 continue;
 
             var args = slot.Arguments.Length == 0 ? "{}" : slot.Arguments.ToString();
-            var (stage, argsClean) = OpenAiCompatibleHttp.SplitStageFromArguments(args);
-            toolCalls.Add(new DysonToolCall
-            {
-                CallId = slot.CallId!,
-                ToolName = slot.ToolName,
-                Stage = stage,
-                ArgumentsJson = argsClean,
-            });
+            toolCalls.Add(OpenAiCompatibleHttp.BuildToolCall(slot.CallId!, slot.ToolName, args, incompleteReason));
         }
 
         return toolCalls;
