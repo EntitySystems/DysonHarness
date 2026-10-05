@@ -114,7 +114,7 @@ Sandboxed IO for tools, FileManager, file tree, and viewers goes through `IDyson
 - `NativeRootPath` is always the host-visible root for shells, `git -C`, and `Process.WorkingDirectory` (local path, mapped drive, or UNC/SMB mount — including Azure Files mounts).
 - Prefer `DysonWorkspaceFileSystems.CreateLocalAsync(absolutePath)` — validates the directory exists, constructs `DysonLocalWorkspaceFileSystem`, and initializes with `"local_fs"`.
 - Live updates: `CreateWatcher()` → `IDysonWorkspaceChangeWatcher` (`FileSystemWatcher` on the native root today).
-- I/O members are TAP (`FileExistsAsync`, `ReadAllTextAsync`, `WriteAllTextAsync`, `EnumerateEntriesAsync`, …). Path math (`ResolvePath` / `GetRelativePath`) and `CreateWatcher()` stay sync.
+- I/O members are TAP (`FileExistsAsync`, `ReadAllTextAsync`, `WriteAllTextAsync`, `EnumerateEntriesAsync`, …). Path math (`ResolvePath` / `GetRelativePath`) and `CreateWatcher()` stay sync. Sync syscalls inside those TAP methods run on four dedicated workspace IO threads, not the shared thread pool.
 - `MoveAsync(sourceRelativePath, destinationRelativePath)` renames/moves files or directories inside the sandbox (rejects escape, destination collision, and moving a directory into itself). The rail file tree uses this for folder rename from the folder context menu; watcher `Renamed` events refresh the tree.
 
 For Azure Files (and similar) on this product path: mount the share (credentials/lifecycle owned by the host), then use `CreateLocalAsync` over the mount path — not a separate byte-API backend. `work_directories.AbsolutePath` remains the native root string. Custom `IDysonWorkspaceFileSystem` implementations are for cloud hosts that need different storage semantics (see below).

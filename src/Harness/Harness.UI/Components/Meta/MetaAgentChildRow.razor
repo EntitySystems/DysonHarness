@@ -1,0 +1,197 @@
+@namespace Harness.UI.Components.Meta
+@using Harness.UI.Components.Chat
+@using Harness.UI.Demo
+@implements IDisposable
+@inject DysonUiHost Host
+@inject DysonMessageBus Bus
+
+@if (_state is not null)
+{
+    var icon = SubagentCard.ResolveModeIcon(_state.AgentMode);
+    var title = string.IsNullOrWhiteSpace(_state.Title) ? "Subagent" : _state.Title;
+    var statusText = DysonSubagentHostLogic.NestedStatusText(_state.LatestTurnStepTitle, _state.Status);
+    var showModel = DysonSubagentHostLogic.ShowNestedModelLabel(_state.ModelLabel, ParentModelLabel);
+    <button type="button"
+            class="meta-child-row"
+            title="@AccessibleName"
+            aria-label="@AccessibleName"
+            @onclick="NavigateAsync">
+        <span class="meta-child-row__icon @icon.ColorClass"
+              style="--subagent-mode-icon: url('@icon.Url')"
+              aria-hidden="true"></span>
+        <span class="meta-child-row__name">@title</span>
+        @if (_state.RuntimeId > 0)
+        {
+            <span class="meta-child-row__id mono">#@_state.RuntimeId</span>
+        }
+        @if (statusText is not null)
+        {
+            <span class="meta-child-row__step">@statusText</span>
+        }
+        @if (showModel)
+        {
+            <span class="meta-child-row__model">@_state.ModelLabel</span>
+        }
+        @if (_state.IsRunning)
+        {
+            <span class="subagent-card__spinner meta-child-row__spinner" aria-hidden="true"></span>
+        }
+    </button>
+}
+
+@code {
+    [Parameter, EditorRequired] public Guid PersistenceId { get; set; }
+
+    [Parameter] public string? ParentModelLabel { get; set; }
+
+    [Parameter] public EventCallback AfterNavigate { get; set; }
+
+    private DysonSubagentCardState? _state;
+    private Guid? _boundPersistenceId;
+    private IDisposable? _sub;
+
+    private string AccessibleName
+    {
+        get
+        {
+            var name = string.IsNullOrWhiteSpace(_state?.Title) ? "Subagent" : _state.Title.Trim();
+            if (_state is { RuntimeId: > 0 })
+                name += $" #{_state.RuntimeId}";
+            if (_state is not null)
+            {
+                var status = DysonSubagentHostLogic.NestedStatusText(_state.LatestTurnStepTitle, _state.Status);
+                if (!string.IsNullOrWhiteSpace(status))
+                    name += $" {status}";
+            }
+
+            if (_state is not null
+                && DysonSubagentHostLogic.ShowNestedModelLabel(_state.ModelLabel, ParentModelLabel))
+            {
+                name += $" {_state.ModelLabel!.Trim()}";
+            }
+
+            return name;
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (PersistenceId != _boundPersistenceId)
+        {
+            DisposeSubscriptions();
+            _boundPersistenceId = PersistenceId;
+            SubscribeIfNeeded();
+        }
+
+        RefreshState();
+    }
+
+    private void RefreshState() =>
+        _state = PersistenceId == Guid.Empty
+            ? null
+            : Host.GetSubagentCardState(PersistenceId);
+
+    private void SubscribeIfNeeded()
+    {
+        if (PersistenceId == Guid.Empty)
+            return;
+
+        var scope = DysonBusScopes.Session(PersistenceId);
+        IDisposable? activity = null;
+        IDisposable? status = null;
+
+        var activitySub = Bus.Subscribe<DysonSubagentActivityChangedEvent>(scope, OnActivity);
+        if (activitySub.IsSuccess)
+            activity = activitySub.Value;
+
+        var statusSub = Bus.Subscribe<DysonSubagentStatusChangedEvent>(scope, OnStatus);
+        if (statusSub.IsSuccess)
+            status = statusSub.Value;
+
+        if (activity is null && status is null)
+            return;
+
+        _sub = new CompositeDisposable(activity, status);
+    }
+
+    private void OnActivity(DysonSubagentActivityChangedEvent evt) => _ = InvokeAsync(() =>
+    {
+        if (evt.PersistenceId != PersistenceId)
+            return;
+        if (_state is null)
+            RefreshState();
+        if (_state is null || _state.PersistenceId != evt.PersistenceId)
+            return;
+
+        _state = new DysonSubagentCardState
+        {
+            PersistenceId = evt.PersistenceId,
+            RuntimeId = evt.RuntimeId,
+            Title = evt.Title,
+            LatestTurnStepTitle = evt.LatestTurnStepTitle,
+            ModelLabel = _state.ModelLabel,
+            AgentMode = _state.AgentMode,
+            IsRunning = evt.IsRunning,
+            Status = _state.Status,
+        };
+        StateHasChanged();
+    });
+
+    private void OnStatus(DysonSubagentStatusChangedEvent evt) => _ = InvokeAsync(() =>
+    {
+        if (evt.PersistenceId != PersistenceId)
+            return;
+        if (_state is null)
+            RefreshState();
+        if (_state is null || _state.PersistenceId != evt.PersistenceId)
+            return;
+
+        _state = new DysonSubagentCardState
+        {
+            PersistenceId = evt.PersistenceId,
+            RuntimeId = evt.RuntimeId,
+            Title = _state.Title,
+            LatestTurnStepTitle = _state.LatestTurnStepTitle,
+            ModelLabel = _state.ModelLabel,
+            AgentMode = _state.AgentMode,
+            IsRunning = evt.IsRunning,
+            Status = evt.Status,
+        };
+        StateHasChanged();
+    });
+
+    private async Task NavigateAsync()
+    {
+        if (PersistenceId == Guid.Empty)
+            return;
+
+        await Host.NavigateToSessionAsync(PersistenceId);
+        await AfterNavigate.InvokeAsync();
+    }
+
+    private void DisposeSubscriptions()
+    {
+        _sub?.Dispose();
+        _sub = null;
+    }
+
+    public void Dispose() => DisposeSubscriptions();
+
+    private sealed class CompositeDisposable : IDisposable
+    {
+        private readonly IDisposable? _first;
+        private readonly IDisposable? _second;
+
+        public CompositeDisposable(IDisposable? first, IDisposable? second)
+        {
+            _first = first;
+            _second = second;
+        }
+
+        public void Dispose()
+        {
+            _first?.Dispose();
+            _second?.Dispose();
+        }
+    }
+}

@@ -8,7 +8,7 @@ namespace DysonHarness;
 /// Ordered reasoning / interim-text / user-comment segment kinds for a turn's thinking history.
 /// JSON is numeric; append new values only. Thought and InterimText remain UI+DB-only.
 /// UserComment is re-emitted as user-role history via
-/// <see cref="DysonAgentTurn.FormatInjectedUserCommentsForTranscript"/>.
+/// <see cref="DysonInjectedUserComments"/>.
 /// </summary>
 public enum DysonReasoningSegmentKind
 {
@@ -20,19 +20,23 @@ public enum DysonReasoningSegmentKind
 /// <summary>
 /// One entry in a turn's reasoning log. Thought and InterimText are UI + DB only
 /// (never injected into model transcripts). UserComment is persisted the same way
-/// and re-emitted as user-role history via
-/// <see cref="DysonAgentTurn.FormatInjectedUserCommentsForTranscript"/>.
+/// and re-emitted as user-role history via <see cref="DysonInjectedUserComments"/>.
+/// <paramref name="DeliveredAfterToolCalls"/> (UserComment only): the turn's
+/// <see cref="DysonAgentTurn.ToolCalls"/> count when the comment was drained into the tool
+/// loop, i.e. the model first saw it after that many calls. Null = not yet delivered
+/// (or a legacy row); transcripts then emit it after the turn's tools.
 /// </summary>
 public sealed record DysonReasoningSegment(
     DysonReasoningSegmentKind Kind,
     string Text,
-    int RoundIndex);
+    int RoundIndex,
+    int? DeliveredAfterToolCalls = null);
 
 /// <summary>
 /// JSON serialize/restore helpers for <see cref="DysonAgentTurn.ReasoningLog"/>.
 /// Kind is numeric (append-only enum). Thought/Interim stay UI+DB-only;
 /// UserComment is re-emitted as user-role history via
-/// <see cref="DysonAgentTurn.FormatInjectedUserCommentsForTranscript"/>.
+/// <see cref="DysonInjectedUserComments"/>.
 /// </summary>
 public static class DysonReasoningLogSerializer
 {

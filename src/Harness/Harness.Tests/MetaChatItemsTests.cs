@@ -252,4 +252,46 @@ public class MetaChatItemsTests
         Assert.DoesNotContain(items, item => item.Text.Contains("eventId:", StringComparison.Ordinal));
         Assert.DoesNotContain(items, item => item.Text.Contains("RespondToSubagentEvent", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void Build_shows_question_card_and_still_hides_parent_event()
+    {
+        var questionId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+        var question = new DysonUserQuestion(
+            questionId,
+            "Which plan?",
+            ["Ship", "Hold"],
+            MultiSelect: false,
+            AllowCustomAnswer: true,
+            Answer: null);
+        var post = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.DisplayInfo,
+            AssistantText = "Need a call.",
+            UserQuestion = question,
+        };
+        var parentEvent = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.ParentEvent,
+            Instruction = "eventId: " + questionId.ToString("D"),
+        };
+        var user = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "Answer: Ship",
+            HiddenInstruction = "questionId: " + questionId.ToString("D"),
+        };
+
+        var items = MetaChatItems.Build([parentEvent, post, user], []);
+
+        Assert.Equal(2, items.Count);
+        Assert.Equal(MetaChatRole.Agent, items[0].Role);
+        Assert.Equal("Need a call.", items[0].Text);
+        Assert.Same(question, items[0].UserQuestion);
+        Assert.Equal(MetaChatRole.User, items[1].Role);
+        Assert.Equal("Answer: Ship", items[1].Text);
+        Assert.Null(items[1].UserQuestion);
+        Assert.DoesNotContain(items, item => item.Text.Contains("questionId", StringComparison.Ordinal));
+        Assert.DoesNotContain(items, item => item.Text.Contains(questionId.ToString("D"), StringComparison.Ordinal));
+    }
 }

@@ -28,6 +28,53 @@ public class DysonParentEventTests
         await AssertDeepAskQuestionFailsFast();
     }
 
+    [Fact]
+    public async Task Interrupt_keeps_earlier_queued_parent_messages()
+    {
+        var parent = new StubSession();
+        var child = new HangingChildSession();
+        parent.RegisterForTest(child);
+        try
+        {
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "first")).IsSuccess);
+            await child.PromptStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "queued second")).IsSuccess);
+            child.EnqueuePendingTurn(DysonAgentSession.CreateNormalTurn("stale harness follow-up"));
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "queued third")).IsSuccess);
+
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "urgent fourth", interruptSubagent: true)).IsSuccess);
+
+            // FIFO, no duplicates, harness follow-up dropped; the interrupt turn itself is not queued.
+            Assert.True(child.TryDequeuePendingTurn(out var kept));
+            Assert.EndsWith("queued second", kept.Instruction, StringComparison.Ordinal);
+            Assert.True(child.TryDequeuePendingTurn(out var keptNext));
+            Assert.EndsWith("queued third", keptNext.Instruction, StringComparison.Ordinal);
+            Assert.False(child.HasPendingTurn);
+        }
+        finally
+        {
+            child.CancelBackgroundRunForTest();
+        }
+    }
+
+    [Fact]
+    public async Task Parent_message_is_logged_in_full_on_the_child()
+    {
+        var parent = new StubSession();
+        var child = new HangingChildSession();
+        parent.RegisterForTest(child);
+        try
+        {
+            var payload = new string('p', 300) + " tail";
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, payload)).IsSuccess);
+            Assert.Contains($"PARENT MESSAGE: {payload}", child.SnapshotLog());
+        }
+        finally
+        {
+            child.CancelBackgroundRunForTest();
+        }
+    }
+
     private static void AssertLayerGating()
     {
         var root = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess, ["Pwsh"]);

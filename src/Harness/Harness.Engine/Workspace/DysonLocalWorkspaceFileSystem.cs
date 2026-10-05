@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 
 namespace DysonHarness;
@@ -11,6 +12,13 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
 {
     private static readonly StringComparison PathComparison =
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    // ponytail: ceiling = 4 process-wide workers, shared by every workspace and every grep;
+    // upgrade = raise the count if interactive listing latency shows up in a profile.
+    private const int IoWorkerCount = 4;
+    private static readonly BlockingCollection<Action> IoQueue = new();
+    private static readonly object IoStartGate = new();
+    private static int _ioWorkersStarted;
 
     private readonly string _root;
     private string? _subjectId;
@@ -28,9 +36,63 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
 
     public bool IsInitialized => _initialized;
 
-    // ponytail: ceiling = thread-pool offload of a sync syscall; upgrade = a future BCL/async FS API.
-    internal static Task<T> RunIoAsync<T>(Func<T> work, CancellationToken cancellationToken) =>
-        Task.Run(work, cancellationToken);
+    internal static Task<T> RunIoAsync<T>(Func<T> work, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        if (cancellationToken.IsCancellationRequested)
+            return Task.FromCanceled<T>(cancellationToken);
+
+        EnsureIoWorkers();
+        var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        IoQueue.Add(() =>
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                tcs.TrySetCanceled(cancellationToken);
+                return;
+            }
+
+            try
+            {
+                tcs.TrySetResult(work());
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                tcs.TrySetCanceled(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                tcs.TrySetException(ex);
+            }
+        });
+        return tcs.Task;
+    }
+
+    private static void EnsureIoWorkers()
+    {
+        if (Volatile.Read(ref _ioWorkersStarted) >= IoWorkerCount)
+            return;
+
+        lock (IoStartGate)
+        {
+            while (_ioWorkersStarted < IoWorkerCount)
+            {
+                var thread = new Thread(IoWorkerLoop)
+                {
+                    IsBackground = true,
+                    Name = "dyson-workspace-io-" + _ioWorkersStarted,
+                };
+                thread.Start();
+                _ioWorkersStarted++;
+            }
+        }
+    }
+
+    private static void IoWorkerLoop()
+    {
+        foreach (var work in IoQueue.GetConsumingEnumerable())
+            work();
+    }
 
     public Task<VoidResult<string>> InitializeAsync(
         string subjectId,
@@ -171,14 +233,13 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
 
         try
         {
-            var exists = await RunIoAsync(() => File.Exists(resolved.Value), cancellationToken)
-                .ConfigureAwait(false);
-            if (!exists)
-                return Result<string, string>.AsError($"File not found: {path}");
+            return await RunIoAsync(() =>
+            {
+                if (!File.Exists(resolved.Value))
+                    return Result<string, string>.AsError($"File not found: {path}");
 
-            var text = await File.ReadAllTextAsync(resolved.Value, cancellationToken)
-                .ConfigureAwait(false);
-            return Result<string, string>.AsValue(text);
+                return Result<string, string>.AsValue(File.ReadAllText(resolved.Value));
+            }, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -201,14 +262,13 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
 
         try
         {
-            var exists = await RunIoAsync(() => File.Exists(resolved.Value), cancellationToken)
-                .ConfigureAwait(false);
-            if (!exists)
-                return Result<byte[], string>.AsError($"File not found: {path}");
+            return await RunIoAsync(() =>
+            {
+                if (!File.Exists(resolved.Value))
+                    return Result<byte[], string>.AsError($"File not found: {path}");
 
-            var bytes = await File.ReadAllBytesAsync(resolved.Value, cancellationToken)
-                .ConfigureAwait(false);
-            return Result<byte[], string>.AsValue(bytes);
+                return Result<byte[], string>.AsValue(File.ReadAllBytes(resolved.Value));
+            }, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -235,29 +295,27 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
 
         try
         {
-            var exists = await RunIoAsync(() => File.Exists(resolved.Value), cancellationToken)
-                .ConfigureAwait(false);
-            if (!exists)
-                return Result<byte[], string>.AsError($"File not found: {path}");
+            return await RunIoAsync(() =>
+            {
+                if (!File.Exists(resolved.Value))
+                    return Result<byte[], string>.AsError($"File not found: {path}");
 
-            await using var stream = File.Open(
-                resolved.Value,
-                new FileStreamOptions
-                {
-                    Mode = FileMode.Open,
-                    Access = FileAccess.Read,
-                    Share = FileShare.Read,
-                    Options = FileOptions.Asynchronous
-                });
-            var buf = new byte[maxBytes];
-            var read = await stream.ReadAsync(buf.AsMemory(0, buf.Length), cancellationToken)
-                .ConfigureAwait(false);
-            if (read == buf.Length)
-                return Result<byte[], string>.AsValue(buf);
+                using var stream = new FileStream(
+                    resolved.Value,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read,
+                    bufferSize: 4096,
+                    FileOptions.SequentialScan);
+                var buf = new byte[maxBytes];
+                var read = stream.Read(buf, 0, buf.Length);
+                if (read == buf.Length)
+                    return Result<byte[], string>.AsValue(buf);
 
-            var sliced = new byte[read];
-            Buffer.BlockCopy(buf, 0, sliced, 0, read);
-            return Result<byte[], string>.AsValue(sliced);
+                var sliced = new byte[read];
+                Buffer.BlockCopy(buf, 0, sliced, 0, read);
+                return Result<byte[], string>.AsValue(sliced);
+            }, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -413,36 +471,46 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
 
         try
         {
-            await using var stream = new FileStream(
-                resolved.Value,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                bufferSize: 4096,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-            var lineNumber = 0;
-            while (true)
+            return await RunIoAsync(() =>
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
-                if (line is null)
-                    break;
+                try
+                {
+                    using var stream = new FileStream(
+                        resolved.Value,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.Read,
+                        bufferSize: 4096,
+                        FileOptions.SequentialScan);
+                    using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+                    var lineNumber = 0;
+                    while (true)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var line = reader.ReadLine();
+                        if (line is null)
+                            break;
 
-                lineNumber++;
-                if (!onLine(lineNumber, line))
-                    break;
-            }
+                        lineNumber++;
+                        if (!onLine(lineNumber, line))
+                            break;
+                    }
 
-            return VoidResult<string>.Success;
+                    return VoidResult<string>.Success;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    return VoidResult<string>.AsError($"Failed to read file: {ex.Message}");
+                }
+            }, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             throw;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return VoidResult<string>.AsError($"Failed to read file: {ex.Message}");
         }
     }
 
@@ -460,16 +528,15 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
 
         try
         {
-            var dir = Path.GetDirectoryName(resolved.Value);
-            if (!string.IsNullOrEmpty(dir))
+            return await RunIoAsync(() =>
             {
-                await RunIoAsync(() => Directory.CreateDirectory(dir), cancellationToken)
-                    .ConfigureAwait(false);
-            }
+                var dir = Path.GetDirectoryName(resolved.Value);
+                if (!string.IsNullOrEmpty(dir))
+                    Directory.CreateDirectory(dir);
 
-            await File.WriteAllTextAsync(resolved.Value, contents, cancellationToken)
-                .ConfigureAwait(false);
-            return VoidResult<string>.Success;
+                File.WriteAllText(resolved.Value, contents);
+                return VoidResult<string>.Success;
+            }, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -495,16 +562,15 @@ public sealed class DysonLocalWorkspaceFileSystem : IDysonWorkspaceFileSystem
 
         try
         {
-            var dir = Path.GetDirectoryName(resolved.Value);
-            if (!string.IsNullOrEmpty(dir))
+            return await RunIoAsync(() =>
             {
-                await RunIoAsync(() => Directory.CreateDirectory(dir), cancellationToken)
-                    .ConfigureAwait(false);
-            }
+                var dir = Path.GetDirectoryName(resolved.Value);
+                if (!string.IsNullOrEmpty(dir))
+                    Directory.CreateDirectory(dir);
 
-            await File.WriteAllBytesAsync(resolved.Value, contents, cancellationToken)
-                .ConfigureAwait(false);
-            return VoidResult<string>.Success;
+                File.WriteAllBytes(resolved.Value, contents);
+                return VoidResult<string>.Success;
+            }, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {

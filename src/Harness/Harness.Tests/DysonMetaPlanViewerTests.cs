@@ -105,7 +105,7 @@ public class DysonMetaPlanViewerTests
                 Assert.NotNull(turn);
                 Assert.Contains(
                     expected,
-                    turn.FormatInjectedUserCommentsForTranscript(),
+                    DysonInjectedUserComments.FormatPlainText(turn.ReasoningLog),
                     StringComparison.Ordinal);
             }
 

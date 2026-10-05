@@ -102,6 +102,8 @@ jobs:
             -p:InformationalVersion="${VERSION}+${SHORT_SHA}" \
             -p:DysonReleaseChannel="${CHANNEL}" \
             -o "$OUT"
+          # MIT attribution for ported CLIProxyAPI code must travel with every copy (zip + MSI payload).
+          cp LICENSE THIRD-PARTY-NOTICES.md "$OUT/"
 
       - name: Zip (Windows)
         if: runner.os == 'Windows'

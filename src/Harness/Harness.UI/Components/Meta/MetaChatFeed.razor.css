@@ -86,6 +86,66 @@
   padding: 0;
 }
 
+.meta-chat__question {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+
+.meta-chat__question-title {
+  font-weight: 600;
+}
+
+.meta-chat__question-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.meta-chat__question-other {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.meta-chat__question-other textarea {
+  width: 100%;
+  min-height: 3.5rem;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--text);
+  font: inherit;
+}
+
+.meta-chat__question-locked {
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
+.meta-chat__question-submit {
+  align-self: flex-start;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--text);
+}
+
+.meta-chat__question-error {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
 .meta-chat__actions {
   display: flex;
   flex-wrap: wrap;

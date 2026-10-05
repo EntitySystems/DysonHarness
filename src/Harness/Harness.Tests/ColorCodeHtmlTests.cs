@@ -101,6 +101,8 @@ public class ColorCodeHtmlTests
             "TryHighlightSourceLines",
             BindingFlags.Static | BindingFlags.NonPublic)!;
 
+        // The render budget is per thread and another test may have spent it on this worker thread.
+        ColorCodeHtml.ResetHighlightBurst();
         return (string[]?)method.Invoke(null, [relativePath, content]);
     }
 }

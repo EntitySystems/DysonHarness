@@ -35,10 +35,19 @@ public readonly record struct MetaChatItem(
 
     /// <summary>Visualization opened from a DisplayInfo bubble. Null everywhere else.</summary>
     public Guid? VisualizationId { get; init; }
+
+    /// <summary>Question card on a DisplayInfo bubble. Null everywhere else.</summary>
+    public DysonUserQuestion? UserQuestion { get; init; }
 }
 
 /// <summary>Click on a meta-chat conversation action button. Index is into that turn's actions.</summary>
 public readonly record struct MetaChatActionClick(Guid TurnId, int Index);
+
+/// <summary>Submit on a meta-chat question card. The host records the answer; the card does not.</summary>
+public readonly record struct MetaChatQuestionSubmit(
+    Guid QuestionId,
+    IReadOnlyList<string> Selected,
+    string? CustomText);
 
 /// <summary>
 /// Newest root Meta Agent session for a work-directory list (roots-only <see cref="DysonSessionSummary"/>).
@@ -137,6 +146,7 @@ public static class MetaChatItems
                     Actions = turn.ConversationActions,
                     TurnId = turn.Id,
                     VisualizationId = turn.VisualizationId,
+                    UserQuestion = turn.UserQuestion,
                 });
             }
         }

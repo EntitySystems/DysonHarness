@@ -218,6 +218,26 @@ public static class DysonMetaMaintenanceTick
             && store is not null
             && session.PersistenceId != Guid.Empty)
         {
+            // User-authored text survives the hard delete. A failed write skips this batch;
+            // the counter is not reset, so the next completed turn retries the tick.
+            foreach (var turn in evicted)
+            {
+                var line = FormatEvictedUserText(turn);
+                if (line is null)
+                    continue;
+
+                var logged = await store.AppendLogAsync(
+                        DysonSessionLogPayload.CreateEntry(
+                            session.PersistenceId,
+                            DysonSessionLogKind.LogLine,
+                            new DysonSessionLogLogLine(line),
+                            turnId: turn.Id),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (logged.IsError)
+                    return logged;
+            }
+
             var ids = new Guid[evicted.Count];
             for (var i = 0; i < evicted.Count; i++)
                 ids[i] = evicted[i].Id;
@@ -234,6 +254,33 @@ public static class DysonMetaMaintenanceTick
         session.EnqueuePendingTurn(CreateTurn(instruction));
         session.TurnsSinceMetaMaintenance = 0;
         return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// User-authored text of an evicted turn: the prompt (Normal turns: user prompts, queued
+    /// prompts, parent messages) and every injected comment, verbatim. Null when there is none.
+    /// No tool output, no assistant text.
+    /// </summary>
+    public static string? FormatEvictedUserText(DysonAgentTurn turn)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+        var sb = new System.Text.StringBuilder();
+        if (turn.Kind == DysonAgentTurnKind.Normal && !string.IsNullOrWhiteSpace(turn.Instruction))
+        {
+            sb.Append("\nUSER PROMPT: ");
+            sb.Append(turn.Instruction);
+        }
+
+        foreach (var comment in DysonInjectedUserComments.From(turn.ReasoningLog))
+        {
+            sb.Append("\nUSER COMMENT (injected mid-turn): ");
+            sb.Append(comment.Text);
+        }
+
+        if (sb.Length == 0)
+            return null;
+
+        return $"EVICTED TURN {turn.Id:D} ({turn.Kind}, started {turn.StartedUtc:o}) user text:{sb}";
     }
 
     private static DateTime? LatestCompletedUtc(DysonAgentSession child)

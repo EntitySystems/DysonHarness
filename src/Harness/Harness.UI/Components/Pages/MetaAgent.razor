@@ -85,6 +85,7 @@
                                           SessionBusy="IsMetaFocused && Host.IsBusy"
                                           OnRemoveQueued="RemoveQueuedAsync"
                                           OnConversationAction="OnConversationActionAsync"
+                                          OnUserQuestion="OnUserQuestionAsync"
                                           OnOpenVisualization="OpenFocusedVisualization" />
                         </div>
 
@@ -206,9 +207,12 @@
                                         {
                                             @foreach (var id in childIds)
                                             {
-                                                <SubagentCard @key="id"
-                                                              PersistenceId="id"
-                                                              AfterNavigate="InspectChildAsync" />
+                                                <div class="meta-agents__item" @key="id">
+                                                    <SubagentCard PersistenceId="id"
+                                                                  AfterNavigate="InspectChildAsync" />
+                                                    <MetaAgentChildRows ParentPersistenceId="id"
+                                                                        AfterNavigate="InspectChildAsync" />
+                                                </div>
                                             }
                                         }
                                     </div>
@@ -305,19 +309,19 @@
     private int MetaTodoCompleteCount =>
         MetaTodos.Count(t => t.Status == DysonSessionTodoStatus.Complete);
 
-    private IReadOnlyList<Guid> ChildIds
-    {
-        get
-        {
-            if (!IsMetaFocused || Host.Session is null)
-                return [];
+    private IReadOnlyList<Guid> ChildIds =>
+        IsMetaFocused ? OrderedDirectChildIds(Host.Session) : [];
 
-            return Host.Session.SubSessions
-                .Where(child => child is not null && child.PersistenceId != Guid.Empty)
-                .OrderByDescending(child => child.Id)
-                .Select(child => child.PersistenceId)
-                .ToList();
-        }
+    internal static IReadOnlyList<Guid> OrderedDirectChildIds(DysonAgentSession? session)
+    {
+        if (session is null)
+            return [];
+
+        return session.SubSessions
+            .Where(child => child is not null && child.PersistenceId != Guid.Empty)
+            .OrderByDescending(child => child.Id)
+            .Select(child => child.PersistenceId)
+            .ToList();
     }
 
     protected override async Task OnInitializedAsync()
@@ -649,6 +653,16 @@
     {
         var result = await Host.InvokeMetaConversationActionAsync(click.TurnId, click.Index);
         _chatFeed?.NoteConversationActionResult(click.TurnId, result);
+    }
+
+    private async Task OnUserQuestionAsync(MetaChatQuestionSubmit submit)
+    {
+        var result = await Host.SubmitMetaUserQuestionAnswerAsync(
+            submit.QuestionId,
+            submit.Selected,
+            submit.CustomText);
+        if (result.IsError)
+            _chatFeed?.NoteUserQuestionError(submit.QuestionId, result.Error);
     }
 
     private void ToggleTasks() => _tasksOpen = !_tasksOpen;

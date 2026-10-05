@@ -859,6 +859,7 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         }
 
         session.TurnAdded += OnTurnAdded;
+        session.TurnUpdated += OnTurnUpdated;
         session.LogAppended += OnLogAppended;
         session.TodosChanged += OnTodosChanged;
         session.SubagentSpawned += OnSubagentSpawned;
@@ -993,6 +994,7 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         TryDisposeSessionEventToken(session);
 
         session.TurnAdded -= OnTurnAdded;
+        session.TurnUpdated -= OnTurnUpdated;
         session.LogAppended -= OnLogAppended;
         session.TodosChanged -= OnTodosChanged;
         session.SubagentSpawned -= OnSubagentSpawned;
@@ -1040,6 +1042,16 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         RefreshRegistryKey(session);
         HookTurn(turn);
         QueuePersist(() => PersistTurnStartedAsync(session, turn));
+        RaiseChanged(DysonRuntimeChangeKind.SessionGraph, session.PersistenceId);
+    }
+
+    private void OnTurnUpdated(object? sender, DysonAgentTurn turn)
+    {
+        if (sender is not DysonAgentSession session)
+            return;
+
+        RefreshRegistryKey(session);
+        QueuePersist(() => PersistTurnUpdatedAsync(session, turn));
         RaiseChanged(DysonRuntimeChangeKind.SessionGraph, session.PersistenceId);
     }
 
@@ -1138,6 +1150,22 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
 
         var started = DysonTurnPersistence.CreateTurnStartedLog(sessionId, turn);
         await PersistAsync(() => _sessions.AppendLogAsync(started)).ConfigureAwait(false);
+    }
+
+    private async Task PersistTurnUpdatedAsync(DysonAgentSession session, DysonAgentTurn turn)
+    {
+        if (session.PersistenceId == Guid.Empty)
+            return;
+
+        var sessionId = session.PersistenceId;
+        var sequence = IndexOfTurn(session, turn);
+        if (sequence < 0)
+            sequence = Math.Max(0, session.Turns.Count - 1);
+
+        var entity = DysonTurnPersistence.ToEntity(turn, sessionId, sequence);
+        var upsert = await PersistAsync(() => _sessions.UpsertTurnAsync(entity)).ConfigureAwait(false);
+        if (upsert.IsError)
+            ReportError(upsert.Error);
     }
 
     private async Task OnToolStatusAsync(

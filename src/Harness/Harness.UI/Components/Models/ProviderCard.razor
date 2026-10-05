@@ -22,6 +22,41 @@
         <span class="list-item__meta mono">@Provider.BaseUrl</span>
     }
 
+    @if (IsXaiGrok)
+    {
+        <div class="list-item__meta">
+            @if (XaiSummary is { Connected: true } xai)
+            {
+                <text>Signed in@(string.IsNullOrWhiteSpace(xai.Email) ? "" : $" as {xai.Email}") · client version <span class="mono">@xai.ClientVersion</span></text>
+            }
+            else
+            {
+                <text>Not signed in@(XaiSummary is null ? "" : $" · client version {XaiSummary.ClientVersion}")</text>
+            }
+        </div>
+
+        @if (AuthPending && (!string.IsNullOrWhiteSpace(PendingUserCode) || !string.IsNullOrWhiteSpace(PendingAuthUrl)))
+        {
+            <div class="provider-card__device">
+                <div class="list-item__meta">Enter this code on the xAI page, then approve:</div>
+                @if (!string.IsNullOrWhiteSpace(PendingUserCode))
+                {
+                    <div class="provider-card__device-code mono">@PendingUserCode</div>
+                }
+                @if (!string.IsNullOrWhiteSpace(PendingAuthUrl))
+                {
+                    <a href="@PendingAuthUrl" target="_blank" rel="noopener">Open the xAI verification page</a>
+                }
+                <div class="list-item__meta">Waiting for approval…</div>
+            </div>
+        }
+    }
+
+    @if (IsLegacyGrok)
+    {
+        <div class="list-item__meta">Legacy CLIProxy route (deprecated). Native Grok needs no CLIProxy binary.</div>
+    }
+
     @if (IsCliProxy && !CliProxyInstalled)
     {
         <div class="error-banner">
@@ -77,6 +112,30 @@
             <button type="button" class="btn btn--sm" @onclick="OnUpdateApiKey">Update API key</button>
             <button type="button" class="btn btn-ghost btn--sm" @onclick="OnDelete">Delete</button>
         }
+        else if (IsXaiGrok)
+        {
+            @if (AuthPending)
+            {
+                <button type="button" class="btn btn-primary btn--sm" @onclick="OnCancelConnect">Cancel sign-in</button>
+            }
+            else
+            {
+                <button type="button" class="btn btn-primary btn--sm"
+                        disabled="@ConnectBusy"
+                        @onclick="OnConnect">
+                    @(ConnectBusy ? "Connecting…" : "Connect")
+                </button>
+            }
+            <button type="button" class="btn btn--sm"
+                    disabled="@VerifyBusy"
+                    @onclick="OnVerify">
+                @(VerifyBusy ? "Verifying…" : "Verify / Refresh models")
+            </button>
+            <button type="button" class="btn btn-ghost btn--sm"
+                    @onclick="OnDisconnect">Sign out</button>
+            <button type="button" class="btn btn-ghost btn--sm"
+                    @onclick="OnDelete">Delete</button>
+        }
         else if (IsCliProxy)
         {
             @if (AuthPending)
@@ -100,6 +159,11 @@
                     @onclick="OnVerify">
                 @(VerifyBusy ? "Verifying…" : "Verify / Refresh models")
             </button>
+            @if (IsLegacyGrok)
+            {
+                <button type="button" class="btn btn--sm"
+                        @onclick="OnSwitchToNative">Switch to native Grok</button>
+            }
             <button type="button" class="btn btn-ghost btn--sm"
                     @onclick="OnDisconnect">Disconnect</button>
             <button type="button" class="btn btn-ghost btn--sm"
@@ -161,6 +225,19 @@
 
     /// <summary>CLIProxy OAuth chrome (Connect / Verify / missing binary).</summary>
     public bool IsCliProxy => DysonManagedSources.IsCliProxy(Provider.ManagedSource);
+
+    /// <summary>Native xAI/Grok OAuth chrome (device-code panel, sign out); no CLIProxy involved.</summary>
+    public bool IsXaiGrok => DysonManagedSources.IsXaiGrok(Provider.ManagedSource);
+
+    /// <summary>Native xAI account facts (email, client version); null when unknown.</summary>
+    [Parameter] public XaiGrokAccountSummary? XaiSummary { get; set; }
+
+    [Parameter] public EventCallback OnCancelConnect { get; set; }
+
+    /// <summary>Legacy <c>cliproxy-grok</c> card: offers the in-place switch to native Grok.</summary>
+    public bool IsLegacyGrok => string.Equals(Provider.ManagedSource, DysonManagedSources.CliProxyGrok, StringComparison.Ordinal);
+
+    [Parameter] public EventCallback OnSwitchToNative { get; set; }
 
     /// <summary>Direct API-key managed provider (OpenRouter / OrcaRouter).</summary>
     public bool IsDirectManaged => DysonManagedSources.IsDirectManaged(Provider.ManagedSource);

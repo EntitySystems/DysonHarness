@@ -199,4 +199,18 @@ public static class DysonAppSettingKeys
     /// Empty / missing ⇒ not configured. Empty/whitespace delete via <c>SetSettingAsync</c>.
     /// </summary>
     public const string FileStorageS3 = "file_storage_s3";
+
+    /// <summary>
+    /// Key prefix for native xAI/Grok OAuth credentials: <c>xai_grok_credential:&lt;guid&gt;</c>.
+    /// One row per credential; <c>Value</c> is the plaintext JSON of <c>XaiCredential</c> (same plaintext-local
+    /// stance as provider ApiKey / <see cref="FileStorageS3"/>). Looked up by credential handle
+    /// (<c>IDysonXaiCredentialStore</c>), never by subject. Never log the value.
+    /// </summary>
+    public const string XaiGrokCredentialPrefix = "xai_grok_credential:";
+
+    /// <summary>
+    /// <c>"true"</c> once this subject accepted the native xAI/Grok sign-in notice (unofficial Grok CLI identity,
+    /// plaintext token storage). Missing ⇒ Connect is refused until accepted.
+    /// </summary>
+    public const string XaiGrokConsentAccepted = "xai_grok_consent_accepted";
 }

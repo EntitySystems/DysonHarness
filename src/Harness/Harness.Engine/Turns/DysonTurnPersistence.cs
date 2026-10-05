@@ -29,6 +29,7 @@ public static class DysonTurnPersistence
             UserImagesJson = DysonUserImagesSerializer.Serialize(turn.UserImages),
             ConversationActionsJson = DysonConversationActionsSerializer.Serialize(turn.ConversationActions),
             VisualizationId = turn.VisualizationId,
+            UserQuestionJson = DysonUserQuestionSerializer.Serialize(turn.UserQuestion),
             ToolStateJson = DysonTurnToolStateSerializer.CaptureFromTurn(turn),
             ToolHistoryOptimized = turn.ToolHistoryOptimized,
             CompactToolHistory = turn.CompactToolHistory,

@@ -100,6 +100,7 @@ public class DysonSubagentHostLogicTests
         AssertKickOffFailureSummaries();
         AssertPromptQueueFifo();
         AssertCompletionAutoTurnSuppression();
+        AssertNestedAgentRows();
     }
 
     private static void AssertCompletionAutoTurnSuppression()
@@ -295,11 +296,14 @@ public class DysonSubagentHostLogicTests
             throw new InvalidOperationException("Meta Agent continuation must be stable across calls.");
 
         if (!meta.Contains("PostConversationMessage the status", StringComparison.Ordinal)
+            || !meta.Contains("PostUserQuestion the question", StringComparison.Ordinal)
+            || !meta.Contains("The answer arrives on the next user turn", StringComparison.Ordinal)
             || !meta.Contains("only the user can decide", StringComparison.Ordinal)
             || !meta.Contains("Do not start another drone", StringComparison.Ordinal)
             || !meta.Contains("RespondToSubagentEvent(subagentId, eventId, reply)", StringComparison.Ordinal)
             || !meta.Contains("subagentId: 3", StringComparison.Ordinal)
             || !meta.Contains("eventId: 11111111-2222-3333-4444-555555555555", StringComparison.Ordinal)
+            || meta.Contains("PostConversationMessage the question", StringComparison.Ordinal)
             || meta.Contains("TriggerParentEvent", StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Meta Agent continuation missing reply contract.");
@@ -315,7 +319,8 @@ public class DysonSubagentHostLogicTests
             || !drone.Contains("subagentId: 3", StringComparison.Ordinal)
             || !drone.Contains("eventId: 11111111-2222-3333-4444-555555555555", StringComparison.Ordinal)
             || drone.Contains("PostConversationMessage the status", StringComparison.Ordinal)
-            || drone.Contains("PostConversationMessage the question", StringComparison.Ordinal))
+            || drone.Contains("PostConversationMessage the question", StringComparison.Ordinal)
+            || drone.Contains("PostUserQuestion the question", StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Meta Agent Drone continuation missing reply contract.");
         }
@@ -328,6 +333,7 @@ public class DysonSubagentHostLogicTests
             || !work.Contains("subagentId: 3", StringComparison.Ordinal)
             || !work.Contains("eventId: 11111111-2222-3333-4444-555555555555", StringComparison.Ordinal)
             || work.Contains("PostConversationMessage", StringComparison.Ordinal)
+            || work.Contains("PostUserQuestion", StringComparison.Ordinal)
             || work.Contains("TriggerParentEvent", StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Work continuation must stay generic.");
@@ -412,6 +418,55 @@ public class DysonSubagentHostLogicTests
         list.RemoveAt(0);
         if (drained.Text != "one" || list[0].Text != "three")
             throw new InvalidOperationException("Drain should pop front in enqueue order.");
+    }
+
+    private static void AssertNestedAgentRows()
+    {
+        var empty = DysonSubagentHostLogic.CapNestedRows(Array.Empty<int>());
+        if (empty.Visible.Count != 0 || empty.HiddenCount != 0 || !ReferenceEquals(empty.Visible, Array.Empty<int>()))
+            throw new InvalidOperationException("Empty nested rows should stay the same list with nothing hidden.");
+
+        var four = new[] { 4, 3, 2, 1 };
+        var cappedFour = DysonSubagentHostLogic.CapNestedRows(four);
+        if (cappedFour.HiddenCount != 0 || !ReferenceEquals(cappedFour.Visible, four))
+            throw new InvalidOperationException("Four nested rows should stay the same list with nothing hidden.");
+
+        var five = new[] { 5, 4, 3, 2, 1 };
+        var cappedFive = DysonSubagentHostLogic.CapNestedRows(five);
+        if (cappedFive.HiddenCount != 1
+            || cappedFive.Visible.Count != 4
+            || cappedFive.Visible[0] != 5
+            || cappedFive.Visible[1] != 4
+            || cappedFive.Visible[2] != 3
+            || cappedFive.Visible[3] != 2)
+        {
+            throw new InvalidOperationException("Five nested rows should keep the first four and hide one, without reordering.");
+        }
+
+        if (DysonSubagentHostLogic.NestedStatusText("Thinking 2", DysonSessionStatus.Failed) != "Thinking 2")
+            throw new InvalidOperationException("A step title should win over a terminal status.");
+
+        if (DysonSubagentHostLogic.NestedStatusText(null, DysonSessionStatus.Active) is not null
+            || DysonSubagentHostLogic.NestedStatusText("  ", DysonSessionStatus.Active) is not null)
+        {
+            throw new InvalidOperationException("Active with no step should have no status text.");
+        }
+
+        if (DysonSubagentHostLogic.NestedStatusText("  ", DysonSessionStatus.Stopped) != "Stopped"
+            || DysonSubagentHostLogic.NestedStatusText(null, DysonSessionStatus.Failed) != "Failed"
+            || DysonSubagentHostLogic.NestedStatusText(null, DysonSessionStatus.Completed) != "Completed"
+            || DysonSubagentHostLogic.NestedStatusText(null, DysonSessionStatus.Interrupted) != "Interrupted")
+        {
+            throw new InvalidOperationException("Empty step should fall back to the status name, including Stopped.");
+        }
+
+        if (DysonSubagentHostLogic.ShowNestedModelLabel(null, "parent")
+            || DysonSubagentHostLogic.ShowNestedModelLabel("  ", "parent")
+            || DysonSubagentHostLogic.ShowNestedModelLabel("same", "same")
+            || !DysonSubagentHostLogic.ShowNestedModelLabel("child", "parent"))
+        {
+            throw new InvalidOperationException("Model label shows only when the child label differs from the parent.");
+        }
     }
 
     private static void AssertHasActiveDescendant()

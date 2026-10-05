@@ -730,7 +730,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             for (var round = 0; round < maxRounds; round++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                DrainPendingUserCommentsIntoFollowUp(turn, ref harnessFollowUp);
+                previousResponseId = DeliverPendingUserComments(turn, previousResponseId);
 
                 async Task<Result<OpenAiModelReply, string>> ConsumeCurrentProviderRoundAsync()
                 {
@@ -843,8 +843,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     return new VoidResult<string>(replyResult.Error);
                 }
 
-                // This round already sent comments / child-report nudge as currentUserPrompt.
-                // Clear so later rounds do not re-emit them (new comments drain at loop start).
+                // This round already sent the child-report nudge as currentUserPrompt.
+                // Clear so later rounds do not re-emit it. (User comments are replayed by the
+                // transcript builder at their delivery anchor, not via this follow-up.)
                 harnessFollowUp = null;
 
                 var reply = replyResult.Value;
@@ -930,16 +931,6 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     continue;
                 }
 
-                // Comment arrived during this stream — inject on the next round instead of finalizing.
-                if (turn.HasPendingUserComments)
-                {
-                    CommitReasoningRound(turn, reply, round, isFinalAssistant: true);
-                    turn.ClearStreamingPreview();
-                    turn.ClearReasoningPreview();
-                    previousResponseId = null;
-                    continue;
-                }
-
                 var text = ResolveFinalAssistantContent(reply.Content);
 
                 if (Parent is not null && !TurnHasSubmitSubagentReport(turn))
@@ -964,6 +955,17 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     turn.FinalizeIncompleteTools(incompleteToolReason);
                     AppendLog("child report gate: missing SubmitSubagentReport after nudge");
                     return new VoidResult<string>(childReportMissing);
+                }
+
+                // Comment arrived during this stream — deliver it next round instead of finalizing.
+                // Atomic with the pending check: a comment after this point is rejected and
+                // PromptOrInjectAsync queues it as a new prompt turn (never silently dropped).
+                if (!turn.TryCloseCommentIntake())
+                {
+                    CommitReasoningRound(turn, reply, round, isFinalAssistant: true);
+                    turn.ClearStreamingPreview();
+                    turn.ClearReasoningPreview();
+                    continue;
                 }
 
                 // Title parse only at finalize — preview stays raw (incl. mid-stream H1) until then.
@@ -993,6 +995,12 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             turn.ClearReasoningPreview();
             turn.FinalizeIncompleteTools(incompleteToolReason);
             return new VoidResult<string>("Prompt was cancelled.");
+        }
+        finally
+        {
+            // Every other exit (end-turn tool, soft-pause, error, cancel) closes intake before the
+            // in-flight scope pops, so a late comment takes the queued-prompt fallback.
+            turn.CloseCommentIntake();
         }
     }
 
@@ -1502,26 +1510,49 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         return $"OpenAI transient {code} — retry {retryIndex}/{retryCount} after {delayMs / 1000}s";
     }
 
-    private static async Task<Result<OpenAiModelReply, string>> ConsumeStreamAsync(
+    private async Task<Result<OpenAiModelReply, string>> ConsumeStreamAsync(
         IAsyncEnumerable<Result<OpenAiStreamChunk, string>> stream,
         DysonAgentTurn turn,
         CancellationToken cancellationToken)
     {
         OpenAiModelReply? completed = null;
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        long charsReceived = 0;
+
+        // Metadata only (model, size, elapsed), never the arguments themselves.
+        void LogIncomplete(string reason) =>
+            AppendLog(
+                $"stream incomplete: {reason}; model={OpenAiProvider.Slug}; {charsReceived} chars received in {started.Elapsed.TotalSeconds:0.#}s");
 
         try
         {
             await foreach (var item in stream.WithCancellation(cancellationToken).ConfigureAwait(false))
             {
                 if (item.IsError)
+                {
+                    if (item.Error.StartsWith(OpenAiCompatibleHttp.StreamEndedErrorPrefix, StringComparison.Ordinal))
+                        LogIncomplete(OpenAiCompatibleHttp.DescribeIncompleteStream(null)!);
                     return Result<OpenAiModelReply, string>.AsError(item.Error);
+                }
 
                 var chunk = item.Value;
                 if (!string.IsNullOrEmpty(chunk.TextDelta))
+                {
+                    charsReceived += chunk.TextDelta.Length;
                     turn.AppendStreamingDelta(chunk.TextDelta);
+                }
 
                 if (!string.IsNullOrEmpty(chunk.ReasoningDelta))
+                {
+                    charsReceived += chunk.ReasoningDelta.Length;
                     turn.AppendReasoningDelta(chunk.ReasoningDelta);
+                }
+
+                if (chunk.ToolCallDeltas is { } toolDeltas)
+                {
+                    foreach (var toolDelta in toolDeltas)
+                        charsReceived += toolDelta.ArgumentsDelta?.Length ?? 0;
+                }
 
                 if (chunk.IsRoundComplete)
                     completed = chunk.CompletedReply;
@@ -1533,7 +1564,10 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         }
 
         if (completed is null)
-            return Result<OpenAiModelReply, string>.AsError("OpenAI stream ended without a completed reply.");
+            return Result<OpenAiModelReply, string>.AsError(OpenAiCompatibleHttp.StreamEndedErrorPrefix);
+
+        if (completed.IncompleteReason is { } incompleteReason)
+            LogIncomplete(incompleteReason);
 
         return Result<OpenAiModelReply, string>.AsValue(completed);
     }
@@ -1553,42 +1587,14 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     }
 
     /// <summary>
-    /// Drains in-flight user comments into <paramref name="harnessFollowUp"/> (comments first,
-    /// then any existing child-report nudge). No-op when the queue is empty.
+    /// Round start: drains pending user comments and stamps them with the turn's tool-call count
+    /// (<see cref="DysonAgentTurn.TryDequeueUserComments"/>); the transcript builder replays them
+    /// at that anchor in this and every later request. Returns null when any were delivered so
+    /// the Responses delta path (previous_response_id + new outputs only) is skipped and the full
+    /// rebuild carries the comment; otherwise returns <paramref name="previousResponseId"/>.
     /// </summary>
-    private static void DrainPendingUserCommentsIntoFollowUp(DysonAgentTurn turn, ref string? harnessFollowUp)
-    {
-        if (!turn.HasPendingUserComments)
-            return;
-
-        var formatted = FormatDrainedUserComments(turn.TryDequeueUserComments());
-        if (formatted.Length == 0)
-            return;
-
-        harnessFollowUp = string.IsNullOrEmpty(harnessFollowUp)
-            ? formatted
-            : formatted + Environment.NewLine + harnessFollowUp;
-    }
-
-    /// <summary>
-    /// Formats drained queue text as <c>USER INJECTED COMMENT:</c> blocks (blank line between).
-    /// Matches <see cref="DysonAgentTurn.FormatInjectedUserCommentsForTranscript"/> layout.
-    /// </summary>
-    private static string FormatDrainedUserComments(string[] comments)
-    {
-        var sb = new System.Text.StringBuilder();
-        foreach (var comment in comments)
-        {
-            if (string.IsNullOrWhiteSpace(comment))
-                continue;
-            if (sb.Length > 0)
-                sb.AppendLine();
-            sb.Append("USER INJECTED COMMENT: ");
-            sb.AppendLine(comment);
-        }
-
-        return sb.ToString();
-    }
+    internal static string? DeliverPendingUserComments(DysonAgentTurn turn, string? previousResponseId) =>
+        turn.TryDequeueUserComments().Length > 0 ? null : previousResponseId;
 
     /// <summary>
     /// Final no-tool-call round body: drop pure compact-history echoes; otherwise empty → harness note.

@@ -160,7 +160,7 @@ public static class DysonSessionToolsetBuilder
     /// Meta Agent: strip to the allowlist (no project file/shell/wait/completion; temp-scoped WriteTempFile and ReadTempFile stay).
     /// Browser tools already on the pipeline stay. Meta Agent never completes.
     /// Meta Agent Drone: drop AskQuestionFromParent and PromptUserDialogFromParent
-    /// (TriggerParentEvent stays) and add ReadMetaPlan / SubmitMetaPlan.
+    /// (TriggerParentEvent stays) and add ReadMetaPlan / EditMetaPlan / SubmitMetaPlan.
     /// </summary>
     private static void ApplyModeCatalog(DysonMcpPipeline pipeline, string agentMode)
     {

@@ -37,6 +37,7 @@ public static class DysonMetaAgentTools
         "DeleteMetaAgent",
         "DeleteNote",
         "DeletePlan",
+        "EditMetaPlan",
         "GetOpenRulesConfig",
         "ListMetaAgentDrones",
         "ListNotes",
@@ -45,7 +46,9 @@ public static class DysonMetaAgentTools
         "LoadSkill",
         "MessageMetaAgentDrone",
         "PostConversationMessage",
+        "PostUserQuestion",
         "ReadMetaAgentDroneLog",
+        "ReadMetaPlan",
         "ReadTempFile",
         "RemoveTodos",
         "RenderHtmlVisualization",
@@ -156,11 +159,14 @@ public static class DysonMetaAgentTools
 
         foreach (var tool in CreateMetaAgentTools())
             pipeline.Tools[tool.Name] = tool;
+
+        foreach (var tool in CreatePlanBodyTools())
+            pipeline.Tools[tool.Name] = tool;
     }
 
     /// <summary>
     /// Meta Agent Drone: keep the Work catalog (including <c>TriggerParentEvent</c>),
-    /// drop Ask/dialog FromParent tools, add the two review tools, <c>ReadMetaPlan</c>, and a <c>SubmitMetaPlan</c> seam.
+    /// drop Ask/dialog FromParent tools, add the two review tools, <c>ReadMetaPlan</c>, <c>EditMetaPlan</c>, and a <c>SubmitMetaPlan</c> seam.
     /// </summary>
     public static void ApplyDroneAllowlist(DysonMcpPipeline pipeline)
     {
@@ -170,6 +176,9 @@ public static class DysonMetaAgentTools
         pipeline.Tools.Remove("PromptUserDialogFromParent");
 
         foreach (var tool in CreateMetaAgentDroneTools())
+            pipeline.Tools[tool.Name] = tool;
+
+        foreach (var tool in CreatePlanBodyTools())
             pipeline.Tools[tool.Name] = tool;
     }
 
@@ -380,6 +389,7 @@ public static class DysonMetaAgentTools
             Name = "PostConversationMessage",
             Description =
                 "Post markdown the user should see in the meta conversation. " +
+                "Do not use this to ask the user a question. A question goes through PostUserQuestion, with a custom message. " +
                 "Assistant text is not shown; use this for everything the user should see. " +
                 "Optional actions add buttons { name, func } where func is one string. " +
                 "open_plan:{planId}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. " +
@@ -412,6 +422,54 @@ public static class DysonMetaAgentTools
                     }
                   },
                   "required": ["message"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "PostUserQuestion",
+            Description =
+                "Post a question card inside a meta-chat bubble. " +
+                "When asking the user a question, do not use PostConversationMessage; use PostUserQuestion instead, with a custom message. " +
+                "Does not block and does not end the turn. " +
+                "The answer comes back later as a user turn.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string", "description": "Markdown bubble body. Required so the bubble is not dropped." },
+                    "question": { "type": "string", "description": "Card title. Not the bubble body." },
+                    "choices": {
+                      "type": "array",
+                      "minItems": 2,
+                      "maxItems": 12,
+                      "description": "Choices the user can pick. At least 2, at most 12. Each entry is a non-empty unique string.",
+                      "items": { "type": "string" }
+                    },
+                    "multiSelect": {
+                      "type": "boolean",
+                      "description": "When true, more than one choice may apply. Default false."
+                    },
+                    "allowCustomAnswer": {
+                      "type": "boolean",
+                      "description": "When true, the user may type a custom answer. Default true."
+                    },
+                    "actions": {
+                      "type": "array",
+                      "maxItems": 8,
+                      "description": "Optional buttons. func is one string. open_plan:{planId}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. Not run until the user clicks. When the message names a plan, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. Omit or [] for no buttons.",
+                      "items": {
+                        "type": "object",
+                        "required": ["name", "func"],
+                        "properties": {
+                          "name": { "type": "string", "description": "Button label." },
+                          "func": { "type": "string", "description": "Lookup key. Not source code." }
+                        }
+                      }
+                    }
+                  },
+                  "required": ["message", "question", "choices"]
                 }
                 """,
         };
@@ -696,17 +754,18 @@ public static class DysonMetaAgentTools
         };
     }
 
-    private static IEnumerable<DysonMcpTool> CreateMetaAgentDroneTools()
+    /// <summary>
+    /// <c>ReadMetaPlan</c> and <c>EditMetaPlan</c>: on both the root Meta Agent (it cannot match old_text without
+    /// the body) and every Meta Agent Drone. <c>SubmitMetaPlan</c> stays drone-only.
+    /// </summary>
+    private static IEnumerable<DysonMcpTool> CreatePlanBodyTools()
     {
-        foreach (var tool in CreateReviewTools())
-            yield return tool;
-
         yield return new DysonMcpTool
         {
             Name = "ReadMetaPlan",
             Description =
-                "Load a plan by planId (title + markdown). If your brief names a planId, read it before you start — " +
-                "it is the authoritative brief and it is kept current.",
+                "Load a plan by planId (title + markdown + status). The markdown is exactly the text EditMetaPlan matches old_text against. " +
+                "If your brief names a planId, read it before you start — it is the authoritative brief and it is kept current.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -720,10 +779,68 @@ public static class DysonMetaAgentTools
 
         yield return new DysonMcpTool
         {
+            Name = "EditMetaPlan",
+            Description =
+                "Edit an existing meta plan in place, like WriteFile on a plan (same planId, same row; the plan list refreshes live, a plan viewer already open keeps the text it loaded until reopened). " +
+                "Use it for targeted revisions, new sections, wording fixes, and applying user review comments. " +
+                "Pass old_text and new_text, or edits (ordered; each applies to the result of the previous one), or content to replace the whole body — exactly one mode per call. " +
+                "old_text must match exactly once unless replace_all; copy it from ReadMetaPlan's markdown field. " +
+                "The call is atomic: if any edit fails the plan is unchanged and the error names the edit index and match count. " +
+                "Make at most one EditMetaPlan call per plan per stage (same-stage calls run concurrently); put multiple hunks into edits[]. " +
+                "Keep each call small. To add a section, replace a unique anchor line with the anchor plus the new text. " +
+                "Optional title renames; optional summary is a revision note. Status is unchanged. Not a report.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "planId": { "type": "integer", "description": "Positive id of the plan to edit." },
+                    "old_text": {
+                      "type": "string",
+                      "description": "Text span to replace (single edit). Must be unique unless replace_all. Copy from ReadMetaPlan's markdown."
+                    },
+                    "new_text": { "type": "string", "description": "Replacement text for old_text." },
+                    "replace_all": {
+                      "type": "boolean",
+                      "description": "If true, replace every occurrence of old_text (default false). Also applies as default for edits[] items unless overridden."
+                    },
+                    "edits": {
+                      "type": "array",
+                      "description": "Ordered list of targeted replacements when multiple hunks are needed.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "old_text": { "type": "string", "description": "Text span to replace." },
+                          "new_text": { "type": "string" },
+                          "replace_all": { "type": "boolean", "description": "Replace every occurrence for this edit (default: top-level replace_all)." }
+                        },
+                        "required": ["old_text", "new_text"]
+                      }
+                    },
+                    "content": {
+                      "type": "string",
+                      "description": "Replace the whole plan body. Only when targeted edits are impractical; prefer old_text/edits."
+                    },
+                    "title": { "type": "string", "description": "Optional new plan title." },
+                    "summary": { "type": "string", "description": "Optional one-line revision note (logged)." }
+                  },
+                  "required": ["planId"]
+                }
+                """,
+        };
+    }
+
+    private static IEnumerable<DysonMcpTool> CreateMetaAgentDroneTools()
+    {
+        foreach (var tool in CreateReviewTools())
+            yield return tool;
+
+        yield return new DysonMcpTool
+        {
             Name = "SubmitMetaPlan",
             Description =
-                "Publish or revise a meta plan (stored in the database, not as a file). " +
-                "Returns planId. Revise by calling again with the same planId. " +
+                "Create a meta plan, or replace an existing one wholesale when planId is given (stored in the database, not as a file). " +
+                "Returns planId. To revise an existing plan prefer EditMetaPlan: targeted edits are small and cannot lose the rest of the plan. " +
+                "A huge markdown body in one call can fail with invalid JSON, so create with a short skeleton and add sections via EditMetaPlan. " +
                 "This is not a report — still call SubmitSubagentReport after it succeeds.",
             InputSchemaJson = """
                 {

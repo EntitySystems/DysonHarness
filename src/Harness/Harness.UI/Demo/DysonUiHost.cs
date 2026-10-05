@@ -3179,6 +3179,74 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
+    /// Records a meta question answer, then starts or queues a Normal turn.
+    /// Does not drain composer attachments. A failed send clears this attempt's answer.
+    /// </summary>
+    public async Task<VoidResult<string>> SubmitMetaUserQuestionAnswerAsync(
+        Guid questionId,
+        IReadOnlyList<string> selected,
+        string? customText,
+        CancellationToken cancellationToken = default)
+    {
+        var session = _session;
+        if (session is null)
+            return VoidResult<string>.AsError("No active session.");
+
+        var recorded = session.TryRecordUserQuestionAnswer(questionId, selected, customText);
+        if (recorded.IsError)
+            return VoidResult<string>.AsError(recorded.Error);
+
+        var answer = recorded.Value;
+        DysonUserQuestion? question = null;
+        foreach (var candidate in session.Turns)
+        {
+            if (candidate.Kind == DysonAgentTurnKind.DisplayInfo
+                && candidate.UserQuestion is { } posted
+                && posted.Id == questionId)
+            {
+                question = posted;
+                break;
+            }
+        }
+
+        if (question?.Answer is null)
+        {
+            session.TryClearUserQuestionAnswer(questionId, answer.AnsweredUtc);
+            return VoidResult<string>.AsError("PostUserQuestion: not found.");
+        }
+
+        var turn = DysonAgentSession.CreateNormalTurn(DysonUserQuestion.FormatVisibleInstruction(question));
+        turn.HiddenInstruction = DysonUserQuestion.FormatHiddenInstruction(question);
+        AppendAwaitingUserAnswerReminders(turn, session);
+
+        var sessionId = session.PersistenceId;
+        if (sessionId == Guid.Empty)
+        {
+            session.TryClearUserQuestionAnswer(questionId, answer.AnsweredUtc);
+            return VoidResult<string>.AsError("Session is not persisted.");
+        }
+
+        VoidResult<string> started;
+        if (IsSessionBusy(sessionId) || session.HasAnySummarizingTurn)
+            started = EnqueuePrompt(sessionId, turn);
+        else
+            started = await PromptHarnessTurnOnSessionAsync(session, turn, [], cancellationToken)
+                .ConfigureAwait(true);
+
+        if (started.IsError)
+        {
+            session.TryClearUserQuestionAnswer(questionId, answer.AnsweredUtc);
+            LastError = started.Error;
+            Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
+            return started;
+        }
+
+        LastError = null;
+        Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
     /// Consumes buffered Plan-mode Explore completion reports into a
     /// <see cref="DysonAgentTurnKind.BeginBuildPlan"/> turn, then switches to Work.
     /// Busy-rejects when a turn is in flight.
@@ -5694,6 +5762,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         session.TurnAdded += OnTurnAdded;
+        session.TurnUpdated += OnTurnUpdated;
         session.LogAppended += OnLogAppended;
         session.SessionRenamed += OnSessionRenamed;
         session.SubagentSpawned += OnSubagentSpawned;
@@ -5886,6 +5955,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         TryDisposeSessionEventToken(session);
         session.TurnAdded -= OnTurnAdded;
+        session.TurnUpdated -= OnTurnUpdated;
         session.LogAppended -= OnLogAppended;
         session.SessionRenamed -= OnSessionRenamed;
         session.SubagentSpawned -= OnSubagentSpawned;
@@ -7734,6 +7804,17 @@ public sealed class DysonUiHost : IAsyncDisposable
         Notify(DysonHostChangeKind.Transcript);
     }
 
+    private void OnTurnUpdated(object? sender, DysonAgentTurn turn)
+    {
+        if (sender is not DysonAgentSession session)
+            return;
+
+        RefreshRegistryKey(session);
+        if (!IsRuntimeOwned(session))
+            _ = PersistTurnUpdatedAsync(session, turn);
+        Notify(DysonHostChangeKind.Transcript);
+    }
+
     private void OnLogAppended(object? sender, string line)
     {
         if (sender is not DysonAgentSession session || session.PersistenceId == Guid.Empty)
@@ -7788,6 +7869,22 @@ public sealed class DysonUiHost : IAsyncDisposable
         await PersistAsync(() => _sessions.AppendLogAsync(started), CancellationToken.None)
             .ConfigureAwait(false);
 
+        Notify(DysonHostChangeKind.Transcript);
+    }
+
+    private async Task PersistTurnUpdatedAsync(DysonAgentSession session, DysonAgentTurn turn)
+    {
+        if (session.PersistenceId == Guid.Empty || IsRuntimeOwned(session))
+            return;
+
+        var sessionId = session.PersistenceId;
+        var sequence = IndexOfTurn(session, turn);
+        if (sequence < 0)
+            sequence = session.Turns.Count - 1;
+
+        var entity = DysonTurnPersistence.ToEntity(turn, sessionId, sequence);
+        await PersistAsync(() => _sessions.UpsertTurnAsync(entity), CancellationToken.None)
+            .ConfigureAwait(false);
         Notify(DysonHostChangeKind.Transcript);
     }
 

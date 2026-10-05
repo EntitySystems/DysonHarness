@@ -9,6 +9,14 @@ public sealed class OpenAiModelReply
     /// <summary>Model reasoning / thinking text when the provider emits it (UI + persist only).</summary>
     public string? ReasoningContent { get; init; }
     public IReadOnlyList<DysonToolCall> ToolCalls { get; init; } = [];
+
+    /// <summary>
+    /// Why the round stopped before the model finished (stream ended early, output-token limit,
+    /// <c>response.incomplete</c>); null when it finished normally.
+    /// See <see cref="OpenAiCompatibleHttp.DescribeIncompleteStream"/>.
+    /// </summary>
+    public string? IncompleteReason { get; init; }
+
     public string? ResponseId { get; init; }
     public string? UsageCacheHint { get; init; }
 

@@ -157,7 +157,7 @@
         await AfterNavigate.InvokeAsync();
     }
 
-    private static (string Url, string ColorClass) ResolveModeIcon(string? agentMode)
+    internal static (string Url, string ColorClass) ResolveModeIcon(string? agentMode)
     {
         if (string.IsNullOrWhiteSpace(agentMode))
             return ("icons/agent-modes/custom.svg", "subagent-card__icon--other");

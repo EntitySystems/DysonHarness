@@ -7,11 +7,16 @@ public sealed class ManagedInferenceProviderCatalog
         DysonCliProxyHost host,
         HttpClient http,
         IDysonModelRepository models,
-        IDysonSubjectSettingsRepository subjectSettings)
+        IDysonSubjectSettingsRepository subjectSettings,
+        XaiGrokAuthService xaiAuth,
+        IDysonSubjectContext subject,
+        XaiGrokClientOptions? xaiOptions = null)
     {
+        XaiGrok = new XaiGrokManagedInferenceProvider(xaiAuth, http, models, subject, subjectSettings, xaiOptions);
         All =
         [
             new ManagedCodexInferenceProvider(host, http, models, subjectSettings),
+            XaiGrok,
             new ManagedGrokInferenceProvider(host, http, models, subjectSettings),
             new ManagedAntigravityInferenceProvider(host, http, models, subjectSettings),
             new ManagedKimiInferenceProvider(host, http, models, subjectSettings),
@@ -25,12 +30,15 @@ public sealed class ManagedInferenceProviderCatalog
         ];
     }
 
-    public IReadOnlyList<ManagedInferenceProviderBase> All { get; }
+    /// <summary>Native xAI/Grok provider (also listed in <see cref="All"/>).</summary>
+    public XaiGrokManagedInferenceProvider XaiGrok { get; }
+
+    public IReadOnlyList<IManagedConnectionProvider> All { get; }
 
     /// <summary>Direct API-key managed providers (OpenRouter, OrcaRouter); not in <see cref="All"/>.</summary>
     public IReadOnlyList<IManagedInferenceProvider> Direct { get; }
 
-    public ManagedInferenceProviderBase? FindBySource(string? managedSource)
+    public IManagedConnectionProvider? FindBySource(string? managedSource)
     {
         if (string.IsNullOrWhiteSpace(managedSource))
             return null;

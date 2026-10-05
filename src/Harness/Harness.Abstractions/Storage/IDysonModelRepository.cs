@@ -60,6 +60,21 @@ public interface IDysonModelRepository
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Re-tag an existing managed provider <paramref name="fromSource"/> as <paramref name="toSource"/> IN PLACE
+    /// (same provider <c>Id</c>; slugs, <c>IsEnabled</c>, default flags, efforts and favorites all survive).
+    /// Errors when there is no <paramref name="fromSource"/> row or a <paramref name="toSource"/> row already exists.
+    /// </summary>
+    Task<Result<Guid, string>> ConvertManagedSourceAsync(
+        string fromSource,
+        string toSource,
+        string displayName,
+        string baseUrl,
+        string apiKey,
+        string openAiApiMode,
+        bool shared = false,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Insert or update a single managed-provider slug by name. Manual providers are rejected.
     /// </summary>
     Task<Result<Guid, string>> UpsertManagedSlugAsync(

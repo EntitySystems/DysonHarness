@@ -14,6 +14,8 @@ public abstract class DysonAgentSession
     private readonly object _todosGate = new();
     // ponytail: one lock around the in-process action map; upgrade only if registration becomes hot.
     private readonly object _conversationActionsGate = new();
+    // ponytail: one lock around question record/clear; upgrade only if answer writes become hot.
+    private readonly object _userQuestionGate = new();
     private readonly Dictionary<string, Func<CancellationToken, Task<Result<string, string>>>> _conversationActions =
         new(StringComparer.Ordinal);
     private readonly List<DysonAgentSession> _subSessions = [];
@@ -1157,12 +1159,25 @@ public abstract class DysonAgentSession
         if (reopened)
             await child.PersistReopenAsync("parent TriggerSubagentEvent").ConfigureAwait(false);
 
+        // Full text (the prompt: line is truncated); persisted as a LogLine and shown by InspectSubagentLog.
+        child.AppendLog($"PARENT MESSAGE: {trimmed}");
+
         if (interruptSubagent)
         {
             child.CancelPendingParentEventWait(
                 "cancelled by parent TriggerSubagentEvent");
             child.CancelBackgroundRun();
-            child.ClearPendingTurns();
+            // Drop queued harness follow-ups, but keep earlier parent messages: they run after
+            // the interrupt turn instead of being silently discarded.
+            var queuedParentMessages = new List<DysonAgentTurn>();
+            while (child.TryDequeuePendingTurn(out var queued))
+            {
+                if (queued.Instruction?.StartsWith(InjectedSubagentPromptPrefix, StringComparison.Ordinal) == true)
+                    queuedParentMessages.Add(queued);
+            }
+
+            foreach (var queued in queuedParentMessages)
+                child.EnqueuePendingTurn(queued);
             var runCts = new CancellationTokenSource();
             child.AttachBackgroundRun(runCts);
             KickOffChildPrompt(child, CreateInjectedSubagentTurn(trimmed, reportReenabled: reopened), runCts);
@@ -1434,8 +1449,14 @@ public abstract class DysonAgentSession
     {
         foreach (var turn in _inFlightPromptStack)
         {
-            if (turn.Id == turnId)
-                return turn.EnqueueUserComment(comment);
+            if (turn.Id != turnId)
+                continue;
+
+            var queued = turn.EnqueueUserComment(comment);
+            // Full text, never truncated (the prompt: line is): rail Session log + InspectSubagentLog.
+            if (queued.IsSuccess)
+                AppendLog($"USER COMMENT (injected mid-turn, turn {turn.Id.ToString("N")[..8]}): {comment.Trim()}");
+            return queued;
         }
 
         return VoidResult<string>.AsError("Turn is not currently running.");
@@ -1642,19 +1663,22 @@ public abstract class DysonAgentSession
 
     private void RaiseParentEventsChanged() => ParentEventsChanged?.Invoke(this, EventArgs.Empty);
 
+    private const string InjectedSubagentPromptPrefix =
+        "Harness injection: the parent sent instructions via TriggerSubagentEvent.";
+
     private static string BuildInjectedSubagentPrompt(string payload, bool reportReenabled)
     {
         var body = payload.Trim();
         if (reportReenabled)
         {
             return
-                "Harness injection: the parent sent instructions via TriggerSubagentEvent. Follow them and continue your task.\n"
+                InjectedSubagentPromptPrefix + " Follow them and continue your task.\n"
                 + "SubmitSubagentReport is enabled again for this assignment and must be called when the new work is done or blocked.\n\n"
                 + body;
         }
 
         return
-            "Harness injection: the parent sent instructions via TriggerSubagentEvent. Follow them and continue your task.\n\n"
+            InjectedSubagentPromptPrefix + " Follow them and continue your task.\n\n"
             + body;
     }
 
@@ -2746,6 +2770,12 @@ public abstract class DysonAgentSession
     /// <summary>Raised after a turn is appended via <see cref="AddTurn"/> (hosts may UpsertTurn + TurnStarted log).</summary>
     public event EventHandler<DysonAgentTurn>? TurnAdded;
 
+    /// <summary>
+    /// Raised when an existing turn changes without being appended (question answer record or clear).
+    /// Hosts re-upsert the row. Do not append another TurnStarted log.
+    /// </summary>
+    public event EventHandler<DysonAgentTurn>? TurnUpdated;
+
     /// <summary>Appends a turn to history and raises <see cref="TurnAdded"/>.</summary>
     protected void AddTurn(DysonAgentTurn turn)
     {
@@ -2822,6 +2852,7 @@ public abstract class DysonAgentSession
             turn.RestoreConversationActions(
                 DysonConversationActionsSerializer.Deserialize(row.ConversationActionsJson));
             turn.VisualizationId = row.VisualizationId;
+            turn.UserQuestion = DysonUserQuestionSerializer.Deserialize(row.UserQuestionJson);
             DysonTurnToolStateSerializer.ApplyToTurn(turn, row.ToolStateJson);
             turn.FinalizeIncompleteTools(
                 "Tool call did not complete (cancelled or interrupted).");
@@ -3297,7 +3328,8 @@ public abstract class DysonAgentSession
     public DysonAgentTurn AppendDisplayInfoTurn(
         string message,
         IReadOnlyList<DysonConversationAction>? actions = null,
-        Guid? visualizationId = null)
+        Guid? visualizationId = null,
+        DysonUserQuestion? userQuestion = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
         var now = DateTime.UtcNow;
@@ -3308,11 +3340,86 @@ public abstract class DysonAgentSession
             StartedUtc = now,
             CompletedUtc = now,
             VisualizationId = visualizationId,
+            UserQuestion = userQuestion,
         };
         if (actions is { Count: > 0 })
             turn.RestoreConversationActions(actions);
         AddTurn(turn);
         return turn;
+    }
+
+    /// <summary>
+    /// Locks the DisplayInfo card for <paramref name="questionId"/>. Walks every turn, not only the latest.
+    /// A second submit sees <see cref="DysonUserQuestion.Answer"/> and does not record again.
+    /// </summary>
+    public Result<DysonUserQuestionAnswer, string> TryRecordUserQuestionAnswer(
+        Guid questionId,
+        IReadOnlyList<string> selected,
+        string? customText)
+    {
+        DysonAgentTurn? updated = null;
+        DysonUserQuestionAnswer? answer = null;
+        lock (_userQuestionGate)
+        {
+            var turn = FindUserQuestionTurn(questionId);
+            if (turn?.UserQuestion is not { } question)
+                return Result<DysonUserQuestionAnswer, string>.AsError("PostUserQuestion: not found.");
+            if (question.Answer is not null)
+                return Result<DysonUserQuestionAnswer, string>.AsError("PostUserQuestion: already answered.");
+
+            var validated = DysonUserQuestion.ValidateAnswer(
+                question,
+                selected,
+                customText,
+                DateTime.UtcNow);
+            if (validated.IsError)
+                return validated;
+
+            answer = validated.Value;
+            turn.UserQuestion = question with { Answer = answer };
+            updated = turn;
+        }
+
+        TurnUpdated?.Invoke(this, updated!);
+        return Result<DysonUserQuestionAnswer, string>.AsValue(answer!);
+    }
+
+    /// <summary>
+    /// Clears the answer only when the stored <see cref="DysonUserQuestionAnswer.AnsweredUtc"/> equals
+    /// <paramref name="answeredUtc"/>. A failed clear leaves a newer answer in place.
+    /// </summary>
+    public VoidResult<string> TryClearUserQuestionAnswer(Guid questionId, DateTime answeredUtc)
+    {
+        DysonAgentTurn? updated = null;
+        lock (_userQuestionGate)
+        {
+            var turn = FindUserQuestionTurn(questionId);
+            if (turn?.UserQuestion is not { } question || question.Answer is null)
+                return VoidResult<string>.AsError("PostUserQuestion: not found.");
+            if (question.Answer.AnsweredUtc != answeredUtc)
+                return VoidResult<string>.AsError("PostUserQuestion: answer changed.");
+
+            turn.UserQuestion = question with { Answer = null };
+            updated = turn;
+        }
+
+        TurnUpdated?.Invoke(this, updated!);
+        return VoidResult<string>.Success;
+    }
+
+    private DysonAgentTurn? FindUserQuestionTurn(Guid questionId)
+    {
+        foreach (var turn in Turns)
+        {
+            if (turn.Kind == DysonAgentTurnKind.DisplayInfo
+                && turn.UserQuestion is { } question
+                && question.Id == questionId)
+            {
+                return turn;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

@@ -52,6 +52,68 @@
                     {
                         <div class="meta-chat__body turn-block__body">@MarkdownRenderer.ToHtml(item.Text)</div>
                     }
+                    @if (item.UserQuestion is { } question)
+                    {
+                        var locked = question.Answer is not null;
+                        var draft = Draft(question.Id);
+                        var busy = _questionBusy.Contains(question.Id);
+                        <div class="meta-chat__question">
+                            <div class="meta-chat__question-title">@question.Question</div>
+                            @foreach (var choice in question.Choices)
+                            {
+                                var label = choice;
+                                var selected = locked
+                                    ? question.Answer!.SelectedChoices.Contains(label, StringComparer.Ordinal)
+                                    : draft.IsSelected(label);
+                                <label class="meta-chat__question-choice">
+                                    @if (question.MultiSelect)
+                                    {
+                                        <input type="checkbox"
+                                               checked="@selected"
+                                               disabled="@(locked || busy)"
+                                               @onchange="e => ToggleChoice(question, label, e)" />
+                                    }
+                                    else
+                                    {
+                                        <input type="radio"
+                                               name="@($"q-{question.Id:N}")"
+                                               checked="@selected"
+                                               disabled="@(locked || busy)"
+                                               @onchange="() => SelectSingle(question, label)" />
+                                    }
+                                    <span>@label</span>
+                                </label>
+                            }
+                            @if (question.AllowCustomAnswer || !string.IsNullOrWhiteSpace(question.Answer?.CustomText))
+                            {
+                                <label class="meta-chat__question-other">
+                                    <span>Other</span>
+                                    @if (locked)
+                                    {
+                                        <div class="meta-chat__question-locked">@question.Answer?.CustomText</div>
+                                    }
+                                    else
+                                    {
+                                        <textarea rows="2"
+                                                  disabled="@busy"
+                                                  value="@draft.Custom"
+                                                  @oninput="e => SetCustom(question, e)"></textarea>
+                                    }
+                                </label>
+                            }
+                            @if (!locked)
+                            {
+                                <button type="button"
+                                        class="btn meta-chat__question-submit"
+                                        disabled="@(!CanSubmit(question) || busy)"
+                                        @onclick="() => SubmitQuestionAsync(question)">Submit answer</button>
+                                @if (_questionErrors.TryGetValue(question.Id, out var questionError))
+                                {
+                                    <div class="meta-chat__question-error">@questionError</div>
+                                }
+                            }
+                        </div>
+                    }
                     @if (item.Actions.Count > 0 || item.VisualizationId is not null)
                     {
                         var busy = _actionBusy.Contains(item.Key);
@@ -97,6 +159,9 @@
     private IReadOnlyList<MetaChatItem> _items = [];
     private readonly HashSet<string> _actionBusy = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _actionResults = new(StringComparer.Ordinal);
+    private readonly Dictionary<Guid, QuestionDraft> _drafts = [];
+    private readonly HashSet<Guid> _questionBusy = [];
+    private readonly Dictionary<Guid, string> _questionErrors = [];
 
     [Parameter] public IReadOnlyList<DysonAgentTurn> Turns { get; set; } = [];
     [Parameter] public IReadOnlyList<QueuedPrompt> Queued { get; set; } = [];
@@ -104,11 +169,21 @@
     [Parameter] public string EmptyMessage { get; set; } = "Tell the meta agent what to orchestrate.";
     [Parameter] public EventCallback<Guid> OnRemoveQueued { get; set; }
     [Parameter] public EventCallback<MetaChatActionClick> OnConversationAction { get; set; }
+    [Parameter] public EventCallback<MetaChatQuestionSubmit> OnUserQuestion { get; set; }
     [Parameter] public EventCallback<Guid> OnOpenVisualization { get; set; }
 
     /// <summary>
     /// Last click text for a bubble, keyed by item key. Ephemeral: a reload restores buttons, not this.
     /// </summary>
+    /// <summary>Host error for a question card. Empty clears it. The card stays unlocked.</summary>
+    public void NoteUserQuestionError(Guid questionId, string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+            _questionErrors.Remove(questionId);
+        else
+            _questionErrors[questionId] = error;
+    }
+
     public void NoteConversationActionResult(Guid turnId, Result<string, string> result)
     {
         var key = $"a:{turnId:D}";
@@ -118,6 +193,126 @@
             _actionResults[key] = result.Value;
         else
             _actionResults.Remove(key);
+    }
+
+    private QuestionDraft Draft(Guid questionId)
+    {
+        if (!_drafts.TryGetValue(questionId, out var draft))
+        {
+            draft = new QuestionDraft();
+            _drafts[questionId] = draft;
+        }
+
+        return draft;
+    }
+
+    private bool CanSubmit(DysonUserQuestion question)
+    {
+        var draft = Draft(question.Id);
+        return DysonUserQuestion.ValidateAnswer(
+            question,
+            draft.Selected,
+            draft.Custom,
+            DateTime.UtcNow).IsSuccess;
+    }
+
+    private void ToggleChoice(DysonUserQuestion question, string choice, ChangeEventArgs e)
+    {
+        if (question.Answer is not null)
+            return;
+
+        var draft = Draft(question.Id);
+        if (e.Value is bool on && on)
+            draft.Select(choice);
+        else
+            draft.Deselect(choice);
+        _questionErrors.Remove(question.Id);
+    }
+
+    private void SelectSingle(DysonUserQuestion question, string choice)
+    {
+        if (question.Answer is not null || question.MultiSelect)
+            return;
+
+        Draft(question.Id).Replace(choice);
+        _questionErrors.Remove(question.Id);
+    }
+
+    private void SetCustom(DysonUserQuestion question, ChangeEventArgs e)
+    {
+        if (question.Answer is not null)
+            return;
+
+        var draft = Draft(question.Id);
+        draft.Custom = e.Value?.ToString() ?? "";
+        if (!question.MultiSelect && !string.IsNullOrWhiteSpace(draft.Custom))
+            draft.ClearSelected();
+        _questionErrors.Remove(question.Id);
+    }
+
+    private async Task SubmitQuestionAsync(DysonUserQuestion question)
+    {
+        if (question.Answer is not null || _questionBusy.Contains(question.Id) || !CanSubmit(question))
+            return;
+
+        var draft = Draft(question.Id);
+        _questionBusy.Add(question.Id);
+        _questionErrors.Remove(question.Id);
+        try
+        {
+            await OnUserQuestion.InvokeAsync(new MetaChatQuestionSubmit(
+                question.Id,
+                draft.Selected.ToArray(),
+                draft.Custom));
+        }
+        finally
+        {
+            _questionBusy.Remove(question.Id);
+        }
+    }
+
+    private sealed class QuestionDraft
+    {
+        private readonly List<string> _selected = [];
+
+        public IReadOnlyList<string> Selected => _selected;
+
+        public string Custom { get; set; } = "";
+
+        public bool IsSelected(string choice)
+        {
+            foreach (var item in _selected)
+            {
+                if (string.Equals(item, choice, StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
+        }
+
+        public void Select(string choice)
+        {
+            if (!IsSelected(choice))
+                _selected.Add(choice);
+        }
+
+        public void Deselect(string choice)
+        {
+            for (var i = _selected.Count - 1; i >= 0; i--)
+            {
+                if (string.Equals(_selected[i], choice, StringComparison.Ordinal))
+                    _selected.RemoveAt(i);
+            }
+        }
+
+        public void Replace(string choice)
+        {
+            _selected.Clear();
+            _selected.Add(choice);
+            Custom = "";
+        }
+
+        public void ClearSelected() => _selected.Clear();
     }
 
     private async Task InvokeActionAsync(MetaChatItem item, int index)

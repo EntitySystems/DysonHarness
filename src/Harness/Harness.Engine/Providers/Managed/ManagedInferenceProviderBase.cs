@@ -8,7 +8,7 @@ namespace DysonHarness;
 /// <summary>
 /// Shared Begin / Complete / Verify connection flow for CLIProxy-backed managed providers.
 /// </summary>
-public abstract class ManagedInferenceProviderBase
+public abstract class ManagedInferenceProviderBase : IManagedConnectionProvider
 {
     public static readonly string[] DefaultReasoningModes =
         ["none", "minimal", "low", "medium", "high", "xhigh"];
@@ -40,6 +40,10 @@ public abstract class ManagedInferenceProviderBase
 
     /// <summary>owned_by / type tokens used to filter <c>/v1/models</c>.</summary>
     protected abstract IReadOnlyList<string> ModelOwnerTokens { get; }
+
+    /// <summary>CLIProxy keeps its own credentials; Disconnect is local tracking only (no-op).</summary>
+    public Task<VoidResult<string>> DisconnectAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(VoidResult<string>.Success);
 
     public async Task<VoidResult<string>> EnsureProxyAsync(
         IProgress<CliProxyDownloadProgress>? progress = null,

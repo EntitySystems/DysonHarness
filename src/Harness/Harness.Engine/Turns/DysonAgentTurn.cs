@@ -61,7 +61,7 @@ public sealed class DysonAgentTurn
     /// Ordered thought + interim-text + user-comment segments for this turn.
     /// Thought/InterimText are UI + DB only (omitted from transcripts).
     /// UserComment is re-emitted as user-role history via
-    /// <see cref="FormatInjectedUserCommentsForTranscript"/>.
+    /// <see cref="DysonInjectedUserComments"/>.
     /// Returns a snapshot so UI enumeration cannot race Append/Restore mutations.
     /// </summary>
     public IReadOnlyList<DysonReasoningSegment> ReasoningLog
@@ -100,6 +100,12 @@ public sealed class DysonAgentTurn
     /// The visualization body stays on the render turn's tool result.
     /// </summary>
     public Guid? VisualizationId { get; set; }
+
+    /// <summary>
+    /// Question card on a DisplayInfo bubble. Null on every other turn.
+    /// Answer is stored on the same object; a non-null answer locks the card.
+    /// </summary>
+    public DysonUserQuestion? UserQuestion { get; set; }
 
     /// <summary>UTC when this turn began (live create or restored from persistence).</summary>
     public DateTime StartedUtc { get; set; }
@@ -172,6 +178,10 @@ public sealed class DysonAgentTurn
 
     private const int MaxUserCommentLength = 16 * 1024;
     private readonly ConcurrentQueue<string> _pendingUserComments = new();
+    private bool _commentIntakeClosed;
+
+    /// <summary>Error returned by <see cref="EnqueueUserComment"/> once intake is closed.</summary>
+    public const string CommentIntakeClosedError = "Turn is no longer accepting comments.";
 
     /// <summary>
     /// When true, tool history for this turn has been compacted and must not be rewritten
@@ -478,10 +488,14 @@ public sealed class DysonAgentTurn
         if (trimmed.Length > MaxUserCommentLength)
             return VoidResult<string>.AsError($"Comment exceeds the {MaxUserCommentLength} character limit.");
 
-        _pendingUserComments.Enqueue(trimmed);
-
+        // Queue + segment under one gate so a concurrent drain always finds the segment to stamp.
         lock (_reasoningLogGate)
         {
+            // Closed: caller (PromptOrInjectAsync) falls back to a queued new prompt turn.
+            if (_commentIntakeClosed)
+                return VoidResult<string>.AsError(CommentIntakeClosedError);
+
+            _pendingUserComments.Enqueue(trimmed);
             var roundIndex = _reasoningLog.Count > 0 ? _reasoningLog[^1].RoundIndex : 0;
             _reasoningLog.Add(new DysonReasoningSegment(
                 DysonReasoningSegmentKind.UserComment,
@@ -493,44 +507,72 @@ public sealed class DysonAgentTurn
         return VoidResult<string>.Success;
     }
 
-    /// <summary>Drains the in-memory comment queue (ReasoningLog segments remain).</summary>
+    /// <summary>
+    /// Drains the in-memory comment queue and stamps each drained UserComment segment with
+    /// <see cref="DysonReasoningSegment.DeliveredAfterToolCalls"/> = current
+    /// <see cref="ToolCalls"/> count (the tool loop drains at a round start, so this is a round
+    /// boundary). ReasoningLog segments remain; transcripts replay them at that anchor.
+    /// </summary>
     public string[] TryDequeueUserComments()
     {
-        if (_pendingUserComments.IsEmpty)
-            return [];
+        lock (_reasoningLogGate)
+        {
+            if (_pendingUserComments.IsEmpty)
+                return [];
 
-        var drained = new List<string>();
-        while (_pendingUserComments.TryDequeue(out var comment))
-            drained.Add(comment);
-        return [.. drained];
+            var drained = new List<string>();
+            while (_pendingUserComments.TryDequeue(out var comment))
+                drained.Add(comment);
+
+            // FIFO queue and log append order match (both under this gate): stamp the oldest
+            // undelivered UserComment segments, one per drained comment.
+            var anchor = ToolCalls.Count;
+            var toStamp = drained.Count;
+            for (var i = 0; i < _reasoningLog.Count && toStamp > 0; i++)
+            {
+                var segment = _reasoningLog[i];
+                if (segment.Kind != DysonReasoningSegmentKind.UserComment
+                    || segment.DeliveredAfterToolCalls is not null)
+                    continue;
+
+                _reasoningLog[i] = segment with { DeliveredAfterToolCalls = anchor };
+                toStamp--;
+            }
+
+            return [.. drained];
+        }
     }
 
     /// <summary>True when at least one injected comment is still waiting to drain into the tool loop.</summary>
     public bool HasPendingUserComments => !_pendingUserComments.IsEmpty;
 
     /// <summary>
-    /// Joins persisted <see cref="DysonReasoningSegmentKind.UserComment"/> segments as
-    /// <c>USER INJECTED COMMENT:</c> blocks (blank line between). Empty string when none.
-    /// Uses the reasoning log, not the in-memory drain queue.
+    /// Closes comment intake before the turn finalizes, atomically with the pending check:
+    /// false (intake stays open) when a comment is still pending, so the loop runs another round
+    /// to deliver it. After a true return every <see cref="EnqueueUserComment"/> fails with
+    /// <see cref="CommentIntakeClosedError"/>.
     /// </summary>
-    public string FormatInjectedUserCommentsForTranscript()
+    public bool TryCloseCommentIntake()
     {
-        StringBuilder? sb = null;
-        foreach (var segment in ReasoningLog)
+        lock (_reasoningLogGate)
         {
-            if (segment.Kind != DysonReasoningSegmentKind.UserComment)
-                continue;
-            if (string.IsNullOrWhiteSpace(segment.Text))
-                continue;
+            if (!_pendingUserComments.IsEmpty)
+                return false;
 
-            sb ??= new StringBuilder();
-            if (sb.Length > 0)
-                sb.AppendLine();
-            sb.Append("USER INJECTED COMMENT: ");
-            sb.AppendLine(segment.Text);
+            _commentIntakeClosed = true;
+            return true;
         }
+    }
 
-        return sb is null ? "" : sb.ToString();
+    /// <summary>
+    /// Unconditional close when the prompt ends any other way (end-turn tool, error, cancel).
+    /// Accepted-but-undelivered comments stay in <see cref="ReasoningLog"/> with a null anchor
+    /// and replay after the turn's tools in later requests.
+    /// </summary>
+    public void CloseCommentIntake()
+    {
+        lock (_reasoningLogGate)
+            _commentIntakeClosed = true;
     }
 
     /// <summary>

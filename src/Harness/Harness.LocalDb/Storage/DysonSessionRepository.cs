@@ -377,6 +377,7 @@ public sealed class DysonSessionRepository(
                 existing.UserImagesJson = turn.UserImagesJson;
                 existing.ConversationActionsJson = turn.ConversationActionsJson;
                 existing.VisualizationId = turn.VisualizationId;
+                existing.UserQuestionJson = turn.UserQuestionJson;
                 existing.ToolStateJson = turn.ToolStateJson;
                 existing.ToolHistoryOptimized = turn.ToolHistoryOptimized;
                 existing.CompactToolHistory = turn.CompactToolHistory;

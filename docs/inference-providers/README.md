@@ -28,9 +28,13 @@ Research date: **2026-07-27** (slugs and effort enums rot quickly; catalogs may 
 
 [OpenRouter](openrouter.md) and [OrcaRouter](orcarouter.md) are direct managed providers (`ManagedSource=openrouter` / `orcarouter`). Dyson stores the user-supplied Bearer API key on the provider row, calls the provider’s Completions base URL directly, and lets the user browse the live catalog and enable only selected models. Unchecking a model or using card **Remove** deletes the slug row. These paths do not use CLIProxy, loopback port 8317, OAuth Connect/Verify, or a local managed binary.
 
+### Native xAI / Grok (no CLIProxy)
+
+**Grok Build (xAI)** (`ManagedSource=xai-grok`) signs in with xAI's OIDC device-code flow and calls `https://cli-chat-proxy.grok.com/v1` directly (Responses). The provider `ApiKey` is a `dyson-xai:<guid>` handle that `XaiGrokRequestHandler` swaps for the real token (stored plaintext in `app_settings`, key `xai_grok_credential:<guid>`). No binary download, process, port 8317 or management key. Details, header set, `Dyson:XaiGrok:ClientVersion` override and gotchas: [grok-build.md](grok-build.md). The legacy CLIProxy Grok row (`cliproxy-grok`) is deprecated; its card offers **Switch to native Grok**.
+
 ### Managed CLIProxy providers
 
-Dyson can import **ChatGPT Codex**, **Grok Build**, **Antigravity**, **Kimi**, **Claude Code**, and **Meta Muse** as managed rows (`ManagedSource` = `cliproxy-codex` / `cliproxy-grok` / `cliproxy-antigravity` / `cliproxy-kimi` / `cliproxy-claude` / `cliproxy-meta`) that talk to a pinned local [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) process:
+Dyson can import **ChatGPT Codex**, **Grok Build (legacy)**, **Antigravity**, **Kimi**, **Claude Code**, and **Meta Muse** as managed rows (`ManagedSource` = `cliproxy-codex` / `cliproxy-grok` / `cliproxy-antigravity` / `cliproxy-kimi` / `cliproxy-claude` / `cliproxy-meta`) that talk to a pinned local [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) process:
 
 - Binary pin: `DysonThirdPartyResources.CliProxyApi.ReleaseTagUrl` (currently `v7.3.15`); unpacked under `{AppContext.BaseDirectory}/external/cliproxy/{version}/`
 - Host: `DysonCliProxyHost` — `IsInstalled`, lazy `EnsureInstalledAsync` (streamed download progress), `EnsureRunningAsync` (writes `config.yaml` + `keys.json`, supervises process), `RestartAsync` (restart-only), `ReinstallAndRestartAsync` (re-download pin, prune leftover version dirs; keeps `auths/`, `config.yaml`, `keys.json`)
@@ -55,7 +59,7 @@ Today: `ProviderKind=OpenAICompatible` with per-provider `BaseUrl` / `ApiKey` / 
 | [Kimi Code](kimi-code.md) | Completions + K3 `low` / `high` / `max`; omit effort for K2.7 Code |
 | [Kimi (CLIProxy)](kimi-cliproxy.md) | Subscription via CLIProxy managed provider (`cliproxy-kimi`); local Responses |
 | [ChatGPT Codex](chatgpt-codex.md) | Platform API key + Responses at `api.openai.com/v1`; **or** subscription via CLIProxy managed provider (nested `reasoning.effort`) |
-| [Grok Build](grok-build.md) | Subscription via CLIProxy managed provider (`cliproxy-grok`); local Responses |
+| [Grok Build](grok-build.md) | Native xAI device-code sign-in (`xai-grok`, Responses at `cli-chat-proxy.grok.com`); legacy CLIProxy row (`cliproxy-grok`) deprecated |
 | [Meta Muse](meta-muse.md) | Subscription via CLIProxy managed provider (`cliproxy-meta`); device-code `meta-auth-url`; local Responses |
 | [Antigravity](antigravity.md) | Subscription via CLIProxy managed provider (`cliproxy-antigravity`); local Responses |
 | [Claude Code](claude-code.md) | Subscription via CLIProxy managed provider (`cliproxy-claude`); OpenAI/Responses via proxy (not Anthropic Messages) |

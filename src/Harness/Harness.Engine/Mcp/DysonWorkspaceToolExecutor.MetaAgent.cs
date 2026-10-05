@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 
 namespace DysonHarness;
@@ -5,6 +6,10 @@ namespace DysonHarness;
 public sealed partial class DysonWorkspaceToolExecutor
 {
     private readonly IDysonPlanRepository? _plans;
+
+    // ponytail: process-wide, one gate per planId (ids are unique across work directories). Entries are never
+    // removed (one semaphore per edited plan); upgrade = refcounted removal if plan churn ever shows up.
+    private static readonly ConcurrentDictionary<long, SemaphoreSlim> PlanEditGates = new();
 
     private async Task<DysonToolCallResult> StartAsyncMetaAgentDroneAsync(
         DysonToolCall call,
@@ -80,7 +85,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (string.Equals(purpose, "plan", StringComparison.OrdinalIgnoreCase))
         {
             task =
-                "This brief asks you to write a plan. Explore first, then SubmitMetaPlan, then SubmitSubagentReport with the planId. Do not implement and do not commit.\n\n"
+                "This brief asks you to write a plan. Explore first, then SubmitMetaPlan (a short skeleton is fine; revise and grow it in place with EditMetaPlan rather than resubmitting the whole plan), then SubmitSubagentReport with the planId. Do not implement and do not commit.\n\n"
                 + task;
         }
 
@@ -365,7 +370,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             if (messageResult.IsError)
                 return Error(call, messageResult.Error);
 
-            var actions = ParseConversationActions(doc.RootElement);
+            var actions = ParseConversationActions(doc.RootElement, "PostConversationMessage");
             if (actions.IsError)
                 return Error(call, actions.Error);
 
@@ -390,19 +395,129 @@ public sealed partial class DysonWorkspaceToolExecutor
     }
 
     private const int MaxConversationActions = 8;
+    private const int MaxUserQuestionChoices = 12;
 
-    private static Result<List<DysonConversationAction>, string> ParseConversationActions(JsonElement root)
+    private DysonToolCallResult PostUserQuestion(DysonToolCall call)
+    {
+        var denied = RejectUnlessMetaAgent(call, "PostUserQuestion");
+        if (denied is not null)
+            return denied;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var root = doc.RootElement;
+            var message = RequirePostField(root, "message");
+            if (message.IsError)
+                return Error(call, message.Error);
+
+            var question = RequirePostField(root, "question");
+            if (question.IsError)
+                return Error(call, question.Error);
+
+            var choices = ParseUserQuestionChoices(root);
+            if (choices.IsError)
+                return Error(call, choices.Error);
+
+            var multiSelect = OptionalPostBool(root, "multiSelect", defaultValue: false);
+            if (multiSelect.IsError)
+                return Error(call, multiSelect.Error);
+
+            var allowCustom = OptionalPostBool(root, "allowCustomAnswer", defaultValue: true);
+            if (allowCustom.IsError)
+                return Error(call, allowCustom.Error);
+
+            var actions = ParseConversationActions(root, "PostUserQuestion");
+            if (actions.IsError)
+                return Error(call, actions.Error);
+
+            var id = Guid.NewGuid();
+            var userQuestion = new DysonUserQuestion(
+                id,
+                question.Value,
+                choices.Value,
+                multiSelect.Value,
+                allowCustom.Value,
+                Answer: null);
+            _session.AppendDisplayInfoTurn(
+                message.Value,
+                actions.Value.Count == 0 ? null : actions.Value,
+                visualizationId: null,
+                userQuestion);
+            return Ok(call, "{\"ok\":true,\"questionId\":\"" + id.ToString("D") + "\"}");
+        }
+        catch (JsonException)
+        {
+            return Error(call, "PostUserQuestion: invalid JSON arguments.");
+        }
+    }
+
+    private static Result<string, string> RequirePostField(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var prop) || prop.ValueKind != JsonValueKind.String)
+            return Result<string, string>.AsError($"PostUserQuestion: {name} is required.");
+
+        var value = prop.GetString()?.Trim() ?? "";
+        if (value.Length == 0)
+            return Result<string, string>.AsError($"PostUserQuestion: {name} is required.");
+
+        return Result<string, string>.AsValue(value);
+    }
+
+    private static Result<bool, string> OptionalPostBool(JsonElement root, string name, bool defaultValue)
+    {
+        if (!root.TryGetProperty(name, out var prop) || prop.ValueKind == JsonValueKind.Null)
+            return Result<bool, string>.AsValue(defaultValue);
+        if (prop.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            return Result<bool, string>.AsError($"PostUserQuestion: {name} must be a boolean.");
+
+        return Result<bool, string>.AsValue(prop.GetBoolean());
+    }
+
+    private static Result<List<string>, string> ParseUserQuestionChoices(JsonElement root)
+    {
+        if (!root.TryGetProperty("choices", out var choices) || choices.ValueKind == JsonValueKind.Null)
+            return Result<List<string>, string>.AsError("PostUserQuestion: choices are required.");
+        if (choices.ValueKind != JsonValueKind.Array)
+            return Result<List<string>, string>.AsError("PostUserQuestion: choices must be an array.");
+        if (choices.GetArrayLength() < 2)
+            return Result<List<string>, string>.AsError("PostUserQuestion: choices require at least 2.");
+        if (choices.GetArrayLength() > MaxUserQuestionChoices)
+            return Result<List<string>, string>.AsError("PostUserQuestion: choices cannot exceed 12.");
+
+        var list = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var index = 0;
+        foreach (var item in choices.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(item.GetString()))
+                return Result<List<string>, string>.AsError($"PostUserQuestion: choices[{index}] is required.");
+
+            var trimmed = item.GetString()!.Trim();
+            if (!seen.Add(trimmed))
+                return Result<List<string>, string>.AsError("PostUserQuestion: choices must be unique.");
+
+            list.Add(trimmed);
+            index++;
+        }
+
+        return Result<List<string>, string>.AsValue(list);
+    }
+
+    private static Result<List<DysonConversationAction>, string> ParseConversationActions(
+        JsonElement root,
+        string toolName = "PostConversationMessage")
     {
         if (!root.TryGetProperty("actions", out var actions) || actions.ValueKind == JsonValueKind.Null)
             return Result<List<DysonConversationAction>, string>.AsValue([]);
 
         if (actions.ValueKind != JsonValueKind.Array)
             return Result<List<DysonConversationAction>, string>.AsError(
-                "PostConversationMessage: actions must be an array.");
+                $"{toolName}: actions must be an array.");
 
         if (actions.GetArrayLength() > MaxConversationActions)
             return Result<List<DysonConversationAction>, string>.AsError(
-                "PostConversationMessage: actions cannot exceed 8.");
+                $"{toolName}: actions cannot exceed 8.");
 
         var list = new List<DysonConversationAction>();
         var index = 0;
@@ -410,14 +525,14 @@ public sealed partial class DysonWorkspaceToolExecutor
         {
             if (item.ValueKind != JsonValueKind.Object)
                 return Result<List<DysonConversationAction>, string>.AsError(
-                    $"PostConversationMessage: actions[{index}] must be an object.");
+                    $"{toolName}: actions[{index}] must be an object.");
 
             if (!item.TryGetProperty("name", out var nameEl)
                 || nameEl.ValueKind != JsonValueKind.String
                 || string.IsNullOrWhiteSpace(nameEl.GetString()))
             {
                 return Result<List<DysonConversationAction>, string>.AsError(
-                    $"PostConversationMessage: actions[{index}].name is required.");
+                    $"{toolName}: actions[{index}].name is required.");
             }
 
             if (!item.TryGetProperty("func", out var funcEl)
@@ -425,7 +540,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 || string.IsNullOrWhiteSpace(funcEl.GetString()))
             {
                 return Result<List<DysonConversationAction>, string>.AsError(
-                    $"PostConversationMessage: actions[{index}].func is required.");
+                    $"{toolName}: actions[{index}].func is required.");
             }
 
             list.Add(new DysonConversationAction(nameEl.GetString()!.Trim(), funcEl.GetString()!.Trim()));
@@ -536,11 +651,11 @@ public sealed partial class DysonWorkspaceToolExecutor
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
-        if (!string.Equals(_session.Mode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
+        if (!IsMetaAgentOrDrone())
         {
             return Error(
                 call,
-                "ReadMetaPlan is only available in Meta Agent Drone mode.");
+                "ReadMetaPlan is only available in Meta Agent and Meta Agent Drone modes.");
         }
 
         long planId;
@@ -881,9 +996,9 @@ public sealed partial class DysonWorkspaceToolExecutor
 
             summary = GetOptionalString(doc.RootElement, "summary");
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            return Error(call, "SubmitMetaPlan: invalid JSON arguments.");
+            return Error(call, InvalidPlanJsonMessage("SubmitMetaPlan", ex, ArgsOrEmpty(call)));
         }
 
         if (_plans is null)
@@ -896,23 +1011,33 @@ public sealed partial class DysonWorkspaceToolExecutor
         DysonPlanStatus status;
         if (revisePlanId is long existingId)
         {
-            var loaded = await _plans.GetAsync(existingId, _workDirectoryId, cancellationToken)
-                .ConfigureAwait(false);
-            if (loaded.IsError)
-                return Error(call, loaded.Error);
+            // Same gate as EditMetaPlan: a wholesale revise must not interleave with a read-modify-write edit.
+            var gate = PlanEditGates.GetOrAdd(existingId, static _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var loaded = await _plans.GetAsync(existingId, _workDirectoryId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (loaded.IsError)
+                    return Error(call, loaded.Error);
 
-            var updated = await _plans.UpdateAsync(
-                    existingId,
-                    _workDirectoryId,
-                    title: title,
-                    markdown: markdown,
-                    cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
-            if (updated.IsError)
-                return Error(call, updated.Error);
+                var updated = await _plans.UpdateAsync(
+                        existingId,
+                        _workDirectoryId,
+                        title: title,
+                        markdown: markdown,
+                        cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+                if (updated.IsError)
+                    return Error(call, updated.Error);
 
-            planId = existingId;
-            status = loaded.Value.Status;
+                planId = existingId;
+                status = loaded.Value.Status;
+            }
+            finally
+            {
+                gate.Release();
+            }
         }
         else
         {
@@ -944,6 +1069,239 @@ public sealed partial class DysonWorkspaceToolExecutor
             title,
             status = FormatPlanStatus(status),
         }));
+    }
+
+    private bool IsMetaAgentOrDrone() =>
+        string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(_session.Mode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Actionable text for unparseable plan-tool arguments: the parser's reason and position, whether the
+    /// payload looks cut off, and the way out (smaller payloads, EditMetaPlan).
+    /// </summary>
+    private static string InvalidPlanJsonMessage(string tool, JsonException ex, string args)
+    {
+        var reason = ex.Message.Trim();
+        if (reason.Length > 240)
+            reason = reason[..240] + "...";
+
+        var cutOff = args.AsSpan().TrimEnd().Length > 0 && args.AsSpan().TrimEnd()[^1] != '}'
+            ? ", and they do not end with '}' (the output was probably cut off)"
+            : "";
+        return $"{tool}: invalid JSON arguments: {reason} ({args.Length} chars received{cutOff}). " +
+               "Send a smaller payload: create a plan with a short skeleton and add sections with EditMetaPlan (edits[]). " +
+               "Escape quotes and newlines inside JSON strings.";
+    }
+
+    private sealed record EditMetaPlanArgs(
+        long PlanId,
+        string Mode,
+        string? Content,
+        IReadOnlyList<DysonTextEditApplier.Edit> Edits,
+        string? Title,
+        string? Summary);
+
+    private static bool HasValue(JsonElement root, string name, out JsonElement value) =>
+        root.TryGetProperty(name, out value) && value.ValueKind != JsonValueKind.Null;
+
+    private static Result<EditMetaPlanArgs, string> ParseEditMetaPlanArgs(DysonToolCall call)
+    {
+        var raw = ArgsOrEmpty(call);
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return Result<EditMetaPlanArgs, string>.AsError("EditMetaPlan: arguments must be a JSON object.");
+
+            var id = GetInt64(root, "planId");
+            if (id is null || id.Value <= 0)
+                return Result<EditMetaPlanArgs, string>.AsError(DysonMetaAgentTools.PlanIdMustBePositiveMessage);
+
+            var hasContent = HasValue(root, "content", out var contentProp);
+            var hasOld = HasValue(root, "old_text", out var oldProp);
+            var hasNew = HasValue(root, "new_text", out var newProp);
+            var hasEdits = HasValue(root, "edits", out var editsProp);
+            var title = GetOptionalString(root, "title");
+            var summary = GetOptionalString(root, "summary");
+
+            var modes = new List<string>();
+            if (hasContent)
+                modes.Add("content");
+            if (hasOld || hasNew)
+                modes.Add("old_text+new_text");
+            if (hasEdits)
+                modes.Add("edits[]");
+            if (modes.Count > 1)
+            {
+                return Result<EditMetaPlanArgs, string>.AsError(
+                    $"EditMetaPlan: pass exactly one of content, old_text+new_text, or edits[] per call (got {string.Join(" and ", modes)}). " +
+                    "Put several hunks in edits[].");
+            }
+
+            var defaultReplaceAll = GetBool(root, "replace_all");
+            if (hasContent)
+            {
+                if (contentProp.ValueKind != JsonValueKind.String)
+                    return Result<EditMetaPlanArgs, string>.AsError("EditMetaPlan: content must be a string.");
+                return Result<EditMetaPlanArgs, string>.AsValue(
+                    new(id.Value, "content", contentProp.GetString(), [], title, summary));
+            }
+
+            if (hasOld || hasNew)
+            {
+                if (!hasOld || !hasNew
+                    || oldProp.ValueKind != JsonValueKind.String || newProp.ValueKind != JsonValueKind.String)
+                {
+                    return Result<EditMetaPlanArgs, string>.AsError(
+                        "EditMetaPlan: old_text and new_text must both be strings.");
+                }
+
+                return Result<EditMetaPlanArgs, string>.AsValue(new(
+                    id.Value,
+                    "old_text",
+                    null,
+                    [new(oldProp.GetString() ?? "", newProp.GetString() ?? "", defaultReplaceAll)],
+                    title,
+                    summary));
+            }
+
+            if (hasEdits)
+            {
+                if (editsProp.ValueKind != JsonValueKind.Array || editsProp.GetArrayLength() == 0)
+                    return Result<EditMetaPlanArgs, string>.AsError("EditMetaPlan: edits must be a non-empty array.");
+
+                var edits = new List<DysonTextEditApplier.Edit>();
+                var index = 0;
+                foreach (var item in editsProp.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.Object
+                        || !HasValue(item, "old_text", out var o) || o.ValueKind != JsonValueKind.String
+                        || !HasValue(item, "new_text", out var n) || n.ValueKind != JsonValueKind.String)
+                    {
+                        return Result<EditMetaPlanArgs, string>.AsError(
+                            $"EditMetaPlan: edits[{index}] needs string old_text and new_text.");
+                    }
+
+                    var itemReplaceAll = item.TryGetProperty("replace_all", out var ra)
+                        && ra.ValueKind is JsonValueKind.True or JsonValueKind.False
+                        ? ra.ValueKind == JsonValueKind.True
+                        : defaultReplaceAll;
+                    edits.Add(new(o.GetString() ?? "", n.GetString() ?? "", itemReplaceAll));
+                    index++;
+                }
+
+                return Result<EditMetaPlanArgs, string>.AsValue(new(id.Value, "edits", null, edits, title, summary));
+            }
+
+            if (title is not null)
+                return Result<EditMetaPlanArgs, string>.AsValue(new(id.Value, "title", null, [], title, summary));
+
+            return Result<EditMetaPlanArgs, string>.AsError(
+                "EditMetaPlan: provide content, or old_text+new_text, or edits[] (or title to rename only).");
+        }
+        catch (JsonException ex)
+        {
+            return Result<EditMetaPlanArgs, string>.AsError(InvalidPlanJsonMessage("EditMetaPlan", ex, raw));
+        }
+    }
+
+    private async Task<DysonToolCallResult> EditMetaPlanAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        if (!IsMetaAgentOrDrone())
+        {
+            return Error(
+                call,
+                "EditMetaPlan is only available in Meta Agent and Meta Agent Drone modes.");
+        }
+
+        var parsed = ParseEditMetaPlanArgs(call);
+        if (parsed.IsError)
+            return Error(call, parsed.Error);
+        var args = parsed.Value;
+
+        if (_plans is null)
+            return Error(call, "Plan repository is not available.");
+
+        if (_workDirectoryId == Guid.Empty)
+            return Error(call, "Work directory is required to edit a plan.");
+
+        // Read-modify-write under a per-plan gate: same-stage calls run concurrently and must compose, not overwrite.
+        var gate = PlanEditGates.GetOrAdd(args.PlanId, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var loaded = await _plans.GetAsync(args.PlanId, _workDirectoryId, cancellationToken)
+                .ConfigureAwait(false);
+            if (loaded.IsError)
+                return Error(call, loaded.Error);
+
+            var before = loaded.Value.Markdown ?? "";
+            var after = before;
+            IReadOnlyList<int> counts = [];
+            if (args.Mode == "content")
+            {
+                after = args.Content ?? "";
+            }
+            else if (args.Edits.Count > 0)
+            {
+                var batch = DysonTextEditApplier.TryApplyEdits(before, args.Edits);
+                if (batch.IsError)
+                    return Error(call, FormatPlanEditFailure(args, batch.Error));
+
+                after = batch.Value.Content;
+                counts = batch.Value.ReplacementCounts;
+            }
+
+            var bodyChanged = args.Mode != "title";
+            var updated = await _plans.UpdateAsync(
+                    args.PlanId,
+                    _workDirectoryId,
+                    title: args.Title,
+                    markdown: bodyChanged ? after : null,
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            if (updated.IsError)
+                return Error(call, $"EditMetaPlan: {updated.Error} Plan {args.PlanId} is unchanged.");
+
+            var current = await _plans.GetAsync(args.PlanId, _workDirectoryId, cancellationToken)
+                .ConfigureAwait(false);
+            var plan = current.IsSuccess ? current.Value : loaded.Value;
+            var body = plan.Markdown ?? after;
+
+            PublishPlansChanged(args.PlanId);
+            var log = $"EditMetaPlan #{args.PlanId} ({args.Mode})" + (args.Summary is null ? "" : $": {args.Summary}");
+            _session.AppendLog(log);
+
+            return Ok(call, JsonSerializer.Serialize(new
+            {
+                planId = args.PlanId,
+                title = plan.Title,
+                status = FormatPlanStatus(plan.Status),
+                updatedUtc = current.IsSuccess ? plan.UpdatedUtc : (DateTime?)null,
+                mode = args.Mode,
+                edits = counts.Select((replacements, index) => new { index, replacements }).ToArray(),
+                chars = body.Length,
+                lines = body.Count(static c => c == '\n') + 1,
+            }));
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private static string FormatPlanEditFailure(EditMetaPlanArgs args, DysonTextEditApplier.BatchFailure failure)
+    {
+        var where = args.Mode == "edits" ? $"edits[{failure.EditIndex}]" : "old_text";
+        var kind = failure.Failure.Kind;
+        var matches = kind is DysonTextEditApplier.FailureKind.NotFound or DysonTextEditApplier.FailureKind.Ambiguous
+            ? $" ({failure.Failure.MatchCount} matches)"
+            : "";
+        return $"EditMetaPlan: {where} failed{matches}: {failure.Failure.Message} " +
+               $"Match against the markdown field ReadMetaPlan returns. Plan {args.PlanId} is unchanged (no edit in this call was applied).";
     }
 
     private void PublishPlansChanged(long planId)
@@ -1242,7 +1600,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         string noteName;
         var contentOnly = false;
         string fullContent = "";
-        var edits = new List<(string Old, string New, bool ReplaceAll)>();
+        var edits = new List<DysonTextEditApplier.Edit>();
         try
         {
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
@@ -1268,7 +1626,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 if (root.TryGetProperty("old_text", out var oldProp)
                     && root.TryGetProperty("new_text", out var newProp))
                 {
-                    edits.Add((oldProp.GetString() ?? "", newProp.GetString() ?? "", defaultReplaceAll));
+                    edits.Add(new(oldProp.GetString() ?? "", newProp.GetString() ?? "", defaultReplaceAll));
                 }
 
                 if (hasEdits)
@@ -1280,7 +1638,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                         var itemReplaceAll = edit.TryGetProperty("replace_all", out var ra)
                             ? ra.ValueKind == JsonValueKind.True
                             : defaultReplaceAll;
-                        edits.Add((o.GetString() ?? "", n.GetString() ?? "", itemReplaceAll));
+                        edits.Add(new(o.GetString() ?? "", n.GetString() ?? "", itemReplaceAll));
                     }
                 }
             }
@@ -1316,18 +1674,11 @@ public sealed partial class DysonWorkspaceToolExecutor
                 if (read.IsError)
                     return Error(call, DysonScratchNotes.HideStorageFailure(read.Error));
 
-                newText = read.Value;
-                foreach (var (oldText, replacement, replaceAll) in edits)
-                {
-                    if (string.IsNullOrEmpty(oldText))
-                        return Error(call, "UpdateNote: old_text must be non-empty.");
+                var batch = DysonTextEditApplier.TryApplyEdits(read.Value, edits);
+                if (batch.IsError)
+                    return Error(call, "UpdateNote: " + batch.Error.Failure.Message);
 
-                    var replaced = DysonTextEditApplier.TryReplace(newText, oldText, replacement, replaceAll);
-                    if (replaced.IsError)
-                        return Error(call, "UpdateNote: " + replaced.Error.Message);
-
-                    newText = replaced.Value.Content;
-                }
+                newText = batch.Value.Content;
             }
 
             var check = await DysonScratchNotes.CheckWriteAsync(
