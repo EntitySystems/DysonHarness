@@ -215,6 +215,19 @@ public static class DysonAgentSystemPrompts
         - SubmitSubagentReport status completed only after a successful commit. Status failed only when the work cannot continue. Never report failed just to ask a question or to give a status.
         """;
 
+    /// <summary>
+    /// Prepended to a classic Drone child's first <c>PromptAsync</c> task (after <see cref="DroneFirstTurnContextMandate"/>)
+    /// when its parent is a Meta Agent Drone: the worker shares the coordinator's worktree with other workers.
+    /// </summary>
+    public const string MetaAgentDroneWorkerFirstTurnMandate = """
+        Coordinated worker mandate (first turn only):
+        - You are a worker inside a Meta Agent Drone's worktree. Other workers may be editing this same checkout right now.
+        - Edit only the files your task names. If you need another file, ask with TriggerParentEvent kind message and wait for the answer. Do not edit it first.
+        - Do not commit, stash, reset, checkout, merge, or rebase, and do not run any git command that changes the index or the working tree, unless your task says so. The coordinator commits once.
+        - Build or run tests only if your task says you may.
+        - Report the files you changed, what each change does, what you verified, and anything outside your files that still needs doing.
+        """;
+
     public const string SecurityReviewDirective = """
         Mode: Security Review.
 

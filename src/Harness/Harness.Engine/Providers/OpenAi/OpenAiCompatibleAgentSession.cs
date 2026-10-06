@@ -362,7 +362,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         var childProvider = resolved.Value;
 
-        var firstTurn = DysonSessionInitialization.CreateTurn(BuildChildFirstPrompt(agentMode, task, context));
+        var firstTurn = DysonSessionInitialization.CreateTurn(BuildChildFirstPrompt(Mode, agentMode, task, context));
         var attached = await AttachContextFilesToChildTurnAsync(
                 firstTurn,
                 contextFiles,

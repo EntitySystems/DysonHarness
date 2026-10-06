@@ -2406,8 +2406,10 @@ public abstract class DysonAgentSession
     /// <summary>
     /// Builds the first-turn prompt for a spawned child. All modes get
     /// <see cref="DysonAgentSystemPrompts.SubagentReportRequiredMandate"/>; Explore/Drone/MetaAgentDrone get extras.
+    /// A Drone whose <paramref name="parentMode"/> is MetaAgentDrone is a coordinated worker and also gets
+    /// <see cref="DysonAgentSystemPrompts.MetaAgentDroneWorkerFirstTurnMandate"/>.
     /// </summary>
-    protected static string BuildChildFirstPrompt(string agentMode, string task, string? context)
+    protected internal static string BuildChildFirstPrompt(string parentMode, string agentMode, string task, string? context)
     {
         var sb = new StringBuilder();
         sb.AppendLine(DysonAgentSystemPrompts.SubagentReportRequiredMandate.Trim());
@@ -2422,6 +2424,11 @@ public abstract class DysonAgentSession
         {
             sb.AppendLine(DysonAgentSystemPrompts.DroneFirstTurnContextMandate.Trim());
             sb.AppendLine();
+            if (string.Equals(parentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
+            {
+                sb.AppendLine(DysonAgentSystemPrompts.MetaAgentDroneWorkerFirstTurnMandate.Trim());
+                sb.AppendLine();
+            }
         }
         else if (string.Equals(agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
         {

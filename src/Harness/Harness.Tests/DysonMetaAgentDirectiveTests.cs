@@ -16,6 +16,29 @@ public class DysonMetaAgentDirectiveTests
         AssertBothDifferFromWork();
         AssertSubmitMetaPlanIsNotAReportInMandate();
         AssertMetaAgentDroneFirstTurnMandate();
+        AssertWorkerMandate();
+    }
+
+    [Fact]
+    public void Classic_drone_child_of_meta_agent_drone_gets_worker_mandate_only_there()
+    {
+        const string heading = "Coordinated worker mandate";
+        var worker = DysonAgentSession.BuildChildFirstPrompt(DysonAgentModes.MetaAgentDrone, DysonAgentModes.Drone, "task", null);
+        MustContain(worker, heading, "Meta Agent Drone -> Drone first prompt");
+        MustContain(worker, "Drone mandate (first turn only)", "Meta Agent Drone -> Drone first prompt");
+
+        var workDrone = DysonAgentSession.BuildChildFirstPrompt(DysonAgentModes.Work, DysonAgentModes.Drone, "task", null);
+        MustNotContain(workDrone, heading, "Work -> Drone first prompt");
+
+        var explore = DysonAgentSession.BuildChildFirstPrompt(DysonAgentModes.MetaAgentDrone, DysonAgentModes.Explore, "task", null);
+        MustNotContain(explore, heading, "Meta Agent Drone -> Explore first prompt");
+    }
+
+    private static void AssertWorkerMandate()
+    {
+        var text = DysonAgentSystemPrompts.MetaAgentDroneWorkerFirstTurnMandate;
+        MustContain(text, "Edit only the files your task names", nameof(DysonAgentSystemPrompts.MetaAgentDroneWorkerFirstTurnMandate));
+        MustContain(text, "Do not commit", nameof(DysonAgentSystemPrompts.MetaAgentDroneWorkerFirstTurnMandate));
     }
 
     private static void AssertMetaAgentForMode()
