@@ -61,6 +61,14 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "StartAsyncBugReviewAgent", "Meta Agent ForMode");
         MustContain(text, "StartAsyncSecurityReviewAgent", "Meta Agent ForMode");
         MustContain(text, "Do not edit files yourself", "Meta Agent ForMode");
+        // Dispatch shapes for code changes (plan 68): one coordinator by default, parallel direct only when disjoint.
+        MustContain(text, "Code changes: one coordinator, or parallel direct drones", "Meta Agent ForMode");
+        MustContain(text, "A. Coordinator, the default", "Meta Agent ForMode");
+        MustContain(text, "B. Parallel direct", "Meta Agent ForMode");
+        MustContain(text, "whenever you are not sure", "Meta Agent ForMode");
+        MustContain(text, "Before B, write in the dispatch todo why the slices do not overlap", "Meta Agent ForMode");
+        MustContain(text, $"refuses a new useWorktree true drone while {DysonMetaAgentTools.MaxRunningWorktreeDrones} are running", "Meta Agent ForMode");
+        MustNotContain(text, "Create a new drone only for genuinely independent work", "Meta Agent ForMode");
     }
 
     private static void AssertMetaAgentDroneForMode()
@@ -81,6 +89,10 @@ public class DysonMetaAgentDirectiveTests
         MustContain(text, "StartAsyncSecurityReviewAgent", "Meta Agent Drone ForMode");
         MustContain(text, "StartAsyncMetaAgentDrone", "Meta Agent Drone ForMode");
         MustNotContain(text, "There is no path from you to the user", "Meta Agent Drone ForMode");
+        MustContain(text, "Coordinating workers:", "Meta Agent Drone ForMode");
+        MustContain(text, "No file belongs to two slices", "Meta Agent Drone ForMode");
+        MustContain(text, "Workers do not commit. You commit once.", "Meta Agent Drone ForMode");
+        MustContain(text, "Never SubmitSubagentReport while a worker is still running", "Meta Agent Drone ForMode");
     }
 
     private static void AssertBothDifferFromWork()

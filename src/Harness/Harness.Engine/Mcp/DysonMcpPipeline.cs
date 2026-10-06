@@ -1319,7 +1319,7 @@ public sealed class DysonMcpPipeline
                 "Optional contextFiles preloads work-relative files into the child’s first turn as File context (path visible as `[File: relative/path]` before contents). The caller is encouraged to share relevant files so the subagent does not need to load them manually. " +
                 "Optional modelSlug picks a different model (slug or display alias; omit to inherit parent). " +
                 "Optional reasoningEffort overrides the child’s reasoning_effort (omit/null → chosen slug’s defaultEffort; when inheriting parent model, omit keeps the parent’s current effort). " +
-                "Cannot spawn a child whose agentMode is Plan (Plan is top-level only). A Plan parent may StartSubagent Explore. Explore parents cannot spawn. Drone may spawn Explore only (not another Drone).",
+                "Cannot spawn a child whose agentMode is Plan (Plan is top-level only). A Plan parent may StartSubagent Explore. Explore parents cannot spawn. A classic Drone may spawn Explore only (not another Drone). A Meta Agent Drone may spawn Drone workers; they share its worktree and never merge.",
             InputSchemaJson = """
                 {
                   "type": "object",
