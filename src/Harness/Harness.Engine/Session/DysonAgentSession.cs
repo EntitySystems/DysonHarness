@@ -204,6 +204,13 @@ public abstract class DysonAgentSession
         internal set => _turnsSinceMetaMaintenance = value;
     }
 
+    /// <summary>
+    /// Serializes <c>useWorktree: true</c> Meta Agent Drone spawns from this session so the
+    /// <see cref="DysonMetaAgentTools.MaxRunningWorktreeDrones"/> check and the spawn are atomic
+    /// (same-stage tool calls run concurrently, and executors are per call batch).
+    /// </summary>
+    internal SemaphoreSlim WorktreeDroneSpawnGate { get; } = new(1, 1);
+
     public bool IsTerminal =>
         Status is DysonSessionStatus.Completed
             or DysonSessionStatus.Stopped
