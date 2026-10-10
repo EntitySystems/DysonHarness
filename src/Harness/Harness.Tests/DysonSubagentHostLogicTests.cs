@@ -1,4 +1,5 @@
 using DysonHarness;
+using Harness.UI.Components.Pages;
 using Harness.UI.Demo;
 
 namespace Harness.Tests;
@@ -499,6 +500,57 @@ public class DysonSubagentHostLogicTests
             throw new InvalidOperationException("Interrupted descendants should not report as active.");
     }
 
+    [Fact]
+    public void AffectsAgentsList_spawn_requires_matching_parent_and_nonempty_child()
+    {
+        var parent = Guid.NewGuid();
+        var child = Guid.NewGuid();
+        var other = Guid.NewGuid();
+
+        Assert.True(DysonSubagentHostLogic.AffectsAgentsList(
+            parent,
+            new DysonSubagentSpawnedEvent(parent, child, 1, "child", DysonAgentModes.Drone)));
+        Assert.False(DysonSubagentHostLogic.AffectsAgentsList(
+            parent,
+            new DysonSubagentSpawnedEvent(parent, Guid.Empty, 1, "child", DysonAgentModes.Drone)));
+        Assert.False(DysonSubagentHostLogic.AffectsAgentsList(
+            parent,
+            new DysonSubagentSpawnedEvent(other, child, 1, "child", DysonAgentModes.Drone)));
+        Assert.False(DysonSubagentHostLogic.AffectsAgentsList(
+            Guid.Empty,
+            new DysonSubagentSpawnedEvent(parent, child, 1, "child", DysonAgentModes.Drone)));
+    }
+
+    [Fact]
+    public void AffectsAgentsList_status_requires_matching_parent_and_nonempty_child()
+    {
+        var parent = Guid.NewGuid();
+        var child = Guid.NewGuid();
+
+        Assert.True(DysonSubagentHostLogic.AffectsAgentsList(
+            parent,
+            new DysonSubagentStatusChangedEvent(
+                child, parent, 1, DysonSessionStatus.Active, true, null)));
+        Assert.False(DysonSubagentHostLogic.AffectsAgentsList(
+            parent,
+            new DysonSubagentStatusChangedEvent(
+                child, null, 1, DysonSessionStatus.Active, true, null)));
+    }
+
+    [Fact]
+    public void OrderedDirectChildIds_hides_child_until_persistence_id_is_set()
+    {
+        var parent = new StubSession();
+        var child = new StubSession();
+        parent.RegisterForTest(child);
+        Assert.Empty(MetaAgent.OrderedDirectChildIds(parent));
+
+        var childId = Guid.NewGuid();
+        child.SetPersistenceIdForTest(childId);
+        var ids = MetaAgent.OrderedDirectChildIds(parent);
+        Assert.Equal(childId, Assert.Single(ids));
+    }
+
     private sealed class StubProvider : DysonAgentProvider;
 
     private sealed class StubSession(string mode = DysonAgentModes.Work) : DysonAgentSession(
@@ -507,6 +559,8 @@ public class DysonSubagentHostLogicTests
         new StubProvider())
     {
         public void RegisterForTest(DysonAgentSession child) => RegisterSubagent(child);
+
+        public void SetPersistenceIdForTest(Guid persistenceId) => SetPersistenceId(persistenceId);
 
         public override Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
             string agentMode,

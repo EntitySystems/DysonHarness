@@ -146,7 +146,7 @@ Process-local typed pub/sub in `Harness.Engine/Messaging/`. `DysonMessageBus` is
 **Publish points**
 
 - `DysonSessionEventPublisher.Attach(root)` returns a Result token. Recursively hooks the tree and follows `SubagentSpawned`. Per-session refcount so runtime **and** UI can Attach the same tree without double-publishing. Dispose the token to decrement.
-- Status, spawn, turn-added, and `ParentEventsChanged` publish immediately (not coalesced). Activity (`DysonSubagentActivityChangedEvent`) uses a reused 75ms `DysonNotifyCoalescer` plus tuple dedupe `(title, LatestTurnStepTitle, isRunning)`.
+- Status, spawn, turn-added, and `ParentEventsChanged` publish immediately (not coalesced). Spawn publishes once `ChildPersistenceId` is non-empty: when `SubagentSpawned` fires before the id exists (production `CreateChildAsync` registers, sets the title, then `SetPersistenceId`), the publisher waits for `DysonAgentSession.PersistenceIdAssigned` (raised only on `Guid.Empty` → non-empty). One event, parent key + child key, never `DysonBusScopes.Session(Guid.Empty)`. The UI host and runtime hook the same CLR event to fill their registries (no poll). Activity (`DysonSubagentActivityChangedEvent`) uses a reused 75ms `DysonNotifyCoalescer` plus tuple dedupe `(title, LatestTurnStepTitle, isRunning)`.
 - `DysonAgentSession.StatusChanged` is the choke point: raised **outside** `_terminalGate` from `TryMarkTerminal` / `TryAcceptSubagentReport` / `TryReopenForNewParentTask` when status actually changes.
 - `DysonAgentSession.ParentEventsChanged` is the choke for Ask/Dialog pending flags. The publisher is the only bus writer; it hooks that CLR event and does not invent a second source. Flags are snapshots (`HasPendingAsk` / `HasPendingUserDialog`), not question/dialog JSON.
 - Host UI: `DysonUiHost` coalescer sink publishes `DysonHostStateChangedEvent` on `Host.BusScopeKey` (`DysonBusScopes.Host(HostId)`). This replaces `DysonUiHost.Changed` (deleted). If the bus is not injected, the host owns a private bus. `DysonSessionRuntime.Changed` / `DysonRuntimeChange` is unchanged (recovery/reattach). File-viewer paint is a UI Demo event (`DysonFileViewerOpenRequestedEvent` / `DysonFileViewerChangedEvent` in `Harness.UI.Demo`, not Engine records) on the same host key.
@@ -155,7 +155,7 @@ Process-local typed pub/sub in `Harness.Engine/Messaging/`. `DysonMessageBus` is
 
 | Record | Key | Payload |
 | ------ | --- | ------- |
-| `DysonSubagentSpawnedEvent` | parent + child session | `ParentPersistenceId`, `ChildPersistenceId`, `RuntimeId`, `Title`, `AgentMode` |
+| `DysonSubagentSpawnedEvent` | parent + child session (published once `ChildPersistenceId` is non-empty) | `ParentPersistenceId`, `ChildPersistenceId`, `RuntimeId`, `Title`, `AgentMode` |
 | `DysonSubagentStatusChangedEvent` | child + parent session | `PersistenceId`, `ParentPersistenceId`, `RuntimeId`, `Status`, `IsRunning`, `Summary` |
 | `DysonSubagentActivityChangedEvent` | session (+ parent) | `PersistenceId`, `RuntimeId`, `Title`, `LatestTurnStepTitle`, `IsRunning` |
 | `DysonSessionTurnAddedEvent` | session | `PersistenceId`, `TurnId`, `Kind` |

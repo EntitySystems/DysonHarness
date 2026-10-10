@@ -863,6 +863,7 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         session.LogAppended += OnLogAppended;
         session.TodosChanged += OnTodosChanged;
         session.SubagentSpawned += OnSubagentSpawned;
+        session.PersistenceIdAssigned += OnPersistenceIdAssigned;
         TryAttachSessionEvents(session);
 
         foreach (var turn in session.Turns)
@@ -998,6 +999,7 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         session.LogAppended -= OnLogAppended;
         session.TodosChanged -= OnTodosChanged;
         session.SubagentSpawned -= OnSubagentSpawned;
+        session.PersistenceIdAssigned -= OnPersistenceIdAssigned;
 
         foreach (var turn in session.Turns)
             UnhookTurn(turn);
@@ -1087,38 +1089,20 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
 
         RememberParentId(child, parent.PersistenceId == Guid.Empty ? null : parent.PersistenceId);
         EnsureRegistered(child);
-        if (child.PersistenceId == Guid.Empty)
-            _ = EnsureChildRegistryKeyAsync(child);
-        else
+        if (child.PersistenceId != Guid.Empty)
             EnsureSessionMapped(child);
         RaiseChanged(
             DysonRuntimeChangeKind.SessionGraph,
             child.PersistenceId == Guid.Empty ? parent.PersistenceId : child.PersistenceId);
     }
 
-    private async Task EnsureChildRegistryKeyAsync(DysonAgentSession child)
+    private void OnPersistenceIdAssigned(object? sender, EventArgs e)
     {
-        for (var i = 0; i < 40; i++)
-        {
-            if (_disposed != 0 || !_hookedSessions.ContainsKey(child))
-                return;
+        if (sender is not DysonAgentSession session)
+            return;
 
-            EnsureSessionMapped(child);
-            if (child.PersistenceId != Guid.Empty)
-            {
-                RaiseChanged(DysonRuntimeChangeKind.SessionGraph, child.PersistenceId);
-                return;
-            }
-
-            try
-            {
-                await Task.Delay(25).ConfigureAwait(false);
-            }
-            catch
-            {
-                return;
-            }
-        }
+        EnsureSessionMapped(session);
+        RaiseChanged(DysonRuntimeChangeKind.SessionGraph, session.PersistenceId);
     }
 
     private void EnsureSessionMapped(DysonAgentSession session)

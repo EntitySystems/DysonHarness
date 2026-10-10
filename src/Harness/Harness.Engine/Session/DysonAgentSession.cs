@@ -709,6 +709,11 @@ public abstract class DysonAgentSession
     /// <summary>Raised after <see cref="RegisterSubagent"/> (host session registry).</summary>
     public event EventHandler<DysonAgentSession>? SubagentSpawned;
 
+    /// <summary>
+    /// Raised once when <see cref="PersistenceId"/> changes from <see cref="Guid.Empty"/> to a real id.
+    /// </summary>
+    public event EventHandler? PersistenceIdAssigned;
+
     /// <summary>Raised when <see cref="Status"/> actually changes (outside <c>_terminalGate</c>).</summary>
     public event EventHandler<DysonSessionStatusChangedEventArgs>? StatusChanged;
 
@@ -3196,7 +3201,13 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>Assigns <see cref="PersistenceId"/> after <see cref="IDysonSessionRepository.CreateSessionAsync"/>.</summary>
-    protected void SetPersistenceId(Guid persistenceId) => PersistenceId = persistenceId;
+    protected void SetPersistenceId(Guid persistenceId)
+    {
+        var raise = PersistenceId == Guid.Empty && persistenceId != Guid.Empty;
+        PersistenceId = persistenceId;
+        if (raise)
+            PersistenceIdAssigned?.Invoke(this, EventArgs.Empty);
+    }
 
     /// <summary>Sets <see cref="DisplayTitle"/> after create (mirrors persisted Title).</summary>
     protected void SetDisplayTitle(string? title) => DisplayTitle = title;

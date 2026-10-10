@@ -276,6 +276,18 @@ public static class DysonSubagentHostLogic
         return (visible, rows.Count - NestedAgentRowCap);
     }
 
+    /// <summary>Spawn wake-up for the agents list. Empty child ids are the pre-persist publish.</summary>
+    public static bool AffectsAgentsList(Guid parentPersistenceId, DysonSubagentSpawnedEvent evt) =>
+        parentPersistenceId != Guid.Empty
+        && evt.ParentPersistenceId == parentPersistenceId
+        && evt.ChildPersistenceId != Guid.Empty;
+
+    /// <summary>Status wake-up for the agents list (unmounted row, or the +N more count).</summary>
+    public static bool AffectsAgentsList(Guid parentPersistenceId, DysonSubagentStatusChangedEvent evt) =>
+        parentPersistenceId != Guid.Empty
+        && evt.ParentPersistenceId == parentPersistenceId
+        && evt.PersistenceId != Guid.Empty;
+
     /// <summary>
     /// Step text for a nested row: trimmed step when present, else null while
     /// <see cref="DysonSessionStatus.Active"/>, else the status name (<c>Stopped</c> stays <c>Stopped</c>).

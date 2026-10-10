@@ -5770,6 +5770,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         session.TodosChanged += OnTodosChanged;
         session.ParentEventsChanged += OnParentEventsChanged;
         session.TaskLifecycle += OnTaskLifecycle;
+        session.PersistenceIdAssigned += OnPersistenceIdAssigned;
         TryAttachSessionEvents(session);
 
         session.Config.CustomMcpHost?.AttachSession(session);
@@ -5963,6 +5964,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         session.TodosChanged -= OnTodosChanged;
         session.ParentEventsChanged -= OnParentEventsChanged;
         session.TaskLifecycle -= OnTaskLifecycle;
+        session.PersistenceIdAssigned -= OnPersistenceIdAssigned;
 
         foreach (var turn in session.Turns)
             UnhookTurn(turn);
@@ -6077,40 +6079,25 @@ public sealed class DysonUiHost : IAsyncDisposable
         }
 
         EnsureRegistered(child);
-        // PersistenceId is assigned after SubagentSpawned in CreateChildAsync — refresh on a short poll.
-        _ = EnsureChildRegistryKeyAsync(child);
         Notify(DysonHostChangeKind.SessionGraph);
     }
 
-    private async Task EnsureChildRegistryKeyAsync(DysonAgentSession child)
+    private void OnPersistenceIdAssigned(object? sender, EventArgs e)
     {
-        for (var i = 0; i < 40; i++)
+        if (sender is not DysonAgentSession session)
+            return;
+
+        RefreshRegistryKey(session);
+        if (session.PersistenceId == Guid.Empty)
+            return;
+
+        if (_runtimeOwnedSessions.ContainsKey(session)
+            || (session.Parent is { } parent && IsRuntimeOwned(parent)))
         {
-            if (_disposed || !_hookedSessions.ContainsKey(child))
-                return;
-
-            RefreshRegistryKey(child);
-            if (child.PersistenceId != Guid.Empty)
-            {
-                if (_runtimeOwnedSessions.ContainsKey(child)
-                    || (child.Parent is { } parent && IsRuntimeOwned(parent)))
-                {
-                    MarkRuntimeOwned(child);
-                }
-
-                Notify(DysonHostChangeKind.SessionGraph);
-                return;
-            }
-
-            try
-            {
-                await Task.Delay(25).ConfigureAwait(false);
-            }
-            catch
-            {
-                return;
-            }
+            MarkRuntimeOwned(session);
         }
+
+        Notify(DysonHostChangeKind.SessionGraph);
     }
 
     private void OnInterruptEnqueued(object? sender, DysonAgentInterrupt interrupt)
