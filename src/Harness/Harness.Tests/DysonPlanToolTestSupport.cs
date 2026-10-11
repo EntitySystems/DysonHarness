@@ -126,6 +126,9 @@ internal sealed class DysonPlanToolStubSession : DysonAgentSession
     {
         var child = new DysonPlanToolStubSession(agentMode);
         child.SetPersistenceId(Guid.NewGuid());
+        if (string.Equals(agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase)
+            && MetaAgentDroneUseWorktree.Value == true)
+            child.WorktreeBranch = "dyson/stub" + child.Id; // what BindOwnWorktreeAsync would set
         RegisterSubagent(child);
         LastSpawned = child;
         LastSpawnedTask = task;

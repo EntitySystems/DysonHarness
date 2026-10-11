@@ -83,6 +83,17 @@ public abstract class ManagedInferenceProviderBase : IManagedConnectionProvider
             .ConfigureAwait(false);
     }
 
+    /// <summary>Manual multi-account UI. Only Claude is supported; other providers return false.</summary>
+    public virtual bool SupportsManualAccounts => false;
+
+    /// <summary>
+    /// Runs from <see cref="CompleteConnectionAsync"/> only when auth-status is complete.
+    /// Default is success (no extra pin).
+    /// </summary>
+    protected virtual Task<VoidResult<string>> OnConnectionCompletedAsync(
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(VoidResult<string>.Success);
+
     /// <summary>
     /// Provider-specific checks before the management auth-url GET (e.g. Codex OAuth port).
     /// </summary>
@@ -173,6 +184,13 @@ public abstract class ManagedInferenceProviderBase : IManagedConnectionProvider
             ?? obj?["message"]?.GetValue<string>();
 
         var isComplete = string.Equals(status, "ok", StringComparison.OrdinalIgnoreCase);
+        if (isComplete)
+        {
+            var pinned = await OnConnectionCompletedAsync(cancellationToken).ConfigureAwait(false);
+            if (pinned.IsError)
+                return Result<ManagedConnectionComplete, string>.AsError(pinned.Error);
+        }
+
         return Result<ManagedConnectionComplete, string>.AsValue(
             new ManagedConnectionComplete(status, isComplete, message));
     }

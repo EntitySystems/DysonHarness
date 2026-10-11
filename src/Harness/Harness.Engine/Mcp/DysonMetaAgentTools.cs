@@ -12,6 +12,9 @@ public static class DysonMetaAgentTools
 
     public const string PlanIdMustBePositiveMessage = "planId must be a positive integer";
 
+    /// <summary>Most running <c>useWorktree: true</c> Meta Agent Drones one root session may have; the next spawn is refused.</summary>
+    public const int MaxRunningWorktreeDrones = 3;
+
     public const string SetPlanStatusAcceptedMessage =
         "SetPlanStatus: status must be 'building', 'completed', or 'stale'.";
 
@@ -191,8 +194,12 @@ public static class DysonMetaAgentTools
                 "Spawn a Meta Agent Drone (non-blocking). " +
                 "File-mutating tasks (writing code, editing the repo) should set useWorktree true; non-coding tasks (ops, testing, CI, pushes, read-and-run) should set useWorktree false. " +
                 "true: own git worktree and branch, merged on completion. false: parent's work directory, no branch, no merge. " +
+                "A code change is one coordinator drone that runs its own Drone workers in its worktree (default, one merge), " +
+                "or several direct drones only when each owns different files. " +
+                $"At most {MaxRunningWorktreeDrones} useWorktree true drones run at once; a {MaxRunningWorktreeDrones + 1}th is refused. " +
                 "Optional existingWorktreePath (only with useWorktree false) rebinds to an already-listed worktree without allocating one. " +
                 "Returns immediately with droneId / persistenceId / worktreeBranch (null when useWorktree is false); never waits. " +
+                "When other useWorktree true drones are running, the result also lists them in runningWorktreeDrones. " +
                 "purpose=build (default) implements; purpose=plan explores then SubmitMetaPlan. " +
                 "Call ListMetaAgentDrones before dispatching. Reuse an existing drone with MessageMetaAgentDrone " +
                 "instead of spawning a second one for the same work.",
@@ -203,7 +210,7 @@ public static class DysonMetaAgentTools
                     "task": { "type": "string", "description": "Assigned task brief for the drone. Goal, constraints, and acceptance criteria." },
                     "useWorktree": {
                       "type": "boolean",
-                      "description": "Required, no default. File-mutating tasks (writing code, editing the repo) should set useWorktree true; non-coding tasks (ops, testing, CI, pushes, read-and-run) should set useWorktree false. true forks a git worktree and merges on completion; false stays on the parent checkout with no branch and no merge."
+                      "description": "Required, no default. File-mutating tasks (writing code, editing the repo) should set useWorktree true; non-coding tasks (ops, testing, CI, pushes, read-and-run) should set useWorktree false. true forks a git worktree and merges on completion; false stays on the parent checkout with no branch and no merge. Each true drone is its own merge: for related changes use one coordinator, not several true drones."
                     },
                     "existingWorktreePath": {
                       "type": "string",
@@ -551,8 +558,10 @@ public static class DysonMetaAgentTools
         {
             Name = "BeginBuildPlan",
             Description =
-                "Dispatch a Meta Agent Drone briefed on planId (or message an existing drone via agentId) and set status to building. " +
-                "The brief names the planId, not the plan body — the drone calls ReadMetaPlan.",
+                "Dispatch one Meta Agent Drone in its own worktree as the coordinator for the whole plan (or message an existing drone via agentId) and set status to building. " +
+                "The brief names the planId, not the plan body — the drone calls ReadMetaPlan. " +
+                "Do not split one plan across several drones; the builder runs its own workers. " +
+                $"Counts toward the {MaxRunningWorktreeDrones} running useWorktree true drones.",
             InputSchemaJson = """
                 {
                   "type": "object",

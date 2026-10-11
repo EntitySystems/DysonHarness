@@ -15,7 +15,9 @@ public static class DysonMetaBuildBrief
         var brief =
             $"Build {heading}. Call ReadMetaPlan with planId {planId} before you start — " +
             "it is the authoritative brief and it is kept current. Do not rely on this message for the plan body. " +
-            "If the plan turns out wrong or outdated while you build, correct it in place with EditMetaPlan (small targeted edits).";
+            "If the plan turns out wrong or outdated while you build, correct it in place with EditMetaPlan (small targeted edits). " +
+            "You own the whole plan in one worktree and one merge: if it has several slices, run Drone workers as your Coordinating workers rules say. " +
+            "Do not ask for more drones.";
 
         return string.IsNullOrWhiteSpace(extraInstructions)
             ? brief

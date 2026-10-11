@@ -5563,7 +5563,8 @@ code, .mono {
 
 .workdir-settings-modal {
   width: min(640px, 96vw);
-  max-height: min(860px, 92vh);
+  /* 100% = backdrop content box (viewport minus its padding), so short windows still fit. */
+  max-height: min(860px, 100%);
   display: flex;
   flex-direction: column;
   background: var(--surface-glass);
@@ -5589,8 +5590,11 @@ code, .mono {
 }
 
 .workdir-settings-modal__body {
+  /* Header + meta stay put; only the body scrolls. min-height: 0 lets it shrink inside the flex column. */
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 12px 14px 16px;
-  overflow: visible;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -5643,8 +5647,6 @@ code, .mono {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  overflow: visible;
-  max-height: min(32vh, 240px);
 }
 
 .workdir-settings-openrules-row {
@@ -5681,6 +5683,12 @@ code, .mono {
 
 .workdir-settings-openrules-row .effort-picker {
   flex-shrink: 0;
+}
+
+/* Picker sits at the row's right edge; anchor its panel right so it stays inside the scrolling body. */
+.workdir-settings-openrules-row .effort-picker__panel {
+  left: auto;
+  right: 0;
 }
 
 .workdir-settings-openrules-row.is-missing {

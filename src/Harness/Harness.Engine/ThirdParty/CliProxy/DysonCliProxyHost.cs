@@ -224,6 +224,23 @@ public sealed class DysonCliProxyHost : IAsyncDisposable
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Management PATCH/DELETE (and any other verb) through the same client as <see cref="ManagementGetAsync"/>.
+    /// </summary>
+    public async Task<Result<JsonHttpResult, string>> ManagementSendAsync(
+        HttpMethod method,
+        string relativePath,
+        string? jsonBody,
+        CancellationToken ct = default)
+    {
+        var key = GetManagementKey();
+        if (key.IsError)
+            return Result<JsonHttpResult, string>.AsError(key.Error);
+
+        var url = CombineUrl(ManagementBaseUrl, relativePath);
+        return await SendAsync(method, url, key.Value, jsonBody, ct).ConfigureAwait(false);
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)

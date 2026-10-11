@@ -105,11 +105,27 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         var r = started.Value;
         _session.TryGetSubagent(r.SubagentId, out var child);
+        var siblings = useWorktree
+            ? RunningWorktreeDroneIds().Where(id => id != r.SubagentId).ToList()
+            : [];
+        if (siblings.Count == 0)
+        {
+            return Ok(call, JsonSerializer.Serialize(new
+            {
+                droneId = r.SubagentId,
+                persistenceId = r.PersistenceId,
+                worktreeBranch = child?.WorktreeBranch,
+            }));
+        }
+
         return Ok(call, JsonSerializer.Serialize(new
         {
             droneId = r.SubagentId,
             persistenceId = r.PersistenceId,
             worktreeBranch = child?.WorktreeBranch,
+            runningWorktreeDrones = siblings,
+            notice = $"Other useWorktree true drones are running: {FormatDroneIds(siblings)}. Each merges separately. " +
+                     "If this drone can touch their files, stop and use one coordinator instead.",
         }));
     }
 
@@ -1327,6 +1343,32 @@ public sealed partial class DysonWorkspaceToolExecutor
         IReadOnlyList<string>? contextFiles = null)
     {
         // Explicit per call. AsyncLocal so both session implementations share one spawn path.
+        // ponytail: process-local, per root session, counts live drones only (a Failed, conflicted drone that still
+        // holds a worktree is not counted). Upgrade path: count unmerged worktrees from the store if that ever matters.
+        SemaphoreSlim? gate = null;
+        if (useWorktree)
+        {
+            try
+            {
+                await _session.WorktreeDroneSpawnGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return Result<DysonStartSubagentResult, string>.AsError("StartAsyncMetaAgentDrone: cancelled.");
+            }
+
+            gate = _session.WorktreeDroneSpawnGate;
+            var running = RunningWorktreeDroneIds();
+            if (running.Count >= DysonMetaAgentTools.MaxRunningWorktreeDrones)
+            {
+                gate.Release();
+                return Result<DysonStartSubagentResult, string>.AsError(
+                    $"{running.Count} useWorktree true drones are already running ({FormatDroneIds(running)}); " +
+                    $"the limit is {DysonMetaAgentTools.MaxRunningWorktreeDrones}. MessageMetaAgentDrone the one whose area this is, " +
+                    "dispatch after one of them reports, or use useWorktree false if this is not a code change.");
+            }
+        }
+
         DysonAgentSession.MetaAgentDroneUseWorktree.Value = useWorktree;
         DysonAgentSession.MetaAgentDroneExistingWorktreePath.Value =
             !useWorktree && !string.IsNullOrWhiteSpace(existingWorktreePath)
@@ -1349,8 +1391,20 @@ public sealed partial class DysonWorkspaceToolExecutor
         {
             DysonAgentSession.MetaAgentDroneUseWorktree.Value = null;
             DysonAgentSession.MetaAgentDroneExistingWorktreePath.Value = null;
+            gate?.Release();
         }
     }
+
+    /// <summary>Live Meta Agent Drone children that own a worktree (<c>useWorktree: true</c>, not yet merged).</summary>
+    private List<int> RunningWorktreeDroneIds() =>
+        _session.SubSessions
+            .Where(c => string.Equals(c.Mode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase)
+                        && !c.IsTerminal
+                        && !string.IsNullOrWhiteSpace(c.WorktreeBranch))
+            .Select(c => c.Id)
+            .ToList();
+
+    private static string FormatDroneIds(IEnumerable<int> ids) => string.Join(", ", ids.Select(id => "#" + id));
 
     private async Task<Result<string, string>> RequireListedWorktreeAsync(
         string path,

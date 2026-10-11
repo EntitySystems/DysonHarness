@@ -204,6 +204,13 @@ public abstract class DysonAgentSession
         internal set => _turnsSinceMetaMaintenance = value;
     }
 
+    /// <summary>
+    /// Serializes <c>useWorktree: true</c> Meta Agent Drone spawns from this session so the
+    /// <see cref="DysonMetaAgentTools.MaxRunningWorktreeDrones"/> check and the spawn are atomic
+    /// (same-stage tool calls run concurrently, and executors are per call batch).
+    /// </summary>
+    internal SemaphoreSlim WorktreeDroneSpawnGate { get; } = new(1, 1);
+
     public bool IsTerminal =>
         Status is DysonSessionStatus.Completed
             or DysonSessionStatus.Stopped
@@ -701,6 +708,11 @@ public abstract class DysonAgentSession
 
     /// <summary>Raised after <see cref="RegisterSubagent"/> (host session registry).</summary>
     public event EventHandler<DysonAgentSession>? SubagentSpawned;
+
+    /// <summary>
+    /// Raised once when <see cref="PersistenceId"/> changes from <see cref="Guid.Empty"/> to a real id.
+    /// </summary>
+    public event EventHandler? PersistenceIdAssigned;
 
     /// <summary>Raised when <see cref="Status"/> actually changes (outside <c>_terminalGate</c>).</summary>
     public event EventHandler<DysonSessionStatusChangedEventArgs>? StatusChanged;
@@ -2406,8 +2418,10 @@ public abstract class DysonAgentSession
     /// <summary>
     /// Builds the first-turn prompt for a spawned child. All modes get
     /// <see cref="DysonAgentSystemPrompts.SubagentReportRequiredMandate"/>; Explore/Drone/MetaAgentDrone get extras.
+    /// A Drone whose <paramref name="parentMode"/> is MetaAgentDrone is a coordinated worker and also gets
+    /// <see cref="DysonAgentSystemPrompts.MetaAgentDroneWorkerFirstTurnMandate"/>.
     /// </summary>
-    protected static string BuildChildFirstPrompt(string agentMode, string task, string? context)
+    protected internal static string BuildChildFirstPrompt(string parentMode, string agentMode, string task, string? context)
     {
         var sb = new StringBuilder();
         sb.AppendLine(DysonAgentSystemPrompts.SubagentReportRequiredMandate.Trim());
@@ -2422,6 +2436,11 @@ public abstract class DysonAgentSession
         {
             sb.AppendLine(DysonAgentSystemPrompts.DroneFirstTurnContextMandate.Trim());
             sb.AppendLine();
+            if (string.Equals(parentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
+            {
+                sb.AppendLine(DysonAgentSystemPrompts.MetaAgentDroneWorkerFirstTurnMandate.Trim());
+                sb.AppendLine();
+            }
         }
         else if (string.Equals(agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
         {
@@ -3182,7 +3201,13 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>Assigns <see cref="PersistenceId"/> after <see cref="IDysonSessionRepository.CreateSessionAsync"/>.</summary>
-    protected void SetPersistenceId(Guid persistenceId) => PersistenceId = persistenceId;
+    protected void SetPersistenceId(Guid persistenceId)
+    {
+        var raise = PersistenceId == Guid.Empty && persistenceId != Guid.Empty;
+        PersistenceId = persistenceId;
+        if (raise)
+            PersistenceIdAssigned?.Invoke(this, EventArgs.Empty);
+    }
 
     /// <summary>Sets <see cref="DisplayTitle"/> after create (mirrors persisted Title).</summary>
     protected void SetDisplayTitle(string? title) => DisplayTitle = title;

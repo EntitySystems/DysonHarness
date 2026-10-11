@@ -127,6 +127,10 @@
                               PendingUserCode="PendingAuth(p)?.UserCode"
                               PendingAuthUrl="PendingAuth(p)?.AuthUrl"
                               XaiSummary="_xaiSummary"
+                              Accounts="@(string.Equals(p.ManagedSource, DysonManagedSources.CliProxyClaude, StringComparison.Ordinal) ? _claudeAccounts : null)"
+                              AccountsBusy="_accountsBusy"
+                              OnSelectAccount="SelectClaudeAccountAsync"
+                              OnRemoveAccount="RemoveClaudeAccountAsync"
                               DownloadProgress="CardDownloadProgress(p)"
                               ContextStepBusySlugId="_contextStepBusySlugId"
                               OnConnect="() => ConnectManagedAsync(p)"
@@ -184,6 +188,8 @@
     private CliProxyDownloadProgress? _downloadProgress;
     private readonly Dictionary<string, ManagedConnectionBegin> _pendingAuth = new(StringComparer.Ordinal);
     private XaiGrokAccountSummary? _xaiSummary;
+    private IReadOnlyList<ClaudeAccount>? _claudeAccounts;
+    private bool _accountsBusy;
     private CancellationTokenSource? _pollCts;
 
     // Per-source busy tracking so Connect/Verify spinners don't freeze the whole panel.
@@ -223,6 +229,7 @@
         if (result.IsError)
         {
             _error = result.Error;
+            _claudeAccounts = null;
             return;
         }
 
@@ -235,6 +242,8 @@
             if (summary.IsSuccess)
                 _xaiSummary = summary.Value;
         }
+
+        await LoadClaudeAccountsAsync();
     }
 
     public void Dispose()
@@ -526,6 +535,112 @@
         }
 
         _status = $"{provider.DisplayName}: disconnected local auth session tracking. Proxy credentials are kept — use Connect to sign in again.";
+        if (string.Equals(provider.ManagedSource, DysonManagedSources.CliProxyClaude, StringComparison.Ordinal))
+            _status += " Use Remove on an account to delete its credential.";
+    }
+
+    private async Task LoadClaudeAccountsAsync()
+    {
+        if (!_cliProxyInstalled
+            || !_providers.Any(p => string.Equals(p.ManagedSource, DysonManagedSources.CliProxyClaude, StringComparison.Ordinal)))
+        {
+            _claudeAccounts = null;
+            return;
+        }
+
+        if (ManagedCatalog.FindBySource(DysonManagedSources.CliProxyClaude) is not ManagedClaudeInferenceProvider claude)
+        {
+            _claudeAccounts = null;
+            _error = "Claude provider is not available.";
+            return;
+        }
+
+        var accounts = await claude.ListAccountsAsync();
+        if (accounts.IsError)
+        {
+            _claudeAccounts = null;
+            _error = accounts.Error;
+            return;
+        }
+
+        _claudeAccounts = accounts.Value;
+    }
+
+    private async Task SelectClaudeAccountAsync(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            _error = "Claude account name is required.";
+            return;
+        }
+
+        if (ManagedCatalog.FindBySource(DysonManagedSources.CliProxyClaude) is not ManagedClaudeInferenceProvider claude)
+        {
+            _error = "Claude provider is not available.";
+            return;
+        }
+
+        _accountsBusy = true;
+        _error = null;
+        try
+        {
+            var selected = await claude.SetActiveAccountAsync(name);
+            if (selected.IsError)
+            {
+                _error = selected.Error;
+                return;
+            }
+
+            _status = $"Claude account switched to {name}. Running replies finish on the previous account.";
+            await LoadClaudeAccountsAsync();
+        }
+        finally
+        {
+            _accountsBusy = false;
+        }
+    }
+
+    private async Task RemoveClaudeAccountAsync(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            _error = "Claude account name is required.";
+            return;
+        }
+
+        var confirmed = await ConfirmDialog.ConfirmAsync(
+            title: "Remove Claude account",
+            message: $"Remove Claude account \"{name}\"? This deletes that credential file.",
+            confirmLabel: "Remove",
+            cancelLabel: "Cancel",
+            danger: true);
+        if (!confirmed)
+            return;
+
+        if (ManagedCatalog.FindBySource(DysonManagedSources.CliProxyClaude) is not ManagedClaudeInferenceProvider claude)
+        {
+            _error = "Claude provider is not available.";
+            return;
+        }
+
+        _accountsBusy = true;
+        _error = null;
+        try
+        {
+            var removed = await claude.RemoveAccountAsync(name);
+            if (removed.IsError)
+            {
+                _error = removed.Error;
+                return;
+            }
+
+            _status = $"Removed Claude account {name}.";
+            await LoadClaudeAccountsAsync();
+        }
+        finally
+        {
+            _accountsBusy = false;
+        }
     }
 
     private void CancelNativeConnect() => _pollCts?.Cancel();

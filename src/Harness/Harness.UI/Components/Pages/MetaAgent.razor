@@ -263,6 +263,9 @@
     private MetaPlanList? _planList;
     private MetaChatFeed? _chatFeed;
     private IDisposable? _hostSub;
+    private Guid? _agentsListBoundId;
+    private IDisposable? _agentsSpawnedSub;
+    private IDisposable? _agentsStatusSub;
     private DotNetObjectReference<DysonUiHost>? _chatLinksRef;
     private bool _tasksOpen;
     private bool _vizOpen;
@@ -370,6 +373,7 @@
             _sessions = [];
             _sessionReady = false;
             _metaSessionId = null;
+            BindAgentsListSubscriptions();
             return;
         }
 
@@ -452,6 +456,7 @@
             && live.PersistenceId != Guid.Empty)
         {
             _metaSessionId = live.PersistenceId;
+            BindAgentsListSubscriptions();
             _sessionReady = true;
             return;
         }
@@ -474,6 +479,7 @@
             }
 
             _metaSessionId = existing.Id;
+            BindAgentsListSubscriptions();
         }
         else
         {
@@ -488,6 +494,7 @@
             }
 
             _metaSessionId = Host.ActiveSessionId;
+            BindAgentsListSubscriptions();
         }
 
         if (_metaSessionId is not Guid metaId
@@ -558,6 +565,50 @@
         await SyncModelFromHostAsync();
         StateHasChanged();
     });
+
+    private void BindAgentsListSubscriptions()
+    {
+        if (_metaSessionId == _agentsListBoundId)
+            return;
+
+        DisposeAgentsListSubscriptions();
+        _agentsListBoundId = _metaSessionId;
+        if (_metaSessionId is not Guid id || id == Guid.Empty)
+            return;
+
+        var scope = DysonBusScopes.Session(id);
+        var spawnedSub = Bus.Subscribe<DysonSubagentSpawnedEvent>(scope, OnAgentsSpawned);
+        if (spawnedSub.IsSuccess)
+            _agentsSpawnedSub = spawnedSub.Value;
+
+        var statusSub = Bus.Subscribe<DysonSubagentStatusChangedEvent>(scope, OnAgentsStatus);
+        if (statusSub.IsSuccess)
+            _agentsStatusSub = statusSub.Value;
+    }
+
+    private void OnAgentsSpawned(DysonSubagentSpawnedEvent evt) => _ = InvokeAsync(() =>
+    {
+        if (_metaSessionId is not Guid parent
+            || !DysonSubagentHostLogic.AffectsAgentsList(parent, evt))
+            return;
+        StateHasChanged();
+    });
+
+    private void OnAgentsStatus(DysonSubagentStatusChangedEvent evt) => _ = InvokeAsync(() =>
+    {
+        if (_metaSessionId is not Guid parent
+            || !DysonSubagentHostLogic.AffectsAgentsList(parent, evt))
+            return;
+        StateHasChanged();
+    });
+
+    private void DisposeAgentsListSubscriptions()
+    {
+        _agentsSpawnedSub?.Dispose();
+        _agentsSpawnedSub = null;
+        _agentsStatusSub?.Dispose();
+        _agentsStatusSub = null;
+    }
 
     private async Task SendAsync()
     {
@@ -779,6 +830,8 @@
     {
         _hostSub?.Dispose();
         _hostSub = null;
+        DisposeAgentsListSubscriptions();
+        _agentsListBoundId = null;
         if (_imageCaptureBound)
             await DysonCircuitJs.InvokeVoidAsync(Js, "dysonComposer.detachImageCapture", _shell);
 

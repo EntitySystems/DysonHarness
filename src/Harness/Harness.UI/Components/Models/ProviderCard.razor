@@ -105,6 +105,43 @@
         </div>
     }
 
+    @if (Accounts is not null)
+    {
+        <div class="provider-card__accounts">
+            <div class="list-item__meta">Up to 8 accounts. Only the active account is used.</div>
+            @if (Accounts.Count == 0)
+            {
+                <div class="list-item__meta">No Claude accounts yet. Connect to add one.</div>
+            }
+            else
+            {
+                @foreach (var account in Accounts)
+                {
+                    <div class="provider-card__account" @key="AccountRowKey(account)">
+                        <label class="provider-card__account-pick" title="@account.Name">
+                            <input type="radio"
+                                   name="@AccountRadioName"
+                                   checked="@account.IsActive"
+                                   disabled="@(AccountsBusy || ConnectBusy)"
+                                   @onchange="() => OnSelectAccount.InvokeAsync(account.Name)" />
+                            <span class="provider-card__account-name">@account.Display</span>
+                            @if (account.IsActive)
+                            {
+                                <span class="provider-card__account-active">Active</span>
+                            }
+                        </label>
+                        <button type="button"
+                                class="btn btn-ghost btn--xs"
+                                disabled="@(AccountsBusy || ConnectBusy)"
+                                @onclick="() => OnRemoveAccount.InvokeAsync(account.Name)">
+                            Remove
+                        </button>
+                    </div>
+                }
+            }
+        </div>
+    }
+
     <div class="btn-row provider-card__actions">
         @if (IsDirectManaged)
         {
@@ -151,7 +188,7 @@
                 <button type="button" class="btn btn-primary btn--sm"
                         disabled="@(ConnectBusy || !CliProxyInstalled)"
                         @onclick="OnConnect">
-                    @(ConnectBusy ? "Connecting…" : "Connect")
+                    @(ConnectBusy ? "Connecting…" : Accounts is { Count: > 0 } ? "Add account" : "Connect")
                 </button>
             }
             <button type="button" class="btn btn--sm"
@@ -245,6 +282,18 @@
     /// <summary>False blocks Connect / Verify (CLIProxyAPI binary missing).</summary>
     [Parameter] public bool CliProxyInstalled { get; set; }
 
+    /// <summary>Claude accounts. Null hides the section (non-Claude cards, or a failed load).</summary>
+    [Parameter] public IReadOnlyList<ClaudeAccount>? Accounts { get; set; }
+
+    /// <summary>True while the parent is listing, selecting, or removing an account.</summary>
+    [Parameter] public bool AccountsBusy { get; set; }
+
+    /// <summary>Selects the account name as the active Claude credential. No confirm.</summary>
+    [Parameter] public EventCallback<string> OnSelectAccount { get; set; }
+
+    /// <summary>Removes the account name (parent confirms; deletes that credential file).</summary>
+    [Parameter] public EventCallback<string> OnRemoveAccount { get; set; }
+
     /// <summary>Parent-managed: a Connect auth session is pending for this provider.</summary>
     [Parameter] public bool AuthPending { get; set; }
 
@@ -287,6 +336,10 @@
     [Parameter] public EventCallback<(DysonModelSlugEntity slug, string effort)> OnSetEffort { get; set; }
     [Parameter] public EventCallback<(DysonModelSlugEntity slug, List<string> modes)> OnModesChanged { get; set; }
     [Parameter] public EventCallback<(DysonModelSlugEntity slug, int delta)> OnStepContext { get; set; }
+
+    private string AccountRadioName => $"claude-account-{Provider.Id:N}";
+
+    private static string AccountRowKey(ClaudeAccount account) => account.Name + account.IsActive;
 
     private string SlugSummary
     {

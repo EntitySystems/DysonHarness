@@ -6,6 +6,50 @@ namespace Harness.Tests;
 public class DysonSessionEventPublisherTests
 {
     [Fact]
+    public void Register_before_persistence_id_publishes_one_spawn_when_id_is_set()
+    {
+        using var bus = new DysonMessageBus();
+        using var publisher = new DysonSessionEventPublisher(bus);
+        var parentId = Guid.NewGuid();
+        var childId = Guid.NewGuid();
+        var parent = CreateSession(parentId, "parent");
+        var child = new StubSession();
+        child.SetDisplayTitleForTest("child-title");
+        using var attach = Attach(publisher, parent);
+
+        var parentSpawns = new List<DysonSubagentSpawnedEvent>();
+        var childSpawns = new List<DysonSubagentSpawnedEvent>();
+        var emptySpawns = new List<DysonSubagentSpawnedEvent>();
+        Assert.True(bus.Subscribe<DysonSubagentSpawnedEvent>(
+            DysonBusScopes.Session(parentId), parentSpawns.Add).IsSuccess);
+        Assert.True(bus.Subscribe<DysonSubagentSpawnedEvent>(
+            DysonBusScopes.Session(childId), childSpawns.Add).IsSuccess);
+        Assert.True(bus.Subscribe<DysonSubagentSpawnedEvent>(
+            DysonBusScopes.Session(Guid.Empty), emptySpawns.Add).IsSuccess);
+
+        parent.RegisterForTest(child);
+
+        Assert.Empty(parentSpawns);
+        Assert.Empty(childSpawns);
+        Assert.Empty(emptySpawns);
+
+        child.SetPersistenceIdForTest(childId);
+
+        Assert.Single(parentSpawns);
+        Assert.Single(childSpawns);
+        Assert.Empty(emptySpawns);
+        Assert.Equal(parentSpawns[0], childSpawns[0]);
+        Assert.Equal(childId, parentSpawns[0].ChildPersistenceId);
+        Assert.Equal("child-title", parentSpawns[0].Title);
+        Assert.Equal(DysonAgentModes.Work, parentSpawns[0].AgentMode);
+
+        child.SetPersistenceIdForTest(childId);
+        Assert.Single(parentSpawns);
+        Assert.Single(childSpawns);
+        Assert.Empty(emptySpawns);
+    }
+
+    [Fact]
     public void RegisterForTest_publishes_spawn_on_parent_and_child_keys()
     {
         using var bus = new DysonMessageBus();
