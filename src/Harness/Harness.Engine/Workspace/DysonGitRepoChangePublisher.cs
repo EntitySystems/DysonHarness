@@ -107,7 +107,33 @@ public sealed class DysonGitRepoChangePublisher : IDisposable
         }
     }
 
-    private void OnChanged(object? sender, DysonWorkspaceChangeEventArgs e) => SchedulePublish(sender);
+    private void OnChanged(object? sender, DysonWorkspaceChangeEventArgs e)
+    {
+        // Lock churn from external git is not a repo change. A rename index.lock -> index is.
+        if (IsGitLockFilePath(e.FullPath) && (e.OldFullPath is null || IsGitLockFilePath(e.OldFullPath)))
+            return;
+
+        SchedulePublish(sender);
+    }
+
+    /// <summary>
+    /// True for a <c>*.lock</c> file with a <c>.git</c> directory segment (<c>.git/index.lock</c>,
+    /// <c>.git/refs/heads/main.lock</c>, <c>.git/worktrees/x/index.lock</c>). Pure string check.
+    /// </summary>
+    internal static bool IsGitLockFilePath(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || !path.EndsWith(".lock", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var segments = path.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < segments.Length - 1; i++)
+        {
+            if (segments[i].Equals(".git", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
 
     private void OnFailed(object? sender, Exception exception)
     {

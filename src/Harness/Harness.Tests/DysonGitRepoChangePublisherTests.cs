@@ -139,6 +139,56 @@ public class DysonGitRepoChangePublisherTests
         Assert.Equal(root, received[0].RepoRoot);
     }
 
+    [Theory]
+    [InlineData(@"E:\repo\.git\index.lock")]
+    [InlineData("/repo/.git/HEAD.lock")]
+    [InlineData("/repo/.git/packed-refs.lock")]
+    [InlineData("/repo/.git/config.lock")]
+    [InlineData("/repo/.git/refs/heads/main.lock")]
+    [InlineData(@"E:\repo\.git\worktrees\abc\index.lock")]
+    public void IsGitLockFilePath_true_for_lock_files_under_dot_git(string path) =>
+        Assert.True(DysonGitRepoChangePublisher.IsGitLockFilePath(path));
+
+    [Theory]
+    [InlineData(@"E:\repo\.git\index")]
+    [InlineData("/repo/.git/HEAD")]
+    [InlineData("/repo/.git/ORIG_HEAD")]
+    [InlineData("/repo/.git/refs/heads/main")]
+    [InlineData("/repo/.github/workflows/x.lock")]
+    [InlineData("/repo/src/package.lock")]
+    [InlineData("/repo/.gitkeep")]
+    [InlineData("/repo/.git.lock")]
+    [InlineData("changed")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void IsGitLockFilePath_false_for_repo_state_and_non_git_paths(string? path) =>
+        Assert.False(DysonGitRepoChangePublisher.IsGitLockFilePath(path));
+
+    [Fact]
+    public void Git_lock_file_events_do_not_schedule_publish_but_index_rename_does()
+    {
+        var watchers = new List<FakeWatcher>();
+        var delays = 0;
+        using var bus = new DysonMessageBus();
+        using var publisher = CreatePublisher(bus, watchers, (_, ct) =>
+        {
+            Interlocked.Increment(ref delays);
+            return Task.Delay(Timeout.Infinite, ct);
+        });
+        Assert.True(publisher.Watch(Guid.NewGuid(), UniqueRoot("lock")).IsSuccess);
+        var watcher = Assert.Single(watchers);
+
+        watcher.RaiseChanged(@"E:\repo\.git\index.lock");
+        watcher.RaiseChanged("/repo/.git/worktrees/abc/index.lock");
+        Assert.Equal(0, Volatile.Read(ref delays));
+
+        watcher.RaiseChanged(@"E:\repo\.git\index", oldFullPath: @"E:\repo\.git\index.lock");
+        Assert.Equal(1, Volatile.Read(ref delays));
+
+        watcher.RaiseChanged();
+        Assert.Equal(2, Volatile.Read(ref delays));
+    }
+
     private static DysonGitRepoChangePublisher CreatePublisher(
         DysonMessageBus bus,
         List<FakeWatcher> watchers,
@@ -194,13 +244,14 @@ public class DysonGitRepoChangePublisherTests
 
         public void Dispose() => Disposed = true;
 
-        public void RaiseChanged() =>
+        public void RaiseChanged(string fullPath = "changed", string? oldFullPath = null) =>
             Changed?.Invoke(
                 this,
                 new DysonWorkspaceChangeEventArgs
                 {
-                    Kind = DysonWorkspaceChangeKind.Changed,
-                    FullPath = "changed",
+                    Kind = oldFullPath is null ? DysonWorkspaceChangeKind.Changed : DysonWorkspaceChangeKind.Renamed,
+                    FullPath = fullPath,
+                    OldFullPath = oldFullPath,
                 });
 
         public void RaiseFailed() => Failed?.Invoke(this, new IOException("overflow"));
