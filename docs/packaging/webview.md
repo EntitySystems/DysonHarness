@@ -37,6 +37,18 @@ dotnet run --project src/Harness/Harness.UI --urls http://localhost:5180
 5. External http(s) navigations and popups → OS default browser (`ExternalNavigationHandlers`); in-CEF navigation cancelled.
 6. On main window close: cancel web host, `Cef.Shutdown`, exit.
 
+## Agent browser permissions
+
+Agent tabs (`DysonCefBrowserTab`) set `PermissionHandler` to `DysonAgentBrowserPermissionHandler`. There is no prompt and no per-site choice, so debug automation is not blocked:
+
+- `OnShowPermissionPrompt` calls `Continue(PermissionRequestResult.Accept)` and returns true for every `PermissionRequestType` CefSharp can raise (camera, microphone, geolocation, notifications, clipboard, MIDI, storage, protected media, and the rest of that flags enum).
+- `OnRequestMediaAccessPermission` calls `Continue` with the requested `MediaAccessPermissionType` bits (device audio/video and desktop audio/video capture) and returns true. CEF requires that set to match the request for `getUserMedia`, so the grant is exactly what the page asked for — which is every capture bit on the request.
+- `OnDismissPermissionPrompt` does nothing. The prompt was already accepted; a later dismiss (navigation or window close) is not turned into a deny.
+
+The desktop shell (`MainWindow` + `ExternalNavigationHandlers`) does not install this handler. Alloy's default stays in force there: permission prompts are ignored and media access is denied. Shell and agent windows share one `Cef.Initialize` (command-line switches included) but not handler instances. No `enable-media-stream` or `use-fake-ui-for-media-stream` switch is added — those would grant media for the shell as well, and `enable-media-stream` skips the handler. The handler alone covers agent windows.
+
+Pages opened in the agent browser can use the camera, microphone, geolocation, and similar capabilities without asking.
+
 The shell OSR view’s right-click menu is Chromium’s default WPF menu plus a top **Reload page** item. **F5** and **Ctrl+F5** call `ChromiumWebBrowser.Reload` from `MainWindow.PreviewKeyDown` while the browser has focus (`Ctrl+F5` passes ignore-cache). Both are browser-process reloads, not page script. The agent-window toolbar reload is unchanged. Reload is a full navigation to the loopback URL: the document and SignalR circuit are discarded (in-flight engine work keeps running; reload does not stop it), the new circuit restores the work directory from `localStorage` key `dyson-workdir`, and the previously focused session is not selected — click it again to resume. A wedged renderer may block the context menu (the renderer requests it) but not F5, which the WPF window sees before the key is sent to the renderer. If the CEF browser UI thread is wedged, neither works; restart the app.
 
 ## Snip → agent composer
