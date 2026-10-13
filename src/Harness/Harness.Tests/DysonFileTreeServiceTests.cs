@@ -22,10 +22,15 @@ public class DysonFileTreeServiceTests
         var activate = await service.SetActiveAsync(Guid.NewGuid(), root);
         Assert.True(activate.IsSuccess, activate.IsError ? activate.Error : null);
 
+        // Root files load after SkeletonComplete (ShallowLoadChildrenAsync).
         var state = await WaitForAsync(
-            () => service.Active is { SkeletonComplete: true } ? service.Active : null,
+            () => service.Active is { Root.ChildrenLoaded: true } s
+                  && s.Root.Children.Any(c => c.Name == "readme.txt")
+                ? s
+                : null,
             TimeSpan.FromSeconds(5));
         Assert.NotNull(state);
+        Assert.True(state.SkeletonComplete);
 
         var nodeModules = state.Root.Children.Single(c => c.Name == "node_modules");
         Assert.True(nodeModules.IsDirectory);
