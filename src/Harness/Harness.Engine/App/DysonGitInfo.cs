@@ -356,7 +356,7 @@ public static class DysonGitInfo
         if (exitCode != 0)
         {
             return Result<string, string>.AsError(
-                string.IsNullOrWhiteSpace(stderr) ? "git worktree add failed." : stderr.Trim());
+                string.IsNullOrWhiteSpace(stderr) ? "git worktree add failed." : AnnotateGitLockFailure(stderr));
         }
 
         return Result<string, string>.AsValue(fullWorktree);
@@ -401,7 +401,7 @@ public static class DysonGitInfo
         if (exitCode != 0)
         {
             return VoidResult<string>.AsError(
-                string.IsNullOrWhiteSpace(stderr) ? "git worktree remove failed." : stderr.Trim());
+                string.IsNullOrWhiteSpace(stderr) ? "git worktree remove failed." : AnnotateGitLockFailure(stderr));
         }
 
         return VoidResult<string>.Success;
@@ -440,7 +440,10 @@ public static class DysonGitInfo
 
     /// <summary>
     /// Runs <c>git merge --no-edit {branch}</c> in <paramref name="repoRoot"/>.
-    /// Conflicts and other non-zero exits are Result errors (stderr).
+    /// Conflicts and other non-zero exits are Result errors (stderr). A git lock failure
+    /// (another process holds <c>index.lock</c> or a ref lock) is retried up to
+    /// <see cref="MergeLockAttempts"/> times, <see cref="MergeLockRetryDelay"/> apart; the
+    /// lock file is never deleted.
     /// </summary>
     public static async Task<VoidResult<string>> TryMergeBranchAsync(
         string repoRoot,
@@ -454,23 +457,38 @@ public static class DysonGitInfo
         if (string.IsNullOrWhiteSpace(branchName))
             return VoidResult<string>.AsError("Branch name is empty.");
 
-        var run = await RunGitAsync(
-                root.Value,
-                ["merge", "--no-edit", branchName.Trim()],
-                WorktreeCommandTimeout,
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (run.IsError)
-            return VoidResult<string>.AsError(run.Error);
-
-        var (exitCode, _, stderr) = run.Value;
-        if (exitCode != 0)
+        for (var attempt = 1; ; attempt++)
         {
-            return VoidResult<string>.AsError(
-                string.IsNullOrWhiteSpace(stderr) ? "git merge failed." : stderr.Trim());
-        }
+            var run = await RunGitAsync(
+                    root.Value,
+                    ["merge", "--no-edit", branchName.Trim()],
+                    WorktreeCommandTimeout,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (run.IsError)
+                return VoidResult<string>.AsError(run.Error);
 
-        return VoidResult<string>.Success;
+            var (exitCode, _, stderr) = run.Value;
+            if (exitCode == 0)
+                return VoidResult<string>.Success;
+
+            if (attempt < MergeLockAttempts && IsGitLockFailure(stderr))
+            {
+                try
+                {
+                    await Task.Delay(MergeLockRetryDelay, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return VoidResult<string>.AsError("git cancelled.");
+                }
+
+                continue;
+            }
+
+            return VoidResult<string>.AsError(
+                string.IsNullOrWhiteSpace(stderr) ? "git merge failed." : AnnotateGitLockFailure(stderr));
+        }
     }
 
     /// <summary>
@@ -525,7 +543,7 @@ public static class DysonGitInfo
         if (exitCode != 0)
         {
             return VoidResult<string>.AsError(
-                string.IsNullOrWhiteSpace(stderr) ? "git merge --abort failed." : stderr.Trim());
+                string.IsNullOrWhiteSpace(stderr) ? "git merge --abort failed." : AnnotateGitLockFailure(stderr));
         }
 
         return VoidResult<string>.Success;
@@ -911,6 +929,7 @@ public static class DysonGitInfo
             process.StartInfo.ArgumentList.Add(workingDirectory);
             foreach (var arg in args)
                 process.StartInfo.ArgumentList.Add(arg);
+            ApplyOptionalLocksPolicy(process.StartInfo, args);
 
             if (!process.Start())
                 return Result<(int, string, string), string>.AsError("Failed to start git.");
@@ -957,6 +976,47 @@ public static class DysonGitInfo
         {
             process?.Dispose();
         }
+    }
+
+    internal const string OptionalLocksEnvironmentVariable = "GIT_OPTIONAL_LOCKS";
+    internal const string LockHeldSuffix = "Another process holds this lock. Dyson will not delete it.";
+    internal const int MergeLockAttempts = 3;
+    internal static readonly TimeSpan MergeLockRetryDelay = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>
+    /// True for git subcommands that mutate the repo and keep normal locking: <c>merge</c>
+    /// and every <c>worktree</c> subcommand except <c>list</c>. Everything else is a read.
+    /// Add a new mutating subcommand (commit, fetch, push, ...) here when Dyson starts running one.
+    /// </summary>
+    internal static bool GitCommandAllowsOptionalLocks(IReadOnlyList<string> args) =>
+        args.Count > 0
+        && (args[0] == "merge"
+            || (args[0] == "worktree" && (args.Count < 2 || args[1] != "list")));
+
+    /// <summary>
+    /// Read-only commands get <c>GIT_OPTIONAL_LOCKS=0</c> so status/diff never create
+    /// <c>index.lock</c> or rewrite the index. Env, not <c>--no-optional-locks</c>: git older
+    /// than 2.15 ignores the env but rejects the flag.
+    /// </summary>
+    internal static void ApplyOptionalLocksPolicy(ProcessStartInfo startInfo, IReadOnlyList<string> args)
+    {
+        if (!GitCommandAllowsOptionalLocks(args))
+            startInfo.Environment[OptionalLocksEnvironmentVariable] = "0";
+    }
+
+    /// <summary>True when git stderr reports a held <c>*.lock</c> file (not a conflict).</summary>
+    internal static bool IsGitLockFailure(string? stderr) =>
+        !string.IsNullOrEmpty(stderr)
+        && stderr.Contains(".lock", StringComparison.OrdinalIgnoreCase)
+        && (stderr.Contains("File exists", StringComparison.OrdinalIgnoreCase)
+            || stderr.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+            || stderr.Contains("Another git process", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Trimmed stderr, plus <see cref="LockHeldSuffix"/> when it is a lock failure.</summary>
+    internal static string AnnotateGitLockFailure(string stderr)
+    {
+        var trimmed = stderr.Trim();
+        return IsGitLockFailure(trimmed) ? $"{trimmed} {LockHeldSuffix}" : trimmed;
     }
 
     private static async Task ObservePipesAsync(Task stdout, Task stderr)

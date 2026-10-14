@@ -33,6 +33,8 @@ internal sealed class DysonCefBrowserTab : IDysonBrowserTab
                 WebGl = CefState.Enabled,
             },
         };
+        // Agent windows only. The shell OSR view does not set PermissionHandler.
+        BrowserControl.PermissionHandler = new DysonAgentBrowserPermissionHandler();
 
         BrowserControl.IsBrowserInitializedChanged += (_, _) => NudgeHwndLayoutIfNeeded();
         BrowserControl.Loaded += (_, _) => NudgeHwndLayoutIfNeeded();

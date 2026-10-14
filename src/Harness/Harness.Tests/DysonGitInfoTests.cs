@@ -699,6 +699,65 @@ public class DysonGitInfoTests
         return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), comparison);
     }
 
+    [Theory]
+    [InlineData("status", "--porcelain=v1", "-uall")]
+    [InlineData("diff", "--no-color", "--no-ext-diff", "--unified=0", "HEAD", "--", "a.txt")]
+    [InlineData("diff", "--name-only", "--diff-filter=U")]
+    [InlineData("rev-parse", "--abbrev-ref", "HEAD")]
+    [InlineData("remote", "get-url", "origin")]
+    [InlineData("worktree", "list", "--porcelain")]
+    public void ApplyOptionalLocksPolicy_sets_GIT_OPTIONAL_LOCKS_0_for_reads(params string[] args)
+    {
+        var startInfo = new ProcessStartInfo("git");
+        startInfo.Environment.Remove(DysonGitInfo.OptionalLocksEnvironmentVariable);
+
+        DysonGitInfo.ApplyOptionalLocksPolicy(startInfo, args);
+
+        Assert.Equal("0", startInfo.Environment[DysonGitInfo.OptionalLocksEnvironmentVariable]);
+    }
+
+    [Theory]
+    [InlineData("merge", "--no-edit", "dyson/branch")]
+    [InlineData("merge", "--abort")]
+    [InlineData("worktree", "add", "-b", "dyson/branch", "C:/wt", "HEAD")]
+    [InlineData("worktree", "remove", "--force", "C:/wt")]
+    public void ApplyOptionalLocksPolicy_leaves_mutating_commands_on_normal_locking(params string[] args)
+    {
+        var startInfo = new ProcessStartInfo("git");
+        startInfo.Environment.Remove(DysonGitInfo.OptionalLocksEnvironmentVariable);
+
+        DysonGitInfo.ApplyOptionalLocksPolicy(startInfo, args);
+
+        Assert.False(startInfo.Environment.ContainsKey(DysonGitInfo.OptionalLocksEnvironmentVariable));
+    }
+
+    [Fact]
+    public void Lock_failure_is_detected_and_annotated_without_losing_git_path()
+    {
+        const string stderr = """
+            fatal: Unable to create 'E:/repo/.git/index.lock': File exists.
+
+            Another git process seems to be running in this repository.
+            """;
+
+        Assert.True(DysonGitInfo.IsGitLockFailure(stderr));
+        var annotated = DysonGitInfo.AnnotateGitLockFailure(stderr);
+        Assert.Contains("E:/repo/.git/index.lock", annotated);
+        Assert.Contains("Dyson will not delete it", annotated);
+        Assert.Equal(3, DysonGitInfo.MergeLockAttempts);
+        Assert.Equal(TimeSpan.FromMilliseconds(200), DysonGitInfo.MergeLockRetryDelay);
+    }
+
+    [Theory]
+    [InlineData("CONFLICT (content): Merge conflict in a.txt\nAutomatic merge failed; fix conflicts and then commit the result.")]
+    [InlineData("error: Your local changes to the following files would be overwritten by merge:")]
+    [InlineData("")]
+    public void Non_lock_merge_failure_is_not_a_lock_failure(string stderr)
+    {
+        Assert.False(DysonGitInfo.IsGitLockFailure(stderr));
+        Assert.DoesNotContain("Dyson will not delete it", DysonGitInfo.AnnotateGitLockFailure(stderr));
+    }
+
     private static string CreateTempDir()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-git-ann-" + Guid.NewGuid().ToString("N"));
