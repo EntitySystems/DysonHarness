@@ -210,6 +210,9 @@ namespace Harness.LocalDb.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime?>("ArchivedUtc")
+                        .HasColumnType("TEXT");
+
                     b.Property<Guid?>("BuildAgentId")
                         .HasColumnType("TEXT");
 

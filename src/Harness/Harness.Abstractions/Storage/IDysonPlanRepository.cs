@@ -9,9 +9,11 @@ public interface IDysonPlanRepository
 {
     /// <summary>
     /// Metadata only (no <see cref="DysonPlan.Markdown"/>), newest <see cref="DysonPlan.UpdatedUtc"/> first.
+    /// Archived rows (<see cref="DysonPlan.ArchivedUtc"/> set) are excluded unless <paramref name="includeArchived"/>.
     /// </summary>
     Task<Result<IReadOnlyList<DysonPlan>, string>> ListAsync(
         Guid workDirectoryId,
+        bool includeArchived = false,
         CancellationToken cancellationToken = default);
 
     /// <summary>Full row including body. Fails when <paramref name="planId"/> is not in <paramref name="workDirectoryId"/>.</summary>
@@ -35,7 +37,10 @@ public interface IDysonPlanRepository
         Guid? buildAgentId = null,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Patch semantics (null argument = leave unchanged). Bumps <c>UpdatedUtc</c>.</summary>
+    /// <summary>
+    /// Patch semantics (null argument = leave unchanged). Bumps <c>UpdatedUtc</c>.
+    /// Fails with <c>Plan '{id}' is archived.</c> when the row is archived.
+    /// </summary>
     Task<VoidResult<string>> UpdateAsync(
         long planId,
         Guid workDirectoryId,
@@ -46,7 +51,26 @@ public interface IDysonPlanRepository
         Guid? buildAgentId = null,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Deletes the row. Fails when <paramref name="planId"/> is not in <paramref name="workDirectoryId"/>.</summary>
+    /// <summary>
+    /// Sets <c>ArchivedUtc</c> and bumps <c>UpdatedUtc</c>; status, note, and build agent are unchanged.
+    /// Refuses a <see cref="DysonPlanStatus.Building"/> plan. Already archived: success, no write.
+    /// </summary>
+    Task<VoidResult<string>> ArchiveAsync(
+        long planId,
+        Guid workDirectoryId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Clears <c>ArchivedUtc</c> and bumps <c>UpdatedUtc</c>; status unchanged. Not archived: success, no write.
+    /// </summary>
+    Task<VoidResult<string>> RestoreAsync(
+        long planId,
+        Guid workDirectoryId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Hard delete. Not the <c>DeletePlan</c> tool path (that archives). Fails when <paramref name="planId"/> is not in <paramref name="workDirectoryId"/>.
+    /// </summary>
     Task<VoidResult<string>> DeleteAsync(
         long planId,
         Guid workDirectoryId,

@@ -2,7 +2,7 @@
 
 Work-directory-scoped plan rows in the same EF Core SQLite DB as sessions and work directories ([sessions.md](sessions.md), [work-directories.md](work-directories.md)). A meta-agent plan **is** the row: identity, status, and markdown body live here, not on disk. Meta Agent mode has no filesystem or shell access; addressing plans by integer `planId` is what makes that rule structural rather than a prompt convention.
 
-Contracts: `IDysonPlanRepository` in `Harness.Abstractions`. Implementation: `DysonPlanRepository` in `Harness.LocalDb` (`DbSet<DysonPlanEntity> Plans`). Registered next to the other LocalDb repositories in `DysonLocalDbServiceCollectionExtensions`. Schema: migration `20260921165127_AddPlans`. Runtime / UI mirror: `DysonPlan` (non-EF).
+Contracts: `IDysonPlanRepository` in `Harness.Abstractions`. Implementation: `DysonPlanRepository` in `Harness.LocalDb` (`DbSet<DysonPlanEntity> Plans`). Registered next to the other LocalDb repositories in `DysonLocalDbServiceCollectionExtensions`. Schema: migration `20260921165127_AddPlans`; `ArchivedUtc` added by `20261015221714_AddPlanArchivedUtc`. Runtime / UI mirror: `DysonPlan` (non-EF).
 
 Classic Plan-mode artifacts are still files under `.dyson/plans/*.md` with **no** row in this table. This table is the storage half of Meta Agent mode; a later backfill can copy those files in without a second schema change (see [Kind](#kind-dysonplankind)).
 
@@ -22,10 +22,26 @@ Classic Plan-mode artifacts are still files under `.dyson/plans/*.md` with **no*
 | `Note` | Nullable last status note |
 | `BuildAgentId` | Nullable Guid — session id of the drone building the plan, if any |
 | `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC (`UpdateAsync` bumps `UpdatedUtc`) |
+| `ArchivedUtc` | Nullable `DateTime` UTC. Null = on the active list; set by `ArchiveAsync` (the `DeletePlan` tool). No index. Existing rows migrate as null (active). |
 
 `DysonPlanEntity` is the EF row. Every row written today is `Kind = MetaPlan`. The UI plans column (`MetaPlanList`) lists through `ListAsync` and opens a row via `GetAsync` into `FileViewerOverlay` (`metaplan:{planId}/{slug}.md`). **Build** is a session message; the agent’s `BeginBuildPlan` tool is what sets `Status=Building`. Engine writes: Meta Agent Drone `SubmitMetaPlan`; Meta Agent and Meta Agent Drone `EditMetaPlan`; Meta Agent `SetPlanStatus` / `BeginBuildPlan` / `DeletePlan`. Those mutations publish `DysonPlansChangedEvent` on the work-directory bus scope so an open meta page refreshes without a reload. See [meta-agent.md](../engine/meta-agent.md).
 
-Deleting a work directory cascades these rows. `IDysonWorkDirectoryRepository.DeleteAsync` still refuses a workdir that has sessions; cascade matters once the workdir itself goes away.
+Deleting a work directory cascades these rows, archived or not. That is the only product hard delete. `IDysonWorkDirectoryRepository.DeleteAsync` still refuses a workdir that has sessions; cascade matters once the workdir itself goes away.
+
+## Archive
+
+`DeletePlan` archives; it does not remove the row. Archived is a flag (`ArchivedUtc`), not a `DysonPlanStatus` value, so the row keeps `Draft` / `Building` / `Completed` / `Stale`. The user restores from the **Archived** section of the meta plans column (right-click → Restore). There is no hard-delete UI and no `RestorePlan` tool.
+
+| Caller | Archived plan |
+| --- | --- |
+| `ListAsync` default | Excluded. `includeArchived: true` returns them too (the UI list uses this). |
+| `ListPlans` tool | Default list only; archived plans are omitted. Payload unchanged. |
+| `GetAsync` / `ReadMetaPlan` | Allowed (open-from-list works). |
+| `UpdateAsync` (`SetPlanStatus`, `EditMetaPlan`, `SubmitMetaPlan` revise) | Error `Plan '{id}' is archived.` before any mutation. |
+| `BeginBuildPlan` | Error before any drone spawn: `BeginBuildPlan: plan {id} is archived. The user restores it from the Archived section.` |
+| `ArchiveAsync` | Refuses `Building`. Already archived: success, original `ArchivedUtc` kept, `UpdatedUtc` not bumped. Otherwise sets `ArchivedUtc` and bumps `UpdatedUtc`; `Status` / `Note` / `BuildAgentId` untouched. |
+| `RestoreAsync` | Clears `ArchivedUtc`, bumps `UpdatedUtc`, keeps `Status`. Not archived: success, no write. |
+| `DeleteAsync` | Unchanged hard delete (tests / direct call). Not the tool path. |
 
 ## Kind (`DysonPlanKind`)
 
@@ -77,18 +93,21 @@ This is a **known limitation**, not intended design. `title` cannot be patched t
 Result-pattern functional repository. Every method takes `workDirectoryId` and is scoped to the **current subject** (the work directory must exist and belong to `IDysonSubjectContext.SubjectId`; otherwise `"Work directory '{id}' not found."`). Sequential `planId` values are guessable and unique across the whole `plans` table, not per work directory — `workDirectoryId` is the security boundary, never the id alone. `GetAsync` / `UpdateAsync` / `DeleteAsync` look up `Id == planId && WorkDirectoryId == workDirectoryId` and fail with `"Plan '{planId}' not found."` when the row is in another workdir. `planId <= 0` is rejected before the query (`"Plan id must be a positive integer."`).
 
 ```csharp
-Task<Result<IReadOnlyList<DysonPlan>, string>> ListAsync(Guid workDirectoryId, …);
+Task<Result<IReadOnlyList<DysonPlan>, string>> ListAsync(Guid workDirectoryId, bool includeArchived = false, …);
 Task<Result<DysonPlan, string>> GetAsync(long planId, Guid workDirectoryId, …);
 Task<Result<long, string>> CreateAsync(Guid workDirectoryId, DysonPlanKind kind, string title, string? markdown, string? planRelativePath, DysonPlanStatus status = Draft, string? note = null, Guid? buildAgentId = null, …);
 Task<VoidResult<string>> UpdateAsync(long planId, Guid workDirectoryId, string? title = null, string? markdown = null, DysonPlanStatus? status = null, string? note = null, Guid? buildAgentId = null, …);
+Task<VoidResult<string>> ArchiveAsync(long planId, Guid workDirectoryId, …);
+Task<VoidResult<string>> RestoreAsync(long planId, Guid workDirectoryId, …);
 Task<VoidResult<string>> DeleteAsync(long planId, Guid workDirectoryId, …);
 ```
 
-- **`ListAsync`** — metadata only. The projection omits `Markdown` (always null on listed `DysonPlan`s). Newest `UpdatedUtc` first, then highest `Id`. The meta page list renders from this and does not need the body.
+- **`ListAsync`** — metadata only. The projection omits `Markdown` (always null on listed `DysonPlan`s). Newest `UpdatedUtc` first, then highest `Id`. Archived rows are filtered in SQL (`ArchivedUtc == null`) unless `includeArchived`. The meta page list renders from `includeArchived: true` and splits on `ArchivedUtc`; it does not need the body.
 - **`GetAsync`** — full row including `Markdown`.
 - **`CreateAsync`** — insert; returns the database-assigned `planId` **after** save. See [traps](#traps).
-- **`UpdateAsync`** — patch; bumps `UpdatedUtc`. Re-runs the shape invariant on the resulting row. See [traps](#traps).
-- **`DeleteAsync`** — removes the row (body included). Irreversible; no filesystem involvement.
+- **`UpdateAsync`** — patch; bumps `UpdatedUtc`. Re-runs the shape invariant on the resulting row. Refuses an archived row (`Plan '{id}' is archived.`). See [traps](#traps).
+- **`ArchiveAsync`** / **`RestoreAsync`** — set / clear `ArchivedUtc`; see [Archive](#archive). Missing id: `Plan '{id}' not found.`
+- **`DeleteAsync`** — removes the row (body included). Irreversible; no filesystem involvement. No tool calls it; `DeletePlan` archives.
 
 SQLite busy/locked contention is retried by `DysonDbAccessor`; exhausted retries and other failures return error Results, never thrown exceptions.
 
@@ -98,7 +117,7 @@ Every plan tool in `DysonWorkspaceToolExecutor.MetaAgent` is scoped by the sessi
 
 **`ListPlans` JSON is a closed property set:** `planId`, `title`, `status`, `buildAgentId`, `updatedUtc` — **no `planRelativePath`, no `markdown`, no `note`**, even though `ListAsync` still projects `PlanRelativePath` / `Note` onto `DysonPlan`. `DysonPlanStatusTests.ListPlans_serialized_json_omits_path_and_markdown` asserts the serialized names. Widening that payload is a regression (filesystem leak + prompt-cache churn).
 
-**`BeginBuildPlan`** briefs the drone **by reference** (`DysonMetaBuildBrief`: planId + "call `ReadMetaPlan`"), never by inlining markdown. Unrelated to `DysonBeginBuildPlanFlow`. Refuses a second spawn while a **non-terminal** child still matches `BuildAgentId`; pass that `agentId` to extend. **`DeletePlan`** refuses while `Status == Building` (Status is the delete gate).
+**`BeginBuildPlan`** briefs the drone **by reference** (`DysonMetaBuildBrief`: planId + "call `ReadMetaPlan`"), never by inlining markdown. Unrelated to `DysonBeginBuildPlanFlow`. Refuses a second spawn while a **non-terminal** child still matches `BuildAgentId`; pass that `agentId` to extend. Refuses an archived plan before spawning. **`DeletePlan`** archives (`ArchiveAsync`; returns `{ ok, planId, archived: true }`) and refuses while `Status == Building` (Status is the gate).
 
 **`SubmitMetaPlan`** (drone-only) creates a `Draft` `MetaPlan`, or replaces `Title`/`Markdown` of an existing row in place when `planId` is given (never a new row). It does **not** satisfy `SubmitSubagentReport`. No parent interrupt — the drone still reports.
 

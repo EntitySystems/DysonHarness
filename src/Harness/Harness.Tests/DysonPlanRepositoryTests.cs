@@ -248,6 +248,134 @@ public class DysonPlanRepositoryTests
         Assert.Equal(older.Value, list.Value[1].Id);
     }
 
+    [Fact]
+    public async Task ArchiveAsync_keeps_row_and_status_and_is_idempotent()
+    {
+        await using var fixture = await PlanFixture.CreateAsync();
+        var wd = fixture.WorkDirectoryId;
+        var created = await fixture.Plans.CreateAsync(
+            wd, DysonPlanKind.MetaPlan, "Shelf", "# s", null, status: DysonPlanStatus.Completed);
+        AssertOk(created);
+
+        AssertVoidOk(await fixture.Plans.ArchiveAsync(created.Value, wd));
+        var first = await fixture.Plans.GetAsync(created.Value, wd);
+        AssertOk(first);
+        Assert.NotNull(first.Value.ArchivedUtc);
+        Assert.Equal(DysonPlanStatus.Completed, first.Value.Status);
+
+        await Task.Delay(20);
+        AssertVoidOk(await fixture.Plans.ArchiveAsync(created.Value, wd));
+        var second = await fixture.Plans.GetAsync(created.Value, wd);
+        AssertOk(second);
+        Assert.Equal(first.Value.ArchivedUtc, second.Value.ArchivedUtc);
+        Assert.Equal(first.Value.UpdatedUtc, second.Value.UpdatedUtc);
+    }
+
+    [Fact]
+    public async Task ListAsync_omits_archived_unless_includeArchived()
+    {
+        await using var fixture = await PlanFixture.CreateAsync();
+        var wd = fixture.WorkDirectoryId;
+        var active = await fixture.Plans.CreateAsync(wd, DysonPlanKind.MetaPlan, "Active", "# a", null);
+        var shelved = await fixture.Plans.CreateAsync(wd, DysonPlanKind.MetaPlan, "Shelved", "# s", null);
+        AssertOk(active);
+        AssertOk(shelved);
+        AssertVoidOk(await fixture.Plans.ArchiveAsync(shelved.Value, wd));
+
+        var defaults = await fixture.Plans.ListAsync(wd);
+        AssertOk(defaults);
+        var only = Assert.Single(defaults.Value);
+        Assert.Equal(active.Value, only.Id);
+
+        var all = await fixture.Plans.ListAsync(wd, includeArchived: true);
+        AssertOk(all);
+        Assert.Equal(2, all.Value.Count);
+        var archivedRow = Assert.Single(all.Value, p => p.Id == shelved.Value);
+        Assert.NotNull(archivedRow.ArchivedUtc);
+    }
+
+    [Fact]
+    public async Task RestoreAsync_clears_ArchivedUtc_and_leaves_status()
+    {
+        await using var fixture = await PlanFixture.CreateAsync();
+        var wd = fixture.WorkDirectoryId;
+        var created = await fixture.Plans.CreateAsync(
+            wd, DysonPlanKind.MetaPlan, "Back", "# b", null, status: DysonPlanStatus.Stale);
+        AssertOk(created);
+        AssertVoidOk(await fixture.Plans.ArchiveAsync(created.Value, wd));
+
+        AssertVoidOk(await fixture.Plans.RestoreAsync(created.Value, wd));
+        var restored = await fixture.Plans.GetAsync(created.Value, wd);
+        AssertOk(restored);
+        Assert.Null(restored.Value.ArchivedUtc);
+        Assert.Equal(DysonPlanStatus.Stale, restored.Value.Status);
+
+        var listed = await fixture.Plans.ListAsync(wd);
+        AssertOk(listed);
+        Assert.Single(listed.Value);
+
+        // Not archived: success, no write.
+        AssertVoidOk(await fixture.Plans.RestoreAsync(created.Value, wd));
+    }
+
+    [Fact]
+    public async Task Archive_and_Restore_missing_id_is_not_found()
+    {
+        await using var fixture = await PlanFixture.CreateAsync();
+        var wd = fixture.WorkDirectoryId;
+
+        var archive = await fixture.Plans.ArchiveAsync(9999, wd);
+        Assert.True(archive.IsError);
+        Assert.Equal("Plan '9999' not found.", archive.Error);
+
+        var restore = await fixture.Plans.RestoreAsync(9999, wd);
+        Assert.True(restore.IsError);
+        Assert.Equal("Plan '9999' not found.", restore.Error);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_refuses_archived_plan()
+    {
+        await using var fixture = await PlanFixture.CreateAsync();
+        var wd = fixture.WorkDirectoryId;
+        var created = await fixture.Plans.CreateAsync(wd, DysonPlanKind.MetaPlan, "Frozen", "# f", null);
+        AssertOk(created);
+        AssertVoidOk(await fixture.Plans.ArchiveAsync(created.Value, wd));
+
+        var updated = await fixture.Plans.UpdateAsync(
+            created.Value, wd, markdown: "# changed", status: DysonPlanStatus.Building);
+        Assert.True(updated.IsError);
+        Assert.Equal($"Plan '{created.Value}' is archived.", updated.Error);
+
+        var after = await fixture.Plans.GetAsync(created.Value, wd);
+        AssertOk(after);
+        Assert.Equal(DysonPlanStatus.Draft, after.Value.Status);
+        Assert.Equal("# f", after.Value.Markdown);
+    }
+
+    [Fact]
+    public async Task ArchiveAsync_refuses_building_plan()
+    {
+        await using var fixture = await PlanFixture.CreateAsync();
+        var wd = fixture.WorkDirectoryId;
+        var created = await fixture.Plans.CreateAsync(
+            wd, DysonPlanKind.MetaPlan, "Live", "# l", null, status: DysonPlanStatus.Building);
+        AssertOk(created);
+
+        var archived = await fixture.Plans.ArchiveAsync(created.Value, wd);
+        Assert.True(archived.IsError);
+        Assert.Contains("Building", archived.Error, StringComparison.Ordinal);
+
+        var after = await fixture.Plans.GetAsync(created.Value, wd);
+        AssertOk(after);
+        Assert.Null(after.Value.ArchivedUtc);
+    }
+
+    private static void AssertVoidOk(VoidResult<string> result)
+    {
+        Assert.True(result.IsSuccess, result.IsError ? result.Error : null);
+    }
+
     private static void AssertOk<T>(Result<T, string> result)
     {
         Assert.True(result.IsSuccess, result.IsError ? result.Error : null);

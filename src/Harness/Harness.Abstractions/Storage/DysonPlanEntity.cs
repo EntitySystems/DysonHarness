@@ -55,6 +55,9 @@ public sealed class DysonPlanEntity
     /// <summary>UTC.</summary>
     public DateTime UpdatedUtc { get; set; }
 
+    /// <summary>UTC when the plan was archived. Null when it is on the active list.</summary>
+    public DateTime? ArchivedUtc { get; set; }
+
     public DysonWorkDirectoryEntity? WorkDirectory { get; set; }
 }
 
@@ -82,4 +85,7 @@ public sealed class DysonPlan
 
     /// <summary>UTC.</summary>
     public DateTime UpdatedUtc { get; init; }
+
+    /// <summary>UTC when the plan was archived. Null when it is on the active list.</summary>
+    public DateTime? ArchivedUtc { get; init; }
 }

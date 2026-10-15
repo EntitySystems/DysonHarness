@@ -95,7 +95,7 @@ Who does what: a plan is **authored** by a plan drone (`purpose: plan`: explore,
 
 Returns an array of objects with **exactly** `planId`, `title`, `status`, `buildAgentId`, `updatedUtc`. **No `planRelativePath`, no `markdown`, no `note`.** `IDysonPlanRepository.ListAsync` already omits `Markdown`; the tool projection also drops `PlanRelativePath` and `Note`. `DysonPlanStatusTests.ListPlans_serialized_json_omits_path_and_markdown` locks the JSON property set. Widening the payload is a regression against prompt-cache stability and the no-filesystem rule (a path in the roster is a path the agent can try to use).
 
-`status` is the enum name lowercased (`draft` / `building` / `completed` / `stale`).
+`status` is the enum name lowercased (`draft` / `building` / `completed` / `stale`). Archived plans are omitted (`ListAsync` default); there is no `includeArchived` argument, so the payload shape is unchanged.
 
 ### `SetPlanStatus`
 
@@ -111,7 +111,9 @@ Second builder: `FindLiveBuilder` refuses a new spawn while a **non-terminal** c
 
 ### `DeletePlan`
 
-Refuses while `Status == Building` (`"Call SetPlanStatus with stale, or stop the builder first."`). Status is the delete gate; `BuildAgentId` is not consulted.
+Archives the plan (`IDysonPlanRepository.ArchiveAsync`): sets `ArchivedUtc`, keeps the row and its `Status`. Success JSON `{ ok: true, planId, archived: true }`; log `DeletePlan #{planId} archived: {reason}`; publishes `DysonPlansChangedEvent`. Already archived is a success that keeps the original `ArchivedUtc`. The user restores from the **Archived** section of the plans column; there is no `RestorePlan` tool. Archived plans refuse `UpdateAsync` (`SetPlanStatus`, `EditMetaPlan`, `SubmitMetaPlan` revise) and `BeginBuildPlan` (checked before any spawn). `ReadMetaPlan` still works. See [plans.md](../storage/plans.md#archive).
+
+Refuses while `Status == Building` (`"Call SetPlanStatus with stale, or stop the builder first."`). Status is the gate; `BuildAgentId` is not consulted.
 
 ### `SubmitMetaPlan` (drone-only) / `ReadMetaPlan` / `EditMetaPlan` (root and drone)
 

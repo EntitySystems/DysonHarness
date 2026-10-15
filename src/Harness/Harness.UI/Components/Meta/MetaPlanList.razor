@@ -14,7 +14,7 @@
         <div class="error-banner">@_error</div>
     }
 
-    @if (_plans.Count == 0 && string.IsNullOrEmpty(_error))
+    @if (_plans.Count == 0 && _archived.Count == 0 && string.IsNullOrEmpty(_error))
     {
         <div class="meta-plan-list__empty">
             <p class="meta-plan-list__empty-title">No plans yet</p>
@@ -52,19 +52,72 @@
                             Build
                         </button>
                     </div>
-                    <div class="meta-plan-row__meta">
-                        <span class="meta-plan-row__status @StatusClass(plan.Status)"
-                              title="@plan.Status">
-                            @StatusIndicator(plan.Status)
-                            <span>@plan.Status</span>
-                        </span>
-                        <span class="meta-plan-row__time mono">@FormatRelative(plan.UpdatedUtc)</span>
-                    </div>
+                    @RowMeta(plan)
+                </div>
+            }
+        </div>
+    }
+
+    @if (_archived.Count > 0)
+    {
+        <div class="meta-plan-list__archived">
+            <button type="button"
+                    class="meta-plan-list__archived-toggle"
+                    aria-expanded="@(_archivedOpen ? "true" : "false")"
+                    @onclick="() => _archivedOpen = !_archivedOpen">
+                <span class="meta-plan-list__archived-chevron @(_archivedOpen ? "is-open" : "")" aria-hidden="true">▸</span>
+                Archived (@_archived.Count)
+            </button>
+
+            @if (_archivedOpen)
+            {
+                <div class="meta-plan-list__rows meta-plan-list__rows--archived">
+                    @foreach (var plan in _archived)
+                    {
+                        <div @key="plan.Id"
+                             class="meta-plan-row meta-plan-row--archived"
+                             role="button"
+                             tabindex="0"
+                             title="@($"{plan.Title} — right-click to restore")"
+                             @onclick="() => OpenAsync(plan)"
+                             @onkeydown="e => OnRowKeyDown(e, plan)"
+                             @oncontextmenu="e => OnArchivedContextMenu(e, plan)"
+                             @oncontextmenu:preventDefault="true"
+                             @oncontextmenu:stopPropagation="true">
+                            <div class="meta-plan-row__header">
+                                <div class="meta-plan-row__title">
+                                    @(string.IsNullOrWhiteSpace(plan.Title) ? "Untitled" : plan.Title)
+                                </div>
+                            </div>
+                            @RowMeta(plan)
+                        </div>
+                    }
                 </div>
             }
         </div>
     }
 </div>
+
+<DysonTransition Item="_menuPlan" ExitMs="90" RestoreFocus="true" OnEntered="FocusMenuBackdropAsync" Context="ctx">
+    <div class="meta-plan-menu__backdrop"
+         tabindex="-1"
+         @ref="_menuBackdropEl"
+         @onclick="() => { if (!ctx.IsExiting) CloseMenu(); }"
+         @onkeydown="OnMenuBackdropKeyDown"></div>
+    <div class="meta-plan-menu dyson-pop @ctx.StateClass"
+         role="menu"
+         aria-label="Archived plan actions"
+         style="left:@(_menuX.ToString(System.Globalization.CultureInfo.InvariantCulture))px;top:@(_menuY.ToString(System.Globalization.CultureInfo.InvariantCulture))px;--dyson-pop-origin:top left;"
+         @onclick:stopPropagation="true">
+        <button type="button"
+                class="meta-plan-menu__item"
+                role="menuitem"
+                disabled="@(ctx.IsExiting || _busy)"
+                @onclick="() => RestoreAsync(ctx.Item!)">
+            Restore
+        </button>
+    </div>
+</DysonTransition>
 
 @code {
     [Parameter] public Guid WorkDirectoryId { get; set; }
@@ -73,6 +126,12 @@
     [Parameter] public bool CanBuildPlans { get; set; }
 
     private IReadOnlyList<DysonPlan> _plans = [];
+    private IReadOnlyList<DysonPlan> _archived = [];
+    private bool _archivedOpen;
+    private DysonPlan? _menuPlan;
+    private double _menuX;
+    private double _menuY;
+    private ElementReference _menuBackdropEl;
     private string? _error;
     private bool _busy;
     private Guid? _subscribedWorkDirectoryId;
@@ -96,17 +155,19 @@
         if (WorkDirectoryId == Guid.Empty)
         {
             _plans = [];
+            _archived = [];
             return;
         }
 
-        var list = await Plans.ListAsync(WorkDirectoryId);
+        var list = await Plans.ListAsync(WorkDirectoryId, includeArchived: true);
         if (list.IsError)
         {
             _error = list.Error;
             return;
         }
 
-        _plans = list.Value;
+        _plans = list.Value.Where(p => p.ArchivedUtc is null).ToList();
+        _archived = list.Value.Where(p => p.ArchivedUtc is not null).ToList();
     }
 
     private void SubscribeIfNeeded()
@@ -182,6 +243,72 @@
             _busy = false;
         }
     }
+
+    private void OnArchivedContextMenu(MouseEventArgs e, DysonPlan plan)
+    {
+        _menuX = e.ClientX;
+        _menuY = e.ClientY;
+        _menuPlan = plan;
+    }
+
+    private void CloseMenu() => _menuPlan = null;
+
+    private void OnMenuBackdropKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            CloseMenu();
+    }
+
+    /// <summary>Escape is handled on the backdrop, so focus has to land there when the menu opens.</summary>
+    private async Task FocusMenuBackdropAsync()
+    {
+        try
+        {
+            await _menuBackdropEl.FocusAsync();
+        }
+        catch
+        {
+            // Menu may already be gone.
+        }
+    }
+
+    /// <summary>Restore, then publish; the PlansChanged subscriber refreshes the list.</summary>
+    private async Task RestoreAsync(DysonPlan plan)
+    {
+        CloseMenu();
+        if (_busy)
+            return;
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var restored = await Plans.RestoreAsync(plan.Id, WorkDirectoryId);
+            if (restored.IsError)
+            {
+                _error = restored.Error;
+                return;
+            }
+
+            Bus.Publish(
+                DysonBusScopes.WorkDirectory(WorkDirectoryId),
+                new DysonPlansChangedEvent(WorkDirectoryId, plan.Id));
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private RenderFragment RowMeta(DysonPlan plan) =>
+        @<div class="meta-plan-row__meta">
+            <span class="meta-plan-row__status @StatusClass(plan.Status)"
+                  title="@plan.Status">
+                @StatusIndicator(plan.Status)
+                <span>@plan.Status</span>
+            </span>
+            <span class="meta-plan-row__time mono">@FormatRelative(plan.UpdatedUtc)</span>
+        </div>;
 
     private static string StatusClass(DysonPlanStatus status) => status switch
     {
