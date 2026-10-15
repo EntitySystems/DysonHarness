@@ -725,7 +725,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (_workDirectoryId == Guid.Empty)
             return Error(call, "Work directory is required to list plans.");
 
-        var listed = await _plans.ListAsync(_workDirectoryId, cancellationToken).ConfigureAwait(false);
+        var listed = await _plans.ListAsync(_workDirectoryId, cancellationToken: cancellationToken).ConfigureAwait(false);
         if (listed.IsError)
             return Error(call, listed.Error);
 
@@ -843,6 +843,14 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Error(call, loaded.Error);
 
         var plan = loaded.Value;
+        // Before any spawn/trigger: UpdateAsync would refuse the archived row only after a drone exists.
+        if (plan.ArchivedUtc is not null)
+        {
+            return Error(
+                call,
+                $"BeginBuildPlan: plan {planId} is archived. The user restores it from the Archived section.");
+        }
+
         var liveBuilder = FindLiveBuilder(plan.BuildAgentId);
         if (liveBuilder is not null
             && (agentId is null || agentId.Value != liveBuilder.Id))
@@ -957,16 +965,17 @@ public sealed partial class DysonWorkspaceToolExecutor
                 $"DeletePlan: plan {planId} is Building. Call SetPlanStatus with stale, or stop the builder first.");
         }
 
-        var deleted = await _plans.DeleteAsync(planId, _workDirectoryId, cancellationToken).ConfigureAwait(false);
-        if (deleted.IsError)
-            return Error(call, deleted.Error);
+        var archived = await _plans.ArchiveAsync(planId, _workDirectoryId, cancellationToken).ConfigureAwait(false);
+        if (archived.IsError)
+            return Error(call, archived.Error);
 
         PublishPlansChanged(planId);
-        _session.AppendLog($"DeletePlan #{planId}: {reason}");
+        _session.AppendLog($"DeletePlan #{planId} archived: {reason}");
         return Ok(call, JsonSerializer.Serialize(new
         {
             ok = true,
             planId,
+            archived = true,
         }));
     }
 

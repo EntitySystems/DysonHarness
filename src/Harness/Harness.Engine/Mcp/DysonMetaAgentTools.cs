@@ -523,7 +523,7 @@ public static class DysonMetaAgentTools
             Name = "ListPlans",
             Description =
                 "List plans for this work directory (planId, title, status, buildAgentId, updatedUtc). " +
-                "No path, no body, no note. Use after compaction to recover planIds.",
+                "No path, no body, no note. Use after compaction to recover planIds. Archived plans are omitted.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -582,7 +582,9 @@ public static class DysonMetaAgentTools
         yield return new DysonMcpTool
         {
             Name = "DeletePlan",
-            Description = "Permanently delete a plan row by planId. Irreversible. No filesystem involvement.",
+            Description =
+                "Archive a plan by planId. The row stays in the database with its status unchanged and shows under Archived on the plans list, where the user can restore it. " +
+                "Not a hard delete. No filesystem involvement. Refuses while status is building.",
             InputSchemaJson = """
                 {
                   "type": "object",

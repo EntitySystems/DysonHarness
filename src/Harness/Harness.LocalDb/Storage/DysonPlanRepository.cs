@@ -12,6 +12,7 @@ public sealed class DysonPlanRepository(
 
     public Task<Result<IReadOnlyList<DysonPlan>, string>> ListAsync(
         Guid workDirectoryId,
+        bool includeArchived = false,
         CancellationToken cancellationToken = default)
     {
         if (workDirectoryId == Guid.Empty)
@@ -19,7 +20,7 @@ public sealed class DysonPlanRepository(
 
         var subjectId = _subjectContext.SubjectId;
         return _accessor.RunAsync(
-            (db, ct) => ListCoreAsync(db, subjectId, workDirectoryId, ct),
+            (db, ct) => ListCoreAsync(db, subjectId, workDirectoryId, includeArchived, ct),
             cancellationToken);
     }
 
@@ -139,10 +140,39 @@ public sealed class DysonPlanRepository(
             cancellationToken);
     }
 
+    public Task<VoidResult<string>> ArchiveAsync(
+        long planId,
+        Guid workDirectoryId,
+        CancellationToken cancellationToken = default) =>
+        SetArchivedAsync(planId, workDirectoryId, archive: true, cancellationToken);
+
+    public Task<VoidResult<string>> RestoreAsync(
+        long planId,
+        Guid workDirectoryId,
+        CancellationToken cancellationToken = default) =>
+        SetArchivedAsync(planId, workDirectoryId, archive: false, cancellationToken);
+
+    private Task<VoidResult<string>> SetArchivedAsync(
+        long planId,
+        Guid workDirectoryId,
+        bool archive,
+        CancellationToken cancellationToken)
+    {
+        var precondition = ValidateLookup(planId, workDirectoryId);
+        if (precondition.IsError)
+            return Task.FromResult(precondition);
+
+        var subjectId = _subjectContext.SubjectId;
+        return _accessor.RunAsync(
+            (db, ct) => SetArchivedCoreAsync(db, subjectId, planId, workDirectoryId, archive, ct),
+            cancellationToken);
+    }
+
     private static async Task<Result<IReadOnlyList<DysonPlan>, string>> ListCoreAsync(
         DysonDbContext db,
         string subjectId,
         Guid workDirectoryId,
+        bool includeArchived,
         CancellationToken cancellationToken)
     {
         try
@@ -155,6 +185,7 @@ public sealed class DysonPlanRepository(
             var rows = await db.Plans
                 .AsNoTracking()
                 .Where(p => p.WorkDirectoryId == workDirectoryId)
+                .Where(p => includeArchived || p.ArchivedUtc == null)
                 .OrderByDescending(p => p.UpdatedUtc)
                 .ThenByDescending(p => p.Id)
                 .Select(p => new DysonPlan
@@ -169,6 +200,7 @@ public sealed class DysonPlanRepository(
                     BuildAgentId = p.BuildAgentId,
                     CreatedUtc = p.CreatedUtc,
                     UpdatedUtc = p.UpdatedUtc,
+                    ArchivedUtc = p.ArchivedUtc,
                 })
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -289,6 +321,9 @@ public sealed class DysonPlanRepository(
             if (entity is null)
                 return VoidResult<string>.AsError($"Plan '{planId}' not found.");
 
+            if (entity.ArchivedUtc is not null)
+                return VoidResult<string>.AsError($"Plan '{planId}' is archived.");
+
             if (title is not null)
                 entity.Title = title;
             if (markdown is not null)
@@ -344,6 +379,53 @@ public sealed class DysonPlanRepository(
         catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
         {
             return VoidResult<string>.AsError($"Failed to delete plan: {ex.Message}");
+        }
+    }
+
+    private static async Task<VoidResult<string>> SetArchivedCoreAsync(
+        DysonDbContext db,
+        string subjectId,
+        long planId,
+        Guid workDirectoryId,
+        bool archive,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var owned = await WorkDirectoryOwnedAsync(db, subjectId, workDirectoryId, cancellationToken)
+                .ConfigureAwait(false);
+            if (!owned)
+                return VoidResult<string>.AsError($"Work directory '{workDirectoryId}' not found.");
+
+            var entity = await db.Plans
+                .FirstOrDefaultAsync(
+                    p => p.Id == planId && p.WorkDirectoryId == workDirectoryId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (entity is null)
+                return VoidResult<string>.AsError($"Plan '{planId}' not found.");
+
+            // Idempotent: archiving an archived row keeps its original ArchivedUtc; restoring an active row is a no-op.
+            if (archive == (entity.ArchivedUtc is not null))
+                return VoidResult<string>.Success;
+
+            if (archive && entity.Status == DysonPlanStatus.Building)
+            {
+                return VoidResult<string>.AsError(
+                    $"Plan '{planId}' is Building. Mark it stale or stop the builder before archiving.");
+            }
+
+            var now = DateTime.UtcNow;
+            entity.ArchivedUtc = archive ? now : null;
+            entity.UpdatedUtc = now;
+            await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return VoidResult<string>.AsError(
+                $"Failed to {(archive ? "archive" : "restore")} plan: {ex.Message}");
         }
     }
 
@@ -414,5 +496,6 @@ public sealed class DysonPlanRepository(
         BuildAgentId = entity.BuildAgentId,
         CreatedUtc = entity.CreatedUtc,
         UpdatedUtc = entity.UpdatedUtc,
+        ArchivedUtc = entity.ArchivedUtc,
     };
 }

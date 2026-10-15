@@ -6,6 +6,7 @@ namespace Harness.Tests;
 
 /// <summary>
 /// ListPlans projection (no path, no markdown), SetPlanStatus parsing, DeletePlan Building guard,
+/// DeletePlan archives (not hard delete), archived plans refuse BeginBuildPlan,
 /// and cross-work-directory not-found for Set/Delete.
 /// </summary>
 public class DysonPlanStatusTests
@@ -72,11 +73,11 @@ public class DysonPlanStatusTests
     }
 
     [Fact]
-    public async Task DeletePlan_refuses_building_and_deletes_otherwise()
+    public async Task DeletePlan_refuses_building_and_archives_otherwise()
     {
         await using var fixture = await DysonPlanToolFixture.CreateAsync();
         var buildingId = await fixture.CreatePlanAsync(status: DysonPlanStatus.Building);
-        var draftId = await fixture.CreatePlanAsync("Deletable");
+        var draftId = await fixture.CreatePlanAsync("Archivable");
 
         using var http = new HttpClient();
         var session = new DysonPlanToolStubSession(DysonAgentModes.MetaAgent);
@@ -90,13 +91,52 @@ public class DysonPlanStatusTests
 
         var stillThere = await fixture.Plans.GetAsync(buildingId, fixture.WorkDirectoryId);
         Assert.False(stillThere.IsError);
+        Assert.Null(stillThere.Value.ArchivedUtc);
 
-        var deleted = await executor.ExecuteAsync(
+        var archived = await executor.ExecuteAsync(
             Call("DeletePlan", $$"""{"planId":{{draftId}},"reason":"superseded"}"""));
-        Assert.False(deleted.IsError, deleted.Content);
-        var gone = await fixture.Plans.GetAsync(draftId, fixture.WorkDirectoryId);
-        Assert.True(gone.IsError);
-        Assert.Contains("not found", gone.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.False(archived.IsError, archived.Content);
+        Assert.Contains("archived", archived.Content, StringComparison.Ordinal);
+
+        var kept = await fixture.Plans.GetAsync(draftId, fixture.WorkDirectoryId);
+        Assert.False(kept.IsError, kept.IsError ? kept.Error : null);
+        Assert.NotNull(kept.Value.ArchivedUtc);
+        Assert.Equal(DysonPlanStatus.Draft, kept.Value.Status);
+
+        var listed = await executor.ExecuteAsync(Call("ListPlans", "{}"));
+        Assert.False(listed.IsError, listed.Content);
+        Assert.DoesNotContain("Archivable", listed.Content, StringComparison.Ordinal);
+        using var doc = JsonDocument.Parse(listed.Content);
+        var item = Assert.Single(doc.RootElement.EnumerateArray());
+        var names = item.EnumerateObject()
+            .Select(p => p.Name)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(["buildAgentId", "planId", "status", "title", "updatedUtc"], names);
+    }
+
+    [Fact]
+    public async Task BeginBuildPlan_refuses_archived_plan_before_spawning()
+    {
+        await using var fixture = await DysonPlanToolFixture.CreateAsync();
+        var planId = await fixture.CreatePlanAsync("Shelved");
+        var archived = await fixture.Plans.ArchiveAsync(planId, fixture.WorkDirectoryId);
+        Assert.True(archived.IsSuccess, archived.IsError ? archived.Error : null);
+
+        using var http = new HttpClient();
+        var session = new DysonPlanToolStubSession(DysonAgentModes.MetaAgent);
+        var executor = await fixture.ExecutorAsync(session, http);
+
+        var refused = await executor.ExecuteAsync(
+            Call("BeginBuildPlan", $$"""{"planId":{{planId}}}"""));
+        Assert.True(refused.IsError);
+        Assert.Contains("archived", refused.Content, StringComparison.Ordinal);
+        Assert.Null(session.LastSpawned);
+
+        var stored = await fixture.Plans.GetAsync(planId, fixture.WorkDirectoryId);
+        Assert.False(stored.IsError);
+        Assert.Equal(DysonPlanStatus.Draft, stored.Value.Status);
+        Assert.NotNull(stored.Value.ArchivedUtc);
     }
 
     [Fact]

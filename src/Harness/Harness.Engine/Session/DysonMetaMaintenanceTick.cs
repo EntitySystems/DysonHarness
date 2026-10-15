@@ -30,7 +30,7 @@ public static class DysonMetaMaintenanceTick
 
         Review the roster and plans, then prune what is no longer relevant:
         - DeleteMetaAgent on finished agents whose result is already in a todo or a posted message. Oldest first, until at most 20 finished agents remain.
-        - DeletePlan when work is abandoned or the plan is superseded.
+        - DeletePlan when work is abandoned or the plan is superseded. It archives the plan; the user can restore it from the Archived section.
         - SetPlanStatus on any plan still building whose drone is already terminal (completed if the work is merged, stale if the plan no longer describes the work).
         - RemoveTodos for work that is no longer going to happen.
 
