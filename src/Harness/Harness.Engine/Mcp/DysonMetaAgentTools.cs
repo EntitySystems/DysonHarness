@@ -773,7 +773,8 @@ public static class DysonMetaAgentTools
         {
             Name = "ReadMetaPlan",
             Description =
-                "Load a plan by planId (title + markdown + status). The markdown is exactly the text EditMetaPlan matches old_text against. " +
+                "Load a plan by planId (title + markdown + status). Returns the full markdown with no character cap. " +
+                "The markdown is exactly the text EditMetaPlan matches old_text against; old_text may come from anywhere in it. " +
                 "If your brief names a planId, read it before you start — it is the authoritative brief and it is kept current.",
             InputSchemaJson = """
                 {

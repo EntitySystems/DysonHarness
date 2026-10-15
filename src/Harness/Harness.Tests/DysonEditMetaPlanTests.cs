@@ -287,6 +287,28 @@ public class DysonEditMetaPlanTests
     }
 
     [Fact]
+    public async Task ReadMetaPlan_returns_a_body_over_the_64KiB_cap_whole_and_its_tail_is_editable()
+    {
+        var markdown = new string('x', 150_000) + "END-OF-PLAN";
+        var (fixture, executor, planId) = await SeedAsync(markdown);
+        await using var _ = fixture;
+
+        var read = await Run(executor, "ReadMetaPlan", Args(new { planId }));
+
+        Assert.False(read.IsError, read.Content[..Math.Min(200, read.Content.Length)]);
+        Assert.True(read.Content.Length > DysonToolResultLimits.MaxContentChars);
+        Assert.DoesNotContain("truncated", read.Content, StringComparison.Ordinal);
+        var returned = JsonDocument.Parse(read.Content).RootElement.GetProperty("markdown").GetString();
+        Assert.Equal(markdown, returned);
+        Assert.EndsWith("END-OF-PLAN", returned, StringComparison.Ordinal);
+
+        var edit = await Run(executor, "EditMetaPlan", Args(new { planId, old_text = "END-OF-PLAN", new_text = "END-EDITED" }));
+
+        Assert.False(edit.IsError, edit.Content);
+        Assert.Equal(new string('x', 150_000) + "END-EDITED", await BodyAsync(fixture, planId));
+    }
+
+    [Fact]
     public void Tool_is_registered_for_meta_agent_and_drone_and_absent_elsewhere()
     {
         foreach (var mode in new[] { DysonAgentModes.MetaAgent, DysonAgentModes.MetaAgentDrone })

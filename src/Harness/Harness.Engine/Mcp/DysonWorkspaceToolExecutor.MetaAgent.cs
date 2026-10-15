@@ -698,14 +698,18 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (loaded.IsError)
             return Error(call, loaded.Error);
 
+        // Full body, no 64KiB clip: EditMetaPlan old_text must be copyable from anywhere in the markdown.
         var plan = loaded.Value;
-        return Ok(call, JsonSerializer.Serialize(new
-        {
-            planId = plan.Id,
-            title = plan.Title,
-            markdown = plan.Markdown,
-            status = plan.Status.ToString().ToLowerInvariant(),
-        }));
+        return Ok(
+            call,
+            JsonSerializer.Serialize(new
+            {
+                planId = plan.Id,
+                title = plan.Title,
+                markdown = plan.Markdown,
+                status = plan.Status.ToString().ToLowerInvariant(),
+            }),
+            applyContentLimit: false);
     }
 
     private async Task<DysonToolCallResult> ListPlansAsync(

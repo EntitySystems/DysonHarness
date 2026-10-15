@@ -233,14 +233,15 @@ public sealed partial class DysonWorkspaceToolExecutor
         string content,
         DysonBinaryAttachment? binaryAttachment = null,
         bool endsCurrentTurn = false,
-        DysonHtmlVisualization? htmlVisualization = null) =>
+        DysonHtmlVisualization? htmlVisualization = null,
+        bool applyContentLimit = true) =>
         new()
         {
             CallId = call.CallId,
             ToolName = call.ToolName,
             Stage = call.Stage,
             IsError = false,
-            Content = DysonToolResultLimits.TruncateContent(content),
+            Content = applyContentLimit ? DysonToolResultLimits.TruncateContent(content) : content,
             BinaryAttachment = binaryAttachment,
             HtmlVisualization = htmlVisualization,
             EndsCurrentTurn = endsCurrentTurn,

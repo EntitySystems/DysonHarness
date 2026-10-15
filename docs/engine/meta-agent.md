@@ -119,7 +119,7 @@ Refuses while `Status == Building` (`"Call SetPlanStatus with stale, or stop the
 
 It is **not** a report: no `EndsCurrentTurn`, does not call `SubmitSubagentReportAsync`, does not enqueue a parent interrupt. The drone must still `SubmitSubagentReport`. A plan-authoring drone that stops after `SubmitMetaPlan` is caught by the existing unfinished-work / child-report watch. Covered by `DysonSubmitMetaPlanTests`.
 
-`ReadMetaPlan` returns `{planId, title, markdown, status}` for a row in **this** work directory, to the root Meta Agent and to drones. The `markdown` string is exactly what `EditMetaPlan` matches `old_text` against (no line-number prefixes, stored EOLs kept).
+`ReadMetaPlan` returns `{planId, title, markdown, status}` for a row in **this** work directory, to the root Meta Agent and to drones. The `markdown` string is exactly what `EditMetaPlan` matches `old_text` against (no line-number prefixes, stored EOLs kept). The success result is exempt from the 64KiB `DysonToolResultLimits` clip, so the full body is returned with no character cap and no paging (a body too large for the context window surfaces as a provider error or a later DropContext, never a silent slice).
 
 `EditMetaPlan` edits an existing plan in place, mirroring `WriteFile` with `planId` in place of `path`:
 
