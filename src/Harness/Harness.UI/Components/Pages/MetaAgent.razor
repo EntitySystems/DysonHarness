@@ -130,7 +130,8 @@
                                         }
                                     </div>
                                 }
-                                <textarea class="meta-composer__prompt"
+                                <textarea @ref="_prompt"
+                                          class="meta-composer__prompt"
                                           rows="3"
                                           placeholder="Message the meta agent…"
                                           disabled="@ComposerDisabled"
@@ -153,6 +154,11 @@
                                             @onclick="OpenFilePickerAsync">
                                         <span class="composer-attach__icon" aria-hidden="true"></span>
                                     </button>
+                                    <PushToTalkButton AgentMode="@DysonAgentModes.MetaAgent"
+                                                      Disabled="@ComposerDisabled"
+                                                      Textarea="_prompt"
+                                                      @bind-Text="_draft"
+                                                      OnError="Host.ReportError" />
                                     <ModelSlugPicker @ref="_modelPicker"
                                                      SelectedSlugId="_selectedSlugId"
                                                      SelectedSlugIdChanged="OnSelectedSlugIdChangedAsync" />
@@ -161,7 +167,7 @@
                                                           Disabled="@ComposerDisabled"
                                                           OnPick="OnReasoningEffortChangedAsync" />
                                 </div>
-                                <span class="list-item__meta">Ctrl+Enter to send · paste/drop files or images</span>
+                                <span class="list-item__meta">Ctrl+Enter to send · paste/drop files or images · hold Ctrl+M to talk</span>
                                 <ComposerStopMenu />
                                 <button type="button"
                                         class="btn btn-primary"
@@ -271,6 +277,7 @@
     private bool _vizOpen;
     private Guid? _vizFocusId;
     private ElementReference _shell;
+    private ElementReference _prompt;
     private bool _imageCaptureBound;
     private bool _dragOver;
     private int _fileInputKey;

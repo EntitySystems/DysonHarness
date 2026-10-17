@@ -1,0 +1,229 @@
+@page "/settings/voice"
+@layout SettingsLayout
+@using DysonHarness
+@using Harness.UI.Services
+@using Microsoft.AspNetCore.Components.Forms
+@implements IDisposable
+@inject DysonSpeechInstaller Installer
+@inject IDysonSpeechModelRepository SpeechModels
+@inject IDysonSubjectSettingsRepository Settings
+@inject ConfirmDialogService ConfirmDialog
+
+<PageTitle>Voice — Settings</PageTitle>
+
+<div class="settings-page">
+    <h1 class="settings-page__title">Voice</h1>
+    <p class="settings-page__copy">
+        Local speech to text (Phonon 2, push-to-talk in the Meta Agent composer) and text to speech (Pocket TTS).
+        One install downloads a private Python, CPU PyTorch, and both models into the app-data folder below,
+        outside the app install directory. Windows x64 only in this release.
+    </p>
+
+    @if (!string.IsNullOrWhiteSpace(_error))
+    {
+        <div class="error-banner" role="alert">@_error</div>
+    }
+
+    <div class="settings-page__panel panel">
+        <ul class="settings-facts">
+            @foreach (var row in _rows)
+            {
+                <li class="settings-facts__row">
+                    <span class="settings-facts__label">@row.DisplayName</span>
+                    <span class="settings-facts__value">
+                        @(row.Capability == DysonSpeechCapability.Input ? "Speech to text" : "Text to speech")
+                        · @(row.IsInstalled ? "installed" : "not installed")
+                    </span>
+                </li>
+            }
+            <li class="settings-facts__row">
+                <span class="settings-facts__label">Folder</span>
+                <span class="settings-facts__value mono">@Installer.InstallRoot</span>
+            </li>
+        </ul>
+
+        @if (!string.IsNullOrWhiteSpace(_probe?.Note) && !_busy)
+        {
+            <p class="settings-page__copy voice__note">@_probe.Note</p>
+        }
+
+        <div class="btn-row">
+            <button type="button"
+                    class="btn btn-primary"
+                    disabled="@_busy"
+                    aria-busy="@_installing"
+                    @onclick="InstallAsync">
+                @(_installing ? "Installing…" : AnyInstalled ? "Repair" : "Install dependencies")
+            </button>
+            @if (_installing)
+            {
+                <button type="button" class="btn btn-ghost" @onclick="Cancel">Cancel</button>
+            }
+            else if (AnyInstalled)
+            {
+                <button type="button" class="btn btn-ghost" disabled="@_busy" @onclick="UninstallAsync">Uninstall</button>
+            }
+        </div>
+
+        @if (_steps.Count > 0)
+        {
+            <ol class="voice-steps" aria-live="polite">
+                @foreach (var id in DysonSpeechInstaller.StepIds)
+                {
+                    if (!_steps.TryGetValue(id, out var step))
+                        continue;
+                    <li class="voice-step voice-step--@step.State.ToString().ToLowerInvariant()">
+                        <span class="voice-step__id mono">@id</span>
+                        <span class="voice-step__state">@StateLabel(step)</span>
+                        @if (step.State == DysonSpeechStepState.Failed && !string.IsNullOrWhiteSpace(step.Detail))
+                        {
+                            <span class="voice-step__detail">@step.Detail</span>
+                        }
+                    </li>
+                }
+            </ol>
+        }
+    </div>
+
+    @if (ShowTrain)
+    {
+        <div class="settings-page__panel panel voice-train">
+            <div class="tool-panel__title">Train TTS model</div>
+            <p class="settings-page__copy">
+                Pocket TTS takes one .mp3 clip. The installed public weights cannot make a voice from audio,
+                so this reports why and saves nothing; speech keeps using the alba voice.
+            </p>
+            <InputFile accept=".mp3,audio/mpeg" OnChange="OnTrainFileAsync" disabled="@_busy" />
+            @if (!string.IsNullOrWhiteSpace(_trainResult))
+            {
+                <div class="error-banner voice-train__result" role="status">@_trainResult</div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private readonly Dictionary<string, DysonSpeechInstallStep> _steps = [];
+    private List<DysonSpeechModelEntity> _rows = [];
+    private DysonSpeechInstallStatus? _probe;
+    private string? _outputPreference;
+    private CancellationTokenSource? _cts;
+    private bool _busy;
+    private bool _installing;
+    private bool _disposed;
+    private string? _error;
+    private string? _trainResult;
+
+    private bool AnyInstalled => _rows.Any(r => r.IsInstalled) || _probe is { PhononInstalled: true } or { PocketInstalled: true };
+
+    private bool ShowTrain =>
+        DysonSpeechModelSelection.Select(_rows, DysonSpeechCapability.Output, _outputPreference)?.SupportsVoicePrompt == true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var ensure = await SpeechModels.EnsureBuiltInAsync();
+        if (ensure.IsError)
+            _error = ensure.Error;
+
+        var pref = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechOutputModelId);
+        _outputPreference = pref.IsSuccess ? pref.Value : null;
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        var list = await SpeechModels.ListAsync();
+        if (list.IsError)
+            _error = list.Error;
+        else
+            _rows = list.Value.ToList();
+        _probe = await Installer.ProbeAsync();
+    }
+
+    private async Task InstallAsync()
+    {
+        _error = null;
+        _trainResult = null;
+        _steps.Clear();
+        _cts?.Dispose();
+        _cts = new CancellationTokenSource();
+        _busy = _installing = true;
+        try
+        {
+            await foreach (var step in Installer.InstallAsync(SpeechModels, _cts.Token))
+            {
+                if (_disposed)
+                    continue;
+                _steps[step.StepId] = step;
+                if (step.State == DysonSpeechStepState.Failed)
+                    _error = step.Detail;
+                StateHasChanged();
+            }
+        }
+        finally
+        {
+            _busy = _installing = false;
+            if (!_disposed)
+                await ReloadAsync();
+        }
+    }
+
+    private void Cancel() => _cts?.Cancel();
+
+    private async Task UninstallAsync()
+    {
+        var ok = await ConfirmDialog.ConfirmAsync(
+            "Uninstall speech",
+            $"Delete {Installer.InstallRoot} (Python, torch, both models, and voices)? Install dependencies downloads it again.",
+            confirmLabel: "Uninstall");
+        if (!ok)
+            return;
+
+        _error = null;
+        _busy = true;
+        try
+        {
+            var result = await Installer.UninstallAsync(SpeechModels);
+            if (result.IsError)
+                _error = result.Error;
+            _steps.Clear();
+        }
+        finally
+        {
+            _busy = false;
+            await ReloadAsync();
+        }
+    }
+
+    private async Task OnTrainFileAsync(InputFileChangeEventArgs e)
+    {
+        _trainResult = null;
+        var file = e.File;
+        await using var clip = file.OpenReadStream(DysonPhononSpeech.MaxAudioBytes);
+        var result = await DysonSpeechVoicePrep.PrepareAsync(clip, file.Name);
+        _trainResult = result.IsError ? result.Error : $"Voice {result.Value.DisplayName} saved.";
+    }
+
+    private static string StateLabel(DysonSpeechInstallStep step) => step.State switch
+    {
+        DysonSpeechStepState.Done => "done",
+        DysonSpeechStepState.Failed => "failed",
+        _ when step.Download is { } d && d.TotalBytes is > 0 =>
+            $"{FormatBytes(d.BytesReceived)} / {FormatBytes(d.TotalBytes.Value)} ({(d.Fraction ?? 0) * 100:0}%)",
+        _ => "running…",
+    };
+
+    private static string FormatBytes(long bytes) => bytes switch
+    {
+        < 1024 * 1024 => $"{bytes / 1024.0:0.0} KB",
+        < 1024L * 1024 * 1024 => $"{bytes / (1024.0 * 1024.0):0.0} MB",
+        _ => $"{bytes / (1024.0 * 1024.0 * 1024.0):0.00} GB",
+    };
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

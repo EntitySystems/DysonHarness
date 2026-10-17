@@ -116,6 +116,11 @@ internal static class DysonTempDb
         IDysonSubjectContext? subject = null) =>
         new(accessor, subject ?? DysonFixedLocalSubjectContext.Instance);
 
+    public static DysonSpeechModelRepository Speech(
+        DysonDbAccessor accessor,
+        IDysonSubjectContext? subject = null) =>
+        new(accessor, subject ?? DysonFixedLocalSubjectContext.Instance);
+
     private sealed class DelegateDbContextFactory(DbContextOptions<DysonDbContext> options)
         : IDbContextFactory<DysonDbContext>
     {

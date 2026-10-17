@@ -168,6 +168,12 @@
                             @onclick="OpenFilePickerAsync">
                         <span class="composer-attach__icon" aria-hidden="true"></span>
                     </button>
+                    <PushToTalkButton AgentMode="@SelectedAgentMode"
+                                      Disabled="@Disabled"
+                                      Textarea="_textarea"
+                                      Text="@_text"
+                                      TextChanged="OnMicTextAsync"
+                                      OnError="Host.ReportError" />
                     <ModelSlugPicker @ref="_modelPicker"
                                      SelectedSlugId="SelectedSlugId"
                                      SelectedSlugIdChanged="SelectedSlugIdChanged" />
@@ -241,7 +247,7 @@
                     </span>
                 </div>
                 <div class="composer__hint">
-                    <span class="list-item__meta">Ctrl+Enter to send · paste/drop files or images · /help for commands</span>
+                    <span class="list-item__meta">Ctrl+Enter to send · paste/drop files or images · /help for commands@(ContextLimitLocked ? " · hold Ctrl+M to talk" : "")</span>
                 </div>
             </div>
         </div>
@@ -540,6 +546,12 @@
     }
 
     private Task OnTextChanged() => RefreshSlashStateAsync();
+
+    private Task OnMicTextAsync(string text)
+    {
+        _text = text;
+        return OnTextChanged();
+    }
 
     private void ToggleQueueExpanded() => _queueExpanded = !_queueExpanded;
 

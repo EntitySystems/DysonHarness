@@ -107,6 +107,8 @@ Patch instructions for [dysonharness.com](https://dysonharness.com) (Website rep
 
 Builds on `master` and `release-preview` resolve app mode to **Prod** (`DysonProd` app data) via `GITHUB_REF_NAME` in the resolve-app-mode scripts — channel is independent of Dev/Test/Prod. See [storage/models.md](../storage/models.md).
 
+Speech (Settings → Voice) is not in the zip or the MSI and the release workflow downloads nothing for it. The app fetches CPython, CPU torch, and the Phonon-2 / Pocket TTS weights on demand from the URLs and hashes in `packaging/speech/manifest.json` into `{DysonProd}/speech/{stable|preview}`. That folder is app data, so an MSI upgrade keeps it.
+
 ## Windows notes
 
 - **MSI:** WiX dual-scope package (`perUserOrMachine`); default is current-user install into `%LocalAppData%\Programs\DysonHarness`. Appears in Apps & Features as **Dyson Harness** under manufacturer **Entity Systems**. Start Menu shortcut **Dyson Harness** uses the app icon. A successful first install or major upgrade starts `DysonHarness.exe` when msiexec finishes; uninstall, repair, and modify do not. Uninstall removes the install directory and shortcut; app data under `%LocalAppData%\DysonHarness\` is left alone. Zip remains available for portable use. Asset filename keeps CalVer (`DysonHarness-{version}-win-x64.msi`); MSI `ProductVersion` maps `YYYY.M.N` → `(YYYY%100).M.N` because Windows Installer requires major &lt; 256.

@@ -3,6 +3,21 @@
 DysonHarness itself is licensed under AGPL-3.0 (see [LICENSE](LICENSE)). This file lists third-party
 code that is incorporated into, or derived for, DysonHarness under its own license.
 
+## Speech runtime (downloaded on demand, not redistributed)
+
+Settings → Voice downloads these from their public sources (`packaging/speech/manifest.json`) into the
+app-data folder. None of them ship in the zip, the MSI, or this repository. A copy of this list is
+written to `licenses/NOTICES.md` in the speech folder.
+
+- CPython 3.12.15 (python-build-standalone): PSF License.
+- PyTorch 2.14.1+cpu: BSD-3-Clause.
+- `fermion-research` 0.2.11: Apache-2.0.
+- Phonon-2 weights (Fermion Research, derived from NVIDIA Parakeet TDT 0.6B v3): CC-BY-4.0.
+- `pocket-tts` 3.3.0 code (Kyutai): MIT.
+- Pocket TTS weights and the `alba` voice embedding (`kyutai/pocket-tts-without-voice-cloning`, Kyutai): CC-BY-4.0.
+- libsndfile inside the upstream `soundfile` wheel: LGPL-2.1.
+- Other wheels keep their own license files in each wheel's `dist-info`.
+
 ## router-for-me/CLIProxyAPI (MIT)
 
 Source: <https://github.com/router-for-me/CLIProxyAPI>, ported at commit

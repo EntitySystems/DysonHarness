@@ -187,6 +187,21 @@ public static class DysonUiWebHost
             var factory = sp.GetRequiredService<IHttpClientFactory>();
             return new DysonEmbeddedRuntimeInstaller(factory.CreateClient("embedded-runtimes"));
         });
+        builder.Services.AddSingleton(sp =>
+        {
+            var version = DysonAppVersionInfo.Local;
+            var root = DysonSpeechPaths.GetInstallRoot(
+                DysonBuildInfo.Current,
+                version.IsStampedRelease ? version.EffectiveChannel : null);
+            var factory = sp.GetRequiredService<IHttpClientFactory>();
+            return new DysonSpeechInstaller(factory.CreateClient("embedded-runtimes"), root);
+        });
+        builder.Services.AddScoped<IDysonSpeechToText>(sp =>
+            new DysonPhononSpeech(sp.GetRequiredService<DysonSpeechInstaller>().InstallRoot));
+        builder.Services.AddScoped<IDysonTextToSpeech>(sp => new DysonPocketSpeech(
+            sp.GetRequiredService<IDysonSpeechModelRepository>(),
+            sp.GetRequiredService<IDysonSubjectSettingsRepository>(),
+            sp.GetRequiredService<DysonSpeechInstaller>().InstallRoot));
 
         if (hostingMode == DysonHostingMode.Cloud)
             builder.Services.AddScoped<CircuitHandler, DysonCloudSubjectCircuitHandler>();
@@ -232,6 +247,9 @@ public static class DysonUiWebHost
             {
                 // ignore shutdown races
             }
+
+            DysonPhononSpeech.StopSidecar();
+            DysonPocketSpeech.StopBridge();
         });
 
         if (!app.Environment.IsDevelopment())

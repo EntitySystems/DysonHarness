@@ -1,0 +1,46 @@
+.voice__note {
+  margin: 8px 0 0;
+}
+
+.voice-steps {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.voice-step {
+  display: grid;
+  grid-template-columns: minmax(180px, max-content) 1fr;
+  gap: 2px 12px;
+  color: var(--text);
+}
+
+.voice-step__state {
+  color: var(--text-muted);
+}
+
+.voice-step--running .voice-step__id {
+  color: var(--accent-text);
+}
+
+.voice-step--failed .voice-step__state {
+  color: var(--danger);
+}
+
+.voice-step__detail {
+  grid-column: 1 / -1;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.voice-train {
+  margin-top: 16px;
+}
+
+.voice-train__result {
+  margin-top: 8px;
+}

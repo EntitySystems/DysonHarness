@@ -51,6 +51,8 @@ Pinned Node/Python binaries (`DysonEmbeddedRuntimeInstaller.Pins`) unpack under 
 - Node v24.19.0: `{root}/runtimes/node/v24.19.0/node-v24.19.0-{win|darwin|linux}-x64/…` — Windows `node.exe`; macOS `bin/node`; Linux `bin/node` (official `.tar.gz`, not xz). URLs: `https://nodejs.org/dist/v24.19.0/node-v24.19.0-win-x64.zip`, `…-darwin-x64.tar.gz`, `…-linux-x64.tar.gz`. SHA best-effort: `https://nodejs.org/dist/v24.19.0/SHASUMS256.txt`.
 - Python 3.14.7 Windows embed: `{root}/runtimes/python/3.14.7/python.exe` from `https://www.python.org/ftp/python/3.14.7/python-3.14.7-embed-amd64.zip`. Non-Windows `Probe` searches PATH for `python3` then `python` (not `python.exe` on Windows PATH).
 
+Speech (Settings → Voice) installs under `{root}/speech/{variant}` — `dev`, `test`, or for Prod the stamped channel `stable` / `preview` (unstamped Prod ⇒ `dev`). `DYSON_SPEECH_ROOT` overrides `{root}` in tests only. Layout: `install.json` (written last; pins must match), `python/` (CPython 3.12.15), `torch/` (`torch==2.14.1+cpu`), `phonon/{site,wheelhouse,model/model_phonon2_c4c_int6}`, `pocket/{site,wheelhouse,model/{model.safetensors,tokenizer.json,english.yaml},bridge.py,voices/alba.safetensors}`, `licenses/`, `staging/`. Never under the MSI install directory or beside the executable; an MSI upgrade does not touch it.
+
 Single SQLite file holds providers, slugs, sessions, app settings, plugin installation metadata, and usage analytics for that mode. Plugin package/data payloads remain outside the database in their explicit project or global roots.
 
 ## Database
@@ -156,6 +158,14 @@ Subject-owned shell catalog for MCP `ShellExecute` / long-running shell tools (`
 | `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
 
 Unique: `(SubjectId, Name)`. `EnsureDefaultsAsync` seeds Windows rows when the current subject has no rows: `Pwsh`→`pwsh`, `PowerShell`→`powershell.exe`, `Cmd`→`cmd.exe` (all enabled). Other platforms seed nothing until Bash/Zsh runners exist. Settings → Shells edits the table (optional Fixed args as space-separated tokens → `FixedArgsJson`); new/resume sessions load enabled specs into `DysonAgentSessionConfig.AvailableShells` (`Name`, `ExecutablePath`, optional `FixedArgs`). Settings → Shells **Embedded runtimes** download/register the pinned Node/Python binaries and upsert enabled subject-owned rows named `Node` (`FixedArgs` `["-e"]`) and `Python` (`["-c"]`) by name `OrdinalIgnoreCase`. Catalog rows are subject-owned; binaries live in host `{root}/runtimes`, not per-subject. No LocalDb/schema/`EnsureDefaults` changes. No `DysonShellType` values added.
+
+## Speech models (`speech_models`, `speech_voices`)
+
+Subject-owned (`IDysonSpeechModelRepository`). `EnsureBuiltInAsync` inserts when missing: `phonon-2` (Phonon 2, `Capability` Input = 1, `RuntimeKind` `phonon`, `SupportsVoicePrompt` false) and `pocket-tts` (Pocket TTS, Output = 2, `pocket`, true). Unique `(SubjectId, RuntimeId)`. `IsInstalled` / `InstalledVariant` flip at the installer `commit`; `MarkUninstalledAsync` clears them and deletes that subject's voices for the model. `DysonSpeechCapability` is `[Flags]` on the row, not a third interface.
+
+`speech_voices`: `VoiceId`, `SubjectId`, `ModelRuntimeId`, `DisplayName`, `SourceFileName` (null for catalog voices), `Variant`, `CreatedUtc` (UTC). Unique `(SubjectId, ModelRuntimeId, VoiceId)`. No path column: the file is `{installRoot}/pocket/voices/{VoiceId}.safetensors`. Phase 1 only has catalog `alba` (seeded at commit); Train TTS model stores nothing.
+
+App settings: `speech_input_model_id`, `speech_output_model_id`, `speech_output_voice_id` (missing ⇒ single installed row / `alba`).
 
 ## Usage requests (`usage_requests`)
 

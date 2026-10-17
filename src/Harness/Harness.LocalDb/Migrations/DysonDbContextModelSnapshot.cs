@@ -705,6 +705,101 @@ namespace Harness.LocalDb.Migrations
                     b.ToTable("session_todos", (string)null);
                 });
 
+            modelBuilder.Entity("DysonHarness.DysonSpeechModelEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Capability")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("InstalledVariant")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsInstalled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("RuntimeId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RuntimeKind")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SubjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("SupportsVoicePrompt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SubjectId");
+
+                    b.HasIndex("SubjectId", "RuntimeId")
+                        .IsUnique();
+
+                    b.ToTable("speech_models", (string)null);
+                });
+
+            modelBuilder.Entity("DysonHarness.DysonSpeechVoiceEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ModelRuntimeId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceFileName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SubjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Variant")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("VoiceId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SubjectId");
+
+                    b.HasIndex("SubjectId", "ModelRuntimeId", "VoiceId")
+                        .IsUnique();
+
+                    b.ToTable("speech_voices", (string)null);
+                });
+
             modelBuilder.Entity("DysonHarness.DysonSubjectEntity", b =>
                 {
                     b.Property<string>("Id")
