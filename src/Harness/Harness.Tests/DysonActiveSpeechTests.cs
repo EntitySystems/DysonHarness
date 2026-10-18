@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using System.Text.Json;
 using DysonHarness;
 
 namespace Harness.Tests;
@@ -101,6 +102,59 @@ public class DysonActiveSpeechTests
         Assert.Contains(DysonGgufSpeechModels.QwenGgufDisplayName, notInstalled.Error);
         Assert.Contains("not installed", notInstalled.Error, StringComparison.OrdinalIgnoreCase);
         Assert.False(Directory.Exists(root));
+    }
+
+    [Fact]
+    public async Task Qwen_enroll_with_transcript_stores_24k_wav_and_txt()
+    {
+        if (!DysonSpeechInstaller.IsSupportedPlatform())
+            return;
+
+        var manifest = DysonSpeechManifest.LoadEmbedded();
+        Assert.True(manifest.IsSuccess, manifest.IsError ? manifest.Error : null);
+        var rid = manifest.Value.Rids[DysonSpeechInstaller.SupportedRid];
+        var root = Path.Combine(Path.GetTempPath(), "dyson-qwen-enroll-" + Guid.NewGuid().ToString("N"));
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        await using var _ = conn;
+        try
+        {
+            var id = DysonGgufSpeechModels.QwenGgufId;
+            Directory.CreateDirectory(DysonGgufSpeechModels.GetModelDir(root, id));
+            File.WriteAllText(DysonGgufSpeechModels.GetMainModelFile(root, id), "");
+            File.WriteAllText(DysonGgufSpeechModels.GetCompanionFile(root, id)!, "");
+            Directory.CreateDirectory(DysonGgufSpeechModels.GetCrispRuntimeDir(root));
+            File.WriteAllText(DysonGgufSpeechModels.GetCrispExe(root), "");
+            var pin = rid.QwenGguf!.First(f => f.FileName == DysonGgufSpeechModels.QwenGgufFile).Sha256;
+            File.WriteAllText(
+                Path.Combine(root, "install-gguf.json"),
+                JsonSerializer.Serialize(new Dictionary<string, string>
+                {
+                    ["crispasr"] = rid.CrispasrRuntime!.Sha256,
+                    [id] = pin,
+                }));
+
+            var repo = DysonTempDb.Speech(accessor);
+            var settings = DysonTempDb.Settings(accessor);
+            Assert.True((await repo.EnsureBuiltInAsync()).IsSuccess);
+            var qwen = new DysonCrispSpeech(repo, settings, root, id);
+            const string transcript = "the birch canoe slid on the smooth planks";
+            var enrolled = await qwen.EnrollVoiceAsync(
+                new MemoryStream(Pcm16Wav()), "recorded.wav", transcript, CancellationToken.None);
+            Assert.True(enrolled.IsSuccess, enrolled.IsError ? enrolled.Error : null);
+
+            var voiceId = enrolled.Value.VoiceId;
+            var dir = DysonGgufSpeechModels.GetVoicesDir(root, id);
+            var wav = File.ReadAllBytes(Path.Combine(dir, voiceId + ".wav"));
+            Assert.Equal(24_000, BinaryPrimitives.ReadInt32LittleEndian(wav.AsSpan(24)));
+            Assert.Equal((ushort)1, BinaryPrimitives.ReadUInt16LittleEndian(wav.AsSpan(22)));
+            Assert.Equal((ushort)16, BinaryPrimitives.ReadUInt16LittleEndian(wav.AsSpan(34)));
+            Assert.Equal(transcript, await File.ReadAllTextAsync(Path.Combine(dir, voiceId + ".txt")));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]

@@ -7,6 +7,7 @@ namespace DysonHarness;
 /// Settings → Voice tryout: speak text through the active TTS model, or record the microphone.
 /// A live model (<see cref="IDysonLiveSpeechToText"/>) streams PCM. Otherwise each capture window is one
 /// <see cref="IDysonSpeechToText.TranscribeAsync"/>.
+/// <see cref="EnrollRecordedVoiceAsync"/> records one 10 s clip and enrolls it through the active TTS model.
 /// </summary>
 public sealed class DysonSpeechTryout(
     IDysonAudioCapture capture,
@@ -18,6 +19,16 @@ public sealed class DysonSpeechTryout(
     private readonly IDysonSpeechToText _speechToText = speechToText ?? throw new ArgumentNullException(nameof(speechToText));
     private readonly IDysonTextToSpeech _textToSpeech = textToSpeech ?? throw new ArgumentNullException(nameof(textToSpeech));
     private readonly IDysonAudioPlayback _playback = playback ?? throw new ArgumentNullException(nameof(playback));
+    /// <summary>Sentence the train card shows. The user reads it; it is not stored as the transcript.</summary>
+    public const string ReadAloudSentence =
+        "The birch canoe slid on the smooth planks, then five thick slabs of blue cheese sat beside a jar of fresh jam.";
+
+    /// <summary>16 kHz mono s16le for 10 seconds. Matches <c>DysonWindowsAudioCapture</c>.</summary>
+    private const int RecordBytes = 10 * 16_000 * 2;
+
+    private const string EmptyTranscript =
+        "Speech-to-text returned an empty transcript, so the voice was not saved.";
+
     private readonly SemaphoreSlim _playGate = new(1, 1);
     private readonly Lock _gate = new();
     private CancellationTokenSource? _playCts;
@@ -326,6 +337,160 @@ public sealed class DysonSpeechTryout(
                 return committed.ToString();
             return string.Concat(committed.ToString(), " ", partial);
         }
+    }
+
+    /// <summary>
+    /// Records about 10 seconds on <paramref name="deviceId"/>, transcribes that clip once, and enrolls it
+    /// through <see cref="DysonActiveTextToSpeech.PrepareVoiceAsync"/>. No active speech-to-text model does not
+    /// open the microphone. Shares the recording gate with <see cref="RecordAsync"/>.
+    /// </summary>
+    public async Task<Result<DysonSpeechVoiceEntity, string>> EnrollRecordedVoiceAsync(
+        DysonActiveSpeechToText speechToText,
+        DysonActiveTextToSpeech textToSpeech,
+        string? deviceId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(speechToText);
+        ArgumentNullException.ThrowIfNull(textToSpeech);
+        await Task.Run(() => 0, CancellationToken.None).ConfigureAwait(false);
+
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var started = false;
+        lock (_gate)
+        {
+            if (!_recording)
+            {
+                _recording = true;
+                _recordCts = cts;
+                started = true;
+            }
+        }
+
+        if (!started)
+        {
+            cts.Dispose();
+            return Result<DysonSpeechVoiceEntity, string>.AsError("Already recording.");
+        }
+
+        try
+        {
+            return await EnrollCapturedAsync(speechToText, textToSpeech, deviceId, cts).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _recording = false;
+                if (ReferenceEquals(_recordCts, cts))
+                    _recordCts = null;
+            }
+
+            cts.Dispose();
+        }
+    }
+
+    private async Task<Result<DysonSpeechVoiceEntity, string>> EnrollCapturedAsync(
+        DysonActiveSpeechToText speechToText,
+        DysonActiveTextToSpeech textToSpeech,
+        string? deviceId,
+        CancellationTokenSource cts)
+    {
+        var active = await speechToText.ResolveActiveAsync(cts.Token).ConfigureAwait(false);
+        if (active.IsError)
+            return Result<DysonSpeechVoiceEntity, string>.AsError(active.Error);
+        if (cts.IsCancellationRequested)
+            return CancelledEnroll();
+
+        var pcm = new byte[RecordBytes];
+        var filled = 0;
+        try
+        {
+            await foreach (var block in _capture.CapturePcmAsync(deviceId, cts.Token).ConfigureAwait(false))
+            {
+                if (cts.IsCancellationRequested)
+                    return CancelledEnroll();
+                if (block.IsError)
+                    return Result<DysonSpeechVoiceEntity, string>.AsError(block.Error);
+                var take = Math.Min(block.Value.Length, RecordBytes - filled);
+                if (take > 0)
+                {
+                    block.Value.AsSpan(0, take).CopyTo(pcm.AsSpan(filled));
+                    filled += take;
+                }
+
+                if (filled < RecordBytes)
+                    continue;
+                _capture.Stop();
+                break;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return CancelledEnroll();
+        }
+
+        if (cts.IsCancellationRequested)
+            return CancelledEnroll();
+        if ((filled & 1) == 1)
+            filled--;
+        if (filled == 0)
+            return Result<DysonSpeechVoiceEntity, string>.AsError("The recording was empty, so the voice was not saved.");
+
+        await using var wav = Wav16k(pcm.AsSpan(0, filled));
+        string? transcript = null;
+        try
+        {
+            await foreach (var chunk in speechToText.TranscribeAsync(wav, cts.Token).ConfigureAwait(false))
+            {
+                if (chunk.IsError)
+                    return Result<DysonSpeechVoiceEntity, string>.AsError(chunk.Error);
+                if (chunk.Value.IsFinal)
+                    transcript = chunk.Value.Text.Trim();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return CancelledEnroll();
+        }
+
+        if (cts.IsCancellationRequested)
+            return CancelledEnroll();
+        if (string.IsNullOrWhiteSpace(transcript))
+            return Result<DysonSpeechVoiceEntity, string>.AsError(EmptyTranscript);
+
+        wav.Position = 0;
+        return await textToSpeech
+            .PrepareVoiceAsync(wav, "recorded.wav", cts.Token, transcript)
+            .ConfigureAwait(false);
+    }
+
+    private static Result<DysonSpeechVoiceEntity, string> CancelledEnroll() =>
+        Result<DysonSpeechVoiceEntity, string>.AsError("Recording was cancelled.");
+
+    /// <summary>16 kHz mono 16-bit PCM WAV. Not resampled.</summary>
+    private static MemoryStream Wav16k(ReadOnlySpan<byte> pcm)
+    {
+        var stream = new MemoryStream(44 + pcm.Length);
+        using (var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
+        {
+            writer.Write("RIFF"u8);
+            writer.Write(36 + pcm.Length);
+            writer.Write("WAVE"u8);
+            writer.Write("fmt "u8);
+            writer.Write(16);
+            writer.Write((short)1);
+            writer.Write((short)1);
+            writer.Write(16_000);
+            writer.Write(16_000 * 2);
+            writer.Write((short)2);
+            writer.Write((short)16);
+            writer.Write("data"u8);
+            writer.Write(pcm.Length);
+        }
+
+        stream.Write(pcm);
+        stream.Position = 0;
+        return stream;
     }
 
     /// <summary>Stops capture and transcription. Nothing capturing is an error.</summary>

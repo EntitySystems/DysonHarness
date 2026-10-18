@@ -186,6 +186,19 @@
                     <span>I confirm this is my own voice or I have the speaker's consent.</span>
                 </label>
             }
+            @if (WavEnrollment(active.RuntimeId) && _tryout is not null)
+            {
+                <p class="voice-train__prompt">Read this aloud: @DysonSpeechTryout.ReadAloudSentence</p>
+                <div class="voice-train__record">
+                    <button type="button" class="btn btn-primary"
+                            disabled="@(!_voiceConsent || _busy)"
+                            @onclick="RecordTrainAsync">Record 10 seconds</button>
+                    @if (_trainRecording)
+                    {
+                        <span role="status">@(_trainSecondsLeft > 0 ? $"{_trainSecondsLeft} s" : "Finishing…")</span>
+                    }
+                </div>
+            }
             @if (active.RuntimeId == DysonGgufSpeechModels.QwenGgufId)
             {
                 <div class="voice-train__transcript">
@@ -299,7 +312,10 @@
     private bool _playing;
     private int _playGeneration;
     private bool _recording;
+    private bool _trainRecording;
+    private int _trainSecondsLeft;
     private CancellationTokenSource? _recordCts;
+    private CancellationTokenSource? _trainCountdownCts;
 
     private IEnumerable<DysonSpeechModelEntity> OrderedRows =>
         _rows.OrderBy(r => DysonSpeechInstaller.ModelIds.Contains(r.RuntimeId)
@@ -455,6 +471,64 @@
         {
             _busy = false;
             await ReloadAsync();
+        }
+    }
+
+    private async Task RecordTrainAsync()
+    {
+        if (_tryout is null || _disposed || _busy)
+            return;
+        _trainResult = null;
+        _busy = true;
+        _trainRecording = true;
+        _trainCountdownCts?.Dispose();
+        _trainCountdownCts = new CancellationTokenSource();
+        var countdown = CountTrainAsync(_trainCountdownCts.Token);
+        try
+        {
+            var result = await _tryout.EnrollRecordedVoiceAsync(Stt, Tts, _micId, CancellationToken.None);
+            if (_disposed)
+                return;
+            _trainOk = result.IsSuccess;
+            _trainResult = result.IsError
+                ? result.Error
+                : $"Voice {result.Value.DisplayName} saved and selected.";
+        }
+        finally
+        {
+            _trainRecording = false;
+            _busy = false;
+            _trainCountdownCts.Cancel();
+            try
+            {
+                await countdown;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+    }
+
+    private async Task CountTrainAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            for (var left = 10; left >= 1; left--)
+            {
+                if (_disposed)
+                    return;
+                _trainSecondsLeft = left;
+                StateHasChanged();
+                await Task.Delay(1000, cancellationToken);
+            }
+
+            if (_disposed)
+                return;
+            _trainSecondsLeft = 0;
+            StateHasChanged();
+        }
+        catch (OperationCanceledException)
+        {
         }
     }
 
@@ -661,6 +735,8 @@
         _cts?.Dispose();
         _recordCts?.Cancel();
         _recordCts?.Dispose();
+        _trainCountdownCts?.Cancel();
+        _trainCountdownCts?.Dispose();
         _tryout?.StopPlayback();
         _tryout?.StopRecording();
     }

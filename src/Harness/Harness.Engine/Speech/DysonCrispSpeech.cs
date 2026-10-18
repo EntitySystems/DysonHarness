@@ -136,7 +136,8 @@ public sealed class DysonCrispSpeech(
     /// <summary>
     /// Enrollment, not a fine-tune. One 16-bit PCM <c>.wav</c> (32 MB) is copied to
     /// <c>{voiceId}.wav</c>. Qwen3-TTS GGUF is stored as 24 kHz mono (CrispASR returns empty audio at any other rate)
-    /// and also requires <paramref name="transcript"/>, stored as <c>{voiceId}.txt</c>.
+    /// and requires <paramref name="transcript"/>. A non-blank transcript is stored as <c>{voiceId}.txt</c> for
+    /// Pocket, Qwen, and Chatterbox.
     /// </summary>
     public async Task<Result<DysonSpeechVoiceEntity, string>> EnrollVoiceAsync(
         Stream clip,
@@ -180,7 +181,7 @@ public sealed class DysonCrispSpeech(
         var voicesDir = DysonGgufSpeechModels.GetVoicesDir(_installRoot, _runtimeId);
         var wavPath = Path.Combine(voicesDir, voiceId + ".wav");
         var txtPath = Path.Combine(voicesDir, voiceId + ".txt");
-        var writeTranscript = _runtimeId == DysonGgufSpeechModels.QwenGgufId;
+        var writeTranscript = !string.IsNullOrWhiteSpace(transcript);
         var wrote = await Task.Run(
                 () => WriteClip(voicesDir, wavPath, writeTranscript ? txtPath : null, writeTranscript ? transcript : null, stored),
                 CancellationToken.None)

@@ -146,6 +146,30 @@ public class DysonSpeechTryoutTests
     }
 
     [Fact]
+    public async Task Recorded_enroll_does_not_open_the_mic_when_no_speech_to_text_is_installed()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        await using var _ = conn;
+        var repo = DysonTempDb.Speech(accessor);
+        var settings = DysonTempDb.Settings(accessor);
+        Assert.True((await repo.EnsureBuiltInAsync()).IsSuccess);
+        var root = Path.Combine(Path.GetTempPath(), "dyson-enroll-nostt-" + Guid.NewGuid().ToString("N"));
+        var stt = new DysonActiveSpeechToText(repo, settings, root);
+        var tts = new DysonActiveTextToSpeech(repo, settings, root);
+        var capture = new FakeCapture();
+        var tryout = new DysonSpeechTryout(capture, new FakeStt(), new FakeTts(), new FakePlayback());
+
+        var result = await tryout.EnrollRecordedVoiceAsync(stt, tts, "0", CancellationToken.None);
+
+        Assert.Equal(
+            "No speech-to-text model is installed. Open Settings → Voice and install one.",
+            result.Error);
+        Assert.Equal(0, capture.PcmCaptures);
+        Assert.Equal(0, capture.Captures);
+        Assert.False(Directory.Exists(root));
+    }
+
+    [Fact]
     public async Task Stop_recording_ends_capture_and_a_second_record_is_refused()
     {
         var capture = new FakeCapture { Hold = true };
