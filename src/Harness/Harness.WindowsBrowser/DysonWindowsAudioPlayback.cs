@@ -43,6 +43,9 @@ public sealed class DysonWindowsAudioPlayback : IDysonAudioPlayback
         IWavePlayer? device = null;
         BufferedWaveProvider? buffer = null;
         long written = 0;
+        // A streamed read (Vulkan especially) can end on one byte of an s16le sample. Hold it for the next chunk.
+        byte held = 0;
+        var holding = false;
         try
         {
             await foreach (var chunk in chunks.WithCancellation(token))
@@ -51,8 +54,21 @@ public sealed class DysonWindowsAudioPlayback : IDysonAudioPlayback
                     return VoidResult<string>.AsError(chunk.Error);
 
                 var pcm = chunk.Value.Pcm;
-                if (pcm.Length % 2 != 0)
-                    return VoidResult<string>.AsError("PCM chunk is not whole 16-bit samples.");
+                if (holding)
+                {
+                    var merged = new byte[pcm.Length + 1];
+                    merged[0] = held;
+                    pcm.AsSpan().CopyTo(merged.AsSpan(1));
+                    pcm = merged;
+                    holding = false;
+                }
+
+                if ((pcm.Length & 1) != 0)
+                {
+                    held = pcm[^1];
+                    holding = true;
+                    pcm = pcm.Length == 1 ? [] : pcm[..^1];
+                }
 
                 if (pcm.Length > 0)
                 {
@@ -88,6 +104,9 @@ public sealed class DysonWindowsAudioPlayback : IDysonAudioPlayback
                 if (chunk.Value.IsLast)
                     break;
             }
+
+            if (holding)
+                return VoidResult<string>.AsError("PCM chunk is not whole 16-bit samples.");
 
             // WaveOut reports bytes played, so the tail still in device buffers is heard; a seam falls back to the queue.
             while (device is { PlaybackState: PlaybackState.Playing }

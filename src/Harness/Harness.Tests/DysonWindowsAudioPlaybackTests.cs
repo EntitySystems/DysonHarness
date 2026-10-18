@@ -84,8 +84,35 @@ public class DysonWindowsAudioPlaybackTests
         Assert.True(missing.Disposed);
     }
 
+    [Fact]
+    public async Task Odd_pcm_chunk_is_carried_into_the_next_chunk()
+    {
+        byte[] whole = [1, 2, 3, 4, 5, 6, 7, 8];
+        Assert.Equal(whole, await PlayedBytes(Pcm(whole)));
+        Assert.Equal(whole, await PlayedBytes(Pcm(whole[..3]), Pcm(whole[3..])));
+        Assert.Equal(whole, await PlayedBytes(Pcm(whole[..1]), Pcm(whole[1..])));
+    }
+
     private static Result<DysonSpeechAudioChunk, string> Chunk(int bytes, bool isLast = false) =>
         Result<DysonSpeechAudioChunk, string>.AsValue(new DysonSpeechAudioChunk(new byte[bytes], 24000, isLast));
+
+    private static DysonSpeechAudioChunk Pcm(byte[] pcm) => new(pcm, 24000, false);
+
+    private static async Task<byte[]> PlayedBytes(params DysonSpeechAudioChunk[] parts)
+    {
+        var device = new FakeDevice();
+        var play = new DysonWindowsAudioPlayback(() => device).PlayAsync(
+            Stream(parts.Select(part => Result<DysonSpeechAudioChunk, string>.AsValue(part)).ToArray()),
+            CancellationToken.None);
+        var even = 0;
+        foreach (var part in parts)
+            even += part.Pcm.Length;
+        even &= ~1;
+        await WaitUntil(() => device.Buffered == even);
+        var bytes = device.TakeBuffered();
+        Assert.True((await play).IsSuccess);
+        return bytes;
+    }
 
     private static async IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> Stream(
         params Result<DysonSpeechAudioChunk, string>[] items)
@@ -109,6 +136,13 @@ public class DysonWindowsAudioPlaybackTests
         public bool Disposed { get; private set; }
         public int Buffered => _provider?.BufferedBytes ?? 0;
         public void Drain() => _provider!.Read(new byte[_provider.BufferedBytes]);
+
+        public byte[] TakeBuffered()
+        {
+            var bytes = new byte[_provider!.BufferedBytes];
+            var read = _provider.Read(bytes);
+            return read == bytes.Length ? bytes : bytes[..read];
+        }
 
         public void Init(IWaveProvider waveProvider)
         {
