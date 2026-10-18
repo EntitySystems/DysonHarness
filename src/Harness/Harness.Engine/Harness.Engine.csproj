@@ -14,6 +14,8 @@
     <EmbeddedResource Include="Resources\Skills\**\*.md" />
     <EmbeddedResource Include="..\..\..\packaging\speech\manifest.json" LogicalName="DysonHarness.Speech.manifest.json" />
     <EmbeddedResource Include="Speech\DysonPocketBridge.py" LogicalName="DysonHarness.Speech.bridge.py" />
+    <EmbeddedResource Include="Speech\DysonQwenBridge.py" LogicalName="DysonHarness.Speech.qwen_bridge.py" />
+    <EmbeddedResource Include="Speech\DysonChatterboxBridge.py" LogicalName="DysonHarness.Speech.chatterbox_bridge.py" />
   </ItemGroup>
 
   <ItemGroup>

@@ -15,6 +15,13 @@ written to `licenses/NOTICES.md` in the speech folder.
 - Phonon-2 weights (Fermion Research, derived from NVIDIA Parakeet TDT 0.6B v3): CC-BY-4.0.
 - `pocket-tts` 3.3.0 code (Kyutai): MIT.
 - Pocket TTS weights and the `alba` voice embedding (`kyutai/pocket-tts-without-voice-cloning`, Kyutai): CC-BY-4.0.
+- `qwen-tts` 0.1.1 code (Alibaba Qwen): Apache-2.0.
+- Qwen3-TTS-12Hz-0.6B-Base weights (`Qwen/Qwen3-TTS-12Hz-0.6B-Base`, Alibaba Qwen): Apache-2.0.
+- `chatterbox-tts` 0.1.7 code (Resemble AI): MIT.
+- Chatterbox Turbo weights (`ResembleAI/chatterbox-turbo`, Resemble AI): MIT. English only. Output carries Resemble's Perth implicit watermark.
+- `resemble-perth`: MIT. `s3tokenizer`: Apache-2.0. `diffusers`: Apache-2.0. `conformer`: MIT. `omegaconf`: BSD-3-Clause. `pyloudnorm`: MIT. `onnx`: Apache-2.0.
+- `torchaudio`: BSD-2-Clause. `transformers` and `accelerate`: Apache-2.0.
+- `librosa`: ISC. `numba` and `llvmlite`: BSD-2-Clause. `onnxruntime`: MIT. `sox` (Python package): BSD-3-Clause.
 - libsndfile inside the upstream `soundfile` wheel: LGPL-2.1.
 - Other wheels keep their own license files in each wheel's `dist-info`.
 

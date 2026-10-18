@@ -24,12 +24,34 @@ public sealed record DysonSpeechInstallStep(
     string? Detail = null,
     DysonDownloadProgress? Download = null);
 
-/// <summary>File-level install state of the speech tree (DB rows mirror this at commit).</summary>
-public sealed record DysonSpeechInstallStatus(bool PhononInstalled, bool PocketInstalled, string? Note);
+/// <summary>
+/// File-level install state of the speech tree (DB rows mirror this at commit). <see cref="RuntimeInstalled"/> is the
+/// shared CPython + torch; each model is installed only on top of it.
+/// </summary>
+public sealed record DysonSpeechInstallStatus(
+    bool RuntimeInstalled,
+    bool PhononInstalled,
+    bool PocketInstalled,
+    bool QwenInstalled,
+    bool ChatterboxInstalled,
+    string? Note)
+{
+    public static DysonSpeechInstallStatus None(string? note) => new(false, false, false, false, false, note);
+
+    public bool IsInstalled(string runtimeId) => runtimeId switch
+    {
+        DysonPhononSpeech.Id => PhononInstalled,
+        DysonPocketSpeech.Id => PocketInstalled,
+        DysonQwenSpeech.Id => QwenInstalled,
+        DysonChatterboxSpeech.Id => ChatterboxInstalled,
+        _ => false,
+    };
+}
 
 /// <summary>
-/// Shared speech installer: one CPython, one CPU torch, isolated Phonon-2 and Pocket TTS sites under
-/// <see cref="InstallRoot"/> (<see cref="DysonSpeechPaths.GetInstallRoot"/>). Every byte comes through
+/// Shared speech installer: one CPython, one CPU torch, and per-model isolated sites (Phonon-2, Pocket TTS,
+/// Qwen3-TTS 0.6B Base, Chatterbox Turbo) under <see cref="InstallRoot"/> (<see cref="DysonSpeechPaths.GetInstallRoot"/>).
+/// Each model installs and uninstalls on its own; the runtime is built once. Every byte comes through
 /// <see cref="HttpClient"/> from <c>packaging/speech/manifest.json</c>; no system Python, pip, or git, no HF token.
 /// One try per download; a hash mismatch or non-200 fails with the step id and URL.
 /// </summary>
@@ -37,28 +59,61 @@ public sealed class DysonSpeechInstaller
 {
     public const string SupportedRid = "win-x64";
 
-    /// <summary>
-    /// Preflight floor = measured win-x64 trial tree (python 64,991,494 + torch 631,984,027 + phonon 533,602,783
-    /// + pocket 480,934,807 = 1,711,513,111 bytes) × 2. ponytail: re-measure when the pins change.
-    /// </summary>
-    public const long RequiredFreeBytes = 3_423_026_222;
+    // Preflight floors: measured win-x64 trees (Qwen / Chatterbox: site + weights + wheelhouse). Preflight needs
+    // 2 × the sum of what this run builds. ponytail: re-measure when the pins change.
+    internal const long RuntimeBytes = 696_975_521; // python 64,991,494 + torch 631,984,027
+    internal const long PhononBytes = 533_602_783;
+    internal const long PocketBytes = 480_934_807;
+    internal const long QwenBytes = 683_576_361 + 2_516_100_892 + QwenWheelhouseBytes;
+    internal const long ChatterboxBytes = 665_031_080 + 2_987_680_596 + ChatterboxWheelhouseBytes;
+    private const long QwenWheelhouseBytes = 138_343_182;
+    private const long ChatterboxWheelhouseBytes = 182_916_172;
 
-    public static readonly IReadOnlyList<string> StepIds =
+    /// <summary>Model ids in install / UI order. Each owns <c>{root}/{dir}</c>.</summary>
+    public static readonly IReadOnlyList<string> ModelIds =
+        [DysonPhononSpeech.Id, DysonPocketSpeech.Id, DysonQwenSpeech.Id, DysonChatterboxSpeech.Id];
+
+    /// <summary>First installed of these becomes the active TTS when <c>speech_output_model_id</c> is missing.</summary>
+    internal static readonly IReadOnlyList<string> ActiveDefaultOrder =
+        [DysonPocketSpeech.Id, DysonChatterboxSpeech.Id, DysonQwenSpeech.Id];
+
+    private static readonly string[] RuntimeSteps =
     [
-        "preflight", "python-download", "python-hash", "python-extract",
-        "torch-download", "torch-hash", "torch-install",
-        "phonon-wheels-download", "phonon-wheels-hash", "phonon-wheels-install",
-        "phonon-weights-download", "phonon-weights-hash", "phonon-weights-unpack",
-        "pocket-wheels-download", "pocket-wheels-hash", "pocket-wheels-install",
-        "pocket-weights-download", "pocket-weights-hash",
-        "pocket-voice-download", "pocket-voice-hash",
-        "pocket-config", "licenses", "commit", "smoke",
+        "python-download", "python-hash", "python-extract", "torch-download", "torch-hash", "torch-install",
     ];
+
+    private static readonly Dictionary<string, string[]> ModelSteps = new()
+    {
+        [DysonPhononSpeech.Id] =
+        [
+            "phonon-wheels-download", "phonon-wheels-hash", "phonon-wheels-install",
+            "phonon-weights-download", "phonon-weights-hash", "phonon-weights-unpack",
+        ],
+        [DysonPocketSpeech.Id] =
+        [
+            "pocket-wheels-download", "pocket-wheels-hash", "pocket-wheels-install",
+            "pocket-weights-download", "pocket-weights-hash", "pocket-voice-download", "pocket-voice-hash", "pocket-config",
+        ],
+        [DysonQwenSpeech.Id] =
+        [
+            "qwen-wheels-download", "qwen-wheels-hash", "qwen-wheels-install",
+            "qwen-weights-download", "qwen-weights-hash", "qwen-config",
+        ],
+        [DysonChatterboxSpeech.Id] =
+        [
+            "chatterbox-wheels-download", "chatterbox-wheels-hash", "chatterbox-wheels-install",
+            "chatterbox-weights-download", "chatterbox-weights-hash", "chatterbox-config",
+        ],
+    };
+
+    private static readonly string[] TailSteps = ["licenses", "commit", "smoke"];
+
+    /// <summary>Every step in run order. A run emits only <see cref="PlanSteps"/>; skipped steps are not emitted.</summary>
+    public static readonly IReadOnlyList<string> StepIds =
+        ["preflight", .. RuntimeSteps, .. ModelIds.SelectMany(id => ModelSteps[id]), .. TailSteps];
 
     internal const string BridgeResourceName = "DysonHarness.Speech.bridge.py";
     internal const string CatalogVoiceId = "alba";
-
-    private static readonly string[] TreeDirs = ["python", "torch", "phonon", "pocket", "licenses"];
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
 
     private const string PhononUnpackScript =
@@ -83,14 +138,28 @@ public sealed class DysonSpeechInstaller
         Task.Run(() => Probe(InstallRoot), cancellationToken);
 
     /// <summary>
-    /// Runs every step in <see cref="StepIds"/> order on the thread pool. Stops at the first
-    /// <see cref="DysonSpeechStepState.Failed"/> step. Repair is the same pipeline.
+    /// Installs the requested models (<see cref="ModelIds"/>) that are missing, plus the shared runtime only when it
+    /// is missing, on the thread pool (<see cref="PlanSteps"/>). Installed models are never re-downloaded. Stops at
+    /// the first <see cref="DysonSpeechStepState.Failed"/> step. Nothing missing ⇒ preflight "Already installed."
+    /// and a DB sync only.
     /// </summary>
     public async IAsyncEnumerable<DysonSpeechInstallStep> InstallAsync(
         IDysonSpeechModelRepository models,
+        IDysonSubjectSettingsRepository settings,
+        IReadOnlyCollection<string> modelIds,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(models);
+        ArgumentNullException.ThrowIfNull(settings);
+        var invalid = modelIds is not { Count: > 0 }
+            ? "Choose at least one model to install."
+            : modelIds.FirstOrDefault(id => !ModelIds.Contains(id)) is { } unknown ? $"Unknown speech model '{unknown}'." : null;
+        if (invalid is not null)
+        {
+            yield return new DysonSpeechInstallStep("preflight", DysonSpeechStepState.Failed, invalid);
+            yield break;
+        }
+
         if (!_gate.Wait(0))
         {
             yield return new DysonSpeechInstallStep("preflight", DysonSpeechStepState.Failed, "An install is already running.");
@@ -102,7 +171,8 @@ public sealed class DysonSpeechInstaller
         {
             try
             {
-                await new Pipeline(this, models, channel.Writer, cancellationToken).RunAsync().ConfigureAwait(false);
+                await new Pipeline(this, models, settings, modelIds.Distinct().ToList(), channel.Writer, cancellationToken)
+                    .RunAsync().ConfigureAwait(false);
             }
             finally
             {
@@ -117,7 +187,10 @@ public sealed class DysonSpeechInstaller
         await run.ConfigureAwait(false);
     }
 
-    /// <summary>Stops sidecars this process started, deletes the variant tree, and clears both rows.</summary>
+    /// <summary>
+    /// Uninstall everything: stops sidecars this process started, deletes the whole variant tree (runtime and every
+    /// model), and clears every model row and its voices.
+    /// </summary>
     public async Task<VoidResult<string>> UninstallAsync(
         IDysonSpeechModelRepository models,
         CancellationToken cancellationToken = default)
@@ -140,7 +213,7 @@ public sealed class DysonSpeechInstaller
             if (ensure.IsError)
                 return ensure;
 
-            foreach (var id in new[] { DysonPhononSpeech.Id, DysonPocketSpeech.Id })
+            foreach (var id in ModelIds)
             {
                 var mark = await models.MarkUninstalledAsync(id, cancellationToken).ConfigureAwait(false);
                 if (mark.IsError)
@@ -155,38 +228,142 @@ public sealed class DysonSpeechInstaller
         }
     }
 
+    /// <summary>
+    /// Uninstalls one model: stops only its process, deletes <c>{root}/{model dir}</c> (and its voices), clears its
+    /// pin in <c>install.json</c>, and its row. Python, torch, and other models stay. The active TTS setting is not
+    /// changed (synthesis then reports the model as not installed).
+    /// </summary>
+    public async Task<VoidResult<string>> UninstallModelAsync(
+        IDysonSpeechModelRepository models,
+        string runtimeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(models);
+        if (!ModelIds.Contains(runtimeId))
+            return new VoidResult<string>($"Unknown speech model '{runtimeId}'.");
+        if (!_gate.Wait(0))
+            return new VoidResult<string>("An install is already running.");
+
+        try
+        {
+            var deleted = await Task.Run(() =>
+            {
+                StopModel(runtimeId);
+                var delete = DeleteTree(Path.Combine(InstallRoot, ModelDir(runtimeId)));
+                if (delete.IsError)
+                    return delete;
+
+                var stamp = ReadStamp(InstallRoot);
+                return stamp is null ? VoidResult<string>.Success : WriteStamp(InstallRoot, WithPackage(stamp, runtimeId, null));
+            }, CancellationToken.None).ConfigureAwait(false);
+            if (deleted.IsError)
+                return deleted;
+
+            return await models.MarkUninstalledAsync(runtimeId, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// The steps one run executes: preflight; python/torch only when the runtime is missing; each requested model
+    /// that is not installed; then licenses, commit, smoke when anything above runs. Pure.
+    /// </summary>
+    internal static IReadOnlyList<string> PlanSteps(DysonSpeechInstallStatus status, IReadOnlyCollection<string> modelIds)
+    {
+        var missing = ModelIds.Where(id => modelIds.Contains(id) && !status.IsInstalled(id)).ToList();
+        if (missing.Count == 0)
+            return ["preflight"];
+
+        return
+        [
+            "preflight",
+            .. status.RuntimeInstalled ? Array.Empty<string>() : RuntimeSteps,
+            .. missing.SelectMany(id => ModelSteps[id]),
+            .. TailSteps,
+        ];
+    }
+
+    internal static long RequiredFreeBytes(bool runtime, IEnumerable<string> modelIds) =>
+        2 * ((runtime ? RuntimeBytes : 0) + modelIds.Sum(id => id switch
+        {
+            DysonPhononSpeech.Id => PhononBytes,
+            DysonPocketSpeech.Id => PocketBytes,
+            DysonQwenSpeech.Id => QwenBytes,
+            DysonChatterboxSpeech.Id => ChatterboxBytes,
+            _ => 0,
+        }));
+
+    private static string ModelDir(string runtimeId) => runtimeId switch
+    {
+        DysonPhononSpeech.Id => "phonon",
+        DysonPocketSpeech.Id => "pocket",
+        DysonQwenSpeech.Id => "qwen",
+        _ => "chatterbox",
+    };
+
+    private static void StopModel(string runtimeId)
+    {
+        switch (runtimeId)
+        {
+            case DysonPhononSpeech.Id: DysonPhononSpeech.StopSidecar(); break;
+            case DysonPocketSpeech.Id: DysonPocketSpeech.StopBridge(); break;
+            case DysonQwenSpeech.Id: DysonQwenSpeech.StopBridge(); break;
+            default: DysonChatterboxSpeech.StopBridge(); break;
+        }
+    }
+
     public static bool IsSupportedPlatform() =>
         OperatingSystem.IsWindows() && RuntimeInformation.ProcessArchitecture == Architecture.X64;
 
     /// <summary>
-    /// Installed only when <c>install.json</c> matches the manifest pins, python and torch exist, and that
-    /// model's weights exist. Sync file I/O: callers hop to the thread pool first.
+    /// Runtime installed when <c>install.json</c> matches the shared pins and RID and python + torch exist. A model is
+    /// installed on top of that when its stamp pin equals the manifest package and its weights exist. A plan-97 stamp
+    /// (no Qwen / Chatterbox pins) still probes as runtime + Phonon + Pocket. Sync file I/O: callers hop to the
+    /// thread pool first.
     /// </summary>
     internal static DysonSpeechInstallStatus Probe(string installRoot)
     {
         if (!IsSupportedPlatform())
-            return new(false, false, $"Speech install is {SupportedRid} only in this release.");
+            return DysonSpeechInstallStatus.None($"Speech install is {SupportedRid} only in this release.");
 
         var manifest = DysonSpeechManifest.LoadEmbedded();
         if (manifest.IsError)
-            return new(false, false, manifest.Error);
+            return DysonSpeechInstallStatus.None(manifest.Error);
 
+        var m = manifest.Value;
         var stamp = ReadStamp(installRoot);
         if (stamp is null)
-            return new(false, false, "Not installed.");
-        if (!StampMatches(stamp, manifest.Value))
-            return new(false, false, "Installed files do not match this version's pins. Run Install dependencies to repair.");
+            return DysonSpeechInstallStatus.None("Not installed.");
+        if (stamp.SchemaVersion != m.SchemaVersion || stamp.PythonVersion != m.PythonVersion
+            || stamp.TorchRequirement != m.TorchRequirement || stamp.Rid != SupportedRid)
+        {
+            return DysonSpeechInstallStatus.None("Python or torch does not match this version's pins. Install a model to rebuild it.");
+        }
 
         if (!File.Exists(DysonSpeechPaths.GetPythonExe(installRoot))
             || !Directory.Exists(Path.Combine(DysonSpeechPaths.GetTorchDir(installRoot), "torch")))
         {
-            return new(false, false, "Python or torch is missing. Run Install dependencies to repair.");
+            return DysonSpeechInstallStatus.None("Python or torch is missing. Install a model to rebuild it.");
         }
 
-        var phonon = Directory.Exists(DysonSpeechPaths.GetPhononModelDir(installRoot))
-            && Directory.EnumerateFileSystemEntries(DysonSpeechPaths.GetPhononModelDir(installRoot)).Any();
-        var pocket = File.Exists(DysonSpeechPaths.GetPocketModelFile(installRoot));
-        return new(phonon, pocket, phonon && pocket ? null : "Model files are missing. Run Install dependencies to repair.");
+        var phononDir = DysonSpeechPaths.GetPhononModelDir(installRoot);
+        var qwenDir = DysonSpeechPaths.GetQwenModelDir(installRoot);
+        var chatterboxDir = DysonSpeechPaths.GetChatterboxModelDir(installRoot);
+        return new(
+            RuntimeInstalled: true,
+            PhononInstalled: stamp.PhononPackage == m.PhononPackage
+                && Directory.Exists(phononDir) && Directory.EnumerateFileSystemEntries(phononDir).Any(),
+            PocketInstalled: stamp.PocketPackage == m.PocketPackage && File.Exists(DysonSpeechPaths.GetPocketModelFile(installRoot)),
+            QwenInstalled: stamp.QwenPackage == m.QwenPackage
+                && File.Exists(Path.Combine(qwenDir, "model.safetensors"))
+                && File.Exists(Path.Combine(qwenDir, "speech_tokenizer", "model.safetensors")),
+            ChatterboxInstalled: stamp.ChatterboxPackage == m.ChatterboxPackage
+                && File.Exists(Path.Combine(chatterboxDir, "t3_turbo_v1.safetensors"))
+                && File.Exists(Path.Combine(chatterboxDir, "s3gen_meanflow.safetensors")),
+            Note: null);
     }
 
     internal static string BuildRequirements(IReadOnlyList<DysonSpeechFile> wheels, string wheelDir) =>
@@ -301,8 +478,8 @@ public sealed class DysonSpeechInstaller
 
     internal static void StopSidecars()
     {
-        DysonPhononSpeech.StopSidecar();
-        DysonPocketSpeech.StopBridge();
+        foreach (var id in ModelIds)
+            StopModel(id);
     }
 
     internal static VoidResult<string> DeleteTree(string path)
@@ -338,77 +515,142 @@ public sealed class DysonSpeechInstaller
         }
     }
 
-    private static bool StampMatches(DysonSpeechInstallStamp stamp, DysonSpeechManifest manifest) =>
-        stamp.SchemaVersion == manifest.SchemaVersion
-        && stamp.PythonVersion == manifest.PythonVersion
-        && stamp.TorchRequirement == manifest.TorchRequirement
-        && stamp.PhononPackage == manifest.PhononPackage
-        && stamp.PocketPackage == manifest.PocketPackage
-        && stamp.Rid == SupportedRid;
+    private static VoidResult<string> WriteStamp(string installRoot, DysonSpeechInstallStamp stamp)
+    {
+        try
+        {
+            File.WriteAllText(DysonSpeechPaths.GetInstallJson(installRoot), JsonSerializer.Serialize(stamp, JsonOptions));
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new VoidResult<string>($"Could not write {DysonSpeechPaths.GetInstallJson(installRoot)}: {ex.Message}");
+        }
+    }
 
-    private static DysonSpeechInstallStamp NewStamp(DysonSpeechManifest manifest) => new(
-        manifest.SchemaVersion,
-        manifest.PythonVersion,
-        manifest.TorchRequirement,
-        manifest.PhononPackage,
-        manifest.PocketPackage,
-        SupportedRid,
-        DateTime.UtcNow);
+    private static DysonSpeechInstallStamp WithPackage(DysonSpeechInstallStamp stamp, string runtimeId, string? package) =>
+        runtimeId switch
+        {
+            DysonPhononSpeech.Id => stamp with { PhononPackage = package },
+            DysonPocketSpeech.Id => stamp with { PocketPackage = package },
+            DysonQwenSpeech.Id => stamp with { QwenPackage = package },
+            _ => stamp with { ChatterboxPackage = package },
+        };
 
+    private static string PackageOf(DysonSpeechManifest manifest, string runtimeId) => runtimeId switch
+    {
+        DysonPhononSpeech.Id => manifest.PhononPackage,
+        DysonPocketSpeech.Id => manifest.PocketPackage,
+        DysonQwenSpeech.Id => manifest.QwenPackage,
+        _ => manifest.ChatterboxPackage,
+    };
+
+    /// <summary>Shared pins + one nullable package pin per model. Plan-97 stamps (no Qwen / Chatterbox) still read.</summary>
     private sealed record DysonSpeechInstallStamp(
         int SchemaVersion,
         string PythonVersion,
         string TorchRequirement,
-        string PhononPackage,
-        string PocketPackage,
+        string? PhononPackage,
+        string? PocketPackage,
         string Rid,
-        DateTime InstalledUtc);
+        DateTime InstalledUtc,
+        string? QwenPackage = null,
+        string? ChatterboxPackage = null);
 
     /// <summary>One install run. Everything here already runs on the thread pool.</summary>
     private sealed class Pipeline(
         DysonSpeechInstaller owner,
         IDysonSpeechModelRepository models,
+        IDysonSubjectSettingsRepository settings,
+        IReadOnlyList<string> requested,
         ChannelWriter<DysonSpeechInstallStep> writer,
         CancellationToken ct)
     {
         private readonly string _root = owner.InstallRoot;
+        private readonly List<string> _swapped = [];
         private string Staging => Path.Combine(_root, "staging");
         private string Downloads => Path.Combine(Staging, "downloads");
         private string Tree => Path.Combine(Staging, "tree");
         private string Old => Path.Combine(Staging, "old");
         private DysonSpeechManifest _manifest = null!;
         private DysonSpeechRidManifest _m = null!;
+        private DysonSpeechInstallStatus _before = DysonSpeechInstallStatus.None(null);
+        private IReadOnlyList<string> _plan = [];
+        private List<string> _building = [];
+        private bool _rebuildRuntime;
+        private bool _committed;
+        private string? _doneDetail;
+
+        /// <summary>The staged interpreter while the runtime is rebuilt this run, else the installed one.</summary>
+        private string PythonRoot => _rebuildRuntime && !_committed ? Tree : _root;
 
         public async Task RunAsync()
         {
+            var torchWheels = Path.Combine(Downloads, "torch");
             var phononWheels = Path.Combine(Downloads, "phonon-wheelhouse");
             var pocketWheels = Path.Combine(Downloads, "pocket-wheelhouse");
-            var torchWheels = Path.Combine(Downloads, "torch");
+            var qwenWheels = Path.Combine(Downloads, "qwen-wheelhouse");
+            var qwenModel = Path.Combine(Downloads, "qwen-model");
+            var qwenTokenizer = Path.Combine(Downloads, "qwen-speech-tokenizer");
+            var chatterboxWheels = Path.Combine(Downloads, "chatterbox-wheelhouse");
+            var chatterboxModel = Path.Combine(Downloads, "chatterbox-model");
 
-            if (!await StepAsync("preflight", _ => Task.FromResult(Preflight()))) return;
-            if (!await StepAsync("python-download", p => DownloadAllAsync("python-download", [_m.Python], Downloads, p))) return;
-            if (!await StepAsync("python-hash", _ => VerifyAllAsync("python-hash", [_m.Python], Downloads))) return;
-            if (!await StepAsync("python-extract", _ => ExtractPythonAsync())) return;
-            if (!await StepAsync("torch-download", p => DownloadAllAsync("torch-download", _m.Torch, torchWheels, p))) return;
-            if (!await StepAsync("torch-hash", _ => VerifyAllAsync("torch-hash", _m.Torch, torchWheels))) return;
-            if (!await StepAsync("torch-install", _ => PipInstallAsync("torch-install", _m.Torch, torchWheels, DysonSpeechPaths.GetTorchDir(Tree), keepWheelhouseIn: null))) return;
-            if (!await StepAsync("phonon-wheels-download", p => DownloadAllAsync("phonon-wheels-download", _m.PhononWheels, phononWheels, p))) return;
-            if (!await StepAsync("phonon-wheels-hash", _ => VerifyAllAsync("phonon-wheels-hash", _m.PhononWheels, phononWheels))) return;
-            if (!await StepAsync("phonon-wheels-install", _ => PipInstallAsync("phonon-wheels-install", _m.PhononWheels, phononWheels, DysonSpeechPaths.GetPhononSite(Tree), Path.Combine(Tree, "phonon", "wheelhouse")))) return;
-            if (!await StepAsync("phonon-weights-download", p => DownloadAllAsync("phonon-weights-download", [_m.PhononWeights], Downloads, p))) return;
-            if (!await StepAsync("phonon-weights-hash", _ => VerifyAllAsync("phonon-weights-hash", [_m.PhononWeights], Downloads))) return;
-            if (!await StepAsync("phonon-weights-unpack", _ => UnpackPhononAsync())) return;
-            if (!await StepAsync("pocket-wheels-download", p => DownloadAllAsync("pocket-wheels-download", _m.PocketWheels, pocketWheels, p))) return;
-            if (!await StepAsync("pocket-wheels-hash", _ => VerifyAllAsync("pocket-wheels-hash", _m.PocketWheels, pocketWheels))) return;
-            if (!await StepAsync("pocket-wheels-install", _ => PipInstallAsync("pocket-wheels-install", _m.PocketWheels, pocketWheels, DysonSpeechPaths.GetPocketSite(Tree), Path.Combine(Tree, "pocket", "wheelhouse")))) return;
-            if (!await StepAsync("pocket-weights-download", p => DownloadAllAsync("pocket-weights-download", [_m.PocketWeights, _m.PocketTokenizer], Downloads, p))) return;
-            if (!await StepAsync("pocket-weights-hash", _ => VerifyAllAsync("pocket-weights-hash", [_m.PocketWeights, _m.PocketTokenizer], Downloads))) return;
-            if (!await StepAsync("pocket-voice-download", p => DownloadAllAsync("pocket-voice-download", [_m.PocketVoice], Downloads, p))) return;
-            if (!await StepAsync("pocket-voice-hash", _ => VerifyAllAsync("pocket-voice-hash", [_m.PocketVoice], Downloads))) return;
-            if (!await StepAsync("pocket-config", _ => Task.FromResult(WritePocketConfig()))) return;
-            if (!await StepAsync("licenses", _ => Task.FromResult(WriteLicenses()))) return;
-            if (!await StepAsync("commit", _ => CommitAsync())) return;
-            await StepAsync("smoke", _ => SmokeAsync());
+            if (!await StepAsync("preflight", _ => PreflightAsync()) || _plan.Count <= 1)
+                return;
+
+            // Same order as StepIds; only the steps PlanSteps chose run.
+            (string Id, Func<IProgress<DysonDownloadProgress>, Task<VoidResult<string>>> Work)[] steps =
+            [
+                ("python-download", p => DownloadAllAsync("python-download", [_m.Python], Downloads, p)),
+                ("python-hash", _ => VerifyAllAsync("python-hash", [_m.Python], Downloads)),
+                ("python-extract", _ => ExtractPythonAsync()),
+                ("torch-download", p => DownloadAllAsync("torch-download", _m.Torch, torchWheels, p)),
+                ("torch-hash", _ => VerifyAllAsync("torch-hash", _m.Torch, torchWheels)),
+                ("torch-install", _ => PipInstallAsync("torch-install", _m.Torch, torchWheels, DysonSpeechPaths.GetTorchDir(Tree), keepWheelhouseIn: null)),
+                ("phonon-wheels-download", p => DownloadAllAsync("phonon-wheels-download", _m.PhononWheels, phononWheels, p)),
+                ("phonon-wheels-hash", _ => VerifyAllAsync("phonon-wheels-hash", _m.PhononWheels, phononWheels)),
+                ("phonon-wheels-install", _ => PipInstallAsync("phonon-wheels-install", _m.PhononWheels, phononWheels, DysonSpeechPaths.GetPhononSite(Tree), Path.Combine(Tree, "phonon", "wheelhouse"))),
+                ("phonon-weights-download", p => DownloadAllAsync("phonon-weights-download", [_m.PhononWeights], Downloads, p)),
+                ("phonon-weights-hash", _ => VerifyAllAsync("phonon-weights-hash", [_m.PhononWeights], Downloads)),
+                ("phonon-weights-unpack", _ => UnpackPhononAsync()),
+                ("pocket-wheels-download", p => DownloadAllAsync("pocket-wheels-download", _m.PocketWheels, pocketWheels, p)),
+                ("pocket-wheels-hash", _ => VerifyAllAsync("pocket-wheels-hash", _m.PocketWheels, pocketWheels)),
+                ("pocket-wheels-install", _ => PipInstallAsync("pocket-wheels-install", _m.PocketWheels, pocketWheels, DysonSpeechPaths.GetPocketSite(Tree), Path.Combine(Tree, "pocket", "wheelhouse"))),
+                ("pocket-weights-download", p => DownloadAllAsync("pocket-weights-download", [_m.PocketWeights, _m.PocketTokenizer], Downloads, p)),
+                ("pocket-weights-hash", _ => VerifyAllAsync("pocket-weights-hash", [_m.PocketWeights, _m.PocketTokenizer], Downloads)),
+                ("pocket-voice-download", p => DownloadAllAsync("pocket-voice-download", [_m.PocketVoice], Downloads, p)),
+                ("pocket-voice-hash", _ => VerifyAllAsync("pocket-voice-hash", [_m.PocketVoice], Downloads)),
+                ("pocket-config", _ => Task.FromResult(WritePocketConfig())),
+                ("qwen-wheels-download", p => DownloadAllAsync("qwen-wheels-download", _m.QwenWheels, qwenWheels, p)),
+                ("qwen-wheels-hash", _ => VerifyAllAsync("qwen-wheels-hash", _m.QwenWheels, qwenWheels)),
+                ("qwen-wheels-install", _ => PipInstallAsync("qwen-wheels-install", _m.QwenWheels, qwenWheels, DysonSpeechPaths.GetQwenSite(Tree), Path.Combine(Tree, "qwen", "wheelhouse"))),
+                ("qwen-weights-download", async p =>
+                {
+                    var model = await DownloadAllAsync("qwen-weights-download", _m.QwenModel, qwenModel, p).ConfigureAwait(false);
+                    return model.IsError ? model : await DownloadAllAsync("qwen-weights-download", _m.QwenSpeechTokenizer, qwenTokenizer, p).ConfigureAwait(false);
+                }),
+                ("qwen-weights-hash", async _ =>
+                {
+                    var model = await VerifyAllAsync("qwen-weights-hash", _m.QwenModel, qwenModel).ConfigureAwait(false);
+                    return model.IsError ? model : await VerifyAllAsync("qwen-weights-hash", _m.QwenSpeechTokenizer, qwenTokenizer).ConfigureAwait(false);
+                }),
+                ("qwen-config", _ => Task.FromResult(WriteQwenConfig(qwenModel, qwenTokenizer))),
+                ("chatterbox-wheels-download", p => DownloadAllAsync("chatterbox-wheels-download", _m.ChatterboxWheels, chatterboxWheels, p)),
+                ("chatterbox-wheels-hash", _ => VerifyAllAsync("chatterbox-wheels-hash", _m.ChatterboxWheels, chatterboxWheels)),
+                ("chatterbox-wheels-install", _ => PipInstallAsync("chatterbox-wheels-install", _m.ChatterboxWheels, chatterboxWheels, DysonSpeechPaths.GetChatterboxSite(Tree), Path.Combine(Tree, "chatterbox", "wheelhouse"))),
+                ("chatterbox-weights-download", p => DownloadAllAsync("chatterbox-weights-download", _m.ChatterboxModel, chatterboxModel, p)),
+                ("chatterbox-weights-hash", _ => VerifyAllAsync("chatterbox-weights-hash", _m.ChatterboxModel, chatterboxModel)),
+                ("chatterbox-config", _ => Task.FromResult(WriteChatterboxConfig(chatterboxModel))),
+                ("licenses", _ => Task.FromResult(WriteLicenses())),
+                ("commit", _ => CommitAsync()),
+                ("smoke", _ => SmokeAsync()),
+            ];
+
+            foreach (var (id, work) in steps)
+            {
+                if (_plan.Contains(id) && !await StepAsync(id, work))
+                    return;
+            }
         }
 
         private async Task<bool> StepAsync(
@@ -417,6 +659,7 @@ public sealed class DysonSpeechInstaller
         {
             writer.TryWrite(new DysonSpeechInstallStep(stepId, DysonSpeechStepState.Running));
             VoidResult<string> result;
+            _doneDetail = null;
             try
             {
                 ct.ThrowIfCancellationRequested();
@@ -436,11 +679,11 @@ public sealed class DysonSpeechInstaller
 
             writer.TryWrite(result.IsError
                 ? new DysonSpeechInstallStep(stepId, DysonSpeechStepState.Failed, result.Error)
-                : new DysonSpeechInstallStep(stepId, DysonSpeechStepState.Done));
+                : new DysonSpeechInstallStep(stepId, DysonSpeechStepState.Done, _doneDetail));
             return !result.IsError;
         }
 
-        private VoidResult<string> Preflight()
+        private async Task<VoidResult<string>> PreflightAsync()
         {
             if (!IsSupportedPlatform())
                 return new VoidResult<string>($"preflight: speech install is {SupportedRid} only in this release (not supported on {RuntimeInformation.RuntimeIdentifier}).");
@@ -453,12 +696,26 @@ public sealed class DysonSpeechInstaller
             _manifest = manifest.Value;
             _m = rid;
 
-            Directory.CreateDirectory(_root);
-            var free = new DriveInfo(Path.GetPathRoot(_root)!).AvailableFreeSpace;
-            if (free < RequiredFreeBytes)
-                return new VoidResult<string>($"preflight: needs {RequiredFreeBytes:N0} free bytes on {Path.GetPathRoot(_root)}, has {free:N0}.");
+            _before = Probe(_root);
+            _plan = PlanSteps(_before, requested);
+            if (_plan.Count == 1)
+            {
+                var sync = await SyncDbAsync().ConfigureAwait(false);
+                if (sync.IsError)
+                    return new VoidResult<string>("preflight: " + sync.Error);
+                _doneDetail = "Already installed.";
+                return VoidResult<string>.Success;
+            }
 
-            StopSidecars();
+            _rebuildRuntime = !_before.RuntimeInstalled;
+            _building = ModelIds.Where(id => requested.Contains(id) && !_before.IsInstalled(id)).ToList();
+
+            Directory.CreateDirectory(_root);
+            var need = RequiredFreeBytes(_rebuildRuntime, _building);
+            var free = new DriveInfo(Path.GetPathRoot(_root)!).AvailableFreeSpace;
+            if (free < need)
+                return new VoidResult<string>($"preflight: needs {need:N0} free bytes on {Path.GetPathRoot(_root)}, has {free:N0}.");
+
             var clean = DeleteTree(Tree);
             if (clean.IsError)
                 return new VoidResult<string>("preflight: " + clean.Error);
@@ -619,18 +876,54 @@ public sealed class DysonSpeechInstaller
 
             // Paths point at the final location; the tree is swapped into place at commit.
             File.WriteAllText(DysonSpeechPaths.GetPocketConfig(Tree), BuildPocketConfig(_root));
+            return WriteBridge("pocket-config", BridgeResourceName, DysonSpeechPaths.GetPocketBridge(Tree));
+        }
 
-            using var bridge = typeof(DysonSpeechInstaller).Assembly.GetManifestResourceStream(BridgeResourceName);
+        /// <summary>Moves (not copies: same volume, no second 2.5 GB) the verified weights into <c>tree/qwen/model</c>.</summary>
+        private VoidResult<string> WriteQwenConfig(string modelDownloads, string tokenizerDownloads)
+        {
+            var modelDir = DysonSpeechPaths.GetQwenModelDir(Tree);
+            var tokenizerDir = Path.Combine(modelDir, "speech_tokenizer");
+            Directory.CreateDirectory(tokenizerDir);
+            Directory.CreateDirectory(DysonSpeechPaths.GetQwenVoicesDir(Tree));
+            foreach (var file in _m.QwenModel)
+                File.Move(Path.Combine(modelDownloads, file.FileName), Path.Combine(modelDir, file.FileName), overwrite: true);
+            foreach (var file in _m.QwenSpeechTokenizer)
+                File.Move(Path.Combine(tokenizerDownloads, file.FileName), Path.Combine(tokenizerDir, file.FileName), overwrite: true);
+            return WriteBridge("qwen-config", DysonQwenSpeech.BridgeResourceName, DysonSpeechPaths.GetQwenBridge(Tree));
+        }
+
+        /// <summary>Moves the 9 verified files into <c>tree/chatterbox/model</c>; <c>conds.pt</c> becomes catalog voice <c>turbo</c>.</summary>
+        private VoidResult<string> WriteChatterboxConfig(string modelDownloads)
+        {
+            var modelDir = DysonSpeechPaths.GetChatterboxModelDir(Tree);
+            var voicesDir = DysonSpeechPaths.GetChatterboxVoicesDir(Tree);
+            Directory.CreateDirectory(modelDir);
+            Directory.CreateDirectory(voicesDir);
+            foreach (var file in _m.ChatterboxModel)
+                File.Move(Path.Combine(modelDownloads, file.FileName), Path.Combine(modelDir, file.FileName), overwrite: true);
+
+            var conds = Path.Combine(modelDir, "conds.pt");
+            if (!File.Exists(conds))
+                return new VoidResult<string>("chatterbox-config: the manifest has no conds.pt (built-in turbo voice).");
+            File.Copy(conds, Path.Combine(voicesDir, DysonChatterboxSpeech.CatalogVoiceId + ".pt"), overwrite: true);
+            return WriteBridge("chatterbox-config", DysonChatterboxSpeech.BridgeResourceName, DysonSpeechPaths.GetChatterboxBridge(Tree));
+        }
+
+        private static VoidResult<string> WriteBridge(string stepId, string resourceName, string path)
+        {
+            using var bridge = typeof(DysonSpeechInstaller).Assembly.GetManifestResourceStream(resourceName);
             if (bridge is null)
-                return new VoidResult<string>($"pocket-config: embedded {BridgeResourceName} is missing.");
-            using (var output = File.Create(DysonSpeechPaths.GetPocketBridge(Tree)))
+                return new VoidResult<string>($"{stepId}: embedded {resourceName} is missing.");
+            using (var output = File.Create(path))
                 bridge.CopyTo(output);
             return VoidResult<string>.Success;
         }
 
+        /// <summary>Written straight into <c>{root}/licenses</c>: not a swapped directory.</summary>
         private VoidResult<string> WriteLicenses()
         {
-            var dir = Path.Combine(Tree, "licenses");
+            var dir = Path.Combine(_root, "licenses");
             Directory.CreateDirectory(dir);
             File.WriteAllText(Path.Combine(dir, "NOTICES.md"), Notices);
             return VoidResult<string>.Success;
@@ -639,57 +932,121 @@ public sealed class DysonSpeechInstaller
         private async Task<VoidResult<string>> CommitAsync()
         {
             StopSidecars();
-            var swap = Swap();
+            var previous = ReadStamp(_root);
+            string[] dirs = [.. _rebuildRuntime ? ["python", "torch"] : Array.Empty<string>(), .. _building.Select(ModelDir)];
+            var swap = Swap(dirs);
             if (swap.IsError)
             {
                 RestoreOld();
                 return swap;
             }
 
-            await File.WriteAllTextAsync(
-                DysonSpeechPaths.GetInstallJson(_root),
-                JsonSerializer.Serialize(NewStamp(_manifest), JsonOptions),
-                ct).ConfigureAwait(false);
+            _committed = true;
+            var stamp = new DysonSpeechInstallStamp(
+                _manifest.SchemaVersion, _manifest.PythonVersion, _manifest.TorchRequirement,
+                previous?.PhononPackage, previous?.PocketPackage, SupportedRid, DateTime.UtcNow,
+                previous?.QwenPackage, previous?.ChatterboxPackage);
+            foreach (var id in _building)
+                stamp = WithPackage(stamp, id, PackageOf(_manifest, id));
+            var write = WriteStamp(_root, stamp);
+            if (write.IsError)
+            {
+                RestoreOld();
+                return new VoidResult<string>("commit: " + write.Error);
+            }
 
+            var sync = await SyncDbAsync().ConfigureAwait(false);
+            return sync.IsError ? new VoidResult<string>("commit: " + sync.Error) : VoidResult<string>.Success;
+        }
+
+        /// <summary>
+        /// Marks the requested models installed, seeds catalog voices (<c>alba</c>, <c>turbo</c>; insert-if-missing), and
+        /// sets <c>speech_output_model_id</c> when missing to the first installed of <see cref="ActiveDefaultOrder"/>.
+        /// </summary>
+        private async Task<VoidResult<string>> SyncDbAsync()
+        {
             var variant = Path.GetFileName(_root);
             var ensure = await models.EnsureBuiltInAsync(ct).ConfigureAwait(false);
             if (ensure.IsError)
-                return new VoidResult<string>("commit: " + ensure.Error);
-            foreach (var id in new[] { DysonPhononSpeech.Id, DysonPocketSpeech.Id })
+                return ensure;
+
+            foreach (var id in requested)
             {
                 var mark = await models.MarkInstalledAsync(id, variant, ct).ConfigureAwait(false);
                 if (mark.IsError)
-                    return new VoidResult<string>("commit: " + mark.Error);
+                    return mark;
             }
 
-            var voice = await models
-                .EnsureCatalogVoiceAsync(DysonPocketSpeech.Id, CatalogVoiceId, "Alba", variant, ct)
-                .ConfigureAwait(false);
-            return voice.IsError ? new VoidResult<string>("commit: " + voice.Error) : VoidResult<string>.Success;
+            if (requested.Contains(DysonPocketSpeech.Id))
+            {
+                var alba = await models.EnsureCatalogVoiceAsync(DysonPocketSpeech.Id, CatalogVoiceId, "Alba", variant, ct).ConfigureAwait(false);
+                if (alba.IsError)
+                    return alba;
+            }
+
+            if (requested.Contains(DysonChatterboxSpeech.Id))
+            {
+                var turbo = await models
+                    .EnsureCatalogVoiceAsync(DysonChatterboxSpeech.Id, DysonChatterboxSpeech.CatalogVoiceId, "Turbo default", variant, ct)
+                    .ConfigureAwait(false);
+                if (turbo.IsError)
+                    return turbo;
+            }
+
+            var active = await settings.GetSettingAsync(DysonAppSettingKeys.SpeechOutputModelId, ct).ConfigureAwait(false);
+            if (active.IsError || !string.IsNullOrWhiteSpace(active.Value))
+                return active.IsError ? new VoidResult<string>(active.Error) : VoidResult<string>.Success;
+
+            var first = ActiveDefaultOrder.FirstOrDefault(id => requested.Contains(id) || _before.IsInstalled(id));
+            return first is null
+                ? VoidResult<string>.Success
+                : await settings.SetSettingAsync(DysonAppSettingKeys.SpeechOutputModelId, first, ct).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Health / import checks for the models built this run only: Phonon <c>/health</c>, <c>import qwen_tts</c>,
+        /// <c>from chatterbox.tts_turbo import ChatterboxTurboTTS</c> (proves the shared torch ABI without loading
+        /// weights). Any failure restores the swapped directories.
+        /// </summary>
         private async Task<VoidResult<string>> SmokeAsync()
         {
-            var health = await DysonPhononSpeech.CheckHealthAsync(_root, ct).ConfigureAwait(false);
-            DysonPhononSpeech.StopSidecar();
-            if (health.IsError)
+            var check = VoidResult<string>.Success;
+            if (_building.Contains(DysonPhononSpeech.Id))
             {
-                var hadPrevious = File.Exists(Path.Combine(Old, "install.json"));
-                RestoreOld();
-                if (!hadPrevious)
-                {
-                    foreach (var id in new[] { DysonPhononSpeech.Id, DysonPocketSpeech.Id })
-                        await models.MarkUninstalledAsync(id, CancellationToken.None).ConfigureAwait(false);
-                }
+                var health = await DysonPhononSpeech.CheckHealthAsync(_root, ct).ConfigureAwait(false);
+                DysonPhononSpeech.StopSidecar();
+                check = health;
+            }
 
-                return new VoidResult<string>("smoke: " + health.Error + " The previous state was restored.");
+            if (check.IsSuccess && _building.Contains(DysonQwenSpeech.Id))
+            {
+                check = await RunPythonAsync("smoke",
+                    [DysonSpeechPaths.GetQwenSite(_root), DysonSpeechPaths.GetTorchDir(_root)],
+                    ["-c", "import qwen_tts"]).ConfigureAwait(false);
+            }
+
+            if (check.IsSuccess && _building.Contains(DysonChatterboxSpeech.Id))
+            {
+                check = await RunPythonAsync("smoke",
+                    [DysonSpeechPaths.GetChatterboxSite(_root), DysonSpeechPaths.GetTorchDir(_root)],
+                    ["-c", "from chatterbox.tts_turbo import ChatterboxTurboTTS"]).ConfigureAwait(false);
+            }
+
+            if (check.IsError)
+            {
+                RestoreOld();
+                foreach (var id in _building)
+                    await models.MarkUninstalledAsync(id, CancellationToken.None).ConfigureAwait(false);
+                var error = check.Error.StartsWith("smoke: ", StringComparison.Ordinal) ? check.Error : "smoke: " + check.Error;
+                return new VoidResult<string>(error + " The previous state was restored.");
             }
 
             DeleteTree(Staging);
             return VoidResult<string>.Success;
         }
 
-        private VoidResult<string> Swap()
+        /// <summary>Moves only the directories built this run into place; installed models and their voices never move.</summary>
+        private VoidResult<string> Swap(IReadOnlyList<string> dirs)
         {
             try
             {
@@ -697,18 +1054,19 @@ public sealed class DysonSpeechInstaller
                 if (clean.IsError)
                     return new VoidResult<string>("commit: " + clean.Error);
                 Directory.CreateDirectory(Old);
-                foreach (var name in TreeDirs)
-                {
-                    if (Directory.Exists(Path.Combine(_root, name)))
-                        Directory.Move(Path.Combine(_root, name), Path.Combine(Old, name));
-                }
 
                 var json = DysonSpeechPaths.GetInstallJson(_root);
                 if (File.Exists(json))
-                    File.Move(json, Path.Combine(Old, "install.json"));
+                    File.Copy(json, Path.Combine(Old, "install.json"));
 
-                foreach (var name in TreeDirs)
+                foreach (var name in dirs)
+                {
+                    _swapped.Add(name);
+                    if (Directory.Exists(Path.Combine(_root, name)))
+                        Directory.Move(Path.Combine(_root, name), Path.Combine(Old, name));
                     Directory.Move(Path.Combine(Tree, name), Path.Combine(_root, name));
+                }
+
                 return VoidResult<string>.Success;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -717,34 +1075,35 @@ public sealed class DysonSpeechInstaller
             }
         }
 
+        /// <summary>Puts back each swapped directory; one with no previous copy is deleted. Restores <c>install.json</c>.</summary>
         private void RestoreOld()
         {
             try
             {
-                foreach (var name in TreeDirs)
+                StopSidecars();
+                foreach (var name in _swapped)
                 {
-                    if (!Directory.Exists(Path.Combine(Old, name)))
-                        continue;
                     DeleteTree(Path.Combine(_root, name));
-                    Directory.Move(Path.Combine(Old, name), Path.Combine(_root, name));
+                    if (Directory.Exists(Path.Combine(Old, name)))
+                        Directory.Move(Path.Combine(Old, name), Path.Combine(_root, name));
                 }
 
                 var json = DysonSpeechPaths.GetInstallJson(_root);
-                if (File.Exists(json))
-                    File.Delete(json);
                 if (File.Exists(Path.Combine(Old, "install.json")))
-                    File.Move(Path.Combine(Old, "install.json"), json);
+                    File.Copy(Path.Combine(Old, "install.json"), json, overwrite: true);
+                else if (File.Exists(json))
+                    File.Delete(json);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 // ponytail: a failed rollback leaves a tree whose install.json is missing or stale, so Probe
-                // reports not installed and Repair rebuilds it.
+                // reports the model not installed and its checkbox installs it again.
             }
         }
 
         private async Task<VoidResult<string>> RunPythonAsync(string stepId, IReadOnlyList<string> pythonPath, IReadOnlyList<string> args)
         {
-            var psi = PythonStartInfo(Tree, pythonPath, args);
+            var psi = PythonStartInfo(PythonRoot, pythonPath, args);
             using var process = Process.Start(psi);
             if (process is null)
                 return new VoidResult<string>($"{stepId}: could not start {psi.FileName}.");
@@ -789,7 +1148,14 @@ public sealed class DysonSpeechInstaller
         - Phonon-2 weights (Fermion Research, derived from NVIDIA Parakeet TDT 0.6B v3): CC-BY-4.0.
         - pocket-tts 3.3.0 code (Kyutai): MIT.
         - Pocket TTS weights and the alba voice embedding (kyutai/pocket-tts-without-voice-cloning): CC-BY-4.0.
+        - qwen-tts 0.1.1 code (Alibaba Qwen): Apache-2.0.
+        - Qwen3-TTS-12Hz-0.6B-Base weights (Alibaba Qwen): Apache-2.0.
+        - chatterbox-tts 0.1.7 code (Resemble AI): MIT.
+        - Chatterbox Turbo weights (ResembleAI/chatterbox-turbo, Resemble AI): MIT. English only. Output carries Resemble's Perth implicit watermark.
+        - resemble-perth: MIT. s3tokenizer: Apache-2.0. diffusers: Apache-2.0. conformer: MIT. omegaconf: BSD-3-Clause. pyloudnorm: MIT. onnx: Apache-2.0.
+        - torchaudio: BSD-2-Clause. transformers and accelerate: Apache-2.0.
+        - librosa: ISC. numba and llvmlite: BSD-2-Clause. onnxruntime: MIT. sox (Python package): BSD-3-Clause.
         - libsndfile inside the upstream soundfile wheel: LGPL-2.1.
-        - Other wheels in phonon/wheelhouse and pocket/wheelhouse keep the license files inside each wheel's dist-info.
+        - Other wheels in phonon/, pocket/, qwen/ and chatterbox/ wheelhouse folders keep the license files inside each wheel's dist-info.
         """;
 }

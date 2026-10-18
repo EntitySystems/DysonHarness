@@ -9,6 +9,8 @@ public sealed class DysonSpeechModelRepository(
 {
     public const string PhononRuntimeId = "phonon-2";
     public const string PocketRuntimeId = "pocket-tts";
+    public const string QwenRuntimeId = "qwen3-tts-0.6b-base";
+    public const string ChatterboxRuntimeId = "chatterbox-turbo";
 
     private readonly DysonDbAccessor _accessor = accessor ?? throw new ArgumentNullException(nameof(accessor));
     private readonly IDysonSubjectContext _subjectContext =
@@ -68,7 +70,8 @@ public sealed class DysonSpeechModelRepository(
         string voiceId,
         string displayName,
         string variant,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? sourceFileName = null)
     {
         var subjectId = _subjectContext.SubjectId;
         return _accessor.RunAsync<VoidResult<string>>(async (db, ct) =>
@@ -89,7 +92,7 @@ public sealed class DysonSpeechModelRepository(
                     ModelRuntimeId = modelRuntimeId,
                     VoiceId = voiceId,
                     DisplayName = displayName,
-                    SourceFileName = null,
+                    SourceFileName = sourceFileName,
                     Variant = variant,
                     CreatedUtc = DateTime.UtcNow,
                 });
@@ -143,6 +146,11 @@ public sealed class DysonSpeechModelRepository(
                 db.SpeechModels.Add(NewRow(subjectId, PhononRuntimeId, "Phonon 2", DysonSpeechCapability.Input, "phonon", false, now));
             if (!existing.Contains(PocketRuntimeId))
                 db.SpeechModels.Add(NewRow(subjectId, PocketRuntimeId, "Pocket TTS", DysonSpeechCapability.Output, "pocket", true, now));
+            if (!existing.Contains(QwenRuntimeId))
+                db.SpeechModels.Add(NewRow(subjectId, QwenRuntimeId, "Qwen3-TTS 0.6B Base", DysonSpeechCapability.Output, "qwen", true, now));
+            // English only is a product limit, recorded in the name the Voice page renders (no language column).
+            if (!existing.Contains(ChatterboxRuntimeId))
+                db.SpeechModels.Add(NewRow(subjectId, ChatterboxRuntimeId, "Chatterbox Turbo (English only)", DysonSpeechCapability.Output, "chatterbox", true, now));
 
             await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;

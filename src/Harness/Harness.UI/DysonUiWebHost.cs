@@ -198,10 +198,11 @@ public static class DysonUiWebHost
         });
         builder.Services.AddScoped<IDysonSpeechToText>(sp =>
             new DysonPhononSpeech(sp.GetRequiredService<DysonSpeechInstaller>().InstallRoot));
-        builder.Services.AddScoped<IDysonTextToSpeech>(sp => new DysonPocketSpeech(
+        builder.Services.AddScoped(sp => new DysonActiveTextToSpeech(
             sp.GetRequiredService<IDysonSpeechModelRepository>(),
             sp.GetRequiredService<IDysonSubjectSettingsRepository>(),
             sp.GetRequiredService<DysonSpeechInstaller>().InstallRoot));
+        builder.Services.AddScoped<IDysonTextToSpeech>(sp => sp.GetRequiredService<DysonActiveTextToSpeech>());
 
         if (hostingMode == DysonHostingMode.Cloud)
             builder.Services.AddScoped<CircuitHandler, DysonCloudSubjectCircuitHandler>();
@@ -250,6 +251,8 @@ public static class DysonUiWebHost
 
             DysonPhononSpeech.StopSidecar();
             DysonPocketSpeech.StopBridge();
+            DysonQwenSpeech.StopBridge();
+            DysonChatterboxSpeech.StopBridge();
         });
 
         if (!app.Environment.IsDevelopment())

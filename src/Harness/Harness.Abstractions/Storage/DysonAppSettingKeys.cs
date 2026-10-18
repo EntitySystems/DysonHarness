@@ -217,9 +217,17 @@ public static class DysonAppSettingKeys
     /// <summary>Preferred speech-to-text <c>speech_models.RuntimeId</c>. Missing ⇒ the single installed Input row.</summary>
     public const string SpeechInputModelId = "speech_input_model_id";
 
-    /// <summary>Preferred text-to-speech <c>speech_models.RuntimeId</c>. Missing ⇒ the single installed Output row.</summary>
+    /// <summary>
+    /// The active text-to-speech <c>speech_models.RuntimeId</c> (Pocket TTS, Qwen3-TTS, or Chatterbox Turbo). Written by
+    /// Settings → Voice and by the speech installer commit when missing. Set but not installed ⇒ synthesis error, no
+    /// fallback. Missing ⇒ the single installed Output row.
+    /// </summary>
     public const string SpeechOutputModelId = "speech_output_model_id";
 
-    /// <summary>Default output <c>speech_voices.VoiceId</c> when synthesis gets no voice id. Missing ⇒ <c>alba</c>.</summary>
+    /// <summary>
+    /// Default output <c>speech_voices.VoiceId</c> when synthesis gets no voice id; Train TTS model sets it to the new
+    /// voice. Used only when it names a voice of the engine speaking; else Pocket ⇒ <c>alba</c>, Chatterbox ⇒
+    /// <c>turbo</c>, Qwen ⇒ its newest voice.
+    /// </summary>
     public const string SpeechOutputVoiceId = "speech_output_voice_id";
 }

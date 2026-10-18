@@ -46,5 +46,22 @@ public static class DysonSpeechPaths
 
     public static string GetPocketVoicesDir(string installRoot) => Path.Combine(installRoot, "pocket", "voices");
 
+    public static string GetQwenSite(string installRoot) => Path.Combine(installRoot, "qwen", "site");
+
+    /// <summary>The 7 root model files; the speech tokenizer is in <c>speech_tokenizer/</c> below it.</summary>
+    public static string GetQwenModelDir(string installRoot) => Path.Combine(installRoot, "qwen", "model");
+
+    public static string GetQwenBridge(string installRoot) => Path.Combine(installRoot, "qwen", "bridge.py");
+
+    public static string GetQwenVoicesDir(string installRoot) => Path.Combine(installRoot, "qwen", "voices");
+
+    public static string GetChatterboxSite(string installRoot) => Path.Combine(installRoot, "chatterbox", "site");
+
+    public static string GetChatterboxModelDir(string installRoot) => Path.Combine(installRoot, "chatterbox", "model");
+
+    public static string GetChatterboxBridge(string installRoot) => Path.Combine(installRoot, "chatterbox", "bridge.py");
+
+    public static string GetChatterboxVoicesDir(string installRoot) => Path.Combine(installRoot, "chatterbox", "voices");
+
     public static string GetInstallJson(string installRoot) => Path.Combine(installRoot, "install.json");
 }

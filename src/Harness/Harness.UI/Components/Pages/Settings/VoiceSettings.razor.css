@@ -2,6 +2,56 @@
   margin: 8px 0 0;
 }
 
+.voice-models {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.voice-model {
+  display: grid;
+  grid-template-columns: 18px minmax(200px, max-content) 1fr auto;
+  align-items: center;
+  gap: 4px 12px;
+  min-height: 32px;
+}
+
+.voice-model__check {
+  margin: 0;
+  width: 16px;
+  height: 16px;
+}
+
+.voice-model__name {
+  color: var(--text);
+}
+
+.voice-model__state {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.voice-active {
+  margin-top: 16px;
+}
+
+.voice-active__options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.voice-active__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
 .voice-steps {
   list-style: none;
   margin: 12px 0 0;

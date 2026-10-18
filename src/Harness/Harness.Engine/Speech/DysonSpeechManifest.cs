@@ -15,7 +15,12 @@ public sealed record DysonSpeechRidManifest(
     DysonSpeechFile PhononWeights,
     DysonSpeechFile PocketWeights,
     DysonSpeechFile PocketTokenizer,
-    DysonSpeechFile PocketVoice);
+    DysonSpeechFile PocketVoice,
+    IReadOnlyList<DysonSpeechFile> QwenWheels,
+    IReadOnlyList<DysonSpeechFile> QwenModel,
+    IReadOnlyList<DysonSpeechFile> QwenSpeechTokenizer,
+    IReadOnlyList<DysonSpeechFile> ChatterboxWheels,
+    IReadOnlyList<DysonSpeechFile> ChatterboxModel);
 
 /// <summary>
 /// <c>packaging/speech/manifest.json</c>, embedded in Harness.Engine. Git holds URLs and hashes, never the bytes.
@@ -26,6 +31,8 @@ public sealed partial record DysonSpeechManifest(
     string TorchRequirement,
     string PhononPackage,
     string PocketPackage,
+    string QwenPackage,
+    string ChatterboxPackage,
     IReadOnlyDictionary<string, DysonSpeechRidManifest> Rids)
 {
     public const string ResourceName = "DysonHarness.Speech.manifest.json";
@@ -43,8 +50,9 @@ public sealed partial record DysonSpeechManifest(
     }
 
     /// <summary>
-    /// Parses and validates. Rejects any Pocket URL into the gated <c>kyutai/pocket-tts/</c> repo:
-    /// only <c>kyutai/pocket-tts-without-voice-cloning</c> is allowed.
+    /// Parses and validates. Rejects any Pocket URL into the gated <c>kyutai/pocket-tts/</c> repo (only
+    /// <c>kyutai/pocket-tts-without-voice-cloning</c> is allowed), torch or gradio in a model site, and any
+    /// Chatterbox weight outside <c>ResembleAI/chatterbox-turbo/</c> (the multilingual repo is not used).
     /// </summary>
     public static Result<DysonSpeechManifest, string> Parse(string json)
     {
@@ -60,11 +68,15 @@ public sealed partial record DysonSpeechManifest(
 
         if (manifest?.Rids is null || manifest.Rids.Count == 0)
             return Result<DysonSpeechManifest, string>.AsError("Speech manifest has no RIDs.");
+        if (string.IsNullOrWhiteSpace(manifest.QwenPackage) || string.IsNullOrWhiteSpace(manifest.ChatterboxPackage))
+            return Result<DysonSpeechManifest, string>.AsError("Speech manifest has no qwenPackage or chatterboxPackage.");
 
         foreach (var (rid, m) in manifest.Rids)
         {
             if (m?.Python is null || m.Torch is not { Count: > 0 } || m.PhononWheels is null || m.PocketWheels is null
-                || m.PhononWeights is null || m.PocketWeights is null || m.PocketTokenizer is null || m.PocketVoice is null)
+                || m.PhononWeights is null || m.PocketWeights is null || m.PocketTokenizer is null || m.PocketVoice is null
+                || m.QwenWheels is not { Count: > 0 } || m.QwenModel is not { Count: > 0 } || m.QwenSpeechTokenizer is not { Count: > 0 }
+                || m.ChatterboxWheels is not { Count: > 0 } || m.ChatterboxModel is not { Count: > 0 })
             {
                 return Result<DysonSpeechManifest, string>.AsError($"Speech manifest RID '{rid}' is incomplete.");
             }
@@ -73,6 +85,7 @@ public sealed partial record DysonSpeechManifest(
             [
                 m.Python, .. m.Torch, .. m.PhononWheels, .. m.PocketWheels,
                 m.PhononWeights, m.PocketWeights, m.PocketTokenizer, m.PocketVoice,
+                .. m.QwenWheels, .. m.QwenModel, .. m.QwenSpeechTokenizer, .. m.ChatterboxWheels, .. m.ChatterboxModel,
             ];
             foreach (var file in all)
             {
@@ -96,12 +109,22 @@ public sealed partial record DysonSpeechManifest(
                 }
             }
 
-            if (m.PhononWheels.Concat(m.PocketWheels).Any(IsTorchWheel))
+            IEnumerable<DysonSpeechFile> sites = [.. m.PhononWheels, .. m.PocketWheels, .. m.QwenWheels, .. m.ChatterboxWheels];
+            if (sites.Any(IsTorchWheel))
                 return Result<DysonSpeechManifest, string>.AsError($"Speech manifest RID '{rid}' lists torch in a model site.");
+            if (sites.Any(w => w.FileName.StartsWith("gradio", StringComparison.OrdinalIgnoreCase)))
+                return Result<DysonSpeechManifest, string>.AsError($"Speech manifest RID '{rid}' lists gradio in a model site.");
+            if (m.ChatterboxModel.FirstOrDefault(f => !f.Url.Contains(ChatterboxTurboRepo, StringComparison.OrdinalIgnoreCase)) is { } other)
+            {
+                return Result<DysonSpeechManifest, string>.AsError(
+                    $"Speech manifest chatterboxModel points outside {ChatterboxTurboRepo} ({other.Url}). Only Chatterbox Turbo (English only) is used.");
+            }
         }
 
         return Result<DysonSpeechManifest, string>.AsValue(manifest);
     }
+
+    internal const string ChatterboxTurboRepo = "huggingface.co/ResembleAI/chatterbox-turbo/";
 
     internal static bool IsGatedPocketUrl(string url) =>
         url.Contains("kyutai/pocket-tts/", StringComparison.OrdinalIgnoreCase)
