@@ -42,6 +42,12 @@
       "Description": "Ponytail lazy-senior efficiency ladder (mandatory)"
     },
     {
+      "Path": "rules/rules_management_model.md",
+      "Mode": "AutoInclude",
+      "Description": "Management drones (start/stop services, builds, UI restart, tooling) use grok-4.7 at high effort; all others inherit the parent model",
+      "Providers": ["dyson"]
+    },
+    {
       "Path": "rules/rules_cursor_rules.md",
       "Mode": "AgentOptional",
       "Description": "Cursor rules lifecycle — .cursor/ is gitignored; author rules in rules/ per openrules spec",
