@@ -43,6 +43,32 @@ public class DysonWindowsAudioCaptureTests
     }
 
     [Fact]
+    public async Task Pcm_blocks_have_no_wav_header_and_stop_ends_the_sequence()
+    {
+        var wave = new FakeWaveIn { PushOnStart = Tone(DysonWindowsAudioCapture.PcmBlockBytes, 7) };
+        var capture = new DysonWindowsAudioCapture(OneMic, _ => wave);
+        var results = new List<Result<byte[], string>>();
+        var read = Task.Run(async () =>
+        {
+            await foreach (var item in capture.CapturePcmAsync("0", CancellationToken.None))
+                results.Add(item);
+        });
+
+        await wave.Started;
+        await WaitUntil(() => results.Count == 1);
+        Assert.True(capture.Stop().IsSuccess);
+        await read;
+
+        Assert.Single(results);
+        Assert.True(results[0].IsSuccess);
+        Assert.Equal(DysonWindowsAudioCapture.PcmBlockBytes, results[0].Value.Length);
+        Assert.Equal(7, results[0].Value[0]);
+        Assert.False(results[0].Value.AsSpan(0, 4).SequenceEqual("RIFF"u8));
+        Assert.True(wave.Stopped);
+        Assert.True(capture.Stop().IsError);
+    }
+
+    [Fact]
     public async Task Stop_flushes_a_short_tail_and_drops_a_tiny_one()
     {
         var flushed = await StopAfter(Tone(DysonWindowsAudioCapture.MinFlushBytes, 4));

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using DysonHarness;
 
 namespace Harness.Tests;
@@ -78,7 +79,9 @@ public class DysonSpeechInstallerTests
         var addQwen = DysonSpeechInstaller.PlanSteps(pocketOnly, [pocket, qwen]);
         Assert.Contains("qwen-wheels-download", addQwen);
         Assert.Contains("qwen-config", addQwen);
-        Assert.All(DysonSpeechInstaller.StepIds.Where(s => s.StartsWith("qwen-", StringComparison.Ordinal)), s => Assert.Contains(s, addQwen));
+        Assert.All(
+            DysonSpeechInstaller.StepIds.Where(s => s.StartsWith("qwen-", StringComparison.Ordinal) && !s.StartsWith("qwen-gguf-", StringComparison.Ordinal)),
+            s => Assert.Contains(s, addQwen));
         Assert.DoesNotContain(addQwen, s => s.StartsWith("python-") || s.StartsWith("torch-") || s.StartsWith("pocket-") || s.StartsWith("phonon-"));
         Assert.Equal(["commit", "smoke"], addQwen.TakeLast(2));
 
@@ -93,13 +96,114 @@ public class DysonSpeechInstallerTests
         var withQwen = new DysonSpeechInstallStatus(true, false, true, true, false, null);
         var addTurbo = DysonSpeechInstaller.PlanSteps(withQwen, [pocket, qwen, chatterbox]);
         Assert.Equal(
-            ["preflight", .. DysonSpeechInstaller.StepIds.Where(s => s.StartsWith("chatterbox-", StringComparison.Ordinal)), "licenses", "commit", "smoke"],
+            [
+                "preflight",
+                .. DysonSpeechInstaller.StepIds.Where(s =>
+                    s.StartsWith("chatterbox-", StringComparison.Ordinal) && !s.StartsWith("chatterbox-gguf-", StringComparison.Ordinal)),
+                "licenses", "commit", "smoke",
+            ],
             addTurbo);
 
         var turbo = new DysonSpeechInstallStatus(true, false, false, false, true, null);
         Assert.Equal(["preflight"], DysonSpeechInstaller.PlanSteps(turbo, [chatterbox]));
 
         Assert.True(DysonSpeechInstaller.RequiredFreeBytes(false, [qwen]) < DysonSpeechInstaller.RequiredFreeBytes(true, [qwen]));
+    }
+
+    [Fact]
+    public void Plan_steps_for_gguf_skip_python_and_share_crispasr()
+    {
+        var fresh = DysonSpeechInstallStatus.None(null);
+        var nemotron = DysonSpeechInstaller.PlanSteps(fresh, [DysonGgufSpeechModels.NemotronId]);
+        Assert.Equal(
+            ["preflight", "nemotron-download", "nemotron-hash", "nemotron-unpack", "licenses", "commit", "smoke"],
+            nemotron);
+        Assert.DoesNotContain(
+            nemotron,
+            s => s.StartsWith("python-", StringComparison.Ordinal)
+                || s.StartsWith("torch-", StringComparison.Ordinal)
+                || s.StartsWith("crispasr-", StringComparison.Ordinal)
+                || s.StartsWith("phonon", StringComparison.Ordinal)
+                || s.StartsWith("pocket", StringComparison.Ordinal)
+                || s.StartsWith("qwen", StringComparison.Ordinal)
+                || s.StartsWith("chatterbox", StringComparison.Ordinal));
+
+        var pocket = DysonSpeechInstaller.PlanSteps(fresh, [DysonGgufSpeechModels.PocketGgufId]);
+        Assert.Equal(
+            [
+                "preflight", "crispasr-download", "crispasr-hash", "crispasr-extract",
+                "pocket-gguf-download", "pocket-gguf-hash", "pocket-gguf-unpack",
+                "licenses", "commit", "smoke",
+            ],
+            pocket);
+        Assert.DoesNotContain(pocket, s => s.StartsWith("python-", StringComparison.Ordinal) || s.StartsWith("torch-", StringComparison.Ordinal));
+
+        var crispPresent = new DysonSpeechInstallStatus(
+            false, false, false, false, false, null, GgufInstalled: [DysonGgufSpeechModels.PocketGgufId]);
+        var qwen = DysonSpeechInstaller.PlanSteps(crispPresent, [DysonGgufSpeechModels.QwenGgufId]);
+        Assert.DoesNotContain(qwen, s => s.StartsWith("crispasr-", StringComparison.Ordinal));
+        Assert.Contains("qwen-gguf-download", qwen);
+        Assert.Contains("qwen-gguf-unpack", qwen);
+        Assert.DoesNotContain(qwen, s => s.StartsWith("python-", StringComparison.Ordinal));
+
+        Assert.Equal(["preflight"], DysonSpeechInstaller.PlanSteps(crispPresent, [DysonGgufSpeechModels.PocketGgufId]));
+    }
+
+    [Fact]
+    public void Embedded_manifest_pins_gguf_downloads()
+    {
+        var manifest = DysonSpeechManifest.LoadEmbedded();
+        Assert.True(manifest.IsSuccess, manifest.IsError ? manifest.Error : null);
+        var rid = manifest.Value.Rids[DysonSpeechInstaller.SupportedRid];
+        DysonSpeechFile[] singles =
+        [
+            rid.NemotronNative!, rid.NemotronWeights!, rid.CrispasrRuntime!, rid.PhononGguf!, rid.PocketGguf!,
+        ];
+        Assert.All(singles, f => Assert.StartsWith("https://", f.Url));
+        Assert.Equal(2, rid.QwenGguf!.Count);
+        Assert.Equal(2, rid.ChatterboxGguf!.Count);
+        Assert.All(rid.QwenGguf.Concat(rid.ChatterboxGguf), f => Assert.StartsWith("https://", f.Url));
+        Assert.Equal(18_036_555, rid.NemotronNative.Size);
+        Assert.Equal(559_647_200, rid.NemotronWeights.Size);
+        Assert.DoesNotContain(rid.ChatterboxGguf, f => f.Url.Contains("ResembleAI", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Probe_gguf_only_tree_reports_installed_without_python()
+    {
+        if (!DysonSpeechInstaller.IsSupportedPlatform())
+            return;
+
+        var manifest = DysonSpeechManifest.LoadEmbedded();
+        Assert.True(manifest.IsSuccess, manifest.IsError ? manifest.Error : null);
+        var rid = manifest.Value.Rids[DysonSpeechInstaller.SupportedRid];
+        var root = Path.Combine(Path.GetTempPath(), "dyson-speech-gguf-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var id = DysonGgufSpeechModels.PocketGgufId;
+            Directory.CreateDirectory(DysonGgufSpeechModels.GetModelDir(root, id));
+            File.WriteAllText(DysonGgufSpeechModels.GetMainModelFile(root, id), "");
+            Directory.CreateDirectory(DysonGgufSpeechModels.GetCrispRuntimeDir(root));
+            File.WriteAllText(DysonGgufSpeechModels.GetCrispExe(root), "");
+            var stamp = new Dictionary<string, string>
+            {
+                ["crispasr"] = rid.CrispasrRuntime!.Sha256,
+                [id] = rid.PocketGguf!.Sha256,
+            };
+            File.WriteAllText(Path.Combine(root, "install-gguf.json"), JsonSerializer.Serialize(stamp));
+
+            var status = DysonSpeechInstaller.Probe(root);
+            Assert.False(status.RuntimeInstalled);
+            Assert.False(status.PhononInstalled);
+            Assert.True(status.IsInstalled(id));
+            Assert.False(status.IsInstalled(DysonGgufSpeechModels.QwenGgufId));
+            Assert.False(status.IsInstalled(DysonGgufSpeechModels.NemotronId));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
@@ -121,13 +225,13 @@ public class DysonSpeechInstallerTests
         Assert.True((await settings.SetSettingAsync(DysonAppSettingKeys.SpeechOutputModelId, DysonQwenSpeech.Id)).IsSuccess);
         var notInstalled = await FirstAsync(tts.SynthesizeAsync("Hello.", null, CancellationToken.None));
         Assert.True(notInstalled.IsError);
-        Assert.Contains("Qwen3-TTS 0.6B Base is not installed", notInstalled.Error);
+        Assert.Contains("Qwen3-TTS 0.6B Base · safetensors (Python) is not installed", notInstalled.Error);
         Assert.True((await tts.SetActiveAsync(DysonQwenSpeech.Id)).IsError);
 
         Assert.True((await settings.SetSettingAsync(DysonAppSettingKeys.SpeechOutputModelId, DysonChatterboxSpeech.Id)).IsSuccess);
         var turboMissing = await FirstAsync(tts.SynthesizeAsync("Hello.", null, CancellationToken.None));
         Assert.True(turboMissing.IsError);
-        Assert.Contains("Chatterbox Turbo (English only) is not installed", turboMissing.Error);
+        Assert.Contains("Chatterbox Turbo (English only) · safetensors (Python) is not installed", turboMissing.Error);
 
         Assert.True((await repo.MarkInstalledAsync(DysonQwenSpeech.Id, "dev")).IsSuccess);
         Assert.True((await repo.MarkInstalledAsync(DysonChatterboxSpeech.Id, "dev")).IsSuccess);
@@ -168,7 +272,7 @@ public class DysonSpeechInstallerTests
         // Switching uninstalled nothing.
         var rows = (await repo.ListAsync()).Value;
         Assert.All(
-            rows.Where(r => r.Capability == DysonSpeechCapability.Output),
+            rows.Where(r => r.RuntimeId is DysonPocketSpeech.Id or DysonQwenSpeech.Id or DysonChatterboxSpeech.Id),
             r => Assert.True(r.IsInstalled, r.RuntimeId));
     }
 
@@ -215,7 +319,7 @@ public class DysonSpeechInstallerTests
     }
 
     [Fact]
-    public async Task EnsureBuiltIn_seeds_four_rows_once_and_voice_prep_stores_nothing()
+    public async Task EnsureBuiltIn_seeds_built_in_rows_once_and_voice_prep_stores_nothing()
     {
         var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
         await using var _ = conn;
@@ -224,14 +328,42 @@ public class DysonSpeechInstallerTests
         Assert.True((await repo.EnsureBuiltInAsync()).IsSuccess);
         Assert.True((await repo.EnsureBuiltInAsync()).IsSuccess);
         var rows = (await repo.ListAsync()).Value;
-        Assert.Equal(4, rows.Count);
+        Assert.Equal(9, rows.Count);
         var phonon = Assert.Single(rows, r => r.RuntimeId == DysonPhononSpeech.Id);
         var pocket = Assert.Single(rows, r => r.RuntimeId == DysonPocketSpeech.Id);
         var qwen = Assert.Single(rows, r => r.RuntimeId == DysonQwenSpeech.Id);
         var turbo = Assert.Single(rows, r => r.RuntimeId == DysonChatterboxSpeech.Id);
-        Assert.Equal("Qwen3-TTS 0.6B Base", qwen.DisplayName);
-        Assert.Equal("Chatterbox Turbo (English only)", turbo.DisplayName);
-        Assert.Equal(DysonChatterboxSpeech.DisplayName, turbo.DisplayName);
+        Assert.Equal("Phonon 2 \u00b7 BPS packed (Python)", phonon.DisplayName);
+        Assert.Equal("Pocket TTS \u00b7 safetensors, no voice cloning (Python)", pocket.DisplayName);
+        Assert.Equal("Qwen3-TTS 0.6B Base \u00b7 safetensors (Python)", qwen.DisplayName);
+        Assert.Equal("Chatterbox Turbo (English only) \u00b7 safetensors (Python)", turbo.DisplayName);
+        var nemotron = Assert.Single(rows, r => r.RuntimeId == DysonGgufSpeechModels.NemotronId);
+        Assert.Equal(DysonGgufSpeechModels.NemotronDisplayName, nemotron.DisplayName);
+        Assert.Equal(DysonSpeechCapability.Input, nemotron.Capability);
+        Assert.Equal("gguf", nemotron.RuntimeKind);
+        Assert.False(nemotron.SupportsVoicePrompt);
+        Assert.Equal(DysonSpeechCapability.Input, rows.Single(r => r.RuntimeId == DysonGgufSpeechModels.PhononGgufId).Capability);
+        Assert.All(
+            new[] { DysonGgufSpeechModels.PocketGgufId, DysonGgufSpeechModels.QwenGgufId, DysonGgufSpeechModels.ChatterboxGgufId }
+                .Select(id => rows.Single(r => r.RuntimeId == id)),
+            r =>
+            {
+                Assert.Equal(DysonSpeechCapability.Output, r.Capability);
+                Assert.Equal("gguf", r.RuntimeKind);
+                Assert.True(r.SupportsVoicePrompt);
+                Assert.False(r.IsInstalled);
+            });
+
+        await accessor.RunAsync(async (db, ct) =>
+        {
+            var row = db.SpeechModels.Single(m => m.RuntimeId == DysonPhononSpeech.Id);
+            row.DisplayName = "Phonon 2";
+            await db.SaveChangesAsync(ct);
+        });
+        Assert.True((await repo.EnsureBuiltInAsync()).IsSuccess);
+        Assert.Equal(
+            "Phonon 2 \u00b7 BPS packed (Python)",
+            (await repo.ListAsync()).Value.Single(r => r.RuntimeId == DysonPhononSpeech.Id).DisplayName);
         Assert.All(new[] { qwen, turbo }, r =>
         {
             Assert.Equal(DysonSpeechCapability.Output, r.Capability);

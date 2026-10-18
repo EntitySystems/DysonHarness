@@ -5,8 +5,9 @@ public sealed record DysonSpeechAudioChunk(byte[] Pcm, int SampleRate, bool IsLa
 
 /// <summary>
 /// Text to speech, 24 kHz PCM chunks. The app registers <see cref="DysonActiveTextToSpeech"/>, which routes to the
-/// active model: Pocket TTS (<see cref="DysonPocketSpeech"/>), Qwen3-TTS (<see cref="DysonQwenSpeech"/>), or
-/// Chatterbox Turbo, English only (<see cref="DysonChatterboxSpeech"/>).
+/// active model: Pocket TTS (<see cref="DysonPocketSpeech"/>), Qwen3-TTS (<see cref="DysonQwenSpeech"/>),
+/// Chatterbox Turbo, English only (<see cref="DysonChatterboxSpeech"/>), or those three as CrispASR GGUF
+/// (<see cref="DysonCrispSpeech"/>).
 /// Not installed, empty text, or an unknown voice is an error on the first yield.
 /// </summary>
 public interface IDysonTextToSpeech

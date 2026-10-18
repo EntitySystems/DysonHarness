@@ -218,6 +218,11 @@ public static class DysonAppSettingKeys
     public const string SpeechInputModelId = "speech_input_model_id";
 
     /// <summary>
+    /// BCP-47 tag for speech-to-text. The installer writes <c>en-US</c> when this is missing and Nemotron is installed.
+    /// </summary>
+    public const string SpeechInputLanguage = "speech_input_language";
+
+    /// <summary>
     /// The active text-to-speech <c>speech_models.RuntimeId</c> (Pocket TTS, Qwen3-TTS, or Chatterbox Turbo). Written by
     /// Settings → Voice and by the speech installer commit when missing. Set but not installed ⇒ synthesis error, no
     /// fallback. Missing ⇒ the single installed Output row.

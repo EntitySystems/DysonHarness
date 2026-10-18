@@ -8,6 +8,7 @@
 @inject DysonSpeechInstaller Installer
 @inject IDysonSpeechModelRepository SpeechModels
 @inject DysonActiveTextToSpeech Tts
+@inject DysonActiveSpeechToText Stt
 @inject IDysonSubjectSettingsRepository Settings
 @inject ConfirmDialogService ConfirmDialog
 @inject IServiceProvider Services
@@ -17,11 +18,14 @@
 <div class="settings-page">
     <h1 class="settings-page__title">Voice</h1>
     <p class="settings-page__copy">
-        Local speech to text (Phonon 2, push-to-talk in the Meta Agent composer) and text to speech (Pocket TTS,
-        Qwen3-TTS 0.6B Base, Chatterbox Turbo). Each model installs on its own into the app-data folder below,
-        outside the app install directory, on one shared private Python and CPU PyTorch. Qwen3-TTS downloads about
-        2.5 GB of weights and is slower than Pocket. Chatterbox Turbo is English only and downloads about 3.0 GB.
-        Windows x64 only in this release.
+        Local speech to text and text to speech. Each install lands on its own in the app-data folder below, not in
+        the app directory. Python installs share one private Python and CPU PyTorch: Phonon 2 uses Fermion BPS packed
+        weights, and Pocket TTS, Qwen3-TTS 0.6B Base, and Chatterbox Turbo use safetensors. Qwen3-TTS downloads about
+        2.5 GB and is slower than Pocket. Chatterbox Turbo is English only and downloads about 3.0 GB. GGUF installs
+        use native Windows runtimes and no Python: Nemotron 3.5 streaming speech to text on transcribe.cpp, and
+        Phonon 2, Pocket TTS, Qwen3-TTS, and Chatterbox Turbo on CrispASR. Either format of a model can be installed.
+        The active model radios show which one is used. Push-to-talk in the Meta Agent composer uses the active
+        speech-to-text model. Windows x64 only in this release.
     </p>
 
     @if (!string.IsNullOrWhiteSpace(_error))
@@ -112,6 +116,35 @@
         }
     </div>
 
+    @if (InstalledStt.Count > 0 || _inputError is not null)
+    {
+        <div class="settings-page__panel panel voice-active">
+            <div class="tool-panel__title">Active speech-to-text</div>
+            <div class="voice-active__options" role="radiogroup" aria-label="Active speech-to-text model">
+                @foreach (var row in InstalledStt)
+                {
+                    var id = row.RuntimeId;
+                    <label class="voice-active__option">
+                        <input type="radio" name="voice-active-stt" value="@id" checked="@(id == _inputId)"
+                               disabled="@_busy" @onchange="() => SetActiveInputAsync(id)" />
+                        <span>@row.DisplayName</span>
+                    </label>
+                }
+                @if (StaleInput is { } staleInput)
+                {
+                    <label class="voice-active__option">
+                        <input type="radio" name="voice-active-stt" checked disabled />
+                        <span>@staleInput (not installed)</span>
+                    </label>
+                }
+            </div>
+            @if (_inputError is not null)
+            {
+                <p class="settings-page__copy voice__note">@_inputError</p>
+            }
+        </div>
+    }
+
     @if (InstalledTts.Count > 0 || _activeError is not null)
     {
         <div class="settings-page__panel panel voice-active">
@@ -146,7 +179,25 @@
         <div class="settings-page__panel panel voice-train">
             <div class="tool-panel__title">Train TTS model · @active.DisplayName</div>
             <p class="settings-page__copy">@TrainCopy(active.RuntimeId)</p>
-            <InputFile accept=".mp3,audio/mpeg" OnChange="OnTrainFileAsync" disabled="@_busy" />
+            @if (WavEnrollment(active.RuntimeId))
+            {
+                <label class="voice-train__consent">
+                    <input type="checkbox" @bind="_voiceConsent" disabled="@_busy" />
+                    <span>I confirm this is my own voice or I have the speaker's consent.</span>
+                </label>
+            }
+            @if (active.RuntimeId == DysonGgufSpeechModels.QwenGgufId)
+            {
+                <div class="voice-train__transcript">
+                    <label class="voice-try__label" for="voice-train-transcript">Exact transcript of the clip</label>
+                    <textarea id="voice-train-transcript" class="voice-try__transcript" rows="3"
+                              @bind="_trainTranscript" @bind:event="oninput" disabled="@_busy"></textarea>
+                </div>
+            }
+            <div class="voice-train__file">
+                <InputFile accept="@TrainAccept(active.RuntimeId)" OnChange="OnTrainFileAsync"
+                           disabled="@(!CanPickTrainClip(active.RuntimeId))" />
+            </div>
             @if (_training)
             {
                 <p class="settings-page__copy voice__note" role="status">Making the voice…</p>
@@ -158,11 +209,11 @@
         </div>
     }
 
-    @if (_tryout is not null && (PhononInstalled || _activeId is not null))
+    @if (_tryout is not null && (_inputId is not null || _activeId is not null))
     {
         <div class="settings-page__panel panel voice-try">
             <div class="tool-panel__title">Try speech</div>
-            @if (PhononInstalled)
+            @if (_inputId is not null)
             {
                 <label class="voice-try__label" for="voice-mic">Microphone</label>
                 <select id="voice-mic" class="voice-try__mic" disabled="@(_busy || _recording)"
@@ -196,7 +247,7 @@
                     }
                 </div>
             }
-            @if (PhononInstalled)
+            @if (_inputId is not null)
             {
                 <div class="voice-try__row">
                     <button type="button" class="btn btn-primary" aria-pressed="@_recording"
@@ -219,6 +270,12 @@
     private string? _activeId;
     private string? _activeSetting;
     private string? _activeError;
+    private string? _inputId;
+    private string? _inputSetting;
+    private string? _inputError;
+    private bool _voiceConsent;
+    private string _trainTranscript = "";
+    private string? _seenTrainModelId;
     private CancellationTokenSource? _cts;
     private bool _busy;
     private bool _installing;
@@ -246,6 +303,9 @@
     private List<DysonSpeechModelEntity> InstalledTts =>
         OrderedRows.Where(r => r.IsInstalled && r.IsEnabled && r.Capability.HasFlag(DysonSpeechCapability.Output)).ToList();
 
+    private List<DysonSpeechModelEntity> InstalledStt =>
+        OrderedRows.Where(r => r.IsInstalled && r.IsEnabled && r.Capability.HasFlag(DysonSpeechCapability.Input)).ToList();
+
     private DysonSpeechModelEntity? ActiveRow => _rows.FirstOrDefault(r => r.RuntimeId == _activeId);
 
     /// <summary>The saved active model when it is no longer installed (shown, never silently replaced).</summary>
@@ -253,9 +313,12 @@
         ? _rows.FirstOrDefault(r => r.RuntimeId == _activeSetting)?.DisplayName ?? _activeSetting
         : null;
 
-    private bool AnyInstalled => _rows.Any(r => r.IsInstalled) || _probe?.RuntimeInstalled == true;
+    /// <summary>The saved active speech-to-text model when it is no longer installed.</summary>
+    private string? StaleInput => _inputId is null && !string.IsNullOrWhiteSpace(_inputSetting)
+        ? _rows.FirstOrDefault(r => r.RuntimeId == _inputSetting)?.DisplayName ?? _inputSetting
+        : null;
 
-    private bool PhononInstalled => _rows.Any(r => r.RuntimeId == DysonPhononSpeech.Id && r.IsInstalled);
+    private bool AnyInstalled => _rows.Any(r => r.IsInstalled) || _probe?.RuntimeInstalled == true;
 
     protected override async Task OnInitializedAsync()
     {
@@ -282,7 +345,20 @@
         _activeId = active.IsSuccess ? active.Value : null;
         var anyTts = _rows.Any(r => r.IsInstalled && r.Capability.HasFlag(DysonSpeechCapability.Output));
         _activeError = active.IsError && (anyTts || !string.IsNullOrWhiteSpace(_activeSetting)) ? active.Error : null;
-        if (_tryout is not null && PhononInstalled)
+        if (!string.Equals(_activeId, _seenTrainModelId, StringComparison.Ordinal))
+        {
+            _voiceConsent = false;
+            _trainTranscript = "";
+            _seenTrainModelId = _activeId;
+        }
+
+        var inputSetting = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechInputModelId);
+        _inputSetting = inputSetting.IsSuccess ? inputSetting.Value : null;
+        var input = await Stt.ResolveActiveAsync();
+        _inputId = input.IsSuccess ? input.Value : null;
+        var anyStt = _rows.Any(r => r.IsInstalled && r.Capability.HasFlag(DysonSpeechCapability.Input));
+        _inputError = input.IsError && (anyStt || !string.IsNullOrWhiteSpace(_inputSetting)) ? input.Error : null;
+        if (_tryout is not null && _inputId is not null)
             await LoadMicsAsync();
         else if (!_recording)
         {
@@ -355,6 +431,8 @@
 
     private async Task SetActiveAsync(string id) => await RunAsync(() => Tts.SetActiveAsync(id));
 
+    private async Task SetActiveInputAsync(string id) => await RunAsync(() => Stt.SetActiveAsync(id));
+
     private async Task RunAsync(Func<Task<VoidResult<string>>> action)
     {
         _error = null;
@@ -380,9 +458,24 @@
         _busy = _training = true;
         try
         {
+            if (WavEnrollment(_activeId) && !_voiceConsent)
+            {
+                _trainOk = false;
+                _trainResult = "Confirm this is your own voice, or that you have the speaker's consent, before uploading a clip.";
+                return;
+            }
+
+            if (_activeId == DysonGgufSpeechModels.QwenGgufId && string.IsNullOrWhiteSpace(_trainTranscript))
+            {
+                _trainOk = false;
+                _trainResult = "Enter the exact transcript of the clip.";
+                return;
+            }
+
             var file = e.File;
             await using var clip = file.OpenReadStream(DysonPhononSpeech.MaxAudioBytes);
-            var result = await Tts.PrepareVoiceAsync(clip, file.Name);
+            var transcript = _activeId == DysonGgufSpeechModels.QwenGgufId ? _trainTranscript.Trim() : null;
+            var result = await Tts.PrepareVoiceAsync(clip, file.Name, transcript: transcript);
             _trainOk = result.IsSuccess;
             _trainResult = result.IsError ? result.Error : $"Voice {result.Value.DisplayName} saved and selected.";
         }
@@ -392,10 +485,32 @@
         }
     }
 
+    private static bool WavEnrollment(string? runtimeId) => runtimeId is DysonGgufSpeechModels.PocketGgufId
+        or DysonGgufSpeechModels.QwenGgufId
+        or DysonGgufSpeechModels.ChatterboxGgufId;
+
+    private static string TrainAccept(string runtimeId) =>
+        WavEnrollment(runtimeId) ? ".wav,audio/wav" : ".mp3,audio/mpeg";
+
+    private bool CanPickTrainClip(string runtimeId) =>
+        !_busy
+        && (!WavEnrollment(runtimeId)
+            || (_voiceConsent
+                && (runtimeId != DysonGgufSpeechModels.QwenGgufId || !string.IsNullOrWhiteSpace(_trainTranscript))));
+
     private static string TrainCopy(string runtimeId) => runtimeId switch
     {
+        DysonGgufSpeechModels.PocketGgufId =>
+            "Pocket TTS GGUF clones a voice from one short .wav clip (enrollment, not a fine-tune). "
+            + "The safetensors Pocket install cannot clone. Output keeps CrispASR's AI watermark.",
+        DysonGgufSpeechModels.QwenGgufId =>
+            "Qwen3-TTS GGUF clones a voice from one .wav clip plus its exact transcript "
+            + "(in-context voice prompt, not a fine-tune). Output keeps CrispASR's AI watermark.",
+        DysonGgufSpeechModels.ChatterboxGgufId =>
+            "Chatterbox Turbo GGUF clones a voice from one .wav clip (enrollment, not a fine-tune). "
+            + "Output keeps CrispASR's AI watermark.",
         DysonQwenSpeech.Id =>
-            "Qwen3-TTS makes a voice from one short .mp3 of clear speech (about 5–15 s). This saves a speaker embedding "
+            "Qwen3-TTS makes a voice from one short .mp3 of clear speech (about 5\u201315 s). This saves a speaker embedding "
             + "(voice prompt); it does not retrain the model. The clip is not kept.",
         DysonChatterboxSpeech.Id =>
             "Chatterbox Turbo (English only) makes a voice from one .mp3 of clear English speech longer than 5 seconds "
@@ -405,6 +520,7 @@
             "Pocket TTS takes one .mp3 clip. The installed public weights cannot make a voice from audio, "
             + "so this reports why and saves nothing; speech keeps using the alba voice.",
     };
+
 
     private static string StateLabel(DysonSpeechInstallStep step) => step.State switch
     {
@@ -512,7 +628,7 @@
         _recording = true;
         try
         {
-            await foreach (var update in _tryout.RecordAsync(_micId, PhononInstalled, _recordCts.Token))
+            await foreach (var update in _tryout.RecordAsync(_micId, _inputId is not null, _recordCts.Token))
             {
                 if (_disposed)
                     return;

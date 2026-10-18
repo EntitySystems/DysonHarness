@@ -107,7 +107,7 @@ Patch instructions for [dysonharness.com](https://dysonharness.com) (Website rep
 
 Builds on `master` and `release-preview` resolve app mode to **Prod** (`DysonProd` app data) via `GITHUB_REF_NAME` in the resolve-app-mode scripts — channel is independent of Dev/Test/Prod. See [storage/models.md](../storage/models.md).
 
-Speech (Settings → Voice) is not in the zip or the MSI and the release workflow downloads nothing for it. The app fetches CPython, CPU torch, and the Phonon-2 / Pocket TTS / Qwen3-TTS 0.6B Base / Chatterbox Turbo (English only) weights on demand, per model as the user checks them, from the URLs and hashes in `packaging/speech/manifest.json` into `{DysonProd}/speech/{stable|preview}`. That folder is app data, so an MSI upgrade keeps it.
+Speech (Settings → Voice) is not in the zip or the MSI, and the release workflow downloads nothing for it. Runtimes and weights are downloaded at install time, per model the user checks, from the URLs and hashes in `packaging/speech/manifest.json`, into `{DysonProd}/speech/{stable|preview}`. Python installs fetch CPython, CPU torch, and the Phonon-2 (Fermion BPS packed) / Pocket TTS / Qwen3-TTS 0.6B Base / Chatterbox Turbo (English only) safetensors weights. GGUF installs fetch transcribe.cpp v0.4.0 plus the Nemotron 3.5 streaming Q5 GGUF, and CrispASR v0.8.43 plus the Phonon 2, Pocket TTS, Qwen3-TTS, and Chatterbox Turbo GGUF weights. That folder is app data, so an MSI upgrade keeps it.
 
 ## Windows notes
 

@@ -4,8 +4,9 @@ using System.Text;
 namespace DysonHarness;
 
 /// <summary>
-/// Settings → Voice tryout: speak text through the active TTS model, or record the microphone and append
-/// Phonon finals. Phonon has no streaming API; each capture window is one <see cref="IDysonSpeechToText.TranscribeAsync"/>.
+/// Settings → Voice tryout: speak text through the active TTS model, or record the microphone.
+/// A live model (<see cref="IDysonLiveSpeechToText"/>) streams PCM. Otherwise each capture window is one
+/// <see cref="IDysonSpeechToText.TranscribeAsync"/>.
 /// </summary>
 public sealed class DysonSpeechTryout(
     IDysonAudioCapture capture,
@@ -112,7 +113,7 @@ public sealed class DysonSpeechTryout(
         if (!inputInstalled)
         {
             yield return Result<string, string>.AsError(
-                "Phonon 2 is not installed. Open Settings → Voice and install it.");
+                "No speech-to-text model is installed. Open Settings → Voice and install one.");
             yield break;
         }
 
@@ -135,10 +136,37 @@ public sealed class DysonSpeechTryout(
             yield break;
         }
 
-        var text = new StringBuilder();
-        var windows = _capture.CaptureWindowsAsync(deviceId, cts.Token).GetAsyncEnumerator(cts.Token);
+        IAsyncEnumerator<Result<Stream, string>>? windows = null;
         try
         {
+            if (_speechToText is IDysonLiveSpeechToText live)
+            {
+                Result<bool, string> uses;
+                try
+                {
+                    uses = await live.UsesLivePcmAsync(cts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    yield break;
+                }
+
+                if (uses.IsError)
+                {
+                    yield return Result<string, string>.AsError(uses.Error);
+                    yield break;
+                }
+
+                if (uses.Value)
+                {
+                    await foreach (var spoken in RecordLiveAsync(live, deviceId, cts).ConfigureAwait(false))
+                        yield return spoken;
+                    yield break;
+                }
+            }
+
+            var text = new StringBuilder();
+            windows = _capture.CaptureWindowsAsync(deviceId, cts.Token).GetAsyncEnumerator(cts.Token);
             while (true)
             {
                 bool more;
@@ -221,7 +249,8 @@ public sealed class DysonSpeechTryout(
         }
         finally
         {
-            await windows.DisposeAsync().ConfigureAwait(false);
+            if (windows is not null)
+                await windows.DisposeAsync().ConfigureAwait(false);
             lock (_gate)
             {
                 _recording = false;
@@ -230,6 +259,72 @@ public sealed class DysonSpeechTryout(
             }
 
             cts.Dispose();
+        }
+    }
+
+    private async IAsyncEnumerable<Result<string, string>> RecordLiveAsync(
+        IDysonLiveSpeechToText live,
+        string? deviceId,
+        CancellationTokenSource cts)
+    {
+        var committed = new StringBuilder();
+        var chunks = live.TranscribeLiveAsync(_capture.CapturePcmAsync(deviceId, cts.Token), cts.Token)
+            .GetAsyncEnumerator(cts.Token);
+        try
+        {
+            while (true)
+            {
+                bool more;
+                var cancelled = false;
+                try
+                {
+                    more = await chunks.MoveNextAsync().ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    cancelled = true;
+                    more = false;
+                }
+
+                if (cancelled || !more)
+                    yield break;
+
+                var chunk = chunks.Current;
+                if (chunk.IsError)
+                {
+                    yield return Result<string, string>.AsError(chunk.Error);
+                    yield break;
+                }
+
+                if (!chunk.Value.IsFinal)
+                {
+                    var shown = Shown(committed, chunk.Value.Text.Trim());
+                    if (shown.Length > 0)
+                        yield return Result<string, string>.AsValue(shown);
+                    continue;
+                }
+
+                var piece = chunk.Value.Text.Trim();
+                if (piece.Length == 0)
+                    continue;
+                if (committed.Length > 0)
+                    committed.Append(' ');
+                committed.Append(piece);
+                yield return Result<string, string>.AsValue(committed.ToString());
+            }
+        }
+        finally
+        {
+            await chunks.DisposeAsync().ConfigureAwait(false);
+        }
+
+        static string Shown(StringBuilder committed, string partial)
+        {
+            if (committed.Length == 0)
+                return partial;
+            if (partial.Length == 0)
+                return committed.ToString();
+            return string.Concat(committed.ToString(), " ", partial);
         }
     }
 

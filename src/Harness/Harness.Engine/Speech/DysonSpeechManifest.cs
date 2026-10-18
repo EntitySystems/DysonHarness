@@ -20,7 +20,14 @@ public sealed record DysonSpeechRidManifest(
     IReadOnlyList<DysonSpeechFile> QwenModel,
     IReadOnlyList<DysonSpeechFile> QwenSpeechTokenizer,
     IReadOnlyList<DysonSpeechFile> ChatterboxWheels,
-    IReadOnlyList<DysonSpeechFile> ChatterboxModel);
+    IReadOnlyList<DysonSpeechFile> ChatterboxModel,
+    DysonSpeechFile? NemotronNative = null,
+    DysonSpeechFile? NemotronWeights = null,
+    DysonSpeechFile? CrispasrRuntime = null,
+    DysonSpeechFile? PhononGguf = null,
+    DysonSpeechFile? PocketGguf = null,
+    IReadOnlyList<DysonSpeechFile>? QwenGguf = null,
+    IReadOnlyList<DysonSpeechFile>? ChatterboxGguf = null);
 
 /// <summary>
 /// <c>packaging/speech/manifest.json</c>, embedded in Harness.Engine. Git holds URLs and hashes, never the bytes.
@@ -52,7 +59,8 @@ public sealed partial record DysonSpeechManifest(
     /// <summary>
     /// Parses and validates. Rejects any Pocket URL into the gated <c>kyutai/pocket-tts/</c> repo (only
     /// <c>kyutai/pocket-tts-without-voice-cloning</c> is allowed), torch or gradio in a model site, and any
-    /// Chatterbox weight outside <c>ResembleAI/chatterbox-turbo/</c> (the multilingual repo is not used).
+    /// <c>chatterboxModel</c> file outside <c>ResembleAI/chatterbox-turbo/</c> (the multilingual repo is not used).
+    /// GGUF entries are optional; <c>chatterboxGguf</c> is not the Resemble repo and is not checked against it.
     /// </summary>
     public static Result<DysonSpeechManifest, string> Parse(string json)
     {
@@ -89,24 +97,16 @@ public sealed partial record DysonSpeechManifest(
             ];
             foreach (var file in all)
             {
-                if (file is null
-                    || string.IsNullOrWhiteSpace(file.FileName)
-                    || file.FileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
-                    || !Uri.TryCreate(file.Url, UriKind.Absolute, out var uri)
-                    || uri.Scheme != Uri.UriSchemeHttps
-                    || file.Size <= 0
-                    || !Sha256Pattern().IsMatch(file.Sha256 ?? ""))
-                {
-                    return Result<DysonSpeechManifest, string>.AsError(
-                        $"Speech manifest RID '{rid}' has an invalid file entry: {file?.FileName ?? "(null)"}.");
-                }
+                if (FileEntryError(rid, file) is { } error)
+                    return Result<DysonSpeechManifest, string>.AsError(error);
+            }
 
-                if (IsGatedPocketUrl(file.Url))
-                {
-                    return Result<DysonSpeechManifest, string>.AsError(
-                        $"Speech manifest points at the gated kyutai/pocket-tts repo ({file.Url}). "
-                        + "Only kyutai/pocket-tts-without-voice-cloning is allowed.");
-                }
+            foreach (var file in OptionalFiles(m))
+            {
+                if (file is null)
+                    continue;
+                if (FileEntryError(rid, file) is { } error)
+                    return Result<DysonSpeechManifest, string>.AsError(error);
             }
 
             IEnumerable<DysonSpeechFile> sites = [.. m.PhononWheels, .. m.PocketWheels, .. m.QwenWheels, .. m.ChatterboxWheels];
@@ -132,6 +132,48 @@ public sealed partial record DysonSpeechManifest(
 
     internal static bool IsTorchWheel(DysonSpeechFile file) =>
         file.FileName.StartsWith("torch-", StringComparison.OrdinalIgnoreCase);
+
+    private static IEnumerable<DysonSpeechFile?> OptionalFiles(DysonSpeechRidManifest m)
+    {
+        yield return m.NemotronNative;
+        yield return m.NemotronWeights;
+        yield return m.CrispasrRuntime;
+        yield return m.PhononGguf;
+        yield return m.PocketGguf;
+        if (m.QwenGguf is not null)
+        {
+            foreach (var file in m.QwenGguf)
+                yield return file;
+        }
+
+        if (m.ChatterboxGguf is not null)
+        {
+            foreach (var file in m.ChatterboxGguf)
+                yield return file;
+        }
+    }
+
+    private static string? FileEntryError(string rid, DysonSpeechFile? file)
+    {
+        if (file is null
+            || string.IsNullOrWhiteSpace(file.FileName)
+            || file.FileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            || !Uri.TryCreate(file.Url, UriKind.Absolute, out var uri)
+            || uri.Scheme != Uri.UriSchemeHttps
+            || file.Size <= 0
+            || !Sha256Pattern().IsMatch(file.Sha256 ?? ""))
+        {
+            return $"Speech manifest RID '{rid}' has an invalid file entry: {file?.FileName ?? "(null)"}.";
+        }
+
+        if (IsGatedPocketUrl(file.Url))
+        {
+            return $"Speech manifest points at the gated kyutai/pocket-tts repo ({file.Url}). "
+                + "Only kyutai/pocket-tts-without-voice-cloning is allowed.";
+        }
+
+        return null;
+    }
 
     [GeneratedRegex("^[0-9a-f]{64}$")]
     private static partial Regex Sha256Pattern();

@@ -198,8 +198,11 @@ public static class DysonUiWebHost
             var factory = sp.GetRequiredService<IHttpClientFactory>();
             return new DysonSpeechInstaller(factory.CreateClient("embedded-runtimes"), root);
         });
-        builder.Services.AddScoped<IDysonSpeechToText>(sp =>
-            new DysonPhononSpeech(sp.GetRequiredService<DysonSpeechInstaller>().InstallRoot));
+        builder.Services.AddScoped(sp => new DysonActiveSpeechToText(
+            sp.GetRequiredService<IDysonSpeechModelRepository>(),
+            sp.GetRequiredService<IDysonSubjectSettingsRepository>(),
+            sp.GetRequiredService<DysonSpeechInstaller>().InstallRoot));
+        builder.Services.AddScoped<IDysonSpeechToText>(sp => sp.GetRequiredService<DysonActiveSpeechToText>());
         builder.Services.AddScoped(sp => new DysonActiveTextToSpeech(
             sp.GetRequiredService<IDysonSpeechModelRepository>(),
             sp.GetRequiredService<IDysonSubjectSettingsRepository>(),
@@ -255,6 +258,8 @@ public static class DysonUiWebHost
             }
 
             DysonPhononSpeech.StopSidecar();
+            DysonCrispSpeech.StopSidecar();
+            DysonNemotronSpeech.Stop();
             DysonPocketSpeech.StopBridge();
             DysonQwenSpeech.StopBridge();
             DysonChatterboxSpeech.StopBridge();

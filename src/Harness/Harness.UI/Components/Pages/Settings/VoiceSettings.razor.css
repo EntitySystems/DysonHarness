@@ -91,6 +91,30 @@
   margin-top: 16px;
 }
 
+.voice-train__consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--text);
+}
+
+.voice-train__consent input {
+  margin-top: 3px;
+  flex: 0 0 auto;
+}
+
+.voice-train__transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.voice-train__file {
+  margin-top: 8px;
+}
+
 .voice-train__result {
   margin-top: 8px;
 }

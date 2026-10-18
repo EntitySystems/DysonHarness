@@ -42,6 +42,9 @@ public class DysonSpeechTryoutTests
 
         var record = await Collect(tryout.RecordAsync("0", inputInstalled: false, CancellationToken.None));
         Assert.True(record[0].IsError);
+        Assert.Equal(
+            "No speech-to-text model is installed. Open Settings → Voice and install one.",
+            record[0].Error);
         Assert.Equal(0, capture.Captures);
         Assert.Equal(0, stt.Calls);
     }
@@ -110,6 +113,36 @@ public class DysonSpeechTryoutTests
         var failed = await Collect(tryout.RecordAsync("0", true, CancellationToken.None));
         Assert.Equal("sidecar", failed[0].Error);
         Assert.Equal(1, stt.Calls);
+    }
+
+    [Fact]
+    public async Task Record_with_live_speech_uses_pcm_and_yields_the_growing_transcript()
+    {
+        var capture = new FakeCapture();
+        capture.Pcm.Add(Result<byte[], string>.AsValue([1, 0]));
+        capture.Pcm.Add(Result<byte[], string>.AsValue([2, 0]));
+        var stt = new FakeLiveStt();
+        var tryout = new DysonSpeechTryout(capture, stt, new FakeTts(), new FakePlayback());
+        var transcript = await Collect(tryout.RecordAsync("9", true, CancellationToken.None));
+        Assert.Equal(["a", "aa", "aa!"], transcript.Select(r => r.Value).ToArray());
+        Assert.Equal(0, capture.Captures);
+        Assert.Equal(1, capture.PcmCaptures);
+        Assert.Equal(["9"], capture.DeviceIds);
+        Assert.Equal(0, stt.Calls);
+    }
+
+    [Fact]
+    public async Task Record_yields_a_live_probe_error_without_opening_the_microphone()
+    {
+        var capture = new FakeCapture();
+        capture.Pcm.Add(Result<byte[], string>.AsValue([1]));
+        var stt = new FakeLiveStt { UsesError = "runtime missing" };
+        var tryout = new DysonSpeechTryout(capture, stt, new FakeTts(), new FakePlayback());
+        var failed = await Collect(tryout.RecordAsync("0", true, CancellationToken.None));
+        Assert.Equal("runtime missing", failed[0].Error);
+        Assert.Equal(0, capture.Captures);
+        Assert.Equal(0, capture.PcmCaptures);
+        Assert.Equal(0, stt.LiveCalls);
     }
 
     [Fact]
@@ -189,6 +222,36 @@ public class DysonSpeechTryoutTests
         public Result<IReadOnlyList<DysonAudioInputDevice>, string> ListDevices() =>
             Result<IReadOnlyList<DysonAudioInputDevice>, string>.AsValue([new DysonAudioInputDevice("0", "Mic")]);
 
+        public int PcmCaptures;
+        public List<Result<byte[], string>> Pcm { get; } = [];
+
+        public async IAsyncEnumerable<Result<byte[], string>> CapturePcmAsync(
+            string? deviceId,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            PcmCaptures++;
+            DeviceIds.Add(deviceId);
+            foreach (var block in Pcm)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    yield break;
+                yield return block;
+            }
+
+            if (!Hold)
+                yield break;
+
+            _hold = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            Holding.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.Infinite, _hold.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
         public async IAsyncEnumerable<Result<Stream, string>> CaptureWindowsAsync(
             string? deviceId,
             [EnumeratorCancellation] CancellationToken cancellationToken)
@@ -249,6 +312,49 @@ public class DysonSpeechTryoutTests
                 : Scripts[Math.Min(index, Scripts.Count - 1)];
             foreach (var chunk in script)
                 yield return Result<DysonSpeechChunk, string>.AsValue(chunk);
+            await Task.CompletedTask;
+        }
+    }
+
+    private sealed class FakeLiveStt : IDysonSpeechToText, IDysonLiveSpeechToText
+    {
+        public int Calls;
+        public int LiveCalls;
+        public string? UsesError;
+        public string RuntimeId => DysonGgufSpeechModels.NemotronId;
+
+        public Task<Result<bool, string>> UsesLivePcmAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(UsesError is null
+                ? Result<bool, string>.AsValue(true)
+                : Result<bool, string>.AsError(UsesError));
+
+        public async IAsyncEnumerable<Result<DysonSpeechChunk, string>> TranscribeLiveAsync(
+            IAsyncEnumerable<Result<byte[], string>> pcm16kMono,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            LiveCalls++;
+            var text = "";
+            await foreach (var block in pcm16kMono.WithCancellation(cancellationToken))
+            {
+                if (block.IsError)
+                {
+                    yield return Result<DysonSpeechChunk, string>.AsError(block.Error);
+                    yield break;
+                }
+
+                text += "a";
+                yield return Result<DysonSpeechChunk, string>.AsValue(new DysonSpeechChunk(text, 0, 100, false));
+            }
+
+            yield return Result<DysonSpeechChunk, string>.AsValue(new DysonSpeechChunk(text + "!", 0, 200, true));
+        }
+
+        public async IAsyncEnumerable<Result<DysonSpeechChunk, string>> TranscribeAsync(
+            Stream audio,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            Calls++;
+            yield return Result<DysonSpeechChunk, string>.AsError("wav");
             await Task.CompletedTask;
         }
     }

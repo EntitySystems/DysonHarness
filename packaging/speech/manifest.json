@@ -1289,6 +1289,64 @@
           "size": 999186,
           "sha256": "f6bd25a65e4e63ca31360e9fb11c7e4f9a391a78385d640acd814092dd6eee4f"
         }
+      ],
+      "nemotronNative": {
+        "fileName": "transcribe-native-0.4.0-windows-x86_64-cpu-vulkan.tar.gz",
+        "url": "https://github.com/handy-computer/transcribe.cpp/releases/download/v0.4.0/transcribe-native-0.4.0-windows-x86_64-cpu-vulkan.tar.gz",
+        "size": 18036555,
+        "sha256": "9d5bd89f720d7979323e73f5220fe50fad5e38a7b0c2525225d453bd09adf2b0"
+      },
+      "nemotronWeights": {
+        "fileName": "nemotron-3.5-asr-streaming-0.6b-Q5_K_M.gguf",
+        "url": "https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/53ce288f69326b415aeef030cfcb02a08a8096dd/nemotron-3.5-asr-streaming-0.6b-Q5_K_M.gguf",
+        "size": 559647200,
+        "sha256": "86429e8c4f7fdcf9b3312269ad1ca6669478ba7805331c4aea7a2e33e9910d65"
+      },
+      "crispasrRuntime": {
+        "fileName": "crispasr-windows-x86_64-cpu.zip",
+        "url": "https://github.com/CrispStrobe/CrispASR/releases/download/v0.8.43/crispasr-windows-x86_64-cpu.zip",
+        "size": 9088774,
+        "sha256": "997bc39f541e5d5d0bd14144159c038bd95d6ab8b523718c34a54e03ab404f47"
+      },
+      "phononGguf": {
+        "fileName": "phonon2-q4_k.gguf",
+        "url": "https://huggingface.co/cstr/phonon2-GGUF/resolve/3ed3e6ad6e7ce63affffeede37328ff756efaa2f/phonon2-q4_k.gguf",
+        "size": 402226656,
+        "sha256": "c8a55e1009da474f9ae96b1500a6901e739e862cc7b1c3923251bc37e72b16db"
+      },
+      "pocketGguf": {
+        "fileName": "pocket-tts-english-q4_k.gguf",
+        "url": "https://huggingface.co/cstr/pocket-tts-GGUF/resolve/d10681033bba2211a03e65a741a7951462b04252/pocket-tts-english-q4_k.gguf",
+        "size": 72645472,
+        "sha256": "4e069c8a8f8019f6ae08236c0df113e1a13be846ab0bf2ddfdfa92ce78cf5af8"
+      },
+      "qwenGguf": [
+        {
+          "fileName": "qwen3-tts-12hz-0.6b-base-q8_0.gguf",
+          "url": "https://huggingface.co/cstr/qwen3-tts-0.6b-base-GGUF/resolve/94072f5c394b4dc4d98e97cc874800dde6ecacda/qwen3-tts-12hz-0.6b-base-q8_0.gguf",
+          "size": 985716544,
+          "sha256": "6162637048fff8ca7f7a16bebc8a62ea8181f4aec4f160894955dee5b87c1961"
+        },
+        {
+          "fileName": "qwen3-tts-tokenizer-12hz.gguf",
+          "url": "https://huggingface.co/cstr/qwen3-tts-tokenizer-12hz-GGUF/resolve/344e279551177654762e5c7d39e217834325f222/qwen3-tts-tokenizer-12hz.gguf",
+          "size": 358453280,
+          "sha256": "70dc95dbfdd9aa5d9d406236ff771d061bf17b0cda02a72513953355606e719b"
+        }
+      ],
+      "chatterboxGguf": [
+        {
+          "fileName": "chatterbox-turbo-t3-q4_k.gguf",
+          "url": "https://huggingface.co/cstr/chatterbox-turbo-GGUF/resolve/b544cf8b49504d880640864a757b3ff3e4421a42/chatterbox-turbo-t3-q4_k.gguf",
+          "size": 478800960,
+          "sha256": "a26e04eec8199da708a220ce8f5157bebf7bf67da91a302eecf8e2d1bc76143c"
+        },
+        {
+          "fileName": "chatterbox-turbo-s3gen-q4_k.gguf",
+          "url": "https://huggingface.co/cstr/chatterbox-turbo-GGUF/resolve/b544cf8b49504d880640864a757b3ff3e4421a42/chatterbox-turbo-s3gen-q4_k.gguf",
+          "size": 255891744,
+          "sha256": "1c16251e6722c46500ebddd92be495e0dba160c31169f4b64d833acba819b060"
+        }
       ]
     }
   }

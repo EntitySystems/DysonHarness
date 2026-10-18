@@ -10,7 +10,7 @@ namespace DysonHarness;
 
 /// <summary>
 /// Windows <see cref="IDysonAudioCapture"/>: NAudio <see cref="WaveIn"/> (event capture) at 16 kHz mono s16le.
-/// Phonon only accepts a finished WAV, so each yield is one ~2 s clip.
+/// <see cref="CaptureWindowsAsync"/> yields ~2 s WAV clips. <see cref="CapturePcmAsync"/> yields ~560 ms raw PCM.
 /// </summary>
 public sealed class DysonWindowsAudioCapture : IDysonAudioCapture
 {
@@ -21,6 +21,9 @@ public sealed class DysonWindowsAudioCapture : IDysonAudioCapture
 
     /// <summary>100 ms. Shorter tails are dropped when capture stops.</summary>
     internal const int MinFlushBytes = SampleRate * 2 / 10;
+
+    /// <summary>16 kHz mono s16le, about 560 ms. Live blocks have no WAV header.</summary>
+    internal const int PcmBlockBytes = SampleRate * 2 * 560 / 1000;
 
     /// <summary>Windows waiting to be transcribed. One more and capture fails instead of growing.</summary>
     internal const int MaxQueuedWindows = 2;
@@ -47,27 +50,48 @@ public sealed class DysonWindowsAudioCapture : IDysonAudioCapture
         string? deviceId,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        await foreach (var block in CaptureBlocksAsync(deviceId, WindowBytes, MinFlushBytes, cancellationToken)
+                           .ConfigureAwait(false))
+        {
+            if (block.IsError)
+                yield return Result<Stream, string>.AsError(block.Error, block.Exception);
+            else
+                yield return Result<Stream, string>.AsValue(ToWav(block.Value));
+        }
+    }
+
+    public IAsyncEnumerable<Result<byte[], string>> CapturePcmAsync(
+        string? deviceId,
+        CancellationToken cancellationToken) =>
+        CaptureBlocksAsync(deviceId, PcmBlockBytes, minFlushBytes: 2, cancellationToken);
+
+    private async IAsyncEnumerable<Result<byte[], string>> CaptureBlocksAsync(
+        string? deviceId,
+        int blockBytes,
+        int minFlushBytes,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         // WinMM stays off the Blazor circuit even if the caller did not hop.
         await Task.Run(() => 0, CancellationToken.None).ConfigureAwait(false);
 
         var listed = _listDevices();
         if (listed.IsError)
         {
-            yield return Result<Stream, string>.AsError(listed.Error);
+            yield return Result<byte[], string>.AsError(listed.Error);
             yield break;
         }
 
         var selected = DysonSpeechInputDevice.Resolve(listed.Value, deviceId);
         if (selected.IsError)
         {
-            yield return Result<Stream, string>.AsError(selected.Error);
+            yield return Result<byte[], string>.AsError(selected.Error);
             yield break;
         }
 
         if (!int.TryParse(selected.Value.Id, NumberStyles.None, CultureInfo.InvariantCulture, out var deviceNumber)
             || deviceNumber < 0)
         {
-            yield return Result<Stream, string>.AsError($"Microphone '{selected.Value.Id}' is not connected.");
+            yield return Result<byte[], string>.AsError($"Microphone '{selected.Value.Id}' is not connected.");
             yield break;
         }
 
@@ -77,7 +101,7 @@ public sealed class DysonWindowsAudioCapture : IDysonAudioCapture
         {
             if (_session is null)
             {
-                session = new Session(linked);
+                session = new Session(linked, blockBytes);
                 _session = session;
             }
             else
@@ -87,7 +111,7 @@ public sealed class DysonWindowsAudioCapture : IDysonAudioCapture
         if (session is null)
         {
             linked.Dispose();
-            yield return Result<Stream, string>.AsError("Already recording.");
+            yield return Result<byte[], string>.AsError("Already recording.");
             yield break;
         }
 
@@ -96,14 +120,14 @@ public sealed class DysonWindowsAudioCapture : IDysonAudioCapture
             var opened = Open(session, deviceNumber);
             if (opened.IsError)
             {
-                yield return Result<Stream, string>.AsError(opened.Error, opened.Exception);
+                yield return Result<byte[], string>.AsError(opened.Error, opened.Exception);
                 yield break;
             }
 
             while (true)
             {
                 while (session.Windows.Reader.TryRead(out var queued))
-                    yield return queued;
+                    yield return Result<byte[], string>.AsValue(queued);
 
                 if (session.Cts.IsCancellationRequested)
                     break;
@@ -127,14 +151,14 @@ public sealed class DysonWindowsAudioCapture : IDysonAudioCapture
             lock (session.PendingGate)
             {
                 fault = session.Fault;
-                if (fault is null && session.Pending.Count >= MinFlushBytes)
+                if (fault is null && session.Pending.Count >= minFlushBytes)
                     tail = session.DetachPending();
             }
 
             if (fault is not null)
-                yield return Result<Stream, string>.AsError(fault);
+                yield return Result<byte[], string>.AsError(fault);
             else if (tail is not null)
-                yield return Result<Stream, string>.AsValue(ToWav(tail));
+                yield return Result<byte[], string>.AsValue(tail);
         }
         finally
         {
@@ -231,10 +255,8 @@ public sealed class DysonWindowsAudioCapture : IDysonAudioCapture
             (wave as IDisposable)?.Dispose();
         }
 
-        while (session.Windows.Reader.TryRead(out var leftover))
+        while (session.Windows.Reader.TryRead(out _))
         {
-            if (leftover.IsSuccess)
-                leftover.Value.Dispose();
         }
     }
 
@@ -272,10 +294,11 @@ public sealed class DysonWindowsAudioCapture : IDysonAudioCapture
             WaveFormat = new WaveFormat(SampleRate, 16, 1),
         };
 
-    private sealed class Session(CancellationTokenSource cts)
+    private sealed class Session(CancellationTokenSource cts, int blockBytes)
     {
+        public int BlockBytes { get; } = blockBytes;
         public CancellationTokenSource Cts { get; } = cts;
-        public Channel<Result<Stream, string>> Windows { get; } = Channel.CreateBounded<Result<Stream, string>>(
+        public Channel<byte[]> Windows { get; } = Channel.CreateBounded<byte[]>(
             new BoundedChannelOptions(MaxQueuedWindows)
             {
                 SingleReader = true,
@@ -315,11 +338,11 @@ public sealed class DysonWindowsAudioCapture : IDysonAudioCapture
                 if (Fault is not null || Cts.IsCancellationRequested)
                     return;
                 Pending.AddRange(copy);
-                // ponytail: queue cap is MaxQueuedWindows (~4 s). Past that, error instead of a streaming STT API.
-                while (Pending.Count >= WindowBytes && Fault is null)
+                // ponytail: queue cap is MaxQueuedWindows blocks. Past that, error instead of growing the buffer.
+                while (Pending.Count >= BlockBytes && Fault is null)
                 {
                     var pcm = DetachWindow();
-                    if (!Windows.Writer.TryWrite(Result<Stream, string>.AsValue(ToWav(pcm))))
+                    if (!Windows.Writer.TryWrite(pcm))
                     {
                         Fault = "Speech to text fell behind the microphone.";
                         Pending.Clear();
@@ -340,9 +363,9 @@ public sealed class DysonWindowsAudioCapture : IDysonAudioCapture
 
         public byte[] DetachWindow()
         {
-            var pcm = new byte[WindowBytes];
-            Pending.CopyTo(0, pcm, 0, WindowBytes);
-            Pending.RemoveRange(0, WindowBytes);
+            var pcm = new byte[BlockBytes];
+            Pending.CopyTo(0, pcm, 0, BlockBytes);
+            Pending.RemoveRange(0, BlockBytes);
             return pcm;
         }
 

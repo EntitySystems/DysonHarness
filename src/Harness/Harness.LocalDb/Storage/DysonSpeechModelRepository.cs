@@ -12,6 +12,36 @@ public sealed class DysonSpeechModelRepository(
     public const string QwenRuntimeId = "qwen3-tts-0.6b-base";
     public const string ChatterboxRuntimeId = "chatterbox-turbo";
 
+    // Ids and display names match DysonGgufSpeechModels. LocalDb does not reference Harness.Engine.
+    public const string NemotronRuntimeId = "nemotron-3.5-asr-streaming-0.6b";
+    public const string PhononGgufRuntimeId = "phonon-2-gguf";
+    public const string PocketGgufRuntimeId = "pocket-tts-gguf";
+    public const string QwenGgufRuntimeId = "qwen3-tts-0.6b-base-gguf";
+    public const string ChatterboxGgufRuntimeId = "chatterbox-turbo-gguf";
+
+    private const string PhononDisplayName = "Phonon 2 · BPS packed (Python)";
+    private const string PocketDisplayName = "Pocket TTS · safetensors, no voice cloning (Python)";
+    private const string QwenDisplayName = "Qwen3-TTS 0.6B Base · safetensors (Python)";
+    private const string ChatterboxDisplayName = "Chatterbox Turbo (English only) · safetensors (Python)";
+    private const string NemotronDisplayName = "Nemotron 3.5 ASR 0.6B · GGUF Q5_K_M, streaming (560 MB)";
+    private const string PhononGgufDisplayName = "Phonon 2 · GGUF Q4_K (402 MB)";
+    private const string PocketGgufDisplayName = "Pocket TTS · GGUF Q4_K, voice cloning (73 MB)";
+    private const string QwenGgufDisplayName = "Qwen3-TTS 0.6B Base · GGUF Q8_0 + F16 codec (1.34 GB)";
+    private const string ChatterboxGgufDisplayName = "Chatterbox Turbo (English only) · GGUF Q4_K (735 MB)";
+
+    private static readonly (string RuntimeId, string DisplayName, DysonSpeechCapability Capability, string RuntimeKind, bool SupportsVoicePrompt)[] BuiltIns =
+    [
+        (PhononRuntimeId, PhononDisplayName, DysonSpeechCapability.Input, "phonon", false),
+        (PocketRuntimeId, PocketDisplayName, DysonSpeechCapability.Output, "pocket", true),
+        (QwenRuntimeId, QwenDisplayName, DysonSpeechCapability.Output, "qwen", true),
+        (ChatterboxRuntimeId, ChatterboxDisplayName, DysonSpeechCapability.Output, "chatterbox", true),
+        (NemotronRuntimeId, NemotronDisplayName, DysonSpeechCapability.Input, "gguf", false),
+        (PhononGgufRuntimeId, PhononGgufDisplayName, DysonSpeechCapability.Input, "gguf", false),
+        (PocketGgufRuntimeId, PocketGgufDisplayName, DysonSpeechCapability.Output, "gguf", true),
+        (QwenGgufRuntimeId, QwenGgufDisplayName, DysonSpeechCapability.Output, "gguf", true),
+        (ChatterboxGgufRuntimeId, ChatterboxGgufDisplayName, DysonSpeechCapability.Output, "gguf", true),
+    ];
+
     private readonly DysonDbAccessor _accessor = accessor ?? throw new ArgumentNullException(nameof(accessor));
     private readonly IDysonSubjectContext _subjectContext =
         subjectContext ?? throw new ArgumentNullException(nameof(subjectContext));
@@ -138,19 +168,23 @@ public sealed class DysonSpeechModelRepository(
         {
             var existing = await db.SpeechModels
                 .Where(m => m.SubjectId == subjectId)
-                .Select(m => m.RuntimeId)
                 .ToListAsync(cancellationToken).ConfigureAwait(false);
 
             var now = DateTime.UtcNow;
-            if (!existing.Contains(PhononRuntimeId))
-                db.SpeechModels.Add(NewRow(subjectId, PhononRuntimeId, "Phonon 2", DysonSpeechCapability.Input, "phonon", false, now));
-            if (!existing.Contains(PocketRuntimeId))
-                db.SpeechModels.Add(NewRow(subjectId, PocketRuntimeId, "Pocket TTS", DysonSpeechCapability.Output, "pocket", true, now));
-            if (!existing.Contains(QwenRuntimeId))
-                db.SpeechModels.Add(NewRow(subjectId, QwenRuntimeId, "Qwen3-TTS 0.6B Base", DysonSpeechCapability.Output, "qwen", true, now));
-            // English only is a product limit, recorded in the name the Voice page renders (no language column).
-            if (!existing.Contains(ChatterboxRuntimeId))
-                db.SpeechModels.Add(NewRow(subjectId, ChatterboxRuntimeId, "Chatterbox Turbo (English only)", DysonSpeechCapability.Output, "chatterbox", true, now));
+            foreach (var spec in BuiltIns)
+            {
+                var row = existing.FirstOrDefault(m => m.RuntimeId == spec.RuntimeId);
+                if (row is null)
+                {
+                    db.SpeechModels.Add(NewRow(
+                        subjectId, spec.RuntimeId, spec.DisplayName, spec.Capability, spec.RuntimeKind, spec.SupportsVoicePrompt, now));
+                }
+                else if (!string.Equals(row.DisplayName, spec.DisplayName, StringComparison.Ordinal))
+                {
+                    row.DisplayName = spec.DisplayName;
+                    row.UpdatedUtc = now;
+                }
+            }
 
             await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;

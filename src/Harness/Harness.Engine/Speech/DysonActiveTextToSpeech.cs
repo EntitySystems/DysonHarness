@@ -4,8 +4,9 @@ namespace DysonHarness;
 
 /// <summary>
 /// The one <see cref="IDysonTextToSpeech"/> registration: routes to the active text-to-speech model
-/// (<see cref="DysonAppSettingKeys.SpeechOutputModelId"/>) among Pocket TTS, Qwen3-TTS 0.6B Base, and
-/// Chatterbox Turbo (English only). An active model that is not installed is an error; it never falls back
+/// (<see cref="DysonAppSettingKeys.SpeechOutputModelId"/>) among Pocket TTS, Qwen3-TTS 0.6B Base,
+/// Chatterbox Turbo (English only), and the CrispASR GGUF builds of those three
+/// (<see cref="DysonCrispSpeech"/>). An active model that is not installed is an error; it never falls back
 /// to another model. Switching the active model uninstalls nothing.
 /// </summary>
 public sealed class DysonActiveTextToSpeech(
@@ -92,6 +93,8 @@ public sealed class DysonActiveTextToSpeech(
         {
             DysonQwenSpeech.Id => _qwen,
             DysonChatterboxSpeech.Id => _chatterbox,
+            DysonGgufSpeechModels.PocketGgufId or DysonGgufSpeechModels.QwenGgufId or DysonGgufSpeechModels.ChatterboxGgufId
+                => new DysonCrispSpeech(_models, _settings, installRoot, active.Value),
             _ => _pocket,
         };
 
@@ -102,13 +105,15 @@ public sealed class DysonActiveTextToSpeech(
     }
 
     /// <summary>
-    /// Train TTS model for the active model: Qwen3-TTS and Chatterbox Turbo enroll a voice prompt (not a fine-tune);
+    /// Train TTS model for the active model: Qwen3-TTS and Chatterbox Turbo enroll a voice prompt (not a fine-tune).
+    /// CrispASR GGUF models enroll a 16-bit PCM .wav (<paramref name="transcript"/> is required for Qwen3-TTS GGUF).
     /// Pocket TTS returns <see cref="DysonSpeechVoicePrep.VoiceCloningUnsupported"/> and stores nothing.
     /// </summary>
     public async Task<Result<DysonSpeechVoiceEntity, string>> PrepareVoiceAsync(
         Stream clip,
         string fileName,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? transcript = null)
     {
         var active = await ResolveActiveAsync(cancellationToken).ConfigureAwait(false);
         if (active.IsError)
@@ -118,6 +123,8 @@ public sealed class DysonActiveTextToSpeech(
         {
             DysonQwenSpeech.Id => await _qwen.EnrollVoiceAsync(clip, fileName, cancellationToken).ConfigureAwait(false),
             DysonChatterboxSpeech.Id => await _chatterbox.EnrollVoiceAsync(clip, fileName, cancellationToken).ConfigureAwait(false),
+            var id when DysonGgufSpeechModels.IsCrisp(id) => await new DysonCrispSpeech(_models, _settings, installRoot, id)
+                .EnrollVoiceAsync(clip, fileName, transcript, cancellationToken).ConfigureAwait(false),
             _ => await DysonSpeechVoicePrep.PrepareAsync(clip, fileName, cancellationToken).ConfigureAwait(false),
         };
     }
@@ -130,6 +137,10 @@ public sealed class DysonActiveTextToSpeech(
             DysonQwenSpeech.StopBridge();
         if (runtimeId != DysonChatterboxSpeech.Id)
             DysonChatterboxSpeech.StopBridge();
+        if (DysonGgufSpeechModels.IsCrisp(runtimeId))
+            DysonCrispSpeech.StopSidecarUnless(runtimeId);
+        else
+            DysonCrispSpeech.StopSidecar();
     }
 
     /// <summary>Error text uses <c>{0}</c> for the model name.</summary>
