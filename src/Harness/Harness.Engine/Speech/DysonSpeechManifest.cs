@@ -31,7 +31,8 @@ public sealed record DysonSpeechRidManifest(
     DysonSpeechFile? CrispasrVulkan = null,
     DysonSpeechFile? PhononGgufQ8 = null,
     DysonSpeechFile? PocketGgufQ8 = null,
-    IReadOnlyList<DysonSpeechFile>? ChatterboxGgufQ8 = null);
+    IReadOnlyList<DysonSpeechFile>? ChatterboxGgufQ8 = null,
+    IReadOnlyList<DysonSpeechFile>? RocmTorch = null);
 
 /// <summary>
 /// <c>packaging/speech/manifest.json</c>, embedded in Harness.Engine. Git holds URLs and hashes, never the bytes.
@@ -44,7 +45,8 @@ public sealed partial record DysonSpeechManifest(
     string PocketPackage,
     string QwenPackage,
     string ChatterboxPackage,
-    IReadOnlyDictionary<string, DysonSpeechRidManifest> Rids)
+    IReadOnlyDictionary<string, DysonSpeechRidManifest> Rids,
+    string? RocmTorchRequirement = null)
 {
     public const string ResourceName = "DysonHarness.Speech.manifest.json";
 
@@ -122,6 +124,17 @@ public sealed partial record DysonSpeechManifest(
             {
                 return Result<DysonSpeechManifest, string>.AsError(
                     $"Speech manifest chatterboxModel points outside {ChatterboxTurboRepo} ({other.Url}). Only Chatterbox Turbo (English only) is used.");
+            }
+
+            if (m.RocmTorch is { Count: > 0 })
+            {
+                if (string.IsNullOrWhiteSpace(manifest.RocmTorchRequirement))
+                    return Result<DysonSpeechManifest, string>.AsError($"Speech manifest RID '{rid}' lists rocmTorch without rocmTorchRequirement.");
+                foreach (var file in m.RocmTorch)
+                {
+                    if (FileEntryError(rid, file) is { } rocmError)
+                        return Result<DysonSpeechManifest, string>.AsError(rocmError);
+                }
             }
         }
 

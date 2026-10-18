@@ -998,4 +998,67 @@ public class DysonSpeechInstallerTests
              } } }
             """;
     }
+
+    [Fact]
+    public async Task Cpu_plan_is_unchanged_and_rocm_choice_is_a_different_torch_directory()
+    {
+        var fresh = DysonSpeechInstallStatus.None(null);
+        var cpu = DysonSpeechInstaller.PlanSteps(fresh, [DysonPhononSpeech.Id]);
+        Assert.Equal(
+            [
+                "preflight",
+                "python-download", "python-hash", "python-extract",
+                "torch-download", "torch-hash", "torch-install",
+                "phonon-wheels-download", "phonon-wheels-hash", "phonon-wheels-install",
+                "phonon-weights-download", "phonon-weights-hash", "phonon-weights-unpack",
+                "licenses", "commit", "smoke",
+            ],
+            cpu);
+        Assert.DoesNotContain(cpu, step => step.StartsWith("rocm-torch-", StringComparison.Ordinal));
+
+        var rocm = DysonSpeechInstaller.PlanSteps(fresh, [DysonPhononSpeech.Id], installRocm: true);
+        Assert.Contains("torch-install", rocm);
+        Assert.Contains("rocm-torch-install", rocm);
+        Assert.NotEqual(cpu, rocm);
+
+        var root = Path.Combine("speech", "dev");
+        Assert.NotEqual(DysonSpeechPaths.GetTorchDir(root), DysonSpeechPaths.GetRocmTorchDir(root));
+        Assert.EndsWith(Path.Combine("speech", "dev", "torch"), DysonSpeechPaths.GetTorchDir(root));
+        Assert.EndsWith(Path.Combine("speech", "dev", "torch-rocm"), DysonSpeechPaths.GetRocmTorchDir(root));
+        Assert.Equal(DysonSpeechPaths.GetTorchDir(root), DysonSpeechTorchDevice.DirectoryFor(root, null));
+        Assert.Equal(DysonSpeechPaths.GetTorchDir(root), DysonSpeechTorchDevice.DirectoryFor(root, " "));
+        Assert.Equal(DysonSpeechPaths.GetTorchDir(root), DysonSpeechTorchDevice.DirectoryFor(root, "cuda"));
+        Assert.Equal(DysonSpeechPaths.GetRocmTorchDir(root), DysonSpeechTorchDevice.DirectoryFor(root, "rocm"));
+
+        var settings = new TorchSettings();
+        Assert.True((await DysonSpeechTorchDevice.SaveAsync(settings, "cuda")).IsError);
+        Assert.False(settings.Values.ContainsKey(DysonAppSettingKeys.SpeechTorchDevice));
+        Assert.True((await DysonSpeechTorchDevice.SaveAsync(settings, "rocm")).IsSuccess);
+        Assert.Equal("rocm", settings.Values[DysonAppSettingKeys.SpeechTorchDevice]);
+        Assert.True((await DysonSpeechTorchDevice.SaveAsync(settings, "cuda:0")).IsError);
+        Assert.Equal("rocm", settings.Values[DysonAppSettingKeys.SpeechTorchDevice]);
+    }
+
+    private sealed class TorchSettings : IDysonSubjectSettingsRepository
+    {
+        public Dictionary<string, string> Values { get; } = new(StringComparer.Ordinal);
+
+        public Task<VoidResult<string>> EnsureSubjectAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(VoidResult<string>.Success);
+
+        public Task<Result<string?, string>> GetSettingAsync(string key, CancellationToken cancellationToken = default)
+        {
+            Values.TryGetValue(key, out var value);
+            return Task.FromResult(Result<string?, string>.AsValue(value));
+        }
+
+        public Task<VoidResult<string>> SetSettingAsync(string key, string? value, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                Values.Remove(key);
+            else
+                Values[key] = value;
+            return Task.FromResult(VoidResult<string>.Success);
+        }
+    }
 }

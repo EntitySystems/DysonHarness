@@ -5,7 +5,8 @@ namespace DysonHarness;
 
 /// <summary>
 /// Chatterbox Turbo (<c>ResembleAI/chatterbox-turbo</c>), <b>English only</b>, through <c>chatterbox/bridge.py</c>
-/// on the shared CPU torch. 24 kHz PCM; no language parameter. Built-in voice <see cref="CatalogVoiceId"/>
+/// on the CPU torch, or on <c>torch-rocm/</c> (<c>from_local</c> device <c>cuda:0</c>) when
+/// <c>speech_torch_device</c> is <c>rocm</c>. 24 kHz PCM; no language parameter. Built-in voice <see cref="CatalogVoiceId"/>
 /// (the repo's <c>conds.pt</c>). Train makes a voice prompt from an .mp3 longer than 5 seconds, never a fine-tune.
 /// Every output carries Resemble's Perth implicit watermark (kept on purpose).
 /// </summary>
@@ -50,9 +51,17 @@ public sealed class DysonChatterboxSpeech(
             yield break;
         }
 
+        var torch = await DysonSpeechTorchDevice.InstalledDirectoryAsync(_settings, _installRoot, cancellationToken)
+            .ConfigureAwait(false);
+        if (torch.IsError)
+        {
+            yield return Result<DysonSpeechAudioChunk, string>.AsError(torch.Error);
+            yield break;
+        }
+
         var voicePath = Path.Combine(DysonSpeechPaths.GetChatterboxVoicesDir(_installRoot), voice.Value + ".pt");
         await foreach (var chunk in Bridge.SynthesizeAsync(
-                           () => Check(voicePath), StartInfo, new { text, voicePath }, SampleRate, cancellationToken)
+                           () => Check(voicePath), () => StartInfo(torch.Value), new { text, voicePath }, SampleRate, cancellationToken)
                            .ConfigureAwait(false))
         {
             yield return chunk;
@@ -64,14 +73,21 @@ public sealed class DysonChatterboxSpeech(
     /// (speaker embedding + speech tokens), saved and made the default voice. Shorter clips are an error.
     /// A non-blank <paramref name="transcript"/> is stored as <c>{voiceId}.txt</c> beside the <c>.pt</c>.
     /// </summary>
-    public Task<Result<DysonSpeechVoiceEntity, string>> EnrollVoiceAsync(
+    public async Task<Result<DysonSpeechVoiceEntity, string>> EnrollVoiceAsync(
         Stream clip,
         string fileName,
         CancellationToken cancellationToken = default,
-        string? transcript = null) =>
-        Bridge.EnrollAsync(
+        string? transcript = null)
+    {
+        var torch = await DysonSpeechTorchDevice.InstalledDirectoryAsync(_settings, _installRoot, cancellationToken)
+            .ConfigureAwait(false);
+        if (torch.IsError)
+            return Result<DysonSpeechVoiceEntity, string>.AsError(torch.Error);
+        return await Bridge.EnrollAsync(
             _models, _settings, _installRoot, Id, DysonSpeechPaths.GetChatterboxVoicesDir(_installRoot),
-            () => Check(null), StartInfo, clip, fileName, cancellationToken, transcript: transcript);
+            () => Check(null), () => StartInfo(torch.Value), clip, fileName, cancellationToken, transcript: transcript)
+            .ConfigureAwait(false);
+    }
 
     /// <summary>Kills the bridge if this process started one. Safe to call from app shutdown and uninstall.</summary>
     public static void StopBridge() => Bridge.Stop();
@@ -85,8 +101,9 @@ public sealed class DysonChatterboxSpeech(
             : new VoidResult<string>($"Voice file {Path.GetFileName(voicePath)} is missing. Reinstall {DisplayName} or train the voice again.");
     }
 
-    private ProcessStartInfo StartInfo() => DysonSpeechInstaller.PythonStartInfo(
+    private ProcessStartInfo StartInfo(string torchDir) => DysonSpeechInstaller.PythonStartInfo(
         _installRoot,
-        [DysonSpeechPaths.GetChatterboxSite(_installRoot), DysonSpeechPaths.GetTorchDir(_installRoot)],
-        [DysonSpeechPaths.GetChatterboxBridge(_installRoot), "--model", DysonSpeechPaths.GetChatterboxModelDir(_installRoot)]);
+        [DysonSpeechPaths.GetChatterboxSite(_installRoot), torchDir],
+        [DysonSpeechPaths.GetChatterboxBridge(_installRoot), "--model", DysonSpeechPaths.GetChatterboxModelDir(_installRoot)],
+        DysonSpeechTorchDevice.BridgeDevice(_installRoot, torchDir));
 }

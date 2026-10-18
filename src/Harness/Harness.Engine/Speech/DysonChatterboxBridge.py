@@ -52,17 +52,22 @@ def _send_pcm(wav):
             _frame(len(data), data)
 
 
+def _device():
+    # from_local moves modules with .to(device). Only the ROCm torch sets cuda:0.
+    return "cuda:0" if os.environ.get("DYSON_SPEECH_TORCH_DEVICE") == "cuda:0" else "cpu"
+
+
 def _load(model_dir):
     global _model
     if _model is None:
-        _model = ChatterboxTurboTTS.from_local(model_dir, "cpu")
+        _model = ChatterboxTurboTTS.from_local(model_dir, _device())
     return _model
 
 
 def _voice(path):
     conds = _conds.get(path)
     if conds is None:
-        conds = Conditionals.load(path)
+        conds = Conditionals.load(path).to(_device())
         _conds[path] = conds
     return conds
 

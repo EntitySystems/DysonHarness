@@ -248,4 +248,10 @@ public static class DysonAppSettingKeys
     /// Missing, blank, or any other value ⇒ CPU.
     /// </summary>
     public const string SpeechCrispDevice = "speech_crisp_device";
+
+    /// <summary>
+    /// Python speech torch: <c>rocm</c> selects AMD ROCm PyTorch in <c>torch-rocm/</c>. Missing, blank, or any other
+    /// value is the CPU torch in <c>torch/</c>. <c>cuda</c> is not a stored value.
+    /// </summary>
+    public const string SpeechTorchDevice = "speech_torch_device";
 }

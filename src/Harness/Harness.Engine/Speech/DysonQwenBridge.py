@@ -51,17 +51,22 @@ def _send_pcm(wav):
             _frame(len(data), data)
 
 
+def _device():
+    # qwen-tts 0.1.1 documents device_map="cuda:0". Anything else stays CPU float32.
+    return "cuda:0" if os.environ.get("DYSON_SPEECH_TORCH_DEVICE") == "cuda:0" else "cpu"
+
+
 def _load(model_dir):
     global _model
     if _model is None:
-        _model = Qwen3TTSModel.from_pretrained(model_dir, device_map="cpu", dtype=torch.float32)
+        _model = Qwen3TTSModel.from_pretrained(model_dir, device_map=_device(), dtype=torch.float32)
     return _model
 
 
 def _prompt(path):
     items = _prompts.get(path)
     if items is None:
-        data = torch.load(path, map_location="cpu", weights_only=True)
+        data = torch.load(path, map_location=_device(), weights_only=True)
         items = [VoiceClonePromptItem(**d) for d in data["items"]]
         _prompts[path] = items
     return items

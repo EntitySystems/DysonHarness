@@ -4,7 +4,8 @@ using System.Runtime.CompilerServices;
 namespace DysonHarness;
 
 /// <summary>
-/// Qwen3-TTS 0.6B Base (<c>Qwen/Qwen3-TTS-12Hz-0.6B-Base</c>) through <c>qwen/bridge.py</c> on the shared CPU torch.
+/// Qwen3-TTS 0.6B Base (<c>Qwen/Qwen3-TTS-12Hz-0.6B-Base</c>) through <c>qwen/bridge.py</c> on the CPU torch,
+/// or on <c>torch-rocm/</c> with <c>device_map="cuda:0"</c> when <c>speech_torch_device</c> is <c>rocm</c>.
 /// 24 kHz PCM. Base has no built-in speaker: every voice is an enrolled <c>.pt</c> voice prompt (speaker
 /// embedding from one .mp3 or .wav, x-vector only), never a fine-tune. The clip is not kept.
 /// </summary>
@@ -49,9 +50,17 @@ public sealed class DysonQwenSpeech(
             yield break;
         }
 
+        var torch = await DysonSpeechTorchDevice.InstalledDirectoryAsync(_settings, _installRoot, cancellationToken)
+            .ConfigureAwait(false);
+        if (torch.IsError)
+        {
+            yield return Result<DysonSpeechAudioChunk, string>.AsError(torch.Error);
+            yield break;
+        }
+
         var voicePath = Path.Combine(DysonSpeechPaths.GetQwenVoicesDir(_installRoot), voice.Value + ".pt");
         await foreach (var chunk in Bridge.SynthesizeAsync(
-                           () => Check(voicePath), StartInfo, new { text, voicePath }, SampleRate, cancellationToken)
+                           () => Check(voicePath), () => StartInfo(torch.Value), new { text, voicePath }, SampleRate, cancellationToken)
                            .ConfigureAwait(false))
         {
             yield return chunk;
@@ -62,14 +71,21 @@ public sealed class DysonQwenSpeech(
     /// Train TTS model: one .mp3 or .wav ⇒ a speaker-embedding voice prompt, saved and made the default voice.
     /// The clip is deleted. A non-blank <paramref name="transcript"/> is stored as <c>{voiceId}.txt</c> beside the <c>.pt</c>.
     /// </summary>
-    public Task<Result<DysonSpeechVoiceEntity, string>> EnrollVoiceAsync(
+    public async Task<Result<DysonSpeechVoiceEntity, string>> EnrollVoiceAsync(
         Stream clip,
         string fileName,
         CancellationToken cancellationToken = default,
-        string? transcript = null) =>
-        Bridge.EnrollAsync(
+        string? transcript = null)
+    {
+        var torch = await DysonSpeechTorchDevice.InstalledDirectoryAsync(_settings, _installRoot, cancellationToken)
+            .ConfigureAwait(false);
+        if (torch.IsError)
+            return Result<DysonSpeechVoiceEntity, string>.AsError(torch.Error);
+        return await Bridge.EnrollAsync(
             _models, _settings, _installRoot, Id, DysonSpeechPaths.GetQwenVoicesDir(_installRoot),
-            () => Check(null), StartInfo, clip, fileName, cancellationToken, acceptWav: true, transcript: transcript);
+            () => Check(null), () => StartInfo(torch.Value), clip, fileName, cancellationToken, acceptWav: true, transcript: transcript)
+            .ConfigureAwait(false);
+    }
 
     /// <summary>Kills the bridge if this process started one. Safe to call from app shutdown and uninstall.</summary>
     public static void StopBridge() => Bridge.Stop();
@@ -83,8 +99,9 @@ public sealed class DysonQwenSpeech(
             : new VoidResult<string>($"Voice file {Path.GetFileName(voicePath)} is missing. Train the voice again in Settings → Voice.");
     }
 
-    private ProcessStartInfo StartInfo() => DysonSpeechInstaller.PythonStartInfo(
+    private ProcessStartInfo StartInfo(string torchDir) => DysonSpeechInstaller.PythonStartInfo(
         _installRoot,
-        [DysonSpeechPaths.GetQwenSite(_installRoot), DysonSpeechPaths.GetTorchDir(_installRoot)],
-        [DysonSpeechPaths.GetQwenBridge(_installRoot), "--model", DysonSpeechPaths.GetQwenModelDir(_installRoot)]);
+        [DysonSpeechPaths.GetQwenSite(_installRoot), torchDir],
+        [DysonSpeechPaths.GetQwenBridge(_installRoot), "--model", DysonSpeechPaths.GetQwenModelDir(_installRoot)],
+        DysonSpeechTorchDevice.BridgeDevice(_installRoot, torchDir));
 }

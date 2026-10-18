@@ -30,6 +30,9 @@ public static class DysonSpeechPaths
 
     public static string GetTorchDir(string installRoot) => Path.Combine(installRoot, "torch");
 
+    /// <summary>AMD ROCm torch site. Not the CPU <see cref="GetTorchDir"/> tree.</summary>
+    public static string GetRocmTorchDir(string installRoot) => Path.Combine(installRoot, "torch-rocm");
+
     public static string GetPhononSite(string installRoot) => Path.Combine(installRoot, "phonon", "site");
 
     public static string GetPhononModelDir(string installRoot) =>

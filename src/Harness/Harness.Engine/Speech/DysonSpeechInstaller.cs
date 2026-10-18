@@ -68,6 +68,7 @@ public sealed class DysonSpeechInstaller
     // Preflight floors: measured win-x64 trees (Qwen / Chatterbox: site + weights + wheelhouse). Preflight needs
     // 2 × the sum of what this run builds. ponytail: re-measure when the pins change.
     internal const long RuntimeBytes = 696_975_521; // python 64,991,494 + torch 631,984,027
+    internal const long RocmTorchBytes = 1_573_298_232; // ROCm 10.1.0 torch + gfx1102 wheels + the CPU torch pure-Python deps
     internal const long PhononBytes = 533_602_783;
     internal const long PocketBytes = 480_934_807;
     internal const long QwenBytes = 683_576_361 + 2_516_100_892 + QwenWheelhouseBytes;
@@ -123,6 +124,9 @@ public sealed class DysonSpeechInstaller
         "python-download", "python-hash", "python-extract", "torch-download", "torch-hash", "torch-install",
     ];
 
+    private static readonly string[] RocmTorchSteps =
+        ["rocm-torch-download", "rocm-torch-hash", "rocm-torch-install"];
+
     private static readonly string[] CrispSteps = ["crispasr-download", "crispasr-hash", "crispasr-extract"];
 
     private static readonly string[] CrispVulkanSteps =
@@ -166,7 +170,7 @@ public sealed class DysonSpeechInstaller
 
     /// <summary>Every step in run order. A run emits only <see cref="PlanSteps"/>; skipped steps are not emitted.</summary>
     public static readonly IReadOnlyList<string> StepIds =
-        ["preflight", .. RuntimeSteps, .. CrispSteps, .. CrispVulkanSteps, .. ModelIds.SelectMany(id => ModelSteps[id]), .. TailSteps];
+        ["preflight", .. RuntimeSteps, .. RocmTorchSteps, .. CrispSteps, .. CrispVulkanSteps, .. ModelIds.SelectMany(id => ModelSteps[id]), .. TailSteps];
 
     internal const string BridgeResourceName = "DysonHarness.Speech.bridge.py";
     internal const string CatalogVoiceId = "alba";
@@ -382,12 +386,14 @@ public sealed class DysonSpeechInstaller
     /// requested model that is not installed; then licenses, commit, smoke when anything above runs. Pure.
     /// <paramref name="adopt"/> null keeps today's list. A non-null value drops downloads <see cref="Adopt"/> already
     /// matched. Licenses, commit, and smoke stay when a stamp still has to be written after pip or python extract.
+    /// <paramref name="installRocm"/> adds the ROCm torch steps into <c>torch-rocm/</c> and still runs when every
+    /// requested model is already installed. The CPU torch steps are unchanged when it is false.
     /// </summary>
     internal static IReadOnlyList<string> PlanSteps(
-        DysonSpeechInstallStatus status, IReadOnlyCollection<string> modelIds, DysonSpeechAdopt? adopt = null)
+        DysonSpeechInstallStatus status, IReadOnlyCollection<string> modelIds, DysonSpeechAdopt? adopt = null, bool installRocm = false)
     {
         var missing = ModelIds.Where(id => modelIds.Contains(id) && !status.IsInstalled(id)).ToList();
-        if (missing.Count == 0)
+        if (missing.Count == 0 && !installRocm)
             return ["preflight"];
 
         var buildPython = missing.Any(id => !DysonGgufSpeechModels.IsGguf(id));
@@ -395,6 +401,7 @@ public sealed class DysonSpeechInstaller
         [
             "preflight",
             .. !status.RuntimeInstalled && buildPython ? RuntimeSteps : Array.Empty<string>(),
+            .. installRocm ? RocmTorchSteps : Array.Empty<string>(),
             .. missing.Any(DysonGgufSpeechModels.IsCrisp) && !CrispasrInstalled(status) ? CrispSteps : Array.Empty<string>(),
             .. missing.Any(DysonGgufSpeechModels.IsCrisp) && !status.CrispVulkanInstalled ? CrispVulkanSteps : Array.Empty<string>(),
             .. missing.SelectMany(id => ModelSteps[id]),
@@ -452,7 +459,7 @@ public sealed class DysonSpeechInstaller
     private static bool CrispasrInstalled(DysonSpeechInstallStatus status) =>
         status.GgufInstalled?.Any(DysonGgufSpeechModels.IsCrisp) == true;
 
-    internal static long RequiredFreeBytes(bool runtime, IEnumerable<string> modelIds, DysonSpeechAdopt? adopt = null)
+    internal static long RequiredFreeBytes(bool runtime, IEnumerable<string> modelIds, DysonSpeechAdopt? adopt = null, bool rocm = false)
     {
         long models = 0;
         var crisp = false;
@@ -469,7 +476,7 @@ public sealed class DysonSpeechInstaller
         // for that model. Upgrade: add wheelhouse sizes.
         if (crisp)
             models += CrispAsrBytes;
-        return 2 * ((runtime ? RuntimeBytes : 0) + models);
+        return 2 * ((runtime ? RuntimeBytes : 0) + (rocm ? RocmTorchBytes : 0) + models);
     }
 
     private static long ModelBytes(string id) => id switch
@@ -688,7 +695,8 @@ public sealed class DysonSpeechInstaller
     internal static ProcessStartInfo PythonStartInfo(
         string installRoot,
         IReadOnlyList<string> pythonPath,
-        IEnumerable<string> args)
+        IEnumerable<string> args,
+        string? bridgeDevice = null)
     {
         var psi = new ProcessStartInfo(DysonSpeechPaths.GetPythonExe(installRoot))
         {
@@ -710,6 +718,8 @@ public sealed class DysonSpeechInstaller
         psi.Environment["HF_HUB_DISABLE_TELEMETRY"] = "1";
         psi.Environment["PIP_DISABLE_PIP_VERSION_CHECK"] = "1";
         psi.Environment["PIP_NO_INPUT"] = "1";
+        if (bridgeDevice is not null)
+            psi.Environment["DYSON_SPEECH_TORCH_DEVICE"] = bridgeDevice;
         return psi;
     }
 
@@ -1151,6 +1161,18 @@ public sealed class DysonSpeechInstaller
         }
     }
 
+    private static bool RocmTorchReady(string installRoot, DysonSpeechManifest manifest)
+    {
+        if (string.IsNullOrWhiteSpace(manifest.RocmTorchRequirement)
+            || !manifest.Rids.TryGetValue(SupportedRid, out var rid)
+            || rid.RocmTorch is not { Count: > 0 })
+            return false;
+        var dir = DysonSpeechPaths.GetRocmTorchDir(installRoot);
+        var info = TorchDistInfoName(manifest.RocmTorchRequirement);
+        return Directory.Exists(Path.Combine(dir, "torch"))
+            && Directory.Exists(Path.Combine(dir, info));
+    }
+
     private static bool TorchTreeMatches(string installRoot, string distInfoName)
     {
         var torch = DysonSpeechPaths.GetTorchDir(installRoot);
@@ -1252,6 +1274,8 @@ public sealed class DysonSpeechInstaller
         private DysonSpeechAdopt _adopt = DysonSpeechAdopt.Empty;
         private bool _swapPython;
         private bool _swapTorch;
+        private bool _swapRocm;
+        private bool _useRocmTorch;
         private bool _swapCrisp;
         private bool _swapCrispVulkan;
         private bool _committed;
@@ -1293,6 +1317,9 @@ public sealed class DysonSpeechInstaller
                 ("torch-download", p => DownloadAllAsync("torch-download", TorchPlanFiles(), torchWheels, p)),
                 ("torch-hash", _ => VerifyAllAsync("torch-hash", TorchPlanFiles(), torchWheels)),
                 ("torch-install", _ => PipInstallAsync("torch-install", TorchPlanFiles(), torchWheels, TorchInstallDir(), keepWheelhouseIn: null)),
+                ("rocm-torch-download", p => DownloadAllAsync("rocm-torch-download", RocmPlanFiles(), Path.Combine(Downloads, "rocm-torch"), p)),
+                ("rocm-torch-hash", _ => VerifyAllAsync("rocm-torch-hash", RocmPlanFiles(), Path.Combine(Downloads, "rocm-torch"))),
+                ("rocm-torch-install", _ => PipInstallAsync("rocm-torch-install", RocmPlanFiles(), Path.Combine(Downloads, "rocm-torch"), DysonSpeechPaths.GetRocmTorchDir(Tree), keepWheelhouseIn: null)),
                 ("crispasr-download", p => DownloadOneAsync("crispasr-download", _m.CrispasrRuntime, crispZip, p)),
                 ("crispasr-hash", _ => VerifyOneAsync("crispasr-hash", _m.CrispasrRuntime, crispZip)),
                 ("crispasr-extract", _ => Task.FromResult(ExtractCrispasr("crispasr-extract", _m.CrispasrRuntime, crispZip, DysonGgufSpeechModels.GetCrispRuntimeDir(Tree)))),
@@ -1425,7 +1452,16 @@ public sealed class DysonSpeechInstaller
             {
                 _adopt = Adopt(_root, _manifest, _before, requested);
                 _before = _adopt.Status;
-                _plan = PlanSteps(_before, requested, _adopt);
+                var device = await settings.GetSettingAsync(DysonAppSettingKeys.SpeechTorchDevice, ct).ConfigureAwait(false);
+                if (device.IsError)
+                    return new VoidResult<string>("preflight: " + device.Error);
+                var wantRocm = DysonSpeechTorchDevice.IsRocm(device.Value);
+                var rocmReady = RocmTorchReady(_root, _manifest);
+                var pythonInvolved = requested.Any(id => !DysonGgufSpeechModels.IsGguf(id))
+                    || _before.PhononInstalled || _before.PocketInstalled || _before.QwenInstalled || _before.ChatterboxInstalled;
+                var installRocm = wantRocm && !rocmReady && pythonInvolved;
+                _useRocmTorch = wantRocm && (rocmReady || installRocm);
+                _plan = PlanSteps(_before, requested, _adopt, installRocm);
             }
             if (_plan.Count == 1)
             {
@@ -1439,6 +1475,7 @@ public sealed class DysonSpeechInstaller
             _building = ModelIds.Where(id => requested.Contains(id) && !_before.IsInstalled(id)).ToList();
             _swapPython = _plan.Contains("python-extract");
             _swapTorch = _plan.Contains("torch-install") && !_adopt.SkipTorchWheel;
+            _swapRocm = _plan.Contains("rocm-torch-install");
             _swapCrisp = _plan.Contains("crispasr-extract");
             _swapCrispVulkan = _plan.Contains("crispasr-vulkan-extract");
             foreach (var id in _building)
@@ -1450,7 +1487,7 @@ public sealed class DysonSpeechInstaller
             Directory.CreateDirectory(_root);
             var downloadRuntime = _plan.Contains("python-download")
                 || (_plan.Contains("torch-download") && !_adopt.SkipTorchWheel);
-            var need = repair ? 2 * CrispAsrBytes : RequiredFreeBytes(downloadRuntime, _building, _adopt);
+            var need = repair ? 2 * CrispAsrBytes : RequiredFreeBytes(downloadRuntime, _building, _adopt, _plan.Contains("rocm-torch-download"));
             var free = new DriveInfo(Path.GetPathRoot(_root)!).AvailableFreeSpace;
             if (free < need)
                 return new VoidResult<string>($"preflight: needs {need:N0} free bytes on {Path.GetPathRoot(_root)}, has {free:N0}.");
@@ -1815,6 +1852,7 @@ public sealed class DysonSpeechInstaller
             [
                 .. _swapPython ? ["python"] : Array.Empty<string>(),
                 .. _swapTorch ? ["torch"] : Array.Empty<string>(),
+                .. _swapRocm ? ["torch-rocm"] : Array.Empty<string>(),
                 .. _swapCrisp ? ["crispasr"] : Array.Empty<string>(),
                 .. _swapCrispVulkan ? ["crispasr-vulkan"] : Array.Empty<string>(),
                 .. _building.Where(SwapBuiltDir).Select(ModelDir),
@@ -1824,6 +1862,16 @@ public sealed class DysonSpeechInstaller
             {
                 RestoreOld();
                 return swap;
+            }
+
+            if (_swapRocm)
+            {
+                var bridges = RewriteRocmBridges();
+                if (bridges.IsError)
+                {
+                    RestoreOld();
+                    return bridges;
+                }
             }
 
             _committed = true;
@@ -1888,6 +1936,32 @@ public sealed class DysonSpeechInstaller
             _adopt.PipTorchDeps
                 ? _m.Torch.Where(f => !DysonSpeechManifest.IsTorchWheel(f)).ToList()
                 : _m.Torch;
+
+        private IReadOnlyList<DysonSpeechFile> RocmPlanFiles() => _m.RocmTorch ?? [];
+
+        private string SmokeTorchDir() =>
+            _useRocmTorch ? DysonSpeechPaths.GetRocmTorchDir(_root) : DysonSpeechPaths.GetTorchDir(_root);
+
+        /// <summary>Existing Qwen and Chatterbox bridges learn the ROCm device flag. Pocket stays on CPU inside the bridge.</summary>
+        private VoidResult<string> RewriteRocmBridges()
+        {
+            if (Directory.Exists(Path.GetDirectoryName(DysonSpeechPaths.GetQwenBridge(_root))))
+            {
+                var qwen = WriteBridge("commit", DysonQwenSpeech.BridgeResourceName, DysonSpeechPaths.GetQwenBridge(_root));
+                if (qwen.IsError)
+                    return qwen;
+            }
+
+            var chatterboxDir = Path.GetDirectoryName(DysonSpeechPaths.GetChatterboxBridge(_root));
+            if (chatterboxDir is not null && Directory.Exists(chatterboxDir))
+            {
+                var chatterbox = WriteBridge("commit", DysonChatterboxSpeech.BridgeResourceName, DysonSpeechPaths.GetChatterboxBridge(_root));
+                if (chatterbox.IsError)
+                    return chatterbox;
+            }
+
+            return VoidResult<string>.Success;
+        }
 
         private string TorchInstallDir() =>
             _adopt.PipTorchDeps ? DysonSpeechPaths.GetTorchDir(_root) : DysonSpeechPaths.GetTorchDir(Tree);
@@ -1987,17 +2061,24 @@ public sealed class DysonSpeechInstaller
                 check = health;
             }
 
+            if (check.IsSuccess && _swapRocm)
+            {
+                check = await RunPythonAsync("smoke",
+                    [DysonSpeechPaths.GetRocmTorchDir(_root)],
+                    ["-c", "import torch"]).ConfigureAwait(false);
+            }
+
             if (check.IsSuccess && _building.Contains(DysonQwenSpeech.Id))
             {
                 check = await RunPythonAsync("smoke",
-                    [DysonSpeechPaths.GetQwenSite(_root), DysonSpeechPaths.GetTorchDir(_root)],
+                    [DysonSpeechPaths.GetQwenSite(_root), SmokeTorchDir()],
                     ["-c", "import qwen_tts"]).ConfigureAwait(false);
             }
 
             if (check.IsSuccess && _building.Contains(DysonChatterboxSpeech.Id))
             {
                 check = await RunPythonAsync("smoke",
-                    [DysonSpeechPaths.GetChatterboxSite(_root), DysonSpeechPaths.GetTorchDir(_root)],
+                    [DysonSpeechPaths.GetChatterboxSite(_root), SmokeTorchDir()],
                     ["-c", "from chatterbox.tts_turbo import ChatterboxTurboTTS"]).ConfigureAwait(false);
             }
 

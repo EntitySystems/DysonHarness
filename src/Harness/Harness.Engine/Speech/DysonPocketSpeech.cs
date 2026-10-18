@@ -45,9 +45,17 @@ public sealed class DysonPocketSpeech(
             yield break;
         }
 
+        var torch = await DysonSpeechTorchDevice.InstalledDirectoryAsync(_settings, _installRoot, cancellationToken)
+            .ConfigureAwait(false);
+        if (torch.IsError)
+        {
+            yield return Result<DysonSpeechAudioChunk, string>.AsError(torch.Error);
+            yield break;
+        }
+
         var voicePath = voice.Value;
         await foreach (var chunk in Bridge.SynthesizeAsync(
-                           () => Check(_installRoot, voicePath), () => StartInfo(_installRoot),
+                           () => Check(_installRoot, voicePath), () => StartInfo(_installRoot, torch.Value),
                            new { text, voicePath }, SampleRate, cancellationToken).ConfigureAwait(false))
         {
             yield return chunk;
@@ -87,8 +95,8 @@ public sealed class DysonPocketSpeech(
             : new VoidResult<string>($"Voice file {Path.GetFileName(voicePath)} is missing. Reinstall Pocket TTS in Settings → Voice.");
     }
 
-    private static ProcessStartInfo StartInfo(string installRoot) => DysonSpeechInstaller.PythonStartInfo(
+    private static ProcessStartInfo StartInfo(string installRoot, string torchDir) => DysonSpeechInstaller.PythonStartInfo(
         installRoot,
-        [DysonSpeechPaths.GetPocketSite(installRoot), DysonSpeechPaths.GetTorchDir(installRoot)],
+        [DysonSpeechPaths.GetPocketSite(installRoot), torchDir],
         [DysonSpeechPaths.GetPocketBridge(installRoot), "--config", DysonSpeechPaths.GetPocketConfig(installRoot)]);
 }
