@@ -1,6 +1,6 @@
 # Meta Agent mode
 
-Never-blocking orchestrator plus isolated implementer. Page-launched; not in the composer mode picker. Storage: [plans.md](../storage/plans.md). UI: [UI README](../ui/README.md)#meta-agent-page. Pass 1 already covers the 15-turn tick and the 100K cap in [README.md](README.md)#meta-agent-maintenance-tick and [sessions.md](../storage/sessions.md)#meta-agent-turn-window — this page is the toolset, plan tools, and the child-report loop.
+Never-blocking orchestrator plus isolated implementer. Page-launched; not in the composer mode picker. Storage: [plans.md](../storage/plans.md). UI: [UI README](../ui/README.md)#meta-agent-page. Pass 1 already covers the 15-turn tick and the 150K cap in [README.md](README.md)#meta-agent-maintenance-tick and [sessions.md](../storage/sessions.md)#meta-agent-turn-window — this page is the toolset, plan tools, and the child-report loop.
 
 ## Modes
 
@@ -180,7 +180,7 @@ Idle-without-report after two reminders **does** set `Failed` — that child was
 
 `DysonSessionRecoveryService` has no live session graph. For each Active descendant it marks `Interrupted` and appends one parent `Interrupt` log (`SubagentFailed`, summary `application restart`, child's `RuntimeId` / persistence id) via `PersistSyntheticParentReportAsync`. Idempotent if that log already exists. It does **not** call `SubmitSyntheticReportAsync` (nothing is in memory to accept a report). It does not replay model or tool calls. A persisted reminder counter would never be read: Interrupted descendants synthesize immediately on this path.
 
-## Maintenance tick and 100K cap
+## Maintenance tick and 150K cap
 
 See [README.md](README.md)#meta-agent-maintenance-tick and [sessions.md](../storage/sessions.md)#meta-agent-turn-window for the numbers (`IntervalTurns = 15`, `MaxTurns = 40`, `StaleAgentThreshold = 20`, live count ~40–54).
 
@@ -188,7 +188,7 @@ See [README.md](README.md)#meta-agent-maintenance-tick and [sessions.md](../stor
 
 `SelectEvicted` never takes the in-flight turn, an incomplete turn (`CompletedUtc` null — this is also how an unprocessed `MetaMaintenance` survives), or the newest `FullSummarize`. Independent of DropContext (token guard) and `CompactConversation`.
 
-**100K is not configurable** for Meta Agent: `ResolveEffectiveMaxTargetContextTokens` returns `DysonMaxTargetContextTokens.HarnessDefault` and ignores session/slug overrides including `0 = Off`. `DysonUiHost.SetSessionMaxTargetContextTokensAsync` rejects with `"Meta Agent context is fixed at 100K."`. Composer hides the ± stepper when `SelectedAgentMode` is Meta Agent (`ContextLimitLocked`). Meta Agent Drones keep the normal cascade. Covered by `DysonMetaAgentContextCapTests`.
+**150K is not configurable** for Meta Agent: `ResolveEffectiveMaxTargetContextTokens` returns `DysonMaxTargetContextTokens.MetaAgentFixed` (150_000) and ignores session/slug overrides including `0 = Off`. `DysonUiHost.SetSessionMaxTargetContextTokensAsync` rejects with `"Meta Agent context is fixed at 150K."`. Composer hides the ± stepper when `SelectedAgentMode` is Meta Agent (`ContextLimitLocked`). Meta Agent Drones keep the normal cascade. Covered by `DysonMetaAgentContextCapTests`.
 
 ## Traps
 

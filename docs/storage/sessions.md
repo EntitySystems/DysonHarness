@@ -17,7 +17,7 @@ Contracts: `IDysonSessionRepository` in `Harness.Abstractions`. Implementation: 
 | `AgentMode` | Ask / Plan / Work / … |
 | `ModelSlugId` | Guid? FK to `model_slugs` (credentials via parent provider; may reference a shared provider’s slug) |
 | `ReasoningEffort` | Session-scoped `reasoning_effort` override; null = fall back to slug `DefaultReasoningEffort` on resolve; empty = omit from request |
-| `MaxTargetContextTokens` | Session max target context; null = inherit slug `DefaultMaxTargetContextTokens` / harness 100K; `0` = Off (no DropContext inject). **Meta Agent ignores this column** and is pinned at 100K (`DysonMaxTargetContextTokens.HarnessDefault`) |
+| `MaxTargetContextTokens` | Session max target context; null = inherit slug `DefaultMaxTargetContextTokens` / harness 100K; `0` = Off (no DropContext inject). **Meta Agent ignores this column** and is pinned at 150K (`DysonMaxTargetContextTokens.MetaAgentFixed`) |
 | `WorkDirectoryId` | Guid? FK to `work_directories` (`SetNull` on delete; required for new sessions) |
 | `WorktreeEnabled` | bool, default `false` — composer **Worktree** checkbox (copied from workdir `forkWorktree` on create). Not a second `work_directories` row. |
 | `WorktreeAbsolutePath` | string? — absolute git worktree checkout; null until created. Clearing after merge/remove is allowed. |

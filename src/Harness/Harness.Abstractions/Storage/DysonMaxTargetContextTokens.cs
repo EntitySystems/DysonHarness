@@ -6,6 +6,12 @@ public static class DysonMaxTargetContextTokens
     /// <summary>Harness default when session and slug defaults are unset.</summary>
     public const int HarnessDefault = 100_000;
 
+    /// <summary>
+    /// Meta Agent root pin. Ignores session and slug overrides.
+    /// Meta Agent Drones keep <see cref="Resolve"/>.
+    /// </summary>
+    public const int MetaAgentFixed = 150_000;
+
     /// <summary>Composer ± stepper increment.</summary>
     public const int Step = 10_000;
 

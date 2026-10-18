@@ -68,7 +68,7 @@ Contributor and agent notes: [AGENTS.md](AGENTS.md).
 
 - [Engine](docs/engine/README.md) — session loop, modes, tools, completion, optimizer
 - [Engine API surface](docs/engine/api-surface.md) — public bindable types
-- [Meta Agent mode](docs/engine/meta-agent.md) — allowlist toolset, plan tools, child-report watch, 100K cap
+- [Meta Agent mode](docs/engine/meta-agent.md) — allowlist toolset, plan tools, child-report watch, 150K cap
 - [Plans table](docs/storage/plans.md) — Meta Agent `plans` rows (`planId`, not `.dyson/plans/*.md`)
 - [Model profiles & app data](docs/storage/models.md) — app mode, providers, persistence
 - [Sessions & resume](docs/storage/sessions.md) — turns, session log, resume

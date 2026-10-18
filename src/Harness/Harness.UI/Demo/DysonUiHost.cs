@@ -539,7 +539,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// <summary>
     /// Effective max target context for the composer stepper
     /// (session override → slug default → 100K; 0 = Off).
-    /// Meta Agent is pinned at 100K via <see cref="DysonAgentSession.ResolveEffectiveMaxTargetContextTokens"/>.
+    /// Meta Agent is pinned at 150K via <see cref="DysonAgentSession.ResolveEffectiveMaxTargetContextTokens"/>.
     /// </summary>
     public int SessionMaxTargetContextTokens =>
         _session is not null
@@ -3753,7 +3753,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
         {
-            LastError = "Meta Agent context is fixed at 100K.";
+            LastError = "Meta Agent context is fixed at 150K.";
             Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }

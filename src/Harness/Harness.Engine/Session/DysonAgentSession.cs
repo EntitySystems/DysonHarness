@@ -1576,12 +1576,12 @@ public abstract class DysonAgentSession
     /// <summary>
     /// Cascade: session override if set → slug default if set → harness 100K.
     /// 0 means Off / unlimited (no inject). Meta Agent is pinned to
-    /// <see cref="DysonMaxTargetContextTokens.HarnessDefault"/> and ignores the
+    /// <see cref="DysonMaxTargetContextTokens.MetaAgentFixed"/> and ignores the
     /// session/slug values (composer stepper cannot move it).
     /// </summary>
     public int ResolveEffectiveMaxTargetContextTokens() =>
         string.Equals(Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase)
-            ? DysonMaxTargetContextTokens.HarnessDefault
+            ? DysonMaxTargetContextTokens.MetaAgentFixed
             : DysonMaxTargetContextTokens.Resolve(MaxTargetContextTokens, SlugDefaultMaxTargetContextTokens);
 
     /// <summary>
