@@ -607,37 +607,39 @@
         }
     }
 
-    private static bool WavEnrollment(string? runtimeId) => runtimeId is DysonGgufSpeechModels.PocketGgufId
-        or DysonGgufSpeechModels.QwenGgufId
-        or DysonGgufSpeechModels.ChatterboxGgufId;
-
+    // GGUF voice clones take .wav. Python Qwen records, but its file picker stays .mp3.
     private static string TrainAccept(string runtimeId) =>
-        WavEnrollment(runtimeId) ? ".wav,audio/wav" : ".mp3,audio/mpeg";
+        DysonSpeechTryout.ShowsRecordedTrain(runtimeId) && runtimeId != DysonQwenSpeech.Id
+            ? ".wav,audio/wav"
+            : ".mp3,audio/mpeg";
 
     private bool CanPickTrainClip(string runtimeId) =>
         !_busy && (!DysonSpeechTryout.ShowsRecordedTrain(runtimeId) || _voiceConsent);
 
-    private static string TrainCopy(string runtimeId) => runtimeId switch
+    private static string TrainCopy(string runtimeId) => DysonGgufSpeechModels.CrispBackend(runtimeId) switch
     {
-        DysonGgufSpeechModels.PocketGgufId =>
+        "pocket-tts" =>
             "Pocket TTS GGUF clones a voice from one short .wav clip (enrollment, not a fine-tune). "
             + "The safetensors Pocket install cannot clone. Output keeps CrispASR's AI watermark.",
-        DysonGgufSpeechModels.QwenGgufId =>
+        "qwen3-tts" =>
             "Qwen3-TTS GGUF clones a voice from one .wav clip plus its exact transcript "
             + "(in-context voice prompt, not a fine-tune). Output keeps CrispASR's AI watermark.",
-        DysonGgufSpeechModels.ChatterboxGgufId =>
+        "chatterbox-turbo" =>
             "Chatterbox Turbo GGUF clones a voice from one .wav clip (enrollment, not a fine-tune). "
             + "Output keeps CrispASR's AI watermark.",
-        DysonQwenSpeech.Id =>
-            "Qwen3-TTS makes a voice from one short clip of clear speech (about 5\u201315 s): Record 10 seconds, or one .mp3. "
-            + "This saves a speaker embedding (voice prompt); it does not retrain the model. The clip is not kept.",
-        DysonChatterboxSpeech.Id =>
-            "Chatterbox Turbo (English only) makes a voice from one .mp3 of clear English speech longer than 5 seconds "
-            + "(it uses up to 15 s). This saves a voice prompt (speaker embedding and speech tokens); it does not retrain "
-            + "the model. The clip is not kept. Output carries Resemble's Perth watermark.",
-        _ =>
-            "Pocket TTS takes one .mp3 clip. The installed public weights cannot make a voice from audio, "
-            + "so this reports why and saves nothing; speech keeps using the alba voice.",
+        _ => runtimeId switch
+        {
+            DysonQwenSpeech.Id =>
+                "Qwen3-TTS makes a voice from one short clip of clear speech (about 5\u201315 s): Record 10 seconds, or one .mp3. "
+                + "This saves a speaker embedding (voice prompt); it does not retrain the model. The clip is not kept.",
+            DysonChatterboxSpeech.Id =>
+                "Chatterbox Turbo (English only) makes a voice from one .mp3 of clear English speech longer than 5 seconds "
+                + "(it uses up to 15 s). This saves a voice prompt (speaker embedding and speech tokens); it does not retrain "
+                + "the model. The clip is not kept. Output carries Resemble's Perth watermark.",
+            _ =>
+                "Pocket TTS takes one .mp3 clip. The installed public weights cannot make a voice from audio, "
+                + "so this reports why and saves nothing; speech keeps using the alba voice.",
+        },
     };
 
 

@@ -27,13 +27,13 @@ public sealed class DysonSpeechTryout(
 
     /// <summary>
     /// Train card shows consent and Record 10 seconds.
-    /// Python Qwen plus the three CrispASR GGUF voice models. Python Pocket and Chatterbox stay file-only.
+    /// Python Qwen plus CrispASR GGUF voice models (<see cref="DysonCrispSpeech.IsTextToSpeech"/>),
+    /// including the Q8 Pocket and Chatterbox siblings. Python Pocket and Chatterbox stay file-only.
+    /// Phonon GGUF does not enroll.
     /// </summary>
     public static bool ShowsRecordedTrain(string? runtimeId) =>
         runtimeId == DysonQwenSpeech.Id
-        || runtimeId is DysonGgufSpeechModels.PocketGgufId
-            or DysonGgufSpeechModels.QwenGgufId
-            or DysonGgufSpeechModels.ChatterboxGgufId;
+        || (runtimeId is not null && DysonCrispSpeech.IsTextToSpeech(runtimeId));
 
     /// <summary>
     /// Train card shows the editable transcript box, prefilled with <see cref="ReadAloudSentence"/>.

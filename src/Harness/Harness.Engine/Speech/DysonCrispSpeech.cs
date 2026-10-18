@@ -936,7 +936,8 @@ public sealed class DysonCrispSpeech(
     private static bool IsSpeechToText(string id) =>
         id is DysonGgufSpeechModels.PhononGgufId or DysonGgufSpeechModels.PhononGgufQ8Id;
 
-    private static bool IsTextToSpeech(string id) =>
+    /// <summary>Pocket, Qwen, and Chatterbox GGUF, Q4 and Q8. Not Phonon.</summary>
+    internal static bool IsTextToSpeech(string id) =>
         id is DysonGgufSpeechModels.PocketGgufId or DysonGgufSpeechModels.PocketGgufQ8Id
             or DysonGgufSpeechModels.QwenGgufId
             or DysonGgufSpeechModels.ChatterboxGgufId or DysonGgufSpeechModels.ChatterboxGgufQ8Id;

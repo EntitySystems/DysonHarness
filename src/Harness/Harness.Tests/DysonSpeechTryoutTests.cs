@@ -170,6 +170,32 @@ public class DysonSpeechTryoutTests
     }
 
     [Fact]
+    public void Q8_gguf_siblings_take_the_q4_voice_train_card()
+    {
+        Assert.True(DysonSpeechTryout.ShowsRecordedTrain(DysonGgufSpeechModels.PocketGgufId));
+        Assert.True(DysonSpeechTryout.ShowsRecordedTrain(DysonGgufSpeechModels.PocketGgufQ8Id));
+        Assert.True(DysonSpeechTryout.ShowsTrainTranscript(DysonGgufSpeechModels.PocketGgufQ8Id));
+        Assert.Equal(
+            DysonSpeechTryout.ShowsTrainTranscript(DysonGgufSpeechModels.PocketGgufId),
+            DysonSpeechTryout.ShowsTrainTranscript(DysonGgufSpeechModels.PocketGgufQ8Id));
+        Assert.False(DysonSpeechTryout.RequiresTrainTranscript(DysonGgufSpeechModels.PocketGgufQ8Id));
+        Assert.True(DysonCrispSpeech.IsTextToSpeech(DysonGgufSpeechModels.PocketGgufQ8Id));
+
+        Assert.True(DysonSpeechTryout.ShowsRecordedTrain(DysonGgufSpeechModels.ChatterboxGgufId));
+        Assert.True(DysonSpeechTryout.ShowsRecordedTrain(DysonGgufSpeechModels.ChatterboxGgufQ8Id));
+        Assert.True(DysonSpeechTryout.ShowsTrainTranscript(DysonGgufSpeechModels.ChatterboxGgufQ8Id));
+        Assert.Equal(
+            DysonSpeechTryout.ShowsTrainTranscript(DysonGgufSpeechModels.ChatterboxGgufId),
+            DysonSpeechTryout.ShowsTrainTranscript(DysonGgufSpeechModels.ChatterboxGgufQ8Id));
+        Assert.False(DysonSpeechTryout.RequiresTrainTranscript(DysonGgufSpeechModels.ChatterboxGgufQ8Id));
+        Assert.True(DysonCrispSpeech.IsTextToSpeech(DysonGgufSpeechModels.ChatterboxGgufQ8Id));
+
+        Assert.False(DysonSpeechTryout.ShowsRecordedTrain(DysonGgufSpeechModels.PhononGgufQ8Id));
+        Assert.False(DysonSpeechTryout.ShowsTrainTranscript(DysonGgufSpeechModels.PhononGgufQ8Id));
+        Assert.False(DysonCrispSpeech.IsTextToSpeech(DysonGgufSpeechModels.PhononGgufQ8Id));
+    }
+
+    [Fact]
     public async Task Python_qwen_recorded_enroll_skips_speech_to_text_and_writes_nothing_without_a_runtime()
     {
         Assert.True(DysonSpeechTryout.ShowsRecordedTrain(DysonQwenSpeech.Id));
