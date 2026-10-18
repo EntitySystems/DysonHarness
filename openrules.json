@@ -44,7 +44,7 @@
     {
       "Path": "rules/rules_management_model.md",
       "Mode": "AutoInclude",
-      "Description": "grok-4.7 at high effort only for root Meta Agent management drones (start/stop services, builds, UI restart, tooling) via StartAsyncMetaAgentDrone; all other drones, workers, and reviews inherit the parent model",
+      "Description": "grok-4.7 at high effort for every root Meta Agent StartAsyncMetaAgentDrone (management and authoring); workers, explores, and reviews inherit the parent model",
       "Providers": ["dyson"]
     },
     {
