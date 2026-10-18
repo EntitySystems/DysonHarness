@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using DysonHarness;
 
@@ -642,6 +643,170 @@ public class DysonSpeechInstallerTests
         await foreach (var item in stream)
             return item;
         throw new InvalidOperationException("Synthesis yielded nothing.");
+    }
+
+    [Fact]
+    public void Adopt_present_torch_gguf_and_safetensors_writes_stamp_and_skips_download()
+    {
+        var weights = new byte[] { 1, 2, 3, 4 };
+        var tokenizer = new byte[] { 5, 6, 7 };
+        var gguf = new byte[] { 8, 9 };
+        var manifest = AdoptManifest(weights, tokenizer, gguf);
+        var rid = manifest.Rids[DysonSpeechInstaller.SupportedRid];
+        var root = NewSpeechRoot();
+        try
+        {
+            TorchAndPython(root);
+            WriteBytes(DysonSpeechPaths.GetPocketModelFile(root), weights);
+            WriteBytes(Path.Combine(root, "pocket", "model", "tokenizer.json"), tokenizer);
+            Directory.CreateDirectory(Path.Combine(DysonSpeechPaths.GetPocketSite(root), "pocket_tts-3.3.0.dist-info"));
+            var ggufPath = DysonGgufSpeechModels.GetMainModelFile(root, DysonGgufSpeechModels.PocketGgufId);
+            WriteBytes(ggufPath, gguf);
+
+            var ids = new[] { DysonPocketSpeech.Id, DysonGgufSpeechModels.PocketGgufId };
+            var adopt = DysonSpeechInstaller.Adopt(root, manifest, DysonSpeechInstallStatus.None(null), ids);
+            var plan = DysonSpeechInstaller.PlanSteps(adopt.Status, ids, adopt);
+
+            Assert.Equal(["preflight"], plan);
+            Assert.DoesNotContain(plan, s => s.Contains("download", StringComparison.Ordinal));
+            using var stampJson = JsonDocument.Parse(File.ReadAllText(DysonSpeechPaths.GetInstallJson(root)));
+            var stamp = stampJson.RootElement;
+            Assert.Equal("pocket-tts==3.3.0", stamp.GetProperty("PocketPackage").GetString());
+            Assert.Equal("torch==2.14.1+cpu", stamp.GetProperty("TorchRequirement").GetString());
+            var ggufStamp = File.ReadAllText(Path.Combine(root, "install-gguf.json"));
+            Assert.Contains(rid.PocketGguf!.Sha256, ggufStamp, StringComparison.Ordinal);
+            Assert.Contains(rid.CrispasrRuntime!.Sha256, ggufStamp, StringComparison.Ordinal);
+            Assert.Equal(weights.Length, new FileInfo(DysonSpeechPaths.GetPocketModelFile(root)).Length);
+            Assert.Equal(gguf.Length, new FileInfo(ggufPath).Length);
+        }
+        finally
+        {
+            DeleteSpeechRoot(root);
+        }
+    }
+
+    [Fact]
+    public void Adopt_wrong_size_is_not_adopted()
+    {
+        var weights = new byte[] { 1, 2, 3, 4 };
+        var tokenizer = new byte[] { 5, 6, 7 };
+        var gguf = new byte[] { 8, 9 };
+        var manifest = AdoptManifest(weights, tokenizer, gguf);
+        var root = NewSpeechRoot();
+        try
+        {
+            TorchAndPython(root);
+            var badWeights = new byte[] { 1, 2, 3 };
+            var badGguf = new byte[] { 8 };
+            var model = DysonSpeechPaths.GetPocketModelFile(root);
+            var ggufPath = DysonGgufSpeechModels.GetMainModelFile(root, DysonGgufSpeechModels.PocketGgufId);
+            WriteBytes(model, badWeights);
+            WriteBytes(Path.Combine(root, "pocket", "model", "tokenizer.json"), tokenizer);
+            Directory.CreateDirectory(Path.Combine(DysonSpeechPaths.GetPocketSite(root), "pocket_tts-3.3.0.dist-info"));
+            WriteBytes(ggufPath, badGguf);
+
+            var ids = new[] { DysonPocketSpeech.Id, DysonGgufSpeechModels.PocketGgufId };
+            var adopt = DysonSpeechInstaller.Adopt(root, manifest, DysonSpeechInstallStatus.None(null), ids);
+            var plan = DysonSpeechInstaller.PlanSteps(adopt.Status, ids, adopt);
+
+            Assert.False(File.Exists(DysonSpeechPaths.GetInstallJson(root)));
+            Assert.False(File.Exists(Path.Combine(root, "install-gguf.json")));
+            Assert.Contains("pocket-weights-download", plan);
+            Assert.Contains("pocket-gguf-download", plan);
+            Assert.Equal(badWeights, File.ReadAllBytes(model));
+            Assert.Equal(badGguf, File.ReadAllBytes(ggufPath));
+        }
+        finally
+        {
+            DeleteSpeechRoot(root);
+        }
+    }
+
+    [Fact]
+    public void Adopt_matching_weights_missing_site_plans_pip_only()
+    {
+        var weights = new byte[] { 1, 2, 3, 4 };
+        var tokenizer = new byte[] { 5, 6, 7 };
+        var manifest = AdoptManifest(weights, tokenizer, [8, 9]);
+        var root = NewSpeechRoot();
+        try
+        {
+            TorchAndPython(root);
+            var model = DysonSpeechPaths.GetPocketModelFile(root);
+            WriteBytes(model, weights);
+            WriteBytes(Path.Combine(root, "pocket", "model", "tokenizer.json"), tokenizer);
+
+            var ids = new[] { DysonPocketSpeech.Id };
+            var adopt = DysonSpeechInstaller.Adopt(root, manifest, DysonSpeechInstallStatus.None(null), ids);
+            var plan = DysonSpeechInstaller.PlanSteps(adopt.Status, ids, adopt);
+
+            Assert.Contains("pocket-wheels-download", plan);
+            Assert.Contains("pocket-wheels-install", plan);
+            Assert.DoesNotContain("pocket-weights-download", plan);
+            Assert.DoesNotContain("torch-download", plan);
+            Assert.False(File.Exists(DysonSpeechPaths.GetInstallJson(root)));
+            Assert.Equal(weights, File.ReadAllBytes(model));
+        }
+        finally
+        {
+            DeleteSpeechRoot(root);
+        }
+    }
+
+    private static string NewSpeechRoot() =>
+        Path.Combine(Path.GetTempPath(), "dyson-speech-adopt-" + Guid.NewGuid().ToString("N"));
+
+    private static void DeleteSpeechRoot(string root)
+    {
+        if (Directory.Exists(root))
+            Directory.Delete(root, recursive: true);
+    }
+
+    private static void WriteBytes(string path, byte[] bytes)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, bytes);
+    }
+
+    private static void TorchAndPython(string root)
+    {
+        Directory.CreateDirectory(Path.Combine(root, "torch", "torch"));
+        Directory.CreateDirectory(Path.Combine(root, "torch", "torch-2.14.1+cpu.dist-info"));
+        WriteBytes(DysonSpeechPaths.GetPythonExe(root), []);
+        WriteBytes(DysonGgufSpeechModels.GetCrispExe(root), []);
+    }
+
+    private static DysonSpeechManifest AdoptManifest(byte[] weights, byte[] tokenizer, byte[] gguf)
+    {
+        static string Entry(string name, byte[] bytes, string url) =>
+            $$"""{"fileName":"{{name}}","url":"{{url}}","size":{{bytes.Length}},"sha256":"{{Convert.ToHexStringLower(SHA256.HashData(bytes))}}"}""";
+
+        var one = new byte[] { 1 };
+        var json = $$"""
+            {"schemaVersion":1,"pythonVersion":"3.12.15","torchRequirement":"torch==2.14.1+cpu",
+             "phononPackage":"fermion-research==0.2.11","pocketPackage":"pocket-tts==3.3.0",
+             "qwenPackage":"qwen-tts==0.1.1","chatterboxPackage":"chatterbox-tts==0.1.7",
+             "rids":{"win-x64":{
+               "qwenWheels":[{{Entry("qwen_tts-0.1.1-py3-none-any.whl", one, "https://example.test/qwen.whl")}}],
+               "qwenModel":[{{Entry("model.safetensors", one, "https://example.test/qwen-model")}}],
+               "qwenSpeechTokenizer":[{{Entry("model.safetensors", one, "https://example.test/qwen-tok")}}],
+               "chatterboxWheels":[{{Entry("chatterbox_tts-0.1.7-py3-none-any.whl", one, "https://example.test/cb.whl")}}],
+               "chatterboxModel":[{{Entry("conds.pt", one, "https://huggingface.co/ResembleAI/chatterbox-turbo/resolve/main/conds.pt")}}],
+               "python":{{Entry("python.tar.gz", one, "https://example.test/python.tar.gz")}},
+               "torch":[{{Entry("torch-2.14.1+cpu-cp312-cp312-win_amd64.whl", one, "https://example.test/torch.whl")}}],
+               "phononWheels":[{{Entry("soundfile-0.13.1-py2.py3-none-win_amd64.whl", one, "https://example.test/sf.whl")}}],
+               "pocketWheels":[{{Entry("pocket_tts-3.3.0-py3-none-any.whl", one, "https://example.test/pocket.whl")}}],
+               "phononWeights":{{Entry("phonon-2.bps.tar.zst", one, "https://example.test/phonon.zst")}},
+               "pocketWeights":{{Entry("model.safetensors", weights, "https://huggingface.co/kyutai/pocket-tts-without-voice-cloning/resolve/00eac05ed3d16bdc3f6b5d598874019c34a89214/languages/english/model.safetensors")}},
+               "pocketTokenizer":{{Entry("tokenizer.json", tokenizer, "https://example.test/tokenizer.json")}},
+               "pocketVoice":{{Entry("alba.safetensors", one, "https://example.test/alba.safetensors")}},
+               "crispasrRuntime":{{Entry("crispasr.zip", one, "https://example.test/crispasr.zip")}},
+               "pocketGguf":{{Entry("pocket-tts-english-q4_k.gguf", gguf, "https://example.test/pocket.gguf")}}
+             } } }
+            """;
+        var parsed = DysonSpeechManifest.Parse(json);
+        Assert.True(parsed.IsSuccess, parsed.IsError ? parsed.Error : null);
+        return parsed.Value;
     }
 
     private const string PocketUrl =

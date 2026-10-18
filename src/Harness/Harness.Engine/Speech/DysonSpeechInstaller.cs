@@ -325,15 +325,18 @@ public sealed class DysonSpeechInstaller
     /// The steps one run executes: preflight; python/torch only when a non-GGUF model is missing and the runtime is
     /// missing; CrispASR only when a CrispASR model is missing and no CrispASR model is already installed; each
     /// requested model that is not installed; then licenses, commit, smoke when anything above runs. Pure.
+    /// <paramref name="adopt"/> null keeps today's list. A non-null value drops downloads <see cref="Adopt"/> already
+    /// matched. Licenses, commit, and smoke stay when a stamp still has to be written after pip or python extract.
     /// </summary>
-    internal static IReadOnlyList<string> PlanSteps(DysonSpeechInstallStatus status, IReadOnlyCollection<string> modelIds)
+    internal static IReadOnlyList<string> PlanSteps(
+        DysonSpeechInstallStatus status, IReadOnlyCollection<string> modelIds, DysonSpeechAdopt? adopt = null)
     {
         var missing = ModelIds.Where(id => modelIds.Contains(id) && !status.IsInstalled(id)).ToList();
         if (missing.Count == 0)
             return ["preflight"];
 
         var buildPython = missing.Any(id => !DysonGgufSpeechModels.IsGguf(id));
-        return
+        List<string> steps =
         [
             "preflight",
             .. !status.RuntimeInstalled && buildPython ? RuntimeSteps : Array.Empty<string>(),
@@ -341,26 +344,58 @@ public sealed class DysonSpeechInstaller
             .. missing.SelectMany(id => ModelSteps[id]),
             .. TailSteps,
         ];
+        if (adopt is null)
+            return steps;
+
+        steps.RemoveAll(step => step != "preflight" && AdoptDrops(step, adopt));
+        return steps;
+    }
+
+    private static bool AdoptDrops(string step, DysonSpeechAdopt adopt)
+    {
+        if (adopt.SkipPython && step.StartsWith("python-", StringComparison.Ordinal))
+            return true;
+        if (adopt.SkipTorchWheel && !adopt.PipTorchDeps && step.StartsWith("torch-", StringComparison.Ordinal))
+            return true;
+        if (adopt.SkipCrisp && step.StartsWith("crispasr-", StringComparison.Ordinal))
+            return true;
+        foreach (var id in adopt.SkipWeightIds)
+        {
+            if (ModelSteps.TryGetValue(id, out var owned) && owned.Contains(step) && DropOwnedStep(id, step, adopt))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool DropOwnedStep(string id, string step, DysonSpeechAdopt adopt)
+    {
+        if (step.Contains("-wheels-", StringComparison.Ordinal))
+            return !adopt.PipSiteIds.Contains(id);
+        if (id == DysonPocketSpeech.Id && (step.StartsWith("pocket-voice-", StringComparison.Ordinal) || step == "pocket-config"))
+            return adopt.PocketVoiceMatched;
+        return true;
     }
 
     /// <summary>A CrispASR model in <see cref="DysonSpeechInstallStatus.GgufInstalled"/> means the shared runtime is present.</summary>
     private static bool CrispasrInstalled(DysonSpeechInstallStatus status) =>
         status.GgufInstalled?.Any(DysonGgufSpeechModels.IsCrisp) == true;
 
-    internal static long RequiredFreeBytes(bool runtime, IEnumerable<string> modelIds)
+    internal static long RequiredFreeBytes(bool runtime, IEnumerable<string> modelIds, DysonSpeechAdopt? adopt = null)
     {
         long models = 0;
         var crisp = false;
         foreach (var id in modelIds)
         {
-            models += ModelBytes(id);
+            if (adopt?.SkipWeightIds.Contains(id) != true)
+                models += ModelBytes(id);
             if (DysonGgufSpeechModels.IsCrisp(id))
                 crisp = true;
         }
 
-        // ponytail: CrispASR bytes are added whenever a crisp id is in modelIds, even if crispasr is already installed.
-        // Upgrade: pass a "runtime missing" flag from the caller.
-        if (crisp)
+        // ponytail: without adopt, CrispASR bytes are added even when crispasr is already installed.
+        // A pip-only repair (weights skipped) reserves nothing for that model. Upgrade: add wheelhouse sizes.
+        if (crisp && adopt?.SkipCrisp != true)
             models += CrispAsrBytes;
         return 2 * ((runtime ? RuntimeBytes : 0) + models);
     }
@@ -418,8 +453,8 @@ public sealed class DysonSpeechInstaller
     /// Runtime installed when <c>install.json</c> matches the shared pins and RID and python + torch exist. A Python
     /// model is installed on top of that when its stamp pin equals the manifest package and its weights exist. A
     /// plan-97 stamp (no Qwen / Chatterbox pins) still probes as runtime + Phonon + Pocket. GGUF ids are probed from
-    /// <c>install-gguf.json</c> even when <c>install.json</c> is missing. Sync file I/O: callers hop to the thread
-    /// pool first.
+    /// <c>install-gguf.json</c> even when <c>install.json</c> is missing. Does not hash. Sync file I/O: callers hop
+    /// to the thread pool first.
     /// </summary>
     internal static DysonSpeechInstallStatus Probe(string installRoot)
     {
@@ -430,8 +465,14 @@ public sealed class DysonSpeechInstaller
         if (manifest.IsError)
             return DysonSpeechInstallStatus.None(manifest.Error);
 
-        var python = ProbePython(installRoot, manifest.Value);
-        var gguf = ProbeGguf(installRoot, manifest.Value);
+        return ProbeFiles(installRoot, manifest.Value);
+    }
+
+    /// <summary>Stamp and key-file probe with no win-x64 gate, so <see cref="Adopt"/> can re-probe on any OS. No hashing.</summary>
+    private static DysonSpeechInstallStatus ProbeFiles(string installRoot, DysonSpeechManifest manifest)
+    {
+        var python = ProbePython(installRoot, manifest);
+        var gguf = ProbeGguf(installRoot, manifest);
         return gguf.Count == 0 ? python : python with { GgufInstalled = gguf };
     }
 
@@ -766,6 +807,295 @@ public sealed class DysonSpeechInstaller
         _ => null,
     };
 
+    /// <summary>
+    /// What <see cref="Adopt"/> proved. <see cref="PlanSteps"/> drops downloads for a matched set. <see cref="PocketVoiceMatched"/>
+    /// is Pocket weights plus <c>alba</c>; the voice is not required to adopt the weights.
+    /// </summary>
+    internal sealed record DysonSpeechAdopt(
+        DysonSpeechInstallStatus Status,
+        bool SkipTorchWheel,
+        bool PipTorchDeps,
+        IReadOnlySet<string> SkipWeightIds,
+        IReadOnlySet<string> PipSiteIds,
+        bool SkipPython,
+        bool SkipCrisp,
+        bool NemotronWeightsOnDisk,
+        bool NemotronDllOnDisk,
+        bool PocketVoiceMatched)
+    {
+        public static DysonSpeechAdopt Empty { get; } = new(
+            DysonSpeechInstallStatus.None(null),
+            false, false,
+            new HashSet<string>(StringComparer.Ordinal),
+            new HashSet<string>(StringComparer.Ordinal),
+            false, false, false, false, false);
+    }
+
+    /// <summary>
+    /// When <paramref name="probed"/> does not already report a requested id, match essential on-disk files and write
+    /// the stamp so the next probe takes the existing DB-sync repair. No HTTP. Does not delete or truncate anything.
+    /// Hash only after <c>Length == Size</c>. ponytail: torch is the dist-info folder name (not a hash of
+    /// <c>torch_cpu.dll</c>); Phonon is a non-empty unpack dir (the archive is not kept); <c>crispasr.exe</c> and
+    /// <c>transcribe.dll</c> are existence-only.
+    /// </summary>
+    internal static DysonSpeechAdopt Adopt(
+        string installRoot,
+        DysonSpeechManifest manifest,
+        DysonSpeechInstallStatus probed,
+        IReadOnlyCollection<string> requested)
+    {
+        if (!manifest.Rids.TryGetValue(SupportedRid, out var rid))
+            return DysonSpeechAdopt.Empty with { Status = probed };
+
+        var torchInfo = TorchDistInfoName(manifest.TorchRequirement);
+        var torchMatches = TorchTreeMatches(installRoot, torchInfo);
+        var pythonExists = File.Exists(DysonSpeechPaths.GetPythonExe(installRoot));
+        var skipCrisp = File.Exists(DysonGgufSpeechModels.GetCrispExe(installRoot));
+        var pipTorch = torchMatches
+            && !OtherTorchDistInfo(installRoot, torchInfo)
+            && rid.Torch.Any(f => !DysonSpeechManifest.IsTorchWheel(f));
+
+        var skip = new HashSet<string>(StringComparer.Ordinal);
+        var pipSites = new HashSet<string>(StringComparer.Ordinal);
+        var stampPython = new HashSet<string>(StringComparer.Ordinal);
+        var nemoWeights = false;
+        var nemoDll = false;
+        foreach (var id in requested)
+        {
+            if (!ModelIds.Contains(id) || probed.IsInstalled(id))
+                continue;
+            if (id == DysonGgufSpeechModels.NemotronId)
+            {
+                nemoWeights = rid.NemotronWeights is not null
+                    && FileMatches(DysonGgufSpeechModels.GetMainModelFile(installRoot, id), rid.NemotronWeights);
+                nemoDll = File.Exists(DysonGgufSpeechModels.GetTranscribeDll(installRoot));
+                if (nemoWeights && nemoDll)
+                    skip.Add(id);
+                continue;
+            }
+
+            if (!EssentialsMatch(installRoot, rid, id))
+                continue;
+            skip.Add(id);
+            if (DysonGgufSpeechModels.IsGguf(id))
+                continue;
+            var site = PythonSite(installRoot, id);
+            if (site is not null && SiteHasDistInfo(site))
+                stampPython.Add(id);
+            else
+                pipSites.Add(id);
+        }
+
+        var pocketVoice = skip.Contains(DysonPocketSpeech.Id)
+            && FileMatches(Path.Combine(DysonSpeechPaths.GetPocketVoicesDir(installRoot), CatalogVoiceId + ".safetensors"), rid.PocketVoice);
+
+        try
+        {
+            WriteAdoptStamps(installRoot, manifest, rid, probed, requested, torchMatches, pythonExists, skipCrisp, skip, stampPython);
+            if (pocketVoice && !EnsurePocketVoiceFiles(installRoot))
+                pocketVoice = false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            pocketVoice = false;
+        }
+
+        return new DysonSpeechAdopt(
+            ProbeFiles(installRoot, manifest), torchMatches, pipTorch, skip, pipSites, pythonExists, skipCrisp,
+            nemoWeights, nemoDll, pocketVoice);
+    }
+
+    private static void WriteAdoptStamps(
+        string installRoot,
+        DysonSpeechManifest manifest,
+        DysonSpeechRidManifest rid,
+        DysonSpeechInstallStatus probed,
+        IReadOnlyCollection<string> requested,
+        bool torchMatches,
+        bool pythonExists,
+        bool skipCrisp,
+        HashSet<string> skip,
+        HashSet<string> stampPython)
+    {
+        var previous = ReadStamp(installRoot);
+        var sharedMismatch = previous is null
+            || previous.SchemaVersion != manifest.SchemaVersion
+            || previous.PythonVersion != manifest.PythonVersion
+            || previous.TorchRequirement != manifest.TorchRequirement
+            || previous.Rid != SupportedRid;
+        if (torchMatches && pythonExists && (stampPython.Count > 0 || (previous is not null && sharedMismatch)))
+        {
+            Directory.CreateDirectory(installRoot);
+            var stamp = new DysonSpeechInstallStamp(
+                manifest.SchemaVersion, manifest.PythonVersion, manifest.TorchRequirement,
+                previous?.PhononPackage, previous?.PocketPackage, SupportedRid, DateTime.UtcNow,
+                previous?.QwenPackage, previous?.ChatterboxPackage);
+            foreach (var id in requested)
+            {
+                if (DysonGgufSpeechModels.IsGguf(id) || probed.IsInstalled(id))
+                    continue;
+                stamp = WithPackage(stamp, id, stampPython.Contains(id) ? PackageOf(manifest, id) : null);
+            }
+
+            WriteStamp(installRoot, stamp);
+        }
+
+        Dictionary<string, string>? gguf = null;
+        foreach (var id in requested)
+        {
+            if (!DysonGgufSpeechModels.IsGguf(id) || probed.IsInstalled(id) || !skip.Contains(id))
+                continue;
+            if (DysonGgufSpeechModels.IsCrisp(id) && !skipCrisp)
+                continue;
+            var pin = GgufPin(rid, id);
+            if (pin is null)
+                continue;
+            gguf ??= new Dictionary<string, string>(
+                ReadGgufStamp(installRoot) ?? new Dictionary<string, string>(), StringComparer.Ordinal);
+            gguf[id] = pin;
+            if (DysonGgufSpeechModels.IsCrisp(id) && rid.CrispasrRuntime is not null)
+                gguf[CrispStampKey] = rid.CrispasrRuntime.Sha256;
+        }
+
+        if (gguf is not null)
+            WriteGgufStamp(installRoot, gguf);
+    }
+
+    /// <summary><c>english.yaml</c> and <c>bridge.py</c> when alba and the weights are already on disk. False if either write failed.</summary>
+    private static bool EnsurePocketVoiceFiles(string installRoot)
+    {
+        var config = DysonSpeechPaths.GetPocketConfig(installRoot);
+        if (!File.Exists(config))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(config)!);
+            File.WriteAllText(config, BuildPocketConfig(installRoot));
+        }
+
+        var bridge = DysonSpeechPaths.GetPocketBridge(installRoot);
+        if (!File.Exists(bridge))
+        {
+            var write = WriteBridge("pocket-config", BridgeResourceName, bridge);
+            if (write.IsError)
+                return false;
+        }
+
+        return File.Exists(config) && File.Exists(bridge);
+    }
+
+    private static VoidResult<string> WriteBridge(string stepId, string resourceName, string path)
+    {
+        using var bridge = typeof(DysonSpeechInstaller).Assembly.GetManifestResourceStream(resourceName);
+        if (bridge is null)
+            return new VoidResult<string>($"{stepId}: embedded {resourceName} is missing.");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using (var output = File.Create(path))
+            bridge.CopyTo(output);
+        return VoidResult<string>.Success;
+    }
+
+    private static bool EssentialsMatch(string installRoot, DysonSpeechRidManifest rid, string id)
+    {
+        if (id == DysonPhononSpeech.Id)
+        {
+            var dir = DysonSpeechPaths.GetPhononModelDir(installRoot);
+            return Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any();
+        }
+
+        if (id == DysonPocketSpeech.Id)
+        {
+            return FileMatches(DysonSpeechPaths.GetPocketModelFile(installRoot), rid.PocketWeights)
+                && FileMatches(Path.Combine(installRoot, "pocket", "model", rid.PocketTokenizer.FileName), rid.PocketTokenizer);
+        }
+
+        if (id == DysonQwenSpeech.Id)
+        {
+            var model = DysonSpeechPaths.GetQwenModelDir(installRoot);
+            return AllMatch(model, rid.QwenModel)
+                && AllMatch(Path.Combine(model, "speech_tokenizer"), rid.QwenSpeechTokenizer);
+        }
+
+        if (id == DysonChatterboxSpeech.Id)
+            return AllMatch(DysonSpeechPaths.GetChatterboxModelDir(installRoot), rid.ChatterboxModel);
+        if (!DysonGgufSpeechModels.IsGguf(id))
+            return false;
+        var files = GgufFiles(rid, id);
+        return files is not null && AllMatch(DysonGgufSpeechModels.GetModelDir(installRoot, id), files);
+    }
+
+    private static bool AllMatch(string dir, IReadOnlyList<DysonSpeechFile> files)
+    {
+        if (files.Count == 0)
+            return false;
+        foreach (var file in files)
+        {
+            if (!FileMatches(Path.Combine(dir, file.FileName), file))
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>Exists, then size, then sha256. A size miss does not read the file. Never deletes.</summary>
+    private static bool FileMatches(string path, DysonSpeechFile pin)
+    {
+        try
+        {
+            if (!File.Exists(path))
+                return false;
+            if (new FileInfo(path).Length != pin.Size)
+                return false;
+            using var stream = File.OpenRead(path);
+            var hash = Convert.ToHexStringLower(SHA256.HashData(stream));
+            return string.Equals(hash, pin.Sha256, StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TorchTreeMatches(string installRoot, string distInfoName)
+    {
+        var torch = DysonSpeechPaths.GetTorchDir(installRoot);
+        return Directory.Exists(Path.Combine(torch, "torch"))
+            && Directory.Exists(Path.Combine(torch, distInfoName));
+    }
+
+    private static bool OtherTorchDistInfo(string installRoot, string distInfoName)
+    {
+        var torch = DysonSpeechPaths.GetTorchDir(installRoot);
+        if (!Directory.Exists(torch))
+            return false;
+        foreach (var path in Directory.EnumerateDirectories(torch, "*.dist-info"))
+        {
+            if (!string.Equals(Path.GetFileName(path), distInfoName, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static string TorchDistInfoName(string torchRequirement)
+    {
+        const string prefix = "torch==";
+        var version = torchRequirement.StartsWith(prefix, StringComparison.Ordinal)
+            ? torchRequirement[prefix.Length..]
+            : torchRequirement;
+        return "torch-" + version + ".dist-info";
+    }
+
+    private static bool SiteHasDistInfo(string site) =>
+        Directory.Exists(site) && Directory.EnumerateDirectories(site, "*.dist-info").Any();
+
+    private static string? PythonSite(string installRoot, string id) => id switch
+    {
+        DysonPhononSpeech.Id => DysonSpeechPaths.GetPhononSite(installRoot),
+        DysonPocketSpeech.Id => DysonSpeechPaths.GetPocketSite(installRoot),
+        DysonQwenSpeech.Id => DysonSpeechPaths.GetQwenSite(installRoot),
+        DysonChatterboxSpeech.Id => DysonSpeechPaths.GetChatterboxSite(installRoot),
+        _ => null,
+    };
+
     /// <summary>Moves the single top-level folder's contents into <paramref name="dest"/> when the archive is wrapped.</summary>
     private static VoidResult<string> FlattenMove(string extracted, string dest, string stepId, string expectedFile)
     {
@@ -821,13 +1151,15 @@ public sealed class DysonSpeechInstaller
         private DysonSpeechInstallStatus _before = DysonSpeechInstallStatus.None(null);
         private IReadOnlyList<string> _plan = [];
         private List<string> _building = [];
-        private bool _rebuildRuntime;
-        private bool _buildCrispRuntime;
+        private DysonSpeechAdopt _adopt = DysonSpeechAdopt.Empty;
+        private bool _swapPython;
+        private bool _swapTorch;
+        private bool _swapCrisp;
         private bool _committed;
         private string? _doneDetail;
 
-        /// <summary>The staged interpreter while the runtime is rebuilt this run, else the installed one.</summary>
-        private string PythonRoot => _rebuildRuntime && !_committed ? Tree : _root;
+        /// <summary>The staged interpreter while python is extracted this run, else the installed one.</summary>
+        private string PythonRoot => _swapPython && !_committed ? Tree : _root;
 
         public async Task RunAsync()
         {
@@ -855,15 +1187,15 @@ public sealed class DysonSpeechInstaller
                 ("python-download", p => DownloadAllAsync("python-download", [_m.Python], Downloads, p)),
                 ("python-hash", _ => VerifyAllAsync("python-hash", [_m.Python], Downloads)),
                 ("python-extract", _ => ExtractPythonAsync()),
-                ("torch-download", p => DownloadAllAsync("torch-download", _m.Torch, torchWheels, p)),
-                ("torch-hash", _ => VerifyAllAsync("torch-hash", _m.Torch, torchWheels)),
-                ("torch-install", _ => PipInstallAsync("torch-install", _m.Torch, torchWheels, DysonSpeechPaths.GetTorchDir(Tree), keepWheelhouseIn: null)),
+                ("torch-download", p => DownloadAllAsync("torch-download", TorchPlanFiles(), torchWheels, p)),
+                ("torch-hash", _ => VerifyAllAsync("torch-hash", TorchPlanFiles(), torchWheels)),
+                ("torch-install", _ => PipInstallAsync("torch-install", TorchPlanFiles(), torchWheels, TorchInstallDir(), keepWheelhouseIn: null)),
                 ("crispasr-download", p => DownloadOneAsync("crispasr-download", _m.CrispasrRuntime, crispZip, p)),
                 ("crispasr-hash", _ => VerifyOneAsync("crispasr-hash", _m.CrispasrRuntime, crispZip)),
                 ("crispasr-extract", _ => ExtractCrispasrAsync(crispZip)),
                 ("phonon-wheels-download", p => DownloadAllAsync("phonon-wheels-download", _m.PhononWheels, phononWheels, p)),
                 ("phonon-wheels-hash", _ => VerifyAllAsync("phonon-wheels-hash", _m.PhononWheels, phononWheels)),
-                ("phonon-wheels-install", _ => PipInstallAsync("phonon-wheels-install", _m.PhononWheels, phononWheels, DysonSpeechPaths.GetPhononSite(Tree), Path.Combine(Tree, "phonon", "wheelhouse"))),
+                ("phonon-wheels-install", _ => PipInstallAsync("phonon-wheels-install", _m.PhononWheels, phononWheels, DysonSpeechPaths.GetPhononSite(InstallTree(DysonPhononSpeech.Id)), Path.Combine(InstallTree(DysonPhononSpeech.Id), "phonon", "wheelhouse"))),
                 ("phonon-weights-download", p => DownloadAllAsync("phonon-weights-download", [_m.PhononWeights], Downloads, p)),
                 ("phonon-weights-hash", _ => VerifyAllAsync("phonon-weights-hash", [_m.PhononWeights], Downloads)),
                 ("phonon-weights-unpack", _ => UnpackPhononAsync()),
@@ -872,10 +1204,10 @@ public sealed class DysonSpeechInstaller
                 ("nemotron-unpack", _ => UnpackNemotronAsync(nemotronFiles)),
                 ("phonon-gguf-download", p => DownloadGgufAsync("phonon-gguf-download", DysonGgufSpeechModels.PhononGgufId, phononGgufFiles, p)),
                 ("phonon-gguf-hash", _ => VerifyGgufAsync("phonon-gguf-hash", DysonGgufSpeechModels.PhononGgufId, phononGgufFiles)),
-                ("phonon-gguf-unpack", _ => Task.FromResult(MoveGguf("phonon-gguf-unpack", DysonGgufSpeechModels.PhononGgufId, phononGgufFiles))),
+                ("phonon-gguf-unpack", _ => Task.FromResult(MoveGguf("phonon-gguf-unpack", DysonGgufSpeechModels.PhononGgufId, phononGgufFiles, Tree))),
                 ("pocket-wheels-download", p => DownloadAllAsync("pocket-wheels-download", _m.PocketWheels, pocketWheels, p)),
                 ("pocket-wheels-hash", _ => VerifyAllAsync("pocket-wheels-hash", _m.PocketWheels, pocketWheels)),
-                ("pocket-wheels-install", _ => PipInstallAsync("pocket-wheels-install", _m.PocketWheels, pocketWheels, DysonSpeechPaths.GetPocketSite(Tree), Path.Combine(Tree, "pocket", "wheelhouse"))),
+                ("pocket-wheels-install", _ => PipInstallAsync("pocket-wheels-install", _m.PocketWheels, pocketWheels, DysonSpeechPaths.GetPocketSite(InstallTree(DysonPocketSpeech.Id)), Path.Combine(InstallTree(DysonPocketSpeech.Id), "pocket", "wheelhouse"))),
                 ("pocket-weights-download", p => DownloadAllAsync("pocket-weights-download", [_m.PocketWeights, _m.PocketTokenizer], Downloads, p)),
                 ("pocket-weights-hash", _ => VerifyAllAsync("pocket-weights-hash", [_m.PocketWeights, _m.PocketTokenizer], Downloads)),
                 ("pocket-voice-download", p => DownloadAllAsync("pocket-voice-download", [_m.PocketVoice], Downloads, p)),
@@ -883,10 +1215,10 @@ public sealed class DysonSpeechInstaller
                 ("pocket-config", _ => Task.FromResult(WritePocketConfig())),
                 ("pocket-gguf-download", p => DownloadGgufAsync("pocket-gguf-download", DysonGgufSpeechModels.PocketGgufId, pocketGgufFiles, p)),
                 ("pocket-gguf-hash", _ => VerifyGgufAsync("pocket-gguf-hash", DysonGgufSpeechModels.PocketGgufId, pocketGgufFiles)),
-                ("pocket-gguf-unpack", _ => Task.FromResult(MoveGguf("pocket-gguf-unpack", DysonGgufSpeechModels.PocketGgufId, pocketGgufFiles))),
+                ("pocket-gguf-unpack", _ => Task.FromResult(MoveGguf("pocket-gguf-unpack", DysonGgufSpeechModels.PocketGgufId, pocketGgufFiles, Tree))),
                 ("qwen-wheels-download", p => DownloadAllAsync("qwen-wheels-download", _m.QwenWheels, qwenWheels, p)),
                 ("qwen-wheels-hash", _ => VerifyAllAsync("qwen-wheels-hash", _m.QwenWheels, qwenWheels)),
-                ("qwen-wheels-install", _ => PipInstallAsync("qwen-wheels-install", _m.QwenWheels, qwenWheels, DysonSpeechPaths.GetQwenSite(Tree), Path.Combine(Tree, "qwen", "wheelhouse"))),
+                ("qwen-wheels-install", _ => PipInstallAsync("qwen-wheels-install", _m.QwenWheels, qwenWheels, DysonSpeechPaths.GetQwenSite(InstallTree(DysonQwenSpeech.Id)), Path.Combine(InstallTree(DysonQwenSpeech.Id), "qwen", "wheelhouse"))),
                 ("qwen-weights-download", async p =>
                 {
                     var model = await DownloadAllAsync("qwen-weights-download", _m.QwenModel, qwenModel, p).ConfigureAwait(false);
@@ -900,16 +1232,16 @@ public sealed class DysonSpeechInstaller
                 ("qwen-config", _ => Task.FromResult(WriteQwenConfig(qwenModel, qwenTokenizer))),
                 ("qwen-gguf-download", p => DownloadGgufAsync("qwen-gguf-download", DysonGgufSpeechModels.QwenGgufId, qwenGgufFiles, p)),
                 ("qwen-gguf-hash", _ => VerifyGgufAsync("qwen-gguf-hash", DysonGgufSpeechModels.QwenGgufId, qwenGgufFiles)),
-                ("qwen-gguf-unpack", _ => Task.FromResult(MoveGguf("qwen-gguf-unpack", DysonGgufSpeechModels.QwenGgufId, qwenGgufFiles))),
+                ("qwen-gguf-unpack", _ => Task.FromResult(MoveGguf("qwen-gguf-unpack", DysonGgufSpeechModels.QwenGgufId, qwenGgufFiles, Tree))),
                 ("chatterbox-wheels-download", p => DownloadAllAsync("chatterbox-wheels-download", _m.ChatterboxWheels, chatterboxWheels, p)),
                 ("chatterbox-wheels-hash", _ => VerifyAllAsync("chatterbox-wheels-hash", _m.ChatterboxWheels, chatterboxWheels)),
-                ("chatterbox-wheels-install", _ => PipInstallAsync("chatterbox-wheels-install", _m.ChatterboxWheels, chatterboxWheels, DysonSpeechPaths.GetChatterboxSite(Tree), Path.Combine(Tree, "chatterbox", "wheelhouse"))),
+                ("chatterbox-wheels-install", _ => PipInstallAsync("chatterbox-wheels-install", _m.ChatterboxWheels, chatterboxWheels, DysonSpeechPaths.GetChatterboxSite(InstallTree(DysonChatterboxSpeech.Id)), Path.Combine(InstallTree(DysonChatterboxSpeech.Id), "chatterbox", "wheelhouse"))),
                 ("chatterbox-weights-download", p => DownloadAllAsync("chatterbox-weights-download", _m.ChatterboxModel, chatterboxModel, p)),
                 ("chatterbox-weights-hash", _ => VerifyAllAsync("chatterbox-weights-hash", _m.ChatterboxModel, chatterboxModel)),
                 ("chatterbox-config", _ => Task.FromResult(WriteChatterboxConfig(chatterboxModel))),
                 ("chatterbox-gguf-download", p => DownloadGgufAsync("chatterbox-gguf-download", DysonGgufSpeechModels.ChatterboxGgufId, chatterboxGgufFiles, p)),
                 ("chatterbox-gguf-hash", _ => VerifyGgufAsync("chatterbox-gguf-hash", DysonGgufSpeechModels.ChatterboxGgufId, chatterboxGgufFiles)),
-                ("chatterbox-gguf-unpack", _ => Task.FromResult(MoveGguf("chatterbox-gguf-unpack", DysonGgufSpeechModels.ChatterboxGgufId, chatterboxGgufFiles))),
+                ("chatterbox-gguf-unpack", _ => Task.FromResult(MoveGguf("chatterbox-gguf-unpack", DysonGgufSpeechModels.ChatterboxGgufId, chatterboxGgufFiles, Tree))),
                 ("licenses", _ => Task.FromResult(WriteLicenses())),
                 ("commit", _ => CommitAsync()),
                 ("smoke", _ => SmokeAsync()),
@@ -966,7 +1298,9 @@ public sealed class DysonSpeechInstaller
             _m = rid;
 
             _before = Probe(_root);
-            _plan = PlanSteps(_before, requested);
+            _adopt = Adopt(_root, _manifest, _before, requested);
+            _before = _adopt.Status;
+            _plan = PlanSteps(_before, requested, _adopt);
             if (_plan.Count == 1)
             {
                 var sync = await SyncDbAsync().ConfigureAwait(false);
@@ -977,8 +1311,9 @@ public sealed class DysonSpeechInstaller
             }
 
             _building = ModelIds.Where(id => requested.Contains(id) && !_before.IsInstalled(id)).ToList();
-            _rebuildRuntime = !_before.RuntimeInstalled && _building.Any(id => !DysonGgufSpeechModels.IsGguf(id));
-            _buildCrispRuntime = _building.Any(DysonGgufSpeechModels.IsCrisp) && !CrispasrInstalled(_before);
+            _swapPython = _plan.Contains("python-extract");
+            _swapTorch = _plan.Contains("torch-install") && !_adopt.SkipTorchWheel;
+            _swapCrisp = _plan.Contains("crispasr-extract");
             foreach (var id in _building)
             {
                 if (DysonGgufSpeechModels.IsGguf(id) && !GgufAvailable(_m, id))
@@ -986,7 +1321,9 @@ public sealed class DysonSpeechInstaller
             }
 
             Directory.CreateDirectory(_root);
-            var need = RequiredFreeBytes(_rebuildRuntime, _building);
+            var downloadRuntime = _plan.Contains("python-download")
+                || (_plan.Contains("torch-download") && !_adopt.SkipTorchWheel);
+            var need = RequiredFreeBytes(downloadRuntime, _building, _adopt);
             var free = new DriveInfo(Path.GetPathRoot(_root)!).AvailableFreeSpace;
             if (free < need)
                 return new VoidResult<string>($"preflight: needs {need:N0} free bytes on {Path.GetPathRoot(_root)}, has {free:N0}.");
@@ -1103,7 +1440,7 @@ public sealed class DysonSpeechInstaller
         private Task<VoidResult<string>> DownloadGgufAsync(
             string stepId, string runtimeId, string dir, IProgress<DysonDownloadProgress> progress)
         {
-            var files = GgufFiles(_m, runtimeId);
+            var files = GgufFilesForRun(runtimeId);
             return files is null
                 ? Task.FromResult(new VoidResult<string>($"{stepId}: not available for this platform."))
                 : DownloadAllAsync(stepId, files, dir, progress);
@@ -1111,10 +1448,24 @@ public sealed class DysonSpeechInstaller
 
         private Task<VoidResult<string>> VerifyGgufAsync(string stepId, string runtimeId, string dir)
         {
-            var files = GgufFiles(_m, runtimeId);
+            var files = GgufFilesForRun(runtimeId);
             return files is null
                 ? Task.FromResult(new VoidResult<string>($"{stepId}: not available for this platform."))
                 : VerifyAllAsync(stepId, files, dir);
+        }
+
+        /// <summary>Nemotron keeps the half already on disk. Other ids download the whole pin list.</summary>
+        private IReadOnlyList<DysonSpeechFile>? GgufFilesForRun(string runtimeId)
+        {
+            var files = GgufFiles(_m, runtimeId);
+            if (files is null || runtimeId != DysonGgufSpeechModels.NemotronId
+                || _m.NemotronNative is null || _m.NemotronWeights is null)
+                return files;
+            if (_adopt.NemotronWeightsOnDisk && !_adopt.NemotronDllOnDisk)
+                return files.Where(f => f.FileName == _m.NemotronNative.FileName).ToList();
+            if (_adopt.NemotronDllOnDisk && !_adopt.NemotronWeightsOnDisk)
+                return files.Where(f => f.FileName == _m.NemotronWeights.FileName).ToList();
+            return files;
         }
 
         private async Task<VoidResult<string>> ExtractCrispasrAsync(string zipDir)
@@ -1139,43 +1490,51 @@ public sealed class DysonSpeechInstaller
             if (native is null || weights is null)
                 return new VoidResult<string>("nemotron-unpack: not available for this platform.");
 
-            var extracted = Path.Combine(Staging, "nemotron-native");
-            var clean = DeleteTree(extracted);
-            if (clean.IsError)
-                return new VoidResult<string>("nemotron-unpack: " + clean.Error);
-            Directory.CreateDirectory(extracted);
-            await using (var file = File.OpenRead(Path.Combine(downloadDir, native.FileName)))
-            await using (var gzip = new GZipStream(file, CompressionMode.Decompress))
-                await TarFile.ExtractToDirectoryAsync(gzip, extracted, overwriteFiles: true, ct).ConfigureAwait(false);
+            var live = _adopt.NemotronWeightsOnDisk || _adopt.NemotronDllOnDisk;
+            var root = live ? _root : Tree;
+            if (!_adopt.NemotronDllOnDisk)
+            {
+                var extracted = Path.Combine(Staging, "nemotron-native");
+                var clean = DeleteTree(extracted);
+                if (clean.IsError)
+                    return new VoidResult<string>("nemotron-unpack: " + clean.Error);
+                Directory.CreateDirectory(extracted);
+                await using (var file = File.OpenRead(Path.Combine(downloadDir, native.FileName)))
+                await using (var gzip = new GZipStream(file, CompressionMode.Decompress))
+                    await TarFile.ExtractToDirectoryAsync(gzip, extracted, overwriteFiles: true, ct).ConfigureAwait(false);
 
-            var runtime = FlattenMove(
-                extracted, DysonGgufSpeechModels.GetNemotronRuntimeDir(Tree), "nemotron-unpack", "transcribe.dll");
-            return runtime.IsError
-                ? runtime
-                : MoveGguf("nemotron-unpack", DysonGgufSpeechModels.NemotronId, downloadDir, [weights]);
+                var runtime = FlattenMove(
+                    extracted, DysonGgufSpeechModels.GetNemotronRuntimeDir(root), "nemotron-unpack", "transcribe.dll");
+                if (runtime.IsError)
+                    return runtime;
+            }
+
+            return _adopt.NemotronWeightsOnDisk
+                ? VoidResult<string>.Success
+                : MoveGguf("nemotron-unpack", DysonGgufSpeechModels.NemotronId, downloadDir, root, [weights]);
         }
 
-        private VoidResult<string> MoveGguf(string stepId, string runtimeId, string downloadDir)
+        private VoidResult<string> MoveGguf(string stepId, string runtimeId, string downloadDir, string treeRoot)
         {
             var files = GgufFiles(_m, runtimeId);
             return files is null
                 ? new VoidResult<string>($"{stepId}: not available for this platform.")
-                : MoveGguf(stepId, runtimeId, downloadDir, files);
+                : MoveGguf(stepId, runtimeId, downloadDir, treeRoot, files);
         }
 
         private VoidResult<string> MoveGguf(
-            string stepId, string runtimeId, string downloadDir, IReadOnlyList<DysonSpeechFile> files)
+            string stepId, string runtimeId, string downloadDir, string treeRoot, IReadOnlyList<DysonSpeechFile> files)
         {
             try
             {
-                var modelDir = DysonGgufSpeechModels.GetModelDir(Tree, runtimeId);
+                var modelDir = DysonGgufSpeechModels.GetModelDir(treeRoot, runtimeId);
                 Directory.CreateDirectory(modelDir);
-                Directory.CreateDirectory(DysonGgufSpeechModels.GetVoicesDir(Tree, runtimeId));
+                Directory.CreateDirectory(DysonGgufSpeechModels.GetVoicesDir(treeRoot, runtimeId));
                 foreach (var file in files)
                     File.Move(Path.Combine(downloadDir, file.FileName), Path.Combine(modelDir, file.FileName), overwrite: true);
-                if (!File.Exists(DysonGgufSpeechModels.GetMainModelFile(Tree, runtimeId)))
+                if (!File.Exists(DysonGgufSpeechModels.GetMainModelFile(treeRoot, runtimeId)))
                     return new VoidResult<string>($"{stepId}: main model file is missing.");
-                var companion = DysonGgufSpeechModels.GetCompanionFile(Tree, runtimeId);
+                var companion = DysonGgufSpeechModels.GetCompanionFile(treeRoot, runtimeId);
                 if (companion is not null && !File.Exists(companion))
                     return new VoidResult<string>($"{stepId}: companion model file is missing.");
                 return VoidResult<string>.Success;
@@ -1216,6 +1575,13 @@ public sealed class DysonSpeechInstaller
                 return pip;
 
             Directory.CreateDirectory(Path.GetDirectoryName(keepWheelhouseIn)!);
+            if (Directory.Exists(keepWheelhouseIn))
+            {
+                var cleared = DeleteTree(keepWheelhouseIn);
+                if (cleared.IsError)
+                    return cleared;
+            }
+
             Directory.Move(wheelDir, keepWheelhouseIn);
             return VoidResult<string>.Success;
         }
@@ -1238,17 +1604,29 @@ public sealed class DysonSpeechInstaller
 
         private VoidResult<string> WritePocketConfig()
         {
-            var modelDir = Path.Combine(Tree, "pocket", "model");
-            var voicesDir = DysonSpeechPaths.GetPocketVoicesDir(Tree);
+            var adopted = _adopt.SkipWeightIds.Contains(DysonPocketSpeech.Id);
+            var root = adopted ? _root : Tree;
+            var modelDir = Path.Combine(root, "pocket", "model");
+            var voicesDir = DysonSpeechPaths.GetPocketVoicesDir(root);
             Directory.CreateDirectory(modelDir);
             Directory.CreateDirectory(voicesDir);
-            File.Copy(Path.Combine(Downloads, _m.PocketWeights.FileName), Path.Combine(modelDir, "model.safetensors"), overwrite: true);
-            File.Copy(Path.Combine(Downloads, _m.PocketTokenizer.FileName), Path.Combine(modelDir, "tokenizer.json"), overwrite: true);
-            File.Copy(Path.Combine(Downloads, _m.PocketVoice.FileName), Path.Combine(voicesDir, CatalogVoiceId + ".safetensors"), overwrite: true);
+            if (!adopted)
+            {
+                File.Copy(Path.Combine(Downloads, _m.PocketWeights.FileName), Path.Combine(modelDir, "model.safetensors"), overwrite: true);
+                File.Copy(Path.Combine(Downloads, _m.PocketTokenizer.FileName), Path.Combine(modelDir, "tokenizer.json"), overwrite: true);
+            }
 
-            // Paths point at the final location; the tree is swapped into place at commit.
-            File.WriteAllText(DysonSpeechPaths.GetPocketConfig(Tree), BuildPocketConfig(_root));
-            return WriteBridge("pocket-config", BridgeResourceName, DysonSpeechPaths.GetPocketBridge(Tree));
+            if (!adopted || _plan.Contains("pocket-voice-download"))
+                File.Copy(Path.Combine(Downloads, _m.PocketVoice.FileName), Path.Combine(voicesDir, CatalogVoiceId + ".safetensors"), overwrite: true);
+
+            // Paths point at the final location; a staged tree is swapped into place at commit.
+            var config = DysonSpeechPaths.GetPocketConfig(root);
+            if (!adopted || !File.Exists(config))
+                File.WriteAllText(config, BuildPocketConfig(_root));
+            var bridge = DysonSpeechPaths.GetPocketBridge(root);
+            if (!adopted || !File.Exists(bridge))
+                return WriteBridge("pocket-config", BridgeResourceName, bridge);
+            return VoidResult<string>.Success;
         }
 
         /// <summary>Moves (not copies: same volume, no second 2.5 GB) the verified weights into <c>tree/qwen/model</c>.</summary>
@@ -1308,9 +1686,10 @@ public sealed class DysonSpeechInstaller
             var ggufBuilding = _building.Where(DysonGgufSpeechModels.IsGguf).ToList();
             string[] dirs =
             [
-                .. _rebuildRuntime ? ["python", "torch"] : Array.Empty<string>(),
-                .. _buildCrispRuntime ? ["crispasr"] : Array.Empty<string>(),
-                .. _building.Select(ModelDir),
+                .. _swapPython ? ["python"] : Array.Empty<string>(),
+                .. _swapTorch ? ["torch"] : Array.Empty<string>(),
+                .. _swapCrisp ? ["crispasr"] : Array.Empty<string>(),
+                .. _building.Where(SwapBuiltDir).Select(ModelDir),
             ];
             var swap = Swap(dirs);
             if (swap.IsError)
@@ -1320,7 +1699,7 @@ public sealed class DysonSpeechInstaller
             }
 
             _committed = true;
-            if (_rebuildRuntime || pythonBuilding.Count > 0)
+            if (_swapPython || _swapTorch || pythonBuilding.Count > 0)
             {
                 var previous = ReadStamp(_root);
                 var stamp = new DysonSpeechInstallStamp(
@@ -1337,10 +1716,10 @@ public sealed class DysonSpeechInstaller
                 }
             }
 
-            if (ggufBuilding.Count > 0 || _buildCrispRuntime)
+            if (ggufBuilding.Count > 0 || _swapCrisp)
             {
                 var gguf = ReadGgufStamp(_root) ?? new Dictionary<string, string>(StringComparer.Ordinal);
-                if (_buildCrispRuntime && _m.CrispasrRuntime is not null)
+                if (_swapCrisp && _m.CrispasrRuntime is not null)
                     gguf[CrispStampKey] = _m.CrispasrRuntime.Sha256;
                 foreach (var id in ggufBuilding)
                 {
@@ -1365,6 +1744,27 @@ public sealed class DysonSpeechInstaller
             var sync = await SyncDbAsync().ConfigureAwait(false);
             return sync.IsError ? new VoidResult<string>("commit: " + sync.Error) : VoidResult<string>.Success;
         }
+
+        /// <summary>Adopted weights stay in the live dir. A Nemotron half already on disk is not swapped away.</summary>
+        private bool SwapBuiltDir(string id)
+        {
+            if (_adopt.SkipWeightIds.Contains(id))
+                return false;
+            return id != DysonGgufSpeechModels.NemotronId
+                || (!_adopt.NemotronWeightsOnDisk && !_adopt.NemotronDllOnDisk);
+        }
+
+        private IReadOnlyList<DysonSpeechFile> TorchPlanFiles() =>
+            _adopt.PipTorchDeps
+                ? _m.Torch.Where(f => !DysonSpeechManifest.IsTorchWheel(f)).ToList()
+                : _m.Torch;
+
+        private string TorchInstallDir() =>
+            _adopt.PipTorchDeps ? DysonSpeechPaths.GetTorchDir(_root) : DysonSpeechPaths.GetTorchDir(Tree);
+
+        /// <summary>Pip of a matched weight set goes into the live tree. A full download still builds under staging.</summary>
+        private string InstallTree(string runtimeId) =>
+            _adopt.PipSiteIds.Contains(runtimeId) ? _root : Tree;
 
         /// <summary>
         /// Marks the requested models installed, seeds catalog voices (<c>alba</c>, <c>turbo</c>; insert-if-missing),
