@@ -1,3 +1,32 @@
+/* Wide page: install list beside the active / train / try cards, which flow into as many
+   ~300px columns as fit (multi-column, so short cards do not leave row gaps). */
+.settings-page--voice {
+  max-width: none;
+}
+
+.voice__intro {
+  max-width: 100ch;
+}
+
+.voice-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.voice-layout__side {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+/* Nothing installed yet: let the install list take the full row. */
+.voice-layout__side:not(:has(> *)) {
+  display: none;
+}
+
 .voice__note {
   margin: 8px 0 0;
 }
@@ -13,10 +42,15 @@
 
 .voice-model {
   display: grid;
-  grid-template-columns: 18px minmax(200px, max-content) 1fr auto;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 4px 12px;
+  gap: 2px 12px;
   min-height: 32px;
+}
+
+.voice-model__action {
+  grid-column: 3;
+  grid-row: 1 / span 2;
 }
 
 .voice-model__check {
@@ -30,12 +64,9 @@
 }
 
 .voice-model__state {
+  grid-column: 2;
   color: var(--text-muted);
   font-size: 12px;
-}
-
-.voice-active {
-  margin-top: 16px;
 }
 
 .voice-active__options {
@@ -87,10 +118,6 @@
   word-break: break-word;
 }
 
-.voice-train {
-  margin-top: 16px;
-}
-
 .voice-train__consent {
   display: flex;
   align-items: flex-start;
@@ -133,7 +160,6 @@
 }
 
 .voice-try {
-  margin-top: 16px;
   display: flex;
   flex-direction: column;
   gap: 8px;

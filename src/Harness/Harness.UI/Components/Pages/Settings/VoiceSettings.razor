@@ -15,9 +15,9 @@
 
 <PageTitle>Voice — Settings</PageTitle>
 
-<div class="settings-page">
+<div class="settings-page settings-page--voice">
     <h1 class="settings-page__title">Voice</h1>
-    <p class="settings-page__copy">
+    <p class="settings-page__copy voice__intro">
         Local speech to text and text to speech. Each install lands on its own in the app-data folder below, not in
         the app directory. Python installs share one private Python and CPU PyTorch: Phonon 2 uses Fermion BPS packed
         weights, and Pocket TTS, Qwen3-TTS 0.6B Base, and Chatterbox Turbo use safetensors. Qwen3-TTS downloads about
@@ -33,6 +33,7 @@
         <div class="error-banner" role="alert">@_error</div>
     }
 
+    <div class="voice-layout">
     <div class="settings-page__panel panel">
         <ul class="voice-models">
             @foreach (var row in OrderedRows)
@@ -116,6 +117,7 @@
         }
     </div>
 
+    <div class="voice-layout__side">
     @if (AnyCrispInstalled)
     {
         <div class="settings-page__panel panel voice-active">
@@ -299,6 +301,8 @@
             }
         </div>
     }
+    </div>
+    </div>
 </div>
 
 @code {
