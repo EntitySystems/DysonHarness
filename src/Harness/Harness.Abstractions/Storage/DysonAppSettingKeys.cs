@@ -230,4 +230,11 @@ public static class DysonAppSettingKeys
     /// <c>turbo</c>, Qwen ⇒ its newest voice.
     /// </summary>
     public const string SpeechOutputVoiceId = "speech_output_voice_id";
+
+    /// <summary>
+    /// Selected microphone for Settings → Voice live recording. Value is <c>DysonAudioInputDevice.Id</c>
+    /// (the NAudio device number on Windows). Missing ⇒ the first listed device. A saved id that is no longer
+    /// listed is not swapped for another microphone.
+    /// </summary>
+    public const string SpeechInputDeviceId = "speech_input_device_id";
 }

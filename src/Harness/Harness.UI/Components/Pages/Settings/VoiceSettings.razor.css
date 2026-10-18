@@ -94,3 +94,51 @@
 .voice-train__result {
   margin-top: 8px;
 }
+
+.voice-try {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.voice-try__label {
+  color: var(--text);
+}
+
+.voice-try__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.voice-try__text {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.voice-try__mic,
+.voice-try__text,
+.voice-try__transcript {
+  background: var(--bg-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+}
+
+.voice-try__mic,
+.voice-try__transcript {
+  width: 100%;
+}
+
+.voice-try__transcript {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.voice-try__status {
+  color: var(--text-muted);
+  font-size: 12px;
+}

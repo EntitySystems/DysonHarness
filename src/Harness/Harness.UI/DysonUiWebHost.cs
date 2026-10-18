@@ -150,6 +150,7 @@ public static class DysonUiWebHost
 #if WINDOWS
         builder.Services.AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>();
         builder.Services.AddSingleton<IDysonAudioPlayback, DysonWindowsAudioPlayback>();
+        builder.Services.AddSingleton<IDysonAudioCapture, DysonWindowsAudioCapture>();
 #endif
         builder.Services.AddSingleton<IDysonSessionRuntimeScopeFactory, DysonUiSessionRuntimeScopeFactory>();
         builder.Services.AddSingleton<DysonSessionRuntimeRegistry>();
@@ -204,6 +205,9 @@ public static class DysonUiWebHost
             sp.GetRequiredService<IDysonSubjectSettingsRepository>(),
             sp.GetRequiredService<DysonSpeechInstaller>().InstallRoot));
         builder.Services.AddScoped<IDysonTextToSpeech>(sp => sp.GetRequiredService<DysonActiveTextToSpeech>());
+#if WINDOWS
+        builder.Services.AddScoped<DysonSpeechTryout>();
+#endif
 
         if (hostingMode == DysonHostingMode.Cloud)
             builder.Services.AddScoped<CircuitHandler, DysonCloudSubjectCircuitHandler>();

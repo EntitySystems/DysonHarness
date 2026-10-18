@@ -3,12 +3,14 @@
 @using DysonHarness
 @using Harness.UI.Services
 @using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.Extensions.DependencyInjection
 @implements IDisposable
 @inject DysonSpeechInstaller Installer
 @inject IDysonSpeechModelRepository SpeechModels
 @inject DysonActiveTextToSpeech Tts
 @inject IDysonSubjectSettingsRepository Settings
 @inject ConfirmDialogService ConfirmDialog
+@inject IServiceProvider Services
 
 <PageTitle>Voice — Settings</PageTitle>
 
@@ -155,6 +157,58 @@
             }
         </div>
     }
+
+    @if (_tryout is not null && (PhononInstalled || _activeId is not null))
+    {
+        <div class="settings-page__panel panel voice-try">
+            <div class="tool-panel__title">Try speech</div>
+            @if (PhononInstalled)
+            {
+                <label class="voice-try__label" for="voice-mic">Microphone</label>
+                <select id="voice-mic" class="voice-try__mic" disabled="@(_busy || _recording)"
+                        @onchange="OnMicChangedAsync">
+                    @if (_micId is null)
+                    {
+                        <option value="" selected disabled>Select a microphone</option>
+                    }
+                    @foreach (var mic in _mics)
+                    {
+                        <option value="@mic.Id" selected="@(mic.Id == _micId)">@mic.Name</option>
+                    }
+                </select>
+                @if (!string.IsNullOrWhiteSpace(_micNote))
+                {
+                    <p class="settings-page__copy voice__note">@_micNote</p>
+                }
+            }
+            @if (_activeId is not null)
+            {
+                <label class="voice-try__label" for="voice-speak">Speak</label>
+                <div class="voice-try__row">
+                    <input id="voice-speak" class="voice-try__text" @bind="_speakText" @bind:event="oninput"
+                           disabled="@_busy" placeholder="Text to speak" />
+                    <button type="button" class="btn btn-primary"
+                            disabled="@(_busy || string.IsNullOrWhiteSpace(_speakText))"
+                            @onclick="PlaySpeechAsync">Play</button>
+                    @if (_playing)
+                    {
+                        <span class="voice-try__status" role="status">Playing…</span>
+                    }
+                </div>
+            }
+            @if (PhononInstalled)
+            {
+                <div class="voice-try__row">
+                    <button type="button" class="btn btn-primary" aria-pressed="@_recording"
+                            disabled="@(_micId is null || (_busy && !_recording))"
+                            @onclick="ToggleRecordAsync">@(_recording ? "Stop recording" : "Record")</button>
+                </div>
+                <label class="voice-try__label" for="voice-transcript">Transcript</label>
+                <textarea id="voice-transcript" class="voice-try__transcript" readonly rows="4"
+                          aria-live="polite">@_transcript</textarea>
+            }
+        </div>
+    }
 </div>
 
 @code {
@@ -173,6 +227,16 @@
     private string? _error;
     private string? _trainResult;
     private bool _trainOk;
+    private DysonSpeechTryout? _tryout;
+    private List<DysonAudioInputDevice> _mics = [];
+    private string? _micId;
+    private string? _micNote;
+    private string _speakText = "";
+    private string _transcript = "";
+    private bool _playing;
+    private int _playGeneration;
+    private bool _recording;
+    private CancellationTokenSource? _recordCts;
 
     private IEnumerable<DysonSpeechModelEntity> OrderedRows =>
         _rows.OrderBy(r => DysonSpeechInstaller.ModelIds.Contains(r.RuntimeId)
@@ -191,8 +255,11 @@
 
     private bool AnyInstalled => _rows.Any(r => r.IsInstalled) || _probe?.RuntimeInstalled == true;
 
+    private bool PhononInstalled => _rows.Any(r => r.RuntimeId == DysonPhononSpeech.Id && r.IsInstalled);
+
     protected override async Task OnInitializedAsync()
     {
+        _tryout = Services.GetService<DysonSpeechTryout>();
         var ensure = await SpeechModels.EnsureBuiltInAsync();
         if (ensure.IsError)
             _error = ensure.Error;
@@ -215,6 +282,13 @@
         _activeId = active.IsSuccess ? active.Value : null;
         var anyTts = _rows.Any(r => r.IsInstalled && r.Capability.HasFlag(DysonSpeechCapability.Output));
         _activeError = active.IsError && (anyTts || !string.IsNullOrWhiteSpace(_activeSetting)) ? active.Error : null;
+        if (_tryout is not null && PhononInstalled)
+            await LoadMicsAsync();
+        else if (!_recording)
+        {
+            _mics = [];
+            _micId = null;
+        }
     }
 
     private void Toggle(string id, bool on)
@@ -348,10 +422,124 @@
         _ => $"{bytes / (1024.0 * 1024.0 * 1024.0):0.00} GB",
     };
 
+    private async Task LoadMicsAsync()
+    {
+        var listed = await _tryout!.ListMicrophonesAsync();
+        if (listed.IsError)
+        {
+            _micNote = listed.Error;
+            _mics = [];
+            _micId = null;
+            return;
+        }
+
+        _mics = listed.Value.ToList();
+        var saved = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechInputDeviceId);
+        var savedId = saved.IsSuccess ? saved.Value : null;
+        if (string.IsNullOrWhiteSpace(savedId))
+        {
+            var first = DysonSpeechInputDevice.Resolve(_mics, null);
+            _micId = first.IsSuccess ? first.Value.Id : null;
+            _micNote = first.IsError ? first.Error : null;
+            return;
+        }
+
+        var resolved = DysonSpeechInputDevice.Resolve(_mics, savedId);
+        if (resolved.IsError)
+        {
+            _micId = null;
+            _micNote = resolved.Error;
+            return;
+        }
+
+        _micId = resolved.Value.Id;
+        _micNote = null;
+    }
+
+    private async Task OnMicChangedAsync(ChangeEventArgs e)
+    {
+        var id = e.Value?.ToString();
+        if (string.IsNullOrWhiteSpace(id))
+            return;
+        var saved = await DysonSpeechInputDevice.SaveAsync(Settings, _mics, id);
+        if (saved.IsError)
+        {
+            _error = saved.Error;
+            return;
+        }
+
+        _micId = id;
+        _micNote = null;
+    }
+
+    private async Task PlaySpeechAsync()
+    {
+        if (_tryout is null || _disposed)
+            return;
+        _error = null;
+        var generation = ++_playGeneration;
+        _playing = true;
+        try
+        {
+            var result = await _tryout.PlayAsync(_speakText, outputInstalled: _activeId is not null, CancellationToken.None);
+            if (_disposed || generation != _playGeneration)
+                return;
+            if (result.IsError)
+                _error = result.Error;
+        }
+        finally
+        {
+            if (generation == _playGeneration)
+                _playing = false;
+        }
+    }
+
+    private async Task ToggleRecordAsync()
+    {
+        if (_tryout is null || _disposed)
+            return;
+        if (_recording)
+        {
+            _recordCts?.Cancel();
+            _tryout.StopRecording();
+            return;
+        }
+
+        _error = null;
+        _transcript = "";
+        _recordCts?.Dispose();
+        _recordCts = new CancellationTokenSource();
+        _recording = true;
+        try
+        {
+            await foreach (var update in _tryout.RecordAsync(_micId, PhononInstalled, _recordCts.Token))
+            {
+                if (_disposed)
+                    return;
+                if (update.IsError)
+                {
+                    _error = update.Error;
+                    break;
+                }
+
+                _transcript = update.Value;
+                StateHasChanged();
+            }
+        }
+        finally
+        {
+            _recording = false;
+        }
+    }
+
     public void Dispose()
     {
         _disposed = true;
         _cts?.Cancel();
         _cts?.Dispose();
+        _recordCts?.Cancel();
+        _recordCts?.Dispose();
+        _tryout?.StopPlayback();
+        _tryout?.StopRecording();
     }
 }
