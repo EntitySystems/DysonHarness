@@ -106,9 +106,10 @@ public sealed class DysonActiveTextToSpeech(
 
     /// <summary>
     /// Train TTS model for the active model: Qwen3-TTS (.mp3 or .wav; speaker embedding, clip not kept) and
-    /// Chatterbox Turbo (.mp3) enroll a voice prompt (not a fine-tune).
+    /// Chatterbox Turbo (.mp3) enroll a voice prompt (not a fine-tune). A non-blank
+    /// <paramref name="transcript"/> is stored as <c>{voiceId}.txt</c> beside that <c>.pt</c>.
     /// CrispASR GGUF models enroll a 16-bit PCM .wav (<paramref name="transcript"/> is required for Qwen3-TTS GGUF,
-    /// which is stored as 24 kHz mono).
+    /// which is stored as 24 kHz mono). A non-blank transcript is stored as <c>{voiceId}.txt</c> for those three.
     /// Pocket TTS returns <see cref="DysonSpeechVoicePrep.VoiceCloningUnsupported"/> and stores nothing.
     /// </summary>
     public async Task<Result<DysonSpeechVoiceEntity, string>> PrepareVoiceAsync(
@@ -121,10 +122,13 @@ public sealed class DysonActiveTextToSpeech(
         if (active.IsError)
             return Result<DysonSpeechVoiceEntity, string>.AsError(active.Error);
 
+        transcript = string.IsNullOrWhiteSpace(transcript) ? null : transcript.Trim();
         return active.Value switch
         {
-            DysonQwenSpeech.Id => await _qwen.EnrollVoiceAsync(clip, fileName, cancellationToken).ConfigureAwait(false),
-            DysonChatterboxSpeech.Id => await _chatterbox.EnrollVoiceAsync(clip, fileName, cancellationToken).ConfigureAwait(false),
+            DysonQwenSpeech.Id => await _qwen.EnrollVoiceAsync(clip, fileName, cancellationToken, transcript)
+                .ConfigureAwait(false),
+            DysonChatterboxSpeech.Id => await _chatterbox.EnrollVoiceAsync(clip, fileName, cancellationToken, transcript)
+                .ConfigureAwait(false),
             var id when DysonGgufSpeechModels.IsCrisp(id) => await new DysonCrispSpeech(_models, _settings, installRoot, id)
                 .EnrollVoiceAsync(clip, fileName, transcript, cancellationToken).ConfigureAwait(false),
             _ => await DysonSpeechVoicePrep.PrepareAsync(clip, fileName, cancellationToken).ConfigureAwait(false),

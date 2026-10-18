@@ -104,11 +104,6 @@
   flex: 0 0 auto;
 }
 
-.voice-train__prompt {
-  margin: 8px 0 0;
-  color: var(--text);
-}
-
 .voice-train__record {
   display: flex;
   flex-wrap: wrap;

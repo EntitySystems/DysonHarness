@@ -209,9 +209,16 @@
                     <span>I confirm this is my own voice or I have the speaker's consent.</span>
                 </label>
             }
+            @if (DysonSpeechTryout.ShowsTrainTranscript(active.RuntimeId))
+            {
+                <div class="voice-train__transcript">
+                    <label class="voice-try__label" for="voice-train-transcript">Read this aloud</label>
+                    <textarea id="voice-train-transcript" class="voice-try__transcript" rows="3"
+                              @bind="_trainTranscript" @bind:event="oninput" disabled="@_busy"></textarea>
+                </div>
+            }
             @if (DysonSpeechTryout.ShowsRecordedTrain(active.RuntimeId) && _tryout is not null)
             {
-                <p class="voice-train__prompt">Read this aloud: @DysonSpeechTryout.ReadAloudSentence</p>
                 <div class="voice-train__record">
                     <button type="button" class="btn btn-primary"
                             disabled="@(!_voiceConsent || _busy)"
@@ -222,22 +229,12 @@
                     }
                 </div>
             }
-            @if (active.RuntimeId == DysonGgufSpeechModels.QwenGgufId)
-            {
-                <div class="voice-train__transcript">
-                    <label class="voice-try__label" for="voice-train-transcript">Exact transcript of the clip</label>
-                    <textarea id="voice-train-transcript" class="voice-try__transcript" rows="3"
-                              @bind="_trainTranscript" @bind:event="oninput" disabled="@_busy"></textarea>
-                </div>
-            }
             <div class="voice-train__file">
                 <InputFile accept="@TrainAccept(active.RuntimeId)" OnChange="OnTrainFileAsync"
                            disabled="@(!CanPickTrainClip(active.RuntimeId))" />
                 @if (!_busy && !CanPickTrainClip(active.RuntimeId))
                 {
-                    <p class="settings-page__copy voice__note">@(DysonSpeechTryout.ShowsRecordedTrain(active.RuntimeId) && !_voiceConsent
-                        ? "Tick the consent box to choose a clip."
-                        : "Enter the exact transcript of the clip to choose a file.")</p>
+                    <p class="settings-page__copy voice__note">Tick the consent box to choose a clip.</p>
                 }
             </div>
             @if (_training)
@@ -397,7 +394,9 @@
         if (!string.Equals(_activeId, _seenTrainModelId, StringComparison.Ordinal))
         {
             _voiceConsent = false;
-            _trainTranscript = "";
+            _trainTranscript = DysonSpeechTryout.ShowsTrainTranscript(_activeId)
+                ? DysonSpeechTryout.ReadAloudSentence
+                : "";
             _seenTrainModelId = _activeId;
         }
 
@@ -534,7 +533,9 @@
         var countdown = CountTrainAsync(_trainCountdownCts.Token);
         try
         {
-            var result = await _tryout.EnrollRecordedVoiceAsync(Stt, Tts, _micId, CancellationToken.None);
+            var transcript = string.IsNullOrWhiteSpace(_trainTranscript) ? null : _trainTranscript.Trim();
+            var result = await _tryout.EnrollRecordedVoiceAsync(
+                Stt, Tts, _micId, CancellationToken.None, transcript);
             if (_disposed)
                 return;
             _trainOk = result.IsSuccess;
@@ -593,16 +594,9 @@
                 return;
             }
 
-            if (_activeId == DysonGgufSpeechModels.QwenGgufId && string.IsNullOrWhiteSpace(_trainTranscript))
-            {
-                _trainOk = false;
-                _trainResult = "Enter the exact transcript of the clip.";
-                return;
-            }
-
             var file = e.File;
             await using var clip = file.OpenReadStream(DysonPhononSpeech.MaxAudioBytes);
-            var transcript = _activeId == DysonGgufSpeechModels.QwenGgufId ? _trainTranscript.Trim() : null;
+            var transcript = string.IsNullOrWhiteSpace(_trainTranscript) ? null : _trainTranscript.Trim();
             var result = await Tts.PrepareVoiceAsync(clip, file.Name, transcript: transcript);
             _trainOk = result.IsSuccess;
             _trainResult = result.IsError ? result.Error : $"Voice {result.Value.DisplayName} saved and selected.";
@@ -621,11 +615,7 @@
         WavEnrollment(runtimeId) ? ".wav,audio/wav" : ".mp3,audio/mpeg";
 
     private bool CanPickTrainClip(string runtimeId) =>
-        !_busy
-        && (!DysonSpeechTryout.ShowsRecordedTrain(runtimeId)
-            || (_voiceConsent
-                && (!DysonSpeechTryout.RequiresTrainTranscript(runtimeId)
-                    || !string.IsNullOrWhiteSpace(_trainTranscript))));
+        !_busy && (!DysonSpeechTryout.ShowsRecordedTrain(runtimeId) || _voiceConsent);
 
     private static string TrainCopy(string runtimeId) => runtimeId switch
     {

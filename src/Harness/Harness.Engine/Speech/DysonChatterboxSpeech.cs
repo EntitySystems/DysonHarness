@@ -62,14 +62,16 @@ public sealed class DysonChatterboxSpeech(
     /// <summary>
     /// Train TTS model: one .mp3 of English speech longer than 5 seconds (up to 15 s used) ⇒ a voice prompt
     /// (speaker embedding + speech tokens), saved and made the default voice. Shorter clips are an error.
+    /// A non-blank <paramref name="transcript"/> is stored as <c>{voiceId}.txt</c> beside the <c>.pt</c>.
     /// </summary>
     public Task<Result<DysonSpeechVoiceEntity, string>> EnrollVoiceAsync(
         Stream clip,
         string fileName,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        string? transcript = null) =>
         Bridge.EnrollAsync(
             _models, _settings, _installRoot, Id, DysonSpeechPaths.GetChatterboxVoicesDir(_installRoot),
-            () => Check(null), StartInfo, clip, fileName, cancellationToken);
+            () => Check(null), StartInfo, clip, fileName, cancellationToken, transcript: transcript);
 
     /// <summary>Kills the bridge if this process started one. Safe to call from app shutdown and uninstall.</summary>
     public static void StopBridge() => Bridge.Stop();

@@ -158,6 +158,25 @@ public class DysonActiveSpeechTests
     }
 
     [Fact]
+    public void Voice_transcript_file_is_written_only_when_the_text_is_not_blank()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "dyson-voice-txt-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Assert.True(DysonSpeechBridge.WriteVoiceTranscript(dir, "clip", "  ").IsSuccess);
+            Assert.False(File.Exists(Path.Combine(dir, "clip.txt")));
+
+            Assert.True(DysonSpeechBridge.WriteVoiceTranscript(dir, "clip", "  hello  ").IsSuccess);
+            Assert.Equal("hello", File.ReadAllText(Path.Combine(dir, "clip.txt")));
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Qwen_prompt_wav_is_24k_mono_so_a_48k_clip_is_not_sent_through()
     {
         // 48 kHz stereo with a LIST chunk (the shape that made CrispASR return empty audio).

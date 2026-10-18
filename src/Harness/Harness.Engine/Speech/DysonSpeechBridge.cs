@@ -183,7 +183,8 @@ internal sealed partial class DysonSpeechBridge(string name)
     /// Train TTS model for engines that make a voice prompt (speaker embedding), never a fine-tune: copies the
     /// clip to <c>staging/enroll-{guid}.mp3</c> (or <c>.wav</c> when <paramref name="acceptWav"/>), sends
     /// <c>op: enroll</c>, always deletes the clip, then inserts the voice row and makes it the default voice.
-    /// A failed DB step deletes the <c>.pt</c>.
+    /// A non-blank <paramref name="transcript"/> is stored as <c>{voiceId}.txt</c> beside the <c>.pt</c>.
+    /// A failed DB step deletes the <c>.pt</c> and that txt.
     /// </summary>
     public async Task<Result<DysonSpeechVoiceEntity, string>> EnrollAsync(
         IDysonSpeechModelRepository models,
@@ -196,7 +197,8 @@ internal sealed partial class DysonSpeechBridge(string name)
         Stream clip,
         string fileName,
         CancellationToken cancellationToken,
-        bool acceptWav = false)
+        bool acceptWav = false,
+        string? transcript = null)
     {
         ArgumentNullException.ThrowIfNull(clip);
         var extension = Path.GetExtension(fileName ?? "");
@@ -258,6 +260,19 @@ internal sealed partial class DysonSpeechBridge(string name)
             return Result<DysonSpeechVoiceEntity, string>.AsError(enroll.IsError ? enroll.Error : $"{name} wrote no voice file.");
         }
 
+        var txtPath = Path.Combine(voicesDir, voiceId + ".txt");
+        if (!string.IsNullOrWhiteSpace(transcript))
+        {
+            var wroteText = await Task.Run(() => WriteVoiceTranscript(voicesDir, voiceId, transcript), CancellationToken.None)
+                .ConfigureAwait(false);
+            if (wroteText.IsError)
+            {
+                TryDelete(outPath);
+                TryDelete(txtPath);
+                return Result<DysonSpeechVoiceEntity, string>.AsError(wroteText.Error);
+            }
+        }
+
         var row = await models.EnsureCatalogVoiceAsync(
                 runtimeId, voiceId, Path.GetFileNameWithoutExtension(fileName)!, Path.GetFileName(installRoot), CancellationToken.None,
                 sourceFileName: Path.GetFileName(fileName))
@@ -273,8 +288,28 @@ internal sealed partial class DysonSpeechBridge(string name)
             return Result<DysonSpeechVoiceEntity, string>.AsValue(entity);
 
         TryDelete(outPath);
+        TryDelete(txtPath);
         return Result<DysonSpeechVoiceEntity, string>.AsError(
             select.IsError ? select.Error : saved is { IsError: true } ? saved.Error : $"Voice '{voiceId}' was not saved.");
+    }
+
+    /// <summary>
+    /// Writes <c>{voiceId}.txt</c> when <paramref name="transcript"/> is non-blank. Blank writes nothing.
+    /// </summary>
+    internal static VoidResult<string> WriteVoiceTranscript(string voicesDir, string voiceId, string? transcript)
+    {
+        if (string.IsNullOrWhiteSpace(transcript))
+            return VoidResult<string>.Success;
+        try
+        {
+            Directory.CreateDirectory(voicesDir);
+            File.WriteAllText(Path.Combine(voicesDir, voiceId + ".txt"), transcript.Trim());
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new VoidResult<string>($"Could not save the voice transcript: {ex.Message}");
+        }
     }
 
     /// <summary>Slug of the file name (<c>^[a-z0-9_-]{1,64}$</c>); <c>-2</c>, <c>-3</c>, … when taken.</summary>

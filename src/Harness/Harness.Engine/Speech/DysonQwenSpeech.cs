@@ -60,15 +60,16 @@ public sealed class DysonQwenSpeech(
 
     /// <summary>
     /// Train TTS model: one .mp3 or .wav ⇒ a speaker-embedding voice prompt, saved and made the default voice.
-    /// The clip is deleted. A transcript is not used.
+    /// The clip is deleted. A non-blank <paramref name="transcript"/> is stored as <c>{voiceId}.txt</c> beside the <c>.pt</c>.
     /// </summary>
     public Task<Result<DysonSpeechVoiceEntity, string>> EnrollVoiceAsync(
         Stream clip,
         string fileName,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        string? transcript = null) =>
         Bridge.EnrollAsync(
             _models, _settings, _installRoot, Id, DysonSpeechPaths.GetQwenVoicesDir(_installRoot),
-            () => Check(null), StartInfo, clip, fileName, cancellationToken, acceptWav: true);
+            () => Check(null), StartInfo, clip, fileName, cancellationToken, acceptWav: true, transcript: transcript);
 
     /// <summary>Kills the bridge if this process started one. Safe to call from app shutdown and uninstall.</summary>
     public static void StopBridge() => Bridge.Stop();

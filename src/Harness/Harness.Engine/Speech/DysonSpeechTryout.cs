@@ -19,12 +19,14 @@ public sealed class DysonSpeechTryout(
     private readonly IDysonSpeechToText _speechToText = speechToText ?? throw new ArgumentNullException(nameof(speechToText));
     private readonly IDysonTextToSpeech _textToSpeech = textToSpeech ?? throw new ArgumentNullException(nameof(textToSpeech));
     private readonly IDysonAudioPlayback _playback = playback ?? throw new ArgumentNullException(nameof(playback));
-    /// <summary>Sentence the train card shows. The user reads it; it is not stored as the transcript.</summary>
+    /// <summary>
+    /// Sentence the train box starts with. The user can edit it; the trimmed text is the enroll transcript.
+    /// </summary>
     public const string ReadAloudSentence =
         "The birch canoe slid on the smooth planks, then five thick slabs of blue cheese sat beside a jar of fresh jam.";
 
     /// <summary>
-    /// Train card shows consent, <see cref="ReadAloudSentence"/>, and Record 10 seconds.
+    /// Train card shows consent and Record 10 seconds.
     /// Python Qwen plus the three CrispASR GGUF voice models. Python Pocket and Chatterbox stay file-only.
     /// </summary>
     public static bool ShowsRecordedTrain(string? runtimeId) =>
@@ -34,7 +36,14 @@ public sealed class DysonSpeechTryout(
             or DysonGgufSpeechModels.ChatterboxGgufId;
 
     /// <summary>
-    /// Exact transcript is a Qwen3-TTS GGUF in-context requirement. Python Qwen enroll does not use one.
+    /// Train card shows the editable transcript box, prefilled with <see cref="ReadAloudSentence"/>.
+    /// Every model that enrolls a voice. Python Pocket does not.
+    /// </summary>
+    public static bool ShowsTrainTranscript(string? runtimeId) =>
+        ShowsRecordedTrain(runtimeId) || runtimeId == DysonChatterboxSpeech.Id;
+
+    /// <summary>
+    /// Qwen3-TTS GGUF enroll rejects a blank transcript. The train card does not gate the file picker on it.
     /// </summary>
     public static bool RequiresTrainTranscript(string? runtimeId) =>
         runtimeId == DysonGgufSpeechModels.QwenGgufId;
@@ -357,16 +366,18 @@ public sealed class DysonSpeechTryout(
 
     /// <summary>
     /// Records about 10 seconds on <paramref name="deviceId"/> and enrolls it through
-    /// <see cref="DysonActiveTextToSpeech.PrepareVoiceAsync"/>. Python Qwen skips speech-to-text and passes
-    /// the WAV (enroll accepts wav or mp3; the clip is not kept). Every other model transcribes once and
-    /// refuses an empty transcript, and does not open the microphone when no speech-to-text model is active.
+    /// <see cref="DysonActiveTextToSpeech.PrepareVoiceAsync"/>. A non-blank <paramref name="transcript"/>
+    /// is the clip text and speech-to-text is not called. When it is blank, Python Qwen still skips
+    /// speech-to-text; every other model transcribes once, refuses an empty transcript, and does not open
+    /// the microphone when no speech-to-text model is active. Empty capture writes nothing.
     /// Shares the recording gate with <see cref="RecordAsync"/>.
     /// </summary>
     public async Task<Result<DysonSpeechVoiceEntity, string>> EnrollRecordedVoiceAsync(
         DysonActiveSpeechToText speechToText,
         DysonActiveTextToSpeech textToSpeech,
         string? deviceId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? transcript = null)
     {
         ArgumentNullException.ThrowIfNull(speechToText);
         ArgumentNullException.ThrowIfNull(textToSpeech);
@@ -392,7 +403,8 @@ public sealed class DysonSpeechTryout(
 
         try
         {
-            return await EnrollCapturedAsync(speechToText, textToSpeech, deviceId, cts).ConfigureAwait(false);
+            return await EnrollCapturedAsync(speechToText, textToSpeech, deviceId, cts, transcript)
+                .ConfigureAwait(false);
         }
         finally
         {
@@ -411,13 +423,15 @@ public sealed class DysonSpeechTryout(
         DysonActiveSpeechToText speechToText,
         DysonActiveTextToSpeech textToSpeech,
         string? deviceId,
-        CancellationTokenSource cts)
+        CancellationTokenSource cts,
+        string? transcript)
     {
-        // Python Qwen stores a speaker embedding and ignores a transcript, so a missing speech-to-text
-        // model must not block the microphone. Every other model keeps that gate.
+        // A filled train box is the transcript. Speech-to-text is only the fallback when that box is empty,
+        // and Python Qwen still skips it so a missing speech-to-text model does not block the microphone.
+        var provided = string.IsNullOrWhiteSpace(transcript) ? null : transcript.Trim();
         var model = await textToSpeech.ResolveActiveAsync(cts.Token).ConfigureAwait(false);
         var pythonQwen = model.IsSuccess && model.Value == DysonQwenSpeech.Id;
-        if (!pythonQwen)
+        if (provided is null && !pythonQwen)
         {
             var active = await speechToText.ResolveActiveAsync(cts.Token).ConfigureAwait(false);
             if (active.IsError)
@@ -463,8 +477,8 @@ public sealed class DysonSpeechTryout(
             return Result<DysonSpeechVoiceEntity, string>.AsError("The recording was empty, so the voice was not saved.");
 
         await using var wav = Wav16k(pcm.AsSpan(0, filled));
-        string? transcript = null;
-        if (!pythonQwen)
+        var enrollTranscript = provided;
+        if (enrollTranscript is null && !pythonQwen)
         {
             try
             {
@@ -473,7 +487,7 @@ public sealed class DysonSpeechTryout(
                     if (chunk.IsError)
                         return Result<DysonSpeechVoiceEntity, string>.AsError(chunk.Error);
                     if (chunk.Value.IsFinal)
-                        transcript = chunk.Value.Text.Trim();
+                        enrollTranscript = chunk.Value.Text.Trim();
                 }
             }
             catch (OperationCanceledException)
@@ -483,13 +497,13 @@ public sealed class DysonSpeechTryout(
 
             if (cts.IsCancellationRequested)
                 return CancelledEnroll();
-            if (string.IsNullOrWhiteSpace(transcript))
+            if (string.IsNullOrWhiteSpace(enrollTranscript))
                 return Result<DysonSpeechVoiceEntity, string>.AsError(EmptyTranscript);
         }
 
         wav.Position = 0;
         return await textToSpeech
-            .PrepareVoiceAsync(wav, "recorded.wav", cts.Token, transcript)
+            .PrepareVoiceAsync(wav, "recorded.wav", cts.Token, enrollTranscript)
             .ConfigureAwait(false);
     }
 

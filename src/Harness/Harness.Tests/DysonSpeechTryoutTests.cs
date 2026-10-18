@@ -178,6 +178,12 @@ public class DysonSpeechTryoutTests
         Assert.True(DysonSpeechTryout.RequiresTrainTranscript(DysonGgufSpeechModels.QwenGgufId));
         Assert.False(DysonSpeechTryout.ShowsRecordedTrain(DysonChatterboxSpeech.Id));
         Assert.False(DysonSpeechTryout.ShowsRecordedTrain(DysonPocketSpeech.Id));
+        Assert.True(DysonSpeechTryout.ShowsTrainTranscript(DysonQwenSpeech.Id));
+        Assert.True(DysonSpeechTryout.ShowsTrainTranscript(DysonChatterboxSpeech.Id));
+        Assert.True(DysonSpeechTryout.ShowsTrainTranscript(DysonGgufSpeechModels.PocketGgufId));
+        Assert.True(DysonSpeechTryout.ShowsTrainTranscript(DysonGgufSpeechModels.QwenGgufId));
+        Assert.True(DysonSpeechTryout.ShowsTrainTranscript(DysonGgufSpeechModels.ChatterboxGgufId));
+        Assert.False(DysonSpeechTryout.ShowsTrainTranscript(DysonPocketSpeech.Id));
 
         var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
         await using var _ = conn;
@@ -223,6 +229,51 @@ public class DysonSpeechTryoutTests
             "No speech-to-text model is installed. Open Settings → Voice and install one.",
             gguf.Error);
         Assert.Equal(0, ggufCapture.PcmCaptures);
+    }
+
+    [Fact]
+    public async Task Recorded_enroll_uses_the_train_box_and_skips_speech_to_text()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        await using var _ = conn;
+        var repo = DysonTempDb.Speech(accessor);
+        var settings = DysonTempDb.Settings(accessor);
+        Assert.True((await repo.EnsureBuiltInAsync()).IsSuccess);
+        Assert.True((await repo.MarkInstalledAsync(DysonGgufSpeechModels.QwenGgufId, "dev")).IsSuccess);
+        var root = Path.Combine(Path.GetTempPath(), "dyson-enroll-box-" + Guid.NewGuid().ToString("N"));
+        var stt = new DysonActiveSpeechToText(repo, settings, root);
+        var tts = new DysonActiveTextToSpeech(repo, settings, root);
+        Assert.True((await tts.SetActiveAsync(DysonGgufSpeechModels.QwenGgufId)).IsSuccess);
+
+        var blankCapture = new FakeCapture();
+        blankCapture.Pcm.Add(Result<byte[], string>.AsValue([1, 0]));
+        var tryout = new DysonSpeechTryout(blankCapture, new FakeStt(), new FakeTts(), new FakePlayback());
+        var blank = await tryout.EnrollRecordedVoiceAsync(stt, tts, "0", CancellationToken.None, "   ");
+        Assert.Equal(
+            "No speech-to-text model is installed. Open Settings → Voice and install one.",
+            blank.Error);
+        Assert.Equal(0, blankCapture.PcmCaptures);
+
+        var emptyCapture = new FakeCapture();
+        tryout = new DysonSpeechTryout(emptyCapture, new FakeStt(), new FakeTts(), new FakePlayback());
+        var empty = await tryout.EnrollRecordedVoiceAsync(
+            stt, tts, "0", CancellationToken.None, DysonSpeechTryout.ReadAloudSentence);
+        Assert.Equal("The recording was empty, so the voice was not saved.", empty.Error);
+        Assert.Equal(1, emptyCapture.PcmCaptures);
+        Assert.False(Directory.Exists(root));
+
+        var capture = new FakeCapture();
+        capture.Pcm.Add(Result<byte[], string>.AsValue([1, 0]));
+        tryout = new DysonSpeechTryout(capture, new FakeStt(), new FakeTts(), new FakePlayback());
+        var reached = await tryout.EnrollRecordedVoiceAsync(
+            stt, tts, "0", CancellationToken.None, DysonSpeechTryout.ReadAloudSentence);
+        Assert.Contains("not installed", reached.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("exact transcript", reached.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("No speech-to-text", reached.Error);
+        Assert.Equal(1, capture.PcmCaptures);
+        Assert.False(Directory.Exists(Path.Combine(root, "qwen-gguf", "voices")));
+        if (Directory.Exists(root))
+            Directory.Delete(root, recursive: true);
     }
 
     [Fact]
