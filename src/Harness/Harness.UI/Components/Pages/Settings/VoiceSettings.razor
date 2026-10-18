@@ -197,6 +197,12 @@
             <div class="voice-train__file">
                 <InputFile accept="@TrainAccept(active.RuntimeId)" OnChange="OnTrainFileAsync"
                            disabled="@(!CanPickTrainClip(active.RuntimeId))" />
+                @if (!_busy && !CanPickTrainClip(active.RuntimeId))
+                {
+                    <p class="settings-page__copy voice__note">@(WavEnrollment(active.RuntimeId) && !_voiceConsent
+                        ? "Tick the consent box to choose a clip."
+                        : "Enter the exact transcript of the clip to choose a file.")</p>
+                }
             </div>
             @if (_training)
             {
