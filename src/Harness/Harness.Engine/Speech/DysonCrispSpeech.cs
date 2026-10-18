@@ -86,6 +86,19 @@ public sealed class DysonCrispSpeech(
 
         try
         {
+            if (_runtimeId == DysonGgufSpeechModels.QwenGgufId && !string.IsNullOrEmpty(voice.Value))
+            {
+                var wavPath = Path.Combine(
+                    DysonGgufSpeechModels.GetVoicesDir(_installRoot, _runtimeId), voice.Value + ".wav");
+                var prepared = await Task.Run(() => EnsureQwenPromptFile(wavPath), CancellationToken.None)
+                    .ConfigureAwait(false);
+                if (prepared.IsError)
+                {
+                    yield return AudioError(prepared.Error);
+                    yield break;
+                }
+            }
+
             await foreach (var chunk in ReadSpeechAsync(port.Value, text, voice.Value, cancellationToken).ConfigureAwait(false))
                 yield return chunk;
         }
@@ -122,7 +135,8 @@ public sealed class DysonCrispSpeech(
 
     /// <summary>
     /// Enrollment, not a fine-tune. One 16-bit PCM <c>.wav</c> (32 MB) is copied to
-    /// <c>{voiceId}.wav</c>. Qwen3-TTS GGUF also requires <paramref name="transcript"/>, stored as <c>{voiceId}.txt</c>.
+    /// <c>{voiceId}.wav</c>. Qwen3-TTS GGUF is stored as 24 kHz mono (CrispASR returns empty audio at any other rate)
+    /// and also requires <paramref name="transcript"/>, stored as <c>{voiceId}.txt</c>.
     /// </summary>
     public async Task<Result<DysonSpeechVoiceEntity, string>> EnrollVoiceAsync(
         Stream clip,
@@ -144,6 +158,15 @@ public sealed class DysonCrispSpeech(
         if (!IsPcm16Wav(read.Value))
             return VoiceError("GGUF voices take a .wav clip (16-bit PCM).");
 
+        var stored = read.Value;
+        if (_runtimeId == DysonGgufSpeechModels.QwenGgufId)
+        {
+            var prompt = ToQwenPromptWav(stored);
+            if (prompt.IsError)
+                return VoiceError(prompt.Error);
+            stored = prompt.Value;
+        }
+
         var installed = await Task.Run(() => RequireInstalled(_installRoot, _runtimeId), CancellationToken.None)
             .ConfigureAwait(false);
         if (installed.IsError)
@@ -159,7 +182,7 @@ public sealed class DysonCrispSpeech(
         var txtPath = Path.Combine(voicesDir, voiceId + ".txt");
         var writeTranscript = _runtimeId == DysonGgufSpeechModels.QwenGgufId;
         var wrote = await Task.Run(
-                () => WriteClip(voicesDir, wavPath, writeTranscript ? txtPath : null, writeTranscript ? transcript : null, read.Value),
+                () => WriteClip(voicesDir, wavPath, writeTranscript ? txtPath : null, writeTranscript ? transcript : null, stored),
                 CancellationToken.None)
             .ConfigureAwait(false);
         if (wrote.IsError)
@@ -676,6 +699,170 @@ public sealed class DysonCrispSpeech(
                 TryDelete(txtPath);
             return new VoidResult<string>($"Could not store the voice clip: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// CrispASR <c>qwen3_tts_set_voice_prompt</c> accepts only 24 kHz PCM (it averages channels) and the
+    /// server reports that refusal as empty audio. Qwen prompts are stored as 24 kHz mono 16-bit PCM.
+    /// </summary>
+    internal static Result<byte[], string> ToQwenPromptWav(ReadOnlySpan<byte> wav)
+    {
+        if (!TryReadPcm16(wav, out var rate, out var channels, out var pcm))
+            return Result<byte[], string>.AsError("Qwen3-TTS GGUF needs a 16-bit PCM clip with audio.");
+
+        var frames = pcm.Length / (channels * 2);
+        var mono = new int[frames];
+        for (var i = 0; i < frames; i++)
+        {
+            long sum = 0;
+            var at = i * channels * 2;
+            for (var c = 0; c < channels; c++)
+                sum += BinaryPrimitives.ReadInt16LittleEndian(pcm[(at + (c * 2))..]);
+            mono[i] = (int)Math.Round(sum / (double)channels);
+        }
+
+        var outCount = (int)Math.Round(frames * (double)SampleRate / rate);
+        if (outCount < 1)
+            outCount = 1;
+        // ponytail: box resample. Upsampling holds a sample; non-integer ratios alias. Upgrade path: windowed sinc.
+        var samples = new short[outCount];
+        for (var i = 0; i < outCount; i++)
+        {
+            var start = (int)((long)i * frames / outCount);
+            var end = (int)((long)(i + 1) * frames / outCount);
+            if (end <= start)
+                end = Math.Min(frames, start + 1);
+            long sum = 0;
+            for (var k = start; k < end; k++)
+                sum += mono[k];
+            var value = (int)Math.Round(sum / (double)(end - start));
+            samples[i] = (short)Math.Clamp(value, short.MinValue, short.MaxValue);
+        }
+
+        return Result<byte[], string>.AsValue(WritePcm16Mono(samples));
+    }
+
+    /// <summary>
+    /// Rewrites <paramref name="wavPath"/> when it is not already 24 kHz PCM so a voice saved before the
+    /// resample (48 kHz stereo recordings) speaks without a re-enroll. 24 kHz files are left as stored.
+    /// </summary>
+    internal static VoidResult<string> EnsureQwenPromptFile(string wavPath)
+    {
+        byte[] bytes;
+        try
+        {
+            bytes = File.ReadAllBytes(wavPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new VoidResult<string>($"Could not read the Qwen3-TTS GGUF voice clip: {ex.Message}");
+        }
+
+        if (TryReadPcm16(bytes, out var rate, out _, out _) && rate == SampleRate)
+            return VoidResult<string>.Success;
+
+        var prompt = ToQwenPromptWav(bytes);
+        if (prompt.IsError)
+            return new VoidResult<string>(prompt.Error);
+
+        var tmp = wavPath + ".24k.tmp";
+        try
+        {
+            File.WriteAllBytes(tmp, prompt.Value);
+            File.Move(tmp, wavPath, overwrite: true);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            TryDelete(tmp);
+            return new VoidResult<string>($"Could not store the Qwen3-TTS GGUF voice clip: {ex.Message}");
+        }
+    }
+
+    private static bool TryReadPcm16(ReadOnlySpan<byte> wav, out int rate, out int channels, out ReadOnlySpan<byte> pcm)
+    {
+        rate = 0;
+        channels = 0;
+        pcm = default;
+        if (wav.Length < 44
+            || wav[0] != (byte)'R' || wav[1] != (byte)'I' || wav[2] != (byte)'F' || wav[3] != (byte)'F'
+            || wav[8] != (byte)'W' || wav[9] != (byte)'A' || wav[10] != (byte)'V' || wav[11] != (byte)'E')
+            return false;
+
+        var rateFound = 0;
+        var channelsFound = 0;
+        var bits = 0;
+        var format = 0;
+        var data = ReadOnlySpan<byte>.Empty;
+        var sawFmt = false;
+        var sawData = false;
+        var off = 12;
+        while (off + 8 <= wav.Length)
+        {
+            var sz = BinaryPrimitives.ReadInt32LittleEndian(wav[(off + 4)..]);
+            if (sz < 0)
+                return false;
+            var payload = off + 8;
+            if (sz > wav.Length - payload)
+                return false;
+
+            if (wav[off] == (byte)'f' && wav[off + 1] == (byte)'m' && wav[off + 2] == (byte)'t' && wav[off + 3] == (byte)' ')
+            {
+                if (sz < 16)
+                    return false;
+                format = BinaryPrimitives.ReadUInt16LittleEndian(wav[payload..]);
+                channelsFound = BinaryPrimitives.ReadUInt16LittleEndian(wav[(payload + 2)..]);
+                rateFound = BinaryPrimitives.ReadInt32LittleEndian(wav[(payload + 4)..]);
+                bits = BinaryPrimitives.ReadUInt16LittleEndian(wav[(payload + 14)..]);
+                sawFmt = true;
+            }
+            else if (wav[off] == (byte)'d' && wav[off + 1] == (byte)'a' && wav[off + 2] == (byte)'t' && wav[off + 3] == (byte)'a')
+            {
+                data = wav.Slice(payload, sz);
+                sawData = true;
+            }
+
+            var next = payload + sz;
+            if ((sz & 1) == 1)
+                next++;
+            if (next <= off)
+                return false;
+            off = next;
+            if (sawFmt && sawData)
+                break;
+        }
+
+        var block = channelsFound * 2;
+        if (!sawFmt || !sawData || format != 1 || bits != 16 || channelsFound < 1 || rateFound < 1
+            || block < 2 || data.Length < block || data.Length % block != 0)
+            return false;
+
+        rate = rateFound;
+        channels = channelsFound;
+        pcm = data;
+        return true;
+    }
+
+    private static byte[] WritePcm16Mono(ReadOnlySpan<short> samples)
+    {
+        var dataBytes = samples.Length * 2;
+        var wav = new byte[44 + dataBytes];
+        "RIFF"u8.CopyTo(wav);
+        BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(4), wav.Length - 8);
+        "WAVE"u8.CopyTo(wav.AsSpan(8));
+        "fmt "u8.CopyTo(wav.AsSpan(12));
+        BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(16), 16);
+        BinaryPrimitives.WriteUInt16LittleEndian(wav.AsSpan(20), 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(wav.AsSpan(22), 1);
+        BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(24), SampleRate);
+        BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(28), SampleRate * 2);
+        BinaryPrimitives.WriteUInt16LittleEndian(wav.AsSpan(32), 2);
+        BinaryPrimitives.WriteUInt16LittleEndian(wav.AsSpan(34), 16);
+        "data"u8.CopyTo(wav.AsSpan(36));
+        BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(40), dataBytes);
+        for (var i = 0; i < samples.Length; i++)
+            BinaryPrimitives.WriteInt16LittleEndian(wav.AsSpan(44 + (i * 2)), samples[i]);
+        return wav;
     }
 
     private static bool IsPcm16Wav(ReadOnlySpan<byte> wav)

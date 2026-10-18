@@ -106,7 +106,8 @@ public sealed class DysonActiveTextToSpeech(
 
     /// <summary>
     /// Train TTS model for the active model: Qwen3-TTS and Chatterbox Turbo enroll a voice prompt (not a fine-tune).
-    /// CrispASR GGUF models enroll a 16-bit PCM .wav (<paramref name="transcript"/> is required for Qwen3-TTS GGUF).
+    /// CrispASR GGUF models enroll a 16-bit PCM .wav (<paramref name="transcript"/> is required for Qwen3-TTS GGUF,
+    /// which is stored as 24 kHz mono).
     /// Pocket TTS returns <see cref="DysonSpeechVoicePrep.VoiceCloningUnsupported"/> and stores nothing.
     /// </summary>
     public async Task<Result<DysonSpeechVoiceEntity, string>> PrepareVoiceAsync(

@@ -73,7 +73,7 @@ public static class DysonGgufSpeechModels
     public static string GetModelDir(string installRoot, string runtimeId) =>
         Path.Combine(installRoot, Dir(runtimeId) ?? runtimeId, "model");
 
-    /// <summary>Enrolled reference clips (<c>{voiceId}.wav</c>, plus <c>{voiceId}.txt</c> transcript for Qwen3-TTS).</summary>
+    /// <summary>Enrolled reference clips (<c>{voiceId}.wav</c>; Qwen3-TTS is 24 kHz mono plus <c>{voiceId}.txt</c>).</summary>
     public static string GetVoicesDir(string installRoot, string runtimeId) =>
         Path.Combine(installRoot, Dir(runtimeId) ?? runtimeId, "voices");
 
