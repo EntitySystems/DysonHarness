@@ -145,7 +145,8 @@ public sealed class DysonActiveSpeechToText(
     {
         DysonPhononSpeech.Id => new DysonPhononSpeech(_installRoot),
         DysonGgufSpeechModels.NemotronId => new DysonNemotronSpeech(_installRoot),
-        DysonGgufSpeechModels.PhononGgufId => new DysonCrispSpeech(_models, _settings, _installRoot, runtimeId),
+        DysonGgufSpeechModels.PhononGgufId or DysonGgufSpeechModels.PhononGgufQ8Id
+            => new DysonCrispSpeech(_models, _settings, _installRoot, runtimeId),
         _ => null,
     };
 
@@ -153,7 +154,7 @@ public sealed class DysonActiveSpeechToText(
     {
         if (!string.Equals(runtimeId, DysonPhononSpeech.Id, StringComparison.Ordinal))
             DysonPhononSpeech.StopSidecar();
-        if (string.Equals(runtimeId, DysonGgufSpeechModels.PhononGgufId, StringComparison.Ordinal))
+        if (runtimeId is DysonGgufSpeechModels.PhononGgufId or DysonGgufSpeechModels.PhononGgufQ8Id)
             DysonCrispSpeech.StopSidecarUnless(runtimeId);
         else
             DysonCrispSpeech.StopSidecar();

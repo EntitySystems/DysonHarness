@@ -11,29 +11,42 @@ public static class DysonGgufSpeechModels
 {
     public const string NemotronId = "nemotron-3.5-asr-streaming-0.6b";
     public const string PhononGgufId = "phonon-2-gguf";
+    public const string PhononGgufQ8Id = "phonon-2-gguf-q8";
     public const string PocketGgufId = "pocket-tts-gguf";
+    public const string PocketGgufQ8Id = "pocket-tts-gguf-q8";
     public const string QwenGgufId = "qwen3-tts-0.6b-base-gguf";
     public const string ChatterboxGgufId = "chatterbox-turbo-gguf";
+    public const string ChatterboxGgufQ8Id = "chatterbox-turbo-gguf-q8";
 
     public const string NemotronDisplayName = "Nemotron 3.5 ASR 0.6B · GGUF Q5_K_M, streaming (560 MB)";
     public const string PhononGgufDisplayName = "Phonon 2 · GGUF Q4_K (402 MB)";
+    public const string PhononGgufQ8DisplayName = "Phonon 2 · GGUF Q8_0 (674 MB)";
     public const string PocketGgufDisplayName = "Pocket TTS · GGUF Q4_K, voice cloning (73 MB)";
+    public const string PocketGgufQ8DisplayName = "Pocket TTS · GGUF Q8_0, voice cloning (124 MB)";
     public const string QwenGgufDisplayName = "Qwen3-TTS 0.6B Base · GGUF Q8_0 + F16 codec (1.34 GB)";
     public const string ChatterboxGgufDisplayName = "Chatterbox Turbo (English only) · GGUF Q4_K (735 MB)";
+    public const string ChatterboxGgufQ8DisplayName = "Chatterbox Turbo (English only) · GGUF Q8_0 (1.03 GB)";
 
-    /// <summary>The four models served by the shared CrispASR runtime (<see cref="GetCrispExe"/>).</summary>
-    public static readonly IReadOnlyList<string> CrispIds = [PhononGgufId, PocketGgufId, QwenGgufId, ChatterboxGgufId];
+    /// <summary>Models served by the shared CrispASR runtime (<see cref="GetCrispExe"/>). Q8 ids are siblings of the Q4 ids, not replacements.</summary>
+    public static readonly IReadOnlyList<string> CrispIds =
+    [
+        PhononGgufId, PhononGgufQ8Id, PocketGgufId, PocketGgufQ8Id, QwenGgufId, ChatterboxGgufId, ChatterboxGgufQ8Id,
+    ];
 
     /// <summary>Every GGUF id, in install / UI order.</summary>
     public static readonly IReadOnlyList<string> AllIds = [NemotronId, .. CrispIds];
 
     public const string NemotronModelFile = "nemotron-3.5-asr-streaming-0.6b-Q5_K_M.gguf";
     public const string PhononGgufFile = "phonon2-q4_k.gguf";
+    public const string PhononGgufQ8File = "phonon2-q8_0.gguf";
     public const string PocketGgufFile = "pocket-tts-english-q4_k.gguf";
+    public const string PocketGgufQ8File = "pocket-tts-english-q8_0.gguf";
     public const string QwenGgufFile = "qwen3-tts-12hz-0.6b-base-q8_0.gguf";
     public const string QwenTokenizerFile = "qwen3-tts-tokenizer-12hz.gguf";
     public const string ChatterboxT3File = "chatterbox-turbo-t3-q4_k.gguf";
     public const string ChatterboxS3GenFile = "chatterbox-turbo-s3gen-q4_k.gguf";
+    public const string ChatterboxT3Q8File = "chatterbox-turbo-t3-q8_0.gguf";
+    public const string ChatterboxS3GenQ8File = "chatterbox-turbo-s3gen-q8_0.gguf";
 
     public static bool IsGguf(string? runtimeId) => runtimeId is not null && AllIds.Contains(runtimeId);
 
@@ -42,10 +55,10 @@ public static class DysonGgufSpeechModels
     /// <summary>CrispASR <c>--backend</c> name; null for a non-CrispASR id.</summary>
     public static string? CrispBackend(string runtimeId) => runtimeId switch
     {
-        PhononGgufId => "phonon2",
-        PocketGgufId => "pocket-tts",
+        PhononGgufId or PhononGgufQ8Id => "phonon2",
+        PocketGgufId or PocketGgufQ8Id => "pocket-tts",
         QwenGgufId => "qwen3-tts",
-        ChatterboxGgufId => "chatterbox-turbo",
+        ChatterboxGgufId or ChatterboxGgufQ8Id => "chatterbox-turbo",
         _ => null,
     };
 
@@ -54,9 +67,12 @@ public static class DysonGgufSpeechModels
     {
         NemotronId => "nemotron",
         PhononGgufId => "phonon-gguf",
+        PhononGgufQ8Id => "phonon-gguf-q8",
         PocketGgufId => "pocket-gguf",
+        PocketGgufQ8Id => "pocket-gguf-q8",
         QwenGgufId => "qwen-gguf",
         ChatterboxGgufId => "chatterbox-gguf",
+        ChatterboxGgufQ8Id => "chatterbox-gguf-q8",
         _ => null,
     };
 
@@ -90,8 +106,11 @@ public static class DysonGgufSpeechModels
         {
             NemotronId => NemotronModelFile,
             PhononGgufId => PhononGgufFile,
+            PhononGgufQ8Id => PhononGgufQ8File,
             PocketGgufId => PocketGgufFile,
+            PocketGgufQ8Id => PocketGgufQ8File,
             QwenGgufId => QwenGgufFile,
+            ChatterboxGgufQ8Id => ChatterboxT3Q8File,
             _ => ChatterboxT3File,
         });
 
@@ -100,6 +119,7 @@ public static class DysonGgufSpeechModels
     {
         QwenGgufId => Path.Combine(GetModelDir(installRoot, runtimeId), QwenTokenizerFile),
         ChatterboxGgufId => Path.Combine(GetModelDir(installRoot, runtimeId), ChatterboxS3GenFile),
+        ChatterboxGgufQ8Id => Path.Combine(GetModelDir(installRoot, runtimeId), ChatterboxS3GenQ8File),
         _ => null,
     };
 }

@@ -28,7 +28,10 @@ public sealed record DysonSpeechRidManifest(
     DysonSpeechFile? PocketGguf = null,
     IReadOnlyList<DysonSpeechFile>? QwenGguf = null,
     IReadOnlyList<DysonSpeechFile>? ChatterboxGguf = null,
-    DysonSpeechFile? CrispasrVulkan = null);
+    DysonSpeechFile? CrispasrVulkan = null,
+    DysonSpeechFile? PhononGgufQ8 = null,
+    DysonSpeechFile? PocketGgufQ8 = null,
+    IReadOnlyList<DysonSpeechFile>? ChatterboxGgufQ8 = null);
 
 /// <summary>
 /// <c>packaging/speech/manifest.json</c>, embedded in Harness.Engine. Git holds URLs and hashes, never the bytes.
@@ -151,6 +154,14 @@ public sealed partial record DysonSpeechManifest(
         if (m.ChatterboxGguf is not null)
         {
             foreach (var file in m.ChatterboxGguf)
+                yield return file;
+        }
+
+        yield return m.PhononGgufQ8;
+        yield return m.PocketGgufQ8;
+        if (m.ChatterboxGgufQ8 is not null)
+        {
+            foreach (var file in m.ChatterboxGgufQ8)
                 yield return file;
         }
     }

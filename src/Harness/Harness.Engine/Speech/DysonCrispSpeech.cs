@@ -284,7 +284,7 @@ public sealed class DysonCrispSpeech(
         var modelName = _runtimeId switch
         {
             DysonGgufSpeechModels.QwenGgufId => "Qwen3-TTS GGUF",
-            DysonGgufSpeechModels.ChatterboxGgufId => "Chatterbox Turbo GGUF",
+            DysonGgufSpeechModels.ChatterboxGgufId or DysonGgufSpeechModels.ChatterboxGgufQ8Id => "Chatterbox Turbo GGUF",
             _ => "Pocket TTS GGUF",
         };
         var resolved = await DysonSpeechBridge.ResolveVoiceIdAsync(
@@ -933,10 +933,13 @@ public sealed class DysonCrispSpeech(
         return format == 1 && bits == 16;
     }
 
-    private static bool IsSpeechToText(string id) => id == DysonGgufSpeechModels.PhononGgufId;
+    private static bool IsSpeechToText(string id) =>
+        id is DysonGgufSpeechModels.PhononGgufId or DysonGgufSpeechModels.PhononGgufQ8Id;
 
     private static bool IsTextToSpeech(string id) =>
-        id is DysonGgufSpeechModels.PocketGgufId or DysonGgufSpeechModels.QwenGgufId or DysonGgufSpeechModels.ChatterboxGgufId;
+        id is DysonGgufSpeechModels.PocketGgufId or DysonGgufSpeechModels.PocketGgufQ8Id
+            or DysonGgufSpeechModels.QwenGgufId
+            or DysonGgufSpeechModels.ChatterboxGgufId or DysonGgufSpeechModels.ChatterboxGgufQ8Id;
 
     private static VoidResult<string> RequireInstalled(string installRoot, string runtimeId) =>
         DysonSpeechInstaller.Probe(installRoot).IsInstalled(runtimeId)
@@ -949,9 +952,12 @@ public sealed class DysonCrispSpeech(
     private static string DisplayName(string runtimeId) => runtimeId switch
     {
         DysonGgufSpeechModels.PhononGgufId => DysonGgufSpeechModels.PhononGgufDisplayName,
+        DysonGgufSpeechModels.PhononGgufQ8Id => DysonGgufSpeechModels.PhononGgufQ8DisplayName,
         DysonGgufSpeechModels.PocketGgufId => DysonGgufSpeechModels.PocketGgufDisplayName,
+        DysonGgufSpeechModels.PocketGgufQ8Id => DysonGgufSpeechModels.PocketGgufQ8DisplayName,
         DysonGgufSpeechModels.QwenGgufId => DysonGgufSpeechModels.QwenGgufDisplayName,
         DysonGgufSpeechModels.ChatterboxGgufId => DysonGgufSpeechModels.ChatterboxGgufDisplayName,
+        DysonGgufSpeechModels.ChatterboxGgufQ8Id => DysonGgufSpeechModels.ChatterboxGgufQ8DisplayName,
         _ => runtimeId,
     };
 

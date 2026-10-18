@@ -75,9 +75,12 @@ public sealed class DysonSpeechInstaller
     internal const long NemotronBytes = 650_000_000; // archive 18,036,555 + weights 559,647,200 + extracted native
     internal const long CrispAsrBytes = 60_000_000; // CPU zip 9,088,774 + Vulkan zip 35,991,946 + extracted
     internal const long PhononGgufBytes = 402_226_656;
+    internal const long PhononGgufQ8Bytes = 674_342_560;
     internal const long PocketGgufBytes = 72_645_472;
+    internal const long PocketGgufQ8Bytes = 123_632_992;
     internal const long QwenGgufBytes = 985_716_544 + 358_453_280;
     internal const long ChatterboxGgufBytes = 478_800_960 + 255_891_744;
+    internal const long ChatterboxGgufQ8Bytes = 658_897_472 + 366_820_384;
     private const long QwenWheelhouseBytes = 138_343_182;
     private const long ChatterboxWheelhouseBytes = 182_916_172;
 
@@ -87,12 +90,15 @@ public sealed class DysonSpeechInstaller
         DysonPhononSpeech.Id,
         DysonGgufSpeechModels.NemotronId,
         DysonGgufSpeechModels.PhononGgufId,
+        DysonGgufSpeechModels.PhononGgufQ8Id,
         DysonPocketSpeech.Id,
         DysonGgufSpeechModels.PocketGgufId,
+        DysonGgufSpeechModels.PocketGgufQ8Id,
         DysonQwenSpeech.Id,
         DysonGgufSpeechModels.QwenGgufId,
         DysonChatterboxSpeech.Id,
         DysonGgufSpeechModels.ChatterboxGgufId,
+        DysonGgufSpeechModels.ChatterboxGgufQ8Id,
     ];
 
     /// <summary>First installed of these becomes the active TTS when <c>speech_output_model_id</c> is missing.</summary>
@@ -102,13 +108,15 @@ public sealed class DysonSpeechInstaller
         DysonChatterboxSpeech.Id,
         DysonQwenSpeech.Id,
         DysonGgufSpeechModels.PocketGgufId,
+        DysonGgufSpeechModels.PocketGgufQ8Id,
         DysonGgufSpeechModels.ChatterboxGgufId,
+        DysonGgufSpeechModels.ChatterboxGgufQ8Id,
         DysonGgufSpeechModels.QwenGgufId,
     ];
 
     /// <summary>Input models. The installer sets <c>speech_input_model_id</c> only when exactly one of these is installed.</summary>
     private static readonly string[] InputModelIds =
-        [DysonPhononSpeech.Id, DysonGgufSpeechModels.PhononGgufId, DysonGgufSpeechModels.NemotronId];
+        [DysonPhononSpeech.Id, DysonGgufSpeechModels.PhononGgufId, DysonGgufSpeechModels.PhononGgufQ8Id, DysonGgufSpeechModels.NemotronId];
 
     private static readonly string[] RuntimeSteps =
     [
@@ -129,12 +137,14 @@ public sealed class DysonSpeechInstaller
         ],
         [DysonGgufSpeechModels.NemotronId] = ["nemotron-download", "nemotron-hash", "nemotron-unpack"],
         [DysonGgufSpeechModels.PhononGgufId] = ["phonon-gguf-download", "phonon-gguf-hash", "phonon-gguf-unpack"],
+        [DysonGgufSpeechModels.PhononGgufQ8Id] = ["phonon-gguf-q8-download", "phonon-gguf-q8-hash", "phonon-gguf-q8-unpack"],
         [DysonPocketSpeech.Id] =
         [
             "pocket-wheels-download", "pocket-wheels-hash", "pocket-wheels-install",
             "pocket-weights-download", "pocket-weights-hash", "pocket-voice-download", "pocket-voice-hash", "pocket-config",
         ],
         [DysonGgufSpeechModels.PocketGgufId] = ["pocket-gguf-download", "pocket-gguf-hash", "pocket-gguf-unpack"],
+        [DysonGgufSpeechModels.PocketGgufQ8Id] = ["pocket-gguf-q8-download", "pocket-gguf-q8-hash", "pocket-gguf-q8-unpack"],
         [DysonQwenSpeech.Id] =
         [
             "qwen-wheels-download", "qwen-wheels-hash", "qwen-wheels-install",
@@ -148,6 +158,8 @@ public sealed class DysonSpeechInstaller
         ],
         [DysonGgufSpeechModels.ChatterboxGgufId] =
             ["chatterbox-gguf-download", "chatterbox-gguf-hash", "chatterbox-gguf-unpack"],
+        [DysonGgufSpeechModels.ChatterboxGgufQ8Id] =
+            ["chatterbox-gguf-q8-download", "chatterbox-gguf-q8-hash", "chatterbox-gguf-q8-unpack"],
     };
 
     private static readonly string[] TailSteps = ["licenses", "commit", "smoke"];
@@ -468,9 +480,12 @@ public sealed class DysonSpeechInstaller
         DysonChatterboxSpeech.Id => ChatterboxBytes,
         DysonGgufSpeechModels.NemotronId => NemotronBytes,
         DysonGgufSpeechModels.PhononGgufId => PhononGgufBytes,
+        DysonGgufSpeechModels.PhononGgufQ8Id => PhononGgufQ8Bytes,
         DysonGgufSpeechModels.PocketGgufId => PocketGgufBytes,
+        DysonGgufSpeechModels.PocketGgufQ8Id => PocketGgufQ8Bytes,
         DysonGgufSpeechModels.QwenGgufId => QwenGgufBytes,
         DysonGgufSpeechModels.ChatterboxGgufId => ChatterboxGgufBytes,
+        DysonGgufSpeechModels.ChatterboxGgufQ8Id => ChatterboxGgufQ8Bytes,
         _ => 0,
     };
 
@@ -862,9 +877,12 @@ public sealed class DysonSpeechInstaller
             DysonGgufSpeechModels.NemotronId when manifest.NemotronNative is not null && manifest.NemotronWeights is not null
                 => [manifest.NemotronNative, manifest.NemotronWeights],
             DysonGgufSpeechModels.PhononGgufId when manifest.PhononGguf is not null => [manifest.PhononGguf],
+            DysonGgufSpeechModels.PhononGgufQ8Id when manifest.PhononGgufQ8 is not null => [manifest.PhononGgufQ8],
             DysonGgufSpeechModels.PocketGgufId when manifest.PocketGguf is not null => [manifest.PocketGguf],
+            DysonGgufSpeechModels.PocketGgufQ8Id when manifest.PocketGgufQ8 is not null => [manifest.PocketGgufQ8],
             DysonGgufSpeechModels.QwenGgufId when manifest.QwenGguf is { Count: > 0 } => manifest.QwenGguf,
             DysonGgufSpeechModels.ChatterboxGgufId when manifest.ChatterboxGguf is { Count: > 0 } => manifest.ChatterboxGguf,
+            DysonGgufSpeechModels.ChatterboxGgufQ8Id when manifest.ChatterboxGgufQ8 is { Count: > 0 } => manifest.ChatterboxGgufQ8,
             _ => null,
         };
 
@@ -874,11 +892,15 @@ public sealed class DysonSpeechInstaller
         DysonGgufSpeechModels.NemotronId when manifest.NemotronWeights is not null && manifest.NemotronNative is not null
             => manifest.NemotronWeights.Sha256 + "+" + manifest.NemotronNative.Sha256,
         DysonGgufSpeechModels.PhononGgufId => manifest.PhononGguf?.Sha256,
+        DysonGgufSpeechModels.PhononGgufQ8Id => manifest.PhononGgufQ8?.Sha256,
         DysonGgufSpeechModels.PocketGgufId => manifest.PocketGguf?.Sha256,
+        DysonGgufSpeechModels.PocketGgufQ8Id => manifest.PocketGgufQ8?.Sha256,
         DysonGgufSpeechModels.QwenGgufId => manifest.QwenGguf?
             .FirstOrDefault(f => f.FileName == DysonGgufSpeechModels.QwenGgufFile)?.Sha256,
         DysonGgufSpeechModels.ChatterboxGgufId => manifest.ChatterboxGguf?
             .FirstOrDefault(f => f.FileName == DysonGgufSpeechModels.ChatterboxT3File)?.Sha256,
+        DysonGgufSpeechModels.ChatterboxGgufQ8Id => manifest.ChatterboxGgufQ8?
+            .FirstOrDefault(f => f.FileName == DysonGgufSpeechModels.ChatterboxT3Q8File)?.Sha256,
         _ => null,
     };
 
@@ -1252,9 +1274,12 @@ public sealed class DysonSpeechInstaller
             var crispVulkanZip = Path.Combine(Downloads, "crispasr-vulkan");
             var nemotronFiles = Path.Combine(Downloads, "nemotron");
             var phononGgufFiles = Path.Combine(Downloads, "phonon-gguf");
+            var phononGgufQ8Files = Path.Combine(Downloads, "phonon-gguf-q8");
             var pocketGgufFiles = Path.Combine(Downloads, "pocket-gguf");
+            var pocketGgufQ8Files = Path.Combine(Downloads, "pocket-gguf-q8");
             var qwenGgufFiles = Path.Combine(Downloads, "qwen-gguf");
             var chatterboxGgufFiles = Path.Combine(Downloads, "chatterbox-gguf");
+            var chatterboxGgufQ8Files = Path.Combine(Downloads, "chatterbox-gguf-q8");
 
             if (!await StepAsync("preflight", _ => PreflightAsync()) || _plan.Count <= 1)
                 return;
@@ -1286,6 +1311,9 @@ public sealed class DysonSpeechInstaller
                 ("phonon-gguf-download", p => DownloadGgufAsync("phonon-gguf-download", DysonGgufSpeechModels.PhononGgufId, phononGgufFiles, p)),
                 ("phonon-gguf-hash", _ => VerifyGgufAsync("phonon-gguf-hash", DysonGgufSpeechModels.PhononGgufId, phononGgufFiles)),
                 ("phonon-gguf-unpack", _ => Task.FromResult(MoveGguf("phonon-gguf-unpack", DysonGgufSpeechModels.PhononGgufId, phononGgufFiles, Tree))),
+                ("phonon-gguf-q8-download", p => DownloadGgufAsync("phonon-gguf-q8-download", DysonGgufSpeechModels.PhononGgufQ8Id, phononGgufQ8Files, p)),
+                ("phonon-gguf-q8-hash", _ => VerifyGgufAsync("phonon-gguf-q8-hash", DysonGgufSpeechModels.PhononGgufQ8Id, phononGgufQ8Files)),
+                ("phonon-gguf-q8-unpack", _ => Task.FromResult(MoveGguf("phonon-gguf-q8-unpack", DysonGgufSpeechModels.PhononGgufQ8Id, phononGgufQ8Files, Tree))),
                 ("pocket-wheels-download", p => DownloadAllAsync("pocket-wheels-download", _m.PocketWheels, pocketWheels, p)),
                 ("pocket-wheels-hash", _ => VerifyAllAsync("pocket-wheels-hash", _m.PocketWheels, pocketWheels)),
                 ("pocket-wheels-install", _ => PipInstallAsync("pocket-wheels-install", _m.PocketWheels, pocketWheels, DysonSpeechPaths.GetPocketSite(InstallTree(DysonPocketSpeech.Id)), Path.Combine(InstallTree(DysonPocketSpeech.Id), "pocket", "wheelhouse"))),
@@ -1297,6 +1325,9 @@ public sealed class DysonSpeechInstaller
                 ("pocket-gguf-download", p => DownloadGgufAsync("pocket-gguf-download", DysonGgufSpeechModels.PocketGgufId, pocketGgufFiles, p)),
                 ("pocket-gguf-hash", _ => VerifyGgufAsync("pocket-gguf-hash", DysonGgufSpeechModels.PocketGgufId, pocketGgufFiles)),
                 ("pocket-gguf-unpack", _ => Task.FromResult(MoveGguf("pocket-gguf-unpack", DysonGgufSpeechModels.PocketGgufId, pocketGgufFiles, Tree))),
+                ("pocket-gguf-q8-download", p => DownloadGgufAsync("pocket-gguf-q8-download", DysonGgufSpeechModels.PocketGgufQ8Id, pocketGgufQ8Files, p)),
+                ("pocket-gguf-q8-hash", _ => VerifyGgufAsync("pocket-gguf-q8-hash", DysonGgufSpeechModels.PocketGgufQ8Id, pocketGgufQ8Files)),
+                ("pocket-gguf-q8-unpack", _ => Task.FromResult(MoveGguf("pocket-gguf-q8-unpack", DysonGgufSpeechModels.PocketGgufQ8Id, pocketGgufQ8Files, Tree))),
                 ("qwen-wheels-download", p => DownloadAllAsync("qwen-wheels-download", _m.QwenWheels, qwenWheels, p)),
                 ("qwen-wheels-hash", _ => VerifyAllAsync("qwen-wheels-hash", _m.QwenWheels, qwenWheels)),
                 ("qwen-wheels-install", _ => PipInstallAsync("qwen-wheels-install", _m.QwenWheels, qwenWheels, DysonSpeechPaths.GetQwenSite(InstallTree(DysonQwenSpeech.Id)), Path.Combine(InstallTree(DysonQwenSpeech.Id), "qwen", "wheelhouse"))),
@@ -1323,6 +1354,9 @@ public sealed class DysonSpeechInstaller
                 ("chatterbox-gguf-download", p => DownloadGgufAsync("chatterbox-gguf-download", DysonGgufSpeechModels.ChatterboxGgufId, chatterboxGgufFiles, p)),
                 ("chatterbox-gguf-hash", _ => VerifyGgufAsync("chatterbox-gguf-hash", DysonGgufSpeechModels.ChatterboxGgufId, chatterboxGgufFiles)),
                 ("chatterbox-gguf-unpack", _ => Task.FromResult(MoveGguf("chatterbox-gguf-unpack", DysonGgufSpeechModels.ChatterboxGgufId, chatterboxGgufFiles, Tree))),
+                ("chatterbox-gguf-q8-download", p => DownloadGgufAsync("chatterbox-gguf-q8-download", DysonGgufSpeechModels.ChatterboxGgufQ8Id, chatterboxGgufQ8Files, p)),
+                ("chatterbox-gguf-q8-hash", _ => VerifyGgufAsync("chatterbox-gguf-q8-hash", DysonGgufSpeechModels.ChatterboxGgufQ8Id, chatterboxGgufQ8Files)),
+                ("chatterbox-gguf-q8-unpack", _ => Task.FromResult(MoveGguf("chatterbox-gguf-q8-unpack", DysonGgufSpeechModels.ChatterboxGgufQ8Id, chatterboxGgufQ8Files, Tree))),
                 ("licenses", _ => Task.FromResult(WriteLicenses())),
                 ("commit", _ => CommitAsync()),
                 ("smoke", _ => SmokeAsync()),

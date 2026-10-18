@@ -15,9 +15,12 @@ public sealed class DysonSpeechModelRepository(
     // Ids and display names match DysonGgufSpeechModels. LocalDb does not reference Harness.Engine.
     public const string NemotronRuntimeId = "nemotron-3.5-asr-streaming-0.6b";
     public const string PhononGgufRuntimeId = "phonon-2-gguf";
+    public const string PhononGgufQ8RuntimeId = "phonon-2-gguf-q8";
     public const string PocketGgufRuntimeId = "pocket-tts-gguf";
+    public const string PocketGgufQ8RuntimeId = "pocket-tts-gguf-q8";
     public const string QwenGgufRuntimeId = "qwen3-tts-0.6b-base-gguf";
     public const string ChatterboxGgufRuntimeId = "chatterbox-turbo-gguf";
+    public const string ChatterboxGgufQ8RuntimeId = "chatterbox-turbo-gguf-q8";
 
     private const string PhononDisplayName = "Phonon 2 · BPS packed (Python)";
     private const string PocketDisplayName = "Pocket TTS · safetensors, no voice cloning (Python)";
@@ -25,9 +28,12 @@ public sealed class DysonSpeechModelRepository(
     private const string ChatterboxDisplayName = "Chatterbox Turbo (English only) · safetensors (Python)";
     private const string NemotronDisplayName = "Nemotron 3.5 ASR 0.6B · GGUF Q5_K_M, streaming (560 MB)";
     private const string PhononGgufDisplayName = "Phonon 2 · GGUF Q4_K (402 MB)";
+    private const string PhononGgufQ8DisplayName = "Phonon 2 · GGUF Q8_0 (674 MB)";
     private const string PocketGgufDisplayName = "Pocket TTS · GGUF Q4_K, voice cloning (73 MB)";
+    private const string PocketGgufQ8DisplayName = "Pocket TTS · GGUF Q8_0, voice cloning (124 MB)";
     private const string QwenGgufDisplayName = "Qwen3-TTS 0.6B Base · GGUF Q8_0 + F16 codec (1.34 GB)";
     private const string ChatterboxGgufDisplayName = "Chatterbox Turbo (English only) · GGUF Q4_K (735 MB)";
+    private const string ChatterboxGgufQ8DisplayName = "Chatterbox Turbo (English only) · GGUF Q8_0 (1.03 GB)";
 
     private static readonly (string RuntimeId, string DisplayName, DysonSpeechCapability Capability, string RuntimeKind, bool SupportsVoicePrompt)[] BuiltIns =
     [
@@ -37,9 +43,12 @@ public sealed class DysonSpeechModelRepository(
         (ChatterboxRuntimeId, ChatterboxDisplayName, DysonSpeechCapability.Output, "chatterbox", true),
         (NemotronRuntimeId, NemotronDisplayName, DysonSpeechCapability.Input, "gguf", false),
         (PhononGgufRuntimeId, PhononGgufDisplayName, DysonSpeechCapability.Input, "gguf", false),
+        (PhononGgufQ8RuntimeId, PhononGgufQ8DisplayName, DysonSpeechCapability.Input, "gguf", false),
         (PocketGgufRuntimeId, PocketGgufDisplayName, DysonSpeechCapability.Output, "gguf", true),
+        (PocketGgufQ8RuntimeId, PocketGgufQ8DisplayName, DysonSpeechCapability.Output, "gguf", true),
         (QwenGgufRuntimeId, QwenGgufDisplayName, DysonSpeechCapability.Output, "gguf", true),
         (ChatterboxGgufRuntimeId, ChatterboxGgufDisplayName, DysonSpeechCapability.Output, "gguf", true),
+        (ChatterboxGgufQ8RuntimeId, ChatterboxGgufQ8DisplayName, DysonSpeechCapability.Output, "gguf", true),
     ];
 
     private readonly DysonDbAccessor _accessor = accessor ?? throw new ArgumentNullException(nameof(accessor));
