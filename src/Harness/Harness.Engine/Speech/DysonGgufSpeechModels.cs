@@ -65,6 +65,12 @@ public static class DysonGgufSpeechModels
 
     public static string GetCrispExe(string installRoot) => Path.Combine(GetCrispRuntimeDir(installRoot), "crispasr.exe");
 
+    /// <summary>CrispASR Vulkan build (<c>crispasr-windows-x86_64-vulkan.zip</c>). It does not fall back to CPU.</summary>
+    public static string GetCrispVulkanRuntimeDir(string installRoot) => Path.Combine(installRoot, "crispasr-vulkan");
+
+    public static string GetCrispVulkanExe(string installRoot) =>
+        Path.Combine(GetCrispVulkanRuntimeDir(installRoot), "crispasr.exe");
+
     /// <summary>transcribe.cpp native folder (<c>transcribe.dll</c> + ggml modules), inside the Nemotron folder.</summary>
     public static string GetNemotronRuntimeDir(string installRoot) => Path.Combine(installRoot, "nemotron", "runtime");
 

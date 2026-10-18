@@ -27,7 +27,9 @@ public sealed record DysonSpeechInstallStep(
 /// <summary>
 /// File-level install state of the speech tree (DB rows mirror this at commit). <see cref="RuntimeInstalled"/> is the
 /// shared CPython + torch; each Python model is installed only on top of it. Ids in <see cref="GgufInstalled"/> are
-/// independent: a tree with only <c>install-gguf.json</c> can report a GGUF model installed.
+/// independent: a tree with only <c>install-gguf.json</c> can report a GGUF model installed. <see cref="CrispCpuInstalled"/> /
+/// <see cref="CrispVulkanInstalled"/>: that runtime's stamp equals the manifest sha and its <c>crispasr.exe</c> exists.
+/// A CrispASR model needs only the CPU runtime to count as installed.
 /// </summary>
 public sealed record DysonSpeechInstallStatus(
     bool RuntimeInstalled,
@@ -36,7 +38,9 @@ public sealed record DysonSpeechInstallStatus(
     bool QwenInstalled,
     bool ChatterboxInstalled,
     string? Note,
-    IReadOnlyCollection<string>? GgufInstalled = null)
+    IReadOnlyCollection<string>? GgufInstalled = null,
+    bool CrispCpuInstalled = false,
+    bool CrispVulkanInstalled = false)
 {
     public static DysonSpeechInstallStatus None(string? note) => new(false, false, false, false, false, note);
 
@@ -69,7 +73,7 @@ public sealed class DysonSpeechInstaller
     internal const long QwenBytes = 683_576_361 + 2_516_100_892 + QwenWheelhouseBytes;
     internal const long ChatterboxBytes = 665_031_080 + 2_987_680_596 + ChatterboxWheelhouseBytes;
     internal const long NemotronBytes = 650_000_000; // archive 18,036,555 + weights 559,647,200 + extracted native
-    internal const long CrispAsrBytes = 60_000_000;
+    internal const long CrispAsrBytes = 60_000_000; // CPU zip 9,088,774 + Vulkan zip 35,991,946 + extracted
     internal const long PhononGgufBytes = 402_226_656;
     internal const long PocketGgufBytes = 72_645_472;
     internal const long QwenGgufBytes = 985_716_544 + 358_453_280;
@@ -113,6 +117,9 @@ public sealed class DysonSpeechInstaller
 
     private static readonly string[] CrispSteps = ["crispasr-download", "crispasr-hash", "crispasr-extract"];
 
+    private static readonly string[] CrispVulkanSteps =
+        ["crispasr-vulkan-download", "crispasr-vulkan-hash", "crispasr-vulkan-extract"];
+
     private static readonly Dictionary<string, string[]> ModelSteps = new()
     {
         [DysonPhononSpeech.Id] =
@@ -147,12 +154,14 @@ public sealed class DysonSpeechInstaller
 
     /// <summary>Every step in run order. A run emits only <see cref="PlanSteps"/>; skipped steps are not emitted.</summary>
     public static readonly IReadOnlyList<string> StepIds =
-        ["preflight", .. RuntimeSteps, .. CrispSteps, .. ModelIds.SelectMany(id => ModelSteps[id]), .. TailSteps];
+        ["preflight", .. RuntimeSteps, .. CrispSteps, .. CrispVulkanSteps, .. ModelIds.SelectMany(id => ModelSteps[id]), .. TailSteps];
 
     internal const string BridgeResourceName = "DysonHarness.Speech.bridge.py";
     internal const string CatalogVoiceId = "alba";
     private const string GgufStampFileName = "install-gguf.json";
     private const string CrispStampKey = "crispasr";
+    private const string CrispVulkanStampKey = "crispasr-vulkan";
+    internal const string CrispVulkanMissingNote = "CrispASR Vulkan runtime is missing. Use Repair CrispASR runtimes.";
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
 
     private const string PhononUnpackScript =
@@ -199,6 +208,35 @@ public sealed class DysonSpeechInstaller
             yield break;
         }
 
+        await foreach (var step in RunGatedAsync(models, settings, modelIds.Distinct().ToList(), repair: false, cancellationToken)
+                           .ConfigureAwait(false))
+            yield return step;
+    }
+
+    /// <summary>
+    /// Re-downloads only a CrispASR runtime (CPU or Vulkan) whose <c>crispasr.exe</c> is missing or whose stamp is not
+    /// the current manifest sha (<see cref="PlanRepairSteps"/>), extracts it into its own folder, swaps only that folder,
+    /// and writes only its stamp key. No weights, no python, no hashing of installed trees. Same gate and step stream
+    /// as <see cref="InstallAsync"/>; both runtimes ok ⇒ preflight "Already installed.".
+    /// </summary>
+    public async IAsyncEnumerable<DysonSpeechInstallStep> RepairCrispRuntimesAsync(
+        IDysonSpeechModelRepository models,
+        IDysonSubjectSettingsRepository settings,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(models);
+        ArgumentNullException.ThrowIfNull(settings);
+        await foreach (var step in RunGatedAsync(models, settings, [], repair: true, cancellationToken).ConfigureAwait(false))
+            yield return step;
+    }
+
+    private async IAsyncEnumerable<DysonSpeechInstallStep> RunGatedAsync(
+        IDysonSpeechModelRepository models,
+        IDysonSubjectSettingsRepository settings,
+        IReadOnlyList<string> requested,
+        bool repair,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         if (!_gate.Wait(0))
         {
             yield return new DysonSpeechInstallStep("preflight", DysonSpeechStepState.Failed, "An install is already running.");
@@ -210,7 +248,7 @@ public sealed class DysonSpeechInstaller
         {
             try
             {
-                await new Pipeline(this, models, settings, modelIds.Distinct().ToList(), channel.Writer, cancellationToken)
+                await new Pipeline(this, models, settings, requested, repair, channel.Writer, cancellationToken)
                     .RunAsync().ConfigureAwait(false);
             }
             finally
@@ -305,7 +343,11 @@ public sealed class DysonSpeechInstaller
                     var crisp = DeleteTree(DysonGgufSpeechModels.GetCrispRuntimeDir(InstallRoot));
                     if (crisp.IsError)
                         return crisp;
+                    var vulkan = DeleteTree(DysonGgufSpeechModels.GetCrispVulkanRuntimeDir(InstallRoot));
+                    if (vulkan.IsError)
+                        return vulkan;
                     gguf.Remove(CrispStampKey);
+                    gguf.Remove(CrispVulkanStampKey);
                 }
 
                 return WriteGgufStamp(InstallRoot, gguf);
@@ -323,7 +365,8 @@ public sealed class DysonSpeechInstaller
 
     /// <summary>
     /// The steps one run executes: preflight; python/torch only when a non-GGUF model is missing and the runtime is
-    /// missing; CrispASR only when a CrispASR model is missing and no CrispASR model is already installed; each
+    /// missing; CrispASR CPU only when a CrispASR model is missing and no CrispASR model is already installed; CrispASR
+    /// Vulkan when a CrispASR model is missing and <see cref="DysonSpeechInstallStatus.CrispVulkanInstalled"/> is false; each
     /// requested model that is not installed; then licenses, commit, smoke when anything above runs. Pure.
     /// <paramref name="adopt"/> null keeps today's list. A non-null value drops downloads <see cref="Adopt"/> already
     /// matched. Licenses, commit, and smoke stay when a stamp still has to be written after pip or python extract.
@@ -341,6 +384,7 @@ public sealed class DysonSpeechInstaller
             "preflight",
             .. !status.RuntimeInstalled && buildPython ? RuntimeSteps : Array.Empty<string>(),
             .. missing.Any(DysonGgufSpeechModels.IsCrisp) && !CrispasrInstalled(status) ? CrispSteps : Array.Empty<string>(),
+            .. missing.Any(DysonGgufSpeechModels.IsCrisp) && !status.CrispVulkanInstalled ? CrispVulkanSteps : Array.Empty<string>(),
             .. missing.SelectMany(id => ModelSteps[id]),
             .. TailSteps,
         ];
@@ -357,7 +401,7 @@ public sealed class DysonSpeechInstaller
             return true;
         if (adopt.SkipTorchWheel && !adopt.PipTorchDeps && step.StartsWith("torch-", StringComparison.Ordinal))
             return true;
-        if (adopt.SkipCrisp && step.StartsWith("crispasr-", StringComparison.Ordinal))
+        if (adopt.SkipCrisp && CrispSteps.Contains(step))
             return true;
         foreach (var id in adopt.SkipWeightIds)
         {
@@ -377,6 +421,21 @@ public sealed class DysonSpeechInstaller
         return true;
     }
 
+    /// <summary>
+    /// Repair plan: each CrispASR runtime that is not ok (exe missing, stamp key missing, or not the manifest sha) gets
+    /// its download / hash / extract trio, then <c>commit</c>. Both ok ⇒ <c>["preflight"]</c>. Pure.
+    /// </summary>
+    internal static IReadOnlyList<string> PlanRepairSteps(DysonSpeechInstallStatus status) =>
+        status.CrispCpuInstalled && status.CrispVulkanInstalled
+            ? ["preflight"]
+            :
+            [
+                "preflight",
+                .. status.CrispCpuInstalled ? Array.Empty<string>() : CrispSteps,
+                .. status.CrispVulkanInstalled ? Array.Empty<string>() : CrispVulkanSteps,
+                "commit",
+            ];
+
     /// <summary>A CrispASR model in <see cref="DysonSpeechInstallStatus.GgufInstalled"/> means the shared runtime is present.</summary>
     private static bool CrispasrInstalled(DysonSpeechInstallStatus status) =>
         status.GgufInstalled?.Any(DysonGgufSpeechModels.IsCrisp) == true;
@@ -393,9 +452,10 @@ public sealed class DysonSpeechInstaller
                 crisp = true;
         }
 
-        // ponytail: without adopt, CrispASR bytes are added even when crispasr is already installed.
-        // A pip-only repair (weights skipped) reserves nothing for that model. Upgrade: add wheelhouse sizes.
-        if (crisp && adopt?.SkipCrisp != true)
+        // ponytail: the CrispASR floor covers both zips (CPU + Vulkan) and is still added whenever a CrispASR id is
+        // requested, even when one or both runtimes are installed. A pip-only repair (weights skipped) reserves nothing
+        // for that model. Upgrade: add wheelhouse sizes.
+        if (crisp)
             models += CrispAsrBytes;
         return 2 * ((runtime ? RuntimeBytes : 0) + models);
     }
@@ -473,8 +533,26 @@ public sealed class DysonSpeechInstaller
     {
         var python = ProbePython(installRoot, manifest);
         var gguf = ProbeGguf(installRoot, manifest);
-        return gguf.Count == 0 ? python : python with { GgufInstalled = gguf };
+        var stamp = ReadGgufStamp(installRoot);
+        manifest.Rids.TryGetValue(SupportedRid, out var rid);
+        var vulkan = CrispRuntimeOk(stamp, CrispVulkanStampKey, rid?.CrispasrVulkan, DysonGgufSpeechModels.GetCrispVulkanExe(installRoot));
+        var status = python with
+        {
+            GgufInstalled = gguf.Count == 0 ? null : gguf,
+            CrispCpuInstalled = CrispRuntimeOk(stamp, CrispStampKey, rid?.CrispasrRuntime, DysonGgufSpeechModels.GetCrispExe(installRoot)),
+            CrispVulkanInstalled = vulkan,
+        };
+        return !vulkan && gguf.Any(DysonGgufSpeechModels.IsCrisp) ? status with { Note = CrispVulkanMissingNote } : status;
     }
+
+    /// <summary>Stamp <paramref name="key"/> equals the manifest sha and <paramref name="exe"/> exists. Does not hash.</summary>
+    private static bool CrispRuntimeOk(
+        IReadOnlyDictionary<string, string>? stamp, string key, DysonSpeechFile? pin, string exe) =>
+        stamp is not null
+        && pin is not null
+        && stamp.TryGetValue(key, out var got)
+        && string.Equals(got, pin.Sha256, StringComparison.Ordinal)
+        && File.Exists(exe);
 
     private static DysonSpeechInstallStatus ProbePython(string installRoot, DysonSpeechManifest m)
     {
@@ -746,10 +824,7 @@ public sealed class DysonSpeechInstaller
         if (stamp is null || stamp.Count == 0)
             return [];
 
-        var crispOk = stamp.TryGetValue(CrispStampKey, out var crispPin)
-            && rid.CrispasrRuntime is not null
-            && string.Equals(crispPin, rid.CrispasrRuntime.Sha256, StringComparison.Ordinal)
-            && File.Exists(DysonGgufSpeechModels.GetCrispExe(installRoot));
+        var crispOk = CrispRuntimeOk(stamp, CrispStampKey, rid.CrispasrRuntime, DysonGgufSpeechModels.GetCrispExe(installRoot));
         var installed = new List<string>();
         foreach (var id in DysonGgufSpeechModels.AllIds)
         {
@@ -1137,6 +1212,7 @@ public sealed class DysonSpeechInstaller
         IDysonSpeechModelRepository models,
         IDysonSubjectSettingsRepository settings,
         IReadOnlyList<string> requested,
+        bool repair,
         ChannelWriter<DysonSpeechInstallStep> writer,
         CancellationToken ct)
     {
@@ -1155,6 +1231,7 @@ public sealed class DysonSpeechInstaller
         private bool _swapPython;
         private bool _swapTorch;
         private bool _swapCrisp;
+        private bool _swapCrispVulkan;
         private bool _committed;
         private string? _doneDetail;
 
@@ -1172,6 +1249,7 @@ public sealed class DysonSpeechInstaller
             var chatterboxWheels = Path.Combine(Downloads, "chatterbox-wheelhouse");
             var chatterboxModel = Path.Combine(Downloads, "chatterbox-model");
             var crispZip = Path.Combine(Downloads, "crispasr");
+            var crispVulkanZip = Path.Combine(Downloads, "crispasr-vulkan");
             var nemotronFiles = Path.Combine(Downloads, "nemotron");
             var phononGgufFiles = Path.Combine(Downloads, "phonon-gguf");
             var pocketGgufFiles = Path.Combine(Downloads, "pocket-gguf");
@@ -1192,7 +1270,10 @@ public sealed class DysonSpeechInstaller
                 ("torch-install", _ => PipInstallAsync("torch-install", TorchPlanFiles(), torchWheels, TorchInstallDir(), keepWheelhouseIn: null)),
                 ("crispasr-download", p => DownloadOneAsync("crispasr-download", _m.CrispasrRuntime, crispZip, p)),
                 ("crispasr-hash", _ => VerifyOneAsync("crispasr-hash", _m.CrispasrRuntime, crispZip)),
-                ("crispasr-extract", _ => ExtractCrispasrAsync(crispZip)),
+                ("crispasr-extract", _ => Task.FromResult(ExtractCrispasr("crispasr-extract", _m.CrispasrRuntime, crispZip, DysonGgufSpeechModels.GetCrispRuntimeDir(Tree)))),
+                ("crispasr-vulkan-download", p => DownloadOneAsync("crispasr-vulkan-download", _m.CrispasrVulkan, crispVulkanZip, p)),
+                ("crispasr-vulkan-hash", _ => VerifyOneAsync("crispasr-vulkan-hash", _m.CrispasrVulkan, crispVulkanZip)),
+                ("crispasr-vulkan-extract", _ => Task.FromResult(ExtractCrispasr("crispasr-vulkan-extract", _m.CrispasrVulkan, crispVulkanZip, DysonGgufSpeechModels.GetCrispVulkanRuntimeDir(Tree)))),
                 ("phonon-wheels-download", p => DownloadAllAsync("phonon-wheels-download", _m.PhononWheels, phononWheels, p)),
                 ("phonon-wheels-hash", _ => VerifyAllAsync("phonon-wheels-hash", _m.PhononWheels, phononWheels)),
                 ("phonon-wheels-install", _ => PipInstallAsync("phonon-wheels-install", _m.PhononWheels, phononWheels, DysonSpeechPaths.GetPhononSite(InstallTree(DysonPhononSpeech.Id)), Path.Combine(InstallTree(DysonPhononSpeech.Id), "phonon", "wheelhouse"))),
@@ -1252,6 +1333,10 @@ public sealed class DysonSpeechInstaller
                 if (_plan.Contains(id) && !await StepAsync(id, work))
                     return;
             }
+
+            // A repair has no smoke step, which is what cleans staging after an install.
+            if (_committed && !_plan.Contains("smoke"))
+                DeleteTree(Staging);
         }
 
         private async Task<bool> StepAsync(
@@ -1298,9 +1383,16 @@ public sealed class DysonSpeechInstaller
             _m = rid;
 
             _before = Probe(_root);
-            _adopt = Adopt(_root, _manifest, _before, requested);
-            _before = _adopt.Status;
-            _plan = PlanSteps(_before, requested, _adopt);
+            if (repair)
+            {
+                _plan = PlanRepairSteps(_before);
+            }
+            else
+            {
+                _adopt = Adopt(_root, _manifest, _before, requested);
+                _before = _adopt.Status;
+                _plan = PlanSteps(_before, requested, _adopt);
+            }
             if (_plan.Count == 1)
             {
                 var sync = await SyncDbAsync().ConfigureAwait(false);
@@ -1314,6 +1406,7 @@ public sealed class DysonSpeechInstaller
             _swapPython = _plan.Contains("python-extract");
             _swapTorch = _plan.Contains("torch-install") && !_adopt.SkipTorchWheel;
             _swapCrisp = _plan.Contains("crispasr-extract");
+            _swapCrispVulkan = _plan.Contains("crispasr-vulkan-extract");
             foreach (var id in _building)
             {
                 if (DysonGgufSpeechModels.IsGguf(id) && !GgufAvailable(_m, id))
@@ -1323,7 +1416,7 @@ public sealed class DysonSpeechInstaller
             Directory.CreateDirectory(_root);
             var downloadRuntime = _plan.Contains("python-download")
                 || (_plan.Contains("torch-download") && !_adopt.SkipTorchWheel);
-            var need = RequiredFreeBytes(downloadRuntime, _building, _adopt);
+            var need = repair ? 2 * CrispAsrBytes : RequiredFreeBytes(downloadRuntime, _building, _adopt);
             var free = new DriveInfo(Path.GetPathRoot(_root)!).AvailableFreeSpace;
             if (free < need)
                 return new VoidResult<string>($"preflight: needs {need:N0} free bytes on {Path.GetPathRoot(_root)}, has {free:N0}.");
@@ -1468,19 +1561,19 @@ public sealed class DysonSpeechInstaller
             return files;
         }
 
-        private async Task<VoidResult<string>> ExtractCrispasrAsync(string zipDir)
+        /// <summary>Unzips one CrispASR runtime and flattens it into <paramref name="dest"/> (a staged runtime folder).</summary>
+        private VoidResult<string> ExtractCrispasr(string stepId, DysonSpeechFile? file, string zipDir, string dest)
         {
-            var file = _m.CrispasrRuntime;
             if (file is null)
-                return new VoidResult<string>("crispasr-extract: not available for this platform.");
+                return new VoidResult<string>($"{stepId}: not available for this platform.");
 
-            var extracted = Path.Combine(Staging, "crispasr-zip");
+            var extracted = Path.Combine(Staging, Path.GetFileName(dest) + "-zip");
             var clean = DeleteTree(extracted);
             if (clean.IsError)
-                return new VoidResult<string>("crispasr-extract: " + clean.Error);
+                return new VoidResult<string>($"{stepId}: " + clean.Error);
             Directory.CreateDirectory(extracted);
             ZipFile.ExtractToDirectory(Path.Combine(zipDir, file.FileName), extracted);
-            return FlattenMove(extracted, DysonGgufSpeechModels.GetCrispRuntimeDir(Tree), "crispasr-extract", "crispasr.exe");
+            return FlattenMove(extracted, dest, stepId, "crispasr.exe");
         }
 
         private async Task<VoidResult<string>> UnpackNemotronAsync(string downloadDir)
@@ -1689,6 +1782,7 @@ public sealed class DysonSpeechInstaller
                 .. _swapPython ? ["python"] : Array.Empty<string>(),
                 .. _swapTorch ? ["torch"] : Array.Empty<string>(),
                 .. _swapCrisp ? ["crispasr"] : Array.Empty<string>(),
+                .. _swapCrispVulkan ? ["crispasr-vulkan"] : Array.Empty<string>(),
                 .. _building.Where(SwapBuiltDir).Select(ModelDir),
             ];
             var swap = Swap(dirs);
@@ -1716,11 +1810,13 @@ public sealed class DysonSpeechInstaller
                 }
             }
 
-            if (ggufBuilding.Count > 0 || _swapCrisp)
+            if (ggufBuilding.Count > 0 || _swapCrisp || _swapCrispVulkan)
             {
                 var gguf = ReadGgufStamp(_root) ?? new Dictionary<string, string>(StringComparer.Ordinal);
                 if (_swapCrisp && _m.CrispasrRuntime is not null)
                     gguf[CrispStampKey] = _m.CrispasrRuntime.Sha256;
+                if (_swapCrispVulkan && _m.CrispasrVulkan is not null)
+                    gguf[CrispVulkanStampKey] = _m.CrispasrVulkan.Sha256;
                 foreach (var id in ggufBuilding)
                 {
                     var pin = GgufPin(_m, id);

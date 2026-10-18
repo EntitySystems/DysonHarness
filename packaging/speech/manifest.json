@@ -1308,6 +1308,12 @@
         "size": 9088774,
         "sha256": "997bc39f541e5d5d0bd14144159c038bd95d6ab8b523718c34a54e03ab404f47"
       },
+      "crispasrVulkan": {
+        "fileName": "crispasr-windows-x86_64-vulkan.zip",
+        "url": "https://github.com/CrispStrobe/CrispASR/releases/download/v0.8.43/crispasr-windows-x86_64-vulkan.zip",
+        "size": 35991946,
+        "sha256": "9294c7c6cca319714da2ae913a8839d81d53e2e9583020162ff9573c47654fc8"
+      },
       "phononGguf": {
         "fileName": "phonon2-q4_k.gguf",
         "url": "https://huggingface.co/cstr/phonon2-GGUF/resolve/3ed3e6ad6e7ce63affffeede37328ff756efaa2f/phonon2-q4_k.gguf",

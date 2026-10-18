@@ -84,7 +84,7 @@
                     disabled="@(_busy || _selected.Count == 0)"
                     aria-busy="@_installing"
                     @onclick="InstallAsync">
-                @(_installing ? "Installing…" : "Install selected")
+                @(_installing && !_repairing ? "Installing…" : "Install selected")
             </button>
             @if (_installing)
             {
@@ -115,6 +115,29 @@
             </ol>
         }
     </div>
+
+    @if (AnyCrispInstalled)
+    {
+        <div class="settings-page__panel panel voice-active">
+            <div class="tool-panel__title">CrispASR device</div>
+            <div class="voice-active__options" role="radiogroup" aria-label="CrispASR device">
+                <label class="voice-active__option">
+                    <input type="radio" name="voice-crisp-device" value="cpu" checked="@(!_crispGpu)"
+                           disabled="@_busy" @onchange="() => SetCrispDeviceAsync(false)" />
+                    <span>CPU</span>
+                </label>
+                <label class="voice-active__option">
+                    <input type="radio" name="voice-crisp-device" value="gpu" checked="@_crispGpu"
+                           disabled="@_busy" @onchange="() => SetCrispDeviceAsync(true)" />
+                    <span>GPU (Vulkan)</span>
+                </label>
+            </div>
+            <div class="btn-row">
+                <button type="button" class="btn btn-ghost" disabled="@_busy" aria-busy="@_repairing"
+                        @onclick="RepairCrispAsync">@(_repairing ? "Repairing…" : "Repair CrispASR runtimes")</button>
+            </div>
+        </div>
+    }
 
     @if (InstalledStt.Count > 0 || _inputError is not null)
     {
@@ -298,6 +321,8 @@
     private CancellationTokenSource? _cts;
     private bool _busy;
     private bool _installing;
+    private bool _repairing;
+    private bool _crispGpu;
     private bool _training;
     private bool _disposed;
     private string? _error;
@@ -342,6 +367,8 @@
 
     private bool AnyInstalled => _rows.Any(r => r.IsInstalled) || _probe?.RuntimeInstalled == true;
 
+    private bool AnyCrispInstalled => _rows.Any(r => r.IsInstalled && DysonGgufSpeechModels.CrispIds.Contains(r.RuntimeId));
+
     protected override async Task OnInitializedAsync()
     {
         _tryout = Services.GetService<DysonSpeechTryout>();
@@ -374,6 +401,9 @@
             _seenTrainModelId = _activeId;
         }
 
+        var crispDevice = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechCrispDevice);
+        _crispGpu = crispDevice.IsSuccess && string.Equals(crispDevice.Value?.Trim(), "gpu", StringComparison.OrdinalIgnoreCase);
+
         var inputSetting = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechInputModelId);
         _inputSetting = inputSetting.IsSuccess ? inputSetting.Value : null;
         var input = await Stt.ResolveActiveAsync();
@@ -397,7 +427,25 @@
             _selected.Remove(id);
     }
 
-    private async Task InstallAsync()
+    private Task InstallAsync() => StreamStepsAsync(ct => Installer.InstallAsync(SpeechModels, Settings, _selected.ToList(), ct));
+
+    private async Task RepairCrispAsync()
+    {
+        _repairing = true;
+        try
+        {
+            await StreamStepsAsync(ct => Installer.RepairCrispRuntimesAsync(SpeechModels, Settings, ct));
+        }
+        finally
+        {
+            _repairing = false;
+        }
+    }
+
+    private async Task SetCrispDeviceAsync(bool gpu) =>
+        await RunAsync(() => Settings.SetSettingAsync(DysonAppSettingKeys.SpeechCrispDevice, gpu ? "gpu" : "cpu"));
+
+    private async Task StreamStepsAsync(Func<CancellationToken, IAsyncEnumerable<DysonSpeechInstallStep>> run)
     {
         _error = null;
         _trainResult = null;
@@ -407,7 +455,7 @@
         _busy = _installing = true;
         try
         {
-            await foreach (var step in Installer.InstallAsync(SpeechModels, Settings, _selected.ToList(), _cts.Token))
+            await foreach (var step in run(_cts.Token))
             {
                 if (_disposed)
                     continue;

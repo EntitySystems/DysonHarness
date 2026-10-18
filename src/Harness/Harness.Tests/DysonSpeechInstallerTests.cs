@@ -133,6 +133,7 @@ public class DysonSpeechInstallerTests
         Assert.Equal(
             [
                 "preflight", "crispasr-download", "crispasr-hash", "crispasr-extract",
+                "crispasr-vulkan-download", "crispasr-vulkan-hash", "crispasr-vulkan-extract",
                 "pocket-gguf-download", "pocket-gguf-hash", "pocket-gguf-unpack",
                 "licenses", "commit", "smoke",
             ],
@@ -142,12 +143,83 @@ public class DysonSpeechInstallerTests
         var crispPresent = new DysonSpeechInstallStatus(
             false, false, false, false, false, null, GgufInstalled: [DysonGgufSpeechModels.PocketGgufId]);
         var qwen = DysonSpeechInstaller.PlanSteps(crispPresent, [DysonGgufSpeechModels.QwenGgufId]);
-        Assert.DoesNotContain(qwen, s => s.StartsWith("crispasr-", StringComparison.Ordinal));
+        Assert.DoesNotContain("crispasr-download", qwen);
+        Assert.Contains("crispasr-vulkan-download", qwen);
+        Assert.Contains("crispasr-vulkan-hash", qwen);
+        Assert.Contains("crispasr-vulkan-extract", qwen);
         Assert.Contains("qwen-gguf-download", qwen);
         Assert.Contains("qwen-gguf-unpack", qwen);
         Assert.DoesNotContain(qwen, s => s.StartsWith("python-", StringComparison.Ordinal));
 
         Assert.Equal(["preflight"], DysonSpeechInstaller.PlanSteps(crispPresent, [DysonGgufSpeechModels.PocketGgufId]));
+
+        var bothRuntimes = crispPresent with { CrispCpuInstalled = true, CrispVulkanInstalled = true };
+        Assert.DoesNotContain(
+            DysonSpeechInstaller.PlanSteps(bothRuntimes, [DysonGgufSpeechModels.QwenGgufId]),
+            s => s.StartsWith("crispasr-", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Plan_repair_steps_redownload_only_the_bad_crispasr_runtime()
+    {
+        var pocketGguf = new DysonSpeechInstallStatus(
+            false, false, false, false, false, null, GgufInstalled: [DysonGgufSpeechModels.PocketGgufId], CrispCpuInstalled: true);
+        var vulkanMissing = DysonSpeechInstaller.PlanRepairSteps(pocketGguf);
+        Assert.Equal(
+            ["preflight", "crispasr-vulkan-download", "crispasr-vulkan-hash", "crispasr-vulkan-extract", "commit"],
+            vulkanMissing);
+        Assert.DoesNotContain(vulkanMissing, s => s.Contains("gguf-download", StringComparison.Ordinal));
+
+        var cpuMissing = DysonSpeechInstaller.PlanRepairSteps(
+            pocketGguf with { CrispCpuInstalled = false, CrispVulkanInstalled = true });
+        Assert.Equal(["preflight", "crispasr-download", "crispasr-hash", "crispasr-extract", "commit"], cpuMissing);
+
+        Assert.Equal(
+            ["preflight"],
+            DysonSpeechInstaller.PlanRepairSteps(pocketGguf with { CrispVulkanInstalled = true }));
+    }
+
+    [Fact]
+    public void Crisp_start_info_uses_vulkan_exe_and_gpu_backend_only_for_gpu()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dyson-crisp-start-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var id = DysonGgufSpeechModels.PocketGgufId;
+            var backend = DysonGgufSpeechModels.CrispBackend(id)!;
+            Directory.CreateDirectory(DysonGgufSpeechModels.GetCrispVulkanRuntimeDir(root));
+            File.WriteAllText(DysonGgufSpeechModels.GetCrispVulkanExe(root), "");
+
+            var gpu = DysonCrispSpeech.StartInfo(root, id, backend, 1234, useVulkan: true);
+            Assert.True(gpu.IsSuccess, gpu.IsError ? gpu.Error : null);
+            Assert.Equal(DysonGgufSpeechModels.GetCrispVulkanExe(root), gpu.Value.FileName);
+            var args = gpu.Value.ArgumentList.ToList();
+            var at = args.IndexOf("--gpu-backend");
+            Assert.True(at > args.IndexOf(backend));
+            Assert.Equal("vulkan", args[at + 1]);
+            Assert.DoesNotContain("-dev", args);
+
+            var cpuMissing = DysonCrispSpeech.StartInfo(root, id, backend, 1234, useVulkan: false);
+            Assert.True(cpuMissing.IsError);
+            Assert.Equal(DysonCrispSpeech.CpuRuntimeMissing, cpuMissing.Error);
+
+            Directory.CreateDirectory(DysonGgufSpeechModels.GetCrispRuntimeDir(root));
+            File.WriteAllText(DysonGgufSpeechModels.GetCrispExe(root), "");
+            var cpu = DysonCrispSpeech.StartInfo(root, id, backend, 1234, useVulkan: false);
+            Assert.True(cpu.IsSuccess, cpu.IsError ? cpu.Error : null);
+            Assert.Equal(DysonGgufSpeechModels.GetCrispExe(root), cpu.Value.FileName);
+            Assert.DoesNotContain("--gpu-backend", cpu.Value.ArgumentList);
+
+            File.Delete(DysonGgufSpeechModels.GetCrispVulkanExe(root));
+            var gpuMissing = DysonCrispSpeech.StartInfo(root, id, backend, 1234, useVulkan: true);
+            Assert.True(gpuMissing.IsError);
+            Assert.Equal(DysonCrispSpeech.VulkanRuntimeMissing, gpuMissing.Error);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
@@ -167,6 +239,11 @@ public class DysonSpeechInstallerTests
         Assert.Equal(18_036_555, rid.NemotronNative.Size);
         Assert.Equal(559_647_200, rid.NemotronWeights.Size);
         Assert.DoesNotContain(rid.ChatterboxGguf, f => f.Url.Contains("ResembleAI", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("crispasr-windows-x86_64-cpu.zip", rid.CrispasrRuntime.FileName);
+        Assert.Equal("crispasr-windows-x86_64-vulkan.zip", rid.CrispasrVulkan!.FileName);
+        Assert.Equal(35_991_946, rid.CrispasrVulkan.Size);
+        Assert.Equal("9294c7c6cca319714da2ae913a8839d81d53e2e9583020162ff9573c47654fc8", rid.CrispasrVulkan.Sha256);
+        Assert.StartsWith("https://github.com/CrispStrobe/CrispASR/releases/download/v0.8.43/", rid.CrispasrVulkan.Url);
     }
 
     [Fact]
@@ -199,6 +276,9 @@ public class DysonSpeechInstallerTests
             Assert.True(status.IsInstalled(id));
             Assert.False(status.IsInstalled(DysonGgufSpeechModels.QwenGgufId));
             Assert.False(status.IsInstalled(DysonGgufSpeechModels.NemotronId));
+            Assert.True(status.CrispCpuInstalled);
+            Assert.False(status.CrispVulkanInstalled);
+            Assert.Equal(DysonSpeechInstaller.CrispVulkanMissingNote, status.Note);
         }
         finally
         {

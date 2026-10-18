@@ -242,4 +242,10 @@ public static class DysonAppSettingKeys
     /// listed is not swapped for another microphone.
     /// </summary>
     public const string SpeechInputDeviceId = "speech_input_device_id";
+
+    /// <summary>
+    /// CrispASR GGUF sidecar device: <c>cpu</c> or <c>gpu</c> (Vulkan runtime, <c>--gpu-backend vulkan</c>).
+    /// Missing, blank, or any other value ⇒ CPU.
+    /// </summary>
+    public const string SpeechCrispDevice = "speech_crisp_device";
 }

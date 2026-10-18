@@ -27,7 +27,8 @@ public sealed record DysonSpeechRidManifest(
     DysonSpeechFile? PhononGguf = null,
     DysonSpeechFile? PocketGguf = null,
     IReadOnlyList<DysonSpeechFile>? QwenGguf = null,
-    IReadOnlyList<DysonSpeechFile>? ChatterboxGguf = null);
+    IReadOnlyList<DysonSpeechFile>? ChatterboxGguf = null,
+    DysonSpeechFile? CrispasrVulkan = null);
 
 /// <summary>
 /// <c>packaging/speech/manifest.json</c>, embedded in Harness.Engine. Git holds URLs and hashes, never the bytes.
@@ -138,6 +139,7 @@ public sealed partial record DysonSpeechManifest(
         yield return m.NemotronNative;
         yield return m.NemotronWeights;
         yield return m.CrispasrRuntime;
+        yield return m.CrispasrVulkan;
         yield return m.PhononGguf;
         yield return m.PocketGguf;
         if (m.QwenGguf is not null)

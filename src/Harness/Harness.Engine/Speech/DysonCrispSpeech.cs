@@ -30,6 +30,12 @@ public sealed class DysonCrispSpeech(
     private const string QwenNoVoice =
         "No Qwen3-TTS GGUF voice yet. Use Train TTS model in Settings → Voice with a .wav clip and its transcript.";
 
+    internal const string CpuRuntimeMissing =
+        "CrispASR CPU runtime is not installed. Open Settings → Voice and use Repair CrispASR runtimes.";
+
+    internal const string VulkanRuntimeMissing =
+        "CrispASR GPU (Vulkan) runtime is not installed. Open Settings → Voice and use Repair CrispASR runtimes.";
+
     // Distinct from any repository error so a missing Pocket/Chatterbox voice can omit "voice".
     private const string NoVoiceOmit = "\u0001";
 
@@ -42,6 +48,7 @@ public sealed class DysonCrispSpeech(
     private static int _port;
     private static string? _servingId;
     private static string? _servingRoot;
+    private static bool _servingVulkan;
     private static readonly Queue<string> OutputTail = new();
 
     private readonly IDysonSpeechModelRepository _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -75,8 +82,15 @@ public sealed class DysonCrispSpeech(
             yield break;
         }
 
+        var vulkan = await UseVulkanAsync(cancellationToken).ConfigureAwait(false);
+        if (vulkan.IsError)
+        {
+            yield return AudioError(vulkan.Error);
+            yield break;
+        }
+
         var port = await Task.Run(
-                () => AcquireSidecarAsync(_installRoot, _runtimeId, cancellationToken), CancellationToken.None)
+                () => AcquireSidecarAsync(_installRoot, _runtimeId, vulkan.Value, cancellationToken), CancellationToken.None)
             .ConfigureAwait(false);
         if (port.IsError)
         {
@@ -120,8 +134,15 @@ public sealed class DysonCrispSpeech(
             yield break;
         }
 
+        var vulkan = await UseVulkanAsync(cancellationToken).ConfigureAwait(false);
+        if (vulkan.IsError)
+        {
+            yield return Result<DysonSpeechChunk, string>.AsError(vulkan.Error);
+            yield break;
+        }
+
         var result = await Task.Run(
-                () => TranscribeCoreAsync(_installRoot, _runtimeId, audio, cancellationToken), CancellationToken.None)
+                () => TranscribeCoreAsync(_installRoot, _runtimeId, vulkan.Value, audio, cancellationToken), CancellationToken.None)
             .ConfigureAwait(false);
         if (result.IsError)
         {
@@ -225,6 +246,7 @@ public sealed class DysonCrispSpeech(
             _sidecar = null;
             _servingId = null;
             _servingRoot = null;
+            _servingVulkan = false;
             _port = 0;
         }
 
@@ -276,10 +298,20 @@ public sealed class DysonCrispSpeech(
         return Result<string?, string>.AsError(resolved.Error);
     }
 
+    /// <summary><c>speech_crisp_device</c> is <c>gpu</c>. Missing, blank, or any other value is CPU, not an error.</summary>
+    private async Task<Result<bool, string>> UseVulkanAsync(CancellationToken cancellationToken)
+    {
+        var device = await _settings.GetSettingAsync(DysonAppSettingKeys.SpeechCrispDevice, cancellationToken).ConfigureAwait(false);
+        return device.IsError
+            ? Result<bool, string>.AsError(device.Error)
+            : Result<bool, string>.AsValue(string.Equals(device.Value?.Trim(), "gpu", StringComparison.OrdinalIgnoreCase));
+    }
+
     /// <summary>On success the caller owns <see cref="Gate"/> and must release it.</summary>
     private static async Task<Result<int, string>> AcquireSidecarAsync(
         string installRoot,
         string runtimeId,
+        bool useVulkan,
         CancellationToken cancellationToken)
     {
         var installed = RequireInstalled(installRoot, runtimeId);
@@ -297,7 +329,7 @@ public sealed class DysonCrispSpeech(
 
         try
         {
-            var port = await EnsureLockedAsync(installRoot, runtimeId, cancellationToken).ConfigureAwait(false);
+            var port = await EnsureLockedAsync(installRoot, runtimeId, useVulkan, cancellationToken).ConfigureAwait(false);
             if (port.IsError)
                 Gate.Release();
             return port;
@@ -312,9 +344,10 @@ public sealed class DysonCrispSpeech(
     private static async Task<Result<int, string>> EnsureLockedAsync(
         string installRoot,
         string runtimeId,
+        bool useVulkan,
         CancellationToken cancellationToken)
     {
-        if (Serving(installRoot, runtimeId) && await IsHealthyAsync(_port, cancellationToken).ConfigureAwait(false))
+        if (Serving(installRoot, runtimeId, useVulkan) && await IsHealthyAsync(_port, cancellationToken).ConfigureAwait(false))
             return Result<int, string>.AsValue(_port);
 
         StopSidecar();
@@ -325,15 +358,15 @@ public sealed class DysonCrispSpeech(
         if (backend is null)
             return Result<int, string>.AsError($"'{runtimeId}' is not a CrispASR model.");
 
-        var exe = DysonGgufSpeechModels.GetCrispExe(installRoot);
-        if (!File.Exists(exe))
-            return Result<int, string>.AsError(NotInstalled(runtimeId));
-
         var port = FreeLoopbackPort();
+        var start = StartInfo(installRoot, runtimeId, backend, port, useVulkan);
+        if (start.IsError)
+            return Result<int, string>.AsError(start.Error);
+
         try
         {
             Directory.CreateDirectory(DysonGgufSpeechModels.GetVoicesDir(installRoot, runtimeId));
-            var process = Process.Start(StartInfo(installRoot, runtimeId, backend, port));
+            var process = Process.Start(start.Value);
             if (process is null)
                 return Result<int, string>.AsError(VcStart("Could not start crispasr.exe."));
 
@@ -354,6 +387,7 @@ public sealed class DysonCrispSpeech(
                 _port = port;
                 _servingId = runtimeId;
                 _servingRoot = Path.GetFullPath(installRoot);
+                _servingVulkan = useVulkan;
             }
 
             process.OutputDataReceived += keep;
@@ -391,12 +425,22 @@ public sealed class DysonCrispSpeech(
         }
     }
 
-    private static ProcessStartInfo StartInfo(string installRoot, string runtimeId, string backend, int port)
+    /// <summary>
+    /// CPU: <c>crispasr/crispasr.exe</c>. GPU: <c>crispasr-vulkan/crispasr.exe</c> plus <c>--gpu-backend vulkan</c> after
+    /// <c>--backend</c> (the model architecture). The chosen exe missing is an error naming the repair; the other exe is
+    /// never used instead (the Vulkan build does not fall back to CPU, and GPU never silently becomes CPU).
+    /// </summary>
+    internal static Result<ProcessStartInfo, string> StartInfo(
+        string installRoot, string runtimeId, string backend, int port, bool useVulkan)
     {
+        var exe = useVulkan ? DysonGgufSpeechModels.GetCrispVulkanExe(installRoot) : DysonGgufSpeechModels.GetCrispExe(installRoot);
+        if (!File.Exists(exe))
+            return Result<ProcessStartInfo, string>.AsError(useVulkan ? VulkanRuntimeMissing : CpuRuntimeMissing);
+
         var psi = new ProcessStartInfo
         {
-            FileName = DysonGgufSpeechModels.GetCrispExe(installRoot),
-            WorkingDirectory = DysonGgufSpeechModels.GetCrispRuntimeDir(installRoot),
+            FileName = exe,
+            WorkingDirectory = Path.GetDirectoryName(exe)!,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
@@ -409,6 +453,12 @@ public sealed class DysonCrispSpeech(
         psi.ArgumentList.Add(port.ToString(CultureInfo.InvariantCulture));
         psi.ArgumentList.Add("--backend");
         psi.ArgumentList.Add(backend);
+        if (useVulkan)
+        {
+            psi.ArgumentList.Add("--gpu-backend");
+            psi.ArgumentList.Add("vulkan");
+        }
+
         psi.ArgumentList.Add("-m");
         psi.ArgumentList.Add(DysonGgufSpeechModels.GetMainModelFile(installRoot, runtimeId));
         var companion = DysonGgufSpeechModels.GetCompanionFile(installRoot, runtimeId);
@@ -425,7 +475,7 @@ public sealed class DysonCrispSpeech(
         psi.ArgumentList.Add("none");
         psi.ArgumentList.Add("-t");
         psi.ArgumentList.Add(Math.Min(8, Environment.ProcessorCount).ToString(CultureInfo.InvariantCulture));
-        return psi;
+        return Result<ProcessStartInfo, string>.AsValue(psi);
     }
 
     private static async IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> ReadSpeechAsync(
@@ -515,6 +565,7 @@ public sealed class DysonCrispSpeech(
     private static async Task<Result<IReadOnlyList<DysonSpeechChunk>, string>> TranscribeCoreAsync(
         string installRoot,
         string runtimeId,
+        bool useVulkan,
         Stream audio,
         CancellationToken cancellationToken)
     {
@@ -544,7 +595,7 @@ public sealed class DysonCrispSpeech(
                     return Result<IReadOnlyList<DysonSpeechChunk>, string>.AsError("Audio clip is empty.");
             }
 
-            var port = await AcquireSidecarAsync(installRoot, runtimeId, cancellationToken).ConfigureAwait(false);
+            var port = await AcquireSidecarAsync(installRoot, runtimeId, useVulkan, cancellationToken).ConfigureAwait(false);
             if (port.IsError)
                 return Result<IReadOnlyList<DysonSpeechChunk>, string>.AsError(port.Error);
             held = true;
@@ -904,9 +955,10 @@ public sealed class DysonCrispSpeech(
         _ => runtimeId,
     };
 
-    private static bool Serving(string installRoot, string runtimeId) =>
+    private static bool Serving(string installRoot, string runtimeId, bool useVulkan) =>
         Alive(_sidecar)
         && string.Equals(_servingId, runtimeId, StringComparison.Ordinal)
+        && _servingVulkan == useVulkan
         && string.Equals(_servingRoot, Path.GetFullPath(installRoot), StringComparison.OrdinalIgnoreCase);
 
     private static bool Alive(Process? process)

@@ -26,7 +26,7 @@ written to `licenses/NOTICES.md` in the speech folder.
 - Other wheels keep their own license files in each wheel's `dist-info`.
 - transcribe.cpp v0.4.0 (MIT, Copyright (c) 2026 The transcribe.cpp authors; includes ggml MIT, miniz, and silero_vad). Native Windows cpu-vulkan archive, downloaded at install, not in the zip or the MSI.
 - NVIDIA Nemotron 3.5 ASR streaming 0.6B GGUF (OpenMDW-1.1, <https://openmdw.ai/license/1-1/>, `handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf`). Downloaded at install, not redistributed in the zip or the MSI.
-- CrispASR v0.8.43 (MIT, CrispStrobe/CrispASR). Bundles OpenBLAS (BSD-3-Clause) as listed in its `THIRD_PARTY_NOTICES.txt`. Downloaded at install, not in the zip or the MSI.
+- CrispASR v0.8.43 (MIT, CrispStrobe/CrispASR). Bundles OpenBLAS (BSD-3-Clause) as listed in its `THIRD_PARTY_NOTICES.txt`. Both Windows zips (`crispasr-windows-x86_64-cpu.zip` and `crispasr-windows-x86_64-vulkan.zip`) are downloaded at install, not in the zip or the MSI.
 - `cstr/phonon2-GGUF` (CC-BY-4.0, derived from FermionResearch/Phonon-2). Downloaded at install, not redistributed in the zip or the MSI.
 - `cstr/pocket-tts-GGUF` (CC-BY-4.0, weights derived from kyutai/pocket-tts). Downloaded at install, not redistributed in the zip or the MSI.
 - `cstr/qwen3-tts-0.6b-base-GGUF` and `cstr/qwen3-tts-tokenizer-12hz-GGUF` (Apache-2.0, Qwen). Downloaded at install, not redistributed in the zip or the MSI.
