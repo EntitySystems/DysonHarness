@@ -149,6 +149,7 @@ public static class DysonUiWebHost
         builder.Services.AddScoped<ManagedInferenceProviderCatalog>();
 #if WINDOWS
         builder.Services.AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>();
+        builder.Services.AddSingleton<IDysonAudioPlayback, DysonWindowsAudioPlayback>();
 #endif
         builder.Services.AddSingleton<IDysonSessionRuntimeScopeFactory, DysonUiSessionRuntimeScopeFactory>();
         builder.Services.AddSingleton<DysonSessionRuntimeRegistry>();
