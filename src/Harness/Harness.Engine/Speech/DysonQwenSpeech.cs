@@ -6,7 +6,7 @@ namespace DysonHarness;
 /// <summary>
 /// Qwen3-TTS 0.6B Base (<c>Qwen/Qwen3-TTS-12Hz-0.6B-Base</c>) through <c>qwen/bridge.py</c> on the shared CPU torch.
 /// 24 kHz PCM. Base has no built-in speaker: every voice is an enrolled <c>.pt</c> voice prompt (speaker
-/// embedding from one .mp3, x-vector only), never a fine-tune.
+/// embedding from one .mp3 or .wav, x-vector only), never a fine-tune. The clip is not kept.
 /// </summary>
 public sealed class DysonQwenSpeech(
     IDysonSpeechModelRepository models,
@@ -19,7 +19,7 @@ public sealed class DysonQwenSpeech(
     internal const string BridgeResourceName = "DysonHarness.Speech.qwen_bridge.py";
 
     internal const string NoVoiceMessage =
-        "No Qwen3-TTS voice yet. Use Train TTS model in Settings → Voice with a short .mp3 clip.";
+        "No Qwen3-TTS voice yet. Use Train TTS model in Settings → Voice with a short clip.";
 
     private static readonly DysonSpeechBridge Bridge = new("Qwen3-TTS");
 
@@ -58,14 +58,17 @@ public sealed class DysonQwenSpeech(
         }
     }
 
-    /// <summary>Train TTS model: one .mp3 ⇒ a speaker-embedding voice prompt, saved and made the default voice.</summary>
+    /// <summary>
+    /// Train TTS model: one .mp3 or .wav ⇒ a speaker-embedding voice prompt, saved and made the default voice.
+    /// The clip is deleted. A transcript is not used.
+    /// </summary>
     public Task<Result<DysonSpeechVoiceEntity, string>> EnrollVoiceAsync(
         Stream clip,
         string fileName,
         CancellationToken cancellationToken = default) =>
         Bridge.EnrollAsync(
             _models, _settings, _installRoot, Id, DysonSpeechPaths.GetQwenVoicesDir(_installRoot),
-            () => Check(null), StartInfo, clip, fileName, cancellationToken);
+            () => Check(null), StartInfo, clip, fileName, cancellationToken, acceptWav: true);
 
     /// <summary>Kills the bridge if this process started one. Safe to call from app shutdown and uninstall.</summary>
     public static void StopBridge() => Bridge.Stop();

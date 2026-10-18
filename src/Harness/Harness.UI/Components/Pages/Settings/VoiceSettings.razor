@@ -202,14 +202,14 @@
         <div class="settings-page__panel panel voice-train">
             <div class="tool-panel__title">Train TTS model · @active.DisplayName</div>
             <p class="settings-page__copy">@TrainCopy(active.RuntimeId)</p>
-            @if (WavEnrollment(active.RuntimeId))
+            @if (DysonSpeechTryout.ShowsRecordedTrain(active.RuntimeId))
             {
                 <label class="voice-train__consent">
                     <input type="checkbox" @bind="_voiceConsent" disabled="@_busy" />
                     <span>I confirm this is my own voice or I have the speaker's consent.</span>
                 </label>
             }
-            @if (WavEnrollment(active.RuntimeId) && _tryout is not null)
+            @if (DysonSpeechTryout.ShowsRecordedTrain(active.RuntimeId) && _tryout is not null)
             {
                 <p class="voice-train__prompt">Read this aloud: @DysonSpeechTryout.ReadAloudSentence</p>
                 <div class="voice-train__record">
@@ -235,7 +235,7 @@
                            disabled="@(!CanPickTrainClip(active.RuntimeId))" />
                 @if (!_busy && !CanPickTrainClip(active.RuntimeId))
                 {
-                    <p class="settings-page__copy voice__note">@(WavEnrollment(active.RuntimeId) && !_voiceConsent
+                    <p class="settings-page__copy voice__note">@(DysonSpeechTryout.ShowsRecordedTrain(active.RuntimeId) && !_voiceConsent
                         ? "Tick the consent box to choose a clip."
                         : "Enter the exact transcript of the clip to choose a file.")</p>
                 }
@@ -586,7 +586,7 @@
         _busy = _training = true;
         try
         {
-            if (WavEnrollment(_activeId) && !_voiceConsent)
+            if (DysonSpeechTryout.ShowsRecordedTrain(_activeId) && !_voiceConsent)
             {
                 _trainOk = false;
                 _trainResult = "Confirm this is your own voice, or that you have the speaker's consent, before uploading a clip.";
@@ -622,9 +622,10 @@
 
     private bool CanPickTrainClip(string runtimeId) =>
         !_busy
-        && (!WavEnrollment(runtimeId)
+        && (!DysonSpeechTryout.ShowsRecordedTrain(runtimeId)
             || (_voiceConsent
-                && (runtimeId != DysonGgufSpeechModels.QwenGgufId || !string.IsNullOrWhiteSpace(_trainTranscript))));
+                && (!DysonSpeechTryout.RequiresTrainTranscript(runtimeId)
+                    || !string.IsNullOrWhiteSpace(_trainTranscript))));
 
     private static string TrainCopy(string runtimeId) => runtimeId switch
     {
@@ -638,8 +639,8 @@
             "Chatterbox Turbo GGUF clones a voice from one .wav clip (enrollment, not a fine-tune). "
             + "Output keeps CrispASR's AI watermark.",
         DysonQwenSpeech.Id =>
-            "Qwen3-TTS makes a voice from one short .mp3 of clear speech (about 5\u201315 s). This saves a speaker embedding "
-            + "(voice prompt); it does not retrain the model. The clip is not kept.",
+            "Qwen3-TTS makes a voice from one short clip of clear speech (about 5\u201315 s): Record 10 seconds, or one .mp3. "
+            + "This saves a speaker embedding (voice prompt); it does not retrain the model. The clip is not kept.",
         DysonChatterboxSpeech.Id =>
             "Chatterbox Turbo (English only) makes a voice from one .mp3 of clear English speech longer than 5 seconds "
             + "(it uses up to 15 s). This saves a voice prompt (speaker embedding and speech tokens); it does not retrain "

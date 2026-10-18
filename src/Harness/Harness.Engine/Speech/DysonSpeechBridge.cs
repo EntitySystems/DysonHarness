@@ -181,8 +181,9 @@ internal sealed partial class DysonSpeechBridge(string name)
 
     /// <summary>
     /// Train TTS model for engines that make a voice prompt (speaker embedding), never a fine-tune: copies the
-    /// .mp3 to <c>staging/enroll-{guid}.mp3</c>, sends <c>op: enroll</c>, always deletes the clip, then inserts
-    /// the voice row and makes it the default voice. A failed DB step deletes the <c>.pt</c>.
+    /// clip to <c>staging/enroll-{guid}.mp3</c> (or <c>.wav</c> when <paramref name="acceptWav"/>), sends
+    /// <c>op: enroll</c>, always deletes the clip, then inserts the voice row and makes it the default voice.
+    /// A failed DB step deletes the <c>.pt</c>.
     /// </summary>
     public async Task<Result<DysonSpeechVoiceEntity, string>> EnrollAsync(
         IDysonSpeechModelRepository models,
@@ -194,11 +195,19 @@ internal sealed partial class DysonSpeechBridge(string name)
         Func<ProcessStartInfo> startInfo,
         Stream clip,
         string fileName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool acceptWav = false)
     {
         ArgumentNullException.ThrowIfNull(clip);
-        if (!string.Equals(Path.GetExtension(fileName ?? ""), ".mp3", StringComparison.OrdinalIgnoreCase))
-            return Result<DysonSpeechVoiceEntity, string>.AsError("Train TTS model takes one .mp3 file.");
+        var extension = Path.GetExtension(fileName ?? "");
+        var mp3 = extension.Equals(".mp3", StringComparison.OrdinalIgnoreCase);
+        var wav = acceptWav && extension.Equals(".wav", StringComparison.OrdinalIgnoreCase);
+        if (!mp3 && !wav)
+        {
+            return Result<DysonSpeechVoiceEntity, string>.AsError(acceptWav
+                ? "Train TTS model takes one .mp3 or .wav file."
+                : "Train TTS model takes one .mp3 file.");
+        }
 
         var installed = await Task.Run(check, CancellationToken.None).ConfigureAwait(false);
         if (installed.IsError)
@@ -210,7 +219,7 @@ internal sealed partial class DysonSpeechBridge(string name)
         var voiceId = NewVoiceId(fileName!, voices.Value.Select(v => v.VoiceId));
         var outPath = Path.Combine(voicesDir, voiceId + ".pt");
         var staging = Path.Combine(installRoot, "staging");
-        var audioPath = Path.Combine(staging, $"enroll-{Guid.NewGuid():N}.mp3");
+        var audioPath = Path.Combine(staging, $"enroll-{Guid.NewGuid():N}{(mp3 ? ".mp3" : ".wav")}");
 
         VoidResult<string> enroll;
         try

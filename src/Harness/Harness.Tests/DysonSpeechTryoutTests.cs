@@ -170,6 +170,62 @@ public class DysonSpeechTryoutTests
     }
 
     [Fact]
+    public async Task Python_qwen_recorded_enroll_skips_speech_to_text_and_writes_nothing_without_a_runtime()
+    {
+        Assert.True(DysonSpeechTryout.ShowsRecordedTrain(DysonQwenSpeech.Id));
+        Assert.False(DysonSpeechTryout.RequiresTrainTranscript(DysonQwenSpeech.Id));
+        Assert.True(DysonSpeechTryout.ShowsRecordedTrain(DysonGgufSpeechModels.QwenGgufId));
+        Assert.True(DysonSpeechTryout.RequiresTrainTranscript(DysonGgufSpeechModels.QwenGgufId));
+        Assert.False(DysonSpeechTryout.ShowsRecordedTrain(DysonChatterboxSpeech.Id));
+        Assert.False(DysonSpeechTryout.ShowsRecordedTrain(DysonPocketSpeech.Id));
+
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        await using var _ = conn;
+        var repo = DysonTempDb.Speech(accessor);
+        var settings = DysonTempDb.Settings(accessor);
+        Assert.True((await repo.EnsureBuiltInAsync()).IsSuccess);
+        Assert.True((await repo.MarkInstalledAsync(DysonQwenSpeech.Id, "dev")).IsSuccess);
+        var root = Path.Combine(Path.GetTempPath(), "dyson-enroll-qwen-" + Guid.NewGuid().ToString("N"));
+        var stt = new DysonActiveSpeechToText(repo, settings, root);
+        var tts = new DysonActiveTextToSpeech(repo, settings, root);
+        Assert.True((await tts.SetActiveAsync(DysonQwenSpeech.Id)).IsSuccess);
+
+        var emptyCapture = new FakeCapture();
+        var tryout = new DysonSpeechTryout(emptyCapture, new FakeStt(), new FakeTts(), new FakePlayback());
+        var empty = await tryout.EnrollRecordedVoiceAsync(stt, tts, "0", CancellationToken.None);
+        Assert.Equal("The recording was empty, so the voice was not saved.", empty.Error);
+        Assert.Equal(1, emptyCapture.PcmCaptures);
+        Assert.False(Directory.Exists(root));
+        Assert.Empty((await repo.ListVoicesAsync(DysonQwenSpeech.Id)).Value);
+
+        var capture = new FakeCapture();
+        capture.Pcm.Add(Result<byte[], string>.AsValue([1, 0, 2, 0]));
+        tryout = new DysonSpeechTryout(capture, new FakeStt(), new FakeTts(), new FakePlayback());
+        var reached = await tryout.EnrollRecordedVoiceAsync(stt, tts, "0", CancellationToken.None);
+        Assert.Contains("is not installed", reached.Error);
+        Assert.DoesNotContain(".mp3", reached.Error);
+        Assert.NotEqual(
+            "No speech-to-text model is installed. Open Settings → Voice and install one.",
+            reached.Error);
+        Assert.Equal(1, capture.PcmCaptures);
+        Assert.Empty((await repo.ListVoicesAsync(DysonQwenSpeech.Id)).Value);
+        Assert.False(Directory.Exists(Path.Combine(root, "qwen", "voices")));
+        if (Directory.Exists(root))
+            Directory.Delete(root, recursive: true);
+
+        Assert.True((await repo.MarkInstalledAsync(DysonGgufSpeechModels.QwenGgufId, "dev")).IsSuccess);
+        Assert.True((await tts.SetActiveAsync(DysonGgufSpeechModels.QwenGgufId)).IsSuccess);
+        var ggufCapture = new FakeCapture();
+        ggufCapture.Pcm.Add(Result<byte[], string>.AsValue([1, 0]));
+        tryout = new DysonSpeechTryout(ggufCapture, new FakeStt(), new FakeTts(), new FakePlayback());
+        var gguf = await tryout.EnrollRecordedVoiceAsync(stt, tts, "0", CancellationToken.None);
+        Assert.Equal(
+            "No speech-to-text model is installed. Open Settings → Voice and install one.",
+            gguf.Error);
+        Assert.Equal(0, ggufCapture.PcmCaptures);
+    }
+
+    [Fact]
     public async Task Stop_recording_ends_capture_and_a_second_record_is_refused()
     {
         var capture = new FakeCapture { Hold = true };
