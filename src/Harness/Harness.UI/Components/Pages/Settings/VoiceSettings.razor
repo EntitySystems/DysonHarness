@@ -19,7 +19,7 @@
     <h1 class="settings-page__title">Voice</h1>
     <p class="settings-page__copy voice__intro">
         Local speech to text and text to speech. Each install lands on its own in the app-data folder below, not in
-        the app directory. Python installs share one private Python and CPU PyTorch: Phonon 2 uses Fermion BPS packed
+        the app directory. Python installs share one private Python and a CPU or ROCm PyTorch: Phonon 2 uses Fermion BPS packed
         weights, and Pocket TTS, Qwen3-TTS 0.6B Base, and Chatterbox Turbo use safetensors. Qwen3-TTS downloads about
         2.5 GB and is slower than Pocket. Chatterbox Turbo is English only and downloads about 3.0 GB. GGUF installs
         use native Windows runtimes and no Python: Nemotron 3.5 streaming speech to text on transcribe.cpp, and
@@ -140,6 +140,10 @@
             </div>
         </div>
     }
+
+    <div class="settings-page__panel panel">
+        <SpeechTorchDevice />
+    </div>
 
     @if (InstalledStt.Count > 0 || _inputError is not null)
     {
