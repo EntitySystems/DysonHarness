@@ -55,6 +55,8 @@ public sealed class DysonVoiceMode(
     private Task? _loops;
     private string? _speakingText;
     private int _speakEpoch;
+    private CancellationTokenSource? _currentSynth;
+    private CancellationTokenSource? _prefetchSynth;
 
     public bool IsOn { get; private set; }
 
@@ -120,10 +122,6 @@ public sealed class DysonVoiceMode(
         if (device.IsError)
             return new VoidResult<string>(device.Error);
 
-        var names = await _models.GetWakeNamesAsync(cancellationToken).ConfigureAwait(false);
-        if (names.IsError)
-            return new VoidResult<string>(names.Error);
-
         Task? prior;
         lock (_state)
         {
@@ -150,7 +148,7 @@ public sealed class DysonVoiceMode(
             SingleReader = true,
             SingleWriter = false,
         });
-        var listener = new Listener(names.Value);
+        var listener = new Listener();
         lock (_state)
         {
             if (IsOn)
@@ -204,6 +202,7 @@ public sealed class DysonVoiceMode(
         {
         }
 
+        CancelSynths();
         CancelSegment();
         // Driver stop can block. Hop so a Blazor circuit is not the caller that waits on it.
         await Task.Run(() =>
@@ -415,13 +414,16 @@ public sealed class DysonVoiceMode(
                     lock (_state)
                         speaking = _speakingText;
 
+                    var names = await _models.GetWakeNamesAsync(runToken).ConfigureAwait(false);
+                    var variants = names.IsError || names.Value is null ? [] : names.Value;
+
                     ListenAction action;
                     bool wasCapturing;
                     bool capturing;
                     lock (_listenerGate)
                     {
                         wasCapturing = listener.Capturing;
-                        action = listener.OnText(item.Value, Environment.TickCount64, speaking);
+                        action = listener.OnText(item.Value, Environment.TickCount64, speaking, variants);
                         capturing = listener.Capturing;
                     }
 
@@ -487,9 +489,18 @@ public sealed class DysonVoiceMode(
                 bool speaking;
                 lock (_state)
                     speaking = IsSpeaking;
-                // Chime is not awaited. Submit still runs if playback throws or is already speaking.
+                // Load only when the cue will play. Speech already playing skips the callback.
+                DysonSpeechAudioChunk? clip = null;
+                if (!speaking)
+                {
+                    clip = await DysonAcceptSentence
+                        .TryLoadAsync(_settings, _textToSpeech.InstallRoot, runToken)
+                        .ConfigureAwait(false);
+                }
+
+                // Cue is not awaited. Submit still runs if playback throws or is already speaking.
                 await AcceptTurnAsync(
-                    message, speaking, () => _tryout.PlayAcceptChime(), MessageReady, Failed)
+                    message, speaking, () => _tryout.PlayAcceptCue(clip), MessageReady, Failed)
                     .ConfigureAwait(false);
             }
         }
@@ -539,79 +550,249 @@ public sealed class DysonVoiceMode(
         if (reader is null)
             return;
 
+        Pumped? ahead = null;
         try
         {
-            while (await reader.WaitToReadAsync(runToken).ConfigureAwait(false))
+            while (!runToken.IsCancellationRequested)
             {
-                while (reader.TryRead(out var line))
+                Pumped? current = null;
+                if (ahead is not null)
                 {
-                    if (runToken.IsCancellationRequested)
-                        return;
-
-                    var epoch = Volatile.Read(ref _speakEpoch);
-                    var activeId = _focus.ActiveId;
-                    string? liveName;
-                    try
+                    var queued = ahead;
+                    ahead = null;
+                    if (Volatile.Read(ref _speakEpoch) != queued.Epoch || runToken.IsCancellationRequested)
+                        EndSynth(queued);
+                    else
                     {
-                        liveName = await _focus
-                            .TryGetLiveNameAsync(line.WorkDirectoryId, CancellationToken.None)
-                            .ConfigureAwait(false);
+                        Promote(queued);
+                        current = queued;
                     }
-                    catch (Exception)
-                    {
-                        // A failed or thrown Get still plays. The enqueue snapshot covers a missing row.
-                        liveName = null;
-                    }
+                }
 
-                    if (runToken.IsCancellationRequested)
+                if (current is null)
+                {
+                    if (!await reader.WaitToReadAsync(runToken).ConfigureAwait(false))
                         return;
-
-                    var playback = PlaybackText(
-                        line.WorkDirectoryId, line.Text, line.WorkDirectoryName, activeId, liveName);
-                    lock (_state)
+                    if (!reader.TryRead(out var line))
+                        continue;
+                    current = await BeginLineAsync(line, prefetch: false, runToken).ConfigureAwait(false);
+                    if (current is null || Volatile.Read(ref _speakEpoch) != current.Epoch)
                     {
-                        if (epoch != _speakEpoch)
-                            continue;
-                        _speakingText = playback;
+                        EndSynth(current);
+                        continue;
+                    }
+                }
+
+                var epoch = current.Epoch;
+                var dropped = false;
+                lock (_state)
+                {
+                    if (epoch != _speakEpoch)
+                        dropped = true;
+                    else
+                    {
+                        _speakingText = current.Playback;
                         IsSpeaking = true;
                     }
-
-                    RaiseState();
-                    VoidResult<string> played;
-                    try
-                    {
-                        // None, not the run token: a fade must not cancel synthesis. Playback ends the call.
-                        played = await _tryout.PlayAsync(playback, outputInstalled: true, CancellationToken.None)
-                            .ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        return;
-                    }
-                    finally
-                    {
-                        var changed = false;
-                        lock (_state)
-                        {
-                            if (epoch == _speakEpoch)
-                                _speakingText = null;
-                            if (IsSpeaking)
-                            {
-                                IsSpeaking = false;
-                                changed = true;
-                            }
-                        }
-
-                        if (changed)
-                            RaiseState();
-                    }
-
-                    if (played.IsError && !IsIntentionalSpeechCancel(played.Error))
-                        Failed?.Invoke(played.Error);
                 }
+
+                if (dropped)
+                {
+                    EndSynth(current);
+                    continue;
+                }
+
+                RaiseState();
+                var playing = current;
+                // None, not the run token: a fade must not cancel the device. The pump token is separate.
+                var play = _tryout.PlayPreparedAsync(playing.Channel.Reader.ReadAllAsync(), CancellationToken.None);
+                if (reader.TryRead(out var nextLine)
+                    && Volatile.Read(ref _speakEpoch) == epoch
+                    && !runToken.IsCancellationRequested)
+                {
+                    ahead = await BeginLineAsync(nextLine, prefetch: true, runToken).ConfigureAwait(false);
+                }
+
+                VoidResult<string> played;
+                try
+                {
+                    played = await play.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    EndSynth(playing);
+                    EndSynth(ahead);
+                    return;
+                }
+                finally
+                {
+                    var changed = false;
+                    lock (_state)
+                    {
+                        if (epoch == _speakEpoch)
+                            _speakingText = null;
+                        if (IsSpeaking)
+                        {
+                            IsSpeaking = false;
+                            changed = true;
+                        }
+                    }
+
+                    if (changed)
+                        RaiseState();
+                }
+
+                EndSynth(playing);
+                if (Volatile.Read(ref _speakEpoch) != epoch || runToken.IsCancellationRequested)
+                {
+                    EndSynth(ahead);
+                    ahead = null;
+                }
+
+                if (played.IsError && !IsIntentionalSpeechCancel(played.Error))
+                    Failed?.Invoke(played.Error);
             }
         }
         catch (OperationCanceledException)
+        {
+            EndSynth(ahead);
+        }
+    }
+
+    /// <summary>
+    /// Fixes <see cref="PlaybackText"/> now and starts synthesis into an unbounded channel.
+    /// The channel is not passed through <c>PlayAsync</c>, so the engine gate can drop while the device still plays.
+    /// </summary>
+    private async Task<Pumped?> BeginLineAsync(SpokenLine line, bool prefetch, CancellationToken runToken)
+    {
+        var epoch = Volatile.Read(ref _speakEpoch);
+        if (runToken.IsCancellationRequested)
+            return null;
+
+        var activeId = _focus.ActiveId;
+        string? liveName = null;
+        try
+        {
+            liveName = await _focus.TryGetLiveNameAsync(line.WorkDirectoryId, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // A failed or thrown Get still plays. The enqueue snapshot covers a missing row.
+            liveName = null;
+        }
+
+        if (runToken.IsCancellationRequested || Volatile.Read(ref _speakEpoch) != epoch)
+            return null;
+
+        var playback = PlaybackText(line.WorkDirectoryId, line.Text, line.WorkDirectoryName, activeId, liveName);
+        var synth = CancellationTokenSource.CreateLinkedTokenSource(runToken);
+        // ponytail: unbounded for one Speak line (600 characters before the work-directory prefix).
+        // A bounded channel would push back onto the enumerator and hold the engine gate.
+        var channel = Channel.CreateUnbounded<Result<DysonSpeechAudioChunk, string>>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = true,
+        });
+        lock (_state)
+        {
+            if (prefetch)
+                _prefetchSynth = synth;
+            else
+                _currentSynth = synth;
+        }
+
+        _ = PumpAsync(playback, synth, channel);
+        return new Pumped(playback, epoch, synth, channel);
+    }
+
+    private async Task PumpAsync(
+        string playback,
+        CancellationTokenSource synth,
+        Channel<Result<DysonSpeechAudioChunk, string>> channel)
+    {
+        try
+        {
+            await foreach (var chunk in _tryout.Synthesize(playback, synth.Token).ConfigureAwait(false))
+            {
+                if (synth.IsCancellationRequested || !channel.Writer.TryWrite(chunk))
+                    break;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (Exception ex)
+        {
+            channel.Writer.TryWrite(Result<DysonSpeechAudioChunk, string>.AsError(ex.Message));
+        }
+        finally
+        {
+            channel.Writer.TryComplete();
+        }
+    }
+
+    private void Promote(Pumped pumped)
+    {
+        lock (_state)
+        {
+            if (ReferenceEquals(_prefetchSynth, pumped.Synth))
+                _prefetchSynth = null;
+            _currentSynth = pumped.Synth;
+        }
+    }
+
+    private void CancelSynths()
+    {
+        CancellationTokenSource? current;
+        CancellationTokenSource? prefetch;
+        lock (_state)
+        {
+            current = _currentSynth;
+            prefetch = _prefetchSynth;
+            _currentSynth = null;
+            _prefetchSynth = null;
+        }
+
+        EndSource(current);
+        EndSource(prefetch);
+    }
+
+    private void EndSynth(Pumped? pumped)
+    {
+        if (pumped is null)
+            return;
+        lock (_state)
+        {
+            if (ReferenceEquals(_currentSynth, pumped.Synth))
+                _currentSynth = null;
+            if (ReferenceEquals(_prefetchSynth, pumped.Synth))
+                _prefetchSynth = null;
+        }
+
+        EndSource(pumped.Synth);
+    }
+
+    private static void EndSource(CancellationTokenSource? synth)
+    {
+        if (synth is null)
+            return;
+        try
+        {
+            synth.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        try
+        {
+            synth.Dispose();
+        }
+        catch (ObjectDisposedException)
         {
         }
     }
@@ -620,6 +801,7 @@ public sealed class DysonVoiceMode(
     {
         // ponytail: a line the speak loop already dequeued can still start; upgrade is a generation check inside PlayAsync.
         Interlocked.Increment(ref _speakEpoch);
+        CancelSynths();
         var reader = _speak?.Reader;
         if (reader is not null)
         {
@@ -656,6 +838,7 @@ public sealed class DysonVoiceMode(
         {
         }
 
+        CancelSynths();
         CancelSegment();
     }
 
@@ -813,10 +996,9 @@ public sealed class DysonVoiceMode(
         Restart,
     }
 
-    /// <summary>Pure listen rules. Time is milliseconds supplied by the caller.</summary>
-    internal sealed class Listener(IReadOnlyList<string> variants)
+    /// <summary>Pure listen rules. Time is milliseconds supplied by the caller. Names are per <c>OnText</c> call.</summary>
+    internal sealed class Listener
     {
-        private readonly IReadOnlyList<string> _variants = variants ?? [];
         private string _text = "";
         private int _messageStart;
         private long _lastChangeMs;
@@ -839,8 +1021,9 @@ public sealed class DysonVoiceMode(
             _speakingArmed = false;
         }
 
-        internal ListenAction OnText(string transcript, long nowMs, string? speaking)
+        internal ListenAction OnText(string transcript, long nowMs, string? speaking, IReadOnlyList<string> variants)
         {
+            variants ??= [];
             transcript ??= "";
             if (Capturing)
             {
@@ -858,7 +1041,7 @@ public sealed class DysonVoiceMode(
                 _speakingArmed = false;
                 _speakMark = 0;
                 var mark = _idleMark > transcript.Length ? 0 : _idleMark;
-                var end = MatchEnd(transcript[mark..], _variants);
+                var end = MatchEnd(transcript[mark..], variants);
                 if (end >= 0)
                 {
                     var abs = mark + end;
@@ -900,7 +1083,7 @@ public sealed class DysonVoiceMode(
             if (IsEcho(heard, speaking))
                 return ListenAction.None;
 
-            var wakeEnd = MatchEnd(heard, _variants);
+            var wakeEnd = MatchEnd(heard, variants);
             if (wakeEnd < 0)
                 return ListenAction.None;
 
@@ -926,6 +1109,18 @@ public sealed class DysonVoiceMode(
             _idleMark = consumed;
             return msg.Length == 0 ? null : InputPrefix + msg;
         }
+    }
+
+    private sealed class Pumped(
+        string playback,
+        int epoch,
+        CancellationTokenSource synth,
+        Channel<Result<DysonSpeechAudioChunk, string>> channel)
+    {
+        public string Playback { get; } = playback;
+        public int Epoch { get; } = epoch;
+        public CancellationTokenSource Synth { get; } = synth;
+        public Channel<Result<DysonSpeechAudioChunk, string>> Channel { get; } = channel;
     }
 
     private readonly struct Token(string norm, int start, int end)

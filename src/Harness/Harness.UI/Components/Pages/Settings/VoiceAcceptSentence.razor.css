@@ -1,0 +1,30 @@
+.voice-accept__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.voice-accept__label {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.voice-accept__text {
+  min-width: 12rem;
+  flex: 1;
+  background: var(--bg-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+
+.voice-accept__status {
+  margin: 8px 0 0;
+}
+
+.voice-accept__status--error {
+  color: var(--danger);
+}

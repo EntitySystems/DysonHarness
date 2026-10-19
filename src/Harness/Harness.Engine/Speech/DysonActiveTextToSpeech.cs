@@ -17,6 +17,9 @@ public sealed class DysonActiveTextToSpeech(
     /// <summary><see cref="RuntimeId"/> of the router itself; the routed engine is <see cref="ResolveActiveAsync"/>.</summary>
     public const string ActiveRuntimeId = "active";
 
+    /// <summary>Speech install tree. The accept-sentence WAV and sidecar live here.</summary>
+    public string InstallRoot { get; } = installRoot ?? throw new ArgumentNullException(nameof(installRoot));
+
     private readonly IDysonSpeechModelRepository _models = models ?? throw new ArgumentNullException(nameof(models));
     private readonly IDysonSubjectSettingsRepository _settings = settings ?? throw new ArgumentNullException(nameof(settings));
     private readonly DysonPocketSpeech _pocket = new(models, settings, installRoot);

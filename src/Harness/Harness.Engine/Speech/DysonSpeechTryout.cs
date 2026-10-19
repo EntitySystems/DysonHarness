@@ -123,6 +123,50 @@ public sealed class DysonSpeechTryout(
     }
 
     /// <summary>
+    /// The same <see cref="IDysonTextToSpeech.SynthesizeAsync"/> <see cref="PlayAsync"/> uses.
+    /// Voice mode pumps this so playback and the queue share one model (in the app that is <see cref="DysonActiveTextToSpeech"/>).
+    /// </summary>
+    internal IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> Synthesize(
+        string text,
+        CancellationToken cancellationToken) =>
+        _textToSpeech.SynthesizeAsync(text, voiceId: null, cancellationToken);
+
+    /// <summary>
+    /// Plays <paramref name="chunks"/> that were already synthesized. Does not cancel the clip in flight and does not
+    /// call <see cref="IDysonAudioPlayback.Stop"/>. Settings tryout still uses <see cref="PlayAsync"/>, which preempts.
+    /// </summary>
+    public async Task<VoidResult<string>> PlayPreparedAsync(
+        IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> chunks,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(chunks);
+        await Task.Run(() => 0, CancellationToken.None).ConfigureAwait(false);
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        lock (_gate)
+            _playCts = cts;
+
+        await _playGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            if (cts.IsCancellationRequested)
+                return VoidResult<string>.Success;
+            Interlocked.Increment(ref _playbackEpoch);
+            return await _playback.PlayAsync(chunks, cts.Token).ConfigureAwait(false);
+        }
+        finally
+        {
+            _playGate.Release();
+            lock (_gate)
+            {
+                if (ReferenceEquals(_playCts, cts))
+                    _playCts = null;
+            }
+
+            cts.Dispose();
+        }
+    }
+
+    /// <summary>
     /// Stops the current clip. A positive <paramref name="fadeOut"/> only fades device volume and does not cancel
     /// synthesis; playback cancels itself when the fade ends. Nothing playing is an error from
     /// <see cref="IDysonAudioPlayback.Stop"/>.
@@ -147,10 +191,16 @@ public sealed class DysonSpeechTryout(
     }
 
     /// <summary>
-    /// Quiet accept beep. Returns immediately. Skips when a clip already holds playback, so speech is not stopped.
-    /// A playback error is ignored.
+    /// Quiet accept beep. Returns immediately. Same as <see cref="PlayAcceptCue"/> with a null clip.
     /// </summary>
-    public void PlayAcceptChime()
+    public void PlayAcceptChime() => PlayAcceptCue(null);
+
+    /// <summary>
+    /// Accept cue. Null plays <see cref="DysonAcceptChime"/>. Otherwise plays that one chunk.
+    /// Returns immediately. Skips when a clip already holds playback, so speech is not stopped.
+    /// Does not call <see cref="StopPlayback"/>. A playback error is ignored.
+    /// </summary>
+    public void PlayAcceptCue(DysonSpeechAudioChunk? clip)
     {
         if (!_playGate.Wait(0))
             return;
@@ -164,14 +214,17 @@ public sealed class DysonSpeechTryout(
             }
         }
 
-        _ = PlayAcceptChimeAsync();
+        _ = PlayAcceptCueAsync(clip);
     }
 
-    private async Task PlayAcceptChimeAsync()
+    private async Task PlayAcceptCueAsync(DysonSpeechAudioChunk? clip)
     {
         try
         {
-            await _playback.PlayAsync(DysonAcceptChime.Once(), CancellationToken.None).ConfigureAwait(false);
+            var stream = clip is null
+                ? DysonAcceptChime.Once()
+                : OneAcceptChunk(clip.IsLast ? clip : clip with { IsLast = true });
+            await _playback.PlayAsync(stream, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception)
         {
@@ -181,6 +234,12 @@ public sealed class DysonSpeechTryout(
         {
             _playGate.Release();
         }
+    }
+
+    private static async IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> OneAcceptChunk(DysonSpeechAudioChunk clip)
+    {
+        yield return Result<DysonSpeechAudioChunk, string>.AsValue(clip);
+        await Task.CompletedTask;
     }
 
     /// <summary>

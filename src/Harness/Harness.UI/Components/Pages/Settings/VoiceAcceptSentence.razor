@@ -1,0 +1,157 @@
+@using DysonHarness
+@inject IDysonSubjectSettingsRepository Settings
+@inject DysonUiHost Host
+
+<div class="settings-page__panel panel voice-accept">
+    <div class="tool-panel__title">Acceptance sentence</div>
+    <p class="settings-page__copy">
+        When a voice turn is submitted, play this instead of the accept beep. Default is the beep.
+    </p>
+    <div class="voice-accept__row" role="radiogroup" aria-label="Acceptance sentence">
+        <label class="voice-accept__label">
+            <input type="radio" name="voice-accept" checked="@(_choice == Beep)" disabled="@_busy" @onchange="() => Choose(Beep)" />
+            Beep
+        </label>
+        <label class="voice-accept__label">
+            <input type="radio" name="voice-accept" checked="@(_choice == Copy)" disabled="@_busy" @onchange="() => Choose(Copy)" />
+            Copy
+        </label>
+        <label class="voice-accept__label">
+            <input type="radio" name="voice-accept" checked="@(_choice == Over)" disabled="@_busy" @onchange="() => Choose(Over)" />
+            Over
+        </label>
+        <label class="voice-accept__label">
+            <input type="radio" name="voice-accept" checked="@(_choice == Custom)" disabled="@_busy" @onchange="() => Choose(Custom)" />
+            Custom
+        </label>
+    </div>
+    @if (_choice == Custom)
+    {
+        <div class="voice-accept__row">
+            <label class="voice-accept__label" for="voice-accept-custom">Custom</label>
+            <input id="voice-accept-custom" class="voice-accept__text" maxlength="40"
+                   @bind="_custom" @bind:event="oninput" disabled="@_busy" />
+        </div>
+    }
+    <div class="btn-row">
+        <button type="button" class="btn btn-primary" disabled="@_busy" @onclick="SaveAsync">Save</button>
+        <button type="button" class="btn" disabled="@_busy" @onclick="PreviewAsync">Preview</button>
+    </div>
+    @if (!string.IsNullOrWhiteSpace(_status))
+    {
+        <p class="@(_statusOk ? "settings-page__copy voice-accept__status" : "settings-page__copy voice-accept__status voice-accept__status--error")" role="status">@_status</p>
+    }
+</div>
+
+@code {
+    private const string Beep = "beep";
+    private const string Copy = "Copy";
+    private const string Over = "Over";
+    private const string Custom = "custom";
+    private const string VoiceOn = "Turn voice mode off before using play or record here.";
+
+    private string _choice = Beep;
+    private string _custom = "";
+    private bool _busy;
+    private string? _status;
+    private bool _statusOk;
+
+    [Parameter] public DysonSpeechTryout? Tryout { get; set; }
+    [Parameter] public IDysonTextToSpeech? Tts { get; set; }
+    [Parameter] public string? InstallRoot { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var saved = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechAcceptSentence);
+        if (saved.IsError)
+        {
+            _statusOk = false;
+            _status = saved.Error;
+            return;
+        }
+
+        var text = saved.Value?.Trim() ?? "";
+        if (text.Length == 0)
+            _choice = Beep;
+        else if (text == Copy)
+            _choice = Copy;
+        else if (text == Over)
+            _choice = Over;
+        else
+        {
+            _choice = Custom;
+            _custom = text.Length > DysonAcceptSentence.MaxLength ? text[..DysonAcceptSentence.MaxLength] : text;
+        }
+    }
+
+    private void Choose(string choice) => _choice = choice;
+
+    private string Sentence() => _choice switch
+    {
+        Copy => Copy,
+        Over => Over,
+        Custom => _custom,
+        _ => "",
+    };
+
+    private async Task SaveAsync()
+    {
+        if (_busy || Tts is null || string.IsNullOrWhiteSpace(InstallRoot))
+            return;
+
+        var sentence = Sentence();
+        if (!string.IsNullOrWhiteSpace(sentence) && Host.Voice?.IsOn == true)
+        {
+            _statusOk = false;
+            _status = VoiceOn;
+            return;
+        }
+
+        _busy = true;
+        _status = null;
+        try
+        {
+            var saved = await DysonAcceptSentence.SaveAsync(Tts, Settings, InstallRoot, sentence, CancellationToken.None);
+            _statusOk = saved.IsSuccess;
+            _status = saved.IsError ? saved.Error : "Saved.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task PreviewAsync()
+    {
+        var tryout = Tryout;
+        if (_busy || tryout is null || string.IsNullOrWhiteSpace(InstallRoot))
+            return;
+        if (Host.Voice?.IsOn == true)
+        {
+            _statusOk = false;
+            _status = VoiceOn;
+            return;
+        }
+
+        _busy = true;
+        _status = null;
+        try
+        {
+            var clip = await DysonAcceptSentence.TryLoadAsync(Settings, InstallRoot, CancellationToken.None);
+            if (clip is null)
+            {
+                _statusOk = false;
+                _status = "Save a sentence first.";
+                return;
+            }
+
+            tryout.PlayAcceptCue(clip);
+            _statusOk = true;
+            _status = "Playing.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

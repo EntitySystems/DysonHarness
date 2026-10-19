@@ -76,6 +76,25 @@ public class DysonSpeechTryoutTests
     }
 
     [Fact]
+    public async Task PlayPrepared_does_not_synthesize_or_stop_and_Play_still_preempts()
+    {
+        var tts = new FakeTts();
+        var playback = new FakePlayback();
+        var tryout = new DysonSpeechTryout(new FakeCapture(), new FakeStt(), tts, playback);
+        var first = tryout.PlayPreparedAsync(OneChunk(), CancellationToken.None);
+        await WaitUntil(() => playback.Waiting == 1);
+        Assert.Empty(tts.Texts);
+        Assert.Equal(0, playback.Stops);
+
+        var second = tryout.PlayAsync("two", true, CancellationToken.None);
+        Assert.True((await first).IsSuccess);
+        Assert.True((await second).IsSuccess);
+        Assert.Equal(["two"], tts.Texts);
+        Assert.True(playback.Stops >= 1);
+        Assert.Equal(2, playback.Plays);
+    }
+
+    [Fact]
     public async Task Stop_after_a_cancelled_play_releases_the_next_play()
     {
         var playback = new FakePlayback();
