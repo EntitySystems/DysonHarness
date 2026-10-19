@@ -209,6 +209,51 @@ public class DysonSpeechInstallerTests
     }
 
     [Fact]
+    public void Torch_only_rocm_tree_is_not_ready_so_repair_reinstalls()
+    {
+        var manifest = DysonSpeechManifest.LoadEmbedded();
+        Assert.True(manifest.IsSuccess, manifest.IsError ? manifest.Error : null);
+        var requirement = manifest.Value.RocmTorchRequirement;
+        Assert.Equal("torch==2.14.0+rocm10.1.0", requirement);
+        var root = Path.Combine(Path.GetTempPath(), "dyson-rocm-sdk-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var dir = DysonSpeechPaths.GetRocmTorchDir(root);
+            var info = "torch-" + requirement!["torch==".Length..] + ".dist-info";
+            Directory.CreateDirectory(Path.Combine(dir, "torch"));
+            Directory.CreateDirectory(Path.Combine(dir, info));
+
+            var ready = DysonSpeechInstaller.RocmTorchReady(root, manifest.Value);
+            Assert.False(ready);
+            var runtime = DysonSpeechInstallStatus.None(null) with { RuntimeInstalled = true };
+            Assert.Equal(
+                ["preflight", "rocm-torch-download", "rocm-torch-hash", "rocm-torch-install", "commit"],
+                DysonSpeechInstaller.PlanTorchRepairSteps(runtime, installRocm: true, rocmReady: ready));
+            var dropped = DysonSpeechInstaller.DropUnreadyRocmTorch(root, manifest.Value);
+            Assert.True(dropped.IsSuccess, dropped.IsError ? dropped.Error : null);
+            Assert.False(Directory.Exists(dir));
+
+            Directory.CreateDirectory(Path.Combine(dir, "torch"));
+            Directory.CreateDirectory(Path.Combine(dir, info));
+            Directory.CreateDirectory(Path.Combine(dir, "rocm_sdk"));
+            ready = DysonSpeechInstaller.RocmTorchReady(root, manifest.Value);
+            Assert.True(ready);
+            Assert.Equal(
+                ["preflight"],
+                DysonSpeechInstaller.PlanTorchRepairSteps(runtime, installRocm: true, rocmReady: ready));
+            dropped = DysonSpeechInstaller.DropUnreadyRocmTorch(root, manifest.Value);
+            Assert.True(dropped.IsSuccess, dropped.IsError ? dropped.Error : null);
+            Assert.True(Directory.Exists(Path.Combine(dir, "torch")));
+            Assert.True(Directory.Exists(Path.Combine(dir, "rocm_sdk")));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Crisp_start_info_uses_vulkan_exe_and_gpu_backend_only_for_gpu()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-crisp-start-" + Guid.NewGuid().ToString("N"));

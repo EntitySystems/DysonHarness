@@ -250,7 +250,8 @@ public sealed class DysonSpeechInstaller
     /// Installs the saved PyTorch device now, on the same python/torch and <c>rocm-torch-*</c> steps a Python model
     /// install uses (<see cref="PlanTorchRepairSteps"/>). No model weights. CPU repairs the CPU torch (and the private
     /// Python that pip needs, when that runtime is missing). ROCm repairs <c>torch-rocm/</c> and, when the CPU runtime
-    /// is missing, the CPU torch beside it. Already present ⇒ preflight "Already installed.". CUDA is not a target.
+    /// is missing, the CPU torch beside it. A <c>torch-rocm</c> missing <c>rocm_sdk</c> is not ready: Repair deletes it
+    /// and reinstalls the pinned ROCm wheels. Already present ⇒ preflight "Already installed.". CUDA is not a target.
     /// A missing manifest, disk, or pip failure is a Failed step whose detail is the <c>VoidResult</c> error; it does not throw.
     /// </summary>
     public async IAsyncEnumerable<DysonSpeechInstallStep> RepairTorchRuntimesAsync(
@@ -483,8 +484,8 @@ public sealed class DysonSpeechInstaller
     /// <summary>
     /// Repair plan for the selected torch. CPU (<paramref name="installRocm"/> false): shared runtime steps when
     /// <see cref="DysonSpeechInstallStatus.RuntimeInstalled"/> is false. ROCm: those steps when the CPU runtime is
-    /// missing, plus the model-install <c>rocm-torch-*</c> steps when <paramref name="rocmReady"/> is false.
-    /// No model weights. Both already ok ⇒ <c>["preflight"]</c>. Pure.
+    /// missing, plus the model-install <c>rocm-torch-*</c> steps when <paramref name="rocmReady"/> is false
+    /// (<c>torch-rocm</c> missing <c>rocm_sdk</c> is not ready). No model weights. Both already ok ⇒ <c>["preflight"]</c>. Pure.
     /// </summary>
     internal static IReadOnlyList<string> PlanTorchRepairSteps(
         DysonSpeechInstallStatus status, bool installRocm, bool rocmReady)
@@ -1248,7 +1249,7 @@ public sealed class DysonSpeechInstaller
         }
     }
 
-    private static bool RocmTorchReady(string installRoot, DysonSpeechManifest manifest)
+    internal static bool RocmTorchReady(string installRoot, DysonSpeechManifest manifest)
     {
         if (string.IsNullOrWhiteSpace(manifest.RocmTorchRequirement)
             || !manifest.Rids.TryGetValue(SupportedRid, out var rid)
@@ -1257,7 +1258,23 @@ public sealed class DysonSpeechInstaller
         var dir = DysonSpeechPaths.GetRocmTorchDir(installRoot);
         var info = TorchDistInfoName(manifest.RocmTorchRequirement);
         return Directory.Exists(Path.Combine(dir, "torch"))
-            && Directory.Exists(Path.Combine(dir, info));
+            && Directory.Exists(Path.Combine(dir, info))
+            && Directory.Exists(Path.Combine(dir, "rocm_sdk"));
+    }
+
+    /// <summary>
+    /// pip <c>--target</c> leaves a foreign torch in place. A <c>torch-rocm</c> that exists but is not the pinned
+    /// tree (no <c>rocm_sdk</c>, or otherwise not <see cref="RocmTorchReady"/>) is deleted. A ready tree is left alone.
+    /// </summary>
+    internal static VoidResult<string> DropUnreadyRocmTorch(string installRoot, DysonSpeechManifest manifest)
+    {
+        var dir = DysonSpeechPaths.GetRocmTorchDir(installRoot);
+        if (!Directory.Exists(dir) || RocmTorchReady(installRoot, manifest))
+            return VoidResult<string>.Success;
+        var deleted = DeleteTree(dir);
+        return deleted.IsError
+            ? new VoidResult<string>("rocm-torch-install: " + deleted.Error)
+            : VoidResult<string>.Success;
     }
 
     private static bool TorchTreeMatches(string installRoot, string distInfoName)
@@ -1406,7 +1423,7 @@ public sealed class DysonSpeechInstaller
                 ("torch-install", _ => PipInstallAsync("torch-install", TorchPlanFiles(), torchWheels, TorchInstallDir(), keepWheelhouseIn: null)),
                 ("rocm-torch-download", p => DownloadAllAsync("rocm-torch-download", RocmPlanFiles(), Path.Combine(Downloads, "rocm-torch"), p)),
                 ("rocm-torch-hash", _ => VerifyAllAsync("rocm-torch-hash", RocmPlanFiles(), Path.Combine(Downloads, "rocm-torch"))),
-                ("rocm-torch-install", _ => PipInstallAsync("rocm-torch-install", RocmPlanFiles(), Path.Combine(Downloads, "rocm-torch"), DysonSpeechPaths.GetRocmTorchDir(Tree), keepWheelhouseIn: null)),
+                ("rocm-torch-install", _ => InstallRocmTorchAsync()),
                 ("crispasr-download", p => DownloadOneAsync("crispasr-download", _m.CrispasrRuntime, crispZip, p)),
                 ("crispasr-hash", _ => VerifyOneAsync("crispasr-hash", _m.CrispasrRuntime, crispZip)),
                 ("crispasr-extract", _ => Task.FromResult(ExtractCrispasr("crispasr-extract", _m.CrispasrRuntime, crispZip, DysonGgufSpeechModels.GetCrispRuntimeDir(Tree)))),
@@ -1816,6 +1833,26 @@ public sealed class DysonSpeechInstaller
                 return new VoidResult<string>($"python-extract: python/python.exe is not in {_m.Python.Url}.");
 
             return await RunPythonAsync("python-extract", [], ["-m", "pip", "--version"]).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Deletes a live or staged <c>torch-rocm</c> that is not the pinned tree, then pip-installs into staging.
+        /// Already on the installer's thread-pool hop. A delete failure is a Failed step, not a throw.
+        /// </summary>
+        private async Task<VoidResult<string>> InstallRocmTorchAsync()
+        {
+            var live = DropUnreadyRocmTorch(_root, _manifest);
+            if (live.IsError)
+                return live;
+            var staged = DropUnreadyRocmTorch(Tree, _manifest);
+            if (staged.IsError)
+                return staged;
+            return await PipInstallAsync(
+                "rocm-torch-install",
+                RocmPlanFiles(),
+                Path.Combine(Downloads, "rocm-torch"),
+                DysonSpeechPaths.GetRocmTorchDir(Tree),
+                keepWheelhouseIn: null).ConfigureAwait(false);
         }
 
         private async Task<VoidResult<string>> PipInstallAsync(
