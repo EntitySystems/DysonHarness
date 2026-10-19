@@ -688,6 +688,106 @@ public class DysonSpeechInstallerTests
     }
 
     [Fact]
+    public async Task WakeNames_SaveRequiresEightNonBlank_AndRoundTrips()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        await using var _ = conn;
+        var repo = DysonTempDb.Speech(accessor);
+
+        var missing = await repo.GetWakeNamesAsync();
+        Assert.True(missing.IsSuccess, missing.IsError ? missing.Error : null);
+        Assert.Empty(missing.Value);
+
+        var seven = await repo.SaveWakeNamesAsync(["dyson", "hey dyson", "ok dyson", "a", "b", "c", "d"]);
+        Assert.Equal("Wake name needs 8 variants.", seven.Error);
+
+        var blank = await repo.SaveWakeNamesAsync(["dyson", "hey dyson", "  ", "a", "b", "c", "d", "e"]);
+        Assert.Equal("Variant 3 is empty.", blank.Error);
+
+        var longName = new string('x', 201);
+        var tooLong = await repo.SaveWakeNamesAsync(["dyson", "hey dyson", longName, "a", "b", "c", "d", "e"]);
+        Assert.Equal("Variant 3 is over 200 characters.", tooLong.Error);
+
+        Assert.True((await repo.SaveWakeNamesAsync(
+            [" dyson ", "hey dyson", "ok dyson", "a", "b", "c", "d", "e"])).IsSuccess);
+        Assert.Equal(
+            ["dyson", "hey dyson", "ok dyson", "a", "b", "c", "d", "e"],
+            (await repo.GetWakeNamesAsync()).Value);
+
+        Assert.True((await repo.SaveWakeNamesAsync(
+            ["DYSON", "hey dyson", "ok dyson", "a", "b", "c", "d", "e"])).IsSuccess);
+        Assert.Equal("DYSON", (await repo.GetWakeNamesAsync()).Value[0]);
+    }
+
+    [Fact]
+    public async Task EnrolledVoice_DefaultsToVoiceNumber_AndRenames()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        await using var _ = conn;
+        var repo = DysonTempDb.Speech(accessor);
+
+        Assert.True((await repo.EnsureCatalogVoiceAsync(DysonPocketSpeech.Id, "alba", "Alba", "dev")).IsSuccess);
+        Assert.True((await repo.EnsureCatalogVoiceAsync(
+            DysonQwenSpeech.Id, "v1", null, "dev", sourceFileName: "a.mp3")).IsSuccess);
+        Assert.True((await repo.EnsureCatalogVoiceAsync(
+            DysonChatterboxSpeech.Id, "v2", null, "dev", sourceFileName: "b.mp3")).IsSuccess);
+
+        Assert.Equal("Voice #1", Assert.Single((await repo.ListVoicesAsync(DysonQwenSpeech.Id)).Value).DisplayName);
+        Assert.Equal("Voice #2", Assert.Single((await repo.ListVoicesAsync(DysonChatterboxSpeech.Id)).Value).DisplayName);
+        Assert.Equal("Alba", Assert.Single((await repo.ListVoicesAsync(DysonPocketSpeech.Id)).Value).DisplayName);
+
+        Assert.Equal("Voice name is empty.", (await repo.RenameVoiceAsync(DysonQwenSpeech.Id, "v1", "  ")).Error);
+        Assert.True((await repo.RenameVoiceAsync(DysonQwenSpeech.Id, "v1", "  Sam  ")).IsSuccess);
+        Assert.Equal("Sam", Assert.Single((await repo.ListVoicesAsync(DysonQwenSpeech.Id)).Value).DisplayName);
+        Assert.True((await repo.RenameVoiceAsync(DysonPocketSpeech.Id, "alba", "Pocket Alba")).IsSuccess);
+        Assert.Equal("Pocket Alba", Assert.Single((await repo.ListVoicesAsync(DysonPocketSpeech.Id)).Value).DisplayName);
+
+        Assert.Equal(
+            "Built-in voices cannot be deleted.",
+            (await repo.DeleteVoiceAsync(DysonPocketSpeech.Id, "alba")).Error);
+        Assert.Equal("Pocket Alba", Assert.Single((await repo.ListVoicesAsync(DysonPocketSpeech.Id)).Value).DisplayName);
+    }
+
+    [Fact]
+    public async Task DeleteVoice_RemovesFilesThenRow()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        await using var _ = conn;
+        var repo = DysonTempDb.Speech(accessor);
+        var settings = DysonTempDb.Settings(accessor);
+        var root = Path.Combine(Path.GetTempPath(), "dyson-voice-del-" + Guid.NewGuid().ToString("N"));
+        var dir = DysonSpeechPaths.GetQwenVoicesDir(root);
+        try
+        {
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(Path.Combine(dir, "x.pt"), "pt");
+            await File.WriteAllTextAsync(Path.Combine(dir, "x.txt"), "hi");
+            await File.WriteAllTextAsync(Path.Combine(dir, "x.source.mp3"), "mp3");
+            await File.WriteAllTextAsync(Path.Combine(dir, "x-2.pt"), "keep");
+
+            Assert.True((await repo.EnsureCatalogVoiceAsync(
+                DysonQwenSpeech.Id, "x", "Voice #1", "dev", sourceFileName: "x.mp3")).IsSuccess);
+            Assert.True((await settings.SetSettingAsync(DysonAppSettingKeys.SpeechOutputVoiceId, "x")).IsSuccess);
+
+            var deleted = await new DysonActiveTextToSpeech(repo, settings, root).DeleteVoiceAsync(DysonQwenSpeech.Id, "x");
+            Assert.True(deleted.IsSuccess, deleted.IsError ? deleted.Error : null);
+            Assert.False(File.Exists(Path.Combine(dir, "x.pt")));
+            Assert.False(File.Exists(Path.Combine(dir, "x.txt")));
+            Assert.False(File.Exists(Path.Combine(dir, "x.source.mp3")));
+            Assert.True(File.Exists(Path.Combine(dir, "x-2.pt")));
+            Assert.Empty((await repo.ListVoicesAsync(DysonQwenSpeech.Id)).Value);
+            var voiceSetting = await settings.GetSettingAsync(DysonAppSettingKeys.SpeechOutputVoiceId);
+            Assert.True(voiceSetting.IsSuccess, voiceSetting.IsError ? voiceSetting.Error : null);
+            Assert.True(string.IsNullOrEmpty(voiceSetting.Value));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Selection_resolves_input_and_output_separately()
     {
         var rows = new[]

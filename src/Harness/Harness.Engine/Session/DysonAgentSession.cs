@@ -48,6 +48,7 @@ public abstract class DysonAgentSession
     private int _childReportRemindersSent;
     private int _turnsSinceMetaMaintenance;
     private bool _subagentReportAccepted;
+    private string? _systemPromptSuffix;
 
     protected DysonAgentSession(
         string agentMode,
@@ -63,10 +64,8 @@ public abstract class DysonAgentSession
             throw new ArgumentOutOfRangeException(nameof(agentMode), agentMode, prompt.Error);
 
         Mode = agentMode;
-        SystemPrompt = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
-            prompt.Value,
-            systemPromptSuffix,
-            DysonAgentSystemPrompts.BuildPluginInstructionBlock(config))!;
+        _systemPromptSuffix = systemPromptSuffix;
+        SystemPrompt = ComposeSystemPrompt(prompt.Value);
         // Do not gate as root here: Parent is always null in the ctor. Roots call
         // ConfigureRootInterAgentTools from Create/Load; children get gated in Register/Restore.
         McpPipeline = DysonSessionToolsetBuilder.BuildInitial(config, agentMode, ResolveModelSlugId());
@@ -375,10 +374,8 @@ public abstract class DysonAgentSession
             return new VoidResult<string>(prompt.Error);
 
         Mode = trimmed;
-        SystemPrompt = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
-            prompt.Value,
-            systemPromptSuffix,
-            DysonAgentSystemPrompts.BuildPluginInstructionBlock(Config))!;
+        _systemPromptSuffix = systemPromptSuffix;
+        SystemPrompt = ComposeSystemPrompt(prompt.Value);
 
         if (Config.ToolPolicy is not null)
         {
@@ -407,13 +404,47 @@ public abstract class DysonAgentSession
         if (prompt.IsError)
             return new VoidResult<string>(prompt.Error);
 
-        SystemPrompt = DysonAgentSystemPrompts.JoinSystemPromptSuffix(
-            prompt.Value,
-            systemPromptSuffix,
-            DysonAgentSystemPrompts.BuildPluginInstructionBlock(Config))!;
+        _systemPromptSuffix = systemPromptSuffix;
+        SystemPrompt = ComposeSystemPrompt(prompt.Value);
         SystemPromptGeneration++;
         return VoidResult<string>.Success;
     }
+
+    /// <summary>
+    /// Root Meta Agent only. Non-null turns voice mode on (SpeakToUser and the voice prompt block).
+    /// Rebuilds the prompt and replaces the tool catalog. No-op when <paramref name="voice"/> is already set.
+    /// Not persisted.
+    /// </summary>
+    public VoidResult<string> SetVoiceMode(DysonVoiceMode? voice)
+    {
+        if (Parent is not null || !DysonSessionPolicy.IsMetaAgent(Mode))
+            return new VoidResult<string>("Voice mode is only for the root Meta Agent session.");
+
+        if (ReferenceEquals(Config.Voice, voice))
+            return VoidResult<string>.Success;
+
+        var prompt = DysonAgentSystemPrompts.ForMode(Mode, Config.CustomAgents);
+        if (prompt.IsError)
+            return new VoidResult<string>(prompt.Error);
+
+        Config.Voice = voice;
+        SystemPrompt = ComposeSystemPrompt(prompt.Value);
+        McpPipeline = DysonSessionToolsetBuilder.Build(
+            Config,
+            Mode,
+            interAgentDepth: ComputeDepth(),
+            omitRootTaskCompletionTools: Parent is not null,
+            modelSlugId: ResolveModelSlugId());
+        SystemPromptGeneration++;
+        AppendLog(voice is null ? "voice mode off" : "voice mode on");
+        return VoidResult<string>.Success;
+    }
+
+    private string ComposeSystemPrompt(string directive) =>
+        DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+            DysonAgentSystemPrompts.WithVoice(directive, Mode, Config.Voice is not null),
+            _systemPromptSuffix,
+            DysonAgentSystemPrompts.BuildPluginInstructionBlock(Config))!;
 
     /// <summary>
     /// Stores the current presentation snapshot and rewrites <c>RenderHtmlVisualization</c>

@@ -105,7 +105,8 @@ public sealed class DysonActiveTextToSpeech(
     }
 
     /// <summary>
-    /// Train TTS model for the active model: Qwen3-TTS (.mp3 or .wav; speaker embedding, clip not kept) and
+    /// Train TTS model for the active model: Qwen3-TTS (.mp3 or .wav; speaker embedding; the clip is kept as
+    /// <c>{voiceId}.source.mp3</c> or <c>.source.wav</c>) and
     /// Chatterbox Turbo (.mp3) enroll a voice prompt (not a fine-tune). A non-blank
     /// <paramref name="transcript"/> is stored as <c>{voiceId}.txt</c> beside that <c>.pt</c>.
     /// CrispASR GGUF models enroll a 16-bit PCM .wav (<paramref name="transcript"/> is required for Qwen3-TTS GGUF,
@@ -135,6 +136,95 @@ public sealed class DysonActiveTextToSpeech(
         };
     }
 
+    /// <summary>Selects <paramref name="voiceId"/> on the active model (<see cref="DysonAppSettingKeys.SpeechOutputVoiceId"/>).</summary>
+    public async Task<VoidResult<string>> SetVoiceAsync(string voiceId, CancellationToken cancellationToken = default)
+    {
+        var active = await ResolveActiveAsync(cancellationToken).ConfigureAwait(false);
+        if (active.IsError)
+            return new VoidResult<string>(active.Error);
+
+        var voices = await _models.ListVoicesAsync(active.Value, cancellationToken).ConfigureAwait(false);
+        if (voices.IsError)
+            return new VoidResult<string>(voices.Error);
+
+        var id = (voiceId ?? "").Trim();
+        var row = voices.Value.FirstOrDefault(v =>
+            string.Equals(v.VoiceId, id, StringComparison.OrdinalIgnoreCase));
+        return row is null
+            ? new VoidResult<string>($"Unknown voice '{id}'.")
+            : await _settings.SetSettingAsync(DysonAppSettingKeys.SpeechOutputVoiceId, row.VoiceId, cancellationToken)
+                .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Deletes an enrolled voice's files, then its row. Catalog voices are refused.
+    /// Clears <see cref="DysonAppSettingKeys.SpeechOutputVoiceId"/> when it names this voice.
+    /// </summary>
+    public async Task<VoidResult<string>> DeleteVoiceAsync(
+        string modelRuntimeId,
+        string voiceId,
+        CancellationToken cancellationToken = default)
+    {
+        var runtimeId = (modelRuntimeId ?? "").Trim();
+        var id = (voiceId ?? "").Trim();
+        var voices = await _models.ListVoicesAsync(runtimeId, cancellationToken).ConfigureAwait(false);
+        if (voices.IsError)
+            return new VoidResult<string>(voices.Error);
+
+        var row = voices.Value.FirstOrDefault(v => string.Equals(v.VoiceId, id, StringComparison.Ordinal));
+        if (row is null)
+            return new VoidResult<string>($"Voice '{id}' was not found.");
+        if (row.SourceFileName is null)
+            return new VoidResult<string>("Built-in voices cannot be deleted.");
+
+        var dir = VoicesDir(runtimeId);
+        if (dir is null)
+            return new VoidResult<string>($"No voice files for '{runtimeId}'.");
+
+        var deleted = await Task.Run(() => DeleteVoiceFiles(dir, row.VoiceId), cancellationToken).ConfigureAwait(false);
+        if (deleted.IsError)
+            return deleted;
+
+        var removed = await _models.DeleteVoiceAsync(runtimeId, row.VoiceId, cancellationToken).ConfigureAwait(false);
+        if (removed.IsError)
+            return removed;
+
+        var setting = await _settings.GetSettingAsync(DysonAppSettingKeys.SpeechOutputVoiceId, cancellationToken)
+            .ConfigureAwait(false);
+        if (setting.IsError)
+            return new VoidResult<string>(setting.Error);
+        if (!string.Equals(setting.Value?.Trim(), row.VoiceId, StringComparison.Ordinal))
+            return VoidResult<string>.Success;
+
+        return await _settings.SetSettingAsync(DysonAppSettingKeys.SpeechOutputVoiceId, "", cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private string? VoicesDir(string runtimeId) => runtimeId switch
+    {
+        DysonQwenSpeech.Id => DysonSpeechPaths.GetQwenVoicesDir(installRoot),
+        DysonChatterboxSpeech.Id => DysonSpeechPaths.GetChatterboxVoicesDir(installRoot),
+        var id when DysonCrispSpeech.IsTextToSpeech(id) => DysonGgufSpeechModels.GetVoicesDir(installRoot, id),
+        _ => null,
+    };
+
+    /// <summary><c>voiceId.*</c> matches <c>voiceId.pt</c> and <c>voiceId.source.mp3</c>, not <c>voiceId-2.pt</c>.</summary>
+    private static VoidResult<string> DeleteVoiceFiles(string dir, string voiceId)
+    {
+        try
+        {
+            if (!Directory.Exists(dir))
+                return VoidResult<string>.Success;
+            foreach (var file in Directory.GetFiles(dir, voiceId + ".*"))
+                File.Delete(file);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new VoidResult<string>($"Could not delete voice files: {ex.Message}");
+        }
+    }
+
     private static void StopBridgesExcept(string runtimeId)
     {
         if (runtimeId != DysonPocketSpeech.Id)
@@ -146,7 +236,7 @@ public sealed class DysonActiveTextToSpeech(
         if (DysonGgufSpeechModels.IsCrisp(runtimeId))
             DysonCrispSpeech.StopSidecarUnless(runtimeId);
         else
-            DysonCrispSpeech.StopSidecar();
+            DysonCrispSpeech.StopSidecarIfServing(DysonCrispSpeech.IsTextToSpeech);
     }
 
     /// <summary>Error text uses <c>{0}</c> for the model name.</summary>

@@ -210,6 +210,7 @@ public static class DysonUiWebHost
         builder.Services.AddScoped<IDysonTextToSpeech>(sp => sp.GetRequiredService<DysonActiveTextToSpeech>());
 #if WINDOWS
         builder.Services.AddScoped<DysonSpeechTryout>();
+        builder.Services.AddScoped<DysonVoiceMode>();
 #endif
 
         if (hostingMode == DysonHostingMode.Cloud)

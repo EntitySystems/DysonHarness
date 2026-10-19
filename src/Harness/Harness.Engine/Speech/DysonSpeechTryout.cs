@@ -119,9 +119,16 @@ public sealed class DysonSpeechTryout(
         }
     }
 
-    /// <summary>Stops the current clip. Nothing playing is an error from <see cref="IDysonAudioPlayback.Stop"/>.</summary>
-    public VoidResult<string> StopPlayback()
+    /// <summary>
+    /// Stops the current clip. A positive <paramref name="fadeOut"/> only fades device volume and does not cancel
+    /// synthesis; playback cancels itself when the fade ends. Nothing playing is an error from
+    /// <see cref="IDysonAudioPlayback.Stop"/>.
+    /// </summary>
+    public VoidResult<string> StopPlayback(TimeSpan fadeOut = default)
     {
+        if (fadeOut > TimeSpan.Zero)
+            return _playback.Stop(fadeOut);
+
         CancellationTokenSource? cts;
         lock (_gate)
             cts = _playCts;

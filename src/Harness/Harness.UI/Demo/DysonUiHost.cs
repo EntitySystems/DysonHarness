@@ -339,6 +339,47 @@ public sealed class DysonUiHost : IAsyncDisposable
         return PromptAsync(text, agentMode, cancellationToken);
     }
 
+    /// <summary>
+    /// Root Meta Agent voice mode. Calls <see cref="DysonAgentSession.SetVoiceMode"/> and persists
+    /// <c>SystemPromptSnapshot</c>. Null turns it off. Not a stored preference; the meta page owns the lifetime.
+    /// </summary>
+    public async Task<VoidResult<string>> SetMetaVoiceModeAsync(DysonVoiceMode? voice)
+    {
+        if (_session is null)
+        {
+            LastError = "No active session.";
+            Notify(DysonHostChangeKind.Error);
+            return new VoidResult<string>(LastError);
+        }
+
+        var applied = _session.SetVoiceMode(voice);
+        if (applied.IsError)
+        {
+            LastError = applied.Error;
+            Notify(DysonHostChangeKind.Error);
+            return applied;
+        }
+
+        if (_session.PersistenceId != Guid.Empty)
+        {
+            var persist = await _sessions.UpdateSessionMetaAsync(
+                new DysonSessionMetaUpdate
+                {
+                    SessionId = _session.PersistenceId,
+                    SystemPromptSnapshot = _session.SystemPrompt,
+                }).ConfigureAwait(false);
+            if (persist.IsError)
+            {
+                LastError = persist.Error;
+                Notify(DysonHostChangeKind.Error);
+                return persist;
+            }
+        }
+
+        Notify(DysonHostChangeKind.SessionGraph);
+        return VoidResult<string>.Success;
+    }
+
     public Guid? ActiveSessionId => _session?.PersistenceId is { } id && id != Guid.Empty ? id : null;
     public Guid HostId { get; } = Guid.NewGuid();
     public DysonMessageBus Bus { get; }

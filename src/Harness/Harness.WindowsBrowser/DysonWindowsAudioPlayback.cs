@@ -12,6 +12,8 @@ public sealed class DysonWindowsAudioPlayback : IDysonAudioPlayback
     private readonly Func<IWavePlayer> _openDevice;
     private readonly Lock _gate = new();
     private CancellationTokenSource? _playing;
+    private IWavePlayer? _device;
+    private bool _fading;
 
     public DysonWindowsAudioPlayback() : this(() => new WaveOut()) { }
 
@@ -123,20 +125,72 @@ public sealed class DysonWindowsAudioPlayback : IDysonAudioPlayback
             device?.Stop();
             device?.Dispose();
             lock (_gate)
+            {
                 _playing = null;
+                _device = null;
+                _fading = false;
+            }
+
             playing.Dispose();
         }
     }
 
-    public VoidResult<string> Stop()
+    public VoidResult<string> Stop(TimeSpan fadeOut = default)
     {
+        IWavePlayer device;
+        float start;
         lock (_gate)
         {
+            var open = _device;
             if (_playing is null)
                 return VoidResult<string>.AsError("Nothing is playing.");
-            _playing.Cancel();
-            return VoidResult<string>.Success;
+            if (fadeOut <= TimeSpan.Zero || open is null)
+            {
+                _playing.Cancel();
+                return VoidResult<string>.Success;
+            }
+
+            if (_fading)
+                return VoidResult<string>.Success;
+
+            _fading = true;
+            device = open;
+            start = open.Volume;
         }
+
+        // Device volume, not a sample provider: WaveOut already queued about 300 ms, and only the device fades that.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var steps = Math.Max(1, (int)Math.Ceiling(fadeOut.TotalMilliseconds / 20d));
+                for (var i = 1; i <= steps; i++)
+                {
+                    await Task.Delay(20).ConfigureAwait(false);
+                    device.Volume = start * (1f - (i / (float)steps));
+                }
+
+                device.Volume = 0f;
+            }
+            catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException)
+            {
+            }
+            finally
+            {
+                lock (_gate)
+                {
+                    _fading = false;
+                    try
+                    {
+                        _playing?.Cancel();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+                }
+            }
+        });
+        return VoidResult<string>.Success;
     }
 
     private Result<IWavePlayer, string> Open(BufferedWaveProvider buffer)
@@ -146,7 +200,10 @@ public sealed class DysonWindowsAudioPlayback : IDysonAudioPlayback
         {
             device = _openDevice();
             device.Init(buffer);
+            device.Volume = 1f;
             device.Play();
+            lock (_gate)
+                _device = device;
             return Result<IWavePlayer, string>.AsValue(device);
         }
         catch (MmException e)

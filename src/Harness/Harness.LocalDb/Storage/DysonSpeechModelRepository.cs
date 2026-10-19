@@ -110,7 +110,7 @@ public sealed class DysonSpeechModelRepository(
     public Task<VoidResult<string>> EnsureCatalogVoiceAsync(
         string modelRuntimeId,
         string voiceId,
-        string displayName,
+        string? displayName,
         string variant,
         CancellationToken cancellationToken = default,
         string? sourceFileName = null)
@@ -127,13 +127,23 @@ public sealed class DysonSpeechModelRepository(
                 if (exists)
                     return VoidResult<string>.Success;
 
+                var name = displayName;
+                if (name is null)
+                {
+                    var enrolled = await db.SpeechVoices.CountAsync(
+                            v => v.SubjectId == subjectId && v.SourceFileName != null,
+                            ct)
+                        .ConfigureAwait(false);
+                    name = $"Voice #{enrolled + 1}";
+                }
+
                 db.SpeechVoices.Add(new DysonSpeechVoiceEntity
                 {
                     Id = Guid.NewGuid(),
                     SubjectId = subjectId,
                     ModelRuntimeId = modelRuntimeId,
                     VoiceId = voiceId,
-                    DisplayName = displayName,
+                    DisplayName = name,
                     SourceFileName = sourceFileName,
                     Variant = variant,
                     CreatedUtc = DateTime.UtcNow,
@@ -167,6 +177,157 @@ public sealed class DysonSpeechModelRepository(
             {
                 return Result<IReadOnlyList<DysonSpeechVoiceEntity>, string>.AsError(
                     $"Failed to list speech voices: {ex.Message}");
+            }
+        }, cancellationToken);
+    }
+
+    public Task<Result<IReadOnlyList<string>, string>> GetWakeNamesAsync(CancellationToken cancellationToken = default)
+    {
+        var subjectId = _subjectContext.SubjectId;
+        return _accessor.RunAsync<Result<IReadOnlyList<string>, string>>(async (db, ct) =>
+        {
+            try
+            {
+                var row = await db.SpeechWakeNames.AsNoTracking()
+                    .FirstOrDefaultAsync(w => w.SubjectId == subjectId, ct)
+                    .ConfigureAwait(false);
+                if (row is null)
+                    return Result<IReadOnlyList<string>, string>.AsValue([]);
+
+                return Result<IReadOnlyList<string>, string>.AsValue(
+                [
+                    row.Variant1, row.Variant2, row.Variant3, row.Variant4,
+                    row.Variant5, row.Variant6, row.Variant7, row.Variant8,
+                ]);
+            }
+            catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+            {
+                return Result<IReadOnlyList<string>, string>.AsError($"Failed to read wake names: {ex.Message}");
+            }
+        }, cancellationToken);
+    }
+
+    public Task<VoidResult<string>> SaveWakeNamesAsync(
+        IReadOnlyList<string> variants,
+        CancellationToken cancellationToken = default)
+    {
+        if (variants is null || variants.Count != 8)
+            return Task.FromResult(new VoidResult<string>("Wake name needs 8 variants."));
+
+        var texts = new string[8];
+        for (var i = 0; i < 8; i++)
+        {
+            var raw = variants[i];
+            var text = string.IsNullOrWhiteSpace(raw) ? "" : raw.Trim();
+            if (text.Length == 0)
+                return Task.FromResult(new VoidResult<string>($"Variant {i + 1} is empty."));
+            if (text.Length > 200)
+                return Task.FromResult(new VoidResult<string>($"Variant {i + 1} is over 200 characters."));
+            texts[i] = text;
+        }
+
+        var subjectId = _subjectContext.SubjectId;
+        return _accessor.RunAsync<VoidResult<string>>(async (db, ct) =>
+        {
+            try
+            {
+                var row = await db.SpeechWakeNames
+                    .FirstOrDefaultAsync(w => w.SubjectId == subjectId, ct)
+                    .ConfigureAwait(false);
+                var now = DateTime.UtcNow;
+                if (row is null)
+                {
+                    row = new DysonSpeechWakeNameEntity
+                    {
+                        Id = Guid.NewGuid(),
+                        SubjectId = subjectId,
+                        CreatedUtc = now,
+                    };
+                    db.SpeechWakeNames.Add(row);
+                }
+
+                row.Variant1 = texts[0];
+                row.Variant2 = texts[1];
+                row.Variant3 = texts[2];
+                row.Variant4 = texts[3];
+                row.Variant5 = texts[4];
+                row.Variant6 = texts[5];
+                row.Variant7 = texts[6];
+                row.Variant8 = texts[7];
+                row.UpdatedUtc = now;
+                await DysonDbAccessor.SaveChangesAsync(db, ct).ConfigureAwait(false);
+                return VoidResult<string>.Success;
+            }
+            catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+            {
+                return new VoidResult<string>($"Failed to save wake names: {ex.Message}");
+            }
+        }, cancellationToken);
+    }
+
+    public Task<VoidResult<string>> RenameVoiceAsync(
+        string modelRuntimeId,
+        string voiceId,
+        string displayName,
+        CancellationToken cancellationToken = default)
+    {
+        var name = (displayName ?? "").Trim();
+        if (name.Length == 0)
+            return Task.FromResult(new VoidResult<string>("Voice name is empty."));
+        if (name.Length > 64)
+            return Task.FromResult(new VoidResult<string>("Voice name is over 64 characters."));
+
+        var subjectId = _subjectContext.SubjectId;
+        return _accessor.RunAsync<VoidResult<string>>(async (db, ct) =>
+        {
+            try
+            {
+                var row = await db.SpeechVoices
+                    .FirstOrDefaultAsync(
+                        v => v.SubjectId == subjectId && v.ModelRuntimeId == modelRuntimeId && v.VoiceId == voiceId,
+                        ct)
+                    .ConfigureAwait(false);
+                if (row is null)
+                    return new VoidResult<string>($"Voice '{voiceId}' was not found.");
+
+                row.DisplayName = name;
+                await DysonDbAccessor.SaveChangesAsync(db, ct).ConfigureAwait(false);
+                return VoidResult<string>.Success;
+            }
+            catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+            {
+                return new VoidResult<string>($"Failed to rename voice '{voiceId}': {ex.Message}");
+            }
+        }, cancellationToken);
+    }
+
+    public Task<VoidResult<string>> DeleteVoiceAsync(
+        string modelRuntimeId,
+        string voiceId,
+        CancellationToken cancellationToken = default)
+    {
+        var subjectId = _subjectContext.SubjectId;
+        return _accessor.RunAsync<VoidResult<string>>(async (db, ct) =>
+        {
+            try
+            {
+                var row = await db.SpeechVoices
+                    .FirstOrDefaultAsync(
+                        v => v.SubjectId == subjectId && v.ModelRuntimeId == modelRuntimeId && v.VoiceId == voiceId,
+                        ct)
+                    .ConfigureAwait(false);
+                if (row is null)
+                    return new VoidResult<string>($"Voice '{voiceId}' was not found.");
+                if (row.SourceFileName is null)
+                    return new VoidResult<string>("Built-in voices cannot be deleted.");
+
+                db.SpeechVoices.Remove(row);
+                await DysonDbAccessor.SaveChangesAsync(db, ct).ConfigureAwait(false);
+                return VoidResult<string>.Success;
+            }
+            catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+            {
+                return new VoidResult<string>($"Failed to delete voice '{voiceId}': {ex.Message}");
             }
         }, cancellationToken);
     }

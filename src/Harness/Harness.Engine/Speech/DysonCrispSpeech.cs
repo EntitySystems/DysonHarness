@@ -213,7 +213,7 @@ public sealed class DysonCrispSpeech(
         var saved = await _models.EnsureCatalogVoiceAsync(
                 _runtimeId,
                 voiceId,
-                Path.GetFileNameWithoutExtension(fileName)!,
+                null,
                 Path.GetFileName(_installRoot),
                 CancellationToken.None,
                 sourceFileName: Path.GetFileName(fileName))
@@ -262,6 +262,19 @@ public sealed class DysonCrispSpeech(
         lock (OutputTail)
         {
             if (string.Equals(_servingId, runtimeId, StringComparison.Ordinal) && Alive(_sidecar))
+                return;
+        }
+
+        StopSidecar();
+    }
+
+    /// <summary>Stops the sidecar only when <c>_servingId</c> matches <paramref name="kind"/>.</summary>
+    internal static void StopSidecarIfServing(Func<string, bool> kind)
+    {
+        ArgumentNullException.ThrowIfNull(kind);
+        lock (OutputTail)
+        {
+            if (_servingId is null || !kind(_servingId) || !Alive(_sidecar))
                 return;
         }
 
@@ -933,7 +946,8 @@ public sealed class DysonCrispSpeech(
         return format == 1 && bits == 16;
     }
 
-    private static bool IsSpeechToText(string id) =>
+    /// <summary>Phonon 2 GGUF Q4_K and Q8_0. Not the Python build.</summary>
+    internal static bool IsSpeechToText(string id) =>
         id is DysonGgufSpeechModels.PhononGgufId or DysonGgufSpeechModels.PhononGgufQ8Id;
 
     /// <summary>Pocket, Qwen, and Chatterbox GGUF, Q4 and Q8. Not Phonon.</summary>

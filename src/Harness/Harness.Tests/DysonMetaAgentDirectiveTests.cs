@@ -34,6 +34,30 @@ public class DysonMetaAgentDirectiveTests
         MustNotContain(explore, heading, "Meta Agent Drone -> Explore first prompt");
     }
 
+    [Fact]
+    public void WithVoice_AppendsBlockOnlyForMetaAgentWhenOn()
+    {
+        var on = DysonAgentSystemPrompts.WithVoice(
+            DysonAgentSystemPrompts.MetaAgentDirective,
+            DysonAgentModes.MetaAgent,
+            true);
+        Assert.Contains("SpeakToUser", on, StringComparison.Ordinal);
+        Assert.Contains("[voice input]", on, StringComparison.Ordinal);
+        Assert.Contains("Voice mode (on):", on, StringComparison.Ordinal);
+
+        var off = DysonAgentSystemPrompts.WithVoice(
+            DysonAgentSystemPrompts.MetaAgentDirective,
+            DysonAgentModes.MetaAgent,
+            false);
+        Assert.Equal(DysonAgentSystemPrompts.MetaAgentDirective, off);
+
+        var drone = DysonAgentSystemPrompts.WithVoice(
+            DysonAgentSystemPrompts.MetaAgentDroneDirective,
+            DysonAgentModes.MetaAgentDrone,
+            true);
+        Assert.Equal(DysonAgentSystemPrompts.MetaAgentDroneDirective, drone);
+    }
+
     private static void AssertWorkerMandate()
     {
         var text = DysonAgentSystemPrompts.MetaAgentDroneWorkerFirstTurnMandate;

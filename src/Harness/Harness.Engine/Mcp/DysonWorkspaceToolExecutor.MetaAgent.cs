@@ -410,6 +410,35 @@ public sealed partial class DysonWorkspaceToolExecutor
         return Ok(call, """{"ok":true}""");
     }
 
+    private DysonToolCallResult SpeakToUser(DysonToolCall call)
+    {
+        var denied = RejectUnlessMetaAgent(call, "SpeakToUser");
+        if (denied is not null)
+            return denied;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var text = RequireString(doc.RootElement, "text");
+            if (text.IsError)
+                return Error(call, text.Error);
+
+            var voice = _session.Config.Voice;
+            if (voice is null)
+                return Error(call, "SpeakToUser: voice mode is off.");
+
+            var spoken = voice.Speak(text.Value);
+            if (spoken.IsError)
+                return Error(call, "SpeakToUser: " + spoken.Error);
+
+            return Ok(call, """{"ok":true}""");
+        }
+        catch (JsonException)
+        {
+            return Error(call, "SpeakToUser: invalid JSON arguments.");
+        }
+    }
+
     private const int MaxConversationActions = 8;
     private const int MaxUserQuestionChoices = 12;
 

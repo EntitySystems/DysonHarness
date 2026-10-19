@@ -36,14 +36,45 @@ internal sealed partial class DysonSpeechBridge(string name)
         }
 
         var stdout = begin.Value;
-        var finished = false;
+        var handedOff = false;
         try
         {
             while (true)
             {
-                var frame = await ReadFrameAsync(stdout, cancellationToken).ConfigureAwait(false);
+                // Read the whole frame with no cancel, then wait. A cancel never splits a frame in the pipe.
+                var read = ReadFrameAsync(stdout, CancellationToken.None);
+                Result<(FrameKind Kind, byte[] Payload), string>? frame = null;
+                var cancelled = false;
+                try
+                {
+                    frame = await read.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    cancelled = true;
+                }
+
+                if (cancelled)
+                {
+                    handedOff = true;
+                    _ = DrainAsync(stdout, read);
+                    yield break;
+                }
+
+                if (frame is null)
+                {
+                    Stop();
+                    _gate.Release();
+                    handedOff = true;
+                    yield return Result<DysonSpeechAudioChunk, string>.AsError($"{name} bridge stopped.");
+                    yield break;
+                }
+
                 if (frame.IsError)
                 {
+                    Stop();
+                    _gate.Release();
+                    handedOff = true;
                     yield return Result<DysonSpeechAudioChunk, string>.AsError(frame.Error);
                     yield break;
                 }
@@ -51,14 +82,16 @@ internal sealed partial class DysonSpeechBridge(string name)
                 var (kind, payload) = frame.Value;
                 if (kind == FrameKind.End)
                 {
-                    finished = true;
+                    _gate.Release();
+                    handedOff = true;
                     yield return Result<DysonSpeechAudioChunk, string>.AsValue(new DysonSpeechAudioChunk([], sampleRate, IsLast: true));
                     yield break;
                 }
 
                 if (kind == FrameKind.Error)
                 {
-                    finished = true;
+                    _gate.Release();
+                    handedOff = true;
                     yield return Result<DysonSpeechAudioChunk, string>.AsError($"{name}: " + Encoding.UTF8.GetString(payload));
                     yield break;
                 }
@@ -68,10 +101,54 @@ internal sealed partial class DysonSpeechBridge(string name)
         }
         finally
         {
-            // An abandoned or broken stream leaves frames in the pipe: drop the bridge so the next call starts clean.
-            if (!finished)
-                Stop();
-            _gate.Release();
+            if (!handedOff)
+                _ = DrainAsync(stdout, null);
+        }
+    }
+
+    /// <summary>
+    /// Finishes the current bridge request in the background so the process stays loaded.
+    /// </summary>
+    private async Task DrainAsync(Stream stdout, Task<Result<(FrameKind Kind, byte[] Payload), string>>? pending)
+    {
+        // ponytail: the bridge still generates the rest of that request. In reliable response mode that is the
+        // whole text, so the next utterance waits for it. Upgrade path: an "op: cancel" read on a stdin thread
+        // in DysonQwenBridge.py, DysonChatterboxBridge.py and DysonPocketBridge.py.
+        var stop = false;
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            while (true)
+            {
+                var read = pending ?? ReadFrameAsync(stdout, CancellationToken.None);
+                pending = null;
+                var frame = await read.WaitAsync(timeout.Token).ConfigureAwait(false);
+                if (frame.IsError)
+                {
+                    stop = true;
+                    return;
+                }
+
+                if (frame.Value.Kind is FrameKind.End or FrameKind.Error)
+                    return;
+            }
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or IOException or EndOfStreamException
+                                       or ObjectDisposedException or InvalidOperationException)
+        {
+            stop = true;
+        }
+        finally
+        {
+            try
+            {
+                if (stop)
+                    Stop();
+            }
+            finally
+            {
+                _gate.Release();
+            }
         }
     }
 
@@ -182,9 +259,10 @@ internal sealed partial class DysonSpeechBridge(string name)
     /// <summary>
     /// Train TTS model for engines that make a voice prompt (speaker embedding), never a fine-tune: copies the
     /// clip to <c>staging/enroll-{guid}.mp3</c> (or <c>.wav</c> when <paramref name="acceptWav"/>), sends
-    /// <c>op: enroll</c>, always deletes the clip, then inserts the voice row and makes it the default voice.
+    /// <c>op: enroll</c>, keeps the clip as <c>{voiceId}.source.mp3</c> or <c>.source.wav</c>, then inserts the
+    /// voice row and makes it the default voice.
     /// A non-blank <paramref name="transcript"/> is stored as <c>{voiceId}.txt</c> beside the <c>.pt</c>.
-    /// A failed DB step deletes the <c>.pt</c> and that txt.
+    /// A failed later step deletes the <c>.pt</c>, that txt, and the kept clip.
     /// </summary>
     public async Task<Result<DysonSpeechVoiceEntity, string>> EnrollAsync(
         IDysonSpeechModelRepository models,
@@ -223,7 +301,8 @@ internal sealed partial class DysonSpeechBridge(string name)
         var staging = Path.Combine(installRoot, "staging");
         var audioPath = Path.Combine(staging, $"enroll-{Guid.NewGuid():N}{(mp3 ? ".mp3" : ".wav")}");
 
-        VoidResult<string> enroll;
+        string? sourcePath = null;
+        VoidResult<string>? enroll = null;
         try
         {
             Directory.CreateDirectory(staging);
@@ -237,27 +316,44 @@ internal sealed partial class DysonSpeechBridge(string name)
                 {
                     total += read;
                     if (total > DysonPhononSpeech.MaxAudioBytes)
-                        return Result<DysonSpeechVoiceEntity, string>.AsError($"Audio clip is over {DysonPhononSpeech.MaxAudioBytes / (1024 * 1024)} MB.");
+                    {
+                        enroll = new VoidResult<string>($"Audio clip is over {DysonPhononSpeech.MaxAudioBytes / (1024 * 1024)} MB.");
+                        break;
+                    }
+
                     await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                 }
             }
 
-            enroll = await RequestAsync(check, startInfo, new { op = "enroll", audioPath, outPath }, cancellationToken)
-                .ConfigureAwait(false);
+            if (enroll is null)
+            {
+                enroll = await RequestAsync(check, startInfo, new { op = "enroll", audioPath, outPath }, cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException)
         {
             enroll = new VoidResult<string>($"{name}: could not read the clip: {ex.Message}");
         }
-        finally
+
+        if (enroll is not { IsSuccess: true } || !File.Exists(outPath))
         {
             TryDelete(audioPath);
+            TryDelete(outPath);
+            return Result<DysonSpeechVoiceEntity, string>.AsError(
+                enroll is { IsError: true } ? enroll.Error : $"{name} wrote no voice file.");
         }
 
-        if (enroll.IsError || !File.Exists(outPath))
+        sourcePath = Path.Combine(voicesDir, voiceId + ".source" + (mp3 ? ".mp3" : ".wav"));
+        try
         {
+            File.Move(audioPath, sourcePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            TryDelete(audioPath);
             TryDelete(outPath);
-            return Result<DysonSpeechVoiceEntity, string>.AsError(enroll.IsError ? enroll.Error : $"{name} wrote no voice file.");
+            return Result<DysonSpeechVoiceEntity, string>.AsError($"{name}: could not keep the clip: {ex.Message}");
         }
 
         var txtPath = Path.Combine(voicesDir, voiceId + ".txt");
@@ -269,12 +365,13 @@ internal sealed partial class DysonSpeechBridge(string name)
             {
                 TryDelete(outPath);
                 TryDelete(txtPath);
+                TryDelete(sourcePath);
                 return Result<DysonSpeechVoiceEntity, string>.AsError(wroteText.Error);
             }
         }
 
         var row = await models.EnsureCatalogVoiceAsync(
-                runtimeId, voiceId, Path.GetFileNameWithoutExtension(fileName)!, Path.GetFileName(installRoot), CancellationToken.None,
+                runtimeId, voiceId, null, Path.GetFileName(installRoot), CancellationToken.None,
                 sourceFileName: Path.GetFileName(fileName))
             .ConfigureAwait(false);
         var select = row.IsError
@@ -289,6 +386,7 @@ internal sealed partial class DysonSpeechBridge(string name)
 
         TryDelete(outPath);
         TryDelete(txtPath);
+        TryDelete(sourcePath!);
         return Result<DysonSpeechVoiceEntity, string>.AsError(
             select.IsError ? select.Error : saved is { IsError: true } ? saved.Error : $"Voice '{voiceId}' was not saved.");
     }

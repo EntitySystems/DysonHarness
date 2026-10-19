@@ -349,6 +349,30 @@ public static class DysonAgentSystemPrompts
         - Anything not in a todo, a compaction summary, a scratch note, or a child report (ListMetaAgentDrones returns the last report per agent) is lost. A posted message is shown to the user and is not in later turns.
         """;
 
+    /// <summary>Appended to the root Meta Agent directive only while voice mode is on.</summary>
+    public const string MetaAgentVoiceDirective = """
+        Voice mode (on):
+        - The user is listening to you and talking to you through a microphone. Keep posting as usual; voice is added on top.
+        - SpeakToUser(text) speaks text aloud with text-to-speech. Use short sentences and plain English words. Use few acronyms, file paths, ids, or symbols unless they are common in this conversation. A long message is allowed only as a sequence of short sentences.
+        - Call SpeakToUser before PostConversationMessage. The posted message is the more technical, expanded version of what you said: names, paths, ids, links, and detail go there, not into speech.
+        - Post status eagerly. When you dispatch, when a report lands, and when you are blocked, say one short sentence with SpeakToUser, then post the detail.
+        - A user message that starts with "[voice input]" was spoken and transcribed by speech-to-text. Words may be misheard; read for intent.
+        - After a user message that starts with "[voice input]", your first action is SpeakToUser with a short acknowledgement, before any other tool. For example: "Let me think about that.", "Processing request.", or "On it, just wait a moment."
+        - The user can interrupt you by talking. Speech stops, and their words arrive as the next "[voice input]" message.
+        """;
+
+    /// <summary>
+    /// Appends <see cref="MetaAgentVoiceDirective"/> only for the root Meta Agent when <paramref name="voiceOn"/> is true.
+    /// Every other mode, and voice mode off, returns <paramref name="directive"/> unchanged.
+    /// </summary>
+    public static string WithVoice(string directive, string agentMode, bool voiceOn)
+    {
+        if (!voiceOn || !DysonSessionPolicy.IsMetaAgent(agentMode))
+            return directive;
+
+        return directive + "\n\n" + MetaAgentVoiceDirective;
+    }
+
     public const string MetaAgentDroneDirective = """
         Mode: Meta Agent Drone (isolated implementer).
 

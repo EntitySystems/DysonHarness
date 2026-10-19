@@ -157,7 +157,7 @@ public sealed class DysonActiveSpeechToText(
         if (runtimeId is DysonGgufSpeechModels.PhononGgufId or DysonGgufSpeechModels.PhononGgufQ8Id)
             DysonCrispSpeech.StopSidecarUnless(runtimeId);
         else
-            DysonCrispSpeech.StopSidecar();
+            DysonCrispSpeech.StopSidecarIfServing(DysonCrispSpeech.IsSpeechToText);
         if (!string.Equals(runtimeId, DysonGgufSpeechModels.NemotronId, StringComparison.Ordinal))
             DysonNemotronSpeech.Stop();
     }

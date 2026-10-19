@@ -579,7 +579,7 @@ public class DysonSpeechTryoutTests
             return VoidResult<string>.Success;
         }
 
-        public VoidResult<string> Stop()
+        public VoidResult<string> Stop(TimeSpan fadeOut = default)
         {
             Stops++;
             if (Waiting > 0)

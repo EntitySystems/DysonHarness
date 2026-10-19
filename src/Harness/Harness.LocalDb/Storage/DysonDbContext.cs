@@ -35,6 +35,7 @@ public sealed class DysonDbContext : DbContext
     public DbSet<DysonUsageRequestEntity> UsageRequests => Set<DysonUsageRequestEntity>();
     public DbSet<DysonSpeechModelEntity> SpeechModels => Set<DysonSpeechModelEntity>();
     public DbSet<DysonSpeechVoiceEntity> SpeechVoices => Set<DysonSpeechVoiceEntity>();
+    public DbSet<DysonSpeechWakeNameEntity> SpeechWakeNames => Set<DysonSpeechWakeNameEntity>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -364,6 +365,22 @@ public sealed class DysonDbContext : DbContext
             e.Property(x => x.Variant).IsRequired();
             e.HasIndex(x => new { x.SubjectId, x.ModelRuntimeId, x.VoiceId }).IsUnique();
             e.HasIndex(x => x.SubjectId);
+        });
+
+        modelBuilder.Entity<DysonSpeechWakeNameEntity>(e =>
+        {
+            e.ToTable("speech_wake_names");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.SubjectId).IsRequired();
+            e.Property(x => x.Variant1).IsRequired();
+            e.Property(x => x.Variant2).IsRequired();
+            e.Property(x => x.Variant3).IsRequired();
+            e.Property(x => x.Variant4).IsRequired();
+            e.Property(x => x.Variant5).IsRequired();
+            e.Property(x => x.Variant6).IsRequired();
+            e.Property(x => x.Variant7).IsRequired();
+            e.Property(x => x.Variant8).IsRequired();
+            e.HasIndex(x => x.SubjectId).IsUnique();
         });
     }
 

@@ -59,17 +59,33 @@ public static class DysonSpeechTorchDevice
             ? RocmBridgeDevice
             : null;
 
-    public static Task<VoidResult<string>> SaveAsync(
+    public static async Task<VoidResult<string>> SaveAsync(
         IDysonSubjectSettingsRepository settings,
         string? value,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(settings);
         if (IsRejectedCuda(value))
-            return Task.FromResult(new VoidResult<string>("CUDA PyTorch is not available."));
-        return settings.SetSettingAsync(
-            DysonAppSettingKeys.SpeechTorchDevice,
-            IsRocm(value) ? RocmValue : CpuValue,
-            cancellationToken);
+            return new VoidResult<string>("CUDA PyTorch is not available.");
+
+        var next = IsRocm(value) ? RocmValue : CpuValue;
+        var stored = await settings.GetSettingAsync(DysonAppSettingKeys.SpeechTorchDevice, cancellationToken)
+            .ConfigureAwait(false);
+        if (stored.IsError)
+            return new VoidResult<string>(stored.Error);
+
+        // A cancel drains the bridge and leaves the process up. A ROCm/CPU change kills it so the next speak starts
+        // on the new torch. The same device does not stop, so a repeat save leaves the model warm.
+        if (IsRocm(stored.Value) != IsRocm(next))
+        {
+            DysonQwenSpeech.StopBridge();
+            DysonChatterboxSpeech.StopBridge();
+            DysonPocketSpeech.StopBridge();
+        }
+        else if (string.Equals(stored.Value?.Trim(), next, StringComparison.OrdinalIgnoreCase))
+            return VoidResult<string>.Success;
+
+        return await settings.SetSettingAsync(DysonAppSettingKeys.SpeechTorchDevice, next, cancellationToken)
+            .ConfigureAwait(false);
     }
 }

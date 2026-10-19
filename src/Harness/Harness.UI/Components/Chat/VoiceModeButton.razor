@@ -1,0 +1,244 @@
+@namespace Harness.UI.Components.Chat
+@using DysonHarness
+@using Harness.UI.Demo
+@using Microsoft.Extensions.DependencyInjection
+@implements IAsyncDisposable
+@inject IServiceProvider Services
+@inject DysonUiHost Host
+
+@* Root Meta Agent voice mode. Windows only; a missing service is the off tooltip, not a hidden control. *@
+<button type="button"
+        class="@CssClass"
+        title="@Title"
+        aria-label="@Title"
+        aria-pressed="@_on"
+        aria-disabled="@Blocked"
+        @onclick="ClickAsync"
+        @onfocus="RefreshRequirementsAsync"
+        @onmouseenter="RefreshRequirementsAsync">
+    <span class="voice-mode__icon" aria-hidden="true"></span>
+</button>
+
+@code {
+    private static readonly TimeSpan RefreshGap = TimeSpan.FromSeconds(2);
+    private const string NotWindowsTitle = "Voice mode needs the Windows app.";
+    private const string OffTitle = "Voice mode: say the agent name, then talk. Click to turn on.";
+    private const string OnTitle = "Voice mode on. Say the agent name, then talk. Click to turn off.";
+    private const string CapturingTitle = "Listening… pause 3 seconds to send.";
+    private const string SpeakingTitle = "Speaking. Talk to interrupt.";
+
+    private DysonVoiceMode? _voice;
+    private string? _blockReason;
+    private bool _on;
+    private bool _busy;
+    private bool _hooked;
+    private bool _disposed;
+    private bool _checking;
+    private bool _ready;
+    private int _checkGeneration;
+    private DateTime _checkedUtc = DateTime.MinValue;
+
+    /// <summary>Raised when voice mode turns on or off, so the page can disable push-to-talk.</summary>
+    [Parameter] public EventCallback<bool> OnChanged { get; set; }
+
+    private bool Blocked => _ready && (_voice is null || _blockReason is not null);
+
+    private string Title
+    {
+        get
+        {
+            if (!_ready)
+                return OffTitle;
+            if (_voice is null)
+                return NotWindowsTitle;
+            if (_blockReason is not null)
+                return _blockReason;
+            if (!_on)
+                return OffTitle;
+            if (_voice.IsSpeaking)
+                return SpeakingTitle;
+            if (_voice.IsCapturing)
+                return CapturingTitle;
+            return OnTitle;
+        }
+    }
+
+    private string CssClass
+    {
+        get
+        {
+            if (Blocked)
+                return "voice-mode voice-mode--off";
+            if (!_on || _voice is null)
+                return "voice-mode";
+            if (_voice.IsSpeaking)
+                return "voice-mode is-on is-speaking";
+            if (_voice.IsCapturing)
+                return "voice-mode is-on is-capturing";
+            return "voice-mode is-on";
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _voice = Services.GetService<DysonVoiceMode>();
+        _ready = true;
+        await RefreshRequirementsAsync();
+    }
+
+    /// <summary>Page session switch: stop before the host focuses another session.</summary>
+    public Task TurnOffAsync() => StopAndDetachAsync(report: true);
+
+    private async Task ClickAsync()
+    {
+        if (!_ready || _disposed || _busy || Blocked)
+            return;
+        if (_on)
+        {
+            await TurnOffAsync();
+            return;
+        }
+
+        if (_voice is null)
+            return;
+
+        _busy = true;
+        _checkGeneration++;
+        try
+        {
+            var started = await _voice.StartAsync();
+            if (_disposed)
+            {
+                await _voice.StopAsync();
+                return;
+            }
+
+            if (started.IsError)
+            {
+                _blockReason = started.Error;
+                return;
+            }
+
+            var attached = await Host.SetMetaVoiceModeAsync(_voice);
+            if (attached.IsError || _disposed)
+            {
+                await _voice.StopAsync();
+                await Host.SetMetaVoiceModeAsync(null);
+                if (attached.IsError && !_disposed)
+                    Host.ReportError(attached.Error);
+                return;
+            }
+
+            Subscribe();
+            _on = true;
+            _blockReason = null;
+            await OnChanged.InvokeAsync(true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RefreshRequirementsAsync()
+    {
+        if (_voice is null || _on || _disposed || _checking)
+            return;
+        if (DateTime.UtcNow - _checkedUtc < RefreshGap)
+            return;
+
+        _checking = true;
+        _checkedUtc = DateTime.UtcNow;
+        var generation = ++_checkGeneration;
+        try
+        {
+            var result = await _voice.CheckRequirementsAsync();
+            if (_disposed || _on || generation != _checkGeneration)
+                return;
+            _blockReason = result.IsError ? result.Error : null;
+        }
+        finally
+        {
+            _checking = false;
+        }
+    }
+
+    private async Task StopAndDetachAsync(bool report)
+    {
+        if (!_on && _voice is not { IsOn: true })
+            return;
+
+        Unsubscribe();
+        var voice = _voice;
+        _on = false;
+        if (voice is not null)
+            await voice.StopAsync();
+
+        if (voice is not null)
+        {
+            var off = await Host.SetMetaVoiceModeAsync(null);
+            if (report && off.IsError && !_disposed)
+                Host.ReportError(off.Error);
+        }
+
+        if (!_disposed)
+        {
+            await OnChanged.InvokeAsync(false);
+            _checkedUtc = DateTime.MinValue;
+            await RefreshRequirementsAsync();
+        }
+    }
+
+    private void Subscribe()
+    {
+        if (_hooked || _voice is null)
+            return;
+        _voice.StateChanged += OnStateChanged;
+        _voice.Failed += OnFailed;
+        _voice.MessageReady += OnMessageReady;
+        _hooked = true;
+    }
+
+    private void Unsubscribe()
+    {
+        if (!_hooked || _voice is null)
+            return;
+        _voice.StateChanged -= OnStateChanged;
+        _voice.Failed -= OnFailed;
+        _voice.MessageReady -= OnMessageReady;
+        _hooked = false;
+    }
+
+    private void OnStateChanged() => PostToCircuit(StateHasChanged);
+
+    private void OnFailed(string message) => PostToCircuit(() => Host.ReportError(message));
+
+    private Task OnMessageReady(string text) =>
+        InvokeAsync(async () =>
+        {
+            await Host.PromptOrInjectAsync(text, DysonAgentModes.MetaAgent);
+        });
+
+    private void PostToCircuit(Action action)
+    {
+        try
+        {
+            _ = InvokeAsync(action);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        Unsubscribe();
+        if (_voice is not null && (_on || _voice.IsOn))
+        {
+            _on = false;
+            await _voice.StopAsync();
+            await Host.SetMetaVoiceModeAsync(null);
+        }
+    }
+}

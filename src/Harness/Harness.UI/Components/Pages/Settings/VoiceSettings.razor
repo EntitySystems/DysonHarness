@@ -191,6 +191,11 @@
         </div>
     }
 
+    @if (_tryout is not null)
+    {
+        <VoiceWakeNames Tryout="_tryout" />
+    }
+
     @if (InstalledTts.Count > 0 || _activeError is not null)
     {
         <div class="settings-page__panel panel voice-active">
@@ -269,6 +274,7 @@
                 <div class="@(_trainOk ? "voice-train__result" : "error-banner voice-train__result")" role="status">@_trainResult</div>
             }
         </div>
+        <VoiceCloneList RuntimeId="@active.RuntimeId" ModelName="@active.DisplayName" Version="_voiceListVersion" />
     }
 
     @if (_tryout is not null && (_inputId is not null || _activeId is not null))
@@ -352,6 +358,7 @@
     private string? _error;
     private string? _trainResult;
     private bool _trainOk;
+    private int _voiceListVersion;
     private DysonSpeechTryout? _tryout;
     private List<DysonAudioInputDevice> _mics = [];
     private string? _micId;
@@ -586,7 +593,9 @@
             _trainOk = result.IsSuccess;
             _trainResult = result.IsError
                 ? result.Error
-                : $"Voice {result.Value.DisplayName} saved and selected.";
+                : $"{result.Value.DisplayName} saved and selected.";
+            if (result.IsSuccess)
+                _voiceListVersion++;
         }
         finally
         {
@@ -644,7 +653,9 @@
             var transcript = string.IsNullOrWhiteSpace(_trainTranscript) ? null : _trainTranscript.Trim();
             var result = await Tts.PrepareVoiceAsync(clip, file.Name, transcript: transcript);
             _trainOk = result.IsSuccess;
-            _trainResult = result.IsError ? result.Error : $"Voice {result.Value.DisplayName} saved and selected.";
+            _trainResult = result.IsError ? result.Error : $"{result.Value.DisplayName} saved and selected.";
+            if (result.IsSuccess)
+                _voiceListVersion++;
         }
         finally
         {

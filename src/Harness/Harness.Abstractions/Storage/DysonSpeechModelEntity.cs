@@ -80,3 +80,33 @@ public sealed class DysonSpeechVoiceEntity
     /// <summary>UTC.</summary>
     public DateTime CreatedUtc { get; set; }
 }
+
+/// <summary>Subject-owned agent wake name (<c>speech_wake_names</c>): 8 spoken variants as STT text. One row per subject.</summary>
+public sealed class DysonSpeechWakeNameEntity
+{
+    public Guid Id { get; set; }
+
+    public string SubjectId { get; set; } = "";
+
+    public string Variant1 { get; set; } = "";
+
+    public string Variant2 { get; set; } = "";
+
+    public string Variant3 { get; set; } = "";
+
+    public string Variant4 { get; set; } = "";
+
+    public string Variant5 { get; set; } = "";
+
+    public string Variant6 { get; set; } = "";
+
+    public string Variant7 { get; set; } = "";
+
+    public string Variant8 { get; set; } = "";
+
+    /// <summary>UTC.</summary>
+    public DateTime CreatedUtc { get; set; }
+
+    /// <summary>UTC.</summary>
+    public DateTime UpdatedUtc { get; set; }
+}

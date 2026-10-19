@@ -178,4 +178,10 @@ public class DysonAgentSessionConfig
     /// When set, preferred over <see cref="DisabledTools"/> for catalog builds.
     /// </summary>
     public DysonToolPolicyDocument? ToolPolicy { get; set; }
+
+    /// <summary>
+    /// Root Meta Agent only, set by <see cref="DysonAgentSession.SetVoiceMode"/> while voice mode is on.
+    /// Non-null adds SpeakToUser and the voice prompt block. Not persisted.
+    /// </summary>
+    public DysonVoiceMode? Voice { get; set; }
 }

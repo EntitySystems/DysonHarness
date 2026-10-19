@@ -1,0 +1,34 @@
+.voice-wake__row {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.voice-wake__label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.voice-wake__row button[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.voice-wake__text {
+  min-width: 0;
+  background: var(--bg-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+
+.voice-wake__status {
+  margin: 8px 0 0;
+}
+
+.voice-wake__status--error {
+  color: var(--danger);
+}

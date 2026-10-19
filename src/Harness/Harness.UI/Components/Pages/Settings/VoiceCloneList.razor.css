@@ -1,0 +1,56 @@
+.voice-clones__list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.voice-clones__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+}
+
+.voice-clones__name {
+  color: var(--text);
+}
+
+.voice-clones__badge {
+  color: var(--accent-text);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 0 6px;
+  font-size: 12px;
+}
+
+.voice-clones__model {
+  color: var(--text-muted);
+  font-size: 12px;
+  min-width: 0;
+}
+
+.voice-clones__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.voice-clones__rename {
+  min-width: 0;
+  flex: 1 1 8rem;
+  background: var(--bg-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+
+.voice-clones__error {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: 12px;
+}

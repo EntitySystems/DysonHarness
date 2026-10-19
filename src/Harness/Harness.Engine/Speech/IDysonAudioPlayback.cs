@@ -16,6 +16,10 @@ public interface IDysonAudioPlayback
         IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> chunks,
         CancellationToken cancellationToken);
 
-    /// <summary>Stops the current clip. Nothing playing is an error.</summary>
-    VoidResult<string> Stop();
+    /// <summary>
+    /// Stops the current clip. <paramref name="fadeOut"/> of zero cancels at once.
+    /// A positive fade ramps device volume to zero, then stops; the call returns immediately.
+    /// Nothing playing is an error.
+    /// </summary>
+    VoidResult<string> Stop(TimeSpan fadeOut = default);
 }

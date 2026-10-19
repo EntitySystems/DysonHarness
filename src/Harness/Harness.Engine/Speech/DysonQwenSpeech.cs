@@ -7,7 +7,7 @@ namespace DysonHarness;
 /// Qwen3-TTS 0.6B Base (<c>Qwen/Qwen3-TTS-12Hz-0.6B-Base</c>) through <c>qwen/bridge.py</c> on the CPU torch,
 /// or on <c>torch-rocm/</c> with <c>device_map="cuda:0"</c> when <c>speech_torch_device</c> is <c>rocm</c>.
 /// 24 kHz PCM. Base has no built-in speaker: every voice is an enrolled <c>.pt</c> voice prompt (speaker
-/// embedding from one .mp3 or .wav, x-vector only), never a fine-tune. The clip is not kept.
+/// embedding from one .mp3 or .wav, x-vector only), never a fine-tune. The clip is kept as\n/// <c>{voiceId}.source.mp3</c> or <c>.source.wav</c>.
 /// </summary>
 public sealed class DysonQwenSpeech(
     IDysonSpeechModelRepository models,

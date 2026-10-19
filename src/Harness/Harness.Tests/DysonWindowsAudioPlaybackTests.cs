@@ -85,6 +85,39 @@ public class DysonWindowsAudioPlaybackTests
     }
 
     [Fact]
+    public async Task Stop_WithFade_RampsVolumeToZeroThenStops()
+    {
+        var device = new FakeDevice();
+        var playback = new DysonWindowsAudioPlayback(() => device);
+        var chunks = Channel.CreateUnbounded<Result<DysonSpeechAudioChunk, string>>();
+        var play = playback.PlayAsync(chunks.Reader.ReadAllAsync(), CancellationToken.None);
+        chunks.Writer.TryWrite(Chunk(480));
+        await WaitUntil(() => device.Buffered == 480);
+
+        Assert.True(playback.Stop(TimeSpan.FromMilliseconds(100)).IsSuccess);
+        Assert.False(play.IsCompleted);
+        Assert.False(device.Disposed);
+        await WaitUntil(() => device.Disposed);
+        Assert.Equal(0f, device.Volume);
+        Assert.Contains(device.Volumes, volume => volume > 0f && volume < 1f);
+        Assert.True((await play).IsSuccess);
+    }
+
+    [Fact]
+    public async Task Open_ResetsVolumeToOne()
+    {
+        var device = new FakeDevice { Volume = 0f };
+        var playback = new DysonWindowsAudioPlayback(() => device);
+        var chunks = Channel.CreateUnbounded<Result<DysonSpeechAudioChunk, string>>();
+        var play = playback.PlayAsync(chunks.Reader.ReadAllAsync(), CancellationToken.None);
+        chunks.Writer.TryWrite(Chunk(480));
+        await WaitUntil(() => device.PlaybackState == PlaybackState.Playing);
+        Assert.Equal(1f, device.Volume);
+        Assert.True(playback.Stop().IsSuccess);
+        Assert.True((await play).IsSuccess);
+    }
+
+    [Fact]
     public async Task Odd_pcm_chunk_is_carried_into_the_next_chunk()
     {
         byte[] whole = [1, 2, 3, 4, 5, 6, 7, 8];
@@ -155,7 +188,17 @@ public class DysonWindowsAudioPlaybackTests
         public void Stop() => PlaybackState = PlaybackState.Stopped;
         public void Pause() => PlaybackState = PlaybackState.Paused;
         public void Dispose() => Disposed = true;
-        public float Volume { get; set; } = 1f;
+        private float _volume = 1f;
+        public List<float> Volumes { get; } = [];
+        public float Volume
+        {
+            get => _volume;
+            set
+            {
+                _volume = value;
+                Volumes.Add(value);
+            }
+        }
         public PlaybackState PlaybackState { get; private set; }
         public WaveFormat OutputWaveFormat => _provider!.WaveFormat;
         public event EventHandler<StoppedEventArgs>? PlaybackStopped { add { } remove { } }
