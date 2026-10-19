@@ -596,6 +596,14 @@ public static class DysonMetaAgentTools
                       "type": "integer",
                       "minimum": 1,
                       "description": "Reuse this existing drone instead of spawning a new one."
+                    },
+                    "modelSlug": {
+                      "type": "string",
+                      "description": "Optional model slug or display alias. Omit uses the Settings Meta Agent Drone default (same spawn as StartAsyncMetaAgentDrone with the slug omitted). Does not inherit the parent chat model when that default is set. Ignored when agentId reuses an existing drone."
+                    },
+                    "reasoningEffort": {
+                      "type": "string",
+                      "description": "Optional freeform reasoning_effort. Omit keeps the settings default effort when modelSlug is also omitted; when modelSlug is set, omit uses that slug's defaultEffort. Ignored when agentId reuses an existing drone."
                     }
                   },
                   "required": ["planId"]

@@ -150,6 +150,8 @@ Accepts `building` / `completed` / `stale` only (`DysonMetaAgentTools.SetPlanSta
 
 Reuse: `agentId` → `TriggerSubagentEventAsync` with that brief (not capped). Otherwise spawn one coordinator via the same `CreateMetaAgentDroneChildAsync` core (`useWorktree: true`, `purpose: build`); that spawn counts toward `MaxRunningWorktreeDrones`, and a refused spawn leaves the plan status unchanged. One plan is never split across several drones; the builder runs its own workers. Then `UpdateAsync(..., status: Building, buildAgentId: persistenceId)`.
 
+Optional `modelSlug` and `reasoningEffort` apply only on that new spawn. Omit, missing, or whitespace is null/null (Settings Meta Agent Drone default, including its effort; the parent only if that default is unset). Slug set and effort omitted uses that slug's defaultEffort. Effort set and slug omitted keeps the settings model with that effort. Both set uses both strings. `agentId` reuse ignores both and does not change the existing drone's model.
+
 Second builder: `FindLiveBuilder` refuses a new spawn while a **non-terminal** child still matches `BuildAgentId` (`"Plan {id} is already being built by agent #{n}. Pass that agentId to extend the build, or SetPlanStatus stale first."`). A `Building` row whose builder is already terminal can start a new one. That is the live-builder check, not a `Status == Building` check.
 
 ### `DeletePlan`

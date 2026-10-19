@@ -906,6 +906,8 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         long planId;
         string? extraInstructions;
+        string? modelSlug;
+        string? reasoningEffort;
         int? agentId;
         try
         {
@@ -915,6 +917,8 @@ public sealed partial class DysonWorkspaceToolExecutor
                 return Error(call, DysonMetaAgentTools.PlanIdMustBePositiveMessage);
             planId = id.Value;
             extraInstructions = GetOptionalString(doc.RootElement, "extraInstructions");
+            modelSlug = GetOptionalString(doc.RootElement, "modelSlug");
+            reasoningEffort = GetOptionalString(doc.RootElement, "reasoningEffort");
             agentId = GetInt(doc.RootElement, "agentId");
             if (agentId is < 1)
                 return Error(call, "BeginBuildPlan: agentId (≥ 1) is required when provided.");
@@ -976,8 +980,8 @@ public sealed partial class DysonWorkspaceToolExecutor
                     brief,
                     context: null,
                     initialTodos: null,
-                    modelSlug: null,
-                    reasoningEffort: null,
+                    modelSlug,
+                    reasoningEffort,
                     useWorktree: true,
                     cancellationToken)
                 .ConfigureAwait(false);
