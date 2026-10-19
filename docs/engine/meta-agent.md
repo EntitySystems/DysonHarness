@@ -94,11 +94,11 @@ While on, one listen loop reads the growing transcript (`DysonSpeechTryout.Recor
 
 - **Wake.** Exact contiguous token match against one of the eight stored texts in `speech_wake_names`. Tokens are lowercased and reduced to letters and digits. The last match wins. There is no fuzzy match and no hardcoded name; the eight variants are the tolerance for STT spelling.
 - **Submit.** More than 3 s (`PauseMs`) with no new words after the wake. The user message is `DysonVoiceMode.InputPrefix` + the rest (`"[voice input] …"`), submitted through the existing composer path (`PromptOrInjectAsync`: queue when busy, inject when a turn is running). A wake with nothing after it is dropped.
-- **Barge-in.** While TTS is speaking, at least two new words that are not echo (`IsEcho` is false) interrupt with no wake name. Playback fades out (`FadeOut`, 150 ms). Those words keep accumulating and the same 3 s pause submits them as the next `[voice input]` message. The model is not unloaded.
+- **Barge-in.** While TTS is speaking, only a match of one of the eight stored wake names cancels playback. Ordinary speech does not. Playback fades out (`FadeOut`, 150 ms), the speak job is cancelled, and the model stays loaded. The words after that wake name keep accumulating and the same 3 s pause submits them as the next `[voice input]` message. A wake is not required again for the rest of that utterance.
 
-`IsEcho` is true when at least 60% of the heard words appear in the sentence being spoken. `SpeakToUser` enqueues (`Speak`); calls play in order on the selected voice (`speech_output_voice_id`). Speech stops when the user starts talking.
+`IsEcho` is true when at least 60% of the heard words appear in the sentence being spoken. Echo does not cancel playback. `SpeakToUser` enqueues (`Speak`); calls play in order on the selected voice (`speech_output_voice_id`). Speech stops only when a stored wake name is heard.
 
-The appended prompt block (Meta Agent, voice on only) tells the model: keep posting; speak short plain-English sentences and put technical detail in `PostConversationMessage`; call `SpeakToUser` before that post; say one short sentence on dispatch, report, and block, then post the detail; treat a message that starts with `[voice input]` as speech that may be misheard; after such a message, the first action is `SpeakToUser` with a short acknowledgement before any other tool; the user can interrupt, and their words arrive as the next `[voice input]` message.
+The appended prompt block (Meta Agent, voice on only) tells the model: keep posting; speak short plain-English sentences and put technical detail in `PostConversationMessage`; call `SpeakToUser` before that post; say one short sentence on dispatch, report, and block, then post the detail; treat a message that starts with `[voice input]` as speech that may be misheard; after such a message, the first action is `SpeakToUser` with a short acknowledgement before any other tool; the user interrupts only by saying the agent name, and the words after that name arrive as the next `[voice input]` message.
 
 Turn-on checks (`Requirements`, first failure wins; each message points at Settings → Voice): an active speech-to-text model, an active text-to-speech model, exactly eight non-blank wake names, a trained voice when the active TTS is Qwen-family only (Python Qwen or Qwen GGUF; Pocket and Chatterbox speak with no clone), and not Phonon 2 GGUF speech-to-text together with any GGUF text-to-speech model (one CrispASR sidecar per process; they would evict each other).
 
@@ -108,7 +108,7 @@ Ceilings (`ponytail:` in the engine):
 
 - Python TTS cancel fades audio in about 150 ms, but the bridge finishes the current request in the background (drain). The next utterance waits. That wait is worst in `reliable` response mode; `low-latency` sentence streaming shortens it. Upgrade: a bridge `op: cancel`.
 - CrispASR cancel aborts the HTTP read. The server may finish that generation before the next request. The model stays loaded.
-- The echo filter is a text heuristic, not acoustic echo cancellation. A loud speaker can still self-interrupt; a headset avoids it. Upgrade: Windows voice-capture DSP in `DysonWindowsAudioCapture`.
+- The echo filter is a text heuristic, not acoustic echo cancellation. Echo of the sentence being spoken does not cancel playback. Upgrade: Windows voice-capture DSP in `DysonWindowsAudioCapture`.
 - The live stream restarts after each submit and after 400 idle characters with no wake. A wake spoken in that roughly 100 ms gap is missed.
 
 ## Plan tools

@@ -49,14 +49,30 @@ public class DysonVoiceModeTests
     }
 
     [Fact]
-    public void Listener_SpeechDuringPlayback_BargesInWithoutWake()
+    public void Listener_OrdinarySpeechDuringPlayback_DoesNotCancel()
     {
         var listener = new DysonVoiceMode.Listener(Eight());
         Assert.Equal(
-            DysonVoiceMode.ListenAction.BargeIn,
+            DysonVoiceMode.ListenAction.None,
             listener.OnText("stop that now", 100, "Processing request."));
-        Assert.Null(listener.OnTick(3100));
-        Assert.Equal("[voice input] stop that now", listener.OnTick(3101));
+        Assert.False(listener.Capturing);
+        Assert.Null(listener.OnTick(100 + DysonVoiceMode.PauseMs + 1));
+    }
+
+    [Fact]
+    public void Listener_WakeDuringPlayback_CancelsAndSubmitsWordsAfterTheName()
+    {
+        var listener = new DysonVoiceMode.Listener(Eight());
+        Assert.Equal(DysonVoiceMode.ListenAction.None, listener.OnText("not the name", 0, "Processing request."));
+        Assert.Equal(
+            DysonVoiceMode.ListenAction.BargeIn,
+            listener.OnText("not the name hey dyson stop", 100, "Processing request."));
+        Assert.True(listener.Capturing);
+        Assert.Equal(
+            DysonVoiceMode.ListenAction.None,
+            listener.OnText("not the name hey dyson stop please", 500, "Processing request."));
+        Assert.Null(listener.OnTick(500 + DysonVoiceMode.PauseMs));
+        Assert.Equal("[voice input] stop please", listener.OnTick(500 + DysonVoiceMode.PauseMs + 1));
     }
 
     [Fact]
@@ -68,6 +84,26 @@ public class DysonVoiceModeTests
             listener.OnText("processing request", 50, "Processing request."));
         Assert.False(listener.Capturing);
         Assert.Null(listener.OnTick(50 + DysonVoiceMode.PauseMs + 1));
+
+        var named = new DysonVoiceMode.Listener(Eight());
+        Assert.Equal(
+            DysonVoiceMode.ListenAction.None,
+            named.OnText("hey dyson", 50, "Hey Dyson, I am on it."));
+        Assert.False(named.Capturing);
+    }
+
+    [Fact]
+    public void Listener_SubmittedTranscript_IsNotHeardAgainWhileSpeaking()
+    {
+        var listener = new DysonVoiceMode.Listener(Eight());
+        listener.OnText("hey dyson open the plan", 0, null);
+        Assert.Equal("[voice input] open the plan", listener.OnTick(DysonVoiceMode.PauseMs + 1));
+
+        Assert.Equal(
+            DysonVoiceMode.ListenAction.None,
+            listener.OnText("hey dyson open the plan", DysonVoiceMode.PauseMs + 2, "On it."));
+        Assert.False(listener.Capturing);
+        Assert.Null(listener.OnTick(DysonVoiceMode.PauseMs + 2 + DysonVoiceMode.PauseMs + 1));
     }
 
     [Fact]

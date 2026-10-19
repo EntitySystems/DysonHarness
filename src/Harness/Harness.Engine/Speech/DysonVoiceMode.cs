@@ -4,7 +4,7 @@ namespace DysonHarness;
 
 /// <summary>
 /// Root Meta Agent voice mode: one listen loop over the growing transcript, a 3 s pause to submit,
-/// barge-in while speech is playing, and a queue the SpeakToUser tool fills.
+/// barge-in on a stored wake name while speech is playing, and a queue the SpeakToUser tool fills.
 /// Windows only, same shape as <see cref="DysonSpeechTryout"/>. No interface: one implementation.
 /// </summary>
 public sealed class DysonVoiceMode(
@@ -238,7 +238,7 @@ public sealed class DysonVoiceMode(
 
     /// <summary>
     /// Heard text is echo when at least 60% of its words are in the sentence being spoken.
-    /// ponytail: text heuristic, not acoustic echo cancellation. Loud speakers can still self-interrupt; a headset avoids it.
+    /// Echo never cancels playback. ponytail: text heuristic, not acoustic echo cancellation.
     /// Upgrade: Windows voice-capture DSP (AEC) in DysonWindowsAudioCapture.
     /// </summary>
     internal static bool IsEcho(string heard, string speaking)
@@ -416,6 +416,10 @@ public sealed class DysonVoiceMode(
                 if (message is null)
                     continue;
 
+                // Before the turn speaks. Otherwise this segment keeps the old transcript and the
+                // next OnText, with the speak mark reset, hears it again from offset 0 and barges in.
+                CancelSegment();
+
                 var ready = MessageReady;
                 if (ready is not null)
                 {
@@ -428,8 +432,6 @@ public sealed class DysonVoiceMode(
                         Failed?.Invoke(ex.Message);
                     }
                 }
-
-                CancelSegment();
             }
         }
         catch (OperationCanceledException)
@@ -491,7 +493,7 @@ public sealed class DysonVoiceMode(
                             RaiseState();
                     }
 
-                    if (played.IsError)
+                    if (played.IsError && !IsIntentionalSpeechCancel(played.Error))
                         Failed?.Invoke(played.Error);
                 }
             }
@@ -515,6 +517,12 @@ public sealed class DysonVoiceMode(
 
         _tryout.StopPlayback(FadeOut);
     }
+
+    /// <summary>Fade or stop of the speak job is not a failure the user should see.</summary>
+    private static bool IsIntentionalSpeechCancel(string error) =>
+        error.Contains("operation was canceled", StringComparison.OrdinalIgnoreCase)
+        || error.Contains("task was canceled", StringComparison.OrdinalIgnoreCase)
+        || error.Contains("was cancelled", StringComparison.OrdinalIgnoreCase);
 
     private void CancelRun()
     {
@@ -774,15 +782,19 @@ public sealed class DysonVoiceMode(
             var heard = transcript[slice..];
             _text = transcript;
             _previousLength = transcript.Length;
-            if (Tokenize(heard).Count >= 2 && !IsEcho(heard, speaking))
-            {
-                _messageStart = slice;
-                _lastChangeMs = nowMs;
-                Capturing = true;
-                return ListenAction.BargeIn;
-            }
+            // Ordinary speech and echo do not stop playback. Only a stored wake name does.
+            if (IsEcho(heard, speaking))
+                return ListenAction.None;
 
-            return ListenAction.None;
+            var wakeEnd = MatchEnd(heard, _variants);
+            if (wakeEnd < 0)
+                return ListenAction.None;
+
+            var wakeAt = slice + wakeEnd;
+            _messageStart = wakeAt + SkipLead(transcript.AsSpan(wakeAt));
+            _lastChangeMs = nowMs;
+            Capturing = true;
+            return ListenAction.BargeIn;
         }
 
         internal string? OnTick(long nowMs)
@@ -793,7 +805,11 @@ public sealed class DysonVoiceMode(
             var msg = _messageStart >= 0 && _messageStart <= _text.Length
                 ? _text[_messageStart..].Trim()
                 : "";
+            var consumed = _text.Length;
             Reset();
+            // Same segment can still deliver this transcript until it restarts. Do not match it from 0.
+            _previousLength = consumed;
+            _idleMark = consumed;
             return msg.Length == 0 ? null : InputPrefix + msg;
         }
     }

@@ -88,7 +88,7 @@ Voice mode: `VoiceModeButton` is mounted in `meta-composer__pickers` immediately
 | Ready, off | (none) | Voice mode: say the agent name, then talk. Click to turn on. |
 | On, listening | `is-on` | Voice mode on. Say the agent name, then talk. Click to turn off. |
 | On, wake heard | `is-on is-capturing` | Listening… pause 3 seconds to send. |
-| On, speaking | `is-on is-speaking` | Speaking. Talk to interrupt. |
+| On, speaking | `is-on is-speaking` | Speaking. Say the agent name to interrupt. |
 
 Unavailable uses `aria-disabled="true"` and a no-op click, not the `disabled` attribute, so the tooltip still shows. `aria-pressed` is true while on. Turn on calls `StartAsync`, then `Host.SetMetaVoiceModeAsync(voice)`, then subscribes. Turn off calls `StopAsync`, then `SetMetaVoiceModeAsync(null)`. A ready transcript is `Host.PromptOrInjectAsync` with mode Meta Agent (same path as Send; the text already starts with `[voice input] `). `Dispose`, leaving the page, or switching the root session turns voice off first. It lives only while this page is open and is never persisted. Loop errors go to `Host.ReportError`. Static mic styles live in `VoiceModeButton.razor.css` (ring when on, accent while capturing).
 

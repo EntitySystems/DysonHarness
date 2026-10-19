@@ -517,15 +517,24 @@ public sealed class DysonCrispSpeech(
 
         HttpResponseMessage? response = null;
         string? sendError = null;
+        var sendCancelled = false;
         try
         {
             response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Playback stop. Not a failure, and this does not unload the sidecar.
+            sendCancelled = true;
+        }
         catch (Exception ex) when (ex is HttpRequestException or IOException or OperationCanceledException)
         {
             sendError = $"CrispASR speech failed: {ex.Message}";
         }
+
+        if (sendCancelled)
+            yield break;
 
         if (response is null)
         {
@@ -548,15 +557,24 @@ public sealed class DysonCrispSpeech(
             {
                 int read;
                 string? readError = null;
+                var readCancelled = false;
                 try
                 {
                     read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    read = -1;
+                    readCancelled = true;
                 }
                 catch (Exception ex) when (ex is HttpRequestException or IOException or OperationCanceledException)
                 {
                     read = -1;
                     readError = $"CrispASR speech failed: {ex.Message}";
                 }
+
+                if (readCancelled)
+                    yield break;
 
                 if (readError is not null)
                 {

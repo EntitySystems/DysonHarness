@@ -358,7 +358,7 @@ public static class DysonAgentSystemPrompts
         - Post status eagerly. When you dispatch, when a report lands, and when you are blocked, say one short sentence with SpeakToUser, then post the detail.
         - A user message that starts with "[voice input]" was spoken and transcribed by speech-to-text. Words may be misheard; read for intent.
         - After a user message that starts with "[voice input]", your first action is SpeakToUser with a short acknowledgement, before any other tool. For example: "Let me think about that.", "Processing request.", or "On it, just wait a moment."
-        - The user can interrupt you by talking. Speech stops, and their words arrive as the next "[voice input]" message.
+        - The user interrupts you only by saying the agent name. Speech stops, and the words after that name arrive as the next "[voice input]" message. Other talk while you are speaking does not stop you.
         """;
 
     /// <summary>
