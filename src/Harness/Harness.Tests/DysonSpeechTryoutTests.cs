@@ -388,7 +388,8 @@ public class DysonSpeechTryoutTests
 
         public async IAsyncEnumerable<Result<byte[], string>> CapturePcmAsync(
             string? deviceId,
-            [EnumeratorCancellation] CancellationToken cancellationToken)
+            [EnumeratorCancellation] CancellationToken cancellationToken,
+            bool dropOldest = false)
         {
             PcmCaptures++;
             DeviceIds.Add(deviceId);

@@ -124,23 +124,65 @@ public class DysonWindowsAudioCaptureTests
     }
 
     [Fact]
-    public async Task Falling_behind_is_an_error()
+    public async Task Live_overrun_drops_the_oldest_block_and_does_not_fault()
     {
-        var wave = new FakeWaveIn
+        var block = DysonWindowsAudioCapture.PcmBlockBytes;
+        var pcm = new byte[block * (DysonWindowsAudioCapture.MaxQueuedWindows + 1)];
+        pcm[0] = 1;
+        pcm[block] = 2;
+        pcm[block * 2] = 3;
+        var wave = new FakeWaveIn { PushOnStart = pcm };
+        var capture = new DysonWindowsAudioCapture(OneMic, _ => wave);
+        var results = new List<Result<byte[], string>>();
+        var read = Task.Run(async () =>
+        {
+            await foreach (var item in capture.CapturePcmAsync("0", CancellationToken.None, dropOldest: true))
+                results.Add(item);
+        });
+
+        await wave.Started;
+        await WaitUntil(() => results.Count == DysonWindowsAudioCapture.MaxQueuedWindows);
+        Assert.True(capture.Stop().IsSuccess);
+        await read;
+
+        Assert.Equal(DysonWindowsAudioCapture.MaxQueuedWindows, results.Count);
+        Assert.All(results, r => Assert.True(r.IsSuccess));
+        Assert.Equal(2, results[0].Value[0]);
+        Assert.Equal(3, results[1].Value[0]);
+        Assert.DoesNotContain(results, r => r.IsError);
+        Assert.True(wave.Stopped);
+    }
+
+    [Fact]
+    public async Task Window_and_enroll_overrun_is_still_an_error()
+    {
+        var windows = new FakeWaveIn
         {
             PushOnStart = new byte[DysonWindowsAudioCapture.WindowBytes * (DysonWindowsAudioCapture.MaxQueuedWindows + 1)],
         };
-        var capture = new DysonWindowsAudioCapture(OneMic, _ => wave);
-        var results = new List<Result<Stream, string>>();
-        await foreach (var item in capture.CaptureWindowsAsync("0", CancellationToken.None))
+        var windowCapture = new DysonWindowsAudioCapture(OneMic, _ => windows);
+        var windowResults = new List<Result<Stream, string>>();
+        await foreach (var item in windowCapture.CaptureWindowsAsync("0", CancellationToken.None))
         {
-            results.Add(item);
+            windowResults.Add(item);
             if (item.IsSuccess)
                 await item.Value.DisposeAsync();
         }
 
-        Assert.Contains(results, r => r.IsError && r.Error.Contains("fell behind", StringComparison.Ordinal));
-        Assert.True(wave.Stopped);
+        Assert.Contains(windowResults, r => r.IsError && r.Error.Contains("fell behind", StringComparison.Ordinal));
+        Assert.True(windows.Stopped);
+
+        var enroll = new FakeWaveIn
+        {
+            PushOnStart = new byte[DysonWindowsAudioCapture.PcmBlockBytes * (DysonWindowsAudioCapture.MaxQueuedWindows + 1)],
+        };
+        var enrollCapture = new DysonWindowsAudioCapture(OneMic, _ => enroll);
+        var enrollResults = new List<Result<byte[], string>>();
+        await foreach (var item in enrollCapture.CapturePcmAsync("0", CancellationToken.None))
+            enrollResults.Add(item);
+
+        Assert.Contains(enrollResults, r => r.IsError && r.Error.Contains("fell behind", StringComparison.Ordinal));
+        Assert.True(enroll.Stopped);
     }
 
     private static async Task<List<Result<Stream, string>>> StopAfter(byte[] pcm)

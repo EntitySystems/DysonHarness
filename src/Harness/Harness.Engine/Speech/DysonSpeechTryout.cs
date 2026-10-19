@@ -144,6 +144,43 @@ public sealed class DysonSpeechTryout(
     }
 
     /// <summary>
+    /// Quiet accept beep. Returns immediately. Skips when a clip already holds playback, so speech is not stopped.
+    /// A playback error is ignored.
+    /// </summary>
+    public void PlayAcceptChime()
+    {
+        if (!_playGate.Wait(0))
+            return;
+
+        lock (_gate)
+        {
+            if (_playCts is not null)
+            {
+                _playGate.Release();
+                return;
+            }
+        }
+
+        _ = PlayAcceptChimeAsync();
+    }
+
+    private async Task PlayAcceptChimeAsync()
+    {
+        try
+        {
+            await _playback.PlayAsync(DysonAcceptChime.Once(), CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // The turn is already accepted. A missing device must not surface as a voice-mode failure.
+        }
+        finally
+        {
+            _playGate.Release();
+        }
+    }
+
+    /// <summary>
     /// Captures until <see cref="StopRecording"/> or <paramref name="cancellationToken"/> and yields the growing transcript.
     /// <paramref name="inputInstalled"/> false does not open the microphone.
     /// </summary>
@@ -311,7 +348,8 @@ public sealed class DysonSpeechTryout(
         CancellationTokenSource cts)
     {
         var committed = new StringBuilder();
-        var chunks = live.TranscribeLiveAsync(_capture.CapturePcmAsync(deviceId, cts.Token), cts.Token)
+        var chunks = live.TranscribeLiveAsync(
+                _capture.CapturePcmAsync(deviceId, cts.Token, dropOldest: true), cts.Token)
             .GetAsyncEnumerator(cts.Token);
         try
         {

@@ -419,23 +419,52 @@ public sealed class DysonVoiceMode(
                 // Before the turn speaks. Otherwise this segment keeps the old transcript and the
                 // next OnText, with the speak mark reset, hears it again from offset 0 and barges in.
                 CancelSegment();
-
-                var ready = MessageReady;
-                if (ready is not null)
-                {
-                    try
-                    {
-                        await ready(message).ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        Failed?.Invoke(ex.Message);
-                    }
-                }
+                bool speaking;
+                lock (_state)
+                    speaking = IsSpeaking;
+                // Chime is not awaited. Submit still runs if playback throws or is already speaking.
+                await AcceptTurnAsync(
+                    message, speaking, () => _tryout.PlayAcceptChime(), MessageReady, Failed)
+                    .ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
         {
+        }
+    }
+
+    /// <summary>
+    /// Forwards an accepted utterance. The chime is not awaited. Playback throwing, or speech already
+    /// playing, does not skip the submit.
+    /// </summary>
+    internal static async Task AcceptTurnAsync(
+        string message,
+        bool speaking,
+        Action chime,
+        Func<string, Task>? ready,
+        Action<string>? failed)
+    {
+        if (!speaking)
+        {
+            try
+            {
+                chime();
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        if (ready is null)
+            return;
+
+        try
+        {
+            await ready(message).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            failed?.Invoke(ex.Message);
         }
     }
 

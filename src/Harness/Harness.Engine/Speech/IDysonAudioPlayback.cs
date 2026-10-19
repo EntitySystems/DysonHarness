@@ -23,3 +23,34 @@ public interface IDysonAudioPlayback
     /// </summary>
     VoidResult<string> Stop(TimeSpan fadeOut = default);
 }
+
+/// <summary>One quiet beep when a voice turn is accepted. Not speech, and not a second voice.</summary>
+internal static class DysonAcceptChime
+{
+    internal const int SampleRate = 16_000;
+    internal const int DurationMs = 120;
+
+    internal static async IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> Once()
+    {
+        yield return Result<DysonSpeechAudioChunk, string>.AsValue(
+            new DysonSpeechAudioChunk(Pcm(), SampleRate, true));
+    }
+
+    internal static byte[] Pcm()
+    {
+        const double amplitude = 0.1;
+        var samples = SampleRate * DurationMs / 1000;
+        var pcm = new byte[samples * 2];
+        for (var i = 0; i < samples; i++)
+        {
+            var edge = Math.Min(i, samples - 1 - i);
+            var env = Math.Min(1d, edge / 80d);
+            var wave = Math.Sin(2d * Math.PI * 880d * i / SampleRate);
+            var value = (short)Math.Round(wave * env * amplitude * short.MaxValue);
+            pcm[i * 2] = (byte)value;
+            pcm[i * 2 + 1] = (byte)(value >> 8);
+        }
+
+        return pcm;
+    }
+}

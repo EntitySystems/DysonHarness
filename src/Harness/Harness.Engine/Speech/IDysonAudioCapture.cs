@@ -25,10 +25,13 @@ public interface IDysonAudioCapture
     /// <see cref="Stop"/> or <paramref name="cancellationToken"/>. Stop or cancel ends the sequence with no
     /// error item. Already capturing, a missing device, or no microphone is an error item, same as
     /// <see cref="CaptureWindowsAsync"/>.
+    /// <paramref name="dropOldest"/> false (enroll) errors when the queue is full.
+    /// True (live voice) drops the oldest unread block and keeps capturing.
     /// </summary>
     IAsyncEnumerable<Result<byte[], string>> CapturePcmAsync(
         string? deviceId,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        bool dropOldest = false);
 
     /// <summary>Stops the current capture. Nothing capturing is an error. Does not block on the device.</summary>
     VoidResult<string> Stop();

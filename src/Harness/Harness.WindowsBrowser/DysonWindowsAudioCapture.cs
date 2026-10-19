@@ -25,7 +25,10 @@ public sealed class DysonWindowsAudioCapture : IDysonAudioCapture
     /// <summary>16 kHz mono s16le, about 560 ms. Live blocks have no WAV header.</summary>
     internal const int PcmBlockBytes = SampleRate * 2 * 560 / 1000;
 
-    /// <summary>Windows waiting to be transcribed. One more and capture fails instead of growing.</summary>
+    /// <summary>
+    /// Blocks waiting to be read. WAV and enroll PCM error at this cap.
+    /// Live PCM (<c>dropOldest</c>) drops the oldest unread block instead.
+    /// </summary>
     internal const int MaxQueuedWindows = 2;
 
     private readonly Func<Result<IReadOnlyList<DysonAudioInputDevice>, string>> _listDevices;
@@ -50,7 +53,8 @@ public sealed class DysonWindowsAudioCapture : IDysonAudioCapture
         string? deviceId,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        await foreach (var block in CaptureBlocksAsync(deviceId, WindowBytes, MinFlushBytes, cancellationToken)
+        await foreach (var block in CaptureBlocksAsync(
+                               deviceId, WindowBytes, MinFlushBytes, cancellationToken, dropOldest: false)
                            .ConfigureAwait(false))
         {
             if (block.IsError)
@@ -62,14 +66,16 @@ public sealed class DysonWindowsAudioCapture : IDysonAudioCapture
 
     public IAsyncEnumerable<Result<byte[], string>> CapturePcmAsync(
         string? deviceId,
-        CancellationToken cancellationToken) =>
-        CaptureBlocksAsync(deviceId, PcmBlockBytes, minFlushBytes: 2, cancellationToken);
+        CancellationToken cancellationToken,
+        bool dropOldest = false) =>
+        CaptureBlocksAsync(deviceId, PcmBlockBytes, minFlushBytes: 2, cancellationToken, dropOldest);
 
     private async IAsyncEnumerable<Result<byte[], string>> CaptureBlocksAsync(
         string? deviceId,
         int blockBytes,
         int minFlushBytes,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+        [EnumeratorCancellation] CancellationToken cancellationToken,
+        bool dropOldest)
     {
         // WinMM stays off the Blazor circuit even if the caller did not hop.
         await Task.Run(() => 0, CancellationToken.None).ConfigureAwait(false);
@@ -101,7 +107,7 @@ public sealed class DysonWindowsAudioCapture : IDysonAudioCapture
         {
             if (_session is null)
             {
-                session = new Session(linked, blockBytes);
+                session = new Session(linked, blockBytes, dropOldest);
                 _session = session;
             }
             else
@@ -294,16 +300,17 @@ public sealed class DysonWindowsAudioCapture : IDysonAudioCapture
             WaveFormat = new WaveFormat(SampleRate, 16, 1),
         };
 
-    private sealed class Session(CancellationTokenSource cts, int blockBytes)
+    private sealed class Session(CancellationTokenSource cts, int blockBytes, bool dropOldest)
     {
         public int BlockBytes { get; } = blockBytes;
+        public bool DropOldest { get; } = dropOldest;
         public CancellationTokenSource Cts { get; } = cts;
         public Channel<byte[]> Windows { get; } = Channel.CreateBounded<byte[]>(
             new BoundedChannelOptions(MaxQueuedWindows)
             {
                 SingleReader = true,
                 SingleWriter = false,
-                FullMode = BoundedChannelFullMode.Wait,
+                FullMode = dropOldest ? BoundedChannelFullMode.DropOldest : BoundedChannelFullMode.Wait,
             });
 
         public object PendingGate { get; } = new();
@@ -338,25 +345,27 @@ public sealed class DysonWindowsAudioCapture : IDysonAudioCapture
                 if (Fault is not null || Cts.IsCancellationRequested)
                     return;
                 Pending.AddRange(copy);
-                // ponytail: queue cap is MaxQueuedWindows blocks. Past that, error instead of growing the buffer.
+                // ponytail: cap is MaxQueuedWindows. Live PCM drops the oldest block; WAV and enroll still error.
                 while (Pending.Count >= BlockBytes && Fault is null)
                 {
                     var pcm = DetachWindow();
-                    if (!Windows.Writer.TryWrite(pcm))
-                    {
-                        Fault = "Speech to text fell behind the microphone.";
-                        Pending.Clear();
-                        try
-                        {
-                            Cts.Cancel();
-                        }
-                        catch (ObjectDisposedException)
-                        {
-                        }
-
-                        Windows.Writer.TryComplete();
+                    if (Windows.Writer.TryWrite(pcm))
+                        continue;
+                    if (DropOldest)
                         return;
+
+                    Fault = "Speech to text fell behind the microphone.";
+                    Pending.Clear();
+                    try
+                    {
+                        Cts.Cancel();
                     }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+
+                    Windows.Writer.TryComplete();
+                    return;
                 }
             }
         }

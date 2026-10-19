@@ -1,8 +1,9 @@
+using System.Runtime.CompilerServices;
 using DysonHarness;
 
 namespace Harness.Tests;
 
-/// <summary>Pure voice-mode rules: wake match, pause, barge-in, echo, and requirement checks. No audio.</summary>
+/// <summary>Voice-mode rules: wake match, pause, barge-in, echo, requirements, and the accept chime (fake playback).</summary>
 public class DysonVoiceModeTests
 {
     [Fact]
@@ -226,6 +227,49 @@ public class DysonVoiceModeTests
         Assert.True(qwenWithVoice.IsSuccess);
     }
 
+    [Fact]
+    public async Task Accepted_turn_chimes_and_still_submits_when_playback_throws_or_is_busy()
+    {
+        var submitted = new List<string>();
+        string? failed = null;
+        Task Ready(string text)
+        {
+            submitted.Add(text);
+            return Task.CompletedTask;
+        }
+
+        var throwing = new ProbePlayback { Throw = true };
+        var tryout = new DysonSpeechTryout(new IdleCapture(), new IdleStt(), new IdleTts(), throwing);
+        await DysonVoiceMode.AcceptTurnAsync(
+            "[voice input] open the plan", false, tryout.PlayAcceptChime, Ready, error => failed = error);
+        await throwing.Finished;
+        Assert.Null(failed);
+        Assert.Equal(1, throwing.Plays);
+        Assert.True(throwing.ToneMs is > 0 and < 300);
+        Assert.True(throwing.Peak < 8000);
+        Assert.Equal(["[voice input] open the plan"], submitted);
+
+        submitted.Clear();
+        var busy = new ProbePlayback { Busy = true };
+        tryout = new DysonSpeechTryout(new IdleCapture(), new IdleStt(), new IdleTts(), busy);
+        await DysonVoiceMode.AcceptTurnAsync(
+            "[voice input] again", false, tryout.PlayAcceptChime, Ready, error => failed = error);
+        await busy.Finished;
+        Assert.Null(failed);
+        Assert.Equal(1, busy.Plays);
+        Assert.Equal(0, busy.Stops);
+        Assert.Equal(["[voice input] again"], submitted);
+
+        submitted.Clear();
+        var speaking = new ProbePlayback();
+        tryout = new DysonSpeechTryout(new IdleCapture(), new IdleStt(), new IdleTts(), speaking);
+        await DysonVoiceMode.AcceptTurnAsync(
+            "[voice input] while speaking", true, tryout.PlayAcceptChime, Ready, error => failed = error);
+        Assert.Null(failed);
+        Assert.Equal(0, speaking.Plays);
+        Assert.Equal(["[voice input] while speaking"], submitted);
+    }
+
     private static Result<string, string> Ok(string id) => Result<string, string>.AsValue(id);
 
     /// <summary>Variant 7 is the stored wake phrase. The other seven cannot match the test sentences.</summary>
@@ -236,5 +280,105 @@ public class DysonVoiceModeTests
             names[i] = $"name {i + 1} alpha";
         names[6] = seventh;
         return names;
+    }
+
+    private sealed class IdleCapture : IDysonAudioCapture
+    {
+        public Result<IReadOnlyList<DysonAudioInputDevice>, string> ListDevices() =>
+            Result<IReadOnlyList<DysonAudioInputDevice>, string>.AsValue([]);
+
+        public async IAsyncEnumerable<Result<Stream, string>> CaptureWindowsAsync(
+            string? deviceId,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield break;
+        }
+
+        public async IAsyncEnumerable<Result<byte[], string>> CapturePcmAsync(
+            string? deviceId,
+            [EnumeratorCancellation] CancellationToken cancellationToken,
+            bool dropOldest = false)
+        {
+            yield break;
+        }
+
+        public VoidResult<string> Stop() => VoidResult<string>.AsError("Nothing is recording.");
+    }
+
+    private sealed class IdleStt : IDysonSpeechToText
+    {
+        public string RuntimeId => "idle";
+
+        public async IAsyncEnumerable<Result<DysonSpeechChunk, string>> TranscribeAsync(
+            Stream audio,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield break;
+        }
+    }
+
+    private sealed class IdleTts : IDysonTextToSpeech
+    {
+        public string RuntimeId => "idle";
+
+        public async IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> SynthesizeAsync(
+            string text,
+            string? voiceId,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield break;
+        }
+    }
+
+    private sealed class ProbePlayback : IDysonAudioPlayback
+    {
+        private readonly TaskCompletionSource _finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Plays;
+        public int Stops;
+        public int ToneMs;
+        public int Peak;
+        public bool Throw;
+        public bool Busy;
+        public Task Finished => _finished.Task;
+
+        public async Task<VoidResult<string>> PlayAsync(
+            IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> chunks,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                Plays++;
+                await foreach (var chunk in chunks)
+                {
+                    if (!chunk.IsSuccess || chunk.Value.SampleRate <= 0)
+                        continue;
+                    var pcm = chunk.Value.Pcm;
+                    ToneMs = Math.Max(ToneMs, pcm.Length / 2 * 1000 / chunk.Value.SampleRate);
+                    for (var i = 0; i + 1 < pcm.Length; i += 2)
+                    {
+                        var sample = pcm[i] | (pcm[i + 1] << 8);
+                        if (sample >= 0x8000)
+                            sample -= 0x10000;
+                        Peak = Math.Max(Peak, Math.Abs(sample));
+                    }
+                }
+
+                if (Throw)
+                    throw new InvalidOperationException("no device");
+                return Busy
+                    ? VoidResult<string>.AsError("Audio is already playing.")
+                    : VoidResult<string>.Success;
+            }
+            finally
+            {
+                _finished.TrySetResult();
+            }
+        }
+
+        public VoidResult<string> Stop(TimeSpan fadeOut = default)
+        {
+            Stops++;
+            return VoidResult<string>.Success;
+        }
     }
 }
