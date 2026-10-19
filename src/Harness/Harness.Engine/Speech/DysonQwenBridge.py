@@ -1,6 +1,6 @@
 """Qwen3-TTS bridge: one JSON line in, length-prefixed PCM frames out.
 
-{"text", "voicePath"} speaks with a saved voice prompt. {"op": "enroll", "audioPath", "outPath"} saves a
+{"text", "voicePath", "lowLatency"} speaks with a saved voice prompt (lowLatency true: one generate per sentence). {"op": "enroll", "audioPath", "outPath"} saves a
 speaker-embedding voice prompt (x-vector only; no weights change). Frames: >0 PCM s16le 24 kHz, 0 end,
 <0 UTF-8 error.
 """
@@ -24,6 +24,7 @@ logging.basicConfig(stream=sys.stderr, level=logging.INFO)
 import numpy as np
 import torch
 from qwen_tts import Qwen3TTSModel, VoiceClonePromptItem
+from speech_sentences import speak
 
 SAMPLE_RATE = 24000
 _model = None
@@ -88,13 +89,17 @@ def main():
                 torch.save({"items": [dataclasses.asdict(i) for i in items]}, req["outPath"])
                 _prompts.pop(req["outPath"], None)
             else:
-                wavs, rate = model.generate_voice_clone(
-                    text=req["text"], language="Auto", voice_clone_prompt=_prompt(req["voicePath"]))
-                if int(rate) != SAMPLE_RATE:
-                    _fail(f"sample rate is {rate}, not {SAMPLE_RATE}")
+                prompt = _prompt(req["voicePath"])
+
+                def generate(piece):
+                    wavs, rate = model.generate_voice_clone(text=piece, language="Auto", voice_clone_prompt=prompt)
+                    if int(rate) != SAMPLE_RATE:
+                        _fail(f"sample rate is {rate}, not {SAMPLE_RATE}")
+                        return None
+                    return wavs[0]
+
+                if not speak(req["text"], generate, _send_pcm, req.get("lowLatency") is True):
                     continue
-                # ponytail: frames go out after the whole utterance; upgrade path is sentence-by-sentence generation.
-                _send_pcm(wavs[0])
             _frame(0)
         except Exception as exc:
             _fail(f"{type(exc).__name__}: {exc}")

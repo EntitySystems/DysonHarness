@@ -1,6 +1,6 @@
 """Chatterbox Turbo (English only) bridge: one JSON line in, length-prefixed PCM frames out.
 
-{"text", "voicePath"} speaks with a saved voice prompt (Conditionals .pt). {"op": "enroll", "audioPath",
+{"text", "voicePath", "lowLatency"} speaks with a saved voice prompt (Conditionals .pt; lowLatency true: one generate per sentence). {"op": "enroll", "audioPath",
 "outPath"} saves a voice prompt from a clip longer than 5 seconds (no weights change). Every output carries
 Resemble's Perth implicit watermark. Frames: >0 PCM s16le 24 kHz, 0 end, <0 UTF-8 error.
 """
@@ -24,6 +24,7 @@ import librosa
 import numpy as np
 import torch
 from chatterbox.tts_turbo import ChatterboxTurboTTS, Conditionals
+from speech_sentences import speak
 
 SAMPLE_RATE = 24000
 MIN_CLIP_SECONDS = 5.0
@@ -97,8 +98,8 @@ def main():
                     _fail(f"sample rate is {model.sr}, not {SAMPLE_RATE}")
                     continue
                 model.conds = _voice(req["voicePath"])
-                wav = model.generate(req["text"])
-                _send_pcm(wav.detach().cpu().numpy())
+                speak(req["text"], lambda piece: model.generate(piece).detach().cpu().numpy(), _send_pcm,
+                      req.get("lowLatency") is True)
             _frame(0)
         except Exception as exc:
             _fail(f"{type(exc).__name__}: {exc}")

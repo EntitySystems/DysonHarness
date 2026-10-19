@@ -254,4 +254,10 @@ public static class DysonAppSettingKeys
     /// value is the CPU torch in <c>torch/</c>. <c>cuda</c> is not a stored value.
     /// </summary>
     public const string SpeechTorchDevice = "speech_torch_device";
+
+    /// <summary>
+    /// Python Qwen3-TTS and Chatterbox Turbo response: <c>low-latency</c> generates and sends one sentence at a time.
+    /// Missing, blank, <c>reliable</c>, or any other value is one generate of the full text. Pocket and CrispASR ignore it.
+    /// </summary>
+    public const string SpeechResponseMode = "speech_response_mode";
 }

@@ -312,6 +312,10 @@ internal sealed partial class DysonSpeechBridge(string name)
         }
     }
 
+    /// <summary><c>speech_response_mode</c> is <c>low-latency</c>. Missing, blank, or anything else is Reliable.</summary>
+    internal static bool IsLowLatency(string? value) =>
+        string.Equals(value?.Trim(), "low-latency", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Slug of the file name (<c>^[a-z0-9_-]{1,64}$</c>); <c>-2</c>, <c>-3</c>, … when taken.</summary>
     internal static string NewVoiceId(string fileName, IEnumerable<string> taken)
     {

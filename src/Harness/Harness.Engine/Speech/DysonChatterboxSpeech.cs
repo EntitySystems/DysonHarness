@@ -59,9 +59,18 @@ public sealed class DysonChatterboxSpeech(
             yield break;
         }
 
+        var mode = await _settings.GetSettingAsync(DysonAppSettingKeys.SpeechResponseMode, cancellationToken)
+            .ConfigureAwait(false);
+        if (mode.IsError)
+        {
+            yield return Result<DysonSpeechAudioChunk, string>.AsError(mode.Error);
+            yield break;
+        }
+
+        var lowLatency = DysonSpeechBridge.IsLowLatency(mode.Value);
         var voicePath = Path.Combine(DysonSpeechPaths.GetChatterboxVoicesDir(_installRoot), voice.Value + ".pt");
         await foreach (var chunk in Bridge.SynthesizeAsync(
-                           () => Check(voicePath), () => StartInfo(torch.Value), new { text, voicePath }, SampleRate, cancellationToken)
+                           () => Check(voicePath), () => StartInfo(torch.Value), new { text, voicePath, lowLatency }, SampleRate, cancellationToken)
                            .ConfigureAwait(false))
         {
             yield return chunk;
@@ -96,6 +105,11 @@ public sealed class DysonChatterboxSpeech(
     {
         if (!DysonSpeechInstaller.Probe(_installRoot).ChatterboxInstalled)
             return new VoidResult<string>($"{DisplayName} is not installed. Open Settings → Voice and install it.");
+        var scripts = DysonSpeechInstaller.EnsureBridgeScripts(BridgeResourceName, DysonSpeechPaths.GetChatterboxBridge(_installRoot));
+        if (scripts.IsError)
+            return new VoidResult<string>(scripts.Error);
+        if (scripts.Value)
+            StopBridge();
         return voicePath is null || File.Exists(voicePath)
             ? VoidResult<string>.Success
             : new VoidResult<string>($"Voice file {Path.GetFileName(voicePath)} is missing. Reinstall {DisplayName} or train the voice again.");

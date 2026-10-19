@@ -1100,6 +1100,45 @@ public sealed class DysonSpeechInstaller
         return VoidResult<string>.Success;
     }
 
+    internal const string SentencesResourceName = "DysonHarness.Speech.speech_sentences.py";
+
+    /// <summary>
+    /// Copies the embedded <c>bridge.py</c> and its sibling <c>speech_sentences.py</c> over the installed files when
+    /// missing or different, so an installed tree picks up a new script on app update. True when either was written
+    /// (the running bridge still has the old code).
+    /// </summary>
+    internal static Result<bool, string> EnsureBridgeScripts(string bridgeResourceName, string bridgePath)
+    {
+        var sentences = EnsureEmbeddedScript(
+            SentencesResourceName, Path.Combine(Path.GetDirectoryName(bridgePath)!, "speech_sentences.py"));
+        if (sentences.IsError)
+            return sentences;
+        var bridge = EnsureEmbeddedScript(bridgeResourceName, bridgePath);
+        return bridge.IsError ? bridge : Result<bool, string>.AsValue(sentences.Value || bridge.Value);
+    }
+
+    private static Result<bool, string> EnsureEmbeddedScript(string resourceName, string path)
+    {
+        using var stream = typeof(DysonSpeechInstaller).Assembly.GetManifestResourceStream(resourceName);
+        if (stream is null)
+            return Result<bool, string>.AsError($"Embedded {resourceName} is missing.");
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        var bytes = buffer.ToArray();
+        try
+        {
+            if (File.Exists(path) && File.ReadAllBytes(path).AsSpan().SequenceEqual(bytes))
+                return Result<bool, string>.AsValue(false);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllBytes(path, bytes);
+            return Result<bool, string>.AsValue(true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Result<bool, string>.AsError($"Could not write {Path.GetFileName(path)}: {ex.Message}");
+        }
+    }
+
     private static bool EssentialsMatch(string installRoot, DysonSpeechRidManifest rid, string id)
     {
         if (id == DysonPhononSpeech.Id)

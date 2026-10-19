@@ -145,6 +145,23 @@
         <SpeechTorchDevice />
     </div>
 
+    <div class="settings-page__panel panel voice-active">
+        <div class="tool-panel__title">Response</div>
+        <div class="voice-active__options" role="radiogroup" aria-label="Speech response">
+            <label class="voice-active__option">
+                <input type="radio" name="voice-response-mode" value="low-latency" checked="@_lowLatency"
+                       disabled="@_busy" @onchange="() => SetResponseModeAsync(true)" />
+                <span>Low latency response</span>
+            </label>
+            <label class="voice-active__option">
+                <input type="radio" name="voice-response-mode" value="reliable" checked="@(!_lowLatency)"
+                       disabled="@_busy" @onchange="() => SetResponseModeAsync(false)" />
+                <span>Reliable response</span>
+            </label>
+        </div>
+        <p class="settings-page__copy voice__note">Only Python Qwen3-TTS and Chatterbox Turbo speak sentence by sentence; Pocket and CrispASR ignore it.</p>
+    </div>
+
     @if (InstalledStt.Count > 0 || _inputError is not null)
     {
         <div class="settings-page__panel panel voice-active">
@@ -328,6 +345,7 @@
     private bool _installing;
     private bool _repairing;
     private bool _crispGpu;
+    private bool _lowLatency;
     private bool _training;
     private bool _disposed;
     private string? _error;
@@ -410,6 +428,8 @@
 
         var crispDevice = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechCrispDevice);
         _crispGpu = crispDevice.IsSuccess && string.Equals(crispDevice.Value?.Trim(), "gpu", StringComparison.OrdinalIgnoreCase);
+        var responseMode = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechResponseMode);
+        _lowLatency = responseMode.IsSuccess && string.Equals(responseMode.Value?.Trim(), "low-latency", StringComparison.OrdinalIgnoreCase);
 
         var inputSetting = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechInputModelId);
         _inputSetting = inputSetting.IsSuccess ? inputSetting.Value : null;
@@ -451,6 +471,9 @@
 
     private async Task SetCrispDeviceAsync(bool gpu) =>
         await RunAsync(() => Settings.SetSettingAsync(DysonAppSettingKeys.SpeechCrispDevice, gpu ? "gpu" : "cpu"));
+
+    private async Task SetResponseModeAsync(bool lowLatency) =>
+        await RunAsync(() => Settings.SetSettingAsync(DysonAppSettingKeys.SpeechResponseMode, lowLatency ? "low-latency" : "reliable"));
 
     private async Task StreamStepsAsync(Func<CancellationToken, IAsyncEnumerable<DysonSpeechInstallStep>> run)
     {
