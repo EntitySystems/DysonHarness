@@ -46,8 +46,10 @@ public static class DysonMetaAgentTools
         "ListNotes",
         "ListPlans",
         "ListTodos",
+        "ListWorkdirs",
         "LoadSkill",
         "MessageMetaAgentDrone",
+        "OpenWorkdirsPanel",
         "PostConversationMessage",
         "PostUserQuestion",
         "ReadMetaAgentDroneLog",
@@ -63,6 +65,7 @@ public static class DysonMetaAgentTools
         "StartAsyncSecurityReviewAgent",
         "StopMetaAgentDrone",
         "SummarizeTurns",
+        "SwitchWorkdir",
         "UpdateNote",
         "UpdateTodo",
         "WriteTempFile",
@@ -190,6 +193,7 @@ public static class DysonMetaAgentTools
     /// <summary>
     /// Meta Agent Drone: keep the Work catalog (including <c>TriggerParentEvent</c>),
     /// drop Ask/dialog FromParent tools, add the two review tools, <c>ReadMetaPlan</c>, <c>EditMetaPlan</c>, and a <c>SubmitMetaPlan</c> seam.
+    /// Does not copy <see cref="AllowedToolNames"/>. ListWorkdirs, OpenWorkdirsPanel, and SwitchWorkdir stay on the root catalog only.
     /// </summary>
     public static void ApplyDroneAllowlist(DysonMcpPipeline pipeline)
     {
@@ -761,6 +765,55 @@ public static class DysonMetaAgentTools
                     }
                   },
                   "required": ["path"]
+                }
+                """,
+        };
+
+        // Root Meta Agent only. Not voice-gated. Not yielded from the drone tools.
+        yield return new DysonMcpTool
+        {
+            Name = "ListWorkdirs",
+            Description =
+                "List this subject's work directories. " +
+                "Returns a JSON array of { id, name, path, active }. path is the absolute path. " +
+                "Only the meta agent of the work directory on screen may call this.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {}
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "OpenWorkdirsPanel",
+            Description =
+                "Open the existing work-directories panel. No parameters. " +
+                "Only the meta agent of the work directory on screen may call this. " +
+                "Does nothing when that panel is not on screen.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {}
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "SwitchWorkdir",
+            Description =
+                "Switch the work directory on screen. id is that work directory's Guid. " +
+                "Only the meta agent of the work directory currently on screen may call this. " +
+                "Does not turn voice mode off.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string", "description": "Work directory id (Guid)." }
+                  },
+                  "required": ["id"]
                 }
                 """,
         };

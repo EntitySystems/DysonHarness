@@ -339,45 +339,241 @@ public sealed class DysonUiHost : IAsyncDisposable
         return PromptAsync(text, agentMode, cancellationToken);
     }
 
+    /// <summary>Shared voice service on the attached runtime. Null off Windows or before attach.</summary>
+    public DysonVoiceMode? Voice =>
+        TryGetAttachedRuntime(out var runtime) ? runtime.Voice : null;
+
+    /// <summary>Work directory on screen for this subject. Null before the runtime is attached.</summary>
+    public DysonWorkDirectoryFocus? Focus =>
+        TryGetAttachedRuntime(out var runtime) ? runtime.Focus : null;
+
+    private bool _voiceInputHooked;
+    private DysonVoiceMode? _voiceInput;
+
     /// <summary>
-    /// Root Meta Agent voice mode. Calls <see cref="DysonAgentSession.SetVoiceMode"/> and persists
-    /// <c>SystemPromptSnapshot</c>. Null turns it off. Not a stored preference; the meta page owns the lifetime.
+    /// Root Meta Agent voice mode. Non-null attaches that service to every live root meta session
+    /// and subscribes <see cref="DysonVoiceMode.MessageReady"/> / <see cref="DysonVoiceMode.Failed"/>.
+    /// Null clears those sessions, unsubscribes, then stops with <see cref="DysonVoiceStopReason.UserOff"/>.
+    /// Not a stored preference. Focusing or leaving a session does not call this with null.
     /// </summary>
     public async Task<VoidResult<string>> SetMetaVoiceModeAsync(DysonVoiceMode? voice)
     {
-        if (_session is null)
+        var shared = voice ?? Voice ?? _voiceInput;
+        VoidResult<string>? firstError = null;
+        foreach (var session in LiveRootMetaSessions())
         {
-            LastError = "No active session.";
-            Notify(DysonHostChangeKind.Error);
-            return new VoidResult<string>(LastError);
-        }
+            var applied = session.SetVoiceMode(voice);
+            if (applied.IsError)
+            {
+                firstError ??= applied;
+                continue;
+            }
 
-        var applied = _session.SetVoiceMode(voice);
-        if (applied.IsError)
-        {
-            LastError = applied.Error;
-            Notify(DysonHostChangeKind.Error);
-            return applied;
-        }
+            if (session.PersistenceId == Guid.Empty)
+                continue;
 
-        if (_session.PersistenceId != Guid.Empty)
-        {
             var persist = await _sessions.UpdateSessionMetaAsync(
                 new DysonSessionMetaUpdate
                 {
-                    SessionId = _session.PersistenceId,
-                    SystemPromptSnapshot = _session.SystemPrompt,
+                    SessionId = session.PersistenceId,
+                    SystemPromptSnapshot = session.SystemPrompt,
                 }).ConfigureAwait(false);
             if (persist.IsError)
-            {
-                LastError = persist.Error;
-                Notify(DysonHostChangeKind.Error);
-                return persist;
-            }
+                firstError ??= persist;
+        }
+
+        if (voice is null)
+        {
+            UnsubscribeVoiceInput();
+            if (shared is not null)
+                await shared.StopAsync(DysonVoiceStopReason.UserOff).ConfigureAwait(false);
+        }
+        else
+        {
+            SubscribeVoiceInput(voice);
+        }
+
+        if (firstError is not null)
+        {
+            LastError = firstError.Error;
+            Notify(DysonHostChangeKind.Error | DysonHostChangeKind.SessionGraph);
+            return firstError;
         }
 
         Notify(DysonHostChangeKind.SessionGraph);
         return VoidResult<string>.Success;
+    }
+
+    private void AdoptVoiceInputHandlers()
+    {
+        if (Voice is { IsOn: true } voice)
+            SubscribeVoiceInput(voice);
+    }
+
+    private void SubscribeVoiceInput(DysonVoiceMode voice)
+    {
+        if (_voiceInputHooked && ReferenceEquals(_voiceInput, voice))
+            return;
+
+        UnsubscribeVoiceInput();
+        voice.MessageReady += OnVoiceMessageReady;
+        voice.Failed += OnVoiceFailed;
+        _voiceInput = voice;
+        _voiceInputHooked = true;
+    }
+
+    private void UnsubscribeVoiceInput()
+    {
+        if (_voiceInputHooked && _voiceInput is not null)
+        {
+            _voiceInput.MessageReady -= OnVoiceMessageReady;
+            _voiceInput.Failed -= OnVoiceFailed;
+        }
+
+        _voiceInputHooked = false;
+        _voiceInput = null;
+    }
+
+    private void OnVoiceFailed(string message)
+    {
+        if (_disposed || string.IsNullOrWhiteSpace(message))
+            return;
+
+        ReportError(message);
+    }
+
+    private Task OnVoiceMessageReady(string text) =>
+        Task.Run(() => PromptVoiceInputAsync(text));
+
+    /// <summary>
+    /// Voice input goes to the active work directory's root meta session. Does not focus it.
+    /// Queue when that session is busy; inject when a turn is already running.
+    /// </summary>
+    private async Task PromptVoiceInputAsync(string text)
+    {
+        if (_disposed)
+            return;
+
+        try
+        {
+            var active = Focus?.ActiveId;
+            if (active is not Guid workDirectoryId || workDirectoryId == Guid.Empty)
+            {
+                ReportError("No active session.");
+                return;
+            }
+
+            var found = await FindExistingMetaAgentSessionAsync(workDirectoryId).ConfigureAwait(false);
+            if (found.IsError)
+            {
+                ReportError(found.Error);
+                return;
+            }
+
+            if (found.Value is null)
+            {
+                ReportError("No active session.");
+                return;
+            }
+
+            var runtime = await TryAttachRuntimeForDemoAsync(CancellationToken.None).ConfigureAwait(false);
+            if (runtime is null)
+            {
+                ReportError("No active session.");
+                return;
+            }
+
+            DysonAgentSession session;
+            if (!runtime.TryGetSession(found.Value.Id, out var live))
+            {
+                var loaded = await runtime.LoadSessionAsync(found.Value.Id, CancellationToken.None)
+                    .ConfigureAwait(false);
+                if (loaded.IsError)
+                {
+                    ReportError(loaded.Error);
+                    return;
+                }
+
+                session = loaded.Value;
+            }
+            else
+            {
+                session = live;
+            }
+
+            MarkRuntimeOwned(session);
+            EnsureRegistered(session);
+            if (session.Config.Focus is null)
+                session.Config.Focus = runtime.Focus;
+
+            if (session.InFlightPromptTurn is { } inFlight)
+            {
+                AppendAwaitingUserAnswerReminders(inFlight, session);
+                var injected = session.InjectTurnComment(inFlight.Id, text);
+                if (injected.IsSuccess)
+                {
+                    Notify(DysonHostChangeKind.Transcript);
+                    return;
+                }
+            }
+
+            var turn = DysonAgentSession.CreateNormalTurn(text);
+            AppendAwaitingUserAnswerReminders(turn, session);
+            var sessionId = session.PersistenceId;
+            if (sessionId == Guid.Empty)
+            {
+                ReportError("Session is not persisted.");
+                return;
+            }
+
+            ClearUserStop(sessionId);
+            if (IsSessionBusy(sessionId) || session.HasAnySummarizingTurn)
+            {
+                var queued = EnqueuePrompt(sessionId, turn);
+                if (queued.IsError)
+                    ReportError(queued.Error);
+                else
+                    Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript);
+                return;
+            }
+
+            var result = await PromptHarnessTurnOnSessionAsync(session, turn, [], CancellationToken.None)
+                .ConfigureAwait(false);
+            if (result.IsError)
+                ReportError(result.Error);
+            else
+                Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript);
+        }
+        catch (Exception ex)
+        {
+            ReportError(ex.Message);
+        }
+    }
+
+    private List<DysonAgentSession> LiveRootMetaSessions()
+    {
+        var list = new List<DysonAgentSession>();
+        var seen = new HashSet<DysonAgentSession>();
+        void Add(DysonAgentSession? session)
+        {
+            if (session is null || !seen.Add(session))
+                return;
+            if (session.Parent is not null || !DysonSessionPolicy.IsMetaAgent(session.Mode))
+                return;
+
+            list.Add(session);
+        }
+
+        if (TryGetAttachedRuntime(out var runtime))
+        {
+            foreach (var session in runtime.SnapshotLiveSessions())
+                Add(session);
+        }
+
+        foreach (var session in _sessionsById.Values)
+            Add(session);
+        Add(_session);
+        return list;
     }
 
     public Guid? ActiveSessionId => _session?.PersistenceId is { } id && id != Guid.Empty ? id : null;
@@ -429,7 +625,10 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         var attached = await _runtimeAttachment.AttachAsync(cancellationToken).ConfigureAwait(false);
         if (attached.IsSuccess)
+        {
+            AdoptVoiceInputHandlers();
             return VoidResult<string>.Success;
+        }
 
         LastError = attached.Error;
         Notify(DysonHostChangeKind.Error);
@@ -5113,6 +5312,14 @@ public sealed class DysonUiHost : IAsyncDisposable
             PluginContributions = contributions,
             UiTheme = resolvedUiTheme,
         };
+        if (TryGetAttachedRuntime(out var runtimeFocus))
+        {
+            config.Focus = runtimeFocus.Focus;
+            if (runtimeFocus.Voice is { IsOn: true } voiceOn
+                && DysonSessionPolicy.IsMetaAgent(agentMode))
+                config.Voice = voiceOn;
+        }
+
         MergePluginCustomAgents(config, contributions);
         if (mcpAccessMode is { } mode)
             config.McpAccessMode = mode;
@@ -8125,6 +8332,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _theme.Changed -= OnThemeChanged;
         _pluginLifecycle.Changed -= OnPluginCatalogChanged;
         _pluginMcpGrants.Changed -= OnPluginMcpGrantChanged;
+        UnsubscribeVoiceInput();
         if (_runtimeAttachment is not null)
         {
             _runtimeAttachment.Changed -= OnRuntimeChanged;

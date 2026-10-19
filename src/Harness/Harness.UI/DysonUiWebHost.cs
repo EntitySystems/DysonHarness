@@ -160,6 +160,8 @@ public static class DysonUiWebHost
         builder.Services.AddScoped<DysonUiRuntimeAttachment>();
         builder.Services.AddScoped<IDysonAgentSessionRuntimeFactory, DysonUiAgentSessionRuntimeFactory>();
         builder.Services.AddScoped<DysonUiAgentSessionRuntimeConfigBuilder>();
+        // In-memory work-directory owner. One per scope, including the retained subject scope. Not Windows-only. Not a singleton.
+        builder.Services.AddScoped<DysonWorkDirectoryFocus>();
         builder.Services.AddScoped<DysonSessionRuntime>();
         builder.Services.AddScoped<DysonUiHost>();
         builder.Services.AddSingleton<DysonFilePreviewStore>();
@@ -209,7 +211,10 @@ public static class DysonUiWebHost
             sp.GetRequiredService<DysonSpeechInstaller>().InstallRoot));
         builder.Services.AddScoped<IDysonTextToSpeech>(sp => sp.GetRequiredService<DysonActiveTextToSpeech>());
 #if WINDOWS
+        // Circuit Settings and the retained voice service each get a tryout. Both share the singleton playback and capture devices.
         builder.Services.AddScoped<DysonSpeechTryout>();
+        // One voice service in the retained subject scope (DysonSessionRuntime.Voice). Circuits must not resolve it.
+        // Not a singleton and not a static.
         builder.Services.AddScoped<DysonVoiceMode>();
 #endif
 

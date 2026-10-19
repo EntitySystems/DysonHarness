@@ -184,4 +184,11 @@ public class DysonAgentSessionConfig
     /// Non-null adds SpeakToUser and the voice prompt block. Not persisted.
     /// </summary>
     public DysonVoiceMode? Voice { get; set; }
+
+    /// <summary>
+    /// Subject's work-directory focus (the work directory on screen).
+    /// Set by the host on every session it builds. Not persisted.
+    /// Null is the same as nobody owning the application for the work-directory tools.
+    /// </summary>
+    public DysonWorkDirectoryFocus? Focus { get; set; }
 }

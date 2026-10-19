@@ -2,6 +2,17 @@ using System.Threading.Channels;
 
 namespace DysonHarness;
 
+/// <summary>Why <see cref="DysonVoiceMode.StopAsync"/> was called. Only user-off and app-exit stop the loops.</summary>
+public enum DysonVoiceStopReason
+{
+    UserOff,
+    AppExit,
+    PageDispose,
+    SessionSwitch,
+    WorkDirectorySwitch,
+    Settings,
+}
+
 /// <summary>
 /// Root Meta Agent voice mode: one listen loop over the growing transcript, a 3 s pause to submit,
 /// barge-in on a stored wake name while speech is playing, and a queue the SpeakToUser tool fills.
@@ -12,12 +23,16 @@ public sealed class DysonVoiceMode(
     DysonActiveSpeechToText speechToText,
     DysonActiveTextToSpeech textToSpeech,
     IDysonSpeechModelRepository models,
-    IDysonSubjectSettingsRepository settings) : IAsyncDisposable
+    IDysonSubjectSettingsRepository settings,
+    DysonWorkDirectoryFocus focus) : IAsyncDisposable
 {
     public const string InputPrefix = "[voice input] ";
     public const int PauseMs = 3000;
     public static readonly TimeSpan FadeOut = TimeSpan.FromMilliseconds(150);
     public const int MaxSpeakChars = 600;
+
+    /// <summary>One queued utterance. <see cref="SpokenLine.WorkDirectoryName"/> is the enqueue snapshot.</summary>
+    internal readonly record struct SpokenLine(string Text, Guid WorkDirectoryId, string WorkDirectoryName);
 
     /// <summary>Idle transcript longer than this restarts the live stream.</summary>
     private const int RestartChars = 400;
@@ -30,17 +45,21 @@ public sealed class DysonVoiceMode(
     private readonly DysonActiveTextToSpeech _textToSpeech = textToSpeech ?? throw new ArgumentNullException(nameof(textToSpeech));
     private readonly IDysonSpeechModelRepository _models = models ?? throw new ArgumentNullException(nameof(models));
     private readonly IDysonSubjectSettingsRepository _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+    private readonly DysonWorkDirectoryFocus _focus = focus ?? throw new ArgumentNullException(nameof(focus));
     private readonly Lock _state = new();
     private readonly Lock _listenerGate = new();
 
     private CancellationTokenSource? _runCts;
     private CancellationTokenSource? _segmentCts;
-    private Channel<string>? _speak;
+    private Channel<SpokenLine>? _speak;
     private Task? _loops;
     private string? _speakingText;
     private int _speakEpoch;
 
     public bool IsOn { get; private set; }
+
+    /// <summary>Work directory on screen. Playback reads <see cref="DysonWorkDirectoryFocus.ActiveId"/> from here.</summary>
+    public DysonWorkDirectoryFocus Focus => _focus;
     public bool IsCapturing { get; private set; }
     public bool IsSpeaking { get; private set; }
 
@@ -126,7 +145,7 @@ public sealed class DysonVoiceMode(
         }
 
         var run = new CancellationTokenSource();
-        var channel = Channel.CreateUnbounded<string>(new UnboundedChannelOptions
+        var channel = Channel.CreateUnbounded<SpokenLine>(new UnboundedChannelOptions
         {
             SingleReader = true,
             SingleWriter = false,
@@ -151,9 +170,19 @@ public sealed class DysonVoiceMode(
         return VoidResult<string>.Success;
     }
 
-    /// <summary>Cancels the loops, stops the microphone, and fades playback out. Safe to call more than once.</summary>
-    public async Task StopAsync()
+    /// <summary>True only for <see cref="DysonVoiceStopReason.UserOff"/> and <see cref="DysonVoiceStopReason.AppExit"/>.</summary>
+    internal static bool Stops(DysonVoiceStopReason reason) =>
+        reason is DysonVoiceStopReason.UserOff or DysonVoiceStopReason.AppExit;
+
+    /// <summary>
+    /// Cancels the loops, stops the microphone, and fades playback out when <see cref="Stops"/> is true.
+    /// Every other reason returns without changing <see cref="IsOn"/>. Safe to call more than once.
+    /// </summary>
+    public async Task StopAsync(DysonVoiceStopReason reason)
     {
+        if (!Stops(reason))
+            return;
+
         Task? loops;
         CancellationTokenSource? run;
         lock (_state)
@@ -197,8 +226,12 @@ public sealed class DysonVoiceMode(
         RaiseState();
     }
 
-    /// <summary>Queues speech. Blank and over-long text are refused. Calls play in order.</summary>
-    public VoidResult<string> Speak(string text)
+    /// <summary>
+    /// Queues speech for <paramref name="workDirectoryId"/>. Blank and over-long text are refused.
+    /// The 600-character check is on <paramref name="text"/> before any work-directory prefix.
+    /// Calls play in order. There is no <c>Speak(string)</c>.
+    /// </summary>
+    public VoidResult<string> Speak(string text, Guid workDirectoryId, string workDirectoryName)
     {
         if (!IsOn)
             return new VoidResult<string>("Voice mode is off.");
@@ -209,16 +242,39 @@ public sealed class DysonVoiceMode(
         if (trimmed.Length > MaxSpeakChars)
             return new VoidResult<string>("Text is over 600 characters. Split it into several SpeakToUser calls.");
 
-        Channel<string>? channel;
+        Channel<SpokenLine>? channel;
         lock (_state)
             channel = _speak;
-        if (channel is null || !channel.Writer.TryWrite(trimmed))
+        if (channel is null || !channel.Writer.TryWrite(new SpokenLine(trimmed, workDirectoryId, workDirectoryName ?? "")))
             return new VoidResult<string>("Voice mode is off.");
 
         return VoidResult<string>.Success;
     }
 
-    public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
+    /// <summary>
+    /// Text actually spoken. The active work directory is not prefixed. Any other line is
+    /// <c>Message from workdir {name}: {text}</c>. <paramref name="liveName"/> wins when non-blank,
+    /// else <paramref name="snapshotName"/>, else <c>untitled</c>.
+    /// </summary>
+    internal static string PlaybackText(
+        Guid lineWorkDirectoryId,
+        string text,
+        string snapshotName,
+        Guid? activeId,
+        string? liveName)
+    {
+        if (activeId is { } active && active == lineWorkDirectoryId)
+            return text;
+
+        var name = !string.IsNullOrWhiteSpace(liveName)
+            ? liveName
+            : !string.IsNullOrWhiteSpace(snapshotName)
+                ? snapshotName
+                : "untitled";
+        return $"Message from workdir {name}: {text}";
+    }
+
+    public async ValueTask DisposeAsync() => await StopAsync(DysonVoiceStopReason.AppExit).ConfigureAwait(false);
 
     /// <summary>
     /// The original substring after the last stored wake phrase, with leading punctuation and whitespace removed.
@@ -345,6 +401,11 @@ public sealed class DysonVoiceMode(
                 {
                     if (item.IsError)
                     {
+                        // Barge-in cancels this segment. A CrispASR cancel or a fell-behind fault on
+                        // that path is the fade, not a failure the user should see.
+                        if (segment.IsCancellationRequested && IsIntentionalSpeechCancel(item.Error))
+                            break;
+
                         Failed?.Invoke(item.Error);
                         failed = true;
                         break;
@@ -355,9 +416,11 @@ public sealed class DysonVoiceMode(
                         speaking = _speakingText;
 
                     ListenAction action;
+                    bool wasCapturing;
                     bool capturing;
                     lock (_listenerGate)
                     {
+                        wasCapturing = listener.Capturing;
                         action = listener.OnText(item.Value, Environment.TickCount64, speaking);
                         capturing = listener.Capturing;
                     }
@@ -367,6 +430,8 @@ public sealed class DysonVoiceMode(
                         BargeIn();
                     else if (action == ListenAction.Restart)
                         break;
+                    else if (!wasCapturing && capturing)
+                        _tryout.PlayListenChime();
                 }
             }
             finally
@@ -478,17 +543,36 @@ public sealed class DysonVoiceMode(
         {
             while (await reader.WaitToReadAsync(runToken).ConfigureAwait(false))
             {
-                while (reader.TryRead(out var text))
+                while (reader.TryRead(out var line))
                 {
                     if (runToken.IsCancellationRequested)
                         return;
 
                     var epoch = Volatile.Read(ref _speakEpoch);
+                    var activeId = _focus.ActiveId;
+                    string? liveName;
+                    try
+                    {
+                        liveName = await _focus
+                            .TryGetLiveNameAsync(line.WorkDirectoryId, CancellationToken.None)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                        // A failed or thrown Get still plays. The enqueue snapshot covers a missing row.
+                        liveName = null;
+                    }
+
+                    if (runToken.IsCancellationRequested)
+                        return;
+
+                    var playback = PlaybackText(
+                        line.WorkDirectoryId, line.Text, line.WorkDirectoryName, activeId, liveName);
                     lock (_state)
                     {
                         if (epoch != _speakEpoch)
                             continue;
-                        _speakingText = text;
+                        _speakingText = playback;
                         IsSpeaking = true;
                     }
 
@@ -497,7 +581,7 @@ public sealed class DysonVoiceMode(
                     try
                     {
                         // None, not the run token: a fade must not cancel synthesis. Playback ends the call.
-                        played = await _tryout.PlayAsync(text, outputInstalled: true, CancellationToken.None)
+                        played = await _tryout.PlayAsync(playback, outputInstalled: true, CancellationToken.None)
                             .ConfigureAwait(false);
                     }
                     catch (OperationCanceledException)
@@ -545,13 +629,14 @@ public sealed class DysonVoiceMode(
         }
 
         _tryout.StopPlayback(FadeOut);
+        _tryout.PlayListenChime();
     }
 
-    /// <summary>Fade or stop of the speak job is not a failure the user should see.</summary>
+    /// <summary>Fade, CrispASR cancel, or a mic fell-behind fault is not a failure the user should see.</summary>
     private static bool IsIntentionalSpeechCancel(string error) =>
-        error.Contains("operation was canceled", StringComparison.OrdinalIgnoreCase)
-        || error.Contains("task was canceled", StringComparison.OrdinalIgnoreCase)
-        || error.Contains("was cancelled", StringComparison.OrdinalIgnoreCase);
+        error.Contains("canceled", StringComparison.OrdinalIgnoreCase)
+        || error.Contains("cancelled", StringComparison.OrdinalIgnoreCase)
+        || error.Contains("fell behind", StringComparison.OrdinalIgnoreCase);
 
     private void CancelRun()
     {

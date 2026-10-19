@@ -12,6 +12,7 @@
 @inject IDysonSubjectSettingsRepository Settings
 @inject ConfirmDialogService ConfirmDialog
 @inject IServiceProvider Services
+@inject DysonUiHost Host
 
 <PageTitle>Voice — Settings</PageTitle>
 
@@ -403,6 +404,7 @@
     protected override async Task OnInitializedAsync()
     {
         _tryout = Services.GetService<DysonSpeechTryout>();
+        await Host.EnsureRuntimeAttachedAsync();
         var ensure = await SpeechModels.EnsureBuiltInAsync();
         if (ensure.IsError)
             _error = ensure.Error;
@@ -573,9 +575,20 @@
         }
     }
 
+    private bool VoiceModeBlocksTryout()
+    {
+        if (Host.Voice?.IsOn != true)
+            return false;
+
+        _error = "Turn voice mode off before using play or record here.";
+        return true;
+    }
+
     private async Task RecordTrainAsync()
     {
         if (_tryout is null || _disposed || _busy)
+            return;
+        if (VoiceModeBlocksTryout())
             return;
         _trainResult = null;
         _busy = true;
@@ -769,6 +782,8 @@
     {
         if (_tryout is null || _disposed)
             return;
+        if (VoiceModeBlocksTryout())
+            return;
         _error = null;
         var generation = ++_playGeneration;
         _playing = true;
@@ -797,6 +812,9 @@
             _tryout.StopRecording();
             return;
         }
+
+        if (VoiceModeBlocksTryout())
+            return;
 
         _error = null;
         _transcript = "";
@@ -834,6 +852,9 @@
         _recordCts?.Dispose();
         _trainCountdownCts?.Cancel();
         _trainCountdownCts?.Dispose();
+        if (Host.Voice?.IsOn == true)
+            return;
+
         _tryout?.StopPlayback();
         _tryout?.StopRecording();
     }

@@ -96,6 +96,37 @@ public class DysonMetaAgentToolsetTests
     }
 
     [Fact]
+    public void Workdir_tools_only_on_root_meta_catalog()
+    {
+        var voice = (DysonVoiceMode)RuntimeHelpers.GetUninitializedObject(typeof(DysonVoiceMode));
+        foreach (var config in new DysonAgentSessionConfig[]
+        {
+            new(),
+            new() { Voice = voice },
+        })
+        {
+            var meta = DysonSessionToolsetBuilder.Build(config, DysonAgentModes.MetaAgent);
+            Assert.Contains("ListWorkdirs", meta.Tools.Keys);
+            Assert.Contains("OpenWorkdirsPanel", meta.Tools.Keys);
+            Assert.Contains("SwitchWorkdir", meta.Tools.Keys);
+        }
+
+        foreach (var mode in new[]
+        {
+            DysonAgentModes.MetaAgentDrone,
+            DysonAgentModes.Drone,
+            DysonAgentModes.Work,
+            DysonAgentModes.Explore,
+        })
+        {
+            var pipeline = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), mode);
+            Assert.DoesNotContain("ListWorkdirs", pipeline.Tools.Keys);
+            Assert.DoesNotContain("OpenWorkdirsPanel", pipeline.Tools.Keys);
+            Assert.DoesNotContain("SwitchWorkdir", pipeline.Tools.Keys);
+        }
+    }
+
+    [Fact]
     public void SpeakToUser_OnlyOnRootMetaAgent_WhenVoiceOn()
     {
         var voice = (DysonVoiceMode)RuntimeHelpers.GetUninitializedObject(typeof(DysonVoiceMode));

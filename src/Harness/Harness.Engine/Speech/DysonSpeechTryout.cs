@@ -56,6 +56,8 @@ public sealed class DysonSpeechTryout(
 
     private readonly SemaphoreSlim _playGate = new(1, 1);
     private readonly Lock _gate = new();
+    /// <summary>Bumped when <see cref="PlayAsync"/> actually starts a clip. A listen chime queued behind that clip is dropped.</summary>
+    private int _playbackEpoch;
     private CancellationTokenSource? _playCts;
     private CancellationTokenSource? _recordCts;
     private bool _recording;
@@ -102,6 +104,7 @@ public sealed class DysonSpeechTryout(
         {
             if (cts.IsCancellationRequested)
                 return VoidResult<string>.Success;
+            Interlocked.Increment(ref _playbackEpoch);
             return await _playback.PlayAsync(
                 _textToSpeech.SynthesizeAsync(text.Trim(), voiceId: null, cts.Token),
                 cts.Token).ConfigureAwait(false);
@@ -177,6 +180,44 @@ public sealed class DysonSpeechTryout(
         finally
         {
             _playGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Quiet listen beep, shorter than <see cref="PlayAcceptChime"/>. Returns immediately.
+    /// Does not call <see cref="StopPlayback"/> and does not cancel speech. If the play gate is held, waits
+    /// until that hold releases, then plays. If a <see cref="PlayAsync"/> takes the gate first, the tone is dropped.
+    /// A playback error is ignored. Off a host with no device this no-ops, same as the accept chime.
+    /// </summary>
+    public void PlayListenChime() => _ = PlayListenChimeAsync();
+
+    private async Task PlayListenChimeAsync()
+    {
+        var release = false;
+        try
+        {
+            var epoch = Volatile.Read(ref _playbackEpoch);
+            if (!_playGate.Wait(0))
+            {
+                await _playGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+                if (Volatile.Read(ref _playbackEpoch) != epoch)
+                {
+                    _playGate.Release();
+                    return;
+                }
+            }
+
+            release = true;
+            await _playback.PlayAsync(DysonListenChime.Once(), CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // A missing device must not surface. This tone never cancels speech.
+        }
+        finally
+        {
+            if (release)
+                _playGate.Release();
         }
     }
 
@@ -596,5 +637,36 @@ public sealed class DysonSpeechTryout(
         }
 
         return _capture.Stop();
+    }
+}
+
+/// <summary>One short beep when listening starts. Not speech, and not the accept chime.</summary>
+internal static class DysonListenChime
+{
+    internal const int SampleRate = 16_000;
+    internal const int DurationMs = 60;
+
+    internal static async IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> Once()
+    {
+        yield return Result<DysonSpeechAudioChunk, string>.AsValue(
+            new DysonSpeechAudioChunk(Pcm(), SampleRate, true));
+    }
+
+    internal static byte[] Pcm()
+    {
+        const double amplitude = 0.04;
+        var samples = SampleRate * DurationMs / 1000;
+        var pcm = new byte[samples * 2];
+        for (var i = 0; i < samples; i++)
+        {
+            var edge = Math.Min(i, samples - 1 - i);
+            var env = Math.Min(1d, edge / 80d);
+            var wave = Math.Sin(2d * Math.PI * 660d * i / SampleRate);
+            var value = (short)Math.Round(wave * env * amplitude * short.MaxValue);
+            pcm[i * 2] = (byte)value;
+            pcm[i * 2 + 1] = (byte)(value >> 8);
+        }
+
+        return pcm;
     }
 }

@@ -3,6 +3,7 @@
 @inject IDysonSpeechModelRepository SpeechModels
 @inject DysonActiveSpeechToText Stt
 @inject IDysonSubjectSettingsRepository Settings
+@inject DysonUiHost Host
 
 <div class="settings-page__panel panel voice-wake">
     <div class="tool-panel__title">Agent name for voice mode</div>
@@ -100,6 +101,13 @@
                 return;
             _recordCts?.Cancel();
             await Task.Run(tryout.StopRecording);
+            return;
+        }
+
+        if (Host.Voice?.IsOn == true)
+        {
+            _statusOk = false;
+            _status = "Turn voice mode off before using play or record here.";
             return;
         }
 

@@ -1,9 +1,7 @@
 @namespace Harness.UI.Components.Chat
 @using DysonHarness
 @using Harness.UI.Demo
-@using Microsoft.Extensions.DependencyInjection
 @implements IAsyncDisposable
-@inject IServiceProvider Services
 @inject DysonUiHost Host
 
 @* Root Meta Agent voice mode. Windows only; a missing service is the off tooltip, not a hidden control. *@
@@ -81,13 +79,17 @@
 
     protected override async Task OnInitializedAsync()
     {
-        _voice = Services.GetService<DysonVoiceMode>();
+        _voice = Host.Voice;
         _ready = true;
+        if (_voice is { IsOn: true })
+        {
+            Subscribe();
+            _on = true;
+            await OnChanged.InvokeAsync(true);
+        }
+
         await RefreshRequirementsAsync();
     }
-
-    /// <summary>Page session switch: stop before the host focuses another session.</summary>
-    public Task TurnOffAsync() => StopAndDetachAsync(report: true);
 
     private async Task ClickAsync()
     {
@@ -107,27 +109,24 @@
         try
         {
             var started = await _voice.StartAsync();
-            if (_disposed)
-            {
-                await _voice.StopAsync();
-                return;
-            }
-
             if (started.IsError)
             {
-                _blockReason = started.Error;
+                if (!_disposed)
+                    _blockReason = started.Error;
                 return;
             }
 
             var attached = await Host.SetMetaVoiceModeAsync(_voice);
-            if (attached.IsError || _disposed)
+            if (attached.IsError)
             {
-                await _voice.StopAsync();
                 await Host.SetMetaVoiceModeAsync(null);
-                if (attached.IsError && !_disposed)
+                if (!_disposed)
                     Host.ReportError(attached.Error);
                 return;
             }
+
+            if (_disposed)
+                return;
 
             Subscribe();
             _on = true;
@@ -137,6 +136,25 @@
         finally
         {
             _busy = false;
+        }
+    }
+
+    private async Task TurnOffAsync()
+    {
+        if (!_on && _voice is not { IsOn: true })
+            return;
+
+        Unsubscribe();
+        _on = false;
+        var off = await Host.SetMetaVoiceModeAsync(null);
+        if (off.IsError && !_disposed)
+            Host.ReportError(off.Error);
+
+        if (!_disposed)
+        {
+            await OnChanged.InvokeAsync(false);
+            _checkedUtc = DateTime.MinValue;
+            await RefreshRequirementsAsync();
         }
     }
 
@@ -163,39 +181,11 @@
         }
     }
 
-    private async Task StopAndDetachAsync(bool report)
-    {
-        if (!_on && _voice is not { IsOn: true })
-            return;
-
-        Unsubscribe();
-        var voice = _voice;
-        _on = false;
-        if (voice is not null)
-            await voice.StopAsync();
-
-        if (voice is not null)
-        {
-            var off = await Host.SetMetaVoiceModeAsync(null);
-            if (report && off.IsError && !_disposed)
-                Host.ReportError(off.Error);
-        }
-
-        if (!_disposed)
-        {
-            await OnChanged.InvokeAsync(false);
-            _checkedUtc = DateTime.MinValue;
-            await RefreshRequirementsAsync();
-        }
-    }
-
     private void Subscribe()
     {
         if (_hooked || _voice is null)
             return;
         _voice.StateChanged += OnStateChanged;
-        _voice.Failed += OnFailed;
-        _voice.MessageReady += OnMessageReady;
         _hooked = true;
     }
 
@@ -204,20 +194,10 @@
         if (!_hooked || _voice is null)
             return;
         _voice.StateChanged -= OnStateChanged;
-        _voice.Failed -= OnFailed;
-        _voice.MessageReady -= OnMessageReady;
         _hooked = false;
     }
 
     private void OnStateChanged() => PostToCircuit(StateHasChanged);
-
-    private void OnFailed(string message) => PostToCircuit(() => Host.ReportError(message));
-
-    private Task OnMessageReady(string text) =>
-        InvokeAsync(async () =>
-        {
-            await Host.PromptOrInjectAsync(text, DysonAgentModes.MetaAgent);
-        });
 
     private void PostToCircuit(Action action)
     {
@@ -230,15 +210,10 @@
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _disposed = true;
         Unsubscribe();
-        if (_voice is not null && (_on || _voice.IsOn))
-        {
-            _on = false;
-            await _voice.StopAsync();
-            await Host.SetMetaVoiceModeAsync(null);
-        }
+        return ValueTask.CompletedTask;
     }
 }

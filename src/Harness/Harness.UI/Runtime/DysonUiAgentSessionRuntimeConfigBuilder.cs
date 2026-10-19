@@ -66,7 +66,9 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
     DysonPluginContributionResolver pluginContributions,
     DysonPluginMcpGrantService pluginMcpGrants,
     DysonPluginMcpResolver pluginMcpResolver,
-    DysonMessageBus? bus = null)
+    DysonMessageBus? bus = null,
+    DysonWorkDirectoryFocus? focus = null,
+    DysonVoiceMode? voice = null)
 {
     private readonly IDysonWorkDirectoryRepository _workDirectories =
         workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
@@ -118,7 +120,10 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
             PluginContributions = contributions,
             UiTheme = request.Theme,
             Bus = _bus,
+            Focus = focus,
         };
+        if (voice is { IsOn: true } && DysonSessionPolicy.IsMetaAgent(request.AgentMode))
+            config.Voice = voice;
         MergePluginCustomAgents(config, contributions);
         if (request.McpAccessMode is { } mode)
             config.McpAccessMode = mode;

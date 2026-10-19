@@ -16,7 +16,8 @@
     <Sidebar>
         <Sidebar>
             <WorkDirectory>
-                <WorkDirectorySwitcher ActiveWorkDirectoryId="_activeWorkDirectoryId"
+                <WorkDirectorySwitcher @ref="_workdirSwitcher"
+                                       ActiveWorkDirectoryId="_activeWorkDirectoryId"
                                        ActiveWorkDirectoryIdChanged="OnWorkDirectoryChanged" />
             </WorkDirectory>
             <SessionList>
@@ -159,7 +160,7 @@
                                                       Textarea="_prompt"
                                                       @bind-Text="_draft"
                                                       OnError="Host.ReportError" />
-                                    <VoiceModeButton @ref="_voiceMode" OnChanged="OnVoiceModeChanged" />
+                                    <VoiceModeButton OnChanged="OnVoiceModeChanged" />
                                     <ModelSlugPicker @ref="_modelPicker"
                                                      SelectedSlugId="_selectedSlugId"
                                                      SelectedSlugIdChanged="OnSelectedSlugIdChangedAsync" />
@@ -279,7 +280,9 @@
     private Guid? _vizFocusId;
     private ElementReference _shell;
     private ElementReference _prompt;
-    private VoiceModeButton? _voiceMode;
+    private WorkDirectorySwitcher? _workdirSwitcher;
+    private Func<Task>? _openPanelHook;
+    private Func<Guid, Task>? _switchHook;
     private bool _voiceOn;
     private bool _imageCaptureBound;
     private bool _dragOver;
@@ -356,6 +359,7 @@
         {
             _chatLinksRef ??= DotNetObjectReference.Create(Host);
             await DysonCircuitJs.InvokeVoidAsync(Js, "dysonChatLinks.install", _chatLinksRef);
+            BindFocusHooks();
         }
 
         if (_imageCaptureBound || _unknownWorkDirectory)
@@ -372,7 +376,7 @@
         if (_loadedWorkDirectoryId == WorkDirectoryId)
             return;
 
-        await TurnVoiceOffAsync();
+        Host.Focus?.SetActive(WorkDirectoryId);
         _loadedWorkDirectoryId = WorkDirectoryId;
         _tasksOpen = false;
         _vizOpen = false;
@@ -382,6 +386,7 @@
         _workDirectoryName = get.IsSuccess ? get.Value.Name : null;
         if (_unknownWorkDirectory)
         {
+            Host.Focus?.SetActive(null);
             _sessions = [];
             _sessionReady = false;
             _metaSessionId = null;
@@ -753,7 +758,6 @@
 
         if (Host.ActiveSessionId != id)
         {
-            await TurnVoiceOffAsync();
             var resume = await Host.ResumeSessionAsync(id);
             if (resume.IsError)
             {
@@ -762,20 +766,15 @@
             }
         }
 
-        await TurnVoiceOffAsync();
         await DysonCircuitJs.NavigateAsync(Js, "/");
     }
 
-    private async Task InspectChildAsync()
-    {
-        await TurnVoiceOffAsync();
-        await DysonCircuitJs.NavigateAsync(Js, "/");
-    }
+    private Task InspectChildAsync() =>
+        DysonCircuitJs.NavigateAsync(Js, "/").AsTask();
 
     // Acting on a session is a session-shell concern — do it, then hand off to "/".
     private async Task StartNewAsync()
     {
-        await TurnVoiceOffAsync();
         var result = await Host.StartNewSessionAsync(DysonAgentModes.Work, null, WorkDirectoryId);
         if (result.IsError)
         {
@@ -788,7 +787,6 @@
 
     private async Task ResumeAsync(Guid sessionId)
     {
-        await TurnVoiceOffAsync();
         var result = await Host.ResumeSessionAsync(sessionId);
         if (result.IsError)
         {
@@ -801,8 +799,6 @@
 
     private async Task DeleteAsync(Guid sessionId)
     {
-        if (sessionId == _metaSessionId)
-            await TurnVoiceOffAsync();
         var result = await Host.DeleteSessionAsync(sessionId);
         if (result.IsError)
             _error = result.Error;
@@ -829,6 +825,7 @@
     // updates once navigation lands, so hold the selection locally first.
     private async Task OnWorkDirectoryChanged(Guid? id)
     {
+        Host.Focus?.SetActive(id);
         if (id is Guid wd && wd == WorkDirectoryId)
             return;
 
@@ -849,22 +846,39 @@
 
     private void OnVoiceModeChanged(bool on) => _voiceOn = on;
 
-    /// <summary>Voice mode is tied to this page's root session. Stop it before that session is replaced.</summary>
-    private async Task TurnVoiceOffAsync()
+    private async Task LeaveMetaAsync() =>
+        await DysonCircuitJs.NavigateAsync(Js, "/");
+
+    private void BindFocusHooks()
     {
-        if (_voiceMode is not null)
-            await _voiceMode.TurnOffAsync();
+        var focus = Host.Focus;
+        if (focus is null)
+            return;
+
+        _openPanelHook ??= () => InvokeAsync(() => _workdirSwitcher?.Open());
+        _switchHook ??= id => InvokeAsync(async () =>
+        {
+            if (_workdirSwitcher is not null)
+                await _workdirSwitcher.SelectAsync(id);
+        });
+        focus.OpenPanel = _openPanelHook;
+        focus.SwitchTo = _switchHook;
     }
 
-    private async Task LeaveMetaAsync()
+    private void UnbindFocusHooks()
     {
-        await TurnVoiceOffAsync();
-        await DysonCircuitJs.NavigateAsync(Js, "/");
+        var focus = Host.Focus;
+        if (focus is null)
+            return;
+        if (ReferenceEquals(focus.OpenPanel, _openPanelHook))
+            focus.OpenPanel = null;
+        if (ReferenceEquals(focus.SwitchTo, _switchHook))
+            focus.SwitchTo = null;
     }
 
     public async ValueTask DisposeAsync()
     {
-        await TurnVoiceOffAsync();
+        UnbindFocusHooks();
         _hostSub?.Dispose();
         _hostSub = null;
         DisposeAgentsListSubscriptions();

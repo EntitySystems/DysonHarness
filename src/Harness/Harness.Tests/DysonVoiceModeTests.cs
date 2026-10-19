@@ -1,9 +1,11 @@
 using System.Runtime.CompilerServices;
+using System.Text;
+using System.Threading.Channels;
 using DysonHarness;
 
 namespace Harness.Tests;
 
-/// <summary>Voice-mode rules: wake match, pause, barge-in, echo, requirements, and the accept chime (fake playback).</summary>
+/// <summary>Voice-mode rules: wake match, pause, barge-in, echo, requirements, prefix, stop reason, and both chimes (fake playback).</summary>
 public class DysonVoiceModeTests
 {
     [Fact]
@@ -270,6 +272,206 @@ public class DysonVoiceModeTests
         Assert.Equal(["[voice input] while speaking"], submitted);
     }
 
+    [Fact]
+    public void PlaybackText_active_is_unprefixed()
+    {
+        var id = Guid.NewGuid();
+        Assert.Equal("Done.", DysonVoiceMode.PlaybackText(id, "Done.", "Harness", id, "Harness"));
+    }
+
+    [Fact]
+    public void PlaybackText_other_workdir_is_prefixed()
+    {
+        var active = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        Assert.Equal(
+            "Message from workdir Harness: Done.",
+            DysonVoiceMode.PlaybackText(other, "Done.", "Harness", active, "Harness"));
+    }
+
+    [Fact]
+    public void PlaybackText_rename_uses_live_name()
+    {
+        var active = Guid.NewGuid();
+        var line = Guid.NewGuid();
+        Assert.Equal(
+            "Message from workdir New: Done.",
+            DysonVoiceMode.PlaybackText(line, "Done.", "Old", active, "New"));
+    }
+
+    [Fact]
+    public void PlaybackText_closed_uses_snapshot()
+    {
+        var active = Guid.NewGuid();
+        var line = Guid.NewGuid();
+        Assert.Equal(
+            "Message from workdir Old: Done.",
+            DysonVoiceMode.PlaybackText(line, "Done.", "Old", active, null));
+    }
+
+    [Fact]
+    public void PlaybackText_became_active_drops_prefix()
+    {
+        var id = Guid.NewGuid();
+        Assert.Equal("Done.", DysonVoiceMode.PlaybackText(id, "Done.", "Old", id, "New"));
+    }
+
+    [Fact]
+    public async Task SpeakLoop_plays_one_at_a_time_in_order()
+    {
+        await using var rig = await VoiceRig.StartAsync();
+        var active = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        rig.Work.Add(new DysonWorkDirectoryEntity
+        {
+            Id = other,
+            Name = "Harness",
+            AbsolutePath = "E:\\Harness",
+        });
+        rig.Focus.SetActive(active);
+
+        Assert.True(rig.Voice.Speak("One", active, "Active").IsSuccess);
+        Assert.True(rig.Voice.Speak("Done.", other, "Old").IsSuccess);
+        await WaitForAsync(() => rig.Tts.Texts.Count >= 2);
+
+        Assert.Equal(["One", "Message from workdir Harness: Done."], rig.Tts.Texts);
+        Assert.Equal(1, rig.Playback.MaxInFlight);
+    }
+
+    [Fact]
+    public async Task Stop_only_for_user_off_or_app_exit()
+    {
+        Assert.True(DysonVoiceMode.Stops(DysonVoiceStopReason.UserOff));
+        Assert.True(DysonVoiceMode.Stops(DysonVoiceStopReason.AppExit));
+        Assert.False(DysonVoiceMode.Stops(DysonVoiceStopReason.PageDispose));
+        Assert.False(DysonVoiceMode.Stops(DysonVoiceStopReason.SessionSwitch));
+        Assert.False(DysonVoiceMode.Stops(DysonVoiceStopReason.WorkDirectorySwitch));
+        Assert.False(DysonVoiceMode.Stops(DysonVoiceStopReason.Settings));
+
+        await using var rig = await VoiceRig.StartAsync();
+        Assert.True(rig.Voice.IsOn);
+
+        await rig.Voice.StopAsync(DysonVoiceStopReason.WorkDirectorySwitch);
+        await rig.Voice.StopAsync(DysonVoiceStopReason.PageDispose);
+        await rig.Voice.StopAsync(DysonVoiceStopReason.SessionSwitch);
+        await rig.Voice.StopAsync(DysonVoiceStopReason.Settings);
+        Assert.True(rig.Voice.IsOn);
+        Assert.Equal(0, rig.Capture.Stops);
+
+        await rig.Voice.StopAsync(DysonVoiceStopReason.UserOff);
+        Assert.False(rig.Voice.IsOn);
+        Assert.True(rig.Capture.Stops >= 1);
+
+        var again = await rig.Voice.StartAsync();
+        Assert.True(again.IsSuccess, again.IsError ? again.Error : null);
+        Assert.True(rig.Voice.IsOn);
+        await rig.Voice.StopAsync(DysonVoiceStopReason.AppExit);
+        Assert.False(rig.Voice.IsOn);
+    }
+
+    [Fact]
+    public async Task ListenChime_once_on_wake_match()
+    {
+        await using var rig = await VoiceRig.StartAsync();
+        rig.Capture.PushText("hey dyson");
+        Assert.True(await rig.Stt.NextAsync());
+        await WaitForAsync(() => rig.Playback.ListenCount >= 1);
+        Assert.Equal(1, rig.Playback.ListenCount);
+        Assert.Equal(0, rig.Playback.AcceptCount);
+
+        rig.Capture.PushText(" open the plan");
+        Assert.True(await rig.Stt.NextAsync());
+        await Task.Delay(100);
+        Assert.Equal(1, rig.Playback.ListenCount);
+        Assert.Equal(0, rig.Playback.AcceptCount);
+        Assert.Equal(0, rig.Playback.FadeStops);
+    }
+
+    [Fact]
+    public async Task ListenChime_not_on_ordinary_speech_or_echo()
+    {
+        await using (var ordinary = await VoiceRig.StartAsync())
+        {
+            await HearWhileSpeakingAsync(ordinary, "Processing request.", "stop that now");
+            Assert.Equal(0, ordinary.Playback.ListenCount);
+            Assert.Equal(0, ordinary.Playback.FadeStops);
+            Assert.Empty(ordinary.Failed);
+        }
+
+        await using (var echo = await VoiceRig.StartAsync())
+        {
+            await HearWhileSpeakingAsync(echo, "Processing request.", "processing request");
+            Assert.Equal(0, echo.Playback.ListenCount);
+            Assert.Equal(0, echo.Playback.FadeStops);
+            Assert.Empty(echo.Failed);
+        }
+    }
+
+    [Fact]
+    public async Task AcceptChime_only_on_submit()
+    {
+        await using var rig = await VoiceRig.StartAsync();
+        rig.Capture.PushText("hey dyson open the plan");
+        Assert.True(await rig.Stt.NextAsync());
+        await WaitForAsync(() => rig.Playback.ListenCount >= 1);
+        Assert.Equal(1, rig.Playback.ListenCount);
+        Assert.Equal(0, rig.Playback.AcceptCount);
+
+        await WaitForAsync(() => rig.Playback.AcceptCount >= 1, 5000);
+        Assert.Equal(1, rig.Playback.AcceptCount);
+        Assert.Equal(1, rig.Playback.ListenCount);
+        Assert.Equal(0, rig.Playback.FadeStops);
+    }
+
+    [Fact]
+    public async Task BargeIn_fades_and_plays_listen_chime_once()
+    {
+        await using var rig = await VoiceRig.StartAsync();
+        rig.Playback.HoldSpeech();
+        rig.Playback.ReleaseError =
+            "CrispASR canceled the generation. Speech to text fell behind the microphone.";
+        var id = Guid.NewGuid();
+        rig.Focus.SetActive(id);
+        Assert.True(rig.Voice.Speak("Processing request.", id, "A").IsSuccess);
+        await rig.Playback.SpeechStarted.WaitAsync(TimeSpan.FromSeconds(5));
+
+        rig.Capture.PushText("hey dyson stop");
+        Assert.True(await rig.Stt.NextAsync());
+        await WaitForAsync(() => rig.Playback.ListenCount >= 1 && !rig.Voice.IsSpeaking);
+        rig.Capture.PushText(" please");
+        Assert.True(await rig.Stt.NextAsync());
+        await Task.Delay(50);
+
+        Assert.Equal(1, rig.Playback.FadeStops);
+        Assert.Equal(DysonVoiceMode.FadeOut, rig.Playback.LastFade);
+        Assert.Equal(1, rig.Playback.ListenCount);
+        Assert.Equal(0, rig.Playback.AcceptCount);
+        Assert.Empty(rig.Failed);
+        Assert.True(rig.Voice.IsOn);
+    }
+
+    private static async Task HearWhileSpeakingAsync(VoiceRig rig, string spoken, string heard)
+    {
+        rig.Playback.HoldSpeech();
+        var id = Guid.NewGuid();
+        rig.Focus.SetActive(id);
+        Assert.True(rig.Voice.Speak(spoken, id, "A").IsSuccess);
+        await rig.Playback.SpeechStarted.WaitAsync(TimeSpan.FromSeconds(5));
+        rig.Capture.PushText(heard);
+        Assert.True(await rig.Stt.NextAsync());
+    }
+
+    private static async Task WaitForAsync(Func<bool> ready, int ms = 4000)
+    {
+        var start = Environment.TickCount64;
+        while (!ready())
+        {
+            if (Environment.TickCount64 - start > ms)
+                return;
+            await Task.Delay(15);
+        }
+    }
+
     private static Result<string, string> Ok(string id) => Result<string, string>.AsValue(id);
 
     /// <summary>Variant 7 is the stored wake phrase. The other seven cannot match the test sentences.</summary>
@@ -380,5 +582,408 @@ public class DysonVoiceModeTests
             Stops++;
             return VoidResult<string>.Success;
         }
+    }
+
+    private sealed class VoiceRig(
+        ScriptCapture capture,
+        Utf8Stt stt,
+        RecordingTts tts,
+        ChimePlayback playback,
+        FakeWorkDirectories work,
+        DysonWorkDirectoryFocus focus,
+        DysonVoiceMode voice) : IAsyncDisposable
+    {
+        public ScriptCapture Capture { get; } = capture;
+        public Utf8Stt Stt { get; } = stt;
+        public RecordingTts Tts { get; } = tts;
+        public ChimePlayback Playback { get; } = playback;
+        public FakeWorkDirectories Work { get; } = work;
+        public DysonWorkDirectoryFocus Focus { get; } = focus;
+        public DysonVoiceMode Voice { get; } = voice;
+        public List<string> Failed { get; } = [];
+
+        public static async Task<VoiceRig> StartAsync()
+        {
+            var capture = new ScriptCapture();
+            var stt = new Utf8Stt();
+            var tts = new RecordingTts();
+            var playback = new ChimePlayback();
+            var work = new FakeWorkDirectories();
+            var settings = new FakeSettings();
+            settings.Set(DysonAppSettingKeys.SpeechInputModelId, DysonPhononSpeech.Id);
+            settings.Set(DysonAppSettingKeys.SpeechOutputModelId, DysonPocketSpeech.Id);
+            var models = new FakeSpeechModels(Eight());
+            var focus = new DysonWorkDirectoryFocus(work);
+            var root = Path.GetTempPath();
+            var tryout = new DysonSpeechTryout(capture, stt, tts, playback);
+            var voice = new DysonVoiceMode(
+                tryout,
+                new DysonActiveSpeechToText(models, settings, root),
+                new DysonActiveTextToSpeech(models, settings, root),
+                models,
+                settings,
+                focus);
+            voice.Failed += text => { };
+            var ready = await voice.StartAsync();
+            if (ready.IsError)
+                throw new InvalidOperationException(ready.Error);
+            var rig = new VoiceRig(capture, stt, tts, playback, work, focus, voice);
+            voice.Failed += rig.Failed.Add;
+            return rig;
+        }
+
+        public async ValueTask DisposeAsync() => await Voice.StopAsync(DysonVoiceStopReason.AppExit);
+    }
+
+    private sealed class ScriptCapture : IDysonAudioCapture
+    {
+        private readonly Channel<Result<Stream, string>> _windows = Channel.CreateUnbounded<Result<Stream, string>>();
+        public int Stops;
+
+        public void PushText(string text) =>
+            _windows.Writer.TryWrite(Result<Stream, string>.AsValue(new MemoryStream(Encoding.UTF8.GetBytes(text))));
+
+        public Result<IReadOnlyList<DysonAudioInputDevice>, string> ListDevices() =>
+            Result<IReadOnlyList<DysonAudioInputDevice>, string>.AsValue([]);
+
+        public async IAsyncEnumerable<Result<Stream, string>> CaptureWindowsAsync(
+            string? deviceId,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                Result<Stream, string>? next = null;
+                try
+                {
+                    if (!await _windows.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+                        yield break;
+                    if (!_windows.Reader.TryRead(out var item))
+                        continue;
+                    next = item;
+                }
+                catch (OperationCanceledException)
+                {
+                    yield break;
+                }
+
+                if (next is not null)
+                    yield return next;
+            }
+        }
+
+        public async IAsyncEnumerable<Result<byte[], string>> CapturePcmAsync(
+            string? deviceId,
+            [EnumeratorCancellation] CancellationToken cancellationToken,
+            bool dropOldest = false)
+        {
+            yield break;
+        }
+
+        public VoidResult<string> Stop()
+        {
+            Stops++;
+            return VoidResult<string>.AsError("Nothing is recording.");
+        }
+    }
+
+    private sealed class Utf8Stt : IDysonSpeechToText
+    {
+        private readonly Channel<int> _done = Channel.CreateUnbounded<int>();
+        private int _n;
+        public string RuntimeId => "utf8";
+
+        public async Task<bool> NextAsync(int ms = 3000)
+        {
+            using var cts = new CancellationTokenSource(ms);
+            try
+            {
+                await _done.Reader.ReadAsync(cts.Token);
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
+        }
+
+        public async IAsyncEnumerable<Result<DysonSpeechChunk, string>> TranscribeAsync(
+            Stream audio,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            using var copy = new MemoryStream();
+            await audio.CopyToAsync(copy, cancellationToken);
+            var text = Encoding.UTF8.GetString(copy.ToArray());
+            yield return Result<DysonSpeechChunk, string>.AsValue(new DysonSpeechChunk(text, 0, 0, true));
+            _done.Writer.TryWrite(Interlocked.Increment(ref _n));
+        }
+    }
+
+    private sealed class RecordingTts : IDysonTextToSpeech
+    {
+        private readonly List<string> _texts = [];
+        public string RuntimeId => "rec";
+        public IReadOnlyList<string> Texts
+        {
+            get
+            {
+                lock (_texts)
+                    return _texts.ToArray();
+            }
+        }
+
+        public async IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> SynthesizeAsync(
+            string text,
+            string? voiceId,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            lock (_texts)
+                _texts.Add(text);
+            yield return Result<DysonSpeechAudioChunk, string>.AsValue(new DysonSpeechAudioChunk(new byte[320], 16_000, true));
+            await Task.CompletedTask;
+        }
+    }
+
+    private readonly record struct Heard(int ToneMs, int Hertz, int Peak)
+    {
+        public bool IsListen => ToneMs is >= 50 and <= 70 && Hertz is >= 620 and <= 700;
+        public bool IsAccept => ToneMs is >= 100 and <= 140 && Hertz is >= 840 and <= 920;
+    }
+
+    private sealed class ChimePlayback : IDysonAudioPlayback
+    {
+        private readonly object _gate = new();
+        private readonly List<Heard> _plays = [];
+        private readonly TaskCompletionSource _speechStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _inFlight;
+        private TaskCompletionSource<bool>? _hold;
+        public int MaxInFlight;
+        public int Stops;
+        public int FadeStops;
+        public TimeSpan LastFade;
+        public string? ReleaseError;
+        public Task SpeechStarted => _speechStarted.Task;
+        public int ListenCount
+        {
+            get
+            {
+                lock (_gate)
+                    return _plays.Count(p => p.IsListen);
+            }
+        }
+
+        public int AcceptCount
+        {
+            get
+            {
+                lock (_gate)
+                    return _plays.Count(p => p.IsAccept);
+            }
+        }
+
+        public void HoldSpeech() =>
+            _hold = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<VoidResult<string>> PlayAsync(
+            IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> chunks,
+            CancellationToken cancellationToken)
+        {
+            var now = Interlocked.Increment(ref _inFlight);
+            lock (_gate)
+            {
+                if (now > MaxInFlight)
+                    MaxInFlight = now;
+            }
+
+            try
+            {
+                byte[]? pcm = null;
+                var rate = 0;
+                await foreach (var chunk in chunks.WithCancellation(cancellationToken))
+                {
+                    if (!chunk.IsSuccess || chunk.Value.Pcm is null)
+                        continue;
+                    pcm = chunk.Value.Pcm;
+                    rate = chunk.Value.SampleRate;
+                }
+
+                var heard = Measure(pcm, rate);
+                lock (_gate)
+                    _plays.Add(heard);
+                if (heard.IsListen || heard.IsAccept)
+                    return VoidResult<string>.Success;
+
+                _speechStarted.TrySetResult();
+                if (_hold is not null)
+                    await _hold.Task.WaitAsync(cancellationToken);
+                if (ReleaseError is not null)
+                    return VoidResult<string>.AsError(ReleaseError);
+                await Task.Delay(40, cancellationToken);
+                return VoidResult<string>.Success;
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _inFlight);
+            }
+        }
+
+        public VoidResult<string> Stop(TimeSpan fadeOut = default)
+        {
+            Stops++;
+            if (fadeOut > TimeSpan.Zero)
+            {
+                FadeStops++;
+                LastFade = fadeOut;
+                _hold?.TrySetResult(true);
+            }
+
+            return VoidResult<string>.Success;
+        }
+
+        private static Heard Measure(byte[]? pcm, int rate)
+        {
+            if (pcm is null || pcm.Length < 2 || rate <= 0)
+                return default;
+            var samples = pcm.Length / 2;
+            var prev = 0;
+            var crossings = 0;
+            var peak = 0;
+            for (var i = 0; i + 1 < pcm.Length; i += 2)
+            {
+                var sample = pcm[i] | (pcm[i + 1] << 8);
+                if (sample >= 0x8000)
+                    sample -= 0x10000;
+                peak = Math.Max(peak, Math.Abs(sample));
+                if (prev < 0 && sample >= 0)
+                    crossings++;
+                prev = sample;
+            }
+
+            var hertz = (int)Math.Round(crossings * (double)rate / samples);
+            return new Heard(samples * 1000 / rate, hertz, peak);
+        }
+    }
+
+    private sealed class FakeWorkDirectories : IDysonWorkDirectoryRepository
+    {
+        public Dictionary<Guid, DysonWorkDirectoryEntity> Items { get; } = [];
+
+        public void Add(DysonWorkDirectoryEntity entity) => Items[entity.Id] = entity;
+
+        public Task<Result<Guid, string>> CreateAsync(
+            string absolutePath, string? name = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result<Guid, string>.AsError("not used"));
+
+        public Task<Result<DysonWorkDirectoryEntity, string>> GetAsync(
+            Guid id, CancellationToken cancellationToken = default) =>
+            Task.FromResult(
+                Items.TryGetValue(id, out var entity)
+                    ? Result<DysonWorkDirectoryEntity, string>.AsValue(entity)
+                    : Result<DysonWorkDirectoryEntity, string>.AsError($"Work directory '{id}' not found."));
+
+        public Task<Result<IReadOnlyList<DysonWorkDirectoryEntity>, string>> ListAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result<IReadOnlyList<DysonWorkDirectoryEntity>, string>.AsValue(Items.Values.ToList()));
+
+        public Task<VoidResult<string>> TouchOpenedAsync(Guid id, CancellationToken cancellationToken = default) =>
+            Task.FromResult(VoidResult<string>.AsError("not used"));
+
+        public Task<VoidResult<string>> UpdateGitMetadataAsync(
+            Guid id, string? gitOrigin, string? gitProvider, CancellationToken cancellationToken = default) =>
+            Task.FromResult(VoidResult<string>.AsError("not used"));
+
+        public Task<VoidResult<string>> DeleteAsync(Guid id, CancellationToken cancellationToken = default) =>
+            Task.FromResult(VoidResult<string>.AsError("not used"));
+    }
+
+    private sealed class FakeSettings : IDysonSubjectSettingsRepository
+    {
+        private readonly Dictionary<string, string?> _values = [];
+
+        public void Set(string key, string? value) => _values[key] = value;
+
+        public Task<VoidResult<string>> EnsureSubjectAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(VoidResult<string>.Success);
+
+        public Task<Result<string?, string>> GetSettingAsync(string key, CancellationToken cancellationToken = default)
+        {
+            _values.TryGetValue(key, out var value);
+            return Task.FromResult(Result<string?, string>.AsValue(value));
+        }
+
+        public Task<VoidResult<string>> SetSettingAsync(
+            string key, string? value, CancellationToken cancellationToken = default)
+        {
+            _values[key] = value;
+            return Task.FromResult(VoidResult<string>.Success);
+        }
+    }
+
+    private sealed class FakeSpeechModels(string[] wake) : IDysonSpeechModelRepository
+    {
+        private readonly string[] _wake = wake;
+        private readonly DysonSpeechModelEntity[] _rows =
+        [
+            Row(DysonPhononSpeech.Id, DysonSpeechCapability.Input),
+            Row(DysonPocketSpeech.Id, DysonSpeechCapability.Output),
+        ];
+
+        public Task<VoidResult<string>> EnsureBuiltInAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(VoidResult<string>.Success);
+
+        public Task<Result<IReadOnlyList<DysonSpeechModelEntity>, string>> ListAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result<IReadOnlyList<DysonSpeechModelEntity>, string>.AsValue(_rows));
+
+        public Task<VoidResult<string>> MarkInstalledAsync(
+            string runtimeId, string variant, CancellationToken cancellationToken = default) =>
+            NotUsed();
+
+        public Task<VoidResult<string>> MarkUninstalledAsync(
+            string runtimeId, CancellationToken cancellationToken = default) =>
+            NotUsed();
+
+        public Task<VoidResult<string>> EnsureCatalogVoiceAsync(
+            string modelRuntimeId,
+            string voiceId,
+            string? displayName,
+            string variant,
+            CancellationToken cancellationToken = default,
+            string? sourceFileName = null) =>
+            NotUsed();
+
+        public Task<Result<IReadOnlyList<DysonSpeechVoiceEntity>, string>> ListVoicesAsync(
+            string modelRuntimeId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(
+                Result<IReadOnlyList<DysonSpeechVoiceEntity>, string>.AsValue(
+                    Array.Empty<DysonSpeechVoiceEntity>()));
+
+        public Task<Result<IReadOnlyList<string>, string>> GetWakeNamesAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result<IReadOnlyList<string>, string>.AsValue(_wake));
+
+        public Task<VoidResult<string>> SaveWakeNamesAsync(
+            IReadOnlyList<string> variants, CancellationToken cancellationToken = default) =>
+            NotUsed();
+
+        public Task<VoidResult<string>> RenameVoiceAsync(
+            string modelRuntimeId, string voiceId, string displayName, CancellationToken cancellationToken = default) =>
+            NotUsed();
+
+        public Task<VoidResult<string>> DeleteVoiceAsync(
+            string modelRuntimeId, string voiceId, CancellationToken cancellationToken = default) =>
+            NotUsed();
+
+        private static Task<VoidResult<string>> NotUsed() =>
+            Task.FromResult(VoidResult<string>.AsError("not used"));
+
+        private static DysonSpeechModelEntity Row(string id, DysonSpeechCapability capability) => new()
+        {
+            Id = Guid.NewGuid(),
+            RuntimeId = id,
+            DisplayName = id,
+            Capability = capability,
+            IsEnabled = true,
+            IsInstalled = true,
+        };
     }
 }

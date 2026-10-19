@@ -410,7 +410,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         return Ok(call, """{"ok":true}""");
     }
 
-    private DysonToolCallResult SpeakToUser(DysonToolCall call)
+    private async Task<DysonToolCallResult> SpeakToUser(DysonToolCall call, CancellationToken cancellationToken)
     {
         var denied = RejectUnlessMetaAgent(call, "SpeakToUser");
         if (denied is not null)
@@ -427,7 +427,12 @@ public sealed partial class DysonWorkspaceToolExecutor
             if (voice is null)
                 return Error(call, "SpeakToUser: voice mode is off.");
 
-            var spoken = voice.Speak(text.Value);
+            var focus = _session.Config.Focus;
+            var name = focus is null
+                ? ""
+                : await focus.GetDisplayNameAsync(_workDirectoryId, cancellationToken).ConfigureAwait(false);
+
+            var spoken = voice.Speak(text.Value, _workDirectoryId, name);
             if (spoken.IsError)
                 return Error(call, "SpeakToUser: " + spoken.Error);
 
@@ -437,6 +442,67 @@ public sealed partial class DysonWorkspaceToolExecutor
         {
             return Error(call, "SpeakToUser: invalid JSON arguments.");
         }
+    }
+
+    private async Task<DysonToolCallResult> ListWorkdirsAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var denied = RejectUnlessMetaAgent(call, "ListWorkdirs");
+        if (denied is not null)
+            return denied;
+
+        var focus = _session.Config.Focus;
+        if (focus is null)
+            return Error(call, DysonWorkDirectoryFocus.NotOwnerMessage);
+
+        var listed = await focus.ListJsonAsync(_workDirectoryId, cancellationToken).ConfigureAwait(false);
+        return listed.IsError ? Error(call, listed.Error) : Ok(call, listed.Value);
+    }
+
+    private async Task<DysonToolCallResult> OpenWorkdirsPanelAsync(DysonToolCall call)
+    {
+        var denied = RejectUnlessMetaAgent(call, "OpenWorkdirsPanel");
+        if (denied is not null)
+            return denied;
+
+        var focus = _session.Config.Focus;
+        if (focus is null)
+            return Error(call, DysonWorkDirectoryFocus.NotOwnerMessage);
+
+        var opened = await focus.OpenPanelAsync(_workDirectoryId).ConfigureAwait(false);
+        return opened.IsError ? Error(call, opened.Error) : Ok(call, """{"ok":true}""");
+    }
+
+    private async Task<DysonToolCallResult> SwitchWorkdirAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var denied = RejectUnlessMetaAgent(call, "SwitchWorkdir");
+        if (denied is not null)
+            return denied;
+
+        Guid id;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var raw = RequireString(doc.RootElement, "id");
+            if (raw.IsError)
+                return Error(call, "SwitchWorkdir: " + raw.Error);
+            if (!Guid.TryParse(raw.Value, out id))
+                return Error(call, "SwitchWorkdir: id must be a Guid.");
+        }
+        catch (JsonException)
+        {
+            return Error(call, "SwitchWorkdir: invalid JSON arguments.");
+        }
+
+        var focus = _session.Config.Focus;
+        if (focus is null)
+            return Error(call, DysonWorkDirectoryFocus.NotOwnerMessage);
+
+        var switched = await focus.SwitchAsync(_workDirectoryId, id, cancellationToken).ConfigureAwait(false);
+        return switched.IsError ? Error(call, switched.Error) : Ok(call, """{"ok":true}""");
     }
 
     private const int MaxConversationActions = 8;

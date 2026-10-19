@@ -137,6 +137,8 @@
     private Guid? _pendingBootWorkDirectoryId;
     private string? _pendingBootWorkDirectoryPath;
     private WorkDirectorySwitcher? _workdirSwitcher;
+    private Func<Task>? _openPanelHook;
+    private Func<Guid, Task>? _switchHook;
     private DotNetObjectReference<DysonUiHost>? _chatLinksRef;
     private IDisposable? _hostSub;
 
@@ -176,6 +178,7 @@
         {
             await Theme.InitializeAsync();
             await InstallChatExternalLinksAsync();
+            BindFocusHooks();
         }
 
         // Prerender is a separate component instance. Hydrating it runs git/DB work
@@ -258,6 +261,7 @@
             if (get.IsSuccess)
             {
                 _activeWorkDirectoryId = id;
+                Host.Focus?.SetActive(id);
                 _registeredWorkDirectoryPath = get.Value.AbsolutePath;
                 Host.SetComposerWorkDirectoryId(id);
                 _pendingBootWorkDirectoryId = id;
@@ -278,6 +282,7 @@
         }
         else
         {
+            Host.Focus?.SetActive(null);
             await RefreshGitBranchAsync(null);
             await RefreshSessionsAsync();
         }
@@ -423,6 +428,7 @@
         else
         {
             _activeWorkDirectoryId = null;
+            Host.Focus?.SetActive(null);
             _registeredWorkDirectoryPath = null;
             Host.SetComposerWorkDirectoryId(null);
             await ApplyOperatorWorkspaceAsync();
@@ -441,6 +447,7 @@
     private async Task SetActiveWorkDirectoryAsync(Guid id, string absolutePath)
     {
         _activeWorkDirectoryId = id;
+        Host.Focus?.SetActive(id);
         _registeredWorkDirectoryPath = absolutePath;
         Host.SetComposerWorkDirectoryId(id);
 
@@ -667,8 +674,36 @@
 
     private Task CancelPrompt() => Host.StopAllExecution();
 
+    private void BindFocusHooks()
+    {
+        var focus = Host.Focus;
+        if (focus is null)
+            return;
+
+        _openPanelHook ??= () => InvokeAsync(() => _workdirSwitcher?.Open());
+        _switchHook ??= id => InvokeAsync(async () =>
+        {
+            if (_workdirSwitcher is not null)
+                await _workdirSwitcher.SelectAsync(id);
+        });
+        focus.OpenPanel = _openPanelHook;
+        focus.SwitchTo = _switchHook;
+    }
+
+    private void UnbindFocusHooks()
+    {
+        var focus = Host.Focus;
+        if (focus is null)
+            return;
+        if (ReferenceEquals(focus.OpenPanel, _openPanelHook))
+            focus.OpenPanel = null;
+        if (ReferenceEquals(focus.SwitchTo, _switchHook))
+            focus.SwitchTo = null;
+    }
+
     public async ValueTask DisposeAsync()
     {
+        UnbindFocusHooks();
         _hostSub?.Dispose();
         _hostSub = null;
         Theme.Changed -= OnThemeChanged;
