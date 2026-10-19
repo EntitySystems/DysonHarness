@@ -76,6 +76,24 @@ public class DysonSpeechTryoutTests
     }
 
     [Fact]
+    public async Task Stop_after_a_cancelled_play_releases_the_next_play()
+    {
+        var playback = new FakePlayback();
+        using var cts = new CancellationTokenSource();
+        var first = playback.PlayAsync(OneChunk(), cts.Token);
+        await WaitUntil(() => playback.Waiting == 1);
+        cts.Cancel();
+        Assert.True((await first).IsSuccess);
+        Assert.Equal(0, playback.Waiting);
+
+        Assert.True(playback.Stop().IsSuccess);
+        var second = playback.PlayAsync(OneChunk(), CancellationToken.None);
+        var finished = await Task.WhenAny(second, Task.Delay(TimeSpan.FromSeconds(2)));
+        Assert.Same(second, finished);
+        Assert.True((await second).IsSuccess);
+    }
+
+    [Fact]
     public async Task Record_appends_finals_and_stops_on_capture_or_transcription_errors()
     {
         var capture = new FakeCapture();
@@ -339,6 +357,12 @@ public class DysonSpeechTryoutTests
         return list;
     }
 
+    private static async IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> OneChunk()
+    {
+        yield return Result<DysonSpeechAudioChunk, string>.AsValue(new DysonSpeechAudioChunk([0, 0], 24000, true));
+        await Task.CompletedTask;
+    }
+
     private static async Task WaitUntil(Func<bool> condition)
     {
         for (var i = 0; i < 500 && !condition(); i++)
@@ -548,6 +572,7 @@ public class DysonSpeechTryoutTests
         public int Waiting;
         public string? Error;
         private readonly TaskCompletionSource _blocker = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _armed;
 
         public async Task<VoidResult<string>> PlayAsync(
             IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> chunks,
@@ -563,6 +588,7 @@ public class DysonSpeechTryoutTests
             if (Error is not null)
                 return new VoidResult<string>(Error);
 
+            Interlocked.Increment(ref _armed);
             Interlocked.Increment(ref Waiting);
             try
             {
@@ -583,7 +609,9 @@ public class DysonSpeechTryoutTests
         public VoidResult<string> Stop(TimeSpan fadeOut = default)
         {
             Stops++;
-            if (Waiting > 0)
+            // A replaced play cancels the waiter before Stop runs. Waiting is already 0,
+            // but the next PlayAsync still has to observe this Stop or the suite deadlocks.
+            if (Volatile.Read(ref _armed) > 0)
                 _blocker.TrySetResult();
             return VoidResult<string>.Success;
         }
