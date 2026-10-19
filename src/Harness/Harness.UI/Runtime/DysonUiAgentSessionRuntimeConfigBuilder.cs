@@ -121,6 +121,7 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
             UiTheme = request.Theme,
             Bus = _bus,
             Focus = focus,
+            AppSettings = _appSettings,
         };
         if (voice is { IsOn: true } && DysonSessionPolicy.IsMetaAgent(request.AgentMode))
             config.Voice = voice;
@@ -409,44 +410,11 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
         Action<OpenAiCompatibleAgentProvider> assign,
         CancellationToken cancellationToken)
     {
-        var setting = await _appSettings
-            .GetSettingAsync(settingKey, cancellationToken)
+        var loaded = await OpenAiCompatibleAgentProvider
+            .TryLoadFromSettingAsync(_appSettings, _models, settingKey, effortSettingKey, cancellationToken)
             .ConfigureAwait(false);
-
-        if (setting.IsError
-            || string.IsNullOrWhiteSpace(setting.Value)
-            || !Guid.TryParse(setting.Value, out var slugId)
-            || slugId == Guid.Empty)
-        {
-            return;
-        }
-
-        var slugResult = await _models.GetSlugAsync(slugId, cancellationToken).ConfigureAwait(false);
-        if (slugResult.IsError
-            || slugResult.Value is null
-            || !IsOpenAiCompatibleSlug(slugResult.Value))
-        {
-            return;
-        }
-
-        var effortSetting = await _appSettings
-            .GetSettingAsync(effortSettingKey, cancellationToken)
-            .ConfigureAwait(false);
-        var effortOverride = effortSetting.IsError
-            ? null
-            : OpenAiCompatibleAgentProvider.NormalizeReasoningEffort(effortSetting.Value);
-
-        assign(new OpenAiCompatibleAgentProvider(slugResult.Value, effortOverride));
-    }
-
-    private static bool IsOpenAiCompatibleSlug(DysonModelSlugEntity slug)
-    {
-        var provider = slug.Provider;
-        var kind = DysonProviderKinds.EffectiveKind(
-            provider?.ProviderKind ?? DysonProviderKinds.Demo,
-            provider?.BaseUrl,
-            provider?.ApiKey);
-        return string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal);
+        if (!loaded.IsError && loaded.Value is { } provider)
+            assign(provider);
     }
 
     private static Guid? NormalizeWorkDirectoryId(Guid? workDirectoryId) =>

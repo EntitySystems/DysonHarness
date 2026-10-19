@@ -89,4 +89,43 @@ public sealed class OpenAiCompatibleAgentProvider : DysonAgentProvider
 
     public static string? NormalizeReasoningEffort(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    /// <summary>
+    /// Read a role model setting (<paramref name="slugKey"/> = slug Guid, <paramref name="effortKey"/> = effort)
+    /// from the database. Value null ⇒ unset, malformed, or not OpenAI-compatible (inherit).
+    /// Error ⇒ the settings or model read failed.
+    /// </summary>
+    public static async Task<Result<OpenAiCompatibleAgentProvider?, string>> TryLoadFromSettingAsync(
+        IDysonSubjectSettingsRepository settings,
+        IDysonModelRepository models,
+        string slugKey,
+        string effortKey,
+        CancellationToken cancellationToken = default)
+    {
+        var setting = await settings.GetSettingAsync(slugKey, cancellationToken).ConfigureAwait(false);
+        if (setting.IsError)
+            return Result<OpenAiCompatibleAgentProvider?, string>.AsError(setting.Error);
+        if (!Guid.TryParse(setting.Value, out var slugId) || slugId == Guid.Empty)
+            return Result<OpenAiCompatibleAgentProvider?, string>.AsValue(null);
+
+        var slug = await models.GetSlugAsync(slugId, cancellationToken).ConfigureAwait(false);
+        if (slug.IsError)
+            return Result<OpenAiCompatibleAgentProvider?, string>.AsError(slug.Error);
+
+        var provider = slug.Value?.Provider;
+        var kind = DysonProviderKinds.EffectiveKind(
+            provider?.ProviderKind ?? DysonProviderKinds.Demo,
+            provider?.BaseUrl,
+            provider?.ApiKey);
+        if (slug.Value is null
+            || !string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
+        {
+            return Result<OpenAiCompatibleAgentProvider?, string>.AsValue(null);
+        }
+
+        var effort = await settings.GetSettingAsync(effortKey, cancellationToken).ConfigureAwait(false);
+        return Result<OpenAiCompatibleAgentProvider?, string>.AsValue(new OpenAiCompatibleAgentProvider(
+            slug.Value,
+            effort.IsError ? null : NormalizeReasoningEffort(effort.Value)));
+    }
 }

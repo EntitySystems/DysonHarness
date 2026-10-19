@@ -318,6 +318,37 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
     }
 
     [Fact]
+    public async Task Subagent_default_is_read_live_from_settings_after_build()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var a = await harness.SeedProvidersAsync();
+        var b = await harness.SeedProvidersAsync();
+        Assert.False((await harness.Settings.SetSettingAsync(
+            DysonAppSettingKeys.ExploreModelSlugId, a.OpenAiSlugId.ToString("D"))).IsError);
+
+        await using var lease = (await harness.Builder.BuildAsync(new DysonUiAgentSessionRuntimeConfigRequest
+        {
+            AgentMode = DysonAgentModes.Work,
+        })).Value;
+
+        Assert.False((await harness.Settings.SetSettingAsync(
+            DysonAppSettingKeys.ExploreModelSlugId, b.OpenAiSlugId.ToString("D"))).IsError);
+        Assert.False((await harness.Settings.SetSettingAsync(
+            DysonAppSettingKeys.ExploreReasoningEffort, "high")).IsError);
+
+        var live = Assert.IsType<OpenAiCompatibleAgentProvider>(await lease.Config
+            .TryGetSubagentDefaultWhenSlugOmittedAsync(null, DysonAgentModes.Explore, harness.Models));
+        Assert.Equal(b.OpenAiSlugId, live.SlugId);
+        Assert.Equal("high", live.ReasoningEffort);
+        Assert.Null(await lease.Config.TryGetSubagentDefaultWhenSlugOmittedAsync(
+            "some-slug", DysonAgentModes.Explore, harness.Models));
+
+        Assert.False((await harness.Settings.SetSettingAsync(DysonAppSettingKeys.ExploreModelSlugId, null)).IsError);
+        Assert.Null(await lease.Config.TryGetSubagentDefaultWhenSlugOmittedAsync(
+            null, DysonAgentModes.Explore, harness.Models));
+    }
+
+    [Fact]
     public async Task DisposeAsync_releases_custom_mcp_retain()
     {
         await using var harness = await Harness.CreateAsync();

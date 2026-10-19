@@ -90,6 +90,13 @@ public class DysonAgentSessionConfig
     public DysonAgentProvider? MetaAgentDroneDefaultProvider { get; set; }
 
     /// <summary>
+    /// Host-owned settings port. When set, Agent Behavior subagent defaults are read live from the
+    /// database on each child start (<see cref="TryGetSubagentDefaultWhenSlugOmittedAsync"/>) instead of
+    /// the <c>*DefaultProvider</c> snapshot. Children share this config instance.
+    /// </summary>
+    public IDysonSubjectSettingsRepository? AppSettings { get; set; }
+
+    /// <summary>
     /// Dedicated direct-OpenAI provider identity for image generation.
     /// Null means <c>GenerateImage</c> is unavailable; it never falls back to the session chat provider.
     /// </summary>
@@ -137,6 +144,45 @@ public class DysonAgentSessionConfig
             return null;
 
         return TryGetSubagentDefaultProvider(agentMode);
+    }
+
+    /// <summary>
+    /// Same resolve order as <see cref="TryGetSubagentDefaultWhenSlugOmitted"/>, but when <see cref="AppSettings"/>
+    /// and <paramref name="models"/> are set the role default is read from the database now (no snapshot fallback,
+    /// so a cleared setting inherits). A failed read returns null (inherit).
+    /// </summary>
+    public async Task<DysonAgentProvider?> TryGetSubagentDefaultWhenSlugOmittedAsync(
+        string? modelSlug,
+        string? agentMode,
+        IDysonModelRepository? models,
+        CancellationToken cancellationToken = default)
+    {
+        if (!string.IsNullOrWhiteSpace(modelSlug))
+            return null;
+
+        if (AppSettings is null || models is null || SubagentDefaultSettingKeys(agentMode) is not { } keys)
+            return TryGetSubagentDefaultProvider(agentMode);
+
+        var loaded = await OpenAiCompatibleAgentProvider
+            .TryLoadFromSettingAsync(AppSettings, models, keys.SlugKey, keys.EffortKey, cancellationToken)
+            .ConfigureAwait(false);
+        return loaded.IsError ? null : loaded.Value;
+    }
+
+    private static (string SlugKey, string EffortKey)? SubagentDefaultSettingKeys(string? agentMode)
+    {
+        if (string.Equals(agentMode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase))
+            return (DysonAppSettingKeys.ExploreModelSlugId, DysonAppSettingKeys.ExploreReasoningEffort);
+        if (string.Equals(agentMode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase))
+            return (DysonAppSettingKeys.DroneModelSlugId, DysonAppSettingKeys.DroneReasoningEffort);
+        if (string.Equals(agentMode, DysonAgentModes.SecurityReview, StringComparison.OrdinalIgnoreCase))
+            return (DysonAppSettingKeys.SecurityReviewModelSlugId, DysonAppSettingKeys.SecurityReviewReasoningEffort);
+        if (string.Equals(agentMode, DysonAgentModes.BugReview, StringComparison.OrdinalIgnoreCase))
+            return (DysonAppSettingKeys.BugReviewModelSlugId, DysonAppSettingKeys.BugReviewReasoningEffort);
+        if (string.Equals(agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
+            return (DysonAppSettingKeys.MetaAgentDroneModelSlugId, DysonAppSettingKeys.MetaAgentDroneReasoningEffort);
+
+        return null;
     }
 
     /// <summary>

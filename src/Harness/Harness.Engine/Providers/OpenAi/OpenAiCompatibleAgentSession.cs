@@ -522,7 +522,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         string? reasoningEffort,
         CancellationToken cancellationToken)
     {
-        if (Config.TryGetSubagentDefaultWhenSlugOmitted(modelSlug, agentMode)
+        if (await Config.TryGetSubagentDefaultWhenSlugOmittedAsync(modelSlug, agentMode, _models, cancellationToken)
+                .ConfigureAwait(false)
             is OpenAiCompatibleAgentProvider modeDefault)
         {
             if (reasoningEffort is null)
