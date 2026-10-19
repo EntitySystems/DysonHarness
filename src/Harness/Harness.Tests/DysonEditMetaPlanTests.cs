@@ -287,6 +287,35 @@ public class DysonEditMetaPlanTests
     }
 
     [Fact]
+    public async Task Work_mode_can_read_a_plan_but_not_edit_it()
+    {
+        await using var fixture = await DysonPlanToolFixture.CreateAsync();
+        using var http = new HttpClient();
+        var work = new DysonPlanToolStubSession(DysonAgentModes.Work);
+        // Reach the executor's mode gate, not the catalog gate.
+        DysonPlanToolStubSession.GrantTool(work, "EditMetaPlan", DysonAgentModes.MetaAgentDrone);
+        var executor = await fixture.ExecutorAsync(work, http);
+        var planId = await fixture.CreatePlanAsync("Work", "alpha");
+
+        var read = await Run(executor, "ReadMetaPlan", Args(new { planId }));
+        Assert.False(read.IsError, read.Content);
+        Assert.Equal("alpha", JsonDocument.Parse(read.Content).RootElement.GetProperty("markdown").GetString());
+
+        var edit = await Run(executor, "EditMetaPlan", Args(new { planId, old_text = "alpha", new_text = "beta" }));
+        Assert.True(edit.IsError);
+        Assert.Contains("only available in Meta Agent and Meta Agent Drone modes.", edit.Content, StringComparison.Ordinal);
+        Assert.Equal("alpha", await BodyAsync(fixture, planId));
+    }
+
+    [Fact]
+    public void Drone_and_worker_prompts_name_ReadMetaPlan()
+    {
+        Assert.Contains("ReadMetaPlan", DysonAgentSystemPrompts.DroneDirective, StringComparison.Ordinal);
+        Assert.Contains("ReadMetaPlan", DysonAgentSystemPrompts.MetaAgentDroneWorkerFirstTurnMandate, StringComparison.Ordinal);
+        Assert.Contains("ReadMetaPlan", DysonAgentSystemPrompts.WorkDirective, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ReadMetaPlan_returns_a_body_over_the_64KiB_cap_whole_and_its_tail_is_editable()
     {
         var markdown = new string('x', 150_000) + "END-OF-PLAN";
@@ -309,7 +338,7 @@ public class DysonEditMetaPlanTests
     }
 
     [Fact]
-    public void Tool_is_registered_for_meta_agent_and_drone_and_absent_elsewhere()
+    public void Read_is_on_every_catalog_and_edit_and_submit_stay_meta_only()
     {
         foreach (var mode in new[] { DysonAgentModes.MetaAgent, DysonAgentModes.MetaAgentDrone })
         {
@@ -318,11 +347,33 @@ public class DysonEditMetaPlanTests
             Assert.True(tools.ContainsKey("ReadMetaPlan"), mode);
         }
 
-        foreach (var mode in new[] { DysonAgentModes.Explore, DysonAgentModes.Work })
+        foreach (var mode in DysonAgentModes.BuiltIns)
+            Assert.True(DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), mode).Tools.ContainsKey("ReadMetaPlan"), mode);
+
+        foreach (var mode in new[]
+                 {
+                     DysonAgentModes.Ask, DysonAgentModes.Plan, DysonAgentModes.Work, DysonAgentModes.Explore,
+                     DysonAgentModes.Drone, DysonAgentModes.SecurityReview, DysonAgentModes.BugReview,
+                 })
         {
             var tools = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), mode).Tools;
             Assert.False(tools.ContainsKey("EditMetaPlan"), mode);
+            Assert.False(tools.ContainsKey("SubmitMetaPlan"), mode);
         }
+
+        var custom = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), "CustomWidget").Tools;
+        Assert.True(custom.ContainsKey("ReadMetaPlan"));
+        Assert.False(custom.ContainsKey("EditMetaPlan"));
+
+        var metaDrone = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.MetaAgentDrone).Tools;
+        Assert.True(metaDrone.ContainsKey("SubmitMetaPlan"));
+
+        var work = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.Work).Tools;
+        var readDescription = work["ReadMetaPlan"].Description;
+        Assert.Contains("plan path is not specified", readDescription, StringComparison.Ordinal);
+        Assert.Contains("not a substitute", readDescription, StringComparison.Ordinal);
+        using (var readSchema = JsonDocument.Parse(work["ReadMetaPlan"].InputSchemaJson))
+            Assert.False(readSchema.RootElement.GetProperty("properties").TryGetProperty("path", out _));
 
         var meta = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.MetaAgent).Tools;
         Assert.False(meta.ContainsKey("SubmitMetaPlan"));

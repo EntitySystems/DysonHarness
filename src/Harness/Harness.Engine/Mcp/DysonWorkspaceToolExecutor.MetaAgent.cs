@@ -667,13 +667,6 @@ public sealed partial class DysonWorkspaceToolExecutor
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
-        if (!IsMetaAgentOrDrone())
-        {
-            return Error(
-                call,
-                "ReadMetaPlan is only available in Meta Agent and Meta Agent Drone modes.");
-        }
-
         long planId;
         try
         {

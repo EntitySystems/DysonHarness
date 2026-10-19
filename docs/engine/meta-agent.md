@@ -37,7 +37,7 @@ Kept:
 | `CompactConversation` | Enqueues `DysonFullSummarizeFlow.CreateTurn()` and **ends the current turn**. |
 | `RemoveTodos` | Runtime `_session.Mode == MetaAgent` check. `DeleteTodo` is not in the catalog. |
 | `ListPlans` / `SetPlanStatus` / `BeginBuildPlan` / `DeletePlan` | Plan tools below. |
-| `ReadMetaPlan` / `EditMetaPlan` | Plan-body tools, shared with the drone (one `CreatePlanBodyTools()` definition). The root cannot match `old_text` without the text, so it reads bodies on demand; `ListPlans` still never carries a body. Neither schema takes a `path`. See [Plan tools](#plan-tools). |
+| `ReadMetaPlan` / `EditMetaPlan` | Plan-body tools, shared with the drone (`CreatePlanBodyTools()`; `ReadMetaPlan` is the same `CreateReadMetaPlanTool()` definition every other mode gets from the default catalog). The root cannot match `old_text` without the text, so it reads bodies on demand; `ListPlans` still never carries a body. Neither schema takes a `path`. See [Plan tools](#plan-tools). |
 | `ListNotes` | Name and token count only. No body, no caps, no `allowed`. |
 | `CanCreateNote` | Pre-write budget check. Optional `name` and `content`. No roster. Does not write. |
 | `CreateNote` | New note. Fails if the name exists, if this would be note 21, or if a token cap would break. |
@@ -115,13 +115,13 @@ Archives the plan (`IDysonPlanRepository.ArchiveAsync`): sets `ArchivedUtc`, kee
 
 Refuses while `Status == Building` (`"Call SetPlanStatus with stale, or stop the builder first."`). Status is the gate; `BuildAgentId` is not consulted.
 
-### `SubmitMetaPlan` (drone-only) / `ReadMetaPlan` / `EditMetaPlan` (root and drone)
+### `SubmitMetaPlan` (drone-only) / `ReadMetaPlan` (every mode) / `EditMetaPlan` (root and drone)
 
 `SubmitMetaPlan` inserts `Kind = MetaPlan`, `Status = Draft`, or overwrites `Title`/`Markdown` of the **existing row in place** when `planId` is given (`UpdateAsync` on the same id; it never creates a second row, and a cross-workdir id is not found). Its description tells the model to prefer `EditMetaPlan` for revisions and to create large plans from a short skeleton. Returns `{planId, title, status}`. Writes **no file**. Cross-workdir `planId` is `"Plan '{id}' not found."`. Empty markdown is a Result error. After a successful create or revise (and after `SetPlanStatus` / `BeginBuildPlan` / `DeletePlan` succeed), the executor publishes `DysonPlansChangedEvent` on `DysonBusScopes.WorkDirectory` so an already-open meta page can refresh `MetaPlanList` without a reload.
 
 It is **not** a report: no `EndsCurrentTurn`, does not call `SubmitSubagentReportAsync`, does not enqueue a parent interrupt. The drone must still `SubmitSubagentReport`. A plan-authoring drone that stops after `SubmitMetaPlan` is caught by the existing unfinished-work / child-report watch. Covered by `DysonSubmitMetaPlanTests`.
 
-`ReadMetaPlan` returns `{planId, title, markdown, status}` for a row in **this** work directory, to the root Meta Agent and to drones. The `markdown` string is exactly what `EditMetaPlan` matches `old_text` against (no line-number prefixes, stored EOLs kept). The success result is exempt from the 64KiB `DysonToolResultLimits` clip, so the full body is returned with no character cap and no paging (a body too large for the context window surfaces as a provider error or a later DropContext, never a silent slice).
+`ReadMetaPlan` returns `{planId, title, markdown, status}` for a row in **this** work directory. It is on the default catalog (`DysonMcpPipeline.CreateDefault`, one `DysonMetaAgentTools.CreateReadMetaPlanTool()` definition), so every mode can read a plan by id (Ask, Plan, Work, Explore, Drone, reviews, custom modes); the root Meta Agent and drones keep it via their allowlists. `EditMetaPlan` and `SubmitMetaPlan` stay meta-only. A classic Drone worker inside a meta-drone worktree reads the same rows (the work-directory id is the parent's). The `markdown` string is exactly what `EditMetaPlan` matches `old_text` against (no line-number prefixes, stored EOLs kept). The success result is exempt from the 64KiB `DysonToolResultLimits` clip, so the full body is returned with no character cap and no paging (a body too large for the context window surfaces as a provider error or a later DropContext, never a silent slice).
 
 `EditMetaPlan` edits an existing plan in place, mirroring `WriteFile` with `planId` in place of `path`:
 

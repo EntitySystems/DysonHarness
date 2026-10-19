@@ -766,28 +766,36 @@ public static class DysonMetaAgentTools
     }
 
     /// <summary>
+    /// The one <c>ReadMetaPlan</c> definition: on the default catalog (<see cref="DysonMcpPipeline.CreateDefault"/>) for every
+    /// mode, and re-added by <see cref="CreatePlanBodyTools"/> on the two meta allowlists.
+    /// </summary>
+    public static DysonMcpTool CreateReadMetaPlanTool() => new()
+    {
+        Name = "ReadMetaPlan",
+        Description =
+            "Load a plan by planId (title + markdown + status). Returns the full markdown with no character cap. " +
+            "The markdown is exactly the text EditMetaPlan matches old_text against; old_text may come from anywhere in it. " +
+            "When you are presented with a plan number or planId and asked to build or follow that plan, and a plan path is not specified, call this tool before editing and treat the returned markdown as the brief. " +
+            "A path, when one is also given, is not a substitute: if the id is the authority, still call this tool. " +
+            "If your brief names a planId, read it before you start — it is the authoritative brief and it is kept current.",
+        InputSchemaJson = """
+            {
+              "type": "object",
+              "properties": {
+                "planId": { "type": "integer", "description": "Positive plan id." }
+              },
+              "required": ["planId"]
+            }
+            """,
+    };
+
+    /// <summary>
     /// <c>ReadMetaPlan</c> and <c>EditMetaPlan</c>: on both the root Meta Agent (it cannot match old_text without
-    /// the body) and every Meta Agent Drone. <c>SubmitMetaPlan</c> stays drone-only.
+    /// the body) and every Meta Agent Drone. <c>EditMetaPlan</c> is meta-only; <c>SubmitMetaPlan</c> stays drone-only.
     /// </summary>
     private static IEnumerable<DysonMcpTool> CreatePlanBodyTools()
     {
-        yield return new DysonMcpTool
-        {
-            Name = "ReadMetaPlan",
-            Description =
-                "Load a plan by planId (title + markdown + status). Returns the full markdown with no character cap. " +
-                "The markdown is exactly the text EditMetaPlan matches old_text against; old_text may come from anywhere in it. " +
-                "If your brief names a planId, read it before you start — it is the authoritative brief and it is kept current.",
-            InputSchemaJson = """
-                {
-                  "type": "object",
-                  "properties": {
-                    "planId": { "type": "integer", "description": "Positive plan id." }
-                  },
-                  "required": ["planId"]
-                }
-                """,
-        };
+        yield return CreateReadMetaPlanTool();
 
         yield return new DysonMcpTool
         {

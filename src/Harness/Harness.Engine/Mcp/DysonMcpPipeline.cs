@@ -1892,6 +1892,8 @@ public sealed class DysonMcpPipeline
                 """,
         };
 
+        yield return DysonMetaAgentTools.CreateReadMetaPlanTool();
+
         yield return new DysonMcpTool
         {
             Name = "GetDateTime",
