@@ -551,10 +551,16 @@ public sealed class DysonVoiceMode(
             return;
 
         Pumped? ahead = null;
+        SpokenLine? pending = null;
         try
         {
             while (!runToken.IsCancellationRequested)
             {
+                // ponytail: 50 ms poll. Ceiling is one extra beat after the 3 s pause before the first resumed line.
+                // Upgrade: pulse from SetCapturing when it goes false.
+                while (CaptureHold())
+                    await Task.Delay(50, runToken).ConfigureAwait(false);
+
                 Pumped? current = null;
                 if (ahead is not null)
                 {
@@ -571,10 +577,28 @@ public sealed class DysonVoiceMode(
 
                 if (current is null)
                 {
-                    if (!await reader.WaitToReadAsync(runToken).ConfigureAwait(false))
-                        return;
-                    if (!reader.TryRead(out var line))
-                        continue;
+                    SpokenLine line;
+                    if (pending is not null)
+                    {
+                        line = pending.Value;
+                        pending = null;
+                    }
+                    else
+                    {
+                        if (!await reader.WaitToReadAsync(runToken).ConfigureAwait(false))
+                            return;
+                        // Speak wrote during the hold. Leave the line in the channel.
+                        if (CaptureHold())
+                            continue;
+                        if (!reader.TryRead(out line))
+                            continue;
+                        if (CaptureHold())
+                        {
+                            pending = line;
+                            continue;
+                        }
+                    }
+
                     current = await BeginLineAsync(line, prefetch: false, runToken).ConfigureAwait(false);
                     if (current is null || Volatile.Read(ref _speakEpoch) != current.Epoch)
                     {
@@ -606,7 +630,8 @@ public sealed class DysonVoiceMode(
                 var playing = current;
                 // None, not the run token: a fade must not cancel the device. The pump token is separate.
                 var play = _tryout.PlayPreparedAsync(playing.Channel.Reader.ReadAllAsync(), CancellationToken.None);
-                if (reader.TryRead(out var nextLine)
+                if (!CaptureHold()
+                    && reader.TryRead(out var nextLine)
                     && Volatile.Read(ref _speakEpoch) == epoch
                     && !runToken.IsCancellationRequested)
                 {
@@ -802,14 +827,6 @@ public sealed class DysonVoiceMode(
         // ponytail: a line the speak loop already dequeued can still start; upgrade is a generation check inside PlayAsync.
         Interlocked.Increment(ref _speakEpoch);
         CancelSynths();
-        var reader = _speak?.Reader;
-        if (reader is not null)
-        {
-            while (reader.TryRead(out _))
-            {
-            }
-        }
-
         _tryout.StopPlayback(FadeOut);
         _tryout.PlayListenChime();
     }
@@ -854,6 +871,12 @@ public sealed class DysonVoiceMode(
         catch (ObjectDisposedException)
         {
         }
+    }
+
+    private bool CaptureHold()
+    {
+        lock (_state)
+            return IsCapturing;
     }
 
     private void SetCapturing(bool capturing)

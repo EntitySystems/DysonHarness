@@ -340,6 +340,31 @@ public class DysonVoiceModeTests
     }
 
     [Fact]
+    public async Task SpeakLoop_holds_lines_until_utterance_pause()
+    {
+        await using var rig = await VoiceRig.StartAsync();
+        var active = Guid.NewGuid();
+        rig.Focus.SetActive(active);
+
+        rig.Capture.PushText("hey dyson open the plan");
+        Assert.True(await rig.Stt.NextAsync());
+        await WaitForAsync(() => rig.Playback.ListenCount >= 1);
+        Assert.True(rig.Voice.IsCapturing);
+
+        Assert.True(rig.Voice.Speak("One", active, "Active").IsSuccess);
+        Assert.True(rig.Voice.Speak("Two", active, "Active").IsSuccess);
+        await Task.Delay(200);
+        Assert.True(rig.Voice.IsCapturing);
+        Assert.Empty(rig.Tts.Texts);
+        Assert.Equal(0, rig.Playback.SpeechPlays);
+
+        await WaitForAsync(() => rig.Tts.Texts.Count >= 2 && rig.Playback.SpeechPlays >= 2, 5000);
+        Assert.Equal(["One", "Two"], rig.Tts.Texts);
+        Assert.Equal(2, rig.Playback.SpeechPlays);
+        Assert.Equal(1, rig.Playback.MaxInFlight);
+    }
+
+    [Fact]
     public async Task SpeakLoop_synthesizes_next_line_while_current_plays()
     {
         await using var rig = await VoiceRig.StartAsync();
