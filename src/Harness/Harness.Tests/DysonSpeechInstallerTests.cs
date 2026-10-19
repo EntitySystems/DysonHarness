@@ -215,6 +215,8 @@ public class DysonSpeechInstallerTests
         Assert.True(manifest.IsSuccess, manifest.IsError ? manifest.Error : null);
         var requirement = manifest.Value.RocmTorchRequirement;
         Assert.Equal("torch==2.14.0+rocm10.1.0", requirement);
+        // The rocm sdist is the distribution that ships import rocm_sdk; dropping the pin brings the crash back.
+        Assert.Contains(manifest.Value.Rids["win-x64"].RocmTorch!, f => f.FileName == "rocm-10.1.0.tar.gz");
         var root = Path.Combine(Path.GetTempPath(), "dyson-rocm-sdk-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -236,6 +238,15 @@ public class DysonSpeechInstallerTests
             Directory.CreateDirectory(Path.Combine(dir, "torch"));
             Directory.CreateDirectory(Path.Combine(dir, info));
             Directory.CreateDirectory(Path.Combine(dir, "rocm_sdk"));
+            Assert.False(DysonSpeechInstaller.RocmTorchReady(root, manifest.Value));
+            dropped = DysonSpeechInstaller.DropUnreadyRocmTorch(root, manifest.Value);
+            Assert.True(dropped.IsSuccess, dropped.IsError ? dropped.Error : null);
+            Assert.False(Directory.Exists(dir));
+
+            Directory.CreateDirectory(Path.Combine(dir, "torch"));
+            Directory.CreateDirectory(Path.Combine(dir, info));
+            Directory.CreateDirectory(Path.Combine(dir, "rocm_sdk"));
+            File.WriteAllText(Path.Combine(dir, "rocm_sdk", "__init__.py"), "");
             ready = DysonSpeechInstaller.RocmTorchReady(root, manifest.Value);
             Assert.True(ready);
             Assert.Equal(
@@ -244,7 +255,7 @@ public class DysonSpeechInstallerTests
             dropped = DysonSpeechInstaller.DropUnreadyRocmTorch(root, manifest.Value);
             Assert.True(dropped.IsSuccess, dropped.IsError ? dropped.Error : null);
             Assert.True(Directory.Exists(Path.Combine(dir, "torch")));
-            Assert.True(Directory.Exists(Path.Combine(dir, "rocm_sdk")));
+            Assert.True(File.Exists(Path.Combine(dir, "rocm_sdk", "__init__.py")));
         }
         finally
         {

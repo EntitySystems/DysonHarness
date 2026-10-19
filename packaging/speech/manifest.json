@@ -121,6 +121,12 @@
           "sha256": "62d0160ecdd86f7132dbab9aec257cb2c96327df2592b0633aa6bb56399cc095"
         },
         {
+          "fileName": "rocm-10.1.0.tar.gz",
+          "url": "https://stable.repo.amd.com/rocm/core/whl-next/rocm/rocm-10.1.0.tar.gz",
+          "size": 27536,
+          "sha256": "e6616e62ebd1324031681e6e59349d46ee4f143a8d8f4f901a91c35c993041fc"
+        },
+        {
           "fileName": "filelock-4.2.1-py3-none-any.whl",
           "url": "https://files.pythonhosted.org/packages/28/00/db89d339bc4ecdc8087fa7b8607ba22ffc27bf96286f340c9620bea428b3/filelock-4.2.1-py3-none-any.whl",
           "size": 162455,

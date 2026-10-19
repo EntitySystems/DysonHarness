@@ -68,7 +68,7 @@ public sealed class DysonSpeechInstaller
     // Preflight floors: measured win-x64 trees (Qwen / Chatterbox: site + weights + wheelhouse). Preflight needs
     // 2 × the sum of what this run builds. ponytail: re-measure when the pins change.
     internal const long RuntimeBytes = 696_975_521; // python 64,991,494 + torch 631,984,027
-    internal const long RocmTorchBytes = 1_573_298_232; // ROCm 10.1.0 torch + gfx1102 wheels + the CPU torch pure-Python deps
+    internal const long RocmTorchBytes = 1_573_325_768; // ROCm 10.1.0 torch + gfx1102 wheels + the rocm sdist + the CPU torch pure-Python deps
     internal const long PhononBytes = 533_602_783;
     internal const long PocketBytes = 480_934_807;
     internal const long QwenBytes = 683_576_361 + 2_516_100_892 + QwenWheelhouseBytes;
@@ -1257,14 +1257,15 @@ public sealed class DysonSpeechInstaller
             return false;
         var dir = DysonSpeechPaths.GetRocmTorchDir(installRoot);
         var info = TorchDistInfoName(manifest.RocmTorchRequirement);
+        // rocm_sdk comes from the rocm sdist; torch/_rocm_init.py imports it first. A bare directory is not the package.
         return Directory.Exists(Path.Combine(dir, "torch"))
             && Directory.Exists(Path.Combine(dir, info))
-            && Directory.Exists(Path.Combine(dir, "rocm_sdk"));
+            && File.Exists(Path.Combine(dir, "rocm_sdk", "__init__.py"));
     }
 
     /// <summary>
     /// pip <c>--target</c> leaves a foreign torch in place. A <c>torch-rocm</c> that exists but is not the pinned
-    /// tree (no <c>rocm_sdk</c>, or otherwise not <see cref="RocmTorchReady"/>) is deleted. A ready tree is left alone.
+    /// tree (no <c>rocm_sdk/__init__.py</c>, or otherwise not <see cref="RocmTorchReady"/>) is deleted. A ready tree is left alone.
     /// </summary>
     internal static VoidResult<string> DropUnreadyRocmTorch(string installRoot, DysonSpeechManifest manifest)
     {
@@ -1837,6 +1838,8 @@ public sealed class DysonSpeechInstaller
 
         /// <summary>
         /// Deletes a live or staged <c>torch-rocm</c> that is not the pinned tree, then pip-installs into staging.
+        /// The pins include the <c>rocm</c> sdist (<c>import rocm_sdk</c>); building it offline needs setuptools in
+        /// the private interpreter and <c>--no-build-isolation</c>, so the pinned setuptools wheel goes in first.
         /// Already on the installer's thread-pool hop. A delete failure is a Failed step, not a throw.
         /// </summary>
         private async Task<VoidResult<string>> InstallRocmTorchAsync()
@@ -1847,27 +1850,44 @@ public sealed class DysonSpeechInstaller
             var staged = DropUnreadyRocmTorch(Tree, _manifest);
             if (staged.IsError)
                 return staged;
+            var wheels = Path.Combine(Downloads, "rocm-torch");
+            if ((await RunPythonAsync("rocm-torch-install", [], ["-c", "import setuptools"]).ConfigureAwait(false)).IsError)
+            {
+                var setuptools = RocmPlanFiles().Where(f => f.FileName.StartsWith("setuptools-", StringComparison.OrdinalIgnoreCase)).ToList();
+                if (setuptools.Count == 0)
+                    return new VoidResult<string>("rocm-torch-install: the manifest rocmTorch pins have no setuptools wheel to build the rocm sdist.");
+                var bootstrap = await PipInstallAsync("rocm-torch-setuptools", setuptools, wheels, target: null, keepWheelhouseIn: null).ConfigureAwait(false);
+                if (bootstrap.IsError)
+                    return bootstrap;
+            }
+
             return await PipInstallAsync(
                 "rocm-torch-install",
                 RocmPlanFiles(),
-                Path.Combine(Downloads, "rocm-torch"),
+                wheels,
                 DysonSpeechPaths.GetRocmTorchDir(Tree),
-                keepWheelhouseIn: null).ConfigureAwait(false);
+                keepWheelhouseIn: null,
+                noBuildIsolation: true).ConfigureAwait(false);
         }
 
         private async Task<VoidResult<string>> PipInstallAsync(
             string stepId,
             IReadOnlyList<DysonSpeechFile> wheels,
             string wheelDir,
-            string target,
-            string? keepWheelhouseIn)
+            string? target,
+            string? keepWheelhouseIn,
+            bool noBuildIsolation = false)
         {
             var requirements = Path.Combine(Staging, stepId + ".txt");
             await File.WriteAllTextAsync(requirements, BuildRequirements(wheels, wheelDir), ct).ConfigureAwait(false);
+            // target null installs into the private interpreter itself (the setuptools bootstrap).
             var pip = await RunPythonAsync(stepId, [],
             [
                 "-m", "pip", "install", "--isolated", "--no-cache-dir", "--no-index", "--no-deps",
-                "--require-hashes", "--no-warn-script-location", "--target", target, "-r", requirements,
+                "--require-hashes", "--no-warn-script-location",
+                .. noBuildIsolation ? ["--no-build-isolation"] : Array.Empty<string>(),
+                .. target is null ? Array.Empty<string>() : ["--target", target],
+                "-r", requirements,
             ]).ConfigureAwait(false);
             if (pip.IsError || keepWheelhouseIn is null)
                 return pip;
