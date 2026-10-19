@@ -93,10 +93,8 @@ public sealed class DysonActiveTextToSpeech(
         {
             DysonQwenSpeech.Id => _qwen,
             DysonChatterboxSpeech.Id => _chatterbox,
-            DysonGgufSpeechModels.PocketGgufId or DysonGgufSpeechModels.PocketGgufQ8Id
-                or DysonGgufSpeechModels.QwenGgufId
-                or DysonGgufSpeechModels.ChatterboxGgufId or DysonGgufSpeechModels.ChatterboxGgufQ8Id
-                => new DysonCrispSpeech(_models, _settings, installRoot, active.Value),
+            var id when DysonCrispSpeech.IsTextToSpeech(id)
+                => new DysonCrispSpeech(_models, _settings, installRoot, id),
             _ => _pocket,
         };
 

@@ -46,7 +46,7 @@ public sealed class DysonSpeechTryout(
     /// Qwen3-TTS GGUF enroll rejects a blank transcript. The train card does not gate the file picker on it.
     /// </summary>
     public static bool RequiresTrainTranscript(string? runtimeId) =>
-        runtimeId == DysonGgufSpeechModels.QwenGgufId;
+        DysonGgufSpeechModels.IsQwenGguf(runtimeId);
 
     /// <summary>16 kHz mono s16le for 10 seconds. Matches <c>DysonWindowsAudioCapture</c>.</summary>
     private const int RecordBytes = 10 * 16_000 * 2;

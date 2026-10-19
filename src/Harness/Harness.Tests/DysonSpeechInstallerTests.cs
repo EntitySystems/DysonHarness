@@ -355,7 +355,21 @@ public class DysonSpeechInstallerTests
         Assert.Contains("/cstr/chatterbox-turbo-GGUF/resolve/b544cf8b49504d880640864a757b3ff3e4421a42/", rid.ChatterboxGgufQ8[0].Url, StringComparison.Ordinal);
 
         Assert.Equal(2, rid.QwenGguf!.Count);
-        Assert.Equal("qwen3-tts-12hz-0.6b-base-q8_0.gguf", rid.QwenGguf[0].FileName);
+        AssertPin(rid.QwenGguf[0], "qwen3-tts-12hz-0.6b-base-q8_0.gguf", 985_716_544, "6162637048fff8ca7f7a16bebc8a62ea8181f4aec4f160894955dee5b87c1961");
+        AssertPin(rid.QwenGguf[1], "qwen3-tts-tokenizer-12hz.gguf", 358_453_280, "70dc95dbfdd9aa5d9d406236ff771d061bf17b0cda02a72513953355606e719b");
+        Assert.Equal(2, rid.QwenGgufQ4!.Count);
+        AssertPin(rid.QwenGgufQ4[0], "qwen3-tts-12hz-0.6b-base-q4_k.gguf", 532_862_784, "747bff927108f5604e5d0326c62f2a1b10ec2db20b5c460b4adf37e37aef5b39");
+        Assert.Contains("/cstr/qwen3-tts-0.6b-base-GGUF/resolve/94072f5c394b4dc4d98e97cc874800dde6ecacda/", rid.QwenGgufQ4[0].Url, StringComparison.Ordinal);
+        Assert.Equal(rid.QwenGguf[1].Url, rid.QwenGgufQ4[1].Url);
+        Assert.Equal(rid.QwenGguf[1].Size, rid.QwenGgufQ4[1].Size);
+        Assert.Equal(rid.QwenGguf[1].Sha256, rid.QwenGgufQ4[1].Sha256);
+        Assert.Equal("qwen3-tts", DysonGgufSpeechModels.CrispBackend(DysonGgufSpeechModels.QwenGgufQ4Id));
+        Assert.Equal(
+            Path.Combine("root", "qwen-gguf-q4", "model", DysonGgufSpeechModels.QwenGgufQ4File),
+            DysonGgufSpeechModels.GetMainModelFile("root", DysonGgufSpeechModels.QwenGgufQ4Id));
+        Assert.Equal(
+            Path.Combine("root", "qwen-gguf-q4", "model", DysonGgufSpeechModels.QwenTokenizerFile),
+            DysonGgufSpeechModels.GetCompanionFile("root", DysonGgufSpeechModels.QwenGgufQ4Id));
 
         Assert.Equal("phonon2", DysonGgufSpeechModels.CrispBackend(DysonGgufSpeechModels.PhononGgufQ8Id));
         Assert.Equal("pocket-tts", DysonGgufSpeechModels.CrispBackend(DysonGgufSpeechModels.PocketGgufQ8Id));
@@ -376,6 +390,12 @@ public class DysonSpeechInstallerTests
         Assert.Equal(
             ["preflight", .. runtime, "chatterbox-gguf-download", "chatterbox-gguf-hash", "chatterbox-gguf-unpack", "licenses", "commit", "smoke"],
             DysonSpeechInstaller.PlanSteps(fresh, [DysonGgufSpeechModels.ChatterboxGgufId]));
+        Assert.Equal(
+            ["preflight", .. runtime, "qwen-gguf-q4-download", "qwen-gguf-q4-hash", "qwen-gguf-q4-unpack", "licenses", "commit", "smoke"],
+            DysonSpeechInstaller.PlanSteps(fresh, [DysonGgufSpeechModels.QwenGgufQ4Id]));
+        Assert.Equal(
+            ["preflight", .. runtime, "qwen-gguf-download", "qwen-gguf-hash", "qwen-gguf-unpack", "licenses", "commit", "smoke"],
+            DysonSpeechInstaller.PlanSteps(fresh, [DysonGgufSpeechModels.QwenGgufId]));
 
         var crispPresent = new DysonSpeechInstallStatus(
             false, false, false, false, false, null, GgufInstalled: [DysonGgufSpeechModels.PocketGgufId]);
@@ -562,7 +582,7 @@ public class DysonSpeechInstallerTests
         Assert.True((await repo.EnsureBuiltInAsync()).IsSuccess);
         Assert.True((await repo.EnsureBuiltInAsync()).IsSuccess);
         var rows = (await repo.ListAsync()).Value;
-        Assert.Equal(12, rows.Count);
+        Assert.Equal(13, rows.Count);
         var phonon = Assert.Single(rows, r => r.RuntimeId == DysonPhononSpeech.Id);
         var pocket = Assert.Single(rows, r => r.RuntimeId == DysonPocketSpeech.Id);
         var qwen = Assert.Single(rows, r => r.RuntimeId == DysonQwenSpeech.Id);
@@ -585,7 +605,7 @@ public class DysonSpeechInstallerTests
             new[]
             {
                 DysonGgufSpeechModels.PocketGgufId, DysonGgufSpeechModels.PocketGgufQ8Id,
-                DysonGgufSpeechModels.QwenGgufId,
+                DysonGgufSpeechModels.QwenGgufId, DysonGgufSpeechModels.QwenGgufQ4Id,
                 DysonGgufSpeechModels.ChatterboxGgufId, DysonGgufSpeechModels.ChatterboxGgufQ8Id,
             }
                 .Select(id => rows.Single(r => r.RuntimeId == id)),

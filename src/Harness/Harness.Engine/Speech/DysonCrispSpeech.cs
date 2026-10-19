@@ -100,7 +100,7 @@ public sealed class DysonCrispSpeech(
 
         try
         {
-            if (_runtimeId == DysonGgufSpeechModels.QwenGgufId && !string.IsNullOrEmpty(voice.Value))
+            if (DysonGgufSpeechModels.IsQwenGguf(_runtimeId) && !string.IsNullOrEmpty(voice.Value))
             {
                 var wavPath = Path.Combine(
                     DysonGgufSpeechModels.GetVoicesDir(_installRoot, _runtimeId), voice.Value + ".wav");
@@ -171,7 +171,7 @@ public sealed class DysonCrispSpeech(
             return VoiceError($"{DisplayName(_runtimeId)} is speech to text, not text to speech.");
         if (!string.Equals(Path.GetExtension(fileName ?? ""), ".wav", StringComparison.OrdinalIgnoreCase))
             return VoiceError("GGUF voices take a .wav clip (16-bit PCM).");
-        if (_runtimeId == DysonGgufSpeechModels.QwenGgufId && string.IsNullOrWhiteSpace(transcript))
+        if (DysonGgufSpeechModels.IsQwenGguf(_runtimeId) && string.IsNullOrWhiteSpace(transcript))
             return VoiceError("Qwen3-TTS GGUF needs the exact transcript of the clip.");
 
         var read = await Task.Run(() => ReadClipAsync(clip, cancellationToken), CancellationToken.None).ConfigureAwait(false);
@@ -181,7 +181,7 @@ public sealed class DysonCrispSpeech(
             return VoiceError("GGUF voices take a .wav clip (16-bit PCM).");
 
         var stored = read.Value;
-        if (_runtimeId == DysonGgufSpeechModels.QwenGgufId)
+        if (DysonGgufSpeechModels.IsQwenGguf(_runtimeId))
         {
             var prompt = ToQwenPromptWav(stored);
             if (prompt.IsError)
@@ -280,10 +280,10 @@ public sealed class DysonCrispSpeech(
 
     private async Task<Result<string?, string>> ResolveVoiceAsync(string? voiceId, CancellationToken cancellationToken)
     {
-        var qwen = _runtimeId == DysonGgufSpeechModels.QwenGgufId;
+        var qwen = DysonGgufSpeechModels.IsQwenGguf(_runtimeId);
         var modelName = _runtimeId switch
         {
-            DysonGgufSpeechModels.QwenGgufId => "Qwen3-TTS GGUF",
+            _ when qwen => "Qwen3-TTS GGUF",
             DysonGgufSpeechModels.ChatterboxGgufId or DysonGgufSpeechModels.ChatterboxGgufQ8Id => "Chatterbox Turbo GGUF",
             _ => "Pocket TTS GGUF",
         };
@@ -939,8 +939,8 @@ public sealed class DysonCrispSpeech(
     /// <summary>Pocket, Qwen, and Chatterbox GGUF, Q4 and Q8. Not Phonon.</summary>
     internal static bool IsTextToSpeech(string id) =>
         id is DysonGgufSpeechModels.PocketGgufId or DysonGgufSpeechModels.PocketGgufQ8Id
-            or DysonGgufSpeechModels.QwenGgufId
-            or DysonGgufSpeechModels.ChatterboxGgufId or DysonGgufSpeechModels.ChatterboxGgufQ8Id;
+            or DysonGgufSpeechModels.ChatterboxGgufId or DysonGgufSpeechModels.ChatterboxGgufQ8Id
+            || DysonGgufSpeechModels.IsQwenGguf(id);
 
     private static VoidResult<string> RequireInstalled(string installRoot, string runtimeId) =>
         DysonSpeechInstaller.Probe(installRoot).IsInstalled(runtimeId)
@@ -957,6 +957,7 @@ public sealed class DysonCrispSpeech(
         DysonGgufSpeechModels.PocketGgufId => DysonGgufSpeechModels.PocketGgufDisplayName,
         DysonGgufSpeechModels.PocketGgufQ8Id => DysonGgufSpeechModels.PocketGgufQ8DisplayName,
         DysonGgufSpeechModels.QwenGgufId => DysonGgufSpeechModels.QwenGgufDisplayName,
+        DysonGgufSpeechModels.QwenGgufQ4Id => DysonGgufSpeechModels.QwenGgufQ4DisplayName,
         DysonGgufSpeechModels.ChatterboxGgufId => DysonGgufSpeechModels.ChatterboxGgufDisplayName,
         DysonGgufSpeechModels.ChatterboxGgufQ8Id => DysonGgufSpeechModels.ChatterboxGgufQ8DisplayName,
         _ => runtimeId,
