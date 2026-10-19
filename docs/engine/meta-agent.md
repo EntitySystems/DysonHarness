@@ -52,7 +52,7 @@ Kept:
 | `ReadTempFile` | Meta Agent only. Reads a generated `.dyson/temp/` leaf. Refuses every other path. |
 | `GetOpenRulesConfig` / `LoadSkill` | Rules without files. |
 | `SummarizeTurns` / `CreateTodo` / `ListTodos` / `UpdateTodo` | Shared schemas. |
-| Browser tools (`CreateBrowserTools`) | Present only when `BrowserControl` is set and the name survived the denylist. Not in `AllowedToolNames`. `BrowserWaitForSelector` and `BrowserWaitForNavigation` return in this turn, bounded by required `timeoutMs`; they are not a stand-in for `WaitForSubagent`. A long `timeoutMs` stalls the orchestrator until the call returns. |
+| Browser tools (`CreateBrowserTools`) | Present only when `BrowserControl` is set and the name survived the denylist. Not in `AllowedToolNames`. `BrowserWaitForSelector` and `BrowserWaitForNavigation` return in this turn, bounded by required `timeoutMs`; they are not a stand-in for `WaitForSubagent`. A long `timeoutMs` stalls the orchestrator until the call returns. That sentence is appended to the root Meta Agent prompt (`WithBrowser`) only when at least one of those tools is on the catalog. |
 
 Todos are the record of dispatches; posted messages are not in later transcripts.
 

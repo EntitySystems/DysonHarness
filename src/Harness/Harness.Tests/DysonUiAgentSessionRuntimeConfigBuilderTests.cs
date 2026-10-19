@@ -6,7 +6,7 @@ namespace Harness.Tests;
 
 /// <summary>
 /// ponytail: retained-scope builder matches host non-UI session config for a root demo session.
-/// Theme is an input snapshot; browser/circuit services are never captured.
+/// Theme is an input snapshot. Browser control is the injected reference, or null when none is supplied.
 /// </summary>
 public class DysonUiAgentSessionRuntimeConfigBuilderTests
 {
@@ -23,9 +23,38 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
         })).Value;
 
         Assert.Null(lease.Config.BrowserControl);
+        Assert.DoesNotContain(
+            "BrowserNavigate",
+            DysonSessionToolsetBuilder.Build(lease.Config, DysonAgentModes.MetaAgent).Tools.Keys);
+        Assert.DoesNotContain(
+            "BrowserNavigate",
+            DysonSessionToolsetBuilder.BuildInitial(lease.Config, DysonAgentModes.MetaAgent).Tools.Keys);
         Assert.Equal(theme.Theme, lease.Config.UiTheme.Theme);
         Assert.Equal(theme.AccentHex, lease.Config.UiTheme.AccentHex);
         Assert.Same(theme, lease.Config.UiTheme);
+    }
+
+    [Fact]
+    public async Task BuildAsync_assigns_supplied_browser_control()
+    {
+        var control = DysonNullBrowserControl.Instance;
+        await using var harness = await Harness.CreateAsync(control);
+
+        await using var lease = (await harness.Builder.BuildAsync(new DysonUiAgentSessionRuntimeConfigRequest
+        {
+            AgentMode = DysonAgentModes.MetaAgent,
+        })).Value;
+
+        Assert.Same(control, lease.Config.BrowserControl);
+        foreach (var pipeline in new[]
+        {
+            DysonSessionToolsetBuilder.Build(lease.Config, DysonAgentModes.MetaAgent),
+            DysonSessionToolsetBuilder.BuildInitial(lease.Config, DysonAgentModes.MetaAgent),
+        })
+        {
+            foreach (var tool in DysonMcpPipeline.CreateBrowserTools())
+                Assert.Contains(tool.Name, pipeline.Tools.Keys);
+        }
     }
 
     [Fact]
@@ -402,7 +431,7 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
         public IDysonModelRepository Models { get; }
         public IDysonPluginInstallationRepository Plugins { get; }
 
-        public static Task<Harness> CreateAsync()
+        public static Task<Harness> CreateAsync(IDysonBrowserControl? browserControl = null)
         {
             var accessor = DysonTempDb.OpenMemoryAccessor(out var connection);
             var subject = DysonTempDb.Subject();
@@ -428,7 +457,8 @@ public class DysonUiAgentSessionRuntimeConfigBuilderTests
                 catalog,
                 contributions,
                 grantService,
-                mcpResolver);
+                mcpResolver,
+                browserControl: browserControl);
             return Task.FromResult(new Harness(
                 connection,
                 builder,

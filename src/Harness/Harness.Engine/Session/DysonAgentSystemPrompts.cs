@@ -270,7 +270,6 @@ public static class DysonAgentSystemPrompts
         - There is no WaitForSubagent in this mode. Dispatch, then end your turn.
         - A drone or explore finishing queues you a new turn automatically. That is how you learn results.
         - Do not idle-poll ReadMetaAgentDroneLog in a loop; read it only when the user asks about progress or a report looks wrong.
-        - Browser tools return in this turn and are bounded by required `timeoutMs`; they are not a stand-in for `WaitForSubagent`, and a long `timeoutMs` on `BrowserWaitForSelector` or `BrowserWaitForNavigation` stalls the orchestrator until the call returns.
 
         Dispatching:
         - StartAsyncMetaAgentDrone for repository changes and for non-coding tasks. useWorktree is required (boolean, no default). File-mutating tasks should set useWorktree true: own git worktree, merges on completion. Non-coding tasks should set useWorktree false: parent's checkout, no branch, no merge. existingWorktreePath is optional and only valid with useWorktree false: it rebinds an already-listed checkout and that drone does not merge. contextFiles is optional. Only a root Meta Agent may call this tool.
@@ -374,6 +373,25 @@ public static class DysonAgentSystemPrompts
             return directive;
 
         return directive + "\n\n" + MetaAgentVoiceDirective;
+    }
+
+    /// <summary>
+    /// The never-block browser sentence. Appended only while a browser tool is on the catalog.
+    /// </summary>
+    public const string MetaAgentBrowserSentence =
+        "Browser tools return in this turn and are bounded by required `timeoutMs`; they are not a stand-in for `WaitForSubagent`, and a long `timeoutMs` on `BrowserWaitForSelector` or `BrowserWaitForNavigation` stalls the orchestrator until the call returns.";
+
+    /// <summary>
+    /// Appends <see cref="MetaAgentBrowserSentence"/> only for the root Meta Agent when
+    /// <paramref name="browserToolsOn"/> is true. Every other mode, and a catalog with no
+    /// browser tool, returns <paramref name="directive"/> unchanged.
+    /// </summary>
+    public static string WithBrowser(string directive, string agentMode, bool browserToolsOn)
+    {
+        if (!browserToolsOn || !DysonSessionPolicy.IsMetaAgent(agentMode))
+            return directive;
+
+        return directive + "\n        - " + MetaAgentBrowserSentence;
     }
 
     public const string MetaAgentDroneDirective = """

@@ -35,6 +35,29 @@ public class DysonMetaAgentDirectiveTests
     }
 
     [Fact]
+    public void WithBrowser_appends_sentence_only_for_root_meta_agent_when_tools_are_on()
+    {
+        var on = DysonAgentSystemPrompts.WithBrowser(
+            DysonAgentSystemPrompts.MetaAgentDirective,
+            DysonAgentModes.MetaAgent,
+            true);
+        Assert.Contains(DysonAgentSystemPrompts.MetaAgentBrowserSentence, on, StringComparison.Ordinal);
+
+        var off = DysonAgentSystemPrompts.WithBrowser(
+            DysonAgentSystemPrompts.MetaAgentDirective,
+            DysonAgentModes.MetaAgent,
+            false);
+        Assert.Equal(DysonAgentSystemPrompts.MetaAgentDirective, off);
+        Assert.DoesNotContain("BrowserWaitForNavigation", off, StringComparison.Ordinal);
+
+        var drone = DysonAgentSystemPrompts.WithBrowser(
+            DysonAgentSystemPrompts.MetaAgentDroneDirective,
+            DysonAgentModes.MetaAgentDrone,
+            true);
+        Assert.Equal(DysonAgentSystemPrompts.MetaAgentDroneDirective, drone);
+    }
+
+    [Fact]
     public void WithVoice_AppendsBlockOnlyForMetaAgentWhenOn()
     {
         var on = DysonAgentSystemPrompts.WithVoice(
@@ -70,7 +93,7 @@ public class DysonMetaAgentDirectiveTests
         var text = Prompt("Meta Agent");
         MustContain(text, DysonAgentSystemPrompts.SharedPreamble.Trim(), "Meta Agent ForMode shared preamble");
         MustContain(text, "never block", "Meta Agent ForMode");
-        MustContain(text, "BrowserWaitForNavigation", "Meta Agent ForMode");
+        MustNotContain(text, "BrowserWaitForNavigation", "Meta Agent ForMode");
         MustContain(text, "Reuse over re-spawn", "Meta Agent ForMode");
         MustContain(text, "You cannot touch the filesystem", "Meta Agent ForMode");
         MustContain(text, "ListNotes", "Meta Agent ForMode");

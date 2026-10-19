@@ -27,6 +27,27 @@ public class DysonMetaAgentToolsetTests
         foreach (var tool in DysonMcpPipeline.CreateBrowserTools())
             Assert.Contains(tool.Name, pipeline.Tools.Keys);
 
+        var session = new StubSession(
+            DysonAgentModes.MetaAgent,
+            config: new DysonAgentSessionConfig { BrowserControl = new DysonNullBrowserControl() });
+        Assert.Contains(DysonAgentSystemPrompts.MetaAgentBrowserSentence, session.SystemPrompt, StringComparison.Ordinal);
+
+        var plain = new StubSession(DysonAgentModes.MetaAgent);
+        Assert.DoesNotContain("BrowserWaitForNavigation", plain.SystemPrompt, StringComparison.Ordinal);
+
+        var deniedNames = DysonMcpPipeline.CreateBrowserTools()
+            .Select(tool => tool.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var denied = new StubSession(
+            DysonAgentModes.MetaAgent,
+            config: new DysonAgentSessionConfig
+            {
+                BrowserControl = new DysonNullBrowserControl(),
+                DisabledTools = deniedNames,
+            });
+        Assert.DoesNotContain("BrowserNavigate", denied.McpPipeline.Tools.Keys);
+        Assert.DoesNotContain("BrowserWaitForNavigation", denied.SystemPrompt, StringComparison.Ordinal);
+
         foreach (var name in new[]
         {
             "ReadFile", "WriteFile", "Grep", "ListDirectory",
@@ -194,9 +215,12 @@ public class DysonMetaAgentToolsetTests
 
     private sealed class StubProvider : DysonAgentProvider;
 
-    private sealed class StubSession(string mode, string? suffix = null) : DysonAgentSession(
+    private sealed class StubSession(
+        string mode,
+        string? suffix = null,
+        DysonAgentSessionConfig? config = null) : DysonAgentSession(
         mode,
-        new DysonAgentSessionConfig(),
+        config ?? new DysonAgentSessionConfig(),
         new StubProvider(),
         suffix)
     {

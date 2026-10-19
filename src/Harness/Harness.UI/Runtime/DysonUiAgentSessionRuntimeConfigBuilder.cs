@@ -2,7 +2,8 @@ namespace DysonHarness;
 
 /// <summary>
 /// Inputs for retained-scope non-UI session config. Theme is an immutable snapshot — this
-/// builder never captures <c>ThemeService</c>, browser control, or circuit state.
+/// builder never captures <c>ThemeService</c> or circuit state. An injected
+/// <see cref="IDysonBrowserControl"/> is assigned onto the config; none registered stays null.
 /// </summary>
 internal sealed class DysonUiAgentSessionRuntimeConfigRequest
 {
@@ -53,8 +54,9 @@ internal sealed class DysonUiAgentSessionRuntimeConfigLease : IAsyncDisposable
 
 /// <summary>
 /// Retained-scope composition of the same non-UI <see cref="DysonAgentSessionConfig"/> that
-/// <c>DysonUiHost.BuildSessionConfigAsync</c> builds for a root demo session. Does not resolve
-/// theme, browser, Razor, JS, or host/circuit services.
+/// <c>DysonUiHost.BuildSessionConfigAsync</c> builds for a root demo session. Assigns an
+/// injected <see cref="IDysonBrowserControl"/> when one is registered. Does not resolve
+/// theme, Razor, JS, or host/circuit services.
 /// </summary>
 internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
     IDysonWorkDirectoryRepository workDirectories,
@@ -68,7 +70,8 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
     DysonPluginMcpResolver pluginMcpResolver,
     DysonMessageBus? bus = null,
     DysonWorkDirectoryFocus? focus = null,
-    DysonVoiceMode? voice = null)
+    DysonVoiceMode? voice = null,
+    IDysonBrowserControl? browserControl = null)
 {
     private readonly IDysonWorkDirectoryRepository _workDirectories =
         workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
@@ -117,6 +120,7 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
 
         var config = new DysonAgentSessionConfig
         {
+            BrowserControl = browserControl,
             PluginContributions = contributions,
             UiTheme = request.Theme,
             Bus = _bus,
