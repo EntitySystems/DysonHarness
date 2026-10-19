@@ -172,7 +172,7 @@ Aggregate DTO: session entity + `IReadOnlyList` turns + `IReadOnlyList` log entr
 6. Session is ready for further `PromptAsync`
 
 Demo path: `DemoDysonAgentSession.LoadAsync(sessionRepository, sessionId, provider)` (also used by the retained-scope runtime factory).
-OpenAI-compatible path: `OpenAiCompatibleAgentSession.LoadAsync(sessionRepository, sessionId, provider, http, workDirectoryAbsolutePath)` (still host-owned; the runtime factory returns an explicit Result error for OpenAI create/load).
+OpenAI-compatible path: `OpenAiCompatibleAgentSession.LoadAsync(sessionRepository, sessionId, provider, http, workDirectoryAbsolutePath)` (host direct path, and the retained-scope runtime factory for every built-in agent mode; Completions vs Responses follows `OpenAiApiMode`).
 
 **Worktree on resume/load:** if `WorktreeAbsolutePath` is set and that directory still exists, the host/factory binds the live session to that path (tools, shells, openrules). If the column is set but the folder is gone, load **clears** `WorktreeAbsolutePath` / `WorktreeBranch` (`UpdateWorktreeLocation` with nulls) and falls back to the registered work-directory `AbsolutePath`. `WorktreeEnabled` is kept. Process-restart recovery already finalizes an incomplete `WorktreeCreating` turn (`CompletedUtc` + `InterruptionReason`); the next Work send retries ensure if the path is still null.
 

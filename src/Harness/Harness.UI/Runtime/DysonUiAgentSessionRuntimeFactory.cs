@@ -4,8 +4,9 @@ namespace DysonHarness;
 
 /// <summary>
 /// Retained-scope composition factory. <see cref="CreateRootAsync"/> and <see cref="LoadAsync"/>
-/// create or resume demo sessions from subject-scoped repositories. OpenAI create/resume stay
-/// explicit Result errors until those paths are extracted. Does not resolve circuit/UI services.
+/// create or resume demo and OpenAI-compatible sessions from subject-scoped repositories.
+/// OpenAI-compatible covers every built-in agent mode; Completions vs Responses follows the
+/// provider row. Does not resolve circuit/UI services.
 /// </summary>
 internal sealed class DysonUiAgentSessionRuntimeFactory(
     IDysonSessionRepository sessions,
@@ -13,7 +14,11 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
     IDysonWorkDirectoryRepository workDirectories,
     IDysonWorkDirectoryConfigurationRepository workDirectoryConfigurations,
     DysonWorkDirectoryService workDirectoryService,
-    DysonUiAgentSessionRuntimeConfigBuilder configBuilder)
+    DysonUiAgentSessionRuntimeConfigBuilder configBuilder,
+    HttpClient? http = null,
+    IDysonPlanRepository? plans = null,
+    IDysonUsageAnalyticsRepository? usageAnalytics = null,
+    DysonCliProxyHost? cliProxy = null)
     : IDysonAgentSessionRuntimeFactory
 {
     private readonly IDysonSessionRepository _sessions =
@@ -28,6 +33,10 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
         workDirectoryService ?? throw new ArgumentNullException(nameof(workDirectoryService));
     private readonly DysonUiAgentSessionRuntimeConfigBuilder _configBuilder =
         configBuilder ?? throw new ArgumentNullException(nameof(configBuilder));
+    private readonly HttpClient? _http = http;
+    private readonly IDysonPlanRepository? _plans = plans;
+    private readonly IDysonUsageAnalyticsRepository? _usageAnalytics = usageAnalytics;
+    private readonly DysonCliProxyHost? _cliProxy = cliProxy;
 
     public async Task<Result<DysonAgentSessionRuntimeLease, string>> CreateRootAsync(
         DysonAgentSessionRuntimeCreateRequest request,
@@ -52,14 +61,20 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
             .RefreshGitOriginAsync(request.WorkDirectoryId, cancellationToken)
             .ConfigureAwait(false);
 
-        var provider = await ResolveDemoProviderAsync(
+        var provider = await ResolveProviderAsync(
                 request.ModelSlugId,
                 request.ReasoningEffort,
-                cancellationToken,
-                openAiError: "Session runtime factory cannot create OpenAI-compatible sessions yet.")
+                cancellationToken)
             .ConfigureAwait(false);
         if (provider.IsError)
             return Result<DysonAgentSessionRuntimeLease, string>.AsError(provider.Error);
+
+        if (provider.Value.OpenAi is not null
+            && string.IsNullOrWhiteSpace(workDirectory.Value.AbsolutePath))
+        {
+            return Result<DysonAgentSessionRuntimeLease, string>.AsError(
+                "Work directory path is required.");
+        }
 
         var builtConfig = await _configBuilder.BuildAsync(
                 new DysonUiAgentSessionRuntimeConfigRequest
@@ -82,33 +97,64 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
             forkWorktree = DysonWorkDirectoryConfig.TryGetForkWorktree(cfg.Value);
 
         var configLease = builtConfig.Value;
-        var created = await DemoDysonAgentSession.CreateAsync(
-                _sessions,
-                provider.Value,
-                request.WorkDirectoryId,
-                request.AgentMode,
-                config: configLease.Config,
-                models: _models,
-                workDirectoryAbsolutePath: workDirectory.Value.AbsolutePath,
-                worktreeEnabled: forkWorktree,
-                cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-        if (created.IsError)
+        DysonAgentSession session;
+        if (provider.Value.OpenAi is { } openAi)
         {
-            await configLease.DisposeAsync().ConfigureAwait(false);
-            return Result<DysonAgentSessionRuntimeLease, string>.AsError(created.Error);
+            var created = await OpenAiCompatibleAgentSession.CreateAsync(
+                    _sessions,
+                    openAi,
+                    _http!,
+                    request.WorkDirectoryId,
+                    workDirectory.Value.AbsolutePath,
+                    request.AgentMode,
+                    config: configLease.Config,
+                    models: _models,
+                    usageAnalytics: _usageAnalytics,
+                    plans: _plans,
+                    workDirectoryName: workDirectory.Value.Name,
+                    worktreeEnabled: forkWorktree,
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            if (created.IsError)
+            {
+                await configLease.DisposeAsync().ConfigureAwait(false);
+                return Result<DysonAgentSessionRuntimeLease, string>.AsError(created.Error);
+            }
+
+            session = created.Value;
+        }
+        else
+        {
+            var created = await DemoDysonAgentSession.CreateAsync(
+                    _sessions,
+                    provider.Value.Demo!,
+                    request.WorkDirectoryId,
+                    request.AgentMode,
+                    config: configLease.Config,
+                    models: _models,
+                    workDirectoryAbsolutePath: workDirectory.Value.AbsolutePath,
+                    worktreeEnabled: forkWorktree,
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            if (created.IsError)
+            {
+                await configLease.DisposeAsync().ConfigureAwait(false);
+                return Result<DysonAgentSessionRuntimeLease, string>.AsError(created.Error);
+            }
+
+            session = created.Value;
         }
 
         if (request.MaxTargetContextTokens is int requestedMax)
         {
             var normalized = DysonMaxTargetContextTokens.Normalize(requestedMax);
-            created.Value.MaxTargetContextTokens = normalized;
-            if (created.Value.PersistenceId != Guid.Empty)
+            session.MaxTargetContextTokens = normalized;
+            if (session.PersistenceId != Guid.Empty)
             {
                 var persist = await _sessions.UpdateSessionMetaAsync(
                         new DysonSessionMetaUpdate
                         {
-                            SessionId = created.Value.PersistenceId,
+                            SessionId = session.PersistenceId,
                             UpdateMaxTargetContextTokens = true,
                             MaxTargetContextTokens = normalized,
                         },
@@ -123,7 +169,7 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
         }
 
         return Result<DysonAgentSessionRuntimeLease, string>.AsValue(
-            new DysonAgentSessionRuntimeLease(created.Value, configLease.DisposeAsync));
+            new DysonAgentSessionRuntimeLease(session, configLease.DisposeAsync));
     }
 
     public async Task<Result<DysonAgentSessionRuntimeLease, string>> LoadAsync(
@@ -140,7 +186,7 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
             return Result<DysonAgentSessionRuntimeLease, string>.AsError(full.Error);
 
         var persisted = full.Value.Session;
-        var provider = await ResolveDemoProviderAsync(
+        var provider = await ResolveProviderAsync(
                 persisted.ModelSlugId,
                 persisted.ReasoningEffort,
                 cancellationToken)
@@ -150,6 +196,7 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
 
         string? registeredPath = null;
         string? workPath = null;
+        var workDirectoryName = "";
         if (persisted.WorkDirectoryId is Guid workDirectoryId && workDirectoryId != Guid.Empty)
         {
             var workDirectory = await _workDirectories
@@ -164,6 +211,7 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
 
             registeredPath = workDirectory.Value.AbsolutePath;
             workPath = registeredPath;
+            workDirectoryName = workDirectory.Value.Name;
             if (!string.IsNullOrWhiteSpace(persisted.WorktreeAbsolutePath))
             {
                 if (Directory.Exists(persisted.WorktreeAbsolutePath))
@@ -188,6 +236,12 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
             }
         }
 
+        if (provider.Value.OpenAi is not null && string.IsNullOrWhiteSpace(workPath))
+        {
+            return Result<DysonAgentSessionRuntimeLease, string>.AsError(
+                "Session has no work directory; cannot resume OpenAI-compatible session.");
+        }
+
         var builtConfig = await _configBuilder.BuildAsync(
                 new DysonUiAgentSessionRuntimeConfigRequest
                 {
@@ -202,39 +256,69 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
             return Result<DysonAgentSessionRuntimeLease, string>.AsError(builtConfig.Error);
 
         var configLease = builtConfig.Value;
-        var loaded = await DemoDysonAgentSession.LoadAsync(
-                _sessions,
-                sessionId,
-                provider.Value,
-                configLease.Config,
-                models: _models,
-                appendResumeLog: true,
-                workDirectoryAbsolutePath: workPath,
-                registeredWorkDirectoryAbsolutePath: registeredPath,
-                cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-        if (loaded.IsError)
+        DysonAgentSession session;
+        if (provider.Value.OpenAi is { } openAi)
         {
-            await configLease.DisposeAsync().ConfigureAwait(false);
-            return Result<DysonAgentSessionRuntimeLease, string>.AsError(loaded.Error);
+            var loaded = await OpenAiCompatibleAgentSession.LoadAsync(
+                    _sessions,
+                    sessionId,
+                    openAi,
+                    _http!,
+                    workPath!,
+                    configLease.Config,
+                    models: _models,
+                    appendResumeLog: true,
+                    usageAnalytics: _usageAnalytics,
+                    plans: _plans,
+                    workDirectoryName: workDirectoryName,
+                    registeredWorkDirectoryAbsolutePath: registeredPath,
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            if (loaded.IsError)
+            {
+                await configLease.DisposeAsync().ConfigureAwait(false);
+                return Result<DysonAgentSessionRuntimeLease, string>.AsError(loaded.Error);
+            }
+
+            session = loaded.Value;
+        }
+        else
+        {
+            var loaded = await DemoDysonAgentSession.LoadAsync(
+                    _sessions,
+                    sessionId,
+                    provider.Value.Demo!,
+                    configLease.Config,
+                    models: _models,
+                    appendResumeLog: true,
+                    workDirectoryAbsolutePath: workPath,
+                    registeredWorkDirectoryAbsolutePath: registeredPath,
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            if (loaded.IsError)
+            {
+                await configLease.DisposeAsync().ConfigureAwait(false);
+                return Result<DysonAgentSessionRuntimeLease, string>.AsError(loaded.Error);
+            }
+
+            session = loaded.Value;
         }
 
         return Result<DysonAgentSessionRuntimeLease, string>.AsValue(
-            new DysonAgentSessionRuntimeLease(loaded.Value, configLease.DisposeAsync));
+            new DysonAgentSessionRuntimeLease(session, configLease.DisposeAsync));
     }
 
-    private async Task<Result<DemoDysonAgentProvider, string>> ResolveDemoProviderAsync(
+    private async Task<Result<ResolvedRuntimeProvider, string>> ResolveProviderAsync(
         Guid? modelSlugId,
         string? reasoningEffort,
-        CancellationToken cancellationToken,
-        string? openAiError = null)
+        CancellationToken cancellationToken)
     {
         DysonModelSlugEntity? slug = null;
         if (modelSlugId is Guid id)
         {
             var get = await _models.GetSlugAsync(id, cancellationToken).ConfigureAwait(false);
             if (get.IsError)
-                return Result<DemoDysonAgentProvider, string>.AsError(get.Error);
+                return Result<ResolvedRuntimeProvider, string>.AsError(get.Error);
 
             slug = get.Value;
         }
@@ -242,7 +326,7 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
         {
             var def = await _models.GetDefaultSlugAsync(cancellationToken).ConfigureAwait(false);
             if (def.IsError)
-                return Result<DemoDysonAgentProvider, string>.AsError(def.Error);
+                return Result<ResolvedRuntimeProvider, string>.AsError(def.Error);
 
             slug = def.Value;
         }
@@ -254,11 +338,36 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
             provider?.ApiKey);
         if (string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
         {
-            return Result<DemoDysonAgentProvider, string>.AsError(
-                openAiError ?? "Session runtime factory cannot load OpenAI-compatible sessions yet.");
+            if (DysonManagedSources.IsCliProxy(provider?.ManagedSource))
+            {
+                if (_cliProxy is null)
+                {
+                    return Result<ResolvedRuntimeProvider, string>.AsError(
+                        "CLIProxy host is required for OpenAI-compatible cliproxy sessions.");
+                }
+
+                var ensure = await _cliProxy
+                    .EnsureRunningAsync(progress: null, cancellationToken)
+                    .ConfigureAwait(false);
+                if (ensure.IsError)
+                    return Result<ResolvedRuntimeProvider, string>.AsError(ensure.Error);
+            }
+
+            if (_http is null)
+            {
+                return Result<ResolvedRuntimeProvider, string>.AsError(
+                    "HTTP client is required for OpenAI-compatible sessions.");
+            }
+
+            return Result<ResolvedRuntimeProvider, string>.AsValue(
+                new ResolvedRuntimeProvider(null, new OpenAiCompatibleAgentProvider(slug, reasoningEffort)));
         }
 
-        return Result<DemoDysonAgentProvider, string>.AsValue(
-            new DemoDysonAgentProvider(slug, reasoningEffort));
+        return Result<ResolvedRuntimeProvider, string>.AsValue(
+            new ResolvedRuntimeProvider(new DemoDysonAgentProvider(slug, reasoningEffort), null));
     }
+
+    private sealed record ResolvedRuntimeProvider(
+        DemoDysonAgentProvider? Demo,
+        OpenAiCompatibleAgentProvider? OpenAi);
 }

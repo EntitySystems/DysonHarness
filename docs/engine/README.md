@@ -22,7 +22,7 @@ Typical flow: construct session with mode + config + provider → load context �
 
 ### OpenAI-compatible provider
 
-When `ProviderKind == OpenAICompatible`, the host builds `OpenAiCompatibleAgentProvider` + `OpenAiCompatibleAgentSession` (engine). Demo kind stays on `DemoDysonAgentSession`.
+When `ProviderKind == OpenAICompatible`, the host and the UI session runtime factory build `OpenAiCompatibleAgentProvider` + `OpenAiCompatibleAgentSession` (engine) for every built-in agent mode. Demo kind stays on `DemoDysonAgentSession`.
 
 - **API mode** (`OpenAiApiMode` on the provider entity): `Completions` (default) → `POST …/chat/completions`; `Responses` → `POST …/responses`.
 - **Reasoning effort:** when `OpenAiCompatibleAgentProvider.ReasoningEffort` is non-empty, Completions send top-level `"reasoning_effort"` except `ManagedSource=openrouter`, which uses nested `"reasoning": { "effort": "…" }` (`orcarouter` stays top-level); Responses always send nested `"reasoning": { "effort": "…" }`. Blank/null omits the field (provider default). Sourced from slug `DefaultReasoningEffort` with optional session override.

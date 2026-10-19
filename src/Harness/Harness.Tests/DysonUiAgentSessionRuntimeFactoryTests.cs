@@ -5,8 +5,8 @@ using Microsoft.Data.Sqlite;
 namespace Harness.Tests;
 
 /// <summary>
-/// ponytail: demo-only CreateRootAsync / LoadAsync hydrate a lease from subject-scoped repos.
-/// OpenAI create/resume stay explicit Result errors.
+/// ponytail: CreateRootAsync / LoadAsync hydrate a lease from subject-scoped repos for demo
+/// and every OpenAI-compatible agent mode (Completions and Responses).
 /// </summary>
 public class DysonUiAgentSessionRuntimeFactoryTests
 {
@@ -54,15 +54,23 @@ public class DysonUiAgentSessionRuntimeFactoryTests
     }
 
     [Fact]
-    public async Task LoadAsync_openai_session_returns_explicit_error()
+    public async Task LoadAsync_openai_session_returns_lease()
     {
         await using var harness = await Harness.CreateAsync();
         var seeded = await harness.SeedOpenAiSessionAsync();
 
-        var loaded = await harness.Factory.LoadAsync(seeded);
+        var loaded = await harness.Factory.LoadAsync(seeded.SessionId);
 
-        Assert.True(loaded.IsError);
-        Assert.Contains("OpenAI-compatible", loaded.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.True(loaded.IsSuccess, loaded.IsError ? loaded.Error : null);
+        await using var lease = loaded.Value;
+        var session = Assert.IsType<OpenAiCompatibleAgentSession>(lease.Session);
+        Assert.Equal(seeded.SessionId, session.PersistenceId);
+        Assert.Equal(DysonAgentModes.Work, session.Mode);
+        Assert.Equal(DysonOpenAiApiModes.Completions, session.OpenAiProvider.OpenAiApiMode);
+        Assert.DoesNotContain(
+            "cannot load OpenAI-compatible",
+            loaded.IsError ? loaded.Error : "",
+            StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -123,21 +131,75 @@ public class DysonUiAgentSessionRuntimeFactoryTests
     }
 
     [Fact]
-    public async Task CreateRootAsync_openai_model_returns_explicit_error()
+    public async Task CreateRootAsync_openai_model_returns_lease()
     {
         await using var harness = await Harness.CreateAsync();
-        var seeded = await harness.SeedOpenAiCatalogAsync();
+        var seeded = await harness.SeedOpenAiCatalogAsync(DysonOpenAiApiModes.Responses);
+        var theme = new DysonUiThemeSnapshot("light", "#9b7aef");
 
         var created = await harness.Factory.CreateRootAsync(new DysonAgentSessionRuntimeCreateRequest
         {
-            AgentMode = DysonAgentModes.Work,
+            AgentMode = DysonAgentModes.Plan,
             WorkDirectoryId = seeded.WorkDirectoryId,
             ModelSlugId = seeded.SlugId,
+            Theme = theme,
+            ReasoningEffort = "high",
+            MaxTargetContextTokens = 50_000,
         });
 
-        Assert.True(created.IsError);
-        Assert.Contains("OpenAI-compatible", created.Error, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("cannot create", created.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+        await using var lease = created.Value;
+        var session = Assert.IsType<OpenAiCompatibleAgentSession>(lease.Session);
+        var provider = Assert.IsType<OpenAiCompatibleAgentProvider>(session.Provider);
+        Assert.Equal(DysonAgentModes.Plan, session.Mode);
+        Assert.Equal(DysonOpenAiApiModes.Responses, provider.OpenAiApiMode);
+        Assert.Equal("high", provider.ReasoningEffort);
+        Assert.Equal(seeded.SlugId, provider.SlugId);
+        Assert.Equal(theme.Theme, session.Config.UiTheme.Theme);
+        Assert.Equal(50_000, session.MaxTargetContextTokens);
+        Assert.DoesNotContain(
+            "cannot create OpenAI-compatible",
+            created.IsError ? created.Error : "",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task OpenAi_factory_loads_every_builtin_mode_and_api_mode()
+    {
+        await using var harness = await Harness.CreateAsync();
+        foreach (var apiMode in DysonOpenAiApiModes.All)
+        {
+            var catalog = await harness.SeedOpenAiCatalogAsync(apiMode);
+            foreach (var agentMode in DysonAgentModes.BuiltIns)
+            {
+                var created = await harness.Factory.CreateRootAsync(new DysonAgentSessionRuntimeCreateRequest
+                {
+                    AgentMode = agentMode,
+                    WorkDirectoryId = catalog.WorkDirectoryId,
+                    ModelSlugId = catalog.SlugId,
+                });
+                Assert.True(
+                    created.IsSuccess,
+                    $"{agentMode}/{apiMode}: {(created.IsError ? created.Error : "no session")}");
+                Guid sessionId;
+                await using (var lease = created.Value)
+                {
+                    var session = Assert.IsType<OpenAiCompatibleAgentSession>(lease.Session);
+                    Assert.Equal(agentMode, session.Mode);
+                    Assert.Equal(apiMode, session.OpenAiProvider.OpenAiApiMode);
+                    sessionId = session.PersistenceId;
+                }
+
+                var loaded = await harness.Factory.LoadAsync(sessionId);
+                Assert.True(
+                    loaded.IsSuccess,
+                    $"{agentMode}/{apiMode} load: {(loaded.IsError ? loaded.Error : "no session")}");
+                await using var loadedLease = loaded.Value;
+                var resumed = Assert.IsType<OpenAiCompatibleAgentSession>(loadedLease.Session);
+                Assert.Equal(agentMode, resumed.Mode);
+                Assert.Equal(apiMode, resumed.OpenAiProvider.OpenAiApiMode);
+            }
+        }
     }
 
     [Fact]
@@ -334,6 +396,7 @@ public class DysonUiAgentSessionRuntimeFactoryTests
     private sealed class Harness : IAsyncDisposable
     {
         private readonly SqliteConnection _connection;
+        private readonly HttpClient _http;
         private readonly string _workRoot;
 
         private Harness(
@@ -344,6 +407,7 @@ public class DysonUiAgentSessionRuntimeFactoryTests
             IDysonModelRepository models,
             IDysonWorkDirectoryRepository workDirectories,
             IDysonWorkDirectoryConfigurationRepository workDirectoryConfigurations,
+            HttpClient http,
             string workRoot)
         {
             _connection = connection;
@@ -353,6 +417,7 @@ public class DysonUiAgentSessionRuntimeFactoryTests
             Models = models;
             WorkDirectories = workDirectories;
             WorkDirectoryConfigurations = workDirectoryConfigurations;
+            _http = http;
             _workRoot = workRoot;
         }
 
@@ -373,7 +438,8 @@ public class DysonUiAgentSessionRuntimeFactoryTests
             var workDirectoryConfigurations = DysonTempDb.WorkDirectoryConfigurations(accessor, subject);
             var workRoot = Path.Combine(Path.GetTempPath(), $"dyson-factory-{Guid.NewGuid():N}");
             Directory.CreateDirectory(workRoot);
-            var factory = CreateFactory(accessor, subject, sessions, models, workDirectories);
+            var http = new HttpClient();
+            var factory = CreateFactory(accessor, subject, sessions, models, workDirectories, http);
             return Task.FromResult(
                 new Harness(
                     connection,
@@ -383,6 +449,7 @@ public class DysonUiAgentSessionRuntimeFactoryTests
                     models,
                     workDirectories,
                     workDirectoryConfigurations,
+                    http,
                     workRoot));
         }
 
@@ -391,7 +458,8 @@ public class DysonUiAgentSessionRuntimeFactoryTests
             IDysonSubjectContext subject,
             IDysonSessionRepository sessions,
             IDysonModelRepository models,
-            IDysonWorkDirectoryRepository workDirectories)
+            IDysonWorkDirectoryRepository workDirectories,
+            HttpClient? http = null)
         {
             var workDirectoryConfigurations = DysonTempDb.WorkDirectoryConfigurations(accessor, subject);
             var settings = DysonTempDb.Settings(accessor, subject);
@@ -418,7 +486,8 @@ public class DysonUiAgentSessionRuntimeFactoryTests
                 workDirectories,
                 workDirectoryConfigurations,
                 new DysonWorkDirectoryService(workDirectories),
-                configBuilder);
+                configBuilder,
+                http);
         }
 
         public async Task<SeededCatalog> SeedDemoCatalogAsync(bool isDefault = false)
@@ -442,9 +511,12 @@ public class DysonUiAgentSessionRuntimeFactoryTests
             return new SeededCatalog(workDirectory.Value, slug.Value, _workRoot);
         }
 
-        public async Task<SeededCatalog> SeedOpenAiCatalogAsync()
+        public async Task<SeededCatalog> SeedOpenAiCatalogAsync(
+            string openAiApiMode = DysonOpenAiApiModes.Completions)
         {
-            var workDirectory = await WorkDirectories.CreateAsync(_workRoot, "FactoryOpenAi")
+            var root = Path.Combine(_workRoot, Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            var workDirectory = await WorkDirectories.CreateAsync(root, "FactoryOpenAi")
                 .ConfigureAwait(false);
             Assert.True(workDirectory.IsSuccess, workDirectory.IsError ? workDirectory.Error : null);
 
@@ -454,6 +526,7 @@ public class DysonUiAgentSessionRuntimeFactoryTests
                 ProviderKind = DysonProviderKinds.OpenAICompatible,
                 BaseUrl = "https://example.invalid/v1",
                 ApiKey = "sk-test",
+                OpenAiApiMode = openAiApiMode,
             }).ConfigureAwait(false);
             Assert.True(provider.IsSuccess, provider.IsError ? provider.Error : null);
 
@@ -461,7 +534,7 @@ public class DysonUiAgentSessionRuntimeFactoryTests
                 .ConfigureAwait(false);
             Assert.True(slug.IsSuccess, slug.IsError ? slug.Error : null);
 
-            return new SeededCatalog(workDirectory.Value, slug.Value, _workRoot);
+            return new SeededCatalog(workDirectory.Value, slug.Value, root);
         }
 
         public async Task<SeededDemo> SeedDemoSessionAsync()
@@ -481,7 +554,7 @@ public class DysonUiAgentSessionRuntimeFactoryTests
             return new SeededDemo(created.Value, catalog.WorkDirectoryId, catalog.SlugId, catalog.WorkRoot);
         }
 
-        public async Task<Guid> SeedOpenAiSessionAsync()
+        public async Task<SeededDemo> SeedOpenAiSessionAsync()
         {
             var catalog = await SeedOpenAiCatalogAsync().ConfigureAwait(false);
             var created = await Sessions.CreateSessionAsync(new DysonSessionCreateRequest
@@ -494,11 +567,12 @@ public class DysonUiAgentSessionRuntimeFactoryTests
                 SystemPromptSnapshot = "factory-openai",
             }).ConfigureAwait(false);
             Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
-            return created.Value;
+            return new SeededDemo(created.Value, catalog.WorkDirectoryId, catalog.SlugId, catalog.WorkRoot);
         }
 
         public async ValueTask DisposeAsync()
         {
+            _http.Dispose();
             await _connection.DisposeAsync().ConfigureAwait(false);
             try
             {
