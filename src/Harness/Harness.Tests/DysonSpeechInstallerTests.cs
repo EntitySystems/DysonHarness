@@ -180,6 +180,35 @@ public class DysonSpeechInstallerTests
     }
 
     [Fact]
+    public void Plan_torch_repair_installs_the_selected_build_and_not_model_weights()
+    {
+        var missing = DysonSpeechInstallStatus.None(null);
+        var cpu = DysonSpeechInstaller.PlanTorchRepairSteps(missing, installRocm: false, rocmReady: false);
+        Assert.Equal(
+            [
+                "preflight",
+                "python-download", "python-hash", "python-extract",
+                "torch-download", "torch-hash", "torch-install",
+                "commit",
+            ],
+            cpu);
+        Assert.DoesNotContain(cpu, step => step.StartsWith("rocm-torch-", StringComparison.Ordinal));
+        Assert.DoesNotContain(cpu, step => step.Contains("weights", StringComparison.Ordinal));
+
+        var rocm = DysonSpeechInstaller.PlanTorchRepairSteps(missing, installRocm: true, rocmReady: false);
+        Assert.Contains("torch-install", rocm);
+        Assert.Contains("rocm-torch-install", rocm);
+        Assert.DoesNotContain(rocm, step => step.Contains("weights", StringComparison.Ordinal) || step.StartsWith("phonon-", StringComparison.Ordinal));
+
+        var runtime = missing with { RuntimeInstalled = true };
+        Assert.Equal(["preflight"], DysonSpeechInstaller.PlanTorchRepairSteps(runtime, installRocm: false, rocmReady: false));
+        Assert.Equal(
+            ["preflight", "rocm-torch-download", "rocm-torch-hash", "rocm-torch-install", "commit"],
+            DysonSpeechInstaller.PlanTorchRepairSteps(runtime, installRocm: true, rocmReady: false));
+        Assert.Equal(["preflight"], DysonSpeechInstaller.PlanTorchRepairSteps(runtime, installRocm: true, rocmReady: true));
+    }
+
+    [Fact]
     public void Crisp_start_info_uses_vulkan_exe_and_gpu_backend_only_for_gpu()
     {
         var root = Path.Combine(Path.GetTempPath(), "dyson-crisp-start-" + Guid.NewGuid().ToString("N"));

@@ -224,7 +224,7 @@ public sealed class DysonSpeechInstaller
             yield break;
         }
 
-        await foreach (var step in RunGatedAsync(models, settings, modelIds.Distinct().ToList(), repair: false, cancellationToken)
+        await foreach (var step in RunGatedAsync(models, settings, modelIds.Distinct().ToList(), PipelineKind.Install, cancellationToken)
                            .ConfigureAwait(false))
             yield return step;
     }
@@ -242,15 +242,40 @@ public sealed class DysonSpeechInstaller
     {
         ArgumentNullException.ThrowIfNull(models);
         ArgumentNullException.ThrowIfNull(settings);
-        await foreach (var step in RunGatedAsync(models, settings, [], repair: true, cancellationToken).ConfigureAwait(false))
+        await foreach (var step in RunGatedAsync(models, settings, [], PipelineKind.RepairCrisp, cancellationToken).ConfigureAwait(false))
             yield return step;
+    }
+
+    /// <summary>
+    /// Installs the saved PyTorch device now, on the same python/torch and <c>rocm-torch-*</c> steps a Python model
+    /// install uses (<see cref="PlanTorchRepairSteps"/>). No model weights. CPU repairs the CPU torch (and the private
+    /// Python that pip needs, when that runtime is missing). ROCm repairs <c>torch-rocm/</c> and, when the CPU runtime
+    /// is missing, the CPU torch beside it. Already present ⇒ preflight "Already installed.". CUDA is not a target.
+    /// A missing manifest, disk, or pip failure is a Failed step whose detail is the <c>VoidResult</c> error; it does not throw.
+    /// </summary>
+    public async IAsyncEnumerable<DysonSpeechInstallStep> RepairTorchRuntimesAsync(
+        IDysonSpeechModelRepository models,
+        IDysonSubjectSettingsRepository settings,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(models);
+        ArgumentNullException.ThrowIfNull(settings);
+        await foreach (var step in RunGatedAsync(models, settings, [], PipelineKind.RepairTorch, cancellationToken).ConfigureAwait(false))
+            yield return step;
+    }
+
+    private enum PipelineKind
+    {
+        Install,
+        RepairCrisp,
+        RepairTorch,
     }
 
     private async IAsyncEnumerable<DysonSpeechInstallStep> RunGatedAsync(
         IDysonSpeechModelRepository models,
         IDysonSubjectSettingsRepository settings,
         IReadOnlyList<string> requested,
-        bool repair,
+        PipelineKind kind,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (!_gate.Wait(0))
@@ -264,7 +289,7 @@ public sealed class DysonSpeechInstaller
         {
             try
             {
-                await new Pipeline(this, models, settings, requested, repair, channel.Writer, cancellationToken)
+                await new Pipeline(this, models, settings, requested, kind, channel.Writer, cancellationToken)
                     .RunAsync().ConfigureAwait(false);
             }
             finally
@@ -454,6 +479,29 @@ public sealed class DysonSpeechInstaller
                 .. status.CrispVulkanInstalled ? Array.Empty<string>() : CrispVulkanSteps,
                 "commit",
             ];
+
+    /// <summary>
+    /// Repair plan for the selected torch. CPU (<paramref name="installRocm"/> false): shared runtime steps when
+    /// <see cref="DysonSpeechInstallStatus.RuntimeInstalled"/> is false. ROCm: those steps when the CPU runtime is
+    /// missing, plus the model-install <c>rocm-torch-*</c> steps when <paramref name="rocmReady"/> is false.
+    /// No model weights. Both already ok ⇒ <c>["preflight"]</c>. Pure.
+    /// </summary>
+    internal static IReadOnlyList<string> PlanTorchRepairSteps(
+        DysonSpeechInstallStatus status, bool installRocm, bool rocmReady)
+    {
+        var needRuntime = !status.RuntimeInstalled;
+        var needRocm = installRocm && !rocmReady;
+        if (!needRuntime && !needRocm)
+            return ["preflight"];
+
+        return
+        [
+            "preflight",
+            .. needRuntime ? RuntimeSteps : Array.Empty<string>(),
+            .. needRocm ? RocmTorchSteps : Array.Empty<string>(),
+            "commit",
+        ];
+    }
 
     /// <summary>A CrispASR model in <see cref="DysonSpeechInstallStatus.GgufInstalled"/> means the shared runtime is present.</summary>
     private static bool CrispasrInstalled(DysonSpeechInstallStatus status) =>
@@ -1295,7 +1343,7 @@ public sealed class DysonSpeechInstaller
         IDysonSpeechModelRepository models,
         IDysonSubjectSettingsRepository settings,
         IReadOnlyList<string> requested,
-        bool repair,
+        PipelineKind kind,
         ChannelWriter<DysonSpeechInstallStep> writer,
         CancellationToken ct)
     {
@@ -1483,9 +1531,17 @@ public sealed class DysonSpeechInstaller
             _m = rid;
 
             _before = Probe(_root);
-            if (repair)
+            if (kind == PipelineKind.RepairCrisp)
             {
                 _plan = PlanRepairSteps(_before);
+            }
+            else if (kind == PipelineKind.RepairTorch)
+            {
+                var device = await settings.GetSettingAsync(DysonAppSettingKeys.SpeechTorchDevice, ct).ConfigureAwait(false);
+                if (device.IsError)
+                    return new VoidResult<string>("preflight: " + device.Error);
+                var wantRocm = DysonSpeechTorchDevice.IsRocm(device.Value);
+                _plan = PlanTorchRepairSteps(_before, wantRocm, RocmTorchReady(_root, _manifest));
             }
             else
             {
@@ -1526,7 +1582,9 @@ public sealed class DysonSpeechInstaller
             Directory.CreateDirectory(_root);
             var downloadRuntime = _plan.Contains("python-download")
                 || (_plan.Contains("torch-download") && !_adopt.SkipTorchWheel);
-            var need = repair ? 2 * CrispAsrBytes : RequiredFreeBytes(downloadRuntime, _building, _adopt, _plan.Contains("rocm-torch-download"));
+            var need = kind == PipelineKind.RepairCrisp
+                ? 2 * CrispAsrBytes
+                : RequiredFreeBytes(downloadRuntime, _building, _adopt, _plan.Contains("rocm-torch-download"));
             var free = new DriveInfo(Path.GetPathRoot(_root)!).AvailableFreeSpace;
             if (free < need)
                 return new VoidResult<string>($"preflight: needs {need:N0} free bytes on {Path.GetPathRoot(_root)}, has {free:N0}.");

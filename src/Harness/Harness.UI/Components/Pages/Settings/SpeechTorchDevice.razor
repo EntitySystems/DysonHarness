@@ -5,12 +5,12 @@
     <div class="speech-torch__options" role="radiogroup" aria-label="PyTorch device">
         <label class="speech-torch__option">
             <input type="radio" name="speech-torch-device" value="cpu" checked="@(!_rocm)"
-                   disabled="@_busy" @onchange="() => SaveAsync(false)" />
+                   disabled="@Locked" @onchange="() => SaveAsync(false)" />
             <span>CPU</span>
         </label>
         <label class="speech-torch__option">
             <input type="radio" name="speech-torch-device" value="rocm" checked="@_rocm"
-                   disabled="@_busy" @onchange="() => SaveAsync(true)" />
+                   disabled="@Locked" @onchange="() => SaveAsync(true)" />
             <span>ROCm</span>
         </label>
         <label class="speech-torch__option speech-torch__option--disabled">
@@ -18,7 +18,11 @@
             <span>CUDA <span class="speech-torch__soon">coming soon</span></span>
         </label>
     </div>
-    <p class="speech-torch__note">ROCm installs AMD's Windows PyTorch beside the CPU build the next time a Python speech model is installed.</p>
+    <div class="btn-row">
+        <button type="button" class="btn btn-ghost" disabled="@Locked" aria-busy="@Repairing"
+                @onclick="RepairAsync">@(Repairing ? "Repairing…" : "Repair PyTorch runtimes")</button>
+    </div>
+    <p class="speech-torch__note">ROCm is AMD's Windows PyTorch beside the CPU build. Repair PyTorch runtimes installs the selected build now.</p>
     @if (!string.IsNullOrWhiteSpace(_error))
     {
         <div class="speech-torch__error" role="alert">@_error</div>
@@ -26,9 +30,14 @@
 </div>
 
 @code {
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public bool Repairing { get; set; }
+    [Parameter] public EventCallback OnRepair { get; set; }
+
     private bool _rocm;
     private bool _busy;
     private string? _error;
+    private bool Locked => _busy || Busy || Repairing;
 
     protected override async Task OnInitializedAsync()
     {
@@ -51,4 +60,6 @@
         else
             _rocm = rocm;
     }
+
+    private Task RepairAsync() => OnRepair.InvokeAsync();
 }

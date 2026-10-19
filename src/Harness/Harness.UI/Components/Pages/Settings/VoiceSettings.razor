@@ -142,7 +142,7 @@
     }
 
     <div class="settings-page__panel panel">
-        <SpeechTorchDevice />
+        <SpeechTorchDevice Busy="_busy" Repairing="_repairingTorch" OnRepair="RepairTorchAsync" />
     </div>
 
     <div class="settings-page__panel panel voice-active">
@@ -344,6 +344,7 @@
     private bool _busy;
     private bool _installing;
     private bool _repairing;
+    private bool _repairingTorch;
     private bool _crispGpu;
     private bool _lowLatency;
     private bool _training;
@@ -466,6 +467,19 @@
         finally
         {
             _repairing = false;
+        }
+    }
+
+    private async Task RepairTorchAsync()
+    {
+        _repairingTorch = true;
+        try
+        {
+            await StreamStepsAsync(ct => Installer.RepairTorchRuntimesAsync(SpeechModels, Settings, ct));
+        }
+        finally
+        {
+            _repairingTorch = false;
         }
     }
 
