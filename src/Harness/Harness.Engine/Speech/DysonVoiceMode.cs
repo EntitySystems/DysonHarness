@@ -433,7 +433,7 @@ public sealed class DysonVoiceMode(
                     else if (action == ListenAction.Restart)
                         break;
                     else if (!wasCapturing && capturing)
-                        _tryout.PlayListenChime();
+                        PlayListen();
                 }
             }
             finally
@@ -828,7 +828,20 @@ public sealed class DysonVoiceMode(
         Interlocked.Increment(ref _speakEpoch);
         CancelSynths();
         _tryout.StopPlayback(FadeOut);
-        _tryout.PlayListenChime();
+        PlayListen();
+    }
+
+    /// <summary>
+    /// Not awaited and not enqueued on <see cref="Speak"/>. A missing cache plays the listen chime.
+    /// </summary>
+    private void PlayListen() => _ = PlayListenAsync();
+
+    private async Task PlayListenAsync()
+    {
+        var clip = await DysonListenSentence
+            .TryLoadAsync(_settings, _textToSpeech.InstallRoot, CancellationToken.None)
+            .ConfigureAwait(false);
+        _tryout.PlayListenCue(clip);
     }
 
     /// <summary>Fade, CrispASR cancel, or a mic fell-behind fault is not a failure the user should see.</summary>

@@ -243,14 +243,15 @@ public sealed class DysonSpeechTryout(
     }
 
     /// <summary>
-    /// Quiet listen beep, shorter than <see cref="PlayAcceptChime"/>. Returns immediately.
-    /// Does not call <see cref="StopPlayback"/> and does not cancel speech. If the play gate is held, waits
-    /// until that hold releases, then plays. If a <see cref="PlayAsync"/> takes the gate first, the tone is dropped.
+    /// Quiet listen cue, shorter than <see cref="PlayAcceptChime"/> when <paramref name="clip"/> is null.
+    /// Returns immediately. Does not call <see cref="StopPlayback"/> and does not cancel speech.
+    /// If the play gate is held, waits until that hold releases, then plays. If a <see cref="PlayAsync"/>
+    /// takes the gate first, the cue is dropped. Null plays the listen chime; a clip replaces it.
     /// A playback error is ignored. Off a host with no device this no-ops, same as the accept chime.
     /// </summary>
-    public void PlayListenChime() => _ = PlayListenChimeAsync();
+    public void PlayListenCue(DysonSpeechAudioChunk? clip) => _ = PlayListenCueAsync(clip);
 
-    private async Task PlayListenChimeAsync()
+    private async Task PlayListenCueAsync(DysonSpeechAudioChunk? clip)
     {
         var release = false;
         try
@@ -267,11 +268,14 @@ public sealed class DysonSpeechTryout(
             }
 
             release = true;
-            await _playback.PlayAsync(DysonListenChime.Once(), CancellationToken.None).ConfigureAwait(false);
+            var stream = clip is null
+                ? DysonListenChime.Once()
+                : OneAcceptChunk(clip.IsLast ? clip : clip with { IsLast = true });
+            await _playback.PlayAsync(stream, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception)
         {
-            // A missing device must not surface. This tone never cancels speech.
+            // A missing device must not surface. This cue never cancels speech.
         }
         finally
         {

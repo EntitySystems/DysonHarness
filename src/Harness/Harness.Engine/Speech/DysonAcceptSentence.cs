@@ -15,31 +15,127 @@ public static class DysonAcceptSentence
 
     private const string WavName = "accept-sentence.wav";
     private const string TextName = "accept-sentence.txt";
-    private const string TooLong = "Acceptance sentence was too long to cache.";
-    private const string NoAudio = "Acceptance sentence produced no audio.";
+    private const string Label = "Acceptance sentence";
 
     /// <summary>Empty or whitespace is the chime. A line break or more than <see cref="MaxLength"/> characters is an error.</summary>
-    public static VoidResult<string> Validate(string? text)
-    {
-        if (text is not null && (text.Contains('\r') || text.Contains('\n')))
-            return new VoidResult<string>("Acceptance sentence must be one line.");
-        if (string.IsNullOrWhiteSpace(text))
-            return VoidResult<string>.Success;
-        if (text.Trim().Length > MaxLength)
-            return new VoidResult<string>("Acceptance sentence is over 40 characters.");
-        return VoidResult<string>.Success;
-    }
+    public static VoidResult<string> Validate(string? text) => SentenceCue.Validate(text, Label);
 
     /// <summary>
     /// Blank text clears the setting, then deletes the clip. Otherwise synthesizes once
     /// (<c>voiceId</c> null), writes the WAV and sidecar, then stores the sentence.
     /// A failed synth or write leaves the previous key and files.
     /// </summary>
+    public static Task<VoidResult<string>> SaveAsync(
+        IDysonTextToSpeech tts,
+        IDysonSubjectSettingsRepository settings,
+        string installRoot,
+        string? text,
+        CancellationToken cancellationToken) =>
+        SentenceCue.SaveAsync(
+            tts,
+            settings,
+            installRoot,
+            text,
+            DysonAppSettingKeys.SpeechAcceptSentence,
+            WavName,
+            TextName,
+            Label,
+            cancellationToken);
+
+    /// <summary>
+    /// Cached clip, or null when the key is missing, the sidecar disagrees, or the WAV is unreadable.
+    /// Never throws. File bytes are read on the thread pool.
+    /// </summary>
+    public static Task<DysonSpeechAudioChunk?> TryLoadAsync(
+        IDysonSubjectSettingsRepository settings,
+        string installRoot,
+        CancellationToken cancellationToken) =>
+        SentenceCue.TryLoadAsync(
+            settings,
+            installRoot,
+            DysonAppSettingKeys.SpeechAcceptSentence,
+            WavName,
+            TextName,
+            cancellationToken);
+}
+
+/// <summary>
+/// Optional spoken listen cue when a stored wake name matches. Same cache as
+/// <see cref="DysonAcceptSentence"/>, different key and files. Playback never synthesizes.
+/// </summary>
+public static class DysonListenSentence
+{
+    public const int MaxLength = DysonAcceptSentence.MaxLength;
+
+    private const string WavName = "listen-sentence.wav";
+    private const string TextName = "listen-sentence.txt";
+    private const string Label = "Listen sentence";
+
+    /// <summary>Empty or whitespace is the chime. A line break or more than <see cref="MaxLength"/> characters is an error.</summary>
+    public static VoidResult<string> Validate(string? text) => SentenceCue.Validate(text, Label);
+
+    /// <summary>
+    /// Blank text clears the setting, then deletes the clip. Otherwise synthesizes once
+    /// (<c>voiceId</c> null), writes the WAV and sidecar, then stores the sentence.
+    /// A failed synth or write leaves the previous key and files.
+    /// </summary>
+    public static Task<VoidResult<string>> SaveAsync(
+        IDysonTextToSpeech tts,
+        IDysonSubjectSettingsRepository settings,
+        string installRoot,
+        string? text,
+        CancellationToken cancellationToken) =>
+        SentenceCue.SaveAsync(
+            tts,
+            settings,
+            installRoot,
+            text,
+            DysonAppSettingKeys.SpeechListenSentence,
+            WavName,
+            TextName,
+            Label,
+            cancellationToken);
+
+    /// <summary>
+    /// Cached clip, or null when the key is missing, the sidecar disagrees, or the WAV is unreadable.
+    /// Never throws. File bytes are read on the thread pool.
+    /// </summary>
+    public static Task<DysonSpeechAudioChunk?> TryLoadAsync(
+        IDysonSubjectSettingsRepository settings,
+        string installRoot,
+        CancellationToken cancellationToken) =>
+        SentenceCue.TryLoadAsync(
+            settings,
+            installRoot,
+            DysonAppSettingKeys.SpeechListenSentence,
+            WavName,
+            TextName,
+            cancellationToken);
+}
+
+/// <summary>One sentence setting: synth once, then a WAV and a sidecar. Accept and listen share this.</summary>
+file static class SentenceCue
+{
+    public static VoidResult<string> Validate(string? text, string label)
+    {
+        if (text is not null && (text.Contains('\r') || text.Contains('\n')))
+            return new VoidResult<string>($"{label} must be one line.");
+        if (string.IsNullOrWhiteSpace(text))
+            return VoidResult<string>.Success;
+        if (text.Trim().Length > DysonAcceptSentence.MaxLength)
+            return new VoidResult<string>($"{label} is over 40 characters.");
+        return VoidResult<string>.Success;
+    }
+
     public static async Task<VoidResult<string>> SaveAsync(
         IDysonTextToSpeech tts,
         IDysonSubjectSettingsRepository settings,
         string installRoot,
         string? text,
+        string settingKey,
+        string wavName,
+        string textName,
+        string label,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(tts);
@@ -47,17 +143,19 @@ public static class DysonAcceptSentence
         if (string.IsNullOrWhiteSpace(installRoot))
             return new VoidResult<string>("Speech install folder is missing.");
 
-        var valid = Validate(text);
+        var valid = Validate(text, label);
         if (valid.IsError)
             return valid;
         if (string.IsNullOrWhiteSpace(text))
-            return await ClearAsync(settings, installRoot, cancellationToken).ConfigureAwait(false);
+            return await ClearAsync(settings, installRoot, settingKey, wavName, textName, cancellationToken).ConfigureAwait(false);
 
         var sentence = text.Trim();
         await Task.Run(() => 0, CancellationToken.None).ConfigureAwait(false);
 
         byte[]? pcm = null;
         var rate = 0;
+        var tooLong = $"{label} was too long to cache.";
+        var noAudio = $"{label} produced no audio.";
         await foreach (var chunk in tts.SynthesizeAsync(sentence, voiceId: null, cancellationToken).ConfigureAwait(false))
         {
             if (chunk.IsError)
@@ -67,19 +165,19 @@ public static class DysonAcceptSentence
             if (rate == 0)
                 rate = chunk.Value.SampleRate;
             else if (chunk.Value.SampleRate != rate)
-                return new VoidResult<string>(NoAudio);
+                return new VoidResult<string>(noAudio);
             pcm = pcm is null ? part : Join(pcm, part);
         }
 
         if (pcm is null || rate <= 0 || pcm.Length < 2)
-            return new VoidResult<string>(NoAudio);
+            return new VoidResult<string>(noAudio);
         if ((pcm.Length & 1) == 1)
             pcm = pcm[..^1];
         if (pcm.Length / 2 > (long)rate * 5)
-            return new VoidResult<string>(TooLong);
+            return new VoidResult<string>(tooLong);
 
-        var wavPath = Path.Combine(installRoot, WavName);
-        var textPath = Path.Combine(installRoot, TextName);
+        var wavPath = Path.Combine(installRoot, wavName);
+        var textPath = Path.Combine(installRoot, textName);
         try
         {
             var body = pcm;
@@ -101,17 +199,16 @@ public static class DysonAcceptSentence
         }
 
         return await settings
-            .SetSettingAsync(DysonAppSettingKeys.SpeechAcceptSentence, sentence, cancellationToken)
+            .SetSettingAsync(settingKey, sentence, cancellationToken)
             .ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Cached clip, or null when the key is missing, the sidecar disagrees, or the WAV is unreadable.
-    /// Never throws. File bytes are read on the thread pool.
-    /// </summary>
     public static async Task<DysonSpeechAudioChunk?> TryLoadAsync(
         IDysonSubjectSettingsRepository settings,
         string installRoot,
+        string settingKey,
+        string wavName,
+        string textName,
         CancellationToken cancellationToken)
     {
         try
@@ -121,13 +218,15 @@ public static class DysonAcceptSentence
                 return null;
 
             var setting = await settings
-                .GetSettingAsync(DysonAppSettingKeys.SpeechAcceptSentence, cancellationToken)
+                .GetSettingAsync(settingKey, cancellationToken)
                 .ConfigureAwait(false);
             if (setting.IsError || string.IsNullOrWhiteSpace(setting.Value))
                 return null;
 
             var sentence = setting.Value.Trim();
-            return await Task.Run(() => Read(installRoot, sentence), CancellationToken.None).ConfigureAwait(false);
+            return await Task.Run(
+                () => Read(installRoot, sentence, wavName, textName),
+                CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception)
         {
@@ -138,17 +237,20 @@ public static class DysonAcceptSentence
     private static async Task<VoidResult<string>> ClearAsync(
         IDysonSubjectSettingsRepository settings,
         string installRoot,
+        string settingKey,
+        string wavName,
+        string textName,
         CancellationToken cancellationToken)
     {
         var cleared = await settings
-            .SetSettingAsync(DysonAppSettingKeys.SpeechAcceptSentence, "", cancellationToken)
+            .SetSettingAsync(settingKey, "", cancellationToken)
             .ConfigureAwait(false);
         try
         {
             await Task.Run(() =>
             {
-                TryDelete(Path.Combine(installRoot, WavName));
-                TryDelete(Path.Combine(installRoot, TextName));
+                TryDelete(Path.Combine(installRoot, wavName));
+                TryDelete(Path.Combine(installRoot, textName));
             }, CancellationToken.None).ConfigureAwait(false);
         }
         catch (IOException)
@@ -175,10 +277,10 @@ public static class DysonAcceptSentence
         }
     }
 
-    private static DysonSpeechAudioChunk? Read(string installRoot, string sentence)
+    private static DysonSpeechAudioChunk? Read(string installRoot, string sentence, string wavName, string textName)
     {
-        var textPath = Path.Combine(installRoot, TextName);
-        var wavPath = Path.Combine(installRoot, WavName);
+        var textPath = Path.Combine(installRoot, textName);
+        var wavPath = Path.Combine(installRoot, wavName);
         if (!File.Exists(textPath) || !File.Exists(wavPath))
             return null;
         var stored = File.ReadAllText(textPath).Trim();

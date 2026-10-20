@@ -477,6 +477,36 @@ public class DysonVoiceModeTests
     }
 
     [Fact]
+    public async Task ListenSentence_configured_plays_cached_pcm_not_the_chime()
+    {
+        var root = PrivateRoot();
+        try
+        {
+            var settings = new FakeSettings();
+            var pcm = new byte[320];
+            pcm[0] = 40;
+            pcm[1] = 1;
+            Assert.True((await DysonListenSentence.SaveAsync(
+                new ChunkTts(pcm, 16_000), settings, root, "Ready", CancellationToken.None)).IsSuccess);
+            var loaded = await DysonListenSentence.TryLoadAsync(settings, root, CancellationToken.None);
+            Assert.NotNull(loaded);
+            Assert.Equal(pcm, loaded!.Pcm);
+
+            var playback = new ChimePlayback();
+            var tryout = new DysonSpeechTryout(new IdleCapture(), new IdleStt(), new IdleTts(), playback);
+            tryout.PlayListenCue(loaded);
+            await WaitForAsync(() => playback.Clips.Count >= 1);
+            Assert.Equal(0, playback.ListenCount);
+            Assert.Equal(pcm, playback.Clips[0]);
+            Assert.False(DysonListenChime.Pcm().AsSpan().SequenceEqual(playback.Clips[0]));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public async Task AcceptSentence_unset_plays_the_chime()
     {
         var settings = new FakeSettings();

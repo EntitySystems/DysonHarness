@@ -243,6 +243,13 @@ public static class DysonAppSettingKeys
     public const string SpeechAcceptSentence = "speech_accept_sentence";
 
     /// <summary>
+    /// Optional sentence played instead of the listen beep when a stored wake name matches.
+    /// Empty / missing ⇒ the beep. Empty/whitespace delete via <c>SetSettingAsync</c>.
+    /// The clip is not stored in this value.
+    /// </summary>
+    public const string SpeechListenSentence = "speech_listen_sentence";
+
+    /// <summary>
     /// Selected microphone for Settings → Voice live recording. Value is <c>DysonAudioInputDevice.Id</c>
     /// (the NAudio device number on Windows). Missing ⇒ the first listed device. A saved id that is no longer
     /// listed is not swapped for another microphone.
