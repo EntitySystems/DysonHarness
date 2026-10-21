@@ -15,9 +15,9 @@ public static class DysonExpandThoughtProcess
         - Each prior turn in history is labeled with its turn id (see turn header in the transcript). Use those ids with DropTurnContext (requires turnIds, reason, and resume).
         - When several earlier turns are large and serve little purpose for the current task, drop at least a few of them; prefer those over small turns that still matter.
         - resume is required and must stay under 1000 tokens: your own account of what the dropped turns included (name each turn id and what it held). An empty or over-cap resume fails the whole call and drops nothing.
-        - The harness stores the resume on the earliest newly dropped turn; later transcripts show that stub in place of the dropped turns.
-        - RestoreTurnContext undoes a drop and discards the resume; do not treat restore as required hygiene.
-        - After dropping (if any), write your reformulation assuming dropped turns appear only as the resume in later prompts.
+        - The harness appends the resume to this turn's reply, prefixed with the dropped turn ids. Later transcripts keep that reply; the dropped turns themselves are omitted.
+        - RestoreTurnContext brings a dropped turn back and does not remove that reply; do not treat restore as required hygiene.
+        - After dropping (if any), write your reformulation assuming dropped turns are omitted and the resume stays on this turn's reply.
         """;
 
     /// <summary>

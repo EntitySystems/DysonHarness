@@ -1575,16 +1575,13 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
     private static void ApplyAssistantText(DysonAgentTurn turn, string text)
     {
+        var prior = turn.AssistantText;
         var parsed = DysonAgentTurn.TryParseAgentTitle(text);
+        var body = parsed.IsSuccess ? parsed.Value.Body : text;
         if (parsed.IsSuccess)
-        {
             turn.AgentTitle = parsed.Value.Title;
-            turn.AssistantText = parsed.Value.Body;
-        }
-        else
-        {
-            turn.AssistantText = text;
-        }
+
+        turn.AssistantText = DysonWorkspaceToolExecutor.MergeAssistantTextPreservingDropResume(prior, body);
     }
 
     /// <summary>

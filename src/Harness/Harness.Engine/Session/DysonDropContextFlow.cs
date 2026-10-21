@@ -27,9 +27,9 @@ public static class DysonDropContextFlow
         - resume is required and must stay under 1000 tokens. Write it yourself to cover the whole batch:
           name each dropped turn id and what it held (facts, decisions, paths, constraints still worth knowing).
           An empty or over-cap resume fails the whole call and drops nothing.
-        - The harness stores that resume once, on the earliest newly dropped turn; later transcripts show
-          that stub in place of the dropped turns.
-        - RestoreTurnContext undoes a drop and discards the resume.
+        - The harness appends that resume to this turn's reply, prefixed with the dropped turn ids.
+          Later transcripts keep that reply; the dropped turns themselves are omitted.
+        - RestoreTurnContext brings a dropped turn back and does not remove this reply.
         - After dropping, briefly note what you did and stop; the harness will resume the original user prompt next.
         """;
 

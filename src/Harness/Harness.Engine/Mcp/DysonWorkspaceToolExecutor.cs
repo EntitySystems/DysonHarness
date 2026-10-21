@@ -1282,11 +1282,15 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (new DysonTiktokenTokenCounter().CountTokens(resume) > MaxDropResumeTokens)
             return Error(call, $"DropTurnContext: resume must be under {MaxDropResumeTokens} tokens.");
 
-        var currentId = _session.Turns.Count > 0 ? _session.Turns[^1].Id : Guid.Empty;
+        var invoking = _session.InFlightPromptTurn;
+        if (invoking is null && _session.Turns.Count > 0)
+            invoking = _session.Turns[^1];
+
+        var invokingId = invoking?.Id ?? Guid.Empty;
         var dropped = new List<string>();
         var skipped = new List<string>();
-        DysonAgentTurn? earliest = null;
-        var earliestIndex = int.MaxValue;
+        var listed = new List<string>();
+        var newlyExcluded = new List<DysonAgentTurn>();
 
         foreach (var raw in turnIdStrings)
         {
@@ -1296,7 +1300,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 continue;
             }
 
-            if (id == currentId)
+            if (id == invokingId)
             {
                 skipped.Add($"{id:D}: cannot drop the in-flight turn");
                 continue;
@@ -1309,36 +1313,44 @@ public sealed partial class DysonWorkspaceToolExecutor
                 continue;
             }
 
+            var idText = id.ToString("D");
             if (match.IsExcludedFromContext)
             {
-                dropped.Add(id.ToString("D"));
+                NoteDropped(dropped, listed, idText);
                 continue;
             }
 
             match.IsExcludedFromContext = true;
             _session.BumpTranscriptGeneration();
-            dropped.Add(id.ToString("D"));
-            _session.AppendLog($"Turn {id:D} dropped, reason: {reason}");
-
-            var index = IndexOfTurn(match);
-            if (index < earliestIndex)
-            {
-                earliest = match;
-                earliestIndex = index;
-            }
+            _session.AppendLog($"Turn {idText} dropped, reason: {reason}");
+            newlyExcluded.Add(match);
 
             var upserted = await UpsertTurnIfPersistedAsync(match, cancellationToken).ConfigureAwait(false);
             if (upserted.IsError)
                 return Error(call, upserted.Error);
+
+            NoteDropped(dropped, listed, idText);
         }
 
-        // One resume per batch: stored on the earliest newly dropped turn so transcripts emit it once.
-        if (earliest is not null)
+        // Resume lives on the calling turn's reply. Ids are injected after the token check.
+        if (listed.Count > 0)
         {
-            earliest.ContextSummary = resume;
-            var upserted = await UpsertTurnIfPersistedAsync(earliest, cancellationToken).ConfigureAwait(false);
-            if (upserted.IsError)
-                return Error(call, upserted.Error);
+            if (invoking is null)
+            {
+                await RollbackNewlyExcludedAsync(newlyExcluded, cancellationToken).ConfigureAwait(false);
+                return Error(call, "DropTurnContext: no invoking turn to store the resume.");
+            }
+
+            var priorAssistant = invoking.AssistantText;
+            invoking.AssistantText = AppendDropResume(priorAssistant, FormatDropResumeBlock(listed, resume));
+            _session.BumpTranscriptGeneration();
+            var stored = await UpsertTurnIfPersistedAsync(invoking, cancellationToken).ConfigureAwait(false);
+            if (stored.IsError)
+            {
+                invoking.AssistantText = priorAssistant;
+                await RollbackNewlyExcludedAsync(newlyExcluded, cancellationToken).ConfigureAwait(false);
+                return Error(call, stored.Error);
+            }
         }
 
         return Ok(call, JsonSerializer.Serialize(new
@@ -1349,6 +1361,70 @@ public sealed partial class DysonWorkspaceToolExecutor
             dropped,
             skipped,
         }));
+    }
+
+    /// <summary>Marker prefixed onto the calling turn when <c>DropTurnContext</c> stores its resume.</summary>
+    internal const string DropResumeMarker = "Dropped turn ids:";
+
+    /// <summary>Ids first (code-injected), then the model resume. Not counted against the resume token cap.</summary>
+    internal static string FormatDropResumeBlock(IReadOnlyList<string> turnIds, string resume)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(DropResumeMarker);
+        foreach (var id in turnIds)
+        {
+            sb.Append("- ");
+            sb.AppendLine(id);
+        }
+
+        sb.AppendLine();
+        sb.Append(resume);
+        return sb.ToString();
+    }
+
+    /// <summary>Appends a drop-resume block. Existing assistant text is kept.</summary>
+    internal static string AppendDropResume(string? existing, string block)
+    {
+        if (string.IsNullOrEmpty(existing))
+            return block;
+
+        return existing.TrimEnd() + "\n\n---\n\n" + block;
+    }
+
+    /// <summary>
+    /// Final model text replaces <paramref name="prior"/> unless that text is a drop resume.
+    /// A drop resume stays after the closing reply so later transcripts still list the ids.
+    /// </summary>
+    internal static string MergeAssistantTextPreservingDropResume(string? prior, string modelBody)
+    {
+        if (string.IsNullOrEmpty(prior)
+            || prior.IndexOf(DropResumeMarker, StringComparison.Ordinal) < 0)
+        {
+            return modelBody;
+        }
+
+        if (string.IsNullOrWhiteSpace(modelBody) || modelBody.Contains(prior, StringComparison.Ordinal))
+            return string.IsNullOrWhiteSpace(modelBody) ? prior : modelBody;
+
+        return modelBody.TrimEnd() + "\n\n---\n\n" + prior;
+    }
+
+    private static void NoteDropped(List<string> dropped, List<string> listed, string idText)
+    {
+        dropped.Add(idText);
+        if (!listed.Contains(idText))
+            listed.Add(idText);
+    }
+
+    private async Task RollbackNewlyExcludedAsync(
+        List<DysonAgentTurn> newlyExcluded,
+        CancellationToken cancellationToken)
+    {
+        foreach (var turn in newlyExcluded)
+        {
+            turn.IsExcludedFromContext = false;
+            _ = await UpsertTurnIfPersistedAsync(turn, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task<DysonToolCallResult> RestoreTurnContextAsync(
@@ -1403,7 +1479,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             }
 
             match.IsExcludedFromContext = false;
-            // Restore discards any drop resume so the full turn returns (HasSummary would hide the body).
+            // A summary on this turn would still hide the body. The drop resume lives on the caller, not here.
             match.ContextSummary = null;
             _session.BumpTranscriptGeneration();
             restored.Add(id.ToString("D"));

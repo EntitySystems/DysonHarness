@@ -277,7 +277,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         bool excludeLastIfCurrent)
     {
         var turns = session.Turns;
-        var incompleteIndex = FindIncompleteCurrentIndex(turns);
+        var incompleteIndex = FindIncompleteCurrentIndex(session);
         var count = turns.Count;
         for (var i = 0; i < count; i++)
         {
@@ -370,7 +370,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         DysonAgentSession session)
     {
         var turns = session.Turns;
-        var incompleteIndex = FindIncompleteCurrentIndex(turns);
+        var incompleteIndex = FindIncompleteCurrentIndex(session);
         for (var i = 0; i < turns.Count; i++)
         {
             var turn = turns[i];
@@ -456,7 +456,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     /// </summary>
     private static void AppendExcludedTurn(JsonArray target, DysonAgentTurn turn, bool incompleteCurrent)
     {
-        // Agent DropTurnContext stores its resume on the earliest dropped turn; the stub already carries comments.
+        // UI /summarize (and any leftover ContextSummary) still emits the stub, which already carries comments.
+        // A DropTurnContext resume is not stored on the excluded turn.
         if (DysonTurnSummarizer.HasSummary(turn))
         {
             target.Add(new JsonObject
@@ -486,7 +487,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     private static List<DysonReasoningSegment> LiveAnchoredComments(DysonAgentSession session)
     {
         var turns = session.Turns;
-        var index = FindIncompleteCurrentIndex(turns);
+        var index = FindIncompleteCurrentIndex(session);
         if (index < 0)
             return [];
 
@@ -901,8 +902,21 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     /// <summary>
     /// Index of the in-flight prompt turn (may not be last when a PlanResult was appended mid-turn).
     /// </summary>
-    private static int FindIncompleteCurrentIndex(IReadOnlyList<DysonAgentTurn> turns)
+    private static int FindIncompleteCurrentIndex(DysonAgentSession session)
     {
+        var turns = session.Turns;
+        // AssistantText may already hold a DropTurnContext resume while tools are still in flight.
+        // Keep that turn incomplete so history does not also emit the in-flight tool rounds.
+        var inFlight = session.InFlightPromptTurn;
+        if (inFlight is not null)
+        {
+            for (var i = turns.Count - 1; i >= 0; i--)
+            {
+                if (ReferenceEquals(turns[i], inFlight) || turns[i].Id == inFlight.Id)
+                    return i;
+            }
+        }
+
         for (var i = turns.Count - 1; i >= 0; i--)
         {
             if (IsTranscriptChromeKind(turns[i].Kind))

@@ -1778,7 +1778,7 @@ public sealed class DysonMcpPipeline
                 "Callable anytime. Requires reason and resume: your own short account of what the dropped turns included (not a harness synthesis). " +
                 "Empty resume or one over 1000 tokens fails the whole call and drops nothing. " +
                 "Drop at least a few turns, preferring large ones that do little for the current task — not only true noise. " +
-                "Does not delete turns; RestoreTurnContext undoes a drop and discards that resume.",
+                "Does not delete turns. The harness appends your resume plus the dropped ids onto this turn's reply. RestoreTurnContext brings a turn back and does not remove that reply.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1794,7 +1794,7 @@ public sealed class DysonMcpPipeline
                     },
                     "resume": {
                       "type": "string",
-                      "description": "Your short account (under 1000 tokens) of what the dropped turns included: name each turn id and what it held. Shown in later transcripts in place of those turns."
+                      "description": "Your short account (under 1000 tokens) of what the dropped turns included: name each turn id and what it held. The harness appends it to this turn's reply after a code-injected id list; it is not stored on the dropped turns."
                     }
                   },
                   "required": ["turnIds", "reason", "resume"]

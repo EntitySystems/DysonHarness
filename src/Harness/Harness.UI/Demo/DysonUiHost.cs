@@ -4391,7 +4391,10 @@ public sealed class DysonUiHost : IAsyncDisposable
             return VoidResult<string>.Success;
         }
 
+        var priorSummary = turn.ContextSummary;
         turn.IsExcludedFromContext = false;
+        // Same as MCP restore: a leftover ContextSummary would keep emitting FormatSummaryStub.
+        turn.ContextSummary = null;
 
         if (session.PersistenceId != Guid.Empty)
         {
@@ -4404,6 +4407,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (upserted.IsError)
             {
                 turn.IsExcludedFromContext = true;
+                turn.ContextSummary = priorSummary;
                 LastError = upserted.Error;
                 Notify(DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
                 return upserted;

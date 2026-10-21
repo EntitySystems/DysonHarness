@@ -15,6 +15,7 @@ public class DysonExpandThoughtProcessTests
         await AssertExpandEnqueuesAndEndsTurn();
         await AssertExpandRecursionBlocked();
         await AssertDropAndRestoreTurnContext();
+        AssertFinalReplyKeepsDropResume();
         AssertTranscriptTurnIdAndOmitExcluded();
         AssertSoftCloseEndsCurrentTurn();
         AssertSoftClosePreservesModelContent();
@@ -242,18 +243,27 @@ public class DysonExpandThoughtProcessTests
             CallId = "d2",
             ToolName = "DropTurnContext",
             Stage = 0,
-            // noisy2 listed first: the resume still lands on the earliest turn by history index.
+            // noisy2 listed first: both ids are still injected on the invoking turn.
             ArgumentsJson = $$"""{"turnIds":["{{noisy2.Id}}","{{noisy.Id}}","{{Guid.NewGuid()}}"],"reason":"{{dropReason}}","resume":"{{dropResume}}"}""",
         }).GetAwaiter().GetResult();
         if (drop.IsError)
             throw new InvalidOperationException("DropTurnContext should succeed on Normal turn: " + drop.Content);
         if (!noisy.IsExcludedFromContext || !noisy2.IsExcludedFromContext)
             throw new InvalidOperationException("DropTurnContext must set IsExcludedFromContext.");
-        if (noisy.ContextSummary != dropResume || noisy2.ContextSummary is not null)
+        if (noisy.ContextSummary is not null || noisy2.ContextSummary is not null)
         {
             throw new InvalidOperationException(
-                "Resume must be stored only on the earliest newly dropped turn: "
+                "Drop resume must not be stored on a dropped turn: "
                 + noisy.ContextSummary + " / " + noisy2.ContextSummary);
+        }
+        if (current.AssistantText is null
+            || !current.AssistantText.Contains(dropResume, StringComparison.Ordinal)
+            || !current.AssistantText.Contains(noisy.Id.ToString("D"), StringComparison.Ordinal)
+            || !current.AssistantText.Contains(noisy2.Id.ToString("D"), StringComparison.Ordinal)
+            || !current.AssistantText.Contains(DysonWorkspaceToolExecutor.DropResumeMarker, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Resume and injected ids must be on the invoking turn: " + current.AssistantText);
         }
         if (drop.Content.IndexOf(dropResume, StringComparison.Ordinal) < 0)
             throw new InvalidOperationException("Success JSON must echo resume: " + drop.Content);
@@ -265,11 +275,13 @@ public class DysonExpandThoughtProcessTests
             inFlightRounds: []).Messages.ToJsonString();
         var resumeHits = history.Split(dropResume).Length - 1;
         if (resumeHits != 1
-            || !history.Contains("[contextSummary]", StringComparison.Ordinal)
-            || history.Contains("dead end", StringComparison.Ordinal))
+            || history.Contains("[contextSummary]", StringComparison.Ordinal)
+            || history.Contains("dead end", StringComparison.Ordinal)
+            || !history.Contains(noisy.Id.ToString("D"), StringComparison.Ordinal)
+            || !history.Contains(noisy2.Id.ToString("D"), StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"Completions history must emit the drop resume stub once ({resumeHits}) and omit dropped bodies: " + history);
+                $"Completions history must emit the invoking-turn resume once ({resumeHits}) and omit dropped bodies: " + history);
         }
         if (drop.Content.IndexOf("partial", StringComparison.OrdinalIgnoreCase) < 0)
             throw new InvalidOperationException("Unknown id should yield partial status: " + drop.Content);
@@ -279,6 +291,27 @@ public class DysonExpandThoughtProcessTests
         var dropLog = $"Turn {noisy.Id:D} dropped, reason: {dropReason}";
         if (!session.SnapshotLog().Any(l => l.Equals(dropLog, StringComparison.Ordinal)))
             throw new InvalidOperationException("Drop must AppendLog: " + dropLog);
+
+        const string reDropResume = "RESUME_ALREADY_EXCLUDED";
+        var reDrop = await executor.ExecuteAsync(new DysonToolCall
+        {
+            CallId = "d3",
+            ToolName = "DropTurnContext",
+            Stage = 0,
+            ArgumentsJson = $$"""{"turnIds":["{{noisy2.Id}}"],"reason":"again","resume":"{{reDropResume}}"}""",
+        });
+        if (reDrop.IsError)
+            throw new InvalidOperationException("Re-drop of an excluded id must still succeed: " + reDrop.Content);
+        if (current.AssistantText is null
+            || !current.AssistantText.Contains(reDropResume, StringComparison.Ordinal)
+            || !current.AssistantText.Contains(dropResume, StringComparison.Ordinal)
+            || current.AssistantText.Split(noisy2.Id.ToString("D")).Length - 1 < 2)
+        {
+            throw new InvalidOperationException(
+                "Re-drop must append a block that lists the already-excluded id: " + current.AssistantText);
+        }
+        if (noisy2.ContextSummary is not null)
+            throw new InvalidOperationException("Re-drop must not write ContextSummary on the dropped turn.");
 
         var restoreMissingReason = executor.ExecuteAsync(new DysonToolCall
         {
@@ -307,7 +340,14 @@ public class DysonExpandThoughtProcessTests
         if (noisy.IsExcludedFromContext)
             throw new InvalidOperationException("RestoreTurnContext must clear IsExcludedFromContext.");
         if (noisy.ContextSummary is not null)
-            throw new InvalidOperationException("RestoreTurnContext must discard the drop resume.");
+            throw new InvalidOperationException("RestoreTurnContext must not leave a summary on the restored turn.");
+        if (current.AssistantText is null
+            || !current.AssistantText.Contains(noisy2.Id.ToString("D"), StringComparison.Ordinal)
+            || !current.AssistantText.Contains(dropResume, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Restoring one sibling must keep the invoking turn's resume and the other id.");
+        }
         if (restore.Content.IndexOf("partial", StringComparison.OrdinalIgnoreCase) < 0)
             throw new InvalidOperationException("Unknown id should yield partial restore: " + restore.Content);
 
@@ -327,6 +367,26 @@ public class DysonExpandThoughtProcessTests
         var againLog = $"Turn {noisy.Id:D} restored, reason: again";
         if (session.SnapshotLog().Count(l => l.Equals(againLog, StringComparison.Ordinal)) > 0)
             throw new InvalidOperationException("Idempotent restore must not re-log.");
+    }
+
+    private static void AssertFinalReplyKeepsDropResume()
+    {
+        var block = DysonWorkspaceToolExecutor.FormatDropResumeBlock(
+            ["aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"],
+            "kept resume");
+        var merged = DysonWorkspaceToolExecutor.MergeAssistantTextPreservingDropResume(block, "closing words");
+        if (!merged.StartsWith("closing words", StringComparison.Ordinal)
+            || !merged.Contains(block, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "A final reply must keep the drop-resume block: " + merged);
+        }
+
+        if (DysonWorkspaceToolExecutor.MergeAssistantTextPreservingDropResume("plain reply", "next") != "next")
+            throw new InvalidOperationException("Assistant text without a drop resume must be replaced.");
+
+        if (DysonWorkspaceToolExecutor.MergeAssistantTextPreservingDropResume(block, "  ") != block)
+            throw new InvalidOperationException("An empty final reply must keep the drop resume.");
     }
 
     private static void AssertTranscriptTurnIdAndOmitExcluded()
