@@ -113,6 +113,135 @@ public static class DysonListenSentence
             cancellationToken);
 }
 
+/// <summary>
+/// Fixed sentence played when voice mode turns on. No setting and no UI. The sidecar keys the clip on the active
+/// TTS runtime id, the resolved voice id (may be empty), and <see cref="Text"/>. A miss synthesizes once.
+/// Never throws; every failure is null.
+/// </summary>
+public static class DysonActivationSentence
+{
+    public const string Text = "Voice mode activated. Please wait up to five seconds for all systems to initialize.";
+
+    private const string WavName = "activation-sentence.wav";
+    private const string TextName = "activation-sentence.txt";
+
+    // ponytail: 15 s bounds a runaway synth. Raise only if a real voice reads this sentence past 15 s.
+    private const int MaxSeconds = 15;
+
+    /// <summary>One ensure at a time, so a quick off/on does not run two synths; the second waiter loads the file.</summary>
+    private static readonly SemaphoreSlim Gate = new(1, 1);
+
+    /// <summary>Cached clip when all three sidecar lines match and the WAV reads, else null. File IO on the thread pool.</summary>
+    public static async Task<DysonSpeechAudioChunk?> TryLoadAsync(
+        string installRoot,
+        string runtimeId,
+        string voiceId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(installRoot) || string.IsNullOrWhiteSpace(runtimeId))
+                return null;
+            return await Task.Run(() => Read(installRoot, runtimeId, voiceId ?? ""), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Cache hit ⇒ that clip, no synth. Miss ⇒ <see cref="IDysonTextToSpeech.SynthesizeAsync"/> once with
+    /// <c>voiceId</c> null, then writes the WAV and sidecar. Synth error, IO error, or audio over
+    /// 15 seconds ⇒ null and nothing written.
+    /// </summary>
+    public static async Task<DysonSpeechAudioChunk?> EnsureAsync(
+        IDysonTextToSpeech tts,
+        string installRoot,
+        string runtimeId,
+        string voiceId,
+        CancellationToken cancellationToken)
+    {
+        if (tts is null || string.IsNullOrWhiteSpace(installRoot) || string.IsNullOrWhiteSpace(runtimeId))
+            return null;
+        voiceId ??= "";
+        try
+        {
+            await Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+
+        try
+        {
+            var hit = await TryLoadAsync(installRoot, runtimeId, voiceId, cancellationToken).ConfigureAwait(false);
+            if (hit is not null)
+                return hit;
+
+            await Task.Run(() => 0, CancellationToken.None).ConfigureAwait(false);
+            byte[]? pcm = null;
+            var rate = 0;
+            await foreach (var chunk in tts.SynthesizeAsync(Text, voiceId: null, cancellationToken).ConfigureAwait(false))
+            {
+                if (chunk.IsError)
+                    return null;
+                if (chunk.Value.Pcm is not { Length: > 0 } part)
+                    continue;
+                if (rate == 0)
+                    rate = chunk.Value.SampleRate;
+                else if (chunk.Value.SampleRate != rate)
+                    return null;
+                pcm = pcm is null ? part : SentenceCue.Join(pcm, part);
+                if (rate <= 0 || pcm.Length / 2 > (long)rate * MaxSeconds)
+                    return null;
+            }
+
+            if (pcm is null || rate <= 0 || pcm.Length < 2)
+                return null;
+            if ((pcm.Length & 1) == 1)
+                pcm = pcm[..^1];
+
+            var body = pcm;
+            var sampleRate = rate;
+            await Task.Run(() =>
+            {
+                Directory.CreateDirectory(installRoot);
+                File.WriteAllBytes(Path.Combine(installRoot, WavName), SentenceCue.EncodeWav(body, sampleRate));
+                File.WriteAllText(
+                    Path.Combine(installRoot, TextName),
+                    string.Join('\n', runtimeId, voiceId, Text),
+                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            }, CancellationToken.None).ConfigureAwait(false);
+            return new DysonSpeechAudioChunk(body, sampleRate, true);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+
+    private static DysonSpeechAudioChunk? Read(string installRoot, string runtimeId, string voiceId)
+    {
+        var textPath = Path.Combine(installRoot, TextName);
+        var wavPath = Path.Combine(installRoot, WavName);
+        if (!File.Exists(textPath) || !File.Exists(wavPath))
+            return null;
+        var lines = File.ReadAllLines(textPath);
+        if (lines.Length != 3
+            || !string.Equals(lines[0], runtimeId, StringComparison.Ordinal)
+            || !string.Equals(lines[1], voiceId, StringComparison.Ordinal)
+            || !string.Equals(lines[2], Text, StringComparison.Ordinal))
+            return null;
+        return SentenceCue.ReadWav(File.ReadAllBytes(wavPath));
+    }
+}
+
 /// <summary>One sentence setting: synth once, then a WAV and a sidecar. Accept and listen share this.</summary>
 file static class SentenceCue
 {
@@ -289,7 +418,7 @@ file static class SentenceCue
         return ReadWav(File.ReadAllBytes(wavPath));
     }
 
-    private static DysonSpeechAudioChunk? ReadWav(byte[] bytes)
+    public static DysonSpeechAudioChunk? ReadWav(byte[] bytes)
     {
         if (bytes.Length < 44 || bytes[0] != (byte)'R' || bytes[1] != (byte)'I' || bytes[2] != (byte)'F' || bytes[3] != (byte)'F')
             return null;
@@ -330,7 +459,7 @@ file static class SentenceCue
         return new DysonSpeechAudioChunk(pcm, rate, true);
     }
 
-    private static byte[] EncodeWav(byte[] pcm, int sampleRate)
+    public static byte[] EncodeWav(byte[] pcm, int sampleRate)
     {
         var stream = new MemoryStream(44 + pcm.Length);
         using (var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
@@ -354,7 +483,7 @@ file static class SentenceCue
         return stream.ToArray();
     }
 
-    private static byte[] Join(byte[] left, byte[] right)
+    public static byte[] Join(byte[] left, byte[] right)
     {
         var all = new byte[left.Length + right.Length];
         Buffer.BlockCopy(left, 0, all, 0, left.Length);

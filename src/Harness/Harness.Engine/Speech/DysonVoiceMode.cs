@@ -165,6 +165,7 @@ public sealed class DysonVoiceMode(
         }
 
         RaiseState();
+        PlayActivation(run.Token);
         return VoidResult<string>.Success;
     }
 
@@ -842,6 +843,34 @@ public sealed class DysonVoiceMode(
             .TryLoadAsync(_settings, _textToSpeech.InstallRoot, CancellationToken.None)
             .ConfigureAwait(false);
         _tryout.PlayListenCue(clip);
+    }
+
+    /// <summary>
+    /// Not awaited by <see cref="StartAsync"/>. Resolve the speaking voice, ensure the cached activation sentence
+    /// (one synth on a miss), then play it as a listen cue with a non-null clip. Any failure is silent and leaves
+    /// voice mode on. <paramref name="run"/> canceled (turned off, or off then on again) skips playback.
+    /// </summary>
+    private void PlayActivation(CancellationToken run) => _ = PlayActivationAsync(run);
+
+    private async Task PlayActivationAsync(CancellationToken run)
+    {
+        try
+        {
+            await Task.Run(() => 0, CancellationToken.None).ConfigureAwait(false);
+            var voice = await _textToSpeech.ResolveSpeakVoiceAsync(CancellationToken.None).ConfigureAwait(false);
+            if (voice.IsError)
+                return;
+            var clip = await DysonActivationSentence
+                .EnsureAsync(_textToSpeech, _textToSpeech.InstallRoot, voice.Value.RuntimeId, voice.Value.VoiceId, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (clip is null || !IsOn || run.IsCancellationRequested)
+                return;
+            _tryout.PlayListenCue(clip);
+        }
+        catch (Exception)
+        {
+            // Fail soft: the cue is optional and voice mode stays on.
+        }
     }
 
     /// <summary>Fade, CrispASR cancel, or a mic fell-behind fault is not a failure the user should see.</summary>

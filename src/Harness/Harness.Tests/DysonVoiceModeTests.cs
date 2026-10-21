@@ -507,6 +507,42 @@ public class DysonVoiceModeTests
     }
 
     [Fact]
+    public async Task ActivationSentence_cached_plays_pcm_not_a_live_call_or_listen_chime()
+    {
+        var root = PrivateRoot();
+        try
+        {
+            var pcm = new byte[320];
+            pcm[0] = 52;
+            pcm[1] = 2;
+            var tts = new ChunkTts(pcm, 16_000);
+            var made = await DysonActivationSentence.EnsureAsync(tts, root, "pocket", "alba", CancellationToken.None);
+            Assert.NotNull(made);
+            Assert.Equal(1, tts.Calls);
+            Assert.True(File.Exists(Path.Combine(root, "activation-sentence.wav")));
+
+            var loaded = await DysonActivationSentence.TryLoadAsync(root, "pocket", "alba", CancellationToken.None);
+            Assert.NotNull(loaded);
+            Assert.Equal(pcm, loaded!.Pcm);
+            Assert.Null(await DysonActivationSentence.TryLoadAsync(root, "pocket", "other", CancellationToken.None));
+            Assert.NotNull(await DysonActivationSentence.EnsureAsync(tts, root, "pocket", "alba", CancellationToken.None));
+            Assert.Equal(1, tts.Calls);
+
+            var playback = new ChimePlayback();
+            var tryout = new DysonSpeechTryout(new IdleCapture(), new IdleStt(), new IdleTts(), playback);
+            tryout.PlayListenCue(loaded);
+            await WaitForAsync(() => playback.Clips.Count >= 1);
+            Assert.Equal(0, playback.ListenCount);
+            Assert.Equal(pcm, playback.Clips[0]);
+            Assert.False(DysonListenChime.Pcm().AsSpan().SequenceEqual(playback.Clips[0]));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public async Task AcceptSentence_unset_plays_the_chime()
     {
         var settings = new FakeSettings();
@@ -976,11 +1012,14 @@ public class DysonVoiceModeTests
     {
         public string RuntimeId => "chunk";
 
+        public int Calls { get; private set; }
+
         public async IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> SynthesizeAsync(
             string text,
             string? voiceId,
             [EnumeratorCancellation] CancellationToken cancellationToken)
         {
+            Calls++;
             yield return Result<DysonSpeechAudioChunk, string>.AsValue(new DysonSpeechAudioChunk(pcm, rate, true));
             await Task.CompletedTask;
         }

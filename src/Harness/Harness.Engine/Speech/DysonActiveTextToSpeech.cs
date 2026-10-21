@@ -108,6 +108,39 @@ public sealed class DysonActiveTextToSpeech(
     }
 
     /// <summary>
+    /// Runtime id and voice id that <see cref="SynthesizeAsync"/> speaks with when <c>voiceId</c> is null.
+    /// <c>VoiceId</c> is empty when a non-Qwen CrispASR model speaks with no voice. Keys the activation-sentence cache.
+    /// ponytail: copies each engine's default voice. A runtime added only to <see cref="SynthesizeAsync"/> would be
+    /// keyed wrong; upgrade to one resolver both call.
+    /// </summary>
+    internal async Task<Result<(string RuntimeId, string VoiceId), string>> ResolveSpeakVoiceAsync(
+        CancellationToken cancellationToken = default)
+    {
+        const string noVoice = "No voice.";
+        var active = await ResolveActiveAsync(cancellationToken).ConfigureAwait(false);
+        if (active.IsError)
+            return Result<(string RuntimeId, string VoiceId), string>.AsError(active.Error);
+
+        var id = active.Value;
+        var crisp = DysonCrispSpeech.IsTextToSpeech(id);
+        (string EngineId, string? DefaultVoiceId) pick = id switch
+        {
+            DysonQwenSpeech.Id => (id, null),
+            DysonChatterboxSpeech.Id => (id, DysonChatterboxSpeech.CatalogVoiceId),
+            _ when crisp => (id, null),
+            _ => (DysonPocketSpeech.Id, DysonPocketSpeech.DefaultVoiceId),
+        };
+        var voice = await DysonSpeechBridge.ResolveVoiceIdAsync(
+                _models, _settings, pick.EngineId, id, null, pick.DefaultVoiceId, noVoice, cancellationToken)
+            .ConfigureAwait(false);
+        if (voice.IsSuccess)
+            return Result<(string RuntimeId, string VoiceId), string>.AsValue((id, voice.Value));
+        if (crisp && !DysonGgufSpeechModels.IsQwenGguf(id) && voice.Error == noVoice)
+            return Result<(string RuntimeId, string VoiceId), string>.AsValue((id, ""));
+        return Result<(string RuntimeId, string VoiceId), string>.AsError(voice.Error);
+    }
+
+    /// <summary>
     /// Train TTS model for the active model: Qwen3-TTS (.mp3 or .wav; speaker embedding; the clip is kept as
     /// <c>{voiceId}.source.mp3</c> or <c>.source.wav</c>) and
     /// Chatterbox Turbo (.mp3) enroll a voice prompt (not a fine-tune). A non-blank
