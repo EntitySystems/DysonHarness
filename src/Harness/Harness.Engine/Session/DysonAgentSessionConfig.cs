@@ -54,7 +54,7 @@ public class DysonAgentSessionConfig
     public DysonAgentProvider? SummarizerProvider { get; set; }
 
     /// <summary>
-    /// Optional provider for turn context summarization (<c>SummarizeTurns</c>).
+    /// Optional provider for the UI /summarize turn summarizer worker.
     /// Null ⇒ use the session <see cref="DysonAgentSession.Provider"/>.
     /// </summary>
     public DysonAgentProvider? TurnSummarizerProvider { get; set; }

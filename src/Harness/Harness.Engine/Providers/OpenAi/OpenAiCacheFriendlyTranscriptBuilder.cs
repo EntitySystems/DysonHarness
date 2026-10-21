@@ -290,7 +290,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
             if (turn.IsExcludedFromContext)
             {
-                AppendExcludedTurnComments(messages, turn, i == incompleteIndex);
+                AppendExcludedTurn(messages, turn, i == incompleteIndex);
                 continue;
             }
 
@@ -379,7 +379,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
             if (turn.IsExcludedFromContext)
             {
-                AppendExcludedTurnComments(input, turn, i == incompleteIndex);
+                AppendExcludedTurn(input, turn, i == incompleteIndex);
                 continue;
             }
 
@@ -454,6 +454,22 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     /// user instructions. Emitted as marked messages at the turn's slot. For the in-flight turn
     /// only anchor-0 comments go here (later anchors come from <see cref="LiveAnchoredComments"/>).
     /// </summary>
+    private static void AppendExcludedTurn(JsonArray target, DysonAgentTurn turn, bool incompleteCurrent)
+    {
+        // Agent DropTurnContext stores its resume on the earliest dropped turn; the stub already carries comments.
+        if (DysonTurnSummarizer.HasSummary(turn))
+        {
+            target.Add(new JsonObject
+            {
+                ["role"] = "user",
+                ["content"] = DysonTurnSummarizer.FormatSummaryStub(turn),
+            });
+            return;
+        }
+
+        AppendExcludedTurnComments(target, turn, incompleteCurrent);
+    }
+
     private static void AppendExcludedTurnComments(JsonArray target, DysonAgentTurn turn, bool incompleteCurrent)
     {
         var comments = DysonInjectedUserComments.From(turn.ReasoningLog);

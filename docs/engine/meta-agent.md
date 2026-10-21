@@ -15,7 +15,7 @@ Never-blocking orchestrator plus isolated implementer. Page-launched; not in the
 
 ## Toolset (allowlist strip)
 
-`DysonSessionToolsetBuilder.ApplyModeCatalog` runs **after** default catalog, inter-agent depth, completion omit, plugin/custom merge, and the mode denylist. Meta Agent is an allowlist, not a denylist: everything not in `DysonMetaAgentTools.AllowedToolNames` is removed except `CreateBrowserTools` names already on the pipeline, shared schemas (`SummarizeTurns`, todos, `GetOpenRulesConfig`, `LoadSkill`) are restored from a no-browser `CreateDefault`, then meta-only tools are added. Browser tools are not copied back, so a denylist removal and a null `BrowserControl` both stay absent. `OmitRootTaskCompletionTools` also runs — a meta session never completes.
+`DysonSessionToolsetBuilder.ApplyModeCatalog` runs **after** default catalog, inter-agent depth, completion omit, plugin/custom merge, and the mode denylist. Meta Agent is an allowlist, not a denylist: everything not in `DysonMetaAgentTools.AllowedToolNames` is removed except `CreateBrowserTools` names already on the pipeline, shared schemas (todos, `GetOpenRulesConfig`, `LoadSkill`) are restored from a no-browser `CreateDefault`, then meta-only tools are added. Browser tools are not copied back, so a denylist removal and a null `BrowserControl` both stay absent. `OmitRootTaskCompletionTools` also runs — a meta session never completes.
 
 Enforced list: `DysonMetaAgentTools.ExcludedToolNames`, asserted by `DysonMetaAgentNoFileAccessTests` (catalog contains none of those names, does contain `LoadSkill` + `GetOpenRulesConfig`, and no plan-tool schema accepts a `path` argument). `DysonMetaAgentToolsetTests` asserts the live catalog **is exactly** `AllowedToolNames` when `BrowserControl` is null and `Config.Voice` is null, and that a non-null control (including `DysonNullBrowserControl`) keeps every `CreateBrowserTools` name while file and shell tools stay absent. `SpeakToUser` is not in `AllowedToolNames`. It is added only on the root Meta Agent catalog while `Config.Voice` is non-null. Meta Agent Drone and every other mode never get it, even if `Voice` were set.
 
@@ -38,7 +38,7 @@ Kept:
 | `OpenWorkdirsPanel` | Same scope and gate. No parameters. Opens the existing `WorkDirectorySwitcher` modal through `DysonWorkDirectoryFocus.OpenPanel`. Not bound (Settings on screen) ⇒ `The work directories panel is not on screen.` |
 | `SwitchWorkdir` | Same scope and gate. Required `id` (work directory Guid). Bad json or Guid, or a missing row, is a tool error with no side effect. Else `SetActive(id)` and `DysonWorkDirectoryFocus.SwitchTo` → `WorkDirectorySwitcher.SelectAsync` (touch-opened, git refresh, navigation). Hook not bound ⇒ the panel error and the active id is unchanged. |
 | `PostUserQuestion` | Non-blocking question card on a `DisplayInfo` bubble. Root allowlist plus `RejectUnlessMetaAgent` (not on the drone, Work, or Explore). Required `message` (bubble body), `question` (card title), and `choices` (2–12 unique strings). `multiSelect` defaults false; `allowCustomAnswer` defaults true. Optional `actions` share the `PostConversationMessage` cap of 8. No `visualizationId`. Returns `{ok:true, questionId}` and does not end the turn. The answer is a later Normal user turn (`HiddenInstruction` carries the question, because this bubble is not in the provider transcript). Submit locks the card in `turns.UserQuestionJson`; a failed send clears that attempt. |
-| `CompactConversation` | Enqueues `DysonFullSummarizeFlow.CreateTurn()` and **ends the current turn**. |
+| `CompactConversation` | The Meta Agent's context shrink: enqueues `DysonFullSummarizeFlow.CreateTurn()` and **ends the current turn**. |
 | `RemoveTodos` | Runtime `_session.Mode == MetaAgent` check. `DeleteTodo` is not in the catalog. |
 | `ListPlans` / `SetPlanStatus` / `BeginBuildPlan` / `DeletePlan` | Plan tools below. |
 | `ReadMetaPlan` / `EditMetaPlan` | Plan-body tools, shared with the drone (`CreatePlanBodyTools()`; `ReadMetaPlan` is the same `CreateReadMetaPlanTool()` definition every other mode gets from the default catalog). The root cannot match `old_text` without the text, so it reads bodies on demand; `ListPlans` still never carries a body. Neither schema takes a `path`. See [Plan tools](#plan-tools). |
@@ -51,7 +51,7 @@ Kept:
 | `WriteTempFile` | Meta Agent only. Writes a generated leaf under `.dyson/temp/` via `CreateTemporaryFileAsync`. Not a project file. |
 | `ReadTempFile` | Meta Agent only. Reads a generated `.dyson/temp/` leaf. Refuses every other path. |
 | `GetOpenRulesConfig` / `LoadSkill` | Rules without files. |
-| `SummarizeTurns` / `CreateTodo` / `ListTodos` / `UpdateTodo` | Shared schemas. |
+| `CreateTodo` / `ListTodos` / `UpdateTodo` | Shared schemas. |
 | Browser tools (`CreateBrowserTools`) | Present only when `BrowserControl` is set and the name survived the denylist. Not in `AllowedToolNames`. `BrowserWaitForSelector` and `BrowserWaitForNavigation` return in this turn, bounded by required `timeoutMs`; they are not a stand-in for `WaitForSubagent`. A long `timeoutMs` stalls the orchestrator until the call returns. That sentence is appended to the root Meta Agent prompt (`WithBrowser`) only when at least one of those tools is on the catalog. |
 
 Todos are the record of dispatches; posted messages are not in later transcripts.

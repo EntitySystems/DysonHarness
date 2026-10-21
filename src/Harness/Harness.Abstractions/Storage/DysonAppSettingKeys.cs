@@ -30,7 +30,7 @@ public static class DysonAppSettingKeys
     public const string WebSearchSummarizerReasoningEffort = "web_search_summarizer_reasoning_effort";
 
     /// <summary>
-    /// Guid string of the model slug used for turn context summarization (<c>SummarizeTurns</c>).
+    /// Guid string of the model slug used for the UI /summarize turn summarizer worker.
     /// Empty / missing ⇒ use the session model.
     /// </summary>
     public const string TurnSummarizerModelSlugId = "turn_summarizer_model_slug_id";

@@ -1,7 +1,7 @@
 namespace DysonHarness;
 
 /// <summary>
-/// Editable constants for the turn-context summarizer (SummarizeTurns worker).
+/// Editable constants for the turn-context summarizer (UI /summarize worker).
 /// Summarizer system/user text never enters the main agent transcript.
 /// </summary>
 public static class DysonTurnSummarizerPrompt

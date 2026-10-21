@@ -217,7 +217,7 @@ public abstract class DysonAgentSession
             or DysonSessionStatus.Failed
             or DysonSessionStatus.Interrupted;
 
-    /// <summary>True while any turn is mid <c>SummarizeTurns</c> (host or MCP).</summary>
+    /// <summary>True while any turn is mid turn summarization (UI /summarize worker).</summary>
     public bool HasAnySummarizingTurn => !_summarizingTurnIds.IsEmpty;
 
     /// <summary>True while this turn id is claimed for summarization.</summary>

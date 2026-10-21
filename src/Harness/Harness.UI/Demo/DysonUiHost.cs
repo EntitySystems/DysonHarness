@@ -4146,7 +4146,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
-    /// Summarizes listed turns via the harness turn summarizer (same path as SummarizeTurns MCP).
+    /// Summarizes listed turns via the harness turn summarizer (UI /summarize and turn-menu path).
     /// Claims one turn at a time on the session (spinner = active turn only); single-flight per session.
     /// </summary>
     public async Task<VoidResult<string>> SummarizeTurnsAsync(

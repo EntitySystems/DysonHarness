@@ -1734,7 +1734,8 @@ public sealed class DysonMcpPipeline
             Description =
                 "Queue an ExpandThoughtProcess reformulation turn, hard-end the current turn, then auto-continue with a Normal turn. " +
                 "Use when context is noisy or the plan is unclear. Optional focus clarifies what to reformulate. " +
-                "Prefer SummarizeTurns for verbose-but-useful older turns; DropTurnContext for true noise only.",
+                "To shrink history, call DropTurnContext with a model-written resume (under 1000 tokens) of what the dropped turns held; " +
+                "drop at least a few large turns that do little for the current task.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1771,37 +1772,13 @@ public sealed class DysonMcpPipeline
 
         yield return new DysonMcpTool
         {
-            Name = "SummarizeTurns",
-            Description =
-                "Compress listed turn ids (from [turnId=…] history headers) into compact context stubs via a harness worker. " +
-                "Callable anytime. Requires reason. Prefer over DropTurnContext when useful facts remain. " +
-                "Re-summarize overwrites an existing stub. Does not delete turns.",
-            InputSchemaJson = """
-                {
-                  "type": "object",
-                  "properties": {
-                    "turnIds": {
-                      "type": "array",
-                      "items": { "type": "string" },
-                      "description": "Turn Guids from [turnId=…] transcript headers to summarize for future model context."
-                    },
-                    "reason": {
-                      "type": "string",
-                      "description": "Why these turns should be summarized for future model context."
-                    }
-                  },
-                  "required": ["turnIds", "reason"]
-                }
-                """,
-        };
-
-        yield return new DysonMcpTool
-        {
             Name = "DropTurnContext",
             Description =
-                "Exclude listed turn ids (from [turnId=…] history headers) from future provider transcripts. " +
-                "Callable anytime. Requires reason. Prefer SummarizeTurns when useful facts remain; use Drop for true noise only. " +
-                "Does not delete turns; RestoreTurnContext or UI can restore. Prefer keep when unsure.",
+                "Shrink history: exclude listed turn ids (from [turnId=…] history headers) from future provider transcripts. " +
+                "Callable anytime. Requires reason and resume: your own short account of what the dropped turns included (not a harness synthesis). " +
+                "Empty resume or one over 1000 tokens fails the whole call and drops nothing. " +
+                "Drop at least a few turns, preferring large ones that do little for the current task — not only true noise. " +
+                "Does not delete turns; RestoreTurnContext undoes a drop and discards that resume.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1814,9 +1791,13 @@ public sealed class DysonMcpPipeline
                     "reason": {
                       "type": "string",
                       "description": "Why these turns should be excluded from future model context."
+                    },
+                    "resume": {
+                      "type": "string",
+                      "description": "Your short account (under 1000 tokens) of what the dropped turns included: name each turn id and what it held. Shown in later transcripts in place of those turns."
                     }
                   },
-                  "required": ["turnIds", "reason"]
+                  "required": ["turnIds", "reason", "resume"]
                 }
                 """,
         };

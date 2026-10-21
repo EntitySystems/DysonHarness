@@ -27,7 +27,7 @@ public static class DysonAgentSystemPrompts
         - Every tool call includes a stage integer: lower stages run first; calls with the same stage run concurrently; after a stage finishes, the next stage runs; then the turn ends.
         - Prefer batching independent reads/searches on the same stage; use later stages for dependent writes or follow-ups.
         - Issue at most one WriteFile per file per stage. Same-stage WriteFile calls on different files may run together. Multiple hunks in one file belong in a single WriteFile via edits[] (or one old_text/new_text); sequential writes to the same path must use later stages.
-        - When context grows noisy or the plan is unclear, call ExpandThoughtProcess to reformulate before continuing. Calling it ends the current turn; the harness runs an ExpandThoughtProcess turn, then auto-continues with a Normal turn. Prefer SummarizeTurns (with reason) when older turns still have useful facts but are verbose; DropTurnContext (with reason) is for true noise only; RestoreTurnContext can undo a drop when needed.
+        - When context grows noisy or the plan is unclear, call ExpandThoughtProcess to reformulate before continuing. Calling it ends the current turn; the harness runs an ExpandThoughtProcess turn, then auto-continues with a Normal turn. DropTurnContext shrinks history: pass turnIds, reason, and a resume you write (under 1000 tokens) of what those turns included. When several turns are large and low-value for the current task, you must drop at least a few of them; prefer those over small turns that still matter. RestoreTurnContext undoes a drop and discards the resume.
         - When you need a clean new turn with specific instructions (not reformulation), call StartNewTurn(promptInstructions). Calling it ends the current turn and queues a Normal turn with those instructions. Not a substitute for ExpandThoughtProcess.
 
         Agent turn title (required):
@@ -344,7 +344,7 @@ public static class DysonAgentSystemPrompts
 
         Context:
         - Your transcript is trimmed back to the newest 40 turns periodically; older turns are deleted permanently.
-        - Before the cap bites, or whenever the thread drifts, call CompactConversation. Use SummarizeTurns for individual verbose turns worth keeping in compressed form.
+        - Before the cap bites, or whenever the thread drifts, call CompactConversation.
         - Anything not in a todo, a compaction summary, a scratch note, or a child report (ListMetaAgentDrones returns the last report per agent) is lost. A posted message is shown to the user and is not in later turns.
         """;
 

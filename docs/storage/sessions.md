@@ -54,7 +54,7 @@ Live session: `DysonAgentSession.PersistenceId` ↔ `sessions.Id`. Work director
 | `CompactToolHistory` | string? |
 | `CreatedUtc`, `CompletedUtc`? | `DateTime` UTC |
 | `IsExcludedFromContext` | bool — when true, omitted from provider transcripts; UI still shows Dropped + Restore |
-| `ContextSummary` | string? — when set, provider transcripts emit a compact summary stub instead of the full turn body; UI shows Summarized badge |
+| `ContextSummary` | string? — when set, provider transcripts emit a compact summary stub instead of the full turn body; UI shows Summarized badge. Agent `DropTurnContext` also writes its resume here on the earliest newly dropped turn (stub still emitted while excluded); `RestoreTurnContext` clears it. FullSummarize and UI drop do not write it |
 | `InterruptionReason` | string? — nullable process-restart / recovery marker (stable code, e.g. `application-restart`). Presentation-only; not assistant text and not replayed into provider transcripts |
 
 ### `session_todos`
@@ -133,7 +133,7 @@ Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ReplaceTodosAsync(Guid ses
 
 `ListSessionsAsync` optionally filters by `WorkDirectoryId` (within the current subject). `ListChildSessionsAsync` returns direct children of a parent ordered by `RuntimeId`. `DysonSessionCreateRequest` / summaries include `WorkDirectoryId`. Create also copies `WorktreeEnabled` (and optional path/branch, usually null until the first Work fork). `DysonSessionSummary` exposes `WorktreeEnabled` and `HasWorktree` (true when `WorktreeAbsolutePath` is non-empty) so the session list can disable delete without a second query. `DysonSessionMetaUpdate` can patch status/title/model/effort and, on mid-session mode switch, `AgentMode` + `SystemPromptSnapshot`. Worktree patches: `UpdateWorktreeEnabled` writes `WorktreeEnabled`; `UpdateWorktreeLocation` writes both `WorktreeAbsolutePath` and `WorktreeBranch` (nulls clear the location after merge/remove). Repository `ListSessionsAsync` returns every mode, including Meta Agent roots. The sidebar uses `DysonUiHost.ListSessionsAsync`, which omits roots whose `AgentMode` is Meta Agent.
 
-`DeleteTurnsAsync` hard-deletes the given turn rows for that session. Empty `turnIds` is a success no-op; missing ids are ignored; unknown/cross-subject session returns `Session '{id}' not found.` Irreversible — used by the Meta Agent maintenance tick (not by DropContext / FullSummarize, which only flip `IsExcludedFromContext`). It does not compact surviving `Sequence` values.
+`DeleteTurnsAsync` hard-deletes the given turn rows for that session. Empty `turnIds` is a success no-op; missing ids are ignored; unknown/cross-subject session returns `Session '{id}' not found.` Irreversible — used by the Meta Agent maintenance tick (not by DropContext / FullSummarize, which flip `IsExcludedFromContext`; agent `DropTurnContext` also writes `ContextSummary` on one turn). It does not compact surviving `Sequence` values.
 
 `UpsertTurnAsync` looks up by turn id. On insert, the row is appended at `MAX(Sequence) + 1` whenever the requested sequence is at or below the current max (holes included); an empty session keeps the requested sequence. On update, content fields are copied and `Sequence` is never changed. Gaps are expected; `GetFullSessionAsync` still orders by sequence.
 

@@ -16,22 +16,21 @@ public static class DysonDropContextFlow
     public const int MinUserTurnsBetweenInject = 5;
 
     public const string Instruction = """
-        Context is over the session max target. Review turns older than the last 4 and compress
-        or drop only when it helps vs the current topic.
+        Context is over the session max target. Shrink it by dropping older turns with DropTurnContext.
 
         Rules:
         - Each prior turn in history is labeled with its turn id (see turn header in the transcript).
-          Use those ids with SummarizeTurns or DropTurnContext (both require reason).
-        - Only consider turns older than the last 4 (do not summarize or drop the most recent four turns).
-        - Prefer SummarizeTurns when a turn still has useful facts, decisions, paths, or constraints
-          but is verbose — the harness worker writes a compact stub (≤2K tokens) for later prompts.
-        - Call DropTurnContext only for turns that are entirely irrelevant to the current problem
-          and would cause major confusion if kept (wrong rabbit hole, obsolete exploration,
-          superseded dead end).
-        - When in doubt, keep the turn. Prefer summarize over drop; prefer keep over aggressive pruning.
-        - RestoreTurnContext can undo a drop if you need those turns back.
-        - After summarizing/dropping (if any), briefly note what you did (or that nothing qualified) and stop;
-          the harness will resume the original user prompt next.
+          Use those ids with DropTurnContext (requires turnIds, reason, and resume).
+        - Only consider turns older than the last 4 (do not drop the most recent four turns).
+        - Drop at least a few older turns when several are large and low-value for the current task;
+          prefer the large ones over small turns that still matter. If fewer qualify, drop those and say so.
+        - resume is required and must stay under 1000 tokens. Write it yourself to cover the whole batch:
+          name each dropped turn id and what it held (facts, decisions, paths, constraints still worth knowing).
+          An empty or over-cap resume fails the whole call and drops nothing.
+        - The harness stores that resume once, on the earliest newly dropped turn; later transcripts show
+          that stub in place of the dropped turns.
+        - RestoreTurnContext undoes a drop and discards the resume.
+        - After dropping, briefly note what you did and stop; the harness will resume the original user prompt next.
         """;
 
     /// <summary>

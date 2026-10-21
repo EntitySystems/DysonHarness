@@ -15,7 +15,7 @@ public static class DysonFullSummarizeFlow
 
         Hard limits:
         - Stay under 6,000 characters. The harness will hard-trim anything over that cap.
-        - Do not call tools. Do not call CompleteTask, ExpandThoughtProcess, StartNewTurn, SummarizeTurns, DropTurnContext, or RestoreTurnContext.
+        - Do not call tools. Do not call CompleteTask, ExpandThoughtProcess, StartNewTurn, DropTurnContext, or RestoreTurnContext.
         - Do not start subagents. Do not edit files. Do not run shells.
         - Start the reply with a single Markdown H1 title that names the thread (e.g. "# Session summary: …").
 

@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 namespace DysonHarness;
 
 /// <summary>
-/// One-shot Completions summarizer for turn context compression (SummarizeTurns).
+/// One-shot Completions summarizer for turn context compression (UI /summarize worker).
 /// Cap each summary at <see cref="MaxSummaryTokens"/> (tiktoken).
 /// </summary>
 public static class DysonTurnSummarizer
@@ -140,7 +140,7 @@ public static class DysonTurnSummarizer
 
     /// <summary>
     /// Transcript stub: turnId header + summary body, then persisted UserComment
-    /// blocks so comments survive <c>SummarizeTurns</c> (HasSummary emits only this stub).
+    /// blocks so comments survive summarization or a DropTurnContext resume (HasSummary emits only this stub).
     /// </summary>
     public static string FormatSummaryStub(DysonAgentTurn turn)
     {

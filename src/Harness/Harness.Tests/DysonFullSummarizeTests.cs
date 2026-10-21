@@ -40,7 +40,7 @@ public class DysonFullSummarizeTests
             || !instruction.Contains("Do not call tools", StringComparison.Ordinal)
             || !instruction.Contains("exclude every previous turn", StringComparison.Ordinal)
             || !instruction.Contains("DropTurnContext", StringComparison.Ordinal)
-            || !instruction.Contains("SummarizeTurns", StringComparison.Ordinal))
+            || instruction.Contains("SummarizeTurns", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 "Instruction must mention 6,000 characters, no tools, and drop-after.");

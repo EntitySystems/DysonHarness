@@ -21,7 +21,6 @@ public static class DysonMetaAgentTools
     /// <summary>Shared tools kept from the default catalog (canonical schemas).</summary>
     private static readonly string[] SharedToolNames =
     [
-        "SummarizeTurns",
         "CreateTodo",
         "ListTodos",
         "UpdateTodo",
@@ -64,7 +63,6 @@ public static class DysonMetaAgentTools
         "StartAsyncMetaAgentDrone",
         "StartAsyncSecurityReviewAgent",
         "StopMetaAgentDrone",
-        "SummarizeTurns",
         "SwitchWorkdir",
         "UpdateNote",
         "UpdateTodo",
