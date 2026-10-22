@@ -28,6 +28,7 @@ public sealed class DysonVoiceMode(
 {
     public const string InputPrefix = "[voice input] ";
     public const int PauseMs = 3000;
+    public const int PostWakeIgnoreMs = 1000;
     public static readonly TimeSpan FadeOut = TimeSpan.FromMilliseconds(150);
     public const int MaxSpeakChars = 600;
 
@@ -1068,6 +1069,7 @@ public sealed class DysonVoiceMode(
         private string _text = "";
         private int _messageStart;
         private long _lastChangeMs;
+        private long _ignoreUntilMs;
         private int _idleMark;
         private int _speakMark;
         private int _previousLength;
@@ -1081,6 +1083,7 @@ public sealed class DysonVoiceMode(
             _text = "";
             _messageStart = 0;
             _lastChangeMs = 0;
+            _ignoreUntilMs = 0;
             _idleMark = 0;
             _speakMark = 0;
             _previousLength = 0;
@@ -1093,6 +1096,20 @@ public sealed class DysonVoiceMode(
             transcript ??= "";
             if (Capturing)
             {
+                // ponytail: an update is entirely inside the window or entirely eligible, judged only by nowMs.
+                // A syllable at t=0.9 s transcribed at t=1.0 s is kept. Upgrade: word timestamps on the STT partial.
+                if (_ignoreUntilMs != 0 && nowMs < _ignoreUntilMs)
+                {
+                    _text = transcript;
+                    _messageStart = transcript.Length;
+                    _previousLength = transcript.Length;
+                    if (speaking is null)
+                        _speakingArmed = false;
+                    return ListenAction.None;
+                }
+
+                if (_ignoreUntilMs != 0)
+                    _ignoreUntilMs = 0;
                 if (!string.Equals(_text, transcript, StringComparison.Ordinal))
                     _lastChangeMs = nowMs;
                 _text = transcript;
@@ -1110,12 +1127,7 @@ public sealed class DysonVoiceMode(
                 var end = MatchEnd(transcript[mark..], variants);
                 if (end >= 0)
                 {
-                    var abs = mark + end;
-                    _messageStart = abs + SkipLead(transcript.AsSpan(abs));
-                    _lastChangeMs = nowMs;
-                    _text = transcript;
-                    _previousLength = transcript.Length;
-                    Capturing = true;
+                    BeginCapture(transcript, nowMs);
                     return ListenAction.None;
                 }
 
@@ -1153,16 +1165,33 @@ public sealed class DysonVoiceMode(
             if (wakeEnd < 0)
                 return ListenAction.None;
 
-            var wakeAt = slice + wakeEnd;
-            _messageStart = wakeAt + SkipLead(transcript.AsSpan(wakeAt));
-            _lastChangeMs = nowMs;
-            Capturing = true;
+            BeginCapture(transcript, nowMs);
             return ListenAction.BargeIn;
+        }
+
+        private void BeginCapture(string transcript, long nowMs)
+        {
+            _ignoreUntilMs = nowMs + PostWakeIgnoreMs;
+            _messageStart = transcript.Length;
+            _lastChangeMs = nowMs;
+            _text = transcript;
+            _previousLength = transcript.Length;
+            Capturing = true;
         }
 
         internal string? OnTick(long nowMs)
         {
-            if (!Capturing || nowMs - _lastChangeMs <= PauseMs)
+            if (!Capturing)
+                return null;
+            if (_ignoreUntilMs != 0 && nowMs < _ignoreUntilMs)
+                return null;
+            if (_ignoreUntilMs != 0)
+            {
+                _messageStart = _text.Length;
+                _ignoreUntilMs = 0;
+            }
+
+            if (nowMs - _lastChangeMs <= PauseMs)
                 return null;
 
             var msg = _messageStart >= 0 && _messageStart <= _text.Length

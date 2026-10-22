@@ -53,10 +53,19 @@ public sealed class DysonPocketSpeech(
             yield break;
         }
 
+        var mode = await _settings.GetSettingAsync(DysonAppSettingKeys.SpeechResponseMode, cancellationToken)
+            .ConfigureAwait(false);
+        if (mode.IsError)
+        {
+            yield return Result<DysonSpeechAudioChunk, string>.AsError(mode.Error);
+            yield break;
+        }
+
+        var lowLatency = DysonSpeechBridge.IsLowLatency(mode.Value);
         var voicePath = voice.Value;
         await foreach (var chunk in Bridge.SynthesizeAsync(
                            () => Check(_installRoot, voicePath), () => StartInfo(_installRoot, torch.Value),
-                           new { text, voicePath }, SampleRate, cancellationToken).ConfigureAwait(false))
+                           new { text, voicePath, lowLatency }, SampleRate, cancellationToken).ConfigureAwait(false))
         {
             yield return chunk;
         }
@@ -89,10 +98,16 @@ public sealed class DysonPocketSpeech(
     private static VoidResult<string> Check(string installRoot, string voicePath)
     {
         if (!DysonSpeechInstaller.Probe(installRoot).PocketInstalled)
-            return new VoidResult<string>("Pocket TTS is not installed. Open Settings → Voice and install it.");
+            return new VoidResult<string>("Pocket TTS is not installed. Open Settings \u2192 Voice and install it.");
+        var scripts = DysonSpeechInstaller.EnsureBridgeScripts(
+            DysonSpeechInstaller.BridgeResourceName, DysonSpeechPaths.GetPocketBridge(installRoot));
+        if (scripts.IsError)
+            return new VoidResult<string>(scripts.Error);
+        if (scripts.Value)
+            StopBridge();
         return File.Exists(voicePath)
             ? VoidResult<string>.Success
-            : new VoidResult<string>($"Voice file {Path.GetFileName(voicePath)} is missing. Reinstall Pocket TTS in Settings → Voice.");
+            : new VoidResult<string>($"Voice file {Path.GetFileName(voicePath)} is missing. Reinstall Pocket TTS in Settings \u2192 Voice.");
     }
 
     private static ProcessStartInfo StartInfo(string installRoot, string torchDir) => DysonSpeechInstaller.PythonStartInfo(

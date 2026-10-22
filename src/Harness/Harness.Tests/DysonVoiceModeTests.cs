@@ -53,6 +53,26 @@ public class DysonVoiceModeTests
     }
 
     [Fact]
+    public void Listener_FirstSecondAfterWake_IsNotPromptAudio()
+    {
+        var listener = new DysonVoiceMode.Listener();
+        Assert.Equal(DysonVoiceMode.ListenAction.None, listener.OnText("hey dyson open the plan", 0, null, Eight()));
+        Assert.True(listener.Capturing);
+        Assert.Equal(
+            DysonVoiceMode.ListenAction.None,
+            listener.OnText("hey dyson open the plan please", 999, null, Eight()));
+        Assert.Null(listener.OnTick(999));
+        Assert.True(listener.Capturing);
+        Assert.Null(listener.OnTick(1000));
+        Assert.Equal(
+            DysonVoiceMode.ListenAction.None,
+            listener.OnText("hey dyson open the plan please list files", 1000, null, Eight()));
+        var at = 1000 + DysonVoiceMode.PauseMs;
+        Assert.Null(listener.OnTick(at));
+        Assert.Equal("[voice input] list files", listener.OnTick(at + 1));
+    }
+
+    [Fact]
     public void Listener_OrdinarySpeechDuringPlayback_DoesNotCancel()
     {
         var listener = new DysonVoiceMode.Listener();
@@ -70,13 +90,14 @@ public class DysonVoiceModeTests
         Assert.Equal(DysonVoiceMode.ListenAction.None, listener.OnText("not the name", 0, "Processing request.", Eight()));
         Assert.Equal(
             DysonVoiceMode.ListenAction.BargeIn,
-            listener.OnText("not the name hey dyson stop", 100, "Processing request.", Eight()));
+            listener.OnText("not the name hey dyson", 100, "Processing request.", Eight()));
         Assert.True(listener.Capturing);
+        var heard = 100 + DysonVoiceMode.PostWakeIgnoreMs;
         Assert.Equal(
             DysonVoiceMode.ListenAction.None,
-            listener.OnText("not the name hey dyson stop please", 500, "Processing request.", Eight()));
-        Assert.Null(listener.OnTick(500 + DysonVoiceMode.PauseMs));
-        Assert.Equal("[voice input] stop please", listener.OnTick(500 + DysonVoiceMode.PauseMs + 1));
+            listener.OnText("not the name hey dyson stop please", heard, "Processing request.", Eight()));
+        Assert.Null(listener.OnTick(heard + DysonVoiceMode.PauseMs));
+        Assert.Equal("[voice input] stop please", listener.OnTick(heard + DysonVoiceMode.PauseMs + 1));
     }
 
     [Fact]
@@ -100,14 +121,18 @@ public class DysonVoiceModeTests
     public void Listener_SubmittedTranscript_IsNotHeardAgainWhileSpeaking()
     {
         var listener = new DysonVoiceMode.Listener();
-        listener.OnText("hey dyson open the plan", 0, null, Eight());
-        Assert.Equal("[voice input] open the plan", listener.OnTick(DysonVoiceMode.PauseMs + 1));
+        listener.OnText("hey dyson", 0, null, Eight());
+        listener.OnText("hey dyson open the plan", DysonVoiceMode.PostWakeIgnoreMs, null, Eight());
+        Assert.Equal(
+            "[voice input] open the plan",
+            listener.OnTick(DysonVoiceMode.PostWakeIgnoreMs + DysonVoiceMode.PauseMs + 1));
 
+        var again = DysonVoiceMode.PostWakeIgnoreMs + DysonVoiceMode.PauseMs + 2;
         Assert.Equal(
             DysonVoiceMode.ListenAction.None,
-            listener.OnText("hey dyson open the plan", DysonVoiceMode.PauseMs + 2, "On it.", Eight()));
+            listener.OnText("hey dyson open the plan", again, "On it.", Eight()));
         Assert.False(listener.Capturing);
-        Assert.Null(listener.OnTick(DysonVoiceMode.PauseMs + 2 + DysonVoiceMode.PauseMs + 1));
+        Assert.Null(listener.OnTick(again + DysonVoiceMode.PauseMs + 1));
     }
 
     [Fact]
@@ -667,12 +692,15 @@ public class DysonVoiceModeTests
     public async Task AcceptChime_only_on_submit()
     {
         await using var rig = await VoiceRig.StartAsync();
-        rig.Capture.PushText("hey dyson open the plan");
+        rig.Capture.PushText("hey dyson");
         Assert.True(await rig.Stt.NextAsync());
         await WaitForAsync(() => rig.Playback.ListenCount >= 1);
         Assert.Equal(1, rig.Playback.ListenCount);
         Assert.Equal(0, rig.Playback.AcceptCount);
 
+        await Task.Delay(DysonVoiceMode.PostWakeIgnoreMs + 50);
+        rig.Capture.PushText("open the plan");
+        Assert.True(await rig.Stt.NextAsync());
         await WaitForAsync(() => rig.Playback.AcceptCount >= 1, 5000);
         Assert.Equal(1, rig.Playback.AcceptCount);
         Assert.Equal(1, rig.Playback.ListenCount);

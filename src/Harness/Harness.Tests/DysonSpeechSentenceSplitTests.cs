@@ -57,6 +57,18 @@ public class DysonSpeechSentenceSplitTests
         AssertSpeak(output["speak"]![1]!, ["One. Two."], ["One. Two."], ok: true);
     }
 
+    [Fact]
+    public async Task Low_latency_crisp_plans_one_job_per_sentence()
+    {
+        var split = await DysonCrispSpeech.PlanJobsAsync("One. Two.", lowLatency: true);
+        Assert.True(split.IsSuccess, split.IsError ? split.Error : "");
+        Assert.Equal(["One.", "Two."], split.Value);
+
+        var whole = await DysonCrispSpeech.PlanJobsAsync("One. Two.", lowLatency: false);
+        Assert.True(whole.IsSuccess, whole.IsError ? whole.Error : "");
+        Assert.Equal(["One. Two."], whole.Value);
+    }
+
     private static void AssertSpeak(JsonNode result, string[] calls, string[] sent, bool ok)
     {
         Assert.Equal(calls, Strings(result["calls"]));

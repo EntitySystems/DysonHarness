@@ -269,8 +269,8 @@ public static class DysonAppSettingKeys
     public const string SpeechTorchDevice = "speech_torch_device";
 
     /// <summary>
-    /// Python Qwen3-TTS and Chatterbox Turbo response: <c>low-latency</c> generates and sends one sentence at a time.
-    /// Missing, blank, <c>reliable</c>, or any other value is one generate of the full text. Pocket and CrispASR ignore it.
+    /// Low-latency is one job per sentence for Python Qwen, Chatterbox, Pocket, and Crisp GGUF TTS.
+    /// Reliable, missing, blank, or any other value is one job of the full text.
     /// </summary>
     public const string SpeechResponseMode = "speech_response_mode";
 }

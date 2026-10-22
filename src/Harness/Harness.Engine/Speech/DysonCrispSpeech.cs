@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Net;
@@ -113,8 +114,37 @@ public sealed class DysonCrispSpeech(
                 }
             }
 
-            await foreach (var chunk in ReadSpeechAsync(port.Value, text, voice.Value, cancellationToken).ConfigureAwait(false))
-                yield return chunk;
+            var mode = await _settings.GetSettingAsync(DysonAppSettingKeys.SpeechResponseMode, cancellationToken)
+                .ConfigureAwait(false);
+            if (mode.IsError)
+            {
+                yield return AudioError(mode.Error);
+                yield break;
+            }
+
+            var jobs = await PlanJobsAsync(text, DysonSpeechBridge.IsLowLatency(mode.Value), cancellationToken)
+                .ConfigureAwait(false);
+            if (jobs.IsError)
+            {
+                yield return AudioError(jobs.Error);
+                yield break;
+            }
+
+            for (var i = 0; i < jobs.Value.Count; i++)
+            {
+                var failed = false;
+                await foreach (var chunk in ReadSpeechAsync(
+                                   port.Value, jobs.Value[i], voice.Value, i == jobs.Value.Count - 1, cancellationToken)
+                               .ConfigureAwait(false))
+                {
+                    yield return chunk;
+                    if (chunk.IsError)
+                        failed = true;
+                }
+
+                if (failed)
+                    yield break;
+            }
         }
         finally
         {
@@ -491,10 +521,154 @@ public sealed class DysonCrispSpeech(
         return Result<ProcessStartInfo, string>.AsValue(psi);
     }
 
+    /// <summary>
+    /// Jobs <see cref="SynthesizeAsync"/> posts. Reliable (and anything that is not low-latency) is the original
+    /// text and does not start Python. Low-latency is one job per sentence from <c>speech_sentences.py</c>.
+    /// </summary>
+    internal static async Task<Result<IReadOnlyList<string>, string>> PlanJobsAsync(
+        string text,
+        bool lowLatency,
+        CancellationToken cancellationToken = default)
+    {
+        if (!lowLatency)
+            return Result<IReadOnlyList<string>, string>.AsValue([text]);
+
+        // ponytail: one Python process per low-latency Crisp utterance to avoid a second splitter.
+        // Ceiling is startup before the first sentence. Upgrade is an in-process call of the same function.
+        var script = SentencesScript();
+        if (script.IsError)
+            return Result<IReadOnlyList<string>, string>.AsError(script.Error);
+
+        var request = JsonSerializer.Serialize(new Dictionary<string, string[]> { ["split"] = [text] });
+        var ran = await RunSplitAsync(script.Value, request, cancellationToken).ConfigureAwait(false);
+        return ran.IsError ? Result<IReadOnlyList<string>, string>.AsError(ran.Error) : ParseSplit(ran.Value);
+    }
+
+    private static readonly Lock SentencesScriptLock = new();
+
+    private static Result<string, string> SentencesScript()
+    {
+        lock (SentencesScriptLock)
+        {
+            using var stream = typeof(DysonCrispSpeech).Assembly.GetManifestResourceStream(
+                DysonSpeechInstaller.SentencesResourceName);
+            if (stream is null)
+                return Result<string, string>.AsError("Embedded speech_sentences.py is missing.");
+            var path = Path.Combine(Path.GetTempPath(), "dyson-speech-sentences.py");
+            try
+            {
+                using var output = File.Create(path);
+                stream.CopyTo(output);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return Result<string, string>.AsError($"Could not write speech_sentences.py: {ex.Message}");
+            }
+
+            return Result<string, string>.AsValue(path);
+        }
+    }
+
+    private static async Task<Result<string, string>> RunSplitAsync(
+        string script,
+        string request,
+        CancellationToken cancellationToken)
+    {
+        var failures = new List<string>();
+        foreach (var (file, arg) in new (string File, string? Arg)[] { ("python3", null), ("python", null), ("py", "-3") })
+        {
+            var psi = new ProcessStartInfo(file)
+            {
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            if (arg is not null)
+                psi.ArgumentList.Add(arg);
+            psi.ArgumentList.Add(script);
+            psi.Environment["PYTHONIOENCODING"] = "utf-8";
+            try
+            {
+                using var process = Process.Start(psi);
+                if (process is null)
+                {
+                    failures.Add($"{file}: did not start");
+                    continue;
+                }
+
+                await process.StandardInput.WriteAsync(request.AsMemory(), cancellationToken).ConfigureAwait(false);
+                process.StandardInput.Close();
+                var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+                var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(TimeSpan.FromSeconds(20));
+                try
+                {
+                    await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    TryKill(process);
+                    failures.Add($"{file}: timed out");
+                    continue;
+                }
+
+                var stdout = await stdoutTask.ConfigureAwait(false);
+                var stderr = await stderrTask.ConfigureAwait(false);
+                if (process.ExitCode == 0 && stdout.TrimStart().StartsWith('{'))
+                    return Result<string, string>.AsValue(stdout);
+                failures.Add($"{file}: exit {process.ExitCode} {Clip(stderr)}");
+            }
+            catch (Win32Exception ex)
+            {
+                failures.Add($"{file}: {ex.Message}");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return Result<string, string>.AsError("Sentence split was cancelled.");
+            }
+        }
+
+        return Result<string, string>.AsError("No Python ran speech_sentences.py. " + string.Join(" ", failures));
+    }
+
+    private static Result<IReadOnlyList<string>, string> ParseSplit(string stdout)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(stdout);
+            if (!doc.RootElement.TryGetProperty("split", out var split)
+                || split.ValueKind != JsonValueKind.Array
+                || split.GetArrayLength() != 1
+                || split[0].ValueKind != JsonValueKind.Array
+                || split[0].GetArrayLength() == 0)
+                return Result<IReadOnlyList<string>, string>.AsError("Sentence split returned no jobs.");
+
+            var jobs = new string[split[0].GetArrayLength()];
+            var i = 0;
+            foreach (var piece in split[0].EnumerateArray())
+            {
+                var value = piece.GetString();
+                if (string.IsNullOrWhiteSpace(value))
+                    return Result<IReadOnlyList<string>, string>.AsError("Sentence split returned no jobs.");
+                jobs[i++] = value;
+            }
+
+            return Result<IReadOnlyList<string>, string>.AsValue(jobs);
+        }
+        catch (JsonException)
+        {
+            return Result<IReadOnlyList<string>, string>.AsError("Sentence split returned no jobs.");
+        }
+    }
+
     private static async IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> ReadSpeechAsync(
         int port,
         string text,
         string? voice,
+        bool markLast,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var payload = new Dictionary<string, string>
@@ -589,7 +763,8 @@ public sealed class DysonCrispSpeech(
                 yield return Result<DysonSpeechAudioChunk, string>.AsValue(new DysonSpeechAudioChunk(pcm, SampleRate, IsLast: false));
             }
 
-            yield return Result<DysonSpeechAudioChunk, string>.AsValue(new DysonSpeechAudioChunk([], SampleRate, IsLast: true));
+            if (markLast)
+                yield return Result<DysonSpeechAudioChunk, string>.AsValue(new DysonSpeechAudioChunk([], SampleRate, IsLast: true));
         }
     }
 

@@ -1,4 +1,7 @@
-"""Pocket TTS bridge: one JSON line in, length-prefixed PCM frames out."""
+"""Pocket TTS bridge: one JSON line in, length-prefixed PCM frames out.
+
+{"text", "voicePath", "lowLatency"} speaks (lowLatency true: one generate per sentence).
+"""
 import argparse
 import json
 import logging
@@ -14,6 +17,8 @@ os.environ.setdefault("TQDM_DISABLE", "1")
 _pcm_out = sys.stdout.buffer
 sys.stdout = sys.stderr
 logging.basicConfig(stream=sys.stderr, level=logging.INFO)
+
+from speech_sentences import speak
 
 import torch
 from pocket_tts import TTSModel
@@ -58,10 +63,16 @@ def main():
             if state is None:
                 state = model.get_state_for_audio_prompt(voice)
                 _voices[voice] = state
-            for chunk in model.generate_audio_stream(state, text):
-                pcm = _s16le(chunk)
-                if pcm:
-                    _frame(len(pcm), pcm)
+
+            def generate(piece):
+                for chunk in model.generate_audio_stream(state, piece):
+                    pcm = _s16le(chunk)
+                    if pcm:
+                        _frame(len(pcm), pcm)
+                return True
+
+            if not speak(text, generate, lambda _wav: None, req.get("lowLatency") is True):
+                continue
             _frame(0)
         except Exception as exc:
             _fail(f"{type(exc).__name__}: {exc}")
