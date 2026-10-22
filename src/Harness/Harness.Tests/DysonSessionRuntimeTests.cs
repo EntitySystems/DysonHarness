@@ -692,6 +692,51 @@ public class DysonSessionRuntimeTests
         Assert.Equal(1, harness.Factory.DisposeCalls);
     }
 
+    [Fact]
+    public async Task AdoptLiveSession_voice_target_is_the_focused_instance_and_a_twin_cannot_start_a_turn()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var row = await harness.Sessions.CreateSessionAsync(new DysonSessionCreateRequest
+        {
+            RuntimeId = 0,
+            AgentMode = DysonAgentModes.Work,
+            Title = "focused",
+            SystemPromptSnapshot = "focused",
+        });
+        Assert.True(row.IsSuccess, row.IsError ? row.Error : null);
+
+        var focused = new StubSession();
+        focused.BindStore(harness.Sessions);
+        focused.SetPersistenceIdForTest(row.Value);
+
+        var adopted = harness.Runtime.AdoptLiveSession(focused);
+        Assert.True(adopted.IsSuccess, adopted.IsError ? adopted.Error : null);
+        Assert.Same(focused, adopted.Value);
+        Assert.True(harness.Runtime.TryGetSession(focused.PersistenceId, out var found));
+        Assert.True(ReferenceEquals(focused, found));
+
+        var loaded = await harness.Runtime.LoadSessionAsync(focused.PersistenceId);
+        Assert.True(loaded.IsSuccess, loaded.IsError ? loaded.Error : null);
+        Assert.Same(focused, loaded.Value);
+        Assert.Equal(0, harness.Factory.LoadCalls);
+
+        var twin = new StubSession();
+        twin.BindStore(harness.Sessions);
+        twin.SetPersistenceIdForTest(focused.PersistenceId);
+
+        var rejected = harness.Runtime.AdoptLiveSession(twin);
+        Assert.True(rejected.IsSuccess, rejected.IsError ? rejected.Error : null);
+        Assert.Same(focused, rejected.Value);
+        Assert.True(harness.Runtime.TryGetSession(focused.PersistenceId, out var still));
+        Assert.Same(focused, still);
+
+        var prompted = await harness.Runtime.ExecutePromptAsync(
+            twin,
+            (_, _) => Task.FromResult(VoidResult<string>.Success));
+        Assert.True(prompted.IsError);
+        Assert.Null(twin.InFlightPromptTurn);
+    }
+
     private static DysonAgentSessionRuntimeCreateRequest RootRequest() =>
         new()
         {

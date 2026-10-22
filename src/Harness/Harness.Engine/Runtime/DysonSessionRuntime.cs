@@ -418,6 +418,47 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Registers <paramref name="session"/> as the live instance for its persistence id
+    /// when none is mapped. Returns the already-mapped instance otherwise (same reference
+    /// or a different object). Does not construct or load a second session.
+    /// </summary>
+    public Result<DysonAgentSession, string> AdoptLiveSession(DysonAgentSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        if (_disposed != 0)
+            return Result<DysonAgentSession, string>.AsError("Session runtime has been disposed.");
+
+        if (session.PersistenceId == Guid.Empty)
+            return FailSession("Session is not persisted.");
+
+        var id = session.PersistenceId;
+        if (_sessionsById.TryGetValue(id, out var mapped))
+        {
+            AttachSharedVoice(mapped);
+            return Result<DysonAgentSession, string>.AsValue(mapped);
+        }
+
+        // ponytail: TryAdd so a racing adopt cannot replace the mapped graph. No merge.
+        if (!_sessionsById.TryAdd(id, session))
+        {
+            if (_sessionsById.TryGetValue(id, out mapped))
+            {
+                AttachSharedVoice(mapped);
+                return Result<DysonAgentSession, string>.AsValue(mapped);
+            }
+
+            return FailSession("Session is already registered.");
+        }
+
+        EnsureRegistered(session);
+        AttachSharedVoice(session);
+        ClearLastError();
+        RaiseChanged(DysonRuntimeChangeKind.SessionGraph, id);
+        return Result<DysonAgentSession, string>.AsValue(session);
+    }
+
     public async Task<Result<DysonAgentSession, string>> LoadSessionAsync(
         Guid sessionId,
         CancellationToken cancellationToken = default)

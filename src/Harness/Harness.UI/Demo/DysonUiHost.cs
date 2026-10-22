@@ -446,8 +446,10 @@ public sealed class DysonUiHost : IAsyncDisposable
         Task.Run(() => PromptVoiceInputAsync(text));
 
     /// <summary>
-    /// Voice input goes to the active work directory's root meta session. Does not focus it.
-    /// Queue when that session is busy; inject when a turn is already running.
+    /// Voice input goes to the active work directory's root meta session: the same
+    /// in-memory instance the page is showing when that id is focused. Adopts that
+    /// instance and does not load another while one is live. Queue when busy; inject
+    /// when a turn is already running.
     /// </summary>
     private async Task PromptVoiceInputAsync(string text)
     {
@@ -483,10 +485,18 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return;
             }
 
-            DysonAgentSession session;
-            if (!runtime.TryGetSession(found.Value.Id, out var live))
+            var metaId = found.Value.Id;
+            DysonAgentSession? resolved = null;
+            if (_session is not null && _session.PersistenceId == metaId)
+                resolved = _session;
+            else if (_sessionsById.TryGetValue(metaId, out var hostMapped))
+                resolved = hostMapped;
+            else if (runtime.TryGetSession(metaId, out var retained))
+                resolved = retained;
+
+            if (resolved is null)
             {
-                var loaded = await runtime.LoadSessionAsync(found.Value.Id, CancellationToken.None)
+                var loaded = await runtime.LoadSessionAsync(metaId, CancellationToken.None)
                     .ConfigureAwait(false);
                 if (loaded.IsError)
                 {
@@ -494,15 +504,22 @@ public sealed class DysonUiHost : IAsyncDisposable
                     return;
                 }
 
-                session = loaded.Value;
-            }
-            else
-            {
-                session = live;
+                resolved = loaded.Value;
             }
 
+            var adopted = runtime.AdoptLiveSession(resolved);
+            if (adopted.IsError)
+            {
+                ReportError(adopted.Error);
+                return;
+            }
+
+            var session = adopted.Value;
             MarkRuntimeOwned(session);
-            EnsureRegistered(session);
+            if (!ReferenceEquals(session, _session) && _session?.PersistenceId == metaId)
+                FocusSession(session, ResolveStoredParentId(session));
+            else
+                EnsureRegistered(session);
             if (session.Config.Focus is null)
                 session.Config.Focus = runtime.Focus;
 
@@ -2953,6 +2970,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             forkWorktree = DysonWorkDirectoryConfig.TryGetForkWorktree(forkCfg.Value);
 
         var kind = providerResult.Value.Kind;
+        DysonAgentSession? adoptedOpenAi = null;
         if (string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal))
         {
             var config = await BuildSessionConfigAsync(
@@ -2987,7 +3005,25 @@ public sealed class DysonUiHost : IAsyncDisposable
 
             RememberCustomMcpRetain(created.Value, workDirectoryId.Value);
             ApplyPendingMaxTargetToSession(created.Value);
-            FocusSession(created.Value, parentSessionId: null);
+            var openAiRuntime = await TryAttachRuntimeForDemoAsync(cancellationToken).ConfigureAwait(false);
+            if (openAiRuntime is not null)
+            {
+                var adopted = openAiRuntime.AdoptLiveSession(created.Value);
+                if (adopted.IsError)
+                {
+                    await ReleaseMcpForConfigAsync(config).ConfigureAwait(false);
+                    LastError = adopted.Error;
+                    Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
+                    return new VoidResult<string>(adopted.Error);
+                }
+
+                adoptedOpenAi = adopted.Value;
+                FocusSession(adoptedOpenAi, parentSessionId: null);
+            }
+            else
+            {
+                FocusSession(created.Value, parentSessionId: null);
+            }
         }
         else
         {
@@ -3065,6 +3101,9 @@ public sealed class DysonUiHost : IAsyncDisposable
                 },
                 cancellationToken).ConfigureAwait(false);
         }
+
+        if (adoptedOpenAi is not null)
+            MarkRuntimeOwned(adoptedOpenAi);
 
         _pendingMaxTargetContextTokens = null;
         _pendingSlugDefaultMaxTargetContextTokens = null;
@@ -4051,13 +4090,6 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         LastError = null;
 
-        if (_sessionsById.TryGetValue(sessionId, out var live))
-        {
-            FocusSession(live, ResolveStoredParentId(live));
-            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
-            return VoidResult<string>.Success;
-        }
-
         var runtime = await TryAttachRuntimeForDemoAsync(cancellationToken).ConfigureAwait(false);
         if (runtime is not null && runtime.TryGetSession(sessionId, out var retained))
         {
@@ -4067,6 +4099,13 @@ public sealed class DysonUiHost : IAsyncDisposable
                 parent = runtimeParent;
             FocusSession(retained, parent);
             Notify(DysonHostChangeKind.SessionGraph);
+            return VoidResult<string>.Success;
+        }
+
+        if (_sessionsById.TryGetValue(sessionId, out var live))
+        {
+            FocusSession(live, ResolveStoredParentId(live));
+            Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
             return VoidResult<string>.Success;
         }
 
@@ -5066,6 +5105,19 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (full.Value.Session.WorkDirectoryId is Guid loadedWd)
                 RememberCustomMcpRetain(loaded.Value, loadedWd);
             session = loaded.Value;
+            var openAiRuntime = await TryAttachRuntimeForDemoAsync(cancellationToken).ConfigureAwait(false);
+            if (openAiRuntime is not null)
+            {
+                var adopted = openAiRuntime.AdoptLiveSession(session);
+                if (adopted.IsError)
+                {
+                    await ReleaseMcpForConfigAsync(openAiConfig).ConfigureAwait(false);
+                    return Result<LoadedSession, string>.AsError(adopted.Error);
+                }
+
+                session = adopted.Value;
+                MarkRuntimeOwned(session);
+            }
         }
         else
         {
