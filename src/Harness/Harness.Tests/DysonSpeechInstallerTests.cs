@@ -283,6 +283,7 @@ public class DysonSpeechInstallerTests
             Assert.True(at > args.IndexOf(backend));
             Assert.Equal("vulkan", args[at + 1]);
             Assert.DoesNotContain("-dev", args);
+            AssertSpokenDisclaimerOff(args);
 
             var cpuMissing = DysonCrispSpeech.StartInfo(root, id, backend, 1234, useVulkan: false);
             Assert.True(cpuMissing.IsError);
@@ -294,6 +295,7 @@ public class DysonSpeechInstallerTests
             Assert.True(cpu.IsSuccess, cpu.IsError ? cpu.Error : null);
             Assert.Equal(DysonGgufSpeechModels.GetCrispExe(root), cpu.Value.FileName);
             Assert.DoesNotContain("--gpu-backend", cpu.Value.ArgumentList);
+            AssertSpokenDisclaimerOff(cpu.Value.ArgumentList.ToList());
 
             File.Delete(DysonGgufSpeechModels.GetCrispVulkanExe(root));
             var gpuMissing = DysonCrispSpeech.StartInfo(root, id, backend, 1234, useVulkan: true);
@@ -305,6 +307,13 @@ public class DysonSpeechInstallerTests
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
+    }
+
+    private static void AssertSpokenDisclaimerOff(List<string> args)
+    {
+        Assert.Single(args, static a => a == "--no-spoken-disclaimer");
+        Assert.Single(args, static a => a == "--accept-marking-responsibility");
+        Assert.DoesNotContain("--no-watermark", args);
     }
 
     [Fact]

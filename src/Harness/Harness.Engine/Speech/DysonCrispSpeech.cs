@@ -514,6 +514,9 @@ public sealed class DysonCrispSpeech(
         psi.ArgumentList.Add("--voice-dir");
         psi.ArgumentList.Add(DysonGgufSpeechModels.GetVoicesDir(installRoot, runtimeId));
         psi.ArgumentList.Add("--no-warmup");
+        // Spoken prefix only. The inaudible watermark stays on (no --no-watermark, no CRISPASR_NO_WATERMARK).
+        psi.ArgumentList.Add("--no-spoken-disclaimer");
+        psi.ArgumentList.Add("--accept-marking-responsibility");
         psi.ArgumentList.Add("--punc-model");
         psi.ArgumentList.Add("none");
         psi.ArgumentList.Add("-t");
