@@ -968,7 +968,7 @@ public sealed class DysonCrispSpeech(
     internal static bool IsSpeechToText(string id) =>
         id is DysonGgufSpeechModels.PhononGgufId or DysonGgufSpeechModels.PhononGgufQ8Id;
 
-    /// <summary>Pocket, Qwen, and Chatterbox GGUF, Q4 and Q8. Not Phonon.</summary>
+    /// <summary>Pocket, Qwen (Q8, Q4, F16), and Chatterbox GGUF. Not Phonon.</summary>
     internal static bool IsTextToSpeech(string id) =>
         id is DysonGgufSpeechModels.PocketGgufId or DysonGgufSpeechModels.PocketGgufQ8Id
             or DysonGgufSpeechModels.ChatterboxGgufId or DysonGgufSpeechModels.ChatterboxGgufQ8Id
@@ -990,6 +990,7 @@ public sealed class DysonCrispSpeech(
         DysonGgufSpeechModels.PocketGgufQ8Id => DysonGgufSpeechModels.PocketGgufQ8DisplayName,
         DysonGgufSpeechModels.QwenGgufId => DysonGgufSpeechModels.QwenGgufDisplayName,
         DysonGgufSpeechModels.QwenGgufQ4Id => DysonGgufSpeechModels.QwenGgufQ4DisplayName,
+        DysonGgufSpeechModels.QwenGgufF16Id => DysonGgufSpeechModels.QwenGgufF16DisplayName,
         DysonGgufSpeechModels.ChatterboxGgufId => DysonGgufSpeechModels.ChatterboxGgufDisplayName,
         DysonGgufSpeechModels.ChatterboxGgufQ8Id => DysonGgufSpeechModels.ChatterboxGgufQ8DisplayName,
         _ => runtimeId,

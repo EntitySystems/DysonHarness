@@ -20,6 +20,7 @@ public sealed class DysonSpeechModelRepository(
     public const string PocketGgufQ8RuntimeId = "pocket-tts-gguf-q8";
     public const string QwenGgufRuntimeId = "qwen3-tts-0.6b-base-gguf";
     public const string QwenGgufQ4RuntimeId = "qwen3-tts-0.6b-base-gguf-q4";
+    public const string QwenGgufF16RuntimeId = "qwen3-tts-0.6b-base-gguf-f16";
     public const string ChatterboxGgufRuntimeId = "chatterbox-turbo-gguf";
     public const string ChatterboxGgufQ8RuntimeId = "chatterbox-turbo-gguf-q8";
 
@@ -34,6 +35,7 @@ public sealed class DysonSpeechModelRepository(
     private const string PocketGgufQ8DisplayName = "Pocket TTS · GGUF Q8_0, voice cloning (124 MB)";
     private const string QwenGgufDisplayName = "Qwen3-TTS 0.6B Base · GGUF Q8_0 + F16 codec (1.34 GB)";
     private const string QwenGgufQ4DisplayName = "Qwen3-TTS 0.6B Base · GGUF Q4_K + F16 codec (0.89 GB), lower quality";
+    private const string QwenGgufF16DisplayName = "Qwen3-TTS 0.6B Base · GGUF F16 full precision + F16 codec (2.19 GB)";
     private const string ChatterboxGgufDisplayName = "Chatterbox Turbo (English only) · GGUF Q4_K (735 MB)";
     private const string ChatterboxGgufQ8DisplayName = "Chatterbox Turbo (English only) · GGUF Q8_0 (1.03 GB)";
 
@@ -50,6 +52,7 @@ public sealed class DysonSpeechModelRepository(
         (PocketGgufQ8RuntimeId, PocketGgufQ8DisplayName, DysonSpeechCapability.Output, "gguf", true),
         (QwenGgufRuntimeId, QwenGgufDisplayName, DysonSpeechCapability.Output, "gguf", true),
         (QwenGgufQ4RuntimeId, QwenGgufQ4DisplayName, DysonSpeechCapability.Output, "gguf", true),
+        (QwenGgufF16RuntimeId, QwenGgufF16DisplayName, DysonSpeechCapability.Output, "gguf", true),
         (ChatterboxGgufRuntimeId, ChatterboxGgufDisplayName, DysonSpeechCapability.Output, "gguf", true),
         (ChatterboxGgufQ8RuntimeId, ChatterboxGgufQ8DisplayName, DysonSpeechCapability.Output, "gguf", true),
     ];

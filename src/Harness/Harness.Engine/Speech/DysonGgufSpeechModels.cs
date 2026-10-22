@@ -16,6 +16,7 @@ public static class DysonGgufSpeechModels
     public const string PocketGgufQ8Id = "pocket-tts-gguf-q8";
     public const string QwenGgufId = "qwen3-tts-0.6b-base-gguf";
     public const string QwenGgufQ4Id = "qwen3-tts-0.6b-base-gguf-q4";
+    public const string QwenGgufF16Id = "qwen3-tts-0.6b-base-gguf-f16";
     public const string ChatterboxGgufId = "chatterbox-turbo-gguf";
     public const string ChatterboxGgufQ8Id = "chatterbox-turbo-gguf-q8";
 
@@ -26,13 +27,14 @@ public static class DysonGgufSpeechModels
     public const string PocketGgufQ8DisplayName = "Pocket TTS · GGUF Q8_0, voice cloning (124 MB)";
     public const string QwenGgufDisplayName = "Qwen3-TTS 0.6B Base · GGUF Q8_0 + F16 codec (1.34 GB)";
     public const string QwenGgufQ4DisplayName = "Qwen3-TTS 0.6B Base · GGUF Q4_K + F16 codec (0.89 GB), lower quality";
+    public const string QwenGgufF16DisplayName = "Qwen3-TTS 0.6B Base · GGUF F16 full precision + F16 codec (2.19 GB)";
     public const string ChatterboxGgufDisplayName = "Chatterbox Turbo (English only) · GGUF Q4_K (735 MB)";
     public const string ChatterboxGgufQ8DisplayName = "Chatterbox Turbo (English only) · GGUF Q8_0 (1.03 GB)";
 
-    /// <summary>Models served by the shared CrispASR runtime (<see cref="GetCrispExe"/>). Q8 ids are siblings of the Q4 ids, not replacements. Qwen Q4_K is the lower-quality sibling of the Q8 row.</summary>
+    /// <summary>Models served by the shared CrispASR runtime (<see cref="GetCrispExe"/>). Q8 ids are siblings of the Q4 ids, not replacements. Qwen Q4_K and full-precision F16 are siblings of the Q8 row, not replacements.</summary>
     public static readonly IReadOnlyList<string> CrispIds =
     [
-        PhononGgufId, PhononGgufQ8Id, PocketGgufId, PocketGgufQ8Id, QwenGgufId, QwenGgufQ4Id, ChatterboxGgufId, ChatterboxGgufQ8Id,
+        PhononGgufId, PhononGgufQ8Id, PocketGgufId, PocketGgufQ8Id, QwenGgufId, QwenGgufQ4Id, QwenGgufF16Id, ChatterboxGgufId, ChatterboxGgufQ8Id,
     ];
 
     /// <summary>Every GGUF id, in install / UI order.</summary>
@@ -45,6 +47,7 @@ public static class DysonGgufSpeechModels
     public const string PocketGgufQ8File = "pocket-tts-english-q8_0.gguf";
     public const string QwenGgufFile = "qwen3-tts-12hz-0.6b-base-q8_0.gguf";
     public const string QwenGgufQ4File = "qwen3-tts-12hz-0.6b-base-q4_k.gguf";
+    public const string QwenGgufF16File = "qwen3-tts-12hz-0.6b-base.gguf";
     public const string QwenTokenizerFile = "qwen3-tts-tokenizer-12hz.gguf";
     public const string ChatterboxT3File = "chatterbox-turbo-t3-q4_k.gguf";
     public const string ChatterboxS3GenFile = "chatterbox-turbo-s3gen-q4_k.gguf";
@@ -55,8 +58,8 @@ public static class DysonGgufSpeechModels
 
     public static bool IsCrisp(string? runtimeId) => runtimeId is not null && CrispIds.Contains(runtimeId);
 
-    /// <summary>Qwen3-TTS GGUF rows (Q8_0 and the lower-quality Q4_K sibling). Same backend and F16 codec.</summary>
-    public static bool IsQwenGguf(string? runtimeId) => runtimeId is QwenGgufId or QwenGgufQ4Id;
+    /// <summary>Qwen3-TTS GGUF rows (Q8_0, lower-quality Q4_K, and full-precision F16). Same backend and F16 codec.</summary>
+    public static bool IsQwenGguf(string? runtimeId) => runtimeId is QwenGgufId or QwenGgufQ4Id or QwenGgufF16Id;
 
     /// <summary>CrispASR <c>--backend</c> name; null for a non-CrispASR id.</summary>
     public static string? CrispBackend(string runtimeId) => runtimeId switch
@@ -78,6 +81,7 @@ public static class DysonGgufSpeechModels
         PocketGgufQ8Id => "pocket-gguf-q8",
         QwenGgufId => "qwen-gguf",
         QwenGgufQ4Id => "qwen-gguf-q4",
+        QwenGgufF16Id => "qwen-gguf-f16",
         ChatterboxGgufId => "chatterbox-gguf",
         ChatterboxGgufQ8Id => "chatterbox-gguf-q8",
         _ => null,
@@ -118,6 +122,7 @@ public static class DysonGgufSpeechModels
             PocketGgufQ8Id => PocketGgufQ8File,
             QwenGgufId => QwenGgufFile,
             QwenGgufQ4Id => QwenGgufQ4File,
+            QwenGgufF16Id => QwenGgufF16File,
             ChatterboxGgufQ8Id => ChatterboxT3Q8File,
             _ => ChatterboxT3File,
         });
@@ -125,7 +130,7 @@ public static class DysonGgufSpeechModels
     /// <summary><c>--codec-model</c> companion: Qwen3-TTS tokenizer or Chatterbox S3Gen; null when the model has none.</summary>
     public static string? GetCompanionFile(string installRoot, string runtimeId) => runtimeId switch
     {
-        QwenGgufId or QwenGgufQ4Id => Path.Combine(GetModelDir(installRoot, runtimeId), QwenTokenizerFile),
+        QwenGgufId or QwenGgufQ4Id or QwenGgufF16Id => Path.Combine(GetModelDir(installRoot, runtimeId), QwenTokenizerFile),
         ChatterboxGgufId => Path.Combine(GetModelDir(installRoot, runtimeId), ChatterboxS3GenFile),
         ChatterboxGgufQ8Id => Path.Combine(GetModelDir(installRoot, runtimeId), ChatterboxS3GenQ8File),
         _ => null,

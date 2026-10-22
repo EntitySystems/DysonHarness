@@ -946,6 +946,7 @@ public sealed class DysonVoiceMode(
         DysonPocketSpeech.Id => "Pocket TTS",
         DysonGgufSpeechModels.QwenGgufId => DysonGgufSpeechModels.QwenGgufDisplayName,
         DysonGgufSpeechModels.QwenGgufQ4Id => DysonGgufSpeechModels.QwenGgufQ4DisplayName,
+        DysonGgufSpeechModels.QwenGgufF16Id => DysonGgufSpeechModels.QwenGgufF16DisplayName,
         DysonGgufSpeechModels.PocketGgufId => DysonGgufSpeechModels.PocketGgufDisplayName,
         DysonGgufSpeechModels.PocketGgufQ8Id => DysonGgufSpeechModels.PocketGgufQ8DisplayName,
         DysonGgufSpeechModels.ChatterboxGgufId => DysonGgufSpeechModels.ChatterboxGgufDisplayName,

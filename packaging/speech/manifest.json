@@ -1459,6 +1459,20 @@
           "sha256": "70dc95dbfdd9aa5d9d406236ff771d061bf17b0cda02a72513953355606e719b"
         }
       ],
+      "qwenGgufF16": [
+        {
+          "fileName": "qwen3-tts-12hz-0.6b-base.gguf",
+          "url": "https://huggingface.co/cstr/qwen3-tts-0.6b-base-GGUF/resolve/94072f5c394b4dc4d98e97cc874800dde6ecacda/qwen3-tts-12hz-0.6b-base.gguf",
+          "size": 1834817248,
+          "sha256": "9b719418cf9d31fc8472a60ecdab3553280d4b15a9cbfc1363ce9352d64af6dc"
+        },
+        {
+          "fileName": "qwen3-tts-tokenizer-12hz.gguf",
+          "url": "https://huggingface.co/cstr/qwen3-tts-tokenizer-12hz-GGUF/resolve/344e279551177654762e5c7d39e217834325f222/qwen3-tts-tokenizer-12hz.gguf",
+          "size": 358453280,
+          "sha256": "70dc95dbfdd9aa5d9d406236ff771d061bf17b0cda02a72513953355606e719b"
+        }
+      ],
       "chatterboxGguf": [
         {
           "fileName": "chatterbox-turbo-t3-q4_k.gguf",

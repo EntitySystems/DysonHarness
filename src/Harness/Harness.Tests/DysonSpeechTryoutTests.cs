@@ -243,6 +243,10 @@ public class DysonSpeechTryoutTests
         Assert.True(DysonSpeechTryout.RequiresTrainTranscript(DysonGgufSpeechModels.QwenGgufQ4Id));
         Assert.True(DysonCrispSpeech.IsTextToSpeech(DysonGgufSpeechModels.QwenGgufQ4Id));
         Assert.True(DysonSpeechTryout.ShowsTrainTranscript(DysonGgufSpeechModels.QwenGgufQ4Id));
+        Assert.True(DysonSpeechTryout.ShowsRecordedTrain(DysonGgufSpeechModels.QwenGgufF16Id));
+        Assert.True(DysonSpeechTryout.RequiresTrainTranscript(DysonGgufSpeechModels.QwenGgufF16Id));
+        Assert.True(DysonCrispSpeech.IsTextToSpeech(DysonGgufSpeechModels.QwenGgufF16Id));
+        Assert.True(DysonSpeechTryout.ShowsTrainTranscript(DysonGgufSpeechModels.QwenGgufF16Id));
         Assert.False(DysonSpeechTryout.ShowsRecordedTrain(DysonChatterboxSpeech.Id));
         Assert.False(DysonSpeechTryout.ShowsRecordedTrain(DysonPocketSpeech.Id));
         Assert.True(DysonSpeechTryout.ShowsTrainTranscript(DysonQwenSpeech.Id));
