@@ -514,7 +514,9 @@ public sealed class DysonCrispSpeech(
         psi.ArgumentList.Add("--voice-dir");
         psi.ArgumentList.Add(DysonGgufSpeechModels.GetVoicesDir(installRoot, runtimeId));
         psi.ArgumentList.Add("--no-warmup");
-        // Spoken prefix only. The inaudible watermark stays on (no --no-watermark, no CRISPASR_NO_WATERMARK).
+        // Spoken prefix is off because each /v1/audio/speech body sends spoken_disclaimer false.
+        // v0.8.43 --server does not read --no-spoken-disclaimer; --accept-marking-responsibility is what honours the opt-out.
+        // The inaudible watermark stays on (no --no-watermark, no CRISPASR_NO_WATERMARK).
         psi.ArgumentList.Add("--no-spoken-disclaimer");
         psi.ArgumentList.Add("--accept-marking-responsibility");
         psi.ArgumentList.Add("--punc-model");
@@ -667,6 +669,32 @@ public sealed class DysonCrispSpeech(
         }
     }
 
+    /// <summary>
+    /// JSON for <c>POST /v1/audio/speech</c>. <c>spoken_disclaimer</c> is a JSON boolean, not a string:
+    /// v0.8.43 defaults the field to true and does not read <c>--no-spoken-disclaimer</c> on <c>--server</c>.
+    /// </summary>
+    internal static string BuildSpeechRequestBody(string text, string? voice)
+    {
+        if (string.IsNullOrEmpty(voice))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                input = text,
+                response_format = "pcm",
+                spoken_disclaimer = false,
+            });
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            input = text,
+            response_format = "pcm",
+            spoken_disclaimer = false,
+            voice,
+            consent_attestation = ConsentAttestation,
+        });
+    }
+
     private static async IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> ReadSpeechAsync(
         int port,
         string text,
@@ -674,22 +702,11 @@ public sealed class DysonCrispSpeech(
         bool markLast,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var payload = new Dictionary<string, string>
-        {
-            ["input"] = text,
-            ["response_format"] = "pcm",
-        };
-        if (!string.IsNullOrEmpty(voice))
-        {
-            payload["voice"] = voice;
-            payload["consent_attestation"] = ConsentAttestation;
-        }
-
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
             $"http://127.0.0.1:{port.ToString(CultureInfo.InvariantCulture)}/v1/audio/speech")
         {
-            Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json"),
+            Content = new StringContent(BuildSpeechRequestBody(text, voice), Encoding.UTF8, "application/json"),
         };
 
         HttpResponseMessage? response = null;

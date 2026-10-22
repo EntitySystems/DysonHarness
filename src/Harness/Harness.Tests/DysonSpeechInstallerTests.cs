@@ -317,6 +317,25 @@ public class DysonSpeechInstallerTests
     }
 
     [Fact]
+    public void Speech_request_body_sends_spoken_disclaimer_false()
+    {
+        using var voiced = JsonDocument.Parse(DysonCrispSpeech.BuildSpeechRequestBody("hello", "swift-1"));
+        var withVoice = voiced.RootElement;
+        Assert.Equal(JsonValueKind.False, withVoice.GetProperty("spoken_disclaimer").ValueKind);
+        Assert.Equal("pcm", withVoice.GetProperty("response_format").GetString());
+        Assert.Equal("swift-1", withVoice.GetProperty("voice").GetString());
+        Assert.False(string.IsNullOrEmpty(withVoice.GetProperty("consent_attestation").GetString()));
+        Assert.False(withVoice.TryGetProperty("watermark", out _));
+
+        using var plain = JsonDocument.Parse(DysonCrispSpeech.BuildSpeechRequestBody("hello", null));
+        var withoutVoice = plain.RootElement;
+        Assert.Equal(JsonValueKind.False, withoutVoice.GetProperty("spoken_disclaimer").ValueKind);
+        Assert.False(withoutVoice.TryGetProperty("voice", out _));
+        Assert.False(withoutVoice.TryGetProperty("consent_attestation", out _));
+        Assert.False(withoutVoice.TryGetProperty("watermark", out _));
+    }
+
+    [Fact]
     public void Embedded_manifest_pins_gguf_downloads()
     {
         var manifest = DysonSpeechManifest.LoadEmbedded();
