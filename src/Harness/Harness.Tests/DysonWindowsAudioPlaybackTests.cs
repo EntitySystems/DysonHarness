@@ -20,6 +20,16 @@ public class DysonWindowsAudioPlaybackTests
     }
 
     [Fact]
+    public void ClipStillOutgoing_keeps_a_reporting_device_until_it_leaves_Playing()
+    {
+        Assert.True(DysonWindowsAudioPlayback.ClipStillOutgoing(deviceReportsPosition: true, bufferedBytes: 0, PlaybackState.Playing));
+        Assert.True(DysonWindowsAudioPlayback.ClipStillOutgoing(deviceReportsPosition: true, bufferedBytes: 2, PlaybackState.Playing));
+        Assert.False(DysonWindowsAudioPlayback.ClipStillOutgoing(deviceReportsPosition: true, bufferedBytes: 0, PlaybackState.Stopped));
+        Assert.False(DysonWindowsAudioPlayback.ClipStillOutgoing(deviceReportsPosition: false, bufferedBytes: 0, PlaybackState.Playing));
+        Assert.True(DysonWindowsAudioPlayback.ClipStillOutgoing(deviceReportsPosition: false, bufferedBytes: 2, PlaybackState.Playing));
+    }
+
+    [Fact]
     public void Stop_with_nothing_playing_is_an_error() =>
         Assert.True(new DysonWindowsAudioPlayback(() => new FakeDevice()).Stop().IsError);
 

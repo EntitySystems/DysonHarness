@@ -26,6 +26,22 @@ public sealed class DysonWindowsAudioPlayback : IDysonAudioPlayback
             ? Result<WaveFormat, string>.AsValue(new WaveFormat(sampleRate, 16, 1))
             : Result<WaveFormat, string>.AsError($"Unsupported sample rate {sampleRate} Hz.");
 
+    /// <summary>
+    /// True while this clip must not Stop. Real PCM still in the software buffer must
+    /// play out. A device that reports a byte position (WaveOut) also stays up until
+    /// it leaves Playing after ReadFully is set false: waveOutGetPosition counts
+    /// ReadFully zeros and the two buffers Play queued before the first AddSamples,
+    /// so position &gt;= bytes written is not "the tail has been heard".
+    /// A device with no position (tests) ends when the software buffer is empty.
+    /// Caller sets ReadFully false on a reporting device only after the last AddSamples.
+    /// </summary>
+    internal static bool ClipStillOutgoing(bool deviceReportsPosition, int bufferedBytes, PlaybackState state)
+    {
+        if (state != PlaybackState.Playing)
+            return false;
+        return deviceReportsPosition || bufferedBytes > 0;
+    }
+
     public async Task<VoidResult<string>> PlayAsync(
         IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> chunks,
         CancellationToken cancellationToken)
@@ -44,7 +60,6 @@ public sealed class DysonWindowsAudioPlayback : IDysonAudioPlayback
         var token = playing.Token;
         IWavePlayer? device = null;
         BufferedWaveProvider? buffer = null;
-        long written = 0;
         // A streamed read (Vulkan especially) can end on one byte of an s16le sample. Hold it for the next chunk.
         byte held = 0;
         var holding = false;
@@ -100,7 +115,6 @@ public sealed class DysonWindowsAudioPlayback : IDysonAudioPlayback
                         buffer.AddSamples(pcm, offset, room);
                         offset += room;
                     }
-                    written += pcm.Length;
                 }
 
                 if (chunk.Value.IsLast)
@@ -110,9 +124,14 @@ public sealed class DysonWindowsAudioPlayback : IDysonAudioPlayback
             if (holding)
                 return VoidResult<string>.AsError("PCM chunk is not whole 16-bit samples.");
 
-            // WaveOut reports bytes played, so the tail still in device buffers is heard; a seam falls back to the queue.
-            while (device is { PlaybackState: PlaybackState.Playing }
-                   && (device is IWavePosition position ? position.GetPosition() < written : buffer!.BufferedBytes > 0))
+            // After the last sample, a reporting device must not pad more silence. It leaves
+            // Playing when the headers already queued finish. GetPosition counts that padding.
+            if (device is IWavePosition && buffer is not null)
+                buffer.ReadFully = false;
+
+            while (device is not null
+                   && buffer is not null
+                   && ClipStillOutgoing(device is IWavePosition, buffer.BufferedBytes, device.PlaybackState))
                 await Task.Delay(20, token);
             return VoidResult<string>.Success;
         }
@@ -139,6 +158,7 @@ public sealed class DysonWindowsAudioPlayback : IDysonAudioPlayback
     {
         IWavePlayer device;
         float start;
+        CancellationTokenSource captured;
         lock (_gate)
         {
             var open = _device;
@@ -156,6 +176,7 @@ public sealed class DysonWindowsAudioPlayback : IDysonAudioPlayback
             _fading = true;
             device = open;
             start = open.Volume;
+            captured = _playing;
         }
 
         // Device volume, not a sample provider: WaveOut already queued about 300 ms, and only the device fades that.
@@ -179,13 +200,16 @@ public sealed class DysonWindowsAudioPlayback : IDysonAudioPlayback
             {
                 lock (_gate)
                 {
-                    _fading = false;
-                    try
+                    if (ReferenceEquals(_playing, captured))
                     {
-                        _playing?.Cancel();
-                    }
-                    catch (ObjectDisposedException)
-                    {
+                        _fading = false;
+                        try
+                        {
+                            captured.Cancel();
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                        }
                     }
                 }
             }
