@@ -908,6 +908,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                         reply.ToolCalls.ToList(),
                         roundResults,
                         reply.ReasoningOutputItems.Count > 0 ? reply.ReasoningOutputItems : null));
+                    turn.ToolRoundCallCounts.Add(reply.ToolCalls.Count);
 
                     AppendLog($"tool round {round + 1}: {reply.ToolCalls.Count} call(s)");
 

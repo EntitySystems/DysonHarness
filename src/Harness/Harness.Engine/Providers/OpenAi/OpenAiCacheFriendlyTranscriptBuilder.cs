@@ -313,15 +313,15 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 continue;
             }
 
-            // In-progress current turn: user content may get ephemeral rename / Plan mandates;
-            // tool rounds come from inFlightRounds. PlanResult may append after the live turn.
+            // User content keeps rename / Plan mandates on the turn that earned them.
+            // In-progress tool rounds come from inFlightRounds. PlanResult may append after the live turn.
             var incompleteCurrent = i == incompleteIndex;
             if (HasTurnUserContent(turn))
             {
                 messages.Add(new JsonObject
                 {
                     ["role"] = "user",
-                    ["content"] = BuildCompletionsTurnUserContent(session, turn, i, incompleteCurrent),
+                    ["content"] = BuildCompletionsTurnUserContent(session, turn, i),
                 });
             }
 
@@ -407,7 +407,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 input.Add(new JsonObject
                 {
                     ["role"] = "user",
-                    ["content"] = BuildResponsesTurnUserContent(session, turn, i, incompleteCurrent),
+                    ["content"] = BuildResponsesTurnUserContent(session, turn, i),
                 });
             }
 
@@ -515,10 +515,10 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     }
 
     /// <summary>
-    /// Completed turn tools split at comment anchors: each chunk is tool calls + paired results,
-    /// followed by the comments delivered at that call count. Null anchors (never delivered or
-    /// legacy rows) follow all tools, before the final assistant text. No comments → one chunk,
-    /// byte-identical to the unsplit history.
+    /// Completed turn tools. Recorded <see cref="DysonAgentTurn.ToolRoundCallCounts"/> that sum to
+    /// <see cref="DysonAgentTurn.ToolCalls"/> replay each round through the in-flight appenders
+    /// (no reasoning items). Otherwise one chunk per comment-anchor span (legacy). Anchor 0 is
+    /// already emitted. Null anchors follow all tools, before the final assistant text.
     /// </summary>
     private static void AppendTurnToolsWithComments(
         JsonArray target,
@@ -526,6 +526,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         List<DysonReasoningSegment> comments,
         bool responses)
     {
+        if (TryAppendRecordedToolRounds(target, turn, comments, responses))
+            return;
+
         var calls = turn.ToolCalls;
         var start = 0;
         foreach (var group in comments
@@ -543,6 +546,77 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         DysonInjectedUserComments.AppendMessages(
             target,
             comments.Where(c => c.DeliveredAfterToolCalls is null));
+    }
+
+    /// <summary>
+    /// Replays recorded rounds. False when counts are missing or do not sum to the call list.
+    /// </summary>
+    private static bool TryAppendRecordedToolRounds(
+        JsonArray target,
+        DysonAgentTurn turn,
+        List<DysonReasoningSegment> comments,
+        bool responses)
+    {
+        var counts = turn.ToolRoundCallCounts;
+        if (counts.Count == 0)
+            return false;
+
+        var sum = 0;
+        foreach (var count in counts)
+        {
+            if (count < 0)
+                return false;
+
+            sum += count;
+        }
+
+        if (sum != turn.ToolCalls.Count)
+            return false;
+
+        var anchored = comments
+            .Where(c => c.DeliveredAfterToolCalls is > 0)
+            .OrderBy(c => c.DeliveredAfterToolCalls)
+            .ToList();
+        var next = 0;
+        var offset = 0;
+        var cumulative = 0;
+        foreach (var count in counts)
+        {
+            if (count > 0)
+            {
+                var slice = turn.ToolCalls.GetRange(offset, count);
+                var round = new InFlightToolRound(slice, ResultsForCalls(turn, slice));
+                if (responses)
+                    AppendToolRoundResponses(target, round, includeBinaryAttachments: false);
+                else
+                    AppendToolRoundCompletions(target, round, includeBinaryAttachments: false);
+            }
+
+            offset += count;
+            cumulative += count;
+            next = AppendLiveCommentsUpTo(target, anchored, next, cumulative);
+        }
+
+        AppendLiveCommentsUpTo(target, anchored, next, int.MaxValue);
+        DysonInjectedUserComments.AppendMessages(
+            target,
+            comments.Where(c => c.DeliveredAfterToolCalls is null));
+        return true;
+    }
+
+    private static List<DysonToolCallResult> ResultsForCalls(
+        DysonAgentTurn turn,
+        IReadOnlyList<DysonToolCall> calls)
+    {
+        var byId = IndexResultsByCallId(turn.ResponseLog);
+        var results = new List<DysonToolCallResult>(calls.Count);
+        foreach (var call in calls)
+        {
+            if (byId.TryGetValue(call.CallId, out var result))
+                results.Add(result);
+        }
+
+        return results;
     }
 
     private static void AppendHistoryToolChunk(
@@ -931,8 +1005,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     /// History turns send <see cref="DysonAgentTurn.Instruction"/> with a
     /// <c>[turnId=…]</c> header. Mid-turn user comments are never spliced here: they are
     /// separate <see cref="DysonInjectedUserComments"/> messages at their delivery anchor.
-    /// Incomplete current turn may append ephemeral mandates (chrome-skipped rename review;
-    /// first Plan-stint Explore).
+    /// A rename-review or first Plan-stint turn keeps that mandate on this user message
+    /// after the turn completes. It is not copied onto Instruction.
     /// After the instruction, appends <see cref="DysonAgentTurn.HiddenInstruction"/>
     /// (local paths only) and live <c>Attached urls:</c> lines from
     /// <see cref="DysonAgentTurn.UserImages"/>.
@@ -940,8 +1014,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     private static string FormatTurnUserContent(
         DysonAgentSession session,
         DysonAgentTurn turn,
-        int zeroBasedIndex,
-        bool incompleteCurrent)
+        int zeroBasedIndex)
     {
         var sb = new StringBuilder();
         sb.Append("[turnId=");
@@ -971,11 +1044,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 sb.AppendLine($"- {image.FileName}");
         }
 
-        if (!incompleteCurrent)
-            return sb.ToString().TrimEnd();
-
         if (ShouldAppendPlanFirstTurnMandate(
-                session, session.Turns, zeroBasedIndex, turn, incompleteCurrent))
+                session, session.Turns, zeroBasedIndex, turn))
         {
             sb.AppendLine();
             sb.AppendLine();
@@ -1060,18 +1130,16 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     }
 
     /// <summary>
-    /// True for the first incomplete Normal/InitializeSession prompt in the current Plan stint.
+    /// True for the first Normal/InitializeSession prompt in the current Plan stint,
+    /// including after that turn completes.
     /// ModeSwitch is inspected (To=Plan starts a stint); DisplayInfo / WorktreeCreating / PlanResult are skipped.
     /// </summary>
     private static bool ShouldAppendPlanFirstTurnMandate(
         DysonAgentSession session,
         IReadOnlyList<DysonAgentTurn> turns,
         int currentIndex,
-        DysonAgentTurn turn,
-        bool incompleteCurrent)
+        DysonAgentTurn turn)
     {
-        if (!incompleteCurrent)
-            return false;
         if (!string.Equals(session.Mode, DysonAgentModes.Plan, StringComparison.OrdinalIgnoreCase))
             return false;
         if (!IsEligiblePlanStintUserTurn(turn))
@@ -1108,10 +1176,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     private static JsonNode BuildCompletionsTurnUserContent(
         DysonAgentSession session,
         DysonAgentTurn turn,
-        int zeroBasedIndex,
-        bool incompleteCurrent)
+        int zeroBasedIndex)
     {
-        var text = FormatTurnUserContent(session, turn, zeroBasedIndex, incompleteCurrent);
+        var text = FormatTurnUserContent(session, turn, zeroBasedIndex);
         if (turn.UserImages.Count == 0)
             return text;
 
@@ -1147,10 +1214,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     private static JsonNode BuildResponsesTurnUserContent(
         DysonAgentSession session,
         DysonAgentTurn turn,
-        int zeroBasedIndex,
-        bool incompleteCurrent)
+        int zeroBasedIndex)
     {
-        var text = FormatTurnUserContent(session, turn, zeroBasedIndex, incompleteCurrent);
+        var text = FormatTurnUserContent(session, turn, zeroBasedIndex);
         if (turn.UserImages.Count == 0)
             return text;
 

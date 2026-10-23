@@ -165,6 +165,12 @@ public sealed class DysonAgentTurn
     public List<DysonToolCall> ToolCalls { get; } = [];
 
     /// <summary>
+    /// Tool-call counts per model round, in send order. Empty on legacy turns.
+    /// Persisted inside tool-state JSON (not its own column). Reasoning items are not stored.
+    /// </summary>
+    public List<int> ToolRoundCallCounts { get; } = [];
+
+    /// <summary>
     /// Tools called this turn with live status (Queued → Working → Completed|Failed).
     /// UI hooks <see cref="ToolCallStatusChanged"/>.
     /// </summary>

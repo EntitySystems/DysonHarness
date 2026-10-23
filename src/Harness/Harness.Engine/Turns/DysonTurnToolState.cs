@@ -9,6 +9,9 @@ public sealed class DysonTurnToolState
     public List<DysonToolCall> ToolCalls { get; set; } = [];
     public List<DysonPersistedTrackedToolCall> Tracked { get; set; } = [];
     public List<DysonToolCallResult> ResponseLog { get; set; } = [];
+
+    /// <summary>Per-round call counts. Omitted on old rows; never reasoning JSON.</summary>
+    public List<int> ToolRoundCallCounts { get; set; } = [];
 }
 
 public sealed class DysonPersistedTrackedToolCall
@@ -72,6 +75,7 @@ public static class DysonTurnToolStateSerializer
                 .. turn.ResponseLog.Select(r =>
                     stripAttachments ? r.ForPersistence() : r),
             ],
+            ToolRoundCallCounts = [.. turn.ToolRoundCallCounts],
         };
 
         return Serialize(state);
@@ -84,6 +88,9 @@ public static class DysonTurnToolStateSerializer
         var state = Deserialize(toolStateJson);
         turn.ToolCalls.Clear();
         turn.ToolCalls.AddRange(state.ToolCalls);
+        turn.ToolRoundCallCounts.Clear();
+        if (state.ToolRoundCallCounts is { Count: > 0 })
+            turn.ToolRoundCallCounts.AddRange(state.ToolRoundCallCounts);
         turn.RestoreTrackedCalls(state.Tracked);
         turn.RestoreResponseLog(state.ResponseLog);
     }

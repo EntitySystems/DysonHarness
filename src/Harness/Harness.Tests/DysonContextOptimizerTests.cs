@@ -16,6 +16,7 @@ public class DysonContextOptimizerTests
         AssertIsOnlyCompactToolHistoryEcho();
         AssertResolveFinalAssistantContentStripsEcho();
         AssertOptimizedTranscriptEmitsUserRoleWithHarnessPrefix();
+        AssertOptimizeAdvancesInBatches();
     }
 
     private static void AssertFormatCompactToolLineUsesTaggedShape()
@@ -224,6 +225,87 @@ public class DysonContextOptimizerTests
             }
         }
     }
+
+    private static void AssertOptimizeAdvancesInBatches()
+    {
+        var optimizer = new DysonContextOptimizer();
+        var counter = new CharTokenCounter();
+        var turns = new List<DysonAgentTurn>();
+        for (var i = 0; i < 12; i++)
+            turns.Add(TinyToolTurn($"c{i}"));
+
+        if (!optimizer.ShouldOptimize(turns, counter))
+            throw new InvalidOperationException("12 tiny turns must cross the default batch.");
+
+        var optimized = optimizer.Optimize(turns, counter);
+        if (optimized.IsError)
+            throw new InvalidOperationException(optimized.Error);
+
+        for (var i = 0; i < 10; i++)
+        {
+            if (!turns[i].ToolHistoryOptimized || string.IsNullOrEmpty(turns[i].CompactToolHistory))
+                throw new InvalidOperationException($"Turn {i} must be compacted in the first batch.");
+        }
+
+        if (turns[10].ToolHistoryOptimized || turns[11].ToolHistoryOptimized)
+            throw new InvalidOperationException("Keep-recent turns must stay full.");
+
+        var firstCompact = turns[0].CompactToolHistory;
+        turns.Add(TinyToolTurn("c12"));
+        if (optimizer.ShouldOptimize(turns, counter))
+            throw new InvalidOperationException("One turn past the batch must not optimize again.");
+
+        if (turns[0].CompactToolHistory != firstCompact || turns[10].ToolHistoryOptimized)
+        {
+            throw new InvalidOperationException(
+                "The next prompt must leave prior compact text and the turn that just left the window unchanged.");
+        }
+
+        var capped = new DysonContextOptimizer { KeepRecentTurns = 2 };
+        var fat = new List<DysonAgentTurn>
+        {
+            MakeCompletedToolTurn(
+                new DysonToolCall
+                {
+                    CallId = "big",
+                    ToolName = "ReadFile",
+                    Stage = 0,
+                    ArgumentsJson = "{}",
+                },
+                new DysonToolCallResult
+                {
+                    CallId = "big",
+                    ToolName = "ReadFile",
+                    Stage = 0,
+                    Content = new string('x', DysonContextOptimizer.DefaultMaxUnoptimizedTokens + 1),
+                }),
+            TinyToolTurn("k1"),
+            TinyToolTurn("k2"),
+        };
+
+        if (!capped.ShouldOptimize(fat, counter))
+        {
+            throw new InvalidOperationException(
+                "A turn over the token cap must optimize once it leaves the keep window.");
+        }
+    }
+
+    private static DysonAgentTurn TinyToolTurn(string callId) =>
+        MakeCompletedToolTurn(
+            new DysonToolCall
+            {
+                CallId = callId,
+                ToolName = "Grep",
+                Stage = 0,
+                ArgumentsJson = "{}",
+            },
+            new DysonToolCallResult
+            {
+                CallId = callId,
+                ToolName = "Grep",
+                Stage = 0,
+                Content = "ok",
+            });
 
     private static DysonAgentTurn MakeCompletedToolTurn(DysonToolCall call, DysonToolCallResult result)
     {
