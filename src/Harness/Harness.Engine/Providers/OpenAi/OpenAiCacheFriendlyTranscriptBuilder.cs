@@ -5,8 +5,8 @@ namespace DysonHarness;
 
 /// <summary>
 /// Builds cache-friendly Completions messages / Responses input from local turn history.
-/// Stable prefix first (system + tools catalog text), dynamic content last; never mutates
-/// already-optimized turn sections.
+/// Stable prefix first (system text), dynamic content last; never mutates
+/// already-optimized turn sections. Tool schemas are tools[] only.
 /// </summary>
 public static class OpenAiCacheFriendlyTranscriptBuilder
 {
@@ -43,14 +43,12 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         IReadOnlyList<DysonToolCallResult> Results,
         IReadOnlyList<JsonObject>? ReasoningItems = null);
 
-    /// <summary>System text: mode prompt + MCP catalog (stable prefix for Completions).</summary>
+    /// <summary>System text: mode prompt + reply format. Tool schemas are tools[] only.</summary>
     public static string BuildSystemText(DysonAgentSession session)
     {
         ArgumentNullException.ThrowIfNull(session);
         var sb = new StringBuilder();
         sb.AppendLine(session.SystemPrompt);
-        sb.AppendLine();
-        sb.AppendLine(session.McpPipeline.FormatToolsForPrompt());
         sb.AppendLine();
         sb.AppendLine(
             "Reply format: start every final assistant message with a Markdown H1 title " +

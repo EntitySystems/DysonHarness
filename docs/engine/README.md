@@ -37,7 +37,7 @@ When `ProviderKind == OpenAICompatible`, the host and the UI session runtime fac
 - **Planned (not shipped):** **`ConvertVideo(inputFile, outputFile, desiredFormat)`** via host **ffmpeg** — intent only; no package, catalog entry, or executor wiring yet.
 - **RenameSession review:** every 8 **chrome-skipped** turns (1-based indices **1, 9, 17, …** among turns that are not `DisplayInfo` / `ModeSwitch` / `PlanResult` — those kinds do not consume review slots), the transcript builder appends an ephemeral yes/no `RenameSessionReviewMandate` on the **current incomplete** user message only. Eligible slot 1 is `InitializeSession` via `DysonSessionInitialization.CreateTurn` when that is the first counted turn; later review turns stay `Normal`. Completed/history turns always send clean `Instruction` — the mandate is never re-emitted. Soft every-turn rename nudges are not in system prompts; MCP description says rename only on harness review mandate or explicit user request.
 - **Cache-friendly requests** (`OpenAiCacheFriendlyTranscriptBuilder`):
-  1. Stable prefix first: system/instructions (mode prompt + MCP catalog) → `tools[]` (stable sort) → prior transcript → new user/tool deltas last.
+  1. Stable prefix first: system/instructions (mode prompt + reply format; tool schemas are not repeated here) → `tools[]` (stable sort) → prior transcript → new user/tool deltas last.
   2. Never mutate an already-sent/optimized prefix (`OptimizeContextIfNeeded` before building).
   3. `prompt_cache_key` = `dyson:{PersistenceId}:sp{SystemPromptGeneration}` on every call (send-first; generation bumps on mid-session `ApplyAgentMode`).
   4. GPT-5.6+ **direct** OpenAI only: optional `prompt_cache_options.mode=explicit` + breakpoint on the system prefix when the slug looks like `gpt-5.6+`. Managed/CLIProxy (`ManagedSource` set) omits `prompt_cache_options` (unsupported) but still sends `prompt_cache_key` + stable prefix ordering.
@@ -212,7 +212,7 @@ Security persistence and services are foundations, not an active hook runtime:
 - **FullAccess** — tools run with full access; no allowlist.
 - **AutoReview** — calls route through in-process `DysonMcpAutoReviewProxy`; no allowlist.
 
-`DysonMcpPipeline` holds the per-session tool catalog (`FormatToolsForPrompt`) and optional auto-review proxy. OpenAI-compatible sessions also expose the same tools as native function schemas (with required `stage`).
+`DysonMcpPipeline` holds the per-session tool catalog and optional auto-review proxy. OpenAI-compatible sessions expose those tools only as native function schemas (with required `stage`), not as a second copy in system/instructions text.
 
 **Custom MCP (live):** workdir-scoped clients under `{workRoot}/.dyson/mcp/{serverId}.json` (stdio + HTTP SSE / streamable / auto-detect). Master switch `mcpActive` lives in `work_directory_configurations` (default on). `DysonCustomMcpHost` + `DysonCustomMcpPromptUpdater` (FileSystemWatcher + ~300ms debounce) connect servers, merge namespaced tools `{serverId}__{toolName}` into the catalog, and bump `SystemPromptGeneration`. `DysonWorkspaceToolExecutor` dispatches those names via `CallToolAsync` before the built-in switch. See [work-directories](../storage/work-directories.md).
 

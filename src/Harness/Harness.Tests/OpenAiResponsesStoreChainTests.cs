@@ -25,6 +25,43 @@ public class OpenAiResponsesStoreChainTests
         AssertParallelToolsPreserveCompletedOutputOrder();
     }
 
+    [Fact]
+    public void SystemText_OmitsToolCatalog_ToolsArrayStillAttached()
+    {
+        var session = new DirectOpenAiSession();
+        var system = OpenAiCacheFriendlyTranscriptBuilder.BuildSystemText(session);
+        if (system.Contains("## Available MCP tools", StringComparison.Ordinal)
+            || system.Contains("Input schema:", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("System text must not include the MCP tool catalog.");
+        }
+
+        if (!system.Contains("Reply format:", StringComparison.Ordinal)
+            || !system.Contains(session.SystemPrompt, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("System text must keep the mode prompt and reply format.");
+        }
+
+        var completions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(session, "hi", null);
+        var responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(session, "hi", null);
+        if (!string.Equals(responses.Instructions, system, StringComparison.Ordinal))
+            throw new InvalidOperationException("Responses instructions must be BuildSystemText.");
+
+        var systemMessage = completions.Messages[0]?.ToJsonString() ?? "";
+        if (!systemMessage.Contains("Reply format:", StringComparison.Ordinal)
+            || systemMessage.Contains("## Available MCP tools", StringComparison.Ordinal)
+            || systemMessage.Contains("Input schema:", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Completions system message must omit the tool catalog.");
+        }
+
+        if (!completions.Tools.ToJsonString().Contains("\"name\":\"ReadFile\"", StringComparison.Ordinal)
+            || !responses.Tools.ToJsonString().Contains("\"name\":\"ReadFile\"", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("tools[] must still list catalog tools.");
+        }
+    }
+
     private static void AssertDirectFullStoresAndOptionalPreviousId()
     {
         var session = new DirectOpenAiSession();

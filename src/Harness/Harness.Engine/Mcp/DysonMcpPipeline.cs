@@ -430,29 +430,6 @@ public sealed class DysonMcpPipeline
         return baseDescription;
     }
 
-    /// <summary>Formats the tools dictionary into a prompt-injectable catalog string.</summary>
-    public string FormatToolsForPrompt()
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("## Available MCP tools");
-        sb.AppendLine(
-            "Every tool call must include harness fields: callId (optional; assigned if omitted), stage (int; required). " +
-            "Calls are ordered by stage; same stage runs concurrently.");
-        sb.AppendLine();
-
-        foreach (var tool in Tools.Values.OrderBy(t => t.Name, StringComparer.Ordinal))
-        {
-            sb.Append("### ");
-            sb.AppendLine(tool.Name);
-            sb.AppendLine(tool.Description);
-            sb.AppendLine("Input schema:");
-            sb.AppendLine(tool.InputSchemaJson);
-            sb.AppendLine();
-        }
-
-        return sb.ToString().TrimEnd();
-    }
-
     /// <summary>
     /// Layer catalog gating for inter-agent + Ask tools.
     /// Depth 0 = root, 1 = L1 child, 2+ = deeper.
