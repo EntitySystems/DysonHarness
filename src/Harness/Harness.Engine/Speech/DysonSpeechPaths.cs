@@ -67,4 +67,7 @@ public static class DysonSpeechPaths
     public static string GetChatterboxVoicesDir(string installRoot) => Path.Combine(installRoot, "chatterbox", "voices");
 
     public static string GetInstallJson(string installRoot) => Path.Combine(installRoot, "install.json");
+
+    /// <summary>Isolated OpenVINO site for Whisper NPU. Not the IR directory.</summary>
+    public static string GetOpenVinoSite(string installRoot) => Path.Combine(installRoot, "openvino", "site");
 }

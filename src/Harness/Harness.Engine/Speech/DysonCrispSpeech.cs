@@ -20,7 +20,8 @@ public sealed class DysonCrispSpeech(
     IDysonSpeechModelRepository models,
     IDysonSubjectSettingsRepository settings,
     string installRoot,
-    string runtimeId) : IDysonTextToSpeech, IDysonSpeechToText
+    string runtimeId,
+    bool? forceVulkan = null) : IDysonTextToSpeech, IDysonSpeechToText
 {
     public const int SampleRate = 24_000;
 
@@ -341,9 +342,14 @@ public sealed class DysonCrispSpeech(
         return Result<string?, string>.AsError(resolved.Error);
     }
 
-    /// <summary><c>speech_crisp_device</c> is <c>gpu</c>. Missing, blank, or any other value is CPU, not an error.</summary>
+    /// <summary>
+    /// <c>speech_crisp_device</c> is <c>gpu</c>. Missing, blank, or any other value is CPU, not an error.
+    /// <paramref name="forceVulkan"/> (Whisper runtime) skips that key: true is the Vulkan exe, false is the CPU exe.
+    /// </summary>
     private async Task<Result<bool, string>> UseVulkanAsync(CancellationToken cancellationToken)
     {
+        if (forceVulkan is bool forced)
+            return Result<bool, string>.AsValue(forced);
         var device = await _settings.GetSettingAsync(DysonAppSettingKeys.SpeechCrispDevice, cancellationToken).ConfigureAwait(false);
         return device.IsError
             ? Result<bool, string>.AsError(device.Error)
@@ -1159,9 +1165,10 @@ public sealed class DysonCrispSpeech(
         return format == 1 && bits == 16;
     }
 
-    /// <summary>Phonon 2 GGUF Q4_K and Q8_0. Not the Python build.</summary>
+    /// <summary>Phonon 2 GGUF and Whisper tiny/base ggml. Not the Python build and not the Intel NPU path.</summary>
     internal static bool IsSpeechToText(string id) =>
-        id is DysonGgufSpeechModels.PhononGgufId or DysonGgufSpeechModels.PhononGgufQ8Id;
+        id is DysonGgufSpeechModels.PhononGgufId or DysonGgufSpeechModels.PhononGgufQ8Id
+            || DysonGgufSpeechModels.IsWhisper(id);
 
     /// <summary>Pocket, Qwen (Q8, Q4, F16), and Chatterbox GGUF. Not Phonon.</summary>
     internal static bool IsTextToSpeech(string id) =>
@@ -1181,6 +1188,8 @@ public sealed class DysonCrispSpeech(
     {
         DysonGgufSpeechModels.PhononGgufId => DysonGgufSpeechModels.PhononGgufDisplayName,
         DysonGgufSpeechModels.PhononGgufQ8Id => DysonGgufSpeechModels.PhononGgufQ8DisplayName,
+        DysonGgufSpeechModels.WhisperTinyId => DysonGgufSpeechModels.WhisperTinyDisplayName,
+        DysonGgufSpeechModels.WhisperBaseId => DysonGgufSpeechModels.WhisperBaseDisplayName,
         DysonGgufSpeechModels.PocketGgufId => DysonGgufSpeechModels.PocketGgufDisplayName,
         DysonGgufSpeechModels.PocketGgufQ8Id => DysonGgufSpeechModels.PocketGgufQ8DisplayName,
         DysonGgufSpeechModels.QwenGgufId => DysonGgufSpeechModels.QwenGgufDisplayName,

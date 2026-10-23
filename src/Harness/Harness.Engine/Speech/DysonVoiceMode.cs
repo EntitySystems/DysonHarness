@@ -78,7 +78,8 @@ public sealed class DysonVoiceMode(
         Result<string, string> stt,
         Result<string, string> tts,
         IReadOnlyList<string> wakeNames,
-        int activeTtsVoiceCount)
+        int activeTtsVoiceCount,
+        string? whisperRuntime = null)
     {
         if (stt.IsError)
             return new VoidResult<string>(stt.Error);
@@ -96,16 +97,30 @@ public sealed class DysonVoiceMode(
                 $"{ModelName(tts.Value)} needs a trained voice to speak. Train one in Settings → Voice.");
         }
 
+        if (DysonGgufSpeechModels.IsWhisper(stt.Value))
+        {
+            var runtime = DysonAppSettingKeys.ParseSpeechWhisperRuntime(whisperRuntime);
+            if (runtime.IsError)
+                return new VoidResult<string>(runtime.Error);
+            if (runtime.Value != DysonAppSettingKeys.SpeechWhisperRuntimeNpu
+                && DysonCrispSpeech.IsTextToSpeech(tts.Value))
+            {
+                return new VoidResult<string>(SharedRuntime(ModelName(stt.Value), ModelName(tts.Value)));
+            }
+        }
+
         if (stt.Value is DysonGgufSpeechModels.PhononGgufId or DysonGgufSpeechModels.PhononGgufQ8Id
             && DysonCrispSpeech.IsTextToSpeech(tts.Value))
         {
-            return new VoidResult<string>(
-                $"Phonon 2 GGUF and {ModelName(tts.Value)} share the one GGUF runtime, so they cannot stay loaded together. " +
-                "In Settings → Voice pick Nemotron 3.5 or Phonon 2 (Python) for speech-to-text, or a Python text-to-speech model.");
+            return new VoidResult<string>(SharedRuntime(ModelName(stt.Value), ModelName(tts.Value)));
         }
 
         return VoidResult<string>.Success;
     }
+
+    private static string SharedRuntime(string sttName, string ttsName) =>
+        $"{sttName} and {ttsName} share the one GGUF runtime, so they cannot stay loaded together. " +
+        "In Settings → Voice pick a speech-to-text model that is not on that runtime (Nemotron, Phonon 2 Python, or Whisper on Intel NPU), or a Python text-to-speech model.";
 
     /// <summary>Hops once, then reads the active models, the 8 wake names, and the active TTS voice count.</summary>
     public Task<VoidResult<string>> CheckRequirementsAsync(CancellationToken cancellationToken = default) =>
@@ -332,7 +347,17 @@ public sealed class DysonVoiceMode(
             voiceCount = voices.Value.Count;
         }
 
-        return Requirements(stt, tts, names.Value, voiceCount);
+        string? whisperRuntime = null;
+        if (stt.IsSuccess && DysonGgufSpeechModels.IsWhisper(stt.Value))
+        {
+            var whisper = await _settings.GetSettingAsync(DysonAppSettingKeys.SpeechWhisperRuntime, cancellationToken)
+                .ConfigureAwait(false);
+            if (whisper.IsError)
+                return new VoidResult<string>(whisper.Error);
+            whisperRuntime = whisper.Value;
+        }
+
+        return Requirements(stt, tts, names.Value, voiceCount, whisperRuntime);
     }
 
     private async Task RunAsync(Listener listener, string? deviceId, CancellationToken runToken)
@@ -952,6 +977,10 @@ public sealed class DysonVoiceMode(
         DysonGgufSpeechModels.PocketGgufQ8Id => DysonGgufSpeechModels.PocketGgufQ8DisplayName,
         DysonGgufSpeechModels.ChatterboxGgufId => DysonGgufSpeechModels.ChatterboxGgufDisplayName,
         DysonGgufSpeechModels.ChatterboxGgufQ8Id => DysonGgufSpeechModels.ChatterboxGgufQ8DisplayName,
+        DysonGgufSpeechModels.WhisperTinyId => DysonGgufSpeechModels.WhisperTinyDisplayName,
+        DysonGgufSpeechModels.WhisperBaseId => DysonGgufSpeechModels.WhisperBaseDisplayName,
+        DysonGgufSpeechModels.PhononGgufId => DysonGgufSpeechModels.PhononGgufDisplayName,
+        DysonGgufSpeechModels.PhononGgufQ8Id => DysonGgufSpeechModels.PhononGgufQ8DisplayName,
         _ => runtimeId,
     };
 

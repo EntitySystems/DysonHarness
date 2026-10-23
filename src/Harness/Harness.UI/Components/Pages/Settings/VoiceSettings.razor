@@ -142,6 +142,30 @@
         </div>
     }
 
+    @if (AnyWhisperInstalled)
+    {
+        <div class="settings-page__panel panel voice-active">
+            <div class="tool-panel__title">Whisper runtime</div>
+            <div class="voice-active__options" role="radiogroup" aria-label="Whisper runtime">
+                <label class="voice-active__option">
+                    <input type="radio" name="voice-whisper-runtime" value="cpu" checked="@(_whisperRuntime == DysonAppSettingKeys.SpeechWhisperRuntimeCpu)"
+                           disabled="@_busy" @onchange="() => SetWhisperRuntimeAsync(DysonAppSettingKeys.SpeechWhisperRuntimeCpu)" />
+                    <span>CPU</span>
+                </label>
+                <label class="voice-active__option">
+                    <input type="radio" name="voice-whisper-runtime" value="vulkan" checked="@(_whisperRuntime == DysonAppSettingKeys.SpeechWhisperRuntimeVulkan)"
+                           disabled="@_busy" @onchange="() => SetWhisperRuntimeAsync(DysonAppSettingKeys.SpeechWhisperRuntimeVulkan)" />
+                    <span>GPU (Vulkan)</span>
+                </label>
+                <label class="voice-active__option">
+                    <input type="radio" name="voice-whisper-runtime" value="npu" checked="@(_whisperRuntime == DysonAppSettingKeys.SpeechWhisperRuntimeNpu)"
+                           disabled="@_busy" @onchange="() => SetWhisperRuntimeAsync(DysonAppSettingKeys.SpeechWhisperRuntimeNpu)" />
+                    <span>Intel NPU</span>
+                </label>
+            </div>
+        </div>
+    }
+
     <div class="settings-page__panel panel">
         <SpeechTorchDevice Busy="_busy" Repairing="_repairingTorch" OnRepair="RepairTorchAsync" />
     </div>
@@ -355,6 +379,7 @@
     private bool _repairing;
     private bool _repairingTorch;
     private bool _crispGpu;
+    private string _whisperRuntime = "";
     private bool _lowLatency;
     private bool _training;
     private bool _disposed;
@@ -403,6 +428,8 @@
 
     private bool AnyCrispInstalled => _rows.Any(r => r.IsInstalled && DysonGgufSpeechModels.CrispIds.Contains(r.RuntimeId));
 
+    private bool AnyWhisperInstalled => _rows.Any(r => r.IsInstalled && DysonGgufSpeechModels.IsWhisper(r.RuntimeId));
+
     protected override async Task OnInitializedAsync()
     {
         _tryout = Services.GetService<DysonSpeechTryout>();
@@ -440,6 +467,8 @@
 
         var crispDevice = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechCrispDevice);
         _crispGpu = crispDevice.IsSuccess && string.Equals(crispDevice.Value?.Trim(), "gpu", StringComparison.OrdinalIgnoreCase);
+        var whisperRuntime = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechWhisperRuntime);
+        _whisperRuntime = whisperRuntime.IsSuccess ? whisperRuntime.Value?.Trim() ?? "" : "";
         var responseMode = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechResponseMode);
         _lowLatency = responseMode.IsSuccess && string.Equals(responseMode.Value?.Trim(), "low-latency", StringComparison.OrdinalIgnoreCase);
 
@@ -496,6 +525,15 @@
 
     private async Task SetCrispDeviceAsync(bool gpu) =>
         await RunAsync(() => Settings.SetSettingAsync(DysonAppSettingKeys.SpeechCrispDevice, gpu ? "gpu" : "cpu"));
+
+    private async Task SetWhisperRuntimeAsync(string value) =>
+        await RunAsync(async () =>
+        {
+            var set = await Settings.SetSettingAsync(DysonAppSettingKeys.SpeechWhisperRuntime, value);
+            if (set.IsSuccess)
+                _whisperRuntime = value;
+            return set;
+        });
 
     private async Task SetResponseModeAsync(bool lowLatency) =>
         await RunAsync(() => Settings.SetSettingAsync(DysonAppSettingKeys.SpeechResponseMode, lowLatency ? "low-latency" : "reliable"));

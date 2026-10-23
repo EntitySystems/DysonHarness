@@ -40,7 +40,9 @@ public sealed record DysonSpeechInstallStatus(
     string? Note,
     IReadOnlyCollection<string>? GgufInstalled = null,
     bool CrispCpuInstalled = false,
-    bool CrispVulkanInstalled = false)
+    bool CrispVulkanInstalled = false,
+    bool PythonReady = false,
+    bool OpenVinoInstalled = false)
 {
     public static DysonSpeechInstallStatus None(string? note) => new(false, false, false, false, false, note);
 
@@ -84,6 +86,11 @@ public sealed class DysonSpeechInstaller
     internal const long QwenGgufF16Bytes = 1_834_817_248L + 358_453_280L;
     internal const long ChatterboxGgufBytes = 478_800_960 + 255_891_744;
     internal const long ChatterboxGgufQ8Bytes = 658_897_472 + 366_820_384;
+    internal const long WhisperTinyBytes = 77_691_713;
+    internal const long WhisperBaseBytes = 147_951_465;
+    internal const long OpenVinoWheelBytes = 104_000_000;
+    internal const long WhisperTinyOpenVinoBytes = 78_000_000;
+    internal const long WhisperBaseOpenVinoBytes = 148_000_000;
     private const long QwenWheelhouseBytes = 138_343_182;
     private const long ChatterboxWheelhouseBytes = 182_916_172;
 
@@ -94,6 +101,8 @@ public sealed class DysonSpeechInstaller
         DysonGgufSpeechModels.NemotronId,
         DysonGgufSpeechModels.PhononGgufId,
         DysonGgufSpeechModels.PhononGgufQ8Id,
+        DysonGgufSpeechModels.WhisperTinyId,
+        DysonGgufSpeechModels.WhisperBaseId,
         DysonPocketSpeech.Id,
         DysonGgufSpeechModels.PocketGgufId,
         DysonGgufSpeechModels.PocketGgufQ8Id,
@@ -123,7 +132,7 @@ public sealed class DysonSpeechInstaller
 
     /// <summary>Input models. The installer sets <c>speech_input_model_id</c> only when exactly one of these is installed.</summary>
     private static readonly string[] InputModelIds =
-        [DysonPhononSpeech.Id, DysonGgufSpeechModels.PhononGgufId, DysonGgufSpeechModels.PhononGgufQ8Id, DysonGgufSpeechModels.NemotronId];
+        [DysonPhononSpeech.Id, DysonGgufSpeechModels.PhononGgufId, DysonGgufSpeechModels.PhononGgufQ8Id, DysonGgufSpeechModels.WhisperTinyId, DysonGgufSpeechModels.WhisperBaseId, DysonGgufSpeechModels.NemotronId];
 
     private static readonly string[] RuntimeSteps =
     [
@@ -138,6 +147,10 @@ public sealed class DysonSpeechInstaller
     private static readonly string[] CrispVulkanSteps =
         ["crispasr-vulkan-download", "crispasr-vulkan-hash", "crispasr-vulkan-extract"];
 
+    private static readonly string[] PythonOnlySteps = ["python-download", "python-hash", "python-extract"];
+
+    private static readonly string[] OpenVinoSteps = ["openvino-download", "openvino-hash", "openvino-install"];
+
     private static readonly Dictionary<string, string[]> ModelSteps = new()
     {
         [DysonPhononSpeech.Id] =
@@ -148,6 +161,16 @@ public sealed class DysonSpeechInstaller
         [DysonGgufSpeechModels.NemotronId] = ["nemotron-download", "nemotron-hash", "nemotron-unpack"],
         [DysonGgufSpeechModels.PhononGgufId] = ["phonon-gguf-download", "phonon-gguf-hash", "phonon-gguf-unpack"],
         [DysonGgufSpeechModels.PhononGgufQ8Id] = ["phonon-gguf-q8-download", "phonon-gguf-q8-hash", "phonon-gguf-q8-unpack"],
+        [DysonGgufSpeechModels.WhisperTinyId] =
+        [
+            "whisper-tiny-download", "whisper-tiny-hash", "whisper-tiny-unpack",
+            "whisper-tiny-openvino-download", "whisper-tiny-openvino-hash", "whisper-tiny-openvino-unpack",
+        ],
+        [DysonGgufSpeechModels.WhisperBaseId] =
+        [
+            "whisper-base-download", "whisper-base-hash", "whisper-base-unpack",
+            "whisper-base-openvino-download", "whisper-base-openvino-hash", "whisper-base-openvino-unpack",
+        ],
         [DysonPocketSpeech.Id] =
         [
             "pocket-wheels-download", "pocket-wheels-hash", "pocket-wheels-install",
@@ -178,13 +201,14 @@ public sealed class DysonSpeechInstaller
 
     /// <summary>Every step in run order. A run emits only <see cref="PlanSteps"/>; skipped steps are not emitted.</summary>
     public static readonly IReadOnlyList<string> StepIds =
-        ["preflight", .. RuntimeSteps, .. RocmTorchSteps, .. CrispSteps, .. CrispVulkanSteps, .. ModelIds.SelectMany(id => ModelSteps[id]), .. TailSteps];
+        ["preflight", .. RuntimeSteps, .. RocmTorchSteps, .. CrispSteps, .. CrispVulkanSteps, .. OpenVinoSteps, .. ModelIds.SelectMany(id => ModelSteps[id]), .. TailSteps];
 
     internal const string BridgeResourceName = "DysonHarness.Speech.bridge.py";
     internal const string CatalogVoiceId = "alba";
     private const string GgufStampFileName = "install-gguf.json";
     private const string CrispStampKey = "crispasr";
     private const string CrispVulkanStampKey = "crispasr-vulkan";
+    private const string OpenVinoStampKey = "openvino";
     internal const string CrispVulkanMissingNote = "CrispASR Vulkan runtime is missing. Use Repair CrispASR runtimes.";
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
 
@@ -388,6 +412,18 @@ public sealed class DysonSpeechInstaller
 
                 var gguf = ReadGgufStamp(InstallRoot) ?? new Dictionary<string, string>(StringComparer.Ordinal);
                 gguf.Remove(runtimeId);
+                if (DysonGgufSpeechModels.IsWhisper(runtimeId))
+                {
+                    gguf.Remove(runtimeId + "-openvino");
+                    if (!WhisperOpenVinoRemains(gguf))
+                    {
+                        var site = DeleteTree(Path.Combine(InstallRoot, "openvino"));
+                        if (site.IsError)
+                            return site;
+                        gguf.Remove(OpenVinoStampKey);
+                    }
+                }
+
                 if (DysonGgufSpeechModels.IsCrisp(runtimeId) && !CrispModelRemains(InstallRoot, gguf))
                 {
                     var crisp = DeleteTree(DysonGgufSpeechModels.GetCrispRuntimeDir(InstallRoot));
@@ -431,13 +467,20 @@ public sealed class DysonSpeechInstaller
             return ["preflight"];
 
         var buildPython = missing.Any(id => !DysonGgufSpeechModels.IsGguf(id));
+        var whisper = missing.Any(DysonGgufSpeechModels.IsWhisper);
+        var pythonSteps = !status.RuntimeInstalled && buildPython
+            ? RuntimeSteps
+            : whisper && !status.PythonReady && !status.RuntimeInstalled
+                ? PythonOnlySteps
+                : Array.Empty<string>();
         List<string> steps =
         [
             "preflight",
-            .. !status.RuntimeInstalled && buildPython ? RuntimeSteps : Array.Empty<string>(),
+            .. pythonSteps,
             .. installRocm ? RocmTorchSteps : Array.Empty<string>(),
             .. missing.Any(DysonGgufSpeechModels.IsCrisp) && !CrispasrInstalled(status) ? CrispSteps : Array.Empty<string>(),
             .. missing.Any(DysonGgufSpeechModels.IsCrisp) && !status.CrispVulkanInstalled ? CrispVulkanSteps : Array.Empty<string>(),
+            .. whisper && !status.OpenVinoInstalled ? OpenVinoSteps : Array.Empty<string>(),
             .. missing.SelectMany(id => ModelSteps[id]),
             .. TailSteps,
         ];
@@ -520,12 +563,15 @@ public sealed class DysonSpeechInstaller
     {
         long models = 0;
         var crisp = false;
+        var whisper = false;
         foreach (var id in modelIds)
         {
             if (adopt?.SkipWeightIds.Contains(id) != true)
                 models += ModelBytes(id);
             if (DysonGgufSpeechModels.IsCrisp(id))
                 crisp = true;
+            if (DysonGgufSpeechModels.IsWhisper(id))
+                whisper = true;
         }
 
         // ponytail: the CrispASR floor covers both zips (CPU + Vulkan) and is still added whenever a CrispASR id is
@@ -533,6 +579,8 @@ public sealed class DysonSpeechInstaller
         // for that model. Upgrade: add wheelhouse sizes.
         if (crisp)
             models += CrispAsrBytes;
+        if (whisper)
+            models += OpenVinoWheelBytes;
         return 2 * ((runtime ? RuntimeBytes : 0) + (rocm ? RocmTorchBytes : 0) + models);
     }
 
@@ -552,6 +600,8 @@ public sealed class DysonSpeechInstaller
         DysonGgufSpeechModels.QwenGgufF16Id => QwenGgufF16Bytes,
         DysonGgufSpeechModels.ChatterboxGgufId => ChatterboxGgufBytes,
         DysonGgufSpeechModels.ChatterboxGgufQ8Id => ChatterboxGgufQ8Bytes,
+        DysonGgufSpeechModels.WhisperTinyId => WhisperTinyBytes + WhisperTinyOpenVinoBytes,
+        DysonGgufSpeechModels.WhisperBaseId => WhisperBaseBytes + WhisperBaseOpenVinoBytes,
         _ => 0,
     };
 
@@ -622,6 +672,8 @@ public sealed class DysonSpeechInstaller
             GgufInstalled = gguf.Count == 0 ? null : gguf,
             CrispCpuInstalled = CrispRuntimeOk(stamp, CrispStampKey, rid?.CrispasrRuntime, DysonGgufSpeechModels.GetCrispExe(installRoot)),
             CrispVulkanInstalled = vulkan,
+            PythonReady = File.Exists(DysonSpeechPaths.GetPythonExe(installRoot)),
+            OpenVinoInstalled = OpenVinoStampOk(stamp, rid),
         };
         return !vulkan && gguf.Any(DysonGgufSpeechModels.IsCrisp) ? status with { Note = CrispVulkanMissingNote } : status;
     }
@@ -634,6 +686,33 @@ public sealed class DysonSpeechInstaller
         && stamp.TryGetValue(key, out var got)
         && string.Equals(got, pin.Sha256, StringComparison.Ordinal)
         && File.Exists(exe);
+
+    private static bool OpenVinoStampOk(IReadOnlyDictionary<string, string>? stamp, DysonSpeechRidManifest? rid)
+    {
+        var sha = OpenVinoWheelSha(rid);
+        return sha is not null
+            && stamp is not null
+            && stamp.TryGetValue(OpenVinoStampKey, out var got)
+            && string.Equals(got, sha, StringComparison.Ordinal);
+    }
+
+    private static bool WhisperOpenVinoRemains(IReadOnlyDictionary<string, string> stamp) =>
+        stamp.ContainsKey(DysonGgufSpeechModels.WhisperTinyId + "-openvino")
+        || stamp.ContainsKey(DysonGgufSpeechModels.WhisperBaseId + "-openvino");
+
+    private static string? OpenVinoWheelSha(DysonSpeechRidManifest? manifest) =>
+        manifest?.OpenVinoWheels?.FirstOrDefault(f => f.FileName.StartsWith("openvino-", StringComparison.Ordinal))?.Sha256;
+
+    private static string? OpenVinoEncoderSha(DysonSpeechRidManifest manifest, string runtimeId) =>
+        OpenVinoFiles(manifest, runtimeId)?.FirstOrDefault(f => f.FileName == "openvino_encoder_model.bin")?.Sha256;
+
+    private static IReadOnlyList<DysonSpeechFile>? OpenVinoFiles(DysonSpeechRidManifest manifest, string runtimeId) =>
+        runtimeId switch
+        {
+            DysonGgufSpeechModels.WhisperTinyId when manifest.WhisperTinyOpenVino is { Count: > 0 } => manifest.WhisperTinyOpenVino,
+            DysonGgufSpeechModels.WhisperBaseId when manifest.WhisperBaseOpenVino is { Count: > 0 } => manifest.WhisperBaseOpenVino,
+            _ => null,
+        };
 
     private static DysonSpeechInstallStatus ProbePython(string installRoot, DysonSpeechManifest m)
     {
@@ -954,6 +1033,8 @@ public sealed class DysonSpeechInstaller
             DysonGgufSpeechModels.QwenGgufF16Id when manifest.QwenGgufF16 is { Count: > 0 } => manifest.QwenGgufF16,
             DysonGgufSpeechModels.ChatterboxGgufId when manifest.ChatterboxGguf is { Count: > 0 } => manifest.ChatterboxGguf,
             DysonGgufSpeechModels.ChatterboxGgufQ8Id when manifest.ChatterboxGgufQ8 is { Count: > 0 } => manifest.ChatterboxGgufQ8,
+            DysonGgufSpeechModels.WhisperTinyId when manifest.WhisperTiny is not null => [manifest.WhisperTiny],
+            DysonGgufSpeechModels.WhisperBaseId when manifest.WhisperBase is not null => [manifest.WhisperBase],
             _ => null,
         };
 
@@ -976,6 +1057,8 @@ public sealed class DysonSpeechInstaller
             .FirstOrDefault(f => f.FileName == DysonGgufSpeechModels.ChatterboxT3File)?.Sha256,
         DysonGgufSpeechModels.ChatterboxGgufQ8Id => manifest.ChatterboxGgufQ8?
             .FirstOrDefault(f => f.FileName == DysonGgufSpeechModels.ChatterboxT3Q8File)?.Sha256,
+        DysonGgufSpeechModels.WhisperTinyId => manifest.WhisperTiny?.Sha256,
+        DysonGgufSpeechModels.WhisperBaseId => manifest.WhisperBase?.Sha256,
         _ => null,
     };
 
@@ -1227,6 +1310,15 @@ public sealed class DysonSpeechInstaller
 
         if (id == DysonChatterboxSpeech.Id)
             return AllMatch(DysonSpeechPaths.GetChatterboxModelDir(installRoot), rid.ChatterboxModel);
+        if (DysonGgufSpeechModels.IsWhisper(id))
+        {
+            var ggml = GgufFiles(rid, id);
+            var ir = OpenVinoFiles(rid, id);
+            return ggml is not null && ir is not null
+                && AllMatch(DysonGgufSpeechModels.GetModelDir(installRoot, id), ggml)
+                && AllMatch(DysonGgufSpeechModels.GetOpenVinoModelDir(installRoot, id), ir);
+        }
+
         if (!DysonGgufSpeechModels.IsGguf(id))
             return false;
         var files = GgufFiles(rid, id);
@@ -1399,6 +1491,7 @@ public sealed class DysonSpeechInstaller
         private bool _useRocmTorch;
         private bool _swapCrisp;
         private bool _swapCrispVulkan;
+        private bool _swapOpenVino;
         private bool _committed;
         private string? _doneDetail;
 
@@ -1427,6 +1520,11 @@ public sealed class DysonSpeechInstaller
             var qwenGgufF16Files = Path.Combine(Downloads, "qwen-gguf-f16");
             var chatterboxGgufFiles = Path.Combine(Downloads, "chatterbox-gguf");
             var chatterboxGgufQ8Files = Path.Combine(Downloads, "chatterbox-gguf-q8");
+            var openVinoWheels = Path.Combine(Downloads, "openvino");
+            var whisperTinyFiles = Path.Combine(Downloads, "whisper-tiny");
+            var whisperBaseFiles = Path.Combine(Downloads, "whisper-base");
+            var whisperTinyIr = Path.Combine(Downloads, "whisper-tiny-openvino");
+            var whisperBaseIr = Path.Combine(Downloads, "whisper-base-openvino");
 
             if (!await StepAsync("preflight", _ => PreflightAsync()) || _plan.Count <= 1)
                 return;
@@ -1449,6 +1547,9 @@ public sealed class DysonSpeechInstaller
                 ("crispasr-vulkan-download", p => DownloadOneAsync("crispasr-vulkan-download", _m.CrispasrVulkan, crispVulkanZip, p)),
                 ("crispasr-vulkan-hash", _ => VerifyOneAsync("crispasr-vulkan-hash", _m.CrispasrVulkan, crispVulkanZip)),
                 ("crispasr-vulkan-extract", _ => Task.FromResult(ExtractCrispasr("crispasr-vulkan-extract", _m.CrispasrVulkan, crispVulkanZip, DysonGgufSpeechModels.GetCrispVulkanRuntimeDir(Tree)))),
+                ("openvino-download", p => DownloadAllAsync("openvino-download", _m.OpenVinoWheels ?? [], openVinoWheels, p)),
+                ("openvino-hash", _ => VerifyAllAsync("openvino-hash", _m.OpenVinoWheels ?? [], openVinoWheels)),
+                ("openvino-install", _ => InstallOpenVinoAsync(openVinoWheels)),
                 ("phonon-wheels-download", p => DownloadAllAsync("phonon-wheels-download", _m.PhononWheels, phononWheels, p)),
                 ("phonon-wheels-hash", _ => VerifyAllAsync("phonon-wheels-hash", _m.PhononWheels, phononWheels)),
                 ("phonon-wheels-install", _ => PipInstallAsync("phonon-wheels-install", _m.PhononWheels, phononWheels, DysonSpeechPaths.GetPhononSite(InstallTree(DysonPhononSpeech.Id)), Path.Combine(InstallTree(DysonPhononSpeech.Id), "phonon", "wheelhouse"))),
@@ -1464,6 +1565,18 @@ public sealed class DysonSpeechInstaller
                 ("phonon-gguf-q8-download", p => DownloadGgufAsync("phonon-gguf-q8-download", DysonGgufSpeechModels.PhononGgufQ8Id, phononGgufQ8Files, p)),
                 ("phonon-gguf-q8-hash", _ => VerifyGgufAsync("phonon-gguf-q8-hash", DysonGgufSpeechModels.PhononGgufQ8Id, phononGgufQ8Files)),
                 ("phonon-gguf-q8-unpack", _ => Task.FromResult(MoveGguf("phonon-gguf-q8-unpack", DysonGgufSpeechModels.PhononGgufQ8Id, phononGgufQ8Files, Tree))),
+                ("whisper-tiny-download", p => DownloadGgufAsync("whisper-tiny-download", DysonGgufSpeechModels.WhisperTinyId, whisperTinyFiles, p)),
+                ("whisper-tiny-hash", _ => VerifyGgufAsync("whisper-tiny-hash", DysonGgufSpeechModels.WhisperTinyId, whisperTinyFiles)),
+                ("whisper-tiny-unpack", _ => Task.FromResult(MoveGguf("whisper-tiny-unpack", DysonGgufSpeechModels.WhisperTinyId, whisperTinyFiles, Tree))),
+                ("whisper-tiny-openvino-download", p => DownloadOpenVinoAsync("whisper-tiny-openvino-download", DysonGgufSpeechModels.WhisperTinyId, whisperTinyIr, p)),
+                ("whisper-tiny-openvino-hash", _ => VerifyOpenVinoAsync("whisper-tiny-openvino-hash", DysonGgufSpeechModels.WhisperTinyId, whisperTinyIr)),
+                ("whisper-tiny-openvino-unpack", _ => Task.FromResult(MoveOpenVino("whisper-tiny-openvino-unpack", DysonGgufSpeechModels.WhisperTinyId, whisperTinyIr))),
+                ("whisper-base-download", p => DownloadGgufAsync("whisper-base-download", DysonGgufSpeechModels.WhisperBaseId, whisperBaseFiles, p)),
+                ("whisper-base-hash", _ => VerifyGgufAsync("whisper-base-hash", DysonGgufSpeechModels.WhisperBaseId, whisperBaseFiles)),
+                ("whisper-base-unpack", _ => Task.FromResult(MoveGguf("whisper-base-unpack", DysonGgufSpeechModels.WhisperBaseId, whisperBaseFiles, Tree))),
+                ("whisper-base-openvino-download", p => DownloadOpenVinoAsync("whisper-base-openvino-download", DysonGgufSpeechModels.WhisperBaseId, whisperBaseIr, p)),
+                ("whisper-base-openvino-hash", _ => VerifyOpenVinoAsync("whisper-base-openvino-hash", DysonGgufSpeechModels.WhisperBaseId, whisperBaseIr)),
+                ("whisper-base-openvino-unpack", _ => Task.FromResult(MoveOpenVino("whisper-base-openvino-unpack", DysonGgufSpeechModels.WhisperBaseId, whisperBaseIr))),
                 ("pocket-wheels-download", p => DownloadAllAsync("pocket-wheels-download", _m.PocketWheels, pocketWheels, p)),
                 ("pocket-wheels-hash", _ => VerifyAllAsync("pocket-wheels-hash", _m.PocketWheels, pocketWheels)),
                 ("pocket-wheels-install", _ => PipInstallAsync("pocket-wheels-install", _m.PocketWheels, pocketWheels, DysonSpeechPaths.GetPocketSite(InstallTree(DysonPocketSpeech.Id)), Path.Combine(InstallTree(DysonPocketSpeech.Id), "pocket", "wheelhouse"))),
@@ -1615,10 +1728,14 @@ public sealed class DysonSpeechInstaller
             _swapRocm = _plan.Contains("rocm-torch-install");
             _swapCrisp = _plan.Contains("crispasr-extract");
             _swapCrispVulkan = _plan.Contains("crispasr-vulkan-extract");
+            _swapOpenVino = _plan.Contains("openvino-install");
             foreach (var id in _building)
             {
                 if (DysonGgufSpeechModels.IsGguf(id) && !GgufAvailable(_m, id))
                     return new VoidResult<string>($"{id}: not available for this platform.");
+                if (DysonGgufSpeechModels.IsWhisper(id)
+                    && (OpenVinoFiles(_m, id) is null || _m.OpenVinoWheels is not { Count: > 0 }))
+                    return new VoidResult<string>($"{id}: OpenVINO files are not in the speech manifest.");
             }
 
             Directory.CreateDirectory(_root);
@@ -1815,6 +1932,52 @@ public sealed class DysonSpeechInstaller
             return _adopt.NemotronWeightsOnDisk
                 ? VoidResult<string>.Success
                 : MoveGguf("nemotron-unpack", DysonGgufSpeechModels.NemotronId, downloadDir, root, [weights]);
+        }
+
+        private Task<VoidResult<string>> DownloadOpenVinoAsync(
+            string stepId, string runtimeId, string dir, IProgress<DysonDownloadProgress> progress)
+        {
+            var files = OpenVinoFiles(_m, runtimeId);
+            return files is null
+                ? Task.FromResult(new VoidResult<string>($"{stepId}: not available for this platform."))
+                : DownloadAllAsync(stepId, files, dir, progress);
+        }
+
+        private Task<VoidResult<string>> VerifyOpenVinoAsync(string stepId, string runtimeId, string dir)
+        {
+            var files = OpenVinoFiles(_m, runtimeId);
+            return files is null
+                ? Task.FromResult(new VoidResult<string>($"{stepId}: not available for this platform."))
+                : VerifyAllAsync(stepId, files, dir);
+        }
+
+        private Task<VoidResult<string>> InstallOpenVinoAsync(string wheelDir)
+        {
+            var files = _m.OpenVinoWheels;
+            return files is not { Count: > 0 }
+                ? Task.FromResult(new VoidResult<string>("openvino-install: not available for this platform."))
+                : PipInstallAsync("openvino-install", files, wheelDir, DysonSpeechPaths.GetOpenVinoSite(Tree), keepWheelhouseIn: null);
+        }
+
+        private VoidResult<string> MoveOpenVino(string stepId, string runtimeId, string downloadDir)
+        {
+            var files = OpenVinoFiles(_m, runtimeId);
+            if (files is null)
+                return new VoidResult<string>($"{stepId}: not available for this platform.");
+            try
+            {
+                var dir = DysonGgufSpeechModels.GetOpenVinoModelDir(Tree, runtimeId);
+                Directory.CreateDirectory(dir);
+                foreach (var file in files)
+                    File.Move(Path.Combine(downloadDir, file.FileName), Path.Combine(dir, file.FileName), overwrite: true);
+                if (!File.Exists(Path.Combine(dir, "openvino_encoder_model.xml")))
+                    return new VoidResult<string>($"{stepId}: OpenVINO encoder is missing.");
+                return VoidResult<string>.Success;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return new VoidResult<string>($"{stepId}: {ex.Message}");
+            }
         }
 
         private VoidResult<string> MoveGguf(string stepId, string runtimeId, string downloadDir, string treeRoot)
@@ -2033,6 +2196,7 @@ public sealed class DysonSpeechInstaller
                 .. _swapRocm ? ["torch-rocm"] : Array.Empty<string>(),
                 .. _swapCrisp ? ["crispasr"] : Array.Empty<string>(),
                 .. _swapCrispVulkan ? ["crispasr-vulkan"] : Array.Empty<string>(),
+                .. _swapOpenVino ? ["openvino"] : Array.Empty<string>(),
                 .. _building.Where(SwapBuiltDir).Select(ModelDir),
             ];
             var swap = Swap(dirs);
@@ -2053,7 +2217,7 @@ public sealed class DysonSpeechInstaller
             }
 
             _committed = true;
-            if (_swapPython || _swapTorch || pythonBuilding.Count > 0)
+            if (_swapTorch || pythonBuilding.Count > 0)
             {
                 var previous = ReadStamp(_root);
                 var stamp = new DysonSpeechInstallStamp(
@@ -2077,6 +2241,18 @@ public sealed class DysonSpeechInstaller
                     gguf[CrispStampKey] = _m.CrispasrRuntime.Sha256;
                 if (_swapCrispVulkan && _m.CrispasrVulkan is not null)
                     gguf[CrispVulkanStampKey] = _m.CrispasrVulkan.Sha256;
+                if (_swapOpenVino)
+                {
+                    var wheel = OpenVinoWheelSha(_m);
+                    if (wheel is null)
+                    {
+                        RestoreOld();
+                        return new VoidResult<string>("commit: openvino wheels have no cp312 pin.");
+                    }
+
+                    gguf[OpenVinoStampKey] = wheel;
+                }
+
                 foreach (var id in ggufBuilding)
                 {
                     var pin = GgufPin(_m, id);
@@ -2087,6 +2263,16 @@ public sealed class DysonSpeechInstaller
                     }
 
                     gguf[id] = pin;
+                    if (!DysonGgufSpeechModels.IsWhisper(id))
+                        continue;
+                    var encoder = OpenVinoEncoderSha(_m, id);
+                    if (encoder is null)
+                    {
+                        RestoreOld();
+                        return new VoidResult<string>($"commit: {id} has no OpenVINO encoder pin.");
+                    }
+
+                    gguf[id + "-openvino"] = encoder;
                 }
 
                 var write = WriteGgufStamp(_root, gguf);
@@ -2219,6 +2405,20 @@ public sealed class DysonSpeechInstaller
                     return new VoidResult<string>(language.Error);
                 if (string.IsNullOrWhiteSpace(language.Value))
                     return await settings.SetSettingAsync(DysonAppSettingKeys.SpeechInputLanguage, "en-US", ct).ConfigureAwait(false);
+            }
+
+            if (requested.Any(DysonGgufSpeechModels.IsWhisper) || _before.IsInstalled(DysonGgufSpeechModels.WhisperTinyId) || _before.IsInstalled(DysonGgufSpeechModels.WhisperBaseId))
+            {
+                var whisper = await settings.GetSettingAsync(DysonAppSettingKeys.SpeechWhisperRuntime, ct).ConfigureAwait(false);
+                if (whisper.IsError)
+                    return new VoidResult<string>(whisper.Error);
+                if (string.IsNullOrWhiteSpace(whisper.Value))
+                {
+                    var set = await settings.SetSettingAsync(
+                        DysonAppSettingKeys.SpeechWhisperRuntime, DysonAppSettingKeys.SpeechWhisperRuntimeCpu, ct).ConfigureAwait(false);
+                    if (set.IsError)
+                        return set;
+                }
             }
 
             return VoidResult<string>.Success;
@@ -2410,5 +2610,7 @@ public sealed class DysonSpeechInstaller
         - librosa: ISC. numba and llvmlite: BSD-2-Clause. onnxruntime: MIT. sox (Python package): BSD-3-Clause.
         - libsndfile inside the upstream soundfile wheel: LGPL-2.1.
         - Other wheels in phonon/, pocket/, qwen/ and chatterbox/ wheelhouse folders keep the license files inside each wheel's dist-info.
+        - ggml Whisper tiny and base (MIT, ggerganov/whisper.cpp conversion of OpenAI Whisper). Downloaded at install, not redistributed.
+        - OpenVINO Whisper tiny and base FP16 IR (Apache-2.0) and the OpenVINO runtime wheels. Downloaded at install, not redistributed.
         """;
 }

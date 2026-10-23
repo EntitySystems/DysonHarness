@@ -12,6 +12,8 @@ public static class DysonGgufSpeechModels
     public const string NemotronId = "nemotron-3.5-asr-streaming-0.6b";
     public const string PhononGgufId = "phonon-2-gguf";
     public const string PhononGgufQ8Id = "phonon-2-gguf-q8";
+    public const string WhisperTinyId = "whisper-tiny";
+    public const string WhisperBaseId = "whisper-base";
     public const string PocketGgufId = "pocket-tts-gguf";
     public const string PocketGgufQ8Id = "pocket-tts-gguf-q8";
     public const string QwenGgufId = "qwen3-tts-0.6b-base-gguf";
@@ -23,6 +25,8 @@ public static class DysonGgufSpeechModels
     public const string NemotronDisplayName = "Nemotron 3.5 ASR 0.6B · GGUF Q5_K_M, streaming (560 MB)";
     public const string PhononGgufDisplayName = "Phonon 2 · GGUF Q4_K (402 MB)";
     public const string PhononGgufQ8DisplayName = "Phonon 2 · GGUF Q8_0 (674 MB)";
+    public const string WhisperTinyDisplayName = "Whisper tiny · ggml (39M, 78 MB)";
+    public const string WhisperBaseDisplayName = "Whisper base · ggml (74M, 148 MB)";
     public const string PocketGgufDisplayName = "Pocket TTS · GGUF Q4_K, voice cloning (73 MB)";
     public const string PocketGgufQ8DisplayName = "Pocket TTS · GGUF Q8_0, voice cloning (124 MB)";
     public const string QwenGgufDisplayName = "Qwen3-TTS 0.6B Base · GGUF Q8_0 + F16 codec (1.34 GB)";
@@ -34,7 +38,7 @@ public static class DysonGgufSpeechModels
     /// <summary>Models served by the shared CrispASR runtime (<see cref="GetCrispExe"/>). Q8 ids are siblings of the Q4 ids, not replacements. Qwen Q4_K and full-precision F16 are siblings of the Q8 row, not replacements.</summary>
     public static readonly IReadOnlyList<string> CrispIds =
     [
-        PhononGgufId, PhononGgufQ8Id, PocketGgufId, PocketGgufQ8Id, QwenGgufId, QwenGgufQ4Id, QwenGgufF16Id, ChatterboxGgufId, ChatterboxGgufQ8Id,
+        PhononGgufId, PhononGgufQ8Id, WhisperTinyId, WhisperBaseId, PocketGgufId, PocketGgufQ8Id, QwenGgufId, QwenGgufQ4Id, QwenGgufF16Id, ChatterboxGgufId, ChatterboxGgufQ8Id,
     ];
 
     /// <summary>Every GGUF id, in install / UI order.</summary>
@@ -43,6 +47,8 @@ public static class DysonGgufSpeechModels
     public const string NemotronModelFile = "nemotron-3.5-asr-streaming-0.6b-Q5_K_M.gguf";
     public const string PhononGgufFile = "phonon2-q4_k.gguf";
     public const string PhononGgufQ8File = "phonon2-q8_0.gguf";
+    public const string WhisperTinyFile = "ggml-tiny.bin";
+    public const string WhisperBaseFile = "ggml-base.bin";
     public const string PocketGgufFile = "pocket-tts-english-q4_k.gguf";
     public const string PocketGgufQ8File = "pocket-tts-english-q8_0.gguf";
     public const string QwenGgufFile = "qwen3-tts-12hz-0.6b-base-q8_0.gguf";
@@ -58,6 +64,9 @@ public static class DysonGgufSpeechModels
 
     public static bool IsCrisp(string? runtimeId) => runtimeId is not null && CrispIds.Contains(runtimeId);
 
+    /// <summary>Whisper tiny and base (ggml on CrispASR, or OpenVINO IR on Intel NPU). Not GGUF.</summary>
+    public static bool IsWhisper(string? runtimeId) => runtimeId is WhisperTinyId or WhisperBaseId;
+
     /// <summary>Qwen3-TTS GGUF rows (Q8_0, lower-quality Q4_K, and full-precision F16). Same backend and F16 codec.</summary>
     public static bool IsQwenGguf(string? runtimeId) => runtimeId is QwenGgufId or QwenGgufQ4Id or QwenGgufF16Id;
 
@@ -65,6 +74,7 @@ public static class DysonGgufSpeechModels
     public static string? CrispBackend(string runtimeId) => runtimeId switch
     {
         PhononGgufId or PhononGgufQ8Id => "phonon2",
+        WhisperTinyId or WhisperBaseId => "whisper",
         PocketGgufId or PocketGgufQ8Id => "pocket-tts",
         _ when IsQwenGguf(runtimeId) => "qwen3-tts",
         ChatterboxGgufId or ChatterboxGgufQ8Id => "chatterbox-turbo",
@@ -77,6 +87,8 @@ public static class DysonGgufSpeechModels
         NemotronId => "nemotron",
         PhononGgufId => "phonon-gguf",
         PhononGgufQ8Id => "phonon-gguf-q8",
+        WhisperTinyId => "whisper-tiny",
+        WhisperBaseId => "whisper-base",
         PocketGgufId => "pocket-gguf",
         PocketGgufQ8Id => "pocket-gguf-q8",
         QwenGgufId => "qwen-gguf",
@@ -118,6 +130,8 @@ public static class DysonGgufSpeechModels
             NemotronId => NemotronModelFile,
             PhononGgufId => PhononGgufFile,
             PhononGgufQ8Id => PhononGgufQ8File,
+            WhisperTinyId => WhisperTinyFile,
+            WhisperBaseId => WhisperBaseFile,
             PocketGgufId => PocketGgufFile,
             PocketGgufQ8Id => PocketGgufQ8File,
             QwenGgufId => QwenGgufFile,
@@ -135,4 +149,8 @@ public static class DysonGgufSpeechModels
         ChatterboxGgufQ8Id => Path.Combine(GetModelDir(installRoot, runtimeId), ChatterboxS3GenQ8File),
         _ => null,
     };
+
+    /// <summary>OpenVINO IR directory for a Whisper id (<c>{dir}/openvino</c>). Not the ggml file and not the wheel site.</summary>
+    public static string GetOpenVinoModelDir(string installRoot, string runtimeId) =>
+        Path.Combine(installRoot, Dir(runtimeId) ?? runtimeId, "openvino");
 }

@@ -34,7 +34,12 @@ public sealed record DysonSpeechRidManifest(
     IReadOnlyList<DysonSpeechFile>? ChatterboxGgufQ8 = null,
     IReadOnlyList<DysonSpeechFile>? RocmTorch = null,
     IReadOnlyList<DysonSpeechFile>? QwenGgufQ4 = null,
-    IReadOnlyList<DysonSpeechFile>? QwenGgufF16 = null);
+    IReadOnlyList<DysonSpeechFile>? QwenGgufF16 = null,
+    DysonSpeechFile? WhisperTiny = null,
+    DysonSpeechFile? WhisperBase = null,
+    IReadOnlyList<DysonSpeechFile>? WhisperTinyOpenVino = null,
+    IReadOnlyList<DysonSpeechFile>? WhisperBaseOpenVino = null,
+    IReadOnlyList<DysonSpeechFile>? OpenVinoWheels = null);
 
 /// <summary>
 /// <c>packaging/speech/manifest.json</c>, embedded in Harness.Engine. Git holds URLs and hashes, never the bytes.
@@ -189,6 +194,26 @@ public sealed partial record DysonSpeechManifest(
         if (m.ChatterboxGgufQ8 is not null)
         {
             foreach (var file in m.ChatterboxGgufQ8)
+                yield return file;
+        }
+
+        yield return m.WhisperTiny;
+        yield return m.WhisperBase;
+        if (m.WhisperTinyOpenVino is not null)
+        {
+            foreach (var file in m.WhisperTinyOpenVino)
+                yield return file;
+        }
+
+        if (m.WhisperBaseOpenVino is not null)
+        {
+            foreach (var file in m.WhisperBaseOpenVino)
+                yield return file;
+        }
+
+        if (m.OpenVinoWheels is not null)
+        {
+            foreach (var file in m.OpenVinoWheels)
                 yield return file;
         }
     }

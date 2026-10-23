@@ -17,6 +17,7 @@
     <EmbeddedResource Include="Speech\DysonQwenBridge.py" LogicalName="DysonHarness.Speech.qwen_bridge.py" />
     <EmbeddedResource Include="Speech\DysonChatterboxBridge.py" LogicalName="DysonHarness.Speech.chatterbox_bridge.py" />
     <EmbeddedResource Include="Speech\DysonSpeechSentences.py" LogicalName="DysonHarness.Speech.speech_sentences.py" />
+    <EmbeddedResource Include="Speech\DysonWhisperNpu.py" LogicalName="DysonHarness.Speech.whisper_npu.py" />
   </ItemGroup>
 
   <ItemGroup>

@@ -16,6 +16,8 @@ public sealed class DysonSpeechModelRepository(
     public const string NemotronRuntimeId = "nemotron-3.5-asr-streaming-0.6b";
     public const string PhononGgufRuntimeId = "phonon-2-gguf";
     public const string PhononGgufQ8RuntimeId = "phonon-2-gguf-q8";
+    public const string WhisperTinyRuntimeId = "whisper-tiny";
+    public const string WhisperBaseRuntimeId = "whisper-base";
     public const string PocketGgufRuntimeId = "pocket-tts-gguf";
     public const string PocketGgufQ8RuntimeId = "pocket-tts-gguf-q8";
     public const string QwenGgufRuntimeId = "qwen3-tts-0.6b-base-gguf";
@@ -31,6 +33,8 @@ public sealed class DysonSpeechModelRepository(
     private const string NemotronDisplayName = "Nemotron 3.5 ASR 0.6B · GGUF Q5_K_M, streaming (560 MB)";
     private const string PhononGgufDisplayName = "Phonon 2 · GGUF Q4_K (402 MB)";
     private const string PhononGgufQ8DisplayName = "Phonon 2 · GGUF Q8_0 (674 MB)";
+    private const string WhisperTinyDisplayName = "Whisper tiny · ggml (39M, 78 MB)";
+    private const string WhisperBaseDisplayName = "Whisper base · ggml (74M, 148 MB)";
     private const string PocketGgufDisplayName = "Pocket TTS · GGUF Q4_K, voice cloning (73 MB)";
     private const string PocketGgufQ8DisplayName = "Pocket TTS · GGUF Q8_0, voice cloning (124 MB)";
     private const string QwenGgufDisplayName = "Qwen3-TTS 0.6B Base · GGUF Q8_0 + F16 codec (1.34 GB)";
@@ -48,6 +52,8 @@ public sealed class DysonSpeechModelRepository(
         (NemotronRuntimeId, NemotronDisplayName, DysonSpeechCapability.Input, "gguf", false),
         (PhononGgufRuntimeId, PhononGgufDisplayName, DysonSpeechCapability.Input, "gguf", false),
         (PhononGgufQ8RuntimeId, PhononGgufQ8DisplayName, DysonSpeechCapability.Input, "gguf", false),
+        (WhisperTinyRuntimeId, WhisperTinyDisplayName, DysonSpeechCapability.Input, "whisper", false),
+        (WhisperBaseRuntimeId, WhisperBaseDisplayName, DysonSpeechCapability.Input, "whisper", false),
         (PocketGgufRuntimeId, PocketGgufDisplayName, DysonSpeechCapability.Output, "gguf", true),
         (PocketGgufQ8RuntimeId, PocketGgufQ8DisplayName, DysonSpeechCapability.Output, "gguf", true),
         (QwenGgufRuntimeId, QwenGgufDisplayName, DysonSpeechCapability.Output, "gguf", true),

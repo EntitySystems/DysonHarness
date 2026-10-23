@@ -160,6 +160,30 @@ public class DysonSpeechInstallerTests
     }
 
     [Fact]
+    public void Whisper_tiny_plan_uses_shared_crisp_and_not_torch()
+    {
+        var plan = DysonSpeechInstaller.PlanSteps(
+            DysonSpeechInstallStatus.None(null), [DysonGgufSpeechModels.WhisperTinyId]);
+        Assert.Contains("crispasr-download", plan);
+        Assert.Contains("crispasr-vulkan-download", plan);
+        Assert.Contains("whisper-tiny-download", plan);
+        Assert.Contains("whisper-tiny-hash", plan);
+        Assert.Contains("whisper-tiny-unpack", plan);
+        Assert.DoesNotContain("torch-download", plan);
+        Assert.Equal("whisper-tiny", DysonGgufSpeechModels.WhisperTinyId);
+        Assert.Equal("whisper-base", DysonGgufSpeechModels.WhisperBaseId);
+        Assert.Equal("cpu", DysonAppSettingKeys.SpeechWhisperRuntimeCpu);
+        Assert.Equal("vulkan", DysonAppSettingKeys.SpeechWhisperRuntimeVulkan);
+        Assert.Equal("npu", DysonAppSettingKeys.SpeechWhisperRuntimeNpu);
+        var npu = DysonAppSettingKeys.ParseSpeechWhisperRuntime("npu");
+        Assert.True(npu.IsSuccess, npu.IsError ? npu.Error : null);
+        Assert.Equal("npu", npu.Value);
+        var gpu = DysonAppSettingKeys.ParseSpeechWhisperRuntime("gpu");
+        Assert.True(gpu.IsError);
+        Assert.Contains("Settings", gpu.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Plan_repair_steps_redownload_only_the_bad_crispasr_runtime()
     {
         var pocketGguf = new DysonSpeechInstallStatus(
@@ -301,6 +325,16 @@ public class DysonSpeechInstallerTests
             var gpuMissing = DysonCrispSpeech.StartInfo(root, id, backend, 1234, useVulkan: true);
             Assert.True(gpuMissing.IsError);
             Assert.Equal(DysonCrispSpeech.VulkanRuntimeMissing, gpuMissing.Error);
+
+            var whisper = DysonCrispSpeech.StartInfo(root, DysonGgufSpeechModels.WhisperTinyId, "whisper", 1234, useVulkan: true);
+            Assert.True(whisper.IsError);
+            Assert.Equal(DysonCrispSpeech.VulkanRuntimeMissing, whisper.Error);
+            File.WriteAllText(DysonGgufSpeechModels.GetCrispVulkanExe(root), "");
+            whisper = DysonCrispSpeech.StartInfo(root, DysonGgufSpeechModels.WhisperBaseId, "whisper", 1234, useVulkan: false);
+            Assert.True(whisper.IsSuccess, whisper.IsError ? whisper.Error : null);
+            Assert.Equal(DysonGgufSpeechModels.GetCrispExe(root), whisper.Value.FileName);
+            Assert.Contains("whisper", whisper.Value.ArgumentList);
+            Assert.DoesNotContain("--gpu-backend", whisper.Value.ArgumentList);
         }
         finally
         {
@@ -630,7 +664,15 @@ public class DysonSpeechInstallerTests
         Assert.True((await repo.EnsureBuiltInAsync()).IsSuccess);
         Assert.True((await repo.EnsureBuiltInAsync()).IsSuccess);
         var rows = (await repo.ListAsync()).Value;
-        Assert.Equal(14, rows.Count);
+        Assert.Equal(16, rows.Count);
+        var tiny = Assert.Single(rows, r => r.RuntimeId == DysonGgufSpeechModels.WhisperTinyId);
+        var whisperBase = Assert.Single(rows, r => r.RuntimeId == DysonGgufSpeechModels.WhisperBaseId);
+        Assert.Equal(DysonGgufSpeechModels.WhisperTinyDisplayName, tiny.DisplayName);
+        Assert.Equal(DysonGgufSpeechModels.WhisperBaseDisplayName, whisperBase.DisplayName);
+        Assert.Equal(DysonSpeechCapability.Input, tiny.Capability);
+        Assert.Equal("whisper", tiny.RuntimeKind);
+        Assert.Equal("whisper", whisperBase.RuntimeKind);
+        Assert.False(tiny.SupportsVoicePrompt);
         var phonon = Assert.Single(rows, r => r.RuntimeId == DysonPhononSpeech.Id);
         var pocket = Assert.Single(rows, r => r.RuntimeId == DysonPocketSpeech.Id);
         var qwen = Assert.Single(rows, r => r.RuntimeId == DysonQwenSpeech.Id);

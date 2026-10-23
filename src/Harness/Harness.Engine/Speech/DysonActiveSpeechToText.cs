@@ -99,15 +99,16 @@ public sealed class DysonActiveSpeechToText(
             yield break;
         }
 
-        await Task.Run(() => StopOthers(active.Value), CancellationToken.None).ConfigureAwait(false);
-        var engine = Engine(active.Value);
-        if (engine is null)
+        var routed = await RouteAsync(active.Value, cancellationToken).ConfigureAwait(false);
+        if (routed.IsError)
         {
-            yield return Result<DysonSpeechChunk, string>.AsError($"No speech-to-text engine for '{active.Value}'.");
+            yield return Result<DysonSpeechChunk, string>.AsError(routed.Error);
             yield break;
         }
 
-        await foreach (var chunk in engine.TranscribeAsync(audio, cancellationToken).ConfigureAwait(false))
+        await Task.Run(() => StopOthers(active.Value, routed.Value.WhisperOnCrisp), CancellationToken.None)
+            .ConfigureAwait(false);
+        await foreach (var chunk in routed.Value.Engine.TranscribeAsync(audio, cancellationToken).ConfigureAwait(false))
             yield return chunk;
     }
 
@@ -134,11 +135,41 @@ public sealed class DysonActiveSpeechToText(
             yield break;
         }
 
-        await Task.Run(() => StopOthers(active.Value), CancellationToken.None).ConfigureAwait(false);
+        await Task.Run(() => StopOthers(active.Value, whisperOnCrisp: null), CancellationToken.None).ConfigureAwait(false);
         await foreach (var chunk in DysonNemotronSpeech
                            .TranscribeLiveAsync(_installRoot, pcm16kMono, cancellationToken)
                            .ConfigureAwait(false))
             yield return chunk;
+    }
+
+    private async Task<Result<(IDysonSpeechToText Engine, bool? WhisperOnCrisp), string>> RouteAsync(
+        string runtimeId, CancellationToken cancellationToken)
+    {
+        if (!DysonGgufSpeechModels.IsWhisper(runtimeId))
+        {
+            var engine = Engine(runtimeId);
+            return engine is null
+                ? Result<(IDysonSpeechToText, bool?), string>.AsError($"No speech-to-text engine for '{runtimeId}'.")
+                : Result<(IDysonSpeechToText, bool?), string>.AsValue((engine, null));
+        }
+
+        var setting = await _settings.GetSettingAsync(DysonAppSettingKeys.SpeechWhisperRuntime, cancellationToken)
+            .ConfigureAwait(false);
+        if (setting.IsError)
+            return Result<(IDysonSpeechToText, bool?), string>.AsError(setting.Error);
+        var parsed = DysonAppSettingKeys.ParseSpeechWhisperRuntime(setting.Value);
+        if (parsed.IsError)
+            return Result<(IDysonSpeechToText, bool?), string>.AsError(parsed.Error);
+
+        if (parsed.Value == DysonAppSettingKeys.SpeechWhisperRuntimeNpu)
+        {
+            return Result<(IDysonSpeechToText, bool?), string>.AsValue(
+                (new DysonWhisperNpuSpeech(_installRoot, runtimeId), false));
+        }
+
+        var vulkan = parsed.Value == DysonAppSettingKeys.SpeechWhisperRuntimeVulkan;
+        return Result<(IDysonSpeechToText, bool?), string>.AsValue(
+            (new DysonCrispSpeech(_models, _settings, _installRoot, runtimeId, vulkan), true));
     }
 
     private IDysonSpeechToText? Engine(string runtimeId) => runtimeId switch
@@ -150,11 +181,14 @@ public sealed class DysonActiveSpeechToText(
         _ => null,
     };
 
-    private static void StopOthers(string runtimeId)
+    /// <param name="whisperOnCrisp">
+    /// True when Whisper is on the Crisp sidecar (CPU or Vulkan). False for Intel NPU. Null for every other model.
+    /// </param>
+    private static void StopOthers(string runtimeId, bool? whisperOnCrisp)
     {
         if (!string.Equals(runtimeId, DysonPhononSpeech.Id, StringComparison.Ordinal))
             DysonPhononSpeech.StopSidecar();
-        if (runtimeId is DysonGgufSpeechModels.PhononGgufId or DysonGgufSpeechModels.PhononGgufQ8Id)
+        if (runtimeId is DysonGgufSpeechModels.PhononGgufId or DysonGgufSpeechModels.PhononGgufQ8Id || whisperOnCrisp == true)
             DysonCrispSpeech.StopSidecarUnless(runtimeId);
         else
             DysonCrispSpeech.StopSidecarIfServing(DysonCrispSpeech.IsSpeechToText);

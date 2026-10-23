@@ -273,4 +273,29 @@ public static class DysonAppSettingKeys
     /// Reliable, missing, blank, or any other value is one job of the full text.
     /// </summary>
     public const string SpeechResponseMode = "speech_response_mode";
+
+    /// <summary>
+    /// Whisper tiny/base runtime. Not <see cref="SpeechCrispDevice"/>. The installer writes
+    /// <see cref="SpeechWhisperRuntimeCpu"/> when this key is missing and a Whisper row was installed.
+    /// </summary>
+    public const string SpeechWhisperRuntime = "speech_whisper_runtime";
+
+    public const string SpeechWhisperRuntimeCpu = "cpu";
+
+    public const string SpeechWhisperRuntimeVulkan = "vulkan";
+
+    public const string SpeechWhisperRuntimeNpu = "npu";
+
+    /// <summary>
+    /// <paramref name="value"/> must be <c>cpu</c>, <c>vulkan</c>, or <c>npu</c> after trim.
+    /// <c>gpu</c> is not Vulkan. Blank is not CPU.
+    /// </summary>
+    public static Result<string, string> ParseSpeechWhisperRuntime(string? value)
+    {
+        var text = value?.Trim() ?? "";
+        if (text is SpeechWhisperRuntimeCpu or SpeechWhisperRuntimeVulkan or SpeechWhisperRuntimeNpu)
+            return Result<string, string>.AsValue(text);
+        return Result<string, string>.AsError(
+            "Whisper runtime must be cpu, vulkan, or npu. Choose it in Settings → Voice.");
+    }
 }
