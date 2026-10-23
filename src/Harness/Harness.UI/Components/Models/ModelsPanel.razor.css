@@ -1,0 +1,10 @@
+.models-panel__imports {
+    margin: 10px 0 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border, #333);
+}
+
+.models-panel__imports summary {
+    cursor: pointer;
+    font-size: 12px;
+}

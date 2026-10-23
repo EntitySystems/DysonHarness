@@ -437,6 +437,100 @@ public sealed class DysonModelRepository(
         }, cancellationToken);
     }
 
+    public Task<Result<ManualSlugSync, string>> SyncManualProviderSlugsAsync(
+        Guid providerId,
+        IReadOnlyList<ManagedSlugSpec> slugs,
+        CancellationToken cancellationToken = default)
+    {
+        if (slugs is null || !slugs.Any(static s => s is not null && !string.IsNullOrWhiteSpace(s.Slug)))
+            return Task.FromResult(Result<ManualSlugSync, string>.AsError("No models in response."));
+
+        var currentSubject = _subjectContext.SubjectId;
+        return _accessor.RunAsync(async (db, cancellationToken) =>
+        {
+            try
+            {
+                var provider = await db.ModelProviders
+                    .Include(p => p.Slugs)
+                    .FirstOrDefaultAsync(p => p.Id == providerId, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (provider is null)
+                    return Result<ManualSlugSync, string>.AsError($"Model provider '{providerId}' not found.");
+
+                var writeGate = GateProviderWrite(provider, currentSubject);
+                if (writeGate is not null)
+                    return Result<ManualSlugSync, string>.AsError(writeGate);
+
+                if (!string.IsNullOrWhiteSpace(provider.ManagedSource))
+                {
+                    return Result<ManualSlugSync, string>.AsError(
+                        $"Provider '{provider.DisplayName}' is managed ({provider.ManagedSource}) and cannot be refreshed this way.");
+                }
+
+                if (!string.Equals(provider.ProviderKind, KindOpenAICompatible, StringComparison.Ordinal))
+                {
+                    return Result<ManualSlugSync, string>.AsError(
+                        $"Provider kind '{provider.ProviderKind}' cannot be refreshed this way.");
+                }
+
+                var now = DateTime.UtcNow;
+                var bySlug = provider.Slugs.ToDictionary(s => s.Slug, StringComparer.OrdinalIgnoreCase);
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var added = 0;
+                var kept = 0;
+
+                foreach (var spec in slugs)
+                {
+                    if (spec is null || string.IsNullOrWhiteSpace(spec.Slug))
+                        continue;
+
+                    var slugKey = spec.Slug.Trim();
+                    if (!seen.Add(slugKey))
+                        continue;
+
+                    if (bySlug.TryGetValue(slugKey, out _))
+                    {
+                        kept++;
+                        continue;
+                    }
+
+                    db.ModelSlugs.Add(new DysonModelSlugEntity
+                    {
+                        Id = Guid.NewGuid(),
+                        ProviderId = provider.Id,
+                        Slug = slugKey,
+                        DisplayAlias = string.IsNullOrWhiteSpace(spec.DisplayAlias)
+                            ? slugKey
+                            : spec.DisplayAlias.Trim(),
+                        IsDefault = false,
+                        IsEnabled = false,
+                        DefaultReasoningEffort = NormalizeReasoningEffort(spec.DefaultReasoningEffort),
+                        ReasoningModes = StringListJsonValueConverter.Normalize(spec.ReasoningModes),
+                        CreatedUtc = now,
+                        UpdatedUtc = now,
+                    });
+                    added++;
+                }
+
+                var removed = 0;
+                foreach (var obsolete in provider.Slugs.Where(s => !seen.Contains(s.Slug)).ToList())
+                {
+                    db.ModelSlugs.Remove(obsolete);
+                    removed++;
+                }
+
+                await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
+                return Result<ManualSlugSync, string>.AsValue(new ManualSlugSync(added, removed, kept));
+            }
+            catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+            {
+                return Result<ManualSlugSync, string>.AsError(
+                    $"Failed to sync manual provider slugs: {ex.Message}", ex);
+            }
+        }, cancellationToken);
+    }
+
     public Task<VoidResult<string>> DeleteProviderAsync(
         Guid id,
         CancellationToken cancellationToken = default)
@@ -717,7 +811,11 @@ public sealed class DysonModelRepository(
                 if (writeGate is not null)
                     return new VoidResult<string>(writeGate);
 
-                if (string.IsNullOrWhiteSpace(existing.Provider?.ManagedSource))
+                if (string.IsNullOrWhiteSpace(existing.Provider?.ManagedSource)
+                    && !string.Equals(
+                        existing.Provider?.ProviderKind,
+                        KindOpenAICompatible,
+                        StringComparison.Ordinal))
                 {
                     return new VoidResult<string>(
                         "Enable/disable is only available for managed provider slugs.");

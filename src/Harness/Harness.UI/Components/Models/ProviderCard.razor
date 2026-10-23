@@ -208,6 +208,15 @@
         }
         else
         {
+            @if (IsCustomOpenAi)
+            {
+                <button type="button"
+                        class="btn btn-primary btn--sm"
+                        disabled="@RefreshBusy"
+                        @onclick="OnRefreshModels">
+                    @(RefreshBusy ? "Refreshing…" : "Refresh models")
+                </button>
+            }
             <button type="button" class="btn btn--sm" @onclick="OnEditProvider">Edit</button>
             <button type="button" class="btn btn-ghost btn--sm" @onclick="OnDeleteProvider">Delete</button>
         }
@@ -221,9 +230,11 @@
                 <div class="list-item__meta">
                     @(IsDirectManaged
                         ? "No slugs yet — Browse models to enable some."
-                        : IsManaged
-                            ? "No slugs yet — Connect then Verify / Refresh models."
-                            : "No slugs")
+                        : IsCustomOpenAi
+                            ? "No slugs yet — Refresh models, or add one."
+                            : IsManaged
+                                ? "No slugs yet — Connect then Verify / Refresh models."
+                                : "No slugs")
                 </div>
             }
             else
@@ -233,6 +244,7 @@
                     <SlugRow Slug="slug"
                              IsManaged="IsManaged"
                              IsDirectManaged="IsDirectManaged"
+                             CanToggleEnabled="IsCustomOpenAi"
                              ContextStepBusy="ContextStepBusySlugId == slug.Id"
                              OnSetDefault="() => OnSetDefault.InvokeAsync(slug)"
                              OnToggleEnabled="() => OnToggleEnabled.InvokeAsync(slug)"
@@ -279,6 +291,10 @@
     /// <summary>Direct API-key managed provider (OpenRouter / OrcaRouter).</summary>
     public bool IsDirectManaged => DysonManagedSources.IsDirectManaged(Provider.ManagedSource);
 
+    /// <summary>Manual OpenAI-compatible provider (Refresh models).</summary>
+    public bool IsCustomOpenAi => !IsManaged
+        && string.Equals(Provider.ProviderKind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal);
+
     /// <summary>False blocks Connect / Verify (CLIProxyAPI binary missing).</summary>
     [Parameter] public bool CliProxyInstalled { get; set; }
 
@@ -300,6 +316,12 @@
     /// <summary>Parent-managed per-provider busy flags.</summary>
     [Parameter] public bool ConnectBusy { get; set; }
     [Parameter] public bool VerifyBusy { get; set; }
+
+    /// <summary>True while this custom OpenAI provider is refreshing its model list.</summary>
+    [Parameter] public bool RefreshBusy { get; set; }
+
+    /// <summary>Lists models for a custom OpenAI-compatible provider and syncs slugs.</summary>
+    [Parameter] public EventCallback OnRefreshModels { get; set; }
 
     /// <summary>Optional pending device code / auth URL shown while <see cref="AuthPending"/>.</summary>
     [Parameter] public string? PendingUserCode { get; set; }

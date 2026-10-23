@@ -4,6 +4,7 @@ namespace Harness.Tests;
 
 /// <summary>
 /// ponytail: managed slug IsEnabled / DefaultReasoningEffort merge / SetSlug* / default fallback / FindSlug filter.
+/// Manual OpenAI-compatible sync keeps user edits and starts new slugs disabled.
 /// </summary>
 public class DysonModelSlugEnabledTests
 {
@@ -16,6 +17,9 @@ public class DysonModelSlugEnabledTests
         AssertUpsertManagedSlugInsertUpdateAndDisableKeepsRow();
         AssertUpsertManagedSlugRejectsManual();
         AssertSetSlugEnabledRejectsManual();
+        AssertSyncManualPreservesEditsAndCounts();
+        AssertSyncManualEmptyListLeavesRows();
+        AssertSyncManualRejectsManagedSource();
         AssertSetSlugDefaultReasoningEffortManagedAndRejectsManual();
         AssertSetSlugDefaultMaxTargetContextTokensManagedAndRejectsManual();
         AssertDisabledDefaultFallsBack();
@@ -329,8 +333,238 @@ public class DysonModelSlugEnabledTests
             throw new InvalidOperationException(add.Error);
 
         var set = store.SetSlugEnabledAsync(add.Value, enabled: false).GetAwaiter().GetResult();
-        if (!set.IsError)
-            throw new InvalidOperationException("SetSlugEnabledAsync must reject manual provider slugs.");
+        if (set.IsError)
+            throw new InvalidOperationException(set.Error);
+
+        var listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+        if (listed.IsError)
+            throw new InvalidOperationException(listed.Error);
+
+        var manual = listed.Value.Single(p => p.Id == create.Value);
+        var row = manual.Slugs.Single(s => s.Id == add.Value);
+        if (row.IsEnabled)
+            throw new InvalidOperationException("SetSlugEnabledAsync(false) must disable a manual OpenAI-compatible slug.");
+        if (manual.Slugs.Count != 1)
+            throw new InvalidOperationException("SetSlugEnabledAsync(false) must keep the manual slug row.");
+
+        var demo = store.CreateProviderAsync(new DysonModelProviderEntity
+        {
+            DisplayName = "Manual Demo",
+            ProviderKind = DysonProviderKinds.Demo,
+        }).GetAwaiter().GetResult();
+        if (demo.IsError)
+            throw new InvalidOperationException(demo.Error);
+
+        var demoSlug = store.AddSlugAsync(demo.Value, "demo-a", "Demo A").GetAwaiter().GetResult();
+        if (demoSlug.IsError)
+            throw new InvalidOperationException(demoSlug.Error);
+
+        var reject = store.SetSlugEnabledAsync(demoSlug.Value, enabled: false).GetAwaiter().GetResult();
+        if (!reject.IsError)
+            throw new InvalidOperationException("SetSlugEnabledAsync must reject manual demo slugs.");
+    }
+
+    private static void AssertSyncManualPreservesEditsAndCounts()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var store = DysonTempDb.Models(accessor);
+
+        var create = store.CreateProviderAsync(new DysonModelProviderEntity
+        {
+            DisplayName = "Manual Sync",
+            ProviderKind = DysonProviderKinds.OpenAICompatible,
+            BaseUrl = "https://api.example.com/v1",
+            ApiKey = "secret-key",
+            OpenAiApiMode = DysonOpenAiApiModes.Responses,
+        }).GetAwaiter().GetResult();
+        if (create.IsError)
+            throw new InvalidOperationException(create.Error);
+
+        var keepAdd = store.AddSlugAsync(
+            create.Value,
+            "keep",
+            "Original",
+            isDefault: true,
+            defaultReasoningEffort: "low",
+            reasoningModes: ["low"]).GetAwaiter().GetResult();
+        if (keepAdd.IsError)
+            throw new InvalidOperationException(keepAdd.Error);
+
+        var goneAdd = store.AddSlugAsync(create.Value, "gone", "Gone").GetAwaiter().GetResult();
+        if (goneAdd.IsError)
+            throw new InvalidOperationException(goneAdd.Error);
+
+        var disable = store.SetSlugEnabledAsync(keepAdd.Value, enabled: false).GetAwaiter().GetResult();
+        if (disable.IsError)
+            throw new InvalidOperationException(disable.Error);
+
+        var listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+        if (listed.IsError)
+            throw new InvalidOperationException(listed.Error);
+
+        var keep = listed.Value.Single().Slugs.Single(s => s.Id == keepAdd.Value);
+        keep.DisplayAlias = "User Alias";
+        keep.DefaultReasoningEffort = "medium";
+        keep.ReasoningModes = ["xhigh", "medium"];
+        keep.IsDefault = true;
+        var update = store.UpdateSlugAsync(keep).GetAwaiter().GetResult();
+        if (update.IsError)
+            throw new InvalidOperationException(update.Error);
+
+        accessor.RunAsync((db, ct) =>
+        {
+            var row = db.ModelSlugs.Single(s => s.Id == keepAdd.Value);
+            row.DefaultMaxTargetContextTokens = 123_456;
+            return DysonDbAccessor.SaveChangesAsync(db, ct);
+        }).GetAwaiter().GetResult();
+
+        var sync = store.SyncManualProviderSlugsAsync(
+            create.Value,
+            [
+                new ManagedSlugSpec("KEEP", "Catalog Alias", "low", ["none"]),
+                new ManagedSlugSpec("fresh", "Fresh", "high", ["high"]),
+                new ManagedSlugSpec("FRESH", "Fresh Dup", "low", ["low"]),
+                new ManagedSlugSpec(" ", "Blank", null, []),
+            ]).GetAwaiter().GetResult();
+        if (sync.IsError)
+            throw new InvalidOperationException(sync.Error);
+        if (sync.Value.Added != 1 || sync.Value.Removed != 1 || sync.Value.Kept != 1)
+        {
+            throw new InvalidOperationException(
+                $"Expected Added/Removed/Kept 1/1/1, got {sync.Value.Added}/{sync.Value.Removed}/{sync.Value.Kept}.");
+        }
+
+        listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+        if (listed.IsError)
+            throw new InvalidOperationException(listed.Error);
+
+        var provider = listed.Value.Single();
+        if (!string.Equals(provider.BaseUrl, "https://api.example.com/v1", StringComparison.Ordinal)
+            || !string.Equals(provider.ApiKey, "secret-key", StringComparison.Ordinal)
+            || !string.Equals(provider.ProviderKind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal)
+            || !string.Equals(provider.DisplayName, "Manual Sync", StringComparison.Ordinal)
+            || !string.Equals(provider.OpenAiApiMode, DysonOpenAiApiModes.Responses, StringComparison.Ordinal)
+            || provider.ManagedSource is not null)
+        {
+            throw new InvalidOperationException("Manual sync must not change provider fields.");
+        }
+
+        if (provider.Slugs.Count != 2)
+            throw new InvalidOperationException($"Expected 2 slugs after manual sync, got {provider.Slugs.Count}.");
+        if (provider.Slugs.Any(s => s.Slug == "gone"))
+            throw new InvalidOperationException("Manual sync must delete slugs absent from the new list.");
+
+        keep = provider.Slugs.Single(s => s.Id == keepAdd.Value);
+        if (!string.Equals(keep.Slug, "keep", StringComparison.Ordinal))
+            throw new InvalidOperationException("Manual sync must keep the stored slug text.");
+        if (keep.IsEnabled)
+            throw new InvalidOperationException("Manual sync must preserve IsEnabled.");
+        if (!keep.IsDefault)
+            throw new InvalidOperationException("Manual sync must preserve IsDefault.");
+        if (!string.Equals(keep.DisplayAlias, "User Alias", StringComparison.Ordinal))
+            throw new InvalidOperationException("Manual sync must preserve DisplayAlias.");
+        if (!string.Equals(keep.DefaultReasoningEffort, "medium", StringComparison.Ordinal))
+            throw new InvalidOperationException("Manual sync must preserve DefaultReasoningEffort.");
+        if (keep.ReasoningModes is not ["xhigh", "medium"])
+            throw new InvalidOperationException("Manual sync must preserve ReasoningModes.");
+        if (keep.DefaultMaxTargetContextTokens != 123_456)
+            throw new InvalidOperationException("Manual sync must preserve DefaultMaxTargetContextTokens.");
+
+        var fresh = provider.Slugs.Single(s => s.Slug == "fresh");
+        if (fresh.IsEnabled)
+            throw new InvalidOperationException("Manual sync must insert new slugs disabled.");
+        if (fresh.IsDefault)
+            throw new InvalidOperationException("Manual sync must insert new slugs with IsDefault=false.");
+        if (!string.Equals(fresh.DisplayAlias, "Fresh", StringComparison.Ordinal))
+            throw new InvalidOperationException("Manual sync must use the first spec alias for a duplicate slug.");
+        if (!string.Equals(fresh.DefaultReasoningEffort, "high", StringComparison.Ordinal))
+            throw new InvalidOperationException("Manual sync must apply spec DefaultReasoningEffort on insert.");
+        if (fresh.ReasoningModes is not ["high"])
+            throw new InvalidOperationException("Manual sync must apply spec ReasoningModes on insert.");
+    }
+
+    private static void AssertSyncManualEmptyListLeavesRows()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var store = DysonTempDb.Models(accessor);
+
+        var create = store.CreateProviderAsync(new DysonModelProviderEntity
+        {
+            DisplayName = "Manual Empty",
+            ProviderKind = DysonProviderKinds.OpenAICompatible,
+            BaseUrl = "https://api.example.com/v1",
+            ApiKey = "k",
+        }).GetAwaiter().GetResult();
+        if (create.IsError)
+            throw new InvalidOperationException(create.Error);
+
+        var add = store.AddSlugAsync(create.Value, "stay", "Stay").GetAwaiter().GetResult();
+        if (add.IsError)
+            throw new InvalidOperationException(add.Error);
+
+        var empty = store.SyncManualProviderSlugsAsync(create.Value, []).GetAwaiter().GetResult();
+        if (!empty.IsError || !empty.Error.Contains("No models in response.", StringComparison.Ordinal))
+            throw new InvalidOperationException($"Expected no-models error, got '{empty.Error}'.");
+
+        var blank = store.SyncManualProviderSlugsAsync(
+            create.Value,
+            [new ManagedSlugSpec(" ", "Blank", null, [])]).GetAwaiter().GetResult();
+        if (!blank.IsError || !blank.Error.Contains("No models in response.", StringComparison.Ordinal))
+            throw new InvalidOperationException($"Expected no-models error for blank slugs, got '{blank.Error}'.");
+
+        var listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+        if (listed.IsError)
+            throw new InvalidOperationException(listed.Error);
+
+        var slugs = listed.Value.Single().Slugs;
+        if (slugs.Count != 1 || slugs.Single().Id != add.Value)
+            throw new InvalidOperationException("Empty manual sync must leave existing slug rows unchanged.");
+    }
+
+    private static void AssertSyncManualRejectsManagedSource()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var store = DysonTempDb.Models(accessor);
+
+        var upsert = store.UpsertManagedProviderAsync(
+            "cliproxy-sync-reject",
+            "Managed",
+            "http://127.0.0.1:1/v1",
+            "key",
+            DysonOpenAiApiModes.Responses,
+            [
+                new ManagedSlugSpec("stay-a", "Stay A", "high", ["high"]),
+                new ManagedSlugSpec("stay-b", "Stay B", null, []),
+            ]).GetAwaiter().GetResult();
+        if (upsert.IsError)
+            throw new InvalidOperationException(upsert.Error);
+
+        var listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+        if (listed.IsError)
+            throw new InvalidOperationException(listed.Error);
+
+        var provider = listed.Value.Single();
+        var beforeIds = provider.Slugs.Select(s => s.Id).OrderBy(id => id).ToArray();
+
+        var sync = store.SyncManualProviderSlugsAsync(
+            provider.Id,
+            [new ManagedSlugSpec("other", "Other", null, [])]).GetAwaiter().GetResult();
+        if (!sync.IsError)
+            throw new InvalidOperationException("Manual sync must reject a managed provider.");
+
+        listed = store.ListProvidersAsync().GetAwaiter().GetResult();
+        if (listed.IsError)
+            throw new InvalidOperationException(listed.Error);
+
+        provider = listed.Value.Single();
+        var afterIds = provider.Slugs.Select(s => s.Id).OrderBy(id => id).ToArray();
+        if (provider.Slugs.Count != 2 || !beforeIds.SequenceEqual(afterIds))
+            throw new InvalidOperationException("Rejected manual sync must not change managed slugs.");
+        if (provider.Slugs.Any(s => s.Slug == "other"))
+            throw new InvalidOperationException("Rejected manual sync must not insert slugs.");
     }
 
     private static void AssertSetSlugDefaultReasoningEffortManagedAndRejectsManual()

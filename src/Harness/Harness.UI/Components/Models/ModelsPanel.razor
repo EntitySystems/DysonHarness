@@ -3,6 +3,7 @@
 @using Harness.UI.Services
 @implements IDisposable
 @inject IDysonModelRepository ModelStore
+@inject IHttpClientFactory HttpClientFactory
 @inject DysonCliProxyHost CliProxy
 @inject ManagedInferenceProviderCatalog ManagedCatalog
 @inject ConfirmDialogService ConfirmDialog
@@ -34,8 +35,8 @@
         </button>
     </div>
 
-    <div class="models-panel__managed" style="margin:10px 0 12px;padding:8px 0;border-bottom:1px solid var(--border, #333);">
-        <div class="tool-panel__title" style="font-size:12px;">Third-party managed providers</div>
+    <details class="models-panel__imports">
+        <summary>Third-party managed providers</summary>
         <div class="list-item__meta" style="margin:4px 0 8px;">
             Grok Build (xAI) signs in natively (device code, no CLIProxy). ChatGPT Codex, Antigravity, Kimi, Claude Code, Meta Muse and the legacy Grok Build (CLIProxy) row use local CLIProxyAPI (OAuth). Rows are view-only; use Connect / Verify to sync models.
         </div>
@@ -102,7 +103,7 @@
                 </button>
             }
         </div>
-    </div>
+    </details>
 
     <div class="models-panel__list list" style="max-height:none;">
         @if (_providers.Count == 0)
@@ -124,6 +125,8 @@
                               AuthPending="IsAuthPending(p)"
                               ConnectBusy="IsConnectBusy(p)"
                               VerifyBusy="IsVerifyBusy(p)"
+                              RefreshBusy="_refreshingProviderId == p.Id"
+                              OnRefreshModels="() => RefreshManualModelsAsync(p)"
                               PendingUserCode="PendingAuth(p)?.UserCode"
                               PendingAuthUrl="PendingAuth(p)?.AuthUrl"
                               XaiSummary="_xaiSummary"
@@ -195,6 +198,7 @@
     // Per-source busy tracking so Connect/Verify spinners don't freeze the whole panel.
     private string? _connectingSource;
     private string? _verifyingSource;
+    private Guid? _refreshingProviderId;
     private string? _importingSource;
     private Guid? _contextStepBusySlugId;
 
@@ -261,16 +265,55 @@
     {
         get
         {
-            if (string.IsNullOrWhiteSpace(_searchText))
-                return _providers;
-
             // NOTE: a slug-only match still shows the whole provider card
             // (ProviderCard renders all slugs); no slug-level filtering.
-            return _providers.Where(p =>
-                p.DisplayName.Contains(_searchText, StringComparison.OrdinalIgnoreCase)
-                || p.Slugs.Any(s =>
-                    s.Slug.Contains(_searchText, StringComparison.OrdinalIgnoreCase)
-                    || s.DisplayAlias.Contains(_searchText, StringComparison.OrdinalIgnoreCase)));
+            // OrderBy is stable: manual providers (no ManagedSource) stay first.
+            IEnumerable<DysonModelProviderEntity> source = string.IsNullOrWhiteSpace(_searchText)
+                ? _providers
+                : _providers.Where(p =>
+                    p.DisplayName.Contains(_searchText, StringComparison.OrdinalIgnoreCase)
+                    || p.Slugs.Any(s =>
+                        s.Slug.Contains(_searchText, StringComparison.OrdinalIgnoreCase)
+                        || s.DisplayAlias.Contains(_searchText, StringComparison.OrdinalIgnoreCase)));
+            return source.OrderBy(p => p.ManagedSource is not null);
+        }
+    }
+
+    private async Task RefreshManualModelsAsync(DysonModelProviderEntity provider)
+    {
+        if (_refreshingProviderId is not null)
+            return;
+
+        _refreshingProviderId = provider.Id;
+        _error = null;
+        _status = null;
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try
+        {
+            var http = HttpClientFactory.CreateClient();
+            var listed = await OpenAiCompatibleModelDiscovery.ListAsync(
+                http, provider.BaseUrl, provider.ApiKey, cts.Token);
+            if (listed.IsError)
+            {
+                _error = listed.Error;
+                return;
+            }
+
+            var sync = await ModelStore.SyncManualProviderSlugsAsync(provider.Id, listed.Value, cts.Token);
+            if (sync.IsError)
+            {
+                _error = sync.Error;
+                return;
+            }
+
+            _status = $"{provider.DisplayName}: {sync.Value.Kept + sync.Value.Added} models ({sync.Value.Added} new, {sync.Value.Removed} removed). Enable the ones you want.";
+            await RefreshAsync();
+            await OnChanged.InvokeAsync();
+        }
+        finally
+        {
+            cts.Dispose();
+            _refreshingProviderId = null;
         }
     }
 
@@ -935,10 +978,6 @@
         if (!string.Equals(rawKind, kind, StringComparison.Ordinal))
             _status = "Provider kind set to OpenAICompatible (credentials require a real provider).";
 
-        var slug = result.InitialSlug.Trim();
-        var alias = string.IsNullOrWhiteSpace(result.InitialAlias) ? result.DisplayName.Trim() : result.InitialAlias.Trim();
-        var makeDefault = !_providers.Any(p => p.Slugs.Any(s => s.IsDefault));
-
         var create = await ModelStore.CreateProviderAsync(new DysonModelProviderEntity
         {
             DisplayName = result.DisplayName.Trim(),
@@ -954,17 +993,23 @@
             return;
         }
 
-        var addSlug = await ModelStore.AddSlugAsync(
-            create.Value,
-            slug,
-            alias,
-            makeDefault,
-            string.IsNullOrWhiteSpace(result.InitialEffort) ? null : result.InitialEffort.Trim(),
-            result.InitialModes);
-        if (addSlug.IsError)
+        if (!string.IsNullOrWhiteSpace(result.InitialSlug))
         {
-            _error = addSlug.Error;
-            return;
+            var slug = result.InitialSlug.Trim();
+            var alias = string.IsNullOrWhiteSpace(result.InitialAlias) ? result.DisplayName.Trim() : result.InitialAlias.Trim();
+            var makeDefault = !_providers.Any(p => p.Slugs.Any(s => s.IsDefault));
+            var addSlug = await ModelStore.AddSlugAsync(
+                create.Value,
+                slug,
+                alias,
+                makeDefault,
+                string.IsNullOrWhiteSpace(result.InitialEffort) ? null : result.InitialEffort.Trim(),
+                result.InitialModes);
+            if (addSlug.IsError)
+            {
+                _error = addSlug.Error;
+                return;
+            }
         }
 
         await RefreshAsync();

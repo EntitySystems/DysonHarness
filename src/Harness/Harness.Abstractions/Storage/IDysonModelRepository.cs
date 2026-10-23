@@ -83,6 +83,15 @@ public interface IDysonModelRepository
         bool enabled,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Replace the slug catalog of a manual OpenAI-compatible provider (ManagedSource null, ProviderKind OpenAICompatible).
+    /// Keeps user edits on matching slugs. Empty list is an error and writes nothing.
+    /// </summary>
+    Task<Result<ManualSlugSync, string>> SyncManualProviderSlugsAsync(
+        Guid providerId,
+        IReadOnlyList<ManagedSlugSpec> slugs,
+        CancellationToken cancellationToken = default);
+
     Task<VoidResult<string>> DeleteProviderAsync(
         Guid id,
         CancellationToken cancellationToken = default);
@@ -116,7 +125,8 @@ public interface IDysonModelRepository
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Enable/disable a managed provider slug. Manual providers are rejected.
+    /// Enable/disable a managed provider slug, or a manual OpenAI-compatible slug.
+    /// Manual demo and Anthropic slugs are rejected.
     /// </summary>
     Task<VoidResult<string>> SetSlugEnabledAsync(
         Guid id,

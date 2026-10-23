@@ -45,6 +45,10 @@ Dyson can import **ChatGPT Codex**, **Grok Build (legacy)**, **Antigravity**, **
 
 **Skipped in v7.3.15:** Qwen Code and Z.ai/iFlow — pinned CLIProxy has no `*-auth-url` management OAuth for those providers. Anthropic Messages dialect / `ManagedEndpointKind.AnthropicCompatible` session work remains reserved and not shipped.
 
+## Custom OpenAI-compatible endpoints
+
+A user-added provider (`ManagedSource` null, `ProviderKind=OpenAICompatible`) refreshes with one `GET {normalized base}/models` (`OpenAiCompatibleModelDiscovery`). `NormalizeBaseUrl` keeps a trailing `/vN` and otherwise appends `/v1`, so a self-hosted CLIProxyAPI (`http://127.0.0.1:8317`), LM Studio (`http://127.0.0.1:1234`), and `https://api.openai.com` all hit `/v1/models`. The `Authorization: Bearer` header is sent only when an API key is set. There is no owner-token filter, no query string, and no second URL. New slugs insert disabled; the user enables the ones they want. Hand-typed slugs the server does not return are removed. This is not CLIProxy **Verify** (that starts Dyson's managed proxy and filters by owner) and not OpenRouter / OrcaRouter **Browse**.
+
 ## Harness mapping
 
 Today: `ProviderKind=OpenAICompatible` with per-provider `BaseUrl` / `ApiKey` / `OpenAiApiMode`, and per-slug `Slug` + freeform `DefaultReasoningEffort` / `ReasoningModes` ([storage/models.md](../storage/models.md)). Non-empty effort → Completions top-level `"reasoning_effort"`, except OpenRouter Completions uses nested `"reasoning": { "effort": "…" }` (OrcaRouter stays on top-level `reasoning_effort`); Responses also uses nested `reasoning.effort` ([engine/README.md](../engine/README.md)). Blank/null omits the field.

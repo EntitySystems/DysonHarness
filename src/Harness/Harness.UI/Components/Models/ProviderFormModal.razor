@@ -63,7 +63,8 @@
                 {
                     <div class="field">
                         <label>Initial slug</label>
-                        <input class="field" @bind="_initialSlug" placeholder="demo-mock" />
+                        <input class="field" @bind="_initialSlug"
+                               placeholder="@(IsOpenAiCompatible ? "optional — or Refresh models after add" : "demo-mock")" />
                     </div>
                     <div class="field">
                         <label>Initial display alias</label>
@@ -108,6 +109,9 @@
     [Parameter] public ProviderFormDraft? ProviderToEdit { get; set; }
 
     private bool IsEditMode => ProviderToEdit is not null;
+
+    private bool IsOpenAiCompatible =>
+        string.Equals(_providerKind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal);
 
     private string _displayName = "";
     private string _providerKind = DysonProviderKinds.OpenAICompatible;
@@ -201,7 +205,7 @@
             return;
         }
 
-        if (!IsEditMode && string.IsNullOrWhiteSpace(_initialSlug))
+        if (!IsEditMode && !IsOpenAiCompatible && string.IsNullOrWhiteSpace(_initialSlug))
         {
             _error = "Initial slug is required.";
             return;
