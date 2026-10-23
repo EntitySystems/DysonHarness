@@ -291,11 +291,12 @@ public static class DysonMetaAgentTools
             Description =
                 "Spawn a read-only Explore agent (non-blocking). Returns immediately with agentId / persistenceId; never waits. " +
                 "Use before briefing a drone when you need a fact about the code. " +
-                "Call ListMetaAgentDrones before dispatching.",
+                "Before calling this tool, call ListMetaAgentDrones. If an existing agent already owns the work, reuse it with MessageMetaAgentDrone instead of spawning a duplicate.",
             InputSchemaJson = ReadOnlyChildInputSchemaJson,
         };
 
-        foreach (var tool in CreateReviewTools())
+        foreach (var tool in CreateReviewTools(
+            "Before calling this tool, call ListMetaAgentDrones. If an existing agent already owns the work, reuse it with MessageMetaAgentDrone instead of spawning a duplicate."))
             yield return tool;
 
         yield return new DysonMcpTool
@@ -583,7 +584,8 @@ public static class DysonMetaAgentTools
                 "Dispatch one Meta Agent Drone in its own worktree as the coordinator for the whole plan (or message an existing drone via agentId) and set status to building. " +
                 "The brief names the planId, not the plan body — the drone calls ReadMetaPlan. " +
                 "Do not split one plan across several drones; the builder runs its own workers. " +
-                $"Counts toward the {MaxRunningWorktreeDrones} running useWorktree true drones.",
+                $"Counts toward the {MaxRunningWorktreeDrones} running useWorktree true drones. " +
+                "Before calling this tool, call ListMetaAgentDrones. If an existing drone already owns this plan, pass its agentId instead of spawning a duplicate.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -825,13 +827,14 @@ public static class DysonMetaAgentTools
         };
     }
 
-    private static IEnumerable<DysonMcpTool> CreateReviewTools()
+    private static IEnumerable<DysonMcpTool> CreateReviewTools(string beforeSpawn)
     {
         yield return new DysonMcpTool
         {
             Name = "StartAsyncBugReviewAgent",
             Description =
-                "Spawn a read-only Bug Review that reports findings, does not implement fixes, returns {agentId, persistenceId}, never waits, and does not get its own worktree.",
+                "Spawn a read-only Bug Review that reports findings, does not implement fixes, returns {agentId, persistenceId}, never waits, and does not get its own worktree. " +
+                beforeSpawn,
             InputSchemaJson = ReadOnlyChildInputSchemaJson,
         };
 
@@ -839,7 +842,8 @@ public static class DysonMetaAgentTools
         {
             Name = "StartAsyncSecurityReviewAgent",
             Description =
-                "Spawn a read-only Security Review that reports findings, does not implement fixes, returns {agentId, persistenceId}, never waits, and does not get its own worktree.",
+                "Spawn a read-only Security Review that reports findings, does not implement fixes, returns {agentId, persistenceId}, never waits, and does not get its own worktree. " +
+                beforeSpawn,
             InputSchemaJson = ReadOnlyChildInputSchemaJson,
         };
     }
@@ -930,7 +934,8 @@ public static class DysonMetaAgentTools
 
     private static IEnumerable<DysonMcpTool> CreateMetaAgentDroneTools()
     {
-        foreach (var tool in CreateReviewTools())
+        foreach (var tool in CreateReviewTools(
+            "Before calling this tool, call ListSubagents. If an existing subagent already owns the work, reuse it with TriggerSubagentEvent instead of spawning a duplicate."))
             yield return tool;
 
         yield return new DysonMcpTool

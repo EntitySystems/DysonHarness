@@ -123,6 +123,31 @@ public class DysonMetaAgentSpawnGateTests
             AssertSchemaOmitsWorktree(tool, name);
         }
 
+        const string rootRoster =
+            "Before calling this tool, call ListMetaAgentDrones. If an existing agent already owns the work, reuse it with MessageMetaAgentDrone instead of spawning a duplicate.";
+        const string childRoster =
+            "Before calling this tool, call ListSubagents. If an existing subagent already owns the work, reuse it with TriggerSubagentEvent instead of spawning a duplicate.";
+        const string buildPlanRoster =
+            "Before calling this tool, call ListMetaAgentDrones. If an existing drone already owns this plan, pass its agentId instead of spawning a duplicate.";
+
+        Assert.Contains("Call ListMetaAgentDrones before dispatching", droneTool.Description, StringComparison.Ordinal);
+        Assert.Contains("MessageMetaAgentDrone", droneTool.Description, StringComparison.Ordinal);
+
+        Assert.Contains(rootRoster, meta.Tools["StartAsyncExploreAgent"].Description, StringComparison.Ordinal);
+        Assert.DoesNotContain("ListSubagents", meta.Tools["StartAsyncExploreAgent"].Description, StringComparison.Ordinal);
+        Assert.Contains(buildPlanRoster, meta.Tools["BeginBuildPlan"].Description, StringComparison.Ordinal);
+
+        foreach (var name in new[] { "StartAsyncBugReviewAgent", "StartAsyncSecurityReviewAgent" })
+        {
+            Assert.Contains(rootRoster, meta.Tools[name].Description, StringComparison.Ordinal);
+            Assert.DoesNotContain("ListSubagents", meta.Tools[name].Description, StringComparison.Ordinal);
+            Assert.Contains(childRoster, droneCatalog.Tools[name].Description, StringComparison.Ordinal);
+            Assert.DoesNotContain("ListMetaAgentDrones", droneCatalog.Tools[name].Description, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(childRoster, droneCatalog.Tools["StartSubagent"].Description, StringComparison.Ordinal);
+        Assert.DoesNotContain("ListMetaAgentDrones", droneCatalog.Tools["StartSubagent"].Description, StringComparison.Ordinal);
+
         foreach (var mode in new[] { DysonAgentModes.Drone, DysonAgentModes.Explore, DysonAgentModes.Work })
         {
             var catalog = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), mode);

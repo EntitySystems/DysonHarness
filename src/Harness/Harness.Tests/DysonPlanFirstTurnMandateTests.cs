@@ -222,6 +222,14 @@ public class DysonPlanFirstTurnMandateTests
                 "StartSubagent description must contain the Work/Drone Explore-blocker wait policy.");
         }
 
+        const string listBeforeSpawn =
+            "Before calling this tool, call ListSubagents. If an existing subagent already owns the work, reuse it with TriggerSubagentEvent instead of spawning a duplicate.";
+        if (!start.Description.Contains(listBeforeSpawn, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "StartSubagent description must tell the caller to list subagents and reuse with TriggerSubagentEvent.");
+        }
+
         if (!pipeline.Tools.TryGetValue("WaitForSubagent", out var wait))
             throw new InvalidOperationException("WaitForSubagent must be in the FullAccess catalog.");
 
