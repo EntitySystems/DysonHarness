@@ -67,6 +67,8 @@ public static class DysonTurnSummarizer
 
     /// <summary>
     /// One-shot Completions summarize. Returns summary text, or a truncated excerpt on failure.
+    /// When the reply includes a usage object, <paramref name="recordUsage"/> is invoked once.
+    /// A missing usage object (including failed calls that return fallback text) does not invoke it.
     /// </summary>
     public static async Task<string> SummarizeAsync(
         OpenAiCompatibleAgentProvider provider,
@@ -74,7 +76,8 @@ public static class DysonTurnSummarizer
         DysonAgentTurn turn,
         string? reason = null,
         IDysonTokenCounter? tokens = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<DysonParsedUsage, CancellationToken, Task>? recordUsage = null)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(http);
@@ -121,6 +124,9 @@ public static class DysonTurnSummarizer
             var parsed = OpenAiCompletionsClient.Parse(response.Value);
             if (parsed.IsError)
                 return Fallback(raw, parsed.Error);
+
+            if (parsed.Value.Usage is { } usage && recordUsage is not null)
+                await recordUsage(usage, cancellationToken).ConfigureAwait(false);
 
             var summary = parsed.Value.Content?.Trim() ?? "";
             if (string.IsNullOrWhiteSpace(summary))

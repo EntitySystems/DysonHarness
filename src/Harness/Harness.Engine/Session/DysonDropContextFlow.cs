@@ -47,7 +47,8 @@ public static class DysonDropContextFlow
 
     /// <summary>
     /// Evaluates whether <see cref="PromptWithTurnAsync"/> should prepend a DropContext turn.
-    /// <see cref="SkipReason"/> is set when not injecting (including under-limit / Off).
+    /// <see cref="SkipReason"/> is set when not injecting (including under-limit / Off / Meta Agent).
+    /// Meta Agent never injects (it has no DropTurnContext). Meta Agent Drone still can.
     /// </summary>
     public static DropContextInjectDecision EvaluateInject(DysonAgentSession session)
     {
@@ -55,6 +56,10 @@ public static class DysonDropContextFlow
 
         var estimated = session.EstimateOutgoingContextTokens();
         var max = session.ResolveEffectiveMaxTargetContextTokens();
+
+        // One guard for OpenAI and Demo: both call TryBeginInject → EvaluateInject.
+        if (DysonSessionPolicy.IsMetaAgent(session.Mode))
+            return new DropContextInjectDecision(false, estimated, max, "meta-agent");
 
         if (max <= 0)
             return new DropContextInjectDecision(false, estimated, max, "off");
@@ -98,8 +103,9 @@ public static class DysonDropContextFlow
     /// <summary>
     /// Logs inject, or skip while over a positive max with reason
     /// (<c>in-phase</c>, <c>no-droppable-older</c>, <c>throttle</c>).
-    /// Silent when under max or Off (unlimited). <c>off</c> remains an
-    /// <see cref="EvaluateInject"/> skip reason but is not session-logged each Send.
+    /// Silent when under max, Off (unlimited), or Meta Agent.
+    /// <c>off</c> and <c>meta-agent</c> remain <see cref="EvaluateInject"/> skip reasons
+    /// but are not session-logged each Send.
     /// </summary>
     public static void AppendDecisionLog(DysonAgentSession session, in DropContextInjectDecision decision)
     {
@@ -111,6 +117,10 @@ public static class DysonDropContextFlow
                 $"drop-context: inject (estimated={decision.Estimated} max={decision.Max})");
             return;
         }
+
+        // Meta Agent is over the limit often; do not log that skip on every Send.
+        if (decision.SkipReason is "meta-agent")
+            return;
 
         // Positive max only: Off (max <= 0) is unlimited — no skip spam on every Send.
         if (decision.SkipReason is null
@@ -185,8 +195,8 @@ public static class DysonDropContextFlow
 /// <param name="Estimated">Current estimated outgoing context tokens.</param>
 /// <param name="Max">Effective max target (0 = Off).</param>
 /// <param name="SkipReason">
-/// When not injecting: <c>off</c>, <c>in-phase</c>, <c>no-droppable-older</c>, <c>throttle</c>,
-/// or null when under a positive max.
+/// When not injecting: <c>off</c>, <c>meta-agent</c>, <c>in-phase</c>, <c>no-droppable-older</c>,
+/// <c>throttle</c>, or null when under a positive max.
 /// </param>
 public readonly record struct DropContextInjectDecision(
     bool ShouldInject,

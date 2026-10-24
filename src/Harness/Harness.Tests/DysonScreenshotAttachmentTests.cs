@@ -8,7 +8,8 @@ using ImageMagick;
 namespace Harness.Tests;
 
 /// <summary>
-/// ponytail: BrowserTakeScreenshot BinaryAttachment + Magick compress + one-shot multimodal.
+/// ponytail: BrowserTakeScreenshot BinaryAttachment + Magick compress.
+/// In-flight rebuilds re-emit the data URL; completed history drops it.
 /// </summary>
 public class DysonScreenshotAttachmentTests
 {
@@ -321,7 +322,7 @@ public class DysonScreenshotAttachmentTests
         // Mocked Files upload → Responses prefer file_id (no data URL).
         AssertResponsesImageFileIdViaUpload(session, call, result);
 
-        // Later in-flight round: prior screenshot round must not re-emit the image.
+        // Later full rebuild: round 0's data-URL image stays so the next hop's prefix matches.
         var laterCall = new DysonToolCall
         {
             CallId = "other1",
@@ -345,10 +346,10 @@ public class DysonScreenshotAttachmentTests
                 new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
                 new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([laterCall], [laterResult]),
             ]);
-        if (multiRound.Messages.ToJsonString().Contains("image_url", StringComparison.Ordinal))
+        if (!multiRound.Messages.ToJsonString().Contains("data:image/jpeg;base64,", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "Prior screenshot round must not re-emit image_url after a later in-flight round.");
+                "Prior screenshot round must still emit its data-URL image on a later in-flight rebuild.");
         }
 
         // History after assistant reply: ack only.

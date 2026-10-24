@@ -61,15 +61,18 @@ Wire (Responses API): nested `reasoning.effort` — same Dyson Responses client 
 | `Slug` | Id from CLIProxy `/v1/models` after Verify |
 | `DefaultReasoningEffort` / `ReasoningModes` | Freeform; Responses sends nested `reasoning.effort` |
 | Nested `reasoning.effort` | Wired on Responses |
-| `prompt_cache_key` | Always sent (session-scoped) |
-| Responses tool-loop (CLIProxy managed) | Stateless: `store: false`, no `previous_response_id`; full local `reasoning` → `function_call` → `function_call_output` replay |
-| `prompt_cache_options` / explicit breakpoints | **Omitted** for CLIProxy managed |
+| `prompt_cache_key` | Always sent (session-scoped). It is not the Anthropic breakpoint |
+| Responses tool-loop (CLIProxy managed) | Full replay every tool hop: `store: false`, no `previous_response_id`; stable prefix; raw `reasoning` → `function_call` → `function_call_output`. Finished turns still omit attachments (data-URL / Files / non-image) and omit Responses reasoning items. RemoteUrl images still re-emit |
+| `cache_control` | **Only this source.** `{ "type": "ephemeral" }` on the last Responses tool, on the last `input_text` part of the current turn’s user message, and on a builder-only user message after each in-flight round’s outputs and before any live user comment. Completions, if that wire is built for this source, stamps the same three places (`text` instead of `input_text`). Anchor text: `[Harness: cache breakpoint after tool results. Not a user instruction.]`. It is not stored. The model sees that line. The builder keeps every in-flight anchor, and a long tool loop can exceed Anthropic's breakpoint limit |
+| `prompt_cache_options` / explicit breakpoints | **Omitted** (`ManagedSource=cliproxy-claude`) |
 | Anthropic Messages dialect / `ProviderKind=Anthropic` | **not wired** |
 
 ## Gotchas
 
 - Managed rows are view-only except Enable/Disable per slug + Default; manual edit of `BaseUrl` / `ApiKey` is rejected while `ManagedSource` is set.
 - Explicit `prompt_cache_options` are rejected by CLIProxy — Dyson omits them for all managed sources.
+- `cache_control` is cliproxy-claude only. Other managed sources, native Grok, OpenRouter, OrcaRouter, and custom Completions do not get it or the anchor line.
+- Pinned CLIProxyAPI v7.3.15 copies `cache_control` from tool objects and from message content parts. It does not keep a breakpoint on `function_call` / `function_call_output`, which is why the anchor is a user content part.
 - Slug lists rot; re-Verify after upstream catalog changes.
 - Disconnect in the UI clears pending auth-session tracking only — it does not delete the managed row or stop the proxy.
 - Connect fails visibly if port **54545** is already bound.

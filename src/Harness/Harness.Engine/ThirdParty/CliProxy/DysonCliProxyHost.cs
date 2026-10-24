@@ -13,6 +13,9 @@ public sealed class DysonCliProxyHost : IAsyncDisposable
 {
     public const int DefaultPort = 8317;
 
+    public const string DisabledError =
+        "CLIProxy is turned off. Turn it on in Settings → Models.";
+
     // ponytail: loopback-only shared secrets so every Dyson build can attach to one local CLIProxy.
     // Upgrade path: user-configurable secrets or install-scoped keys if we ever bind beyond 127.0.0.1.
     public const string DefaultApiKey = "dyson-cliproxy-local-api-key-v1";
@@ -79,6 +82,10 @@ public sealed class DysonCliProxyHost : IAsyncDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            var refused = await Task.Run(RefuseIfDisabled, cancellationToken).ConfigureAwait(false);
+            if (refused is not null)
+                return refused;
+
             if (!IsInstalled)
             {
                 var install = await _downloader.EnsureInstalledAsync(progress, cancellationToken)
@@ -123,6 +130,10 @@ public sealed class DysonCliProxyHost : IAsyncDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            var refused = await Task.Run(RefuseIfDisabled, cancellationToken).ConfigureAwait(false);
+            if (refused is not null)
+                return refused;
+
             if (!IsInstalled)
             {
                 var install = await _downloader.EnsureInstalledAsync(progress, cancellationToken)
@@ -167,6 +178,10 @@ public sealed class DysonCliProxyHost : IAsyncDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            var refused = await Task.Run(RefuseIfDisabled, cancellationToken).ConfigureAwait(false);
+            if (refused is not null)
+                return refused;
+
             KillProcess();
             KillOrphanProcesses();
 
@@ -197,6 +212,20 @@ public sealed class DysonCliProxyHost : IAsyncDisposable
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>Reads the install-global off flag. The file check runs on the thread pool.</summary>
+    public Task<bool> IsDisabledAsync(CancellationToken cancellationToken = default) =>
+        Task.Run(static () => DysonCliProxyPaths.IsDisabled, cancellationToken);
+
+    /// <summary>
+    /// Turn the install-global process off or on. Off writes the flag and stops a running
+    /// process. On deletes the flag and does not start; the next Connect or cliproxy session does.
+    /// </summary>
+    public Task<VoidResult<string>> SetDisabledAsync(bool disabled, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return Task.Run(() => SetDisabledCoreAsync(disabled, cancellationToken), cancellationToken);
     }
 
     public Result<string, string> GetApiKey()
@@ -260,6 +289,49 @@ public sealed class DysonCliProxyHost : IAsyncDisposable
     }
 
     private static string KeysSidecarPath => Path.Combine(DysonCliProxyPaths.InstallRoot, "keys.json");
+
+    private async Task<VoidResult<string>> SetDisabledCoreAsync(bool disabled, CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (disabled)
+            {
+                Directory.CreateDirectory(DysonCliProxyPaths.InstallRoot);
+                File.WriteAllText(DysonCliProxyPaths.DisabledFlagPath, "off\n", Encoding.UTF8);
+                KillProcess();
+                KillOrphanProcesses();
+                return VoidResult<string>.Success;
+            }
+
+            if (File.Exists(DysonCliProxyPaths.DisabledFlagPath))
+                File.Delete(DysonCliProxyPaths.DisabledFlagPath);
+            return VoidResult<string>.Success;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return VoidResult<string>.AsError(
+                $"Failed to update the CLIProxy off switch: {ex.Message}", ex);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// When the off flag is present, stop any supervised process and refuse to start.
+    /// Null means the flag is absent and the caller may start.
+    /// </summary>
+    private VoidResult<string>? RefuseIfDisabled()
+    {
+        if (!DysonCliProxyPaths.IsDisabled)
+            return null;
+
+        KillProcess();
+        KillOrphanProcesses();
+        return VoidResult<string>.AsError(DisabledError);
+    }
 
     private ProxyKeys LoadOrCreateKeys() =>
         new(DefaultApiKey, DefaultManagementKey, DefaultPort);

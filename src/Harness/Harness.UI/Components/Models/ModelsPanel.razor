@@ -27,10 +27,17 @@
         <button type="button" class="btn btn-ghost btn--sm" @onclick="RepairMisTaggedProvidersAsync">
             Repair mis-tagged providers
         </button>
-        <button type="button" class="btn btn-ghost btn--sm" disabled="@_busy" @onclick="ResetCliProxyAsync">
+        <button type="button"
+                class="btn btn-ghost btn--sm"
+                disabled="@_busy"
+                title="@(_cliProxyOff ? "CLI proxy is off. The next Connect or cliproxy session starts it." : "Stop the local CLIProxy process and keep it from starting.")"
+                @onclick="ToggleCliProxyAsync">
+            @(_cliProxyOff ? "Turn CLI proxy on" : "Turn CLI proxy off")
+        </button>
+        <button type="button" class="btn btn-ghost btn--sm" disabled="@(_busy || _cliProxyOff)" @onclick="ResetCliProxyAsync">
             Reset CLI proxy
         </button>
-        <button type="button" class="btn btn-ghost btn--sm" disabled="@_busy" @onclick="ReinstallCliProxyAsync">
+        <button type="button" class="btn btn-ghost btn--sm" disabled="@(_busy || _cliProxyOff)" @onclick="ReinstallCliProxyAsync">
             Reinstall CLI proxy
         </button>
     </div>
@@ -187,6 +194,7 @@
     private string? _status;
     private string _searchText = "";
     private bool _cliProxyInstalled;
+    private bool _cliProxyOff;
     private bool _busy;
     private CliProxyDownloadProgress? _downloadProgress;
     private readonly Dictionary<string, ManagedConnectionBegin> _pendingAuth = new(StringComparer.Ordinal);
@@ -229,6 +237,7 @@
     {
         _error = null;
         _cliProxyInstalled = CliProxy.IsInstalled;
+        _cliProxyOff = await CliProxy.IsDisabledAsync();
         var result = await ModelStore.ListProvidersAsync();
         if (result.IsError)
         {
@@ -1326,6 +1335,44 @@
         await OnChanged.InvokeAsync();
     }
 
+    private async Task ToggleCliProxyAsync()
+    {
+        var turningOff = !_cliProxyOff;
+        if (turningOff)
+        {
+            var confirmed = await ConfirmDialog.ConfirmAsync(
+                title: "Turn CLI proxy off",
+                message: "Stop the local CLIProxyAPI process and keep it from starting until you turn it back on? In-flight requests will fail; signed-in OAuth sessions are kept.",
+                confirmLabel: "Turn off",
+                cancelLabel: "Cancel",
+                danger: false);
+            if (!confirmed)
+                return;
+        }
+
+        _error = null;
+        _status = null;
+        _busy = true;
+        try
+        {
+            var set = await CliProxy.SetDisabledAsync(turningOff);
+            if (set.IsError)
+            {
+                _error = set.Error;
+                return;
+            }
+
+            _cliProxyOff = turningOff;
+            _status = turningOff
+                ? "CLI proxy is off. It stays stopped until you turn it back on."
+                : "CLI proxy is on. It starts on the next Connect or cliproxy session.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
     private async Task ResetCliProxyAsync()
     {
         var confirmed = await ConfirmDialog.ConfirmAsync(
@@ -1346,6 +1393,7 @@
             if (reset.IsError)
             {
                 _error = reset.Error;
+                _cliProxyOff = await CliProxy.IsDisabledAsync();
                 return;
             }
 
@@ -1384,6 +1432,7 @@
             {
                 _error = reinstall.Error;
                 _cliProxyInstalled = CliProxy.IsInstalled;
+                _cliProxyOff = await CliProxy.IsDisabledAsync();
                 return;
             }
 

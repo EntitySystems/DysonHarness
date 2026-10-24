@@ -23,8 +23,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     /// <summary>
     /// Soft-closes <paramref name="turn"/> after tool-round budget exhaustion and optionally enqueues
     /// a <see cref="DysonAgentTurnKind.RethinkToolUsage"/> follow-up. Always returns Success
-    /// (never an exhaustion error string). Does not enqueue rethink when already on rethink, or when
-    /// session mode is Explore (Explore uses a no-tools recap instead).
+    /// (never an exhaustion error string). Does not enqueue rethink when already on rethink, when
+    /// session mode is Explore (Explore uses a no-tools recap instead), or when session mode is
+    /// Meta Agent (no ResumeCurrentTask). Meta Agent Drone still enqueues rethink.
     /// </summary>
     public static VoidResult<string> SoftPauseAfterToolLoopExhaustion(
         DysonAgentSession session,
@@ -44,6 +45,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             session.Mode,
             DysonAgentModes.Explore,
             StringComparison.OrdinalIgnoreCase);
+        var isMetaAgent = DysonSessionPolicy.IsMetaAgent(session.Mode);
 
         string text;
         if (isRethink)
@@ -55,6 +57,11 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         {
             text = DysonRethinkToolUsageFlow.ExploreBudgetExhaustedFallback;
         }
+        else if (isMetaAgent)
+        {
+            text =
+                $"# Tool rounds paused\n\nTool loop reached the {maxRounds}-round budget without a final reply.";
+        }
         else
         {
             text =
@@ -65,7 +72,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         turn.FinishStreaming();
         turn.FinishReasoningStreaming();
 
-        if (!isRethink && !isExplore)
+        if (!isRethink && !isExplore && !isMetaAgent)
             session.EnqueuePendingTurn(DysonRethinkToolUsageFlow.CreateTurn());
 
         return VoidResult<string>.Success;
@@ -1102,31 +1109,42 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         return VoidResult<string>.Success;
     }
 
-    private async Task RecordUsageAsync(OpenAiModelReply reply, CancellationToken cancellationToken)
+    private Task RecordUsageAsync(OpenAiModelReply reply, CancellationToken cancellationToken) =>
+        AppendUsageAsync(OpenAiProvider, reply.Usage, cancellationToken);
+
+    /// <summary>
+    /// Appends one <c>usage_requests</c> row when <paramref name="usage"/> is non-null.
+    /// A missing usage object writes nothing. A real usage object of zeros still appends.
+    /// Model identity is <paramref name="provider"/> (the model that produced the usage).
+    /// </summary>
+    public async Task AppendUsageAsync(
+        OpenAiCompatibleAgentProvider provider,
+        DysonParsedUsage? usage,
+        CancellationToken cancellationToken = default)
     {
-        if (_usageAnalytics is null)
+        ArgumentNullException.ThrowIfNull(provider);
+        if (_usageAnalytics is null || usage is null)
             return;
 
-        var parsed = reply.Usage ?? new DysonParsedUsage();
-        var alias = string.IsNullOrWhiteSpace(OpenAiProvider.DisplayAlias)
-            ? OpenAiProvider.Slug
-            : OpenAiProvider.DisplayAlias;
+        var alias = string.IsNullOrWhiteSpace(provider.DisplayAlias)
+            ? provider.Slug
+            : provider.DisplayAlias;
         var row = new DysonUsageRequestEntity
         {
             Id = Guid.NewGuid(),
             WorkDirectoryName = _workDirectoryName,
             SessionId = PersistenceId,
             RootSessionId = ResolveRootPersistenceId(),
-            ModelSlug = OpenAiProvider.Slug,
+            ModelSlug = provider.Slug,
             ModelDisplayAlias = alias,
-            ReasoningEffort = OpenAiProvider.ReasoningEffort ?? "",
+            ReasoningEffort = provider.ReasoningEffort ?? "",
             OccurredUtc = DateTime.UtcNow,
-            InputTokens = parsed.InputTokens,
-            CacheTokens = parsed.CacheTokens,
-            WriteTokens = parsed.WriteTokens,
-            CacheWriteTokens = parsed.CacheWriteTokens,
-            InputTokensAfterCache = parsed.InputTokensAfterCache,
-            WriteTokensAfterCache = parsed.WriteTokensAfterCache,
+            InputTokens = usage.InputTokens,
+            CacheTokens = usage.CacheTokens,
+            WriteTokens = usage.WriteTokens,
+            CacheWriteTokens = usage.CacheWriteTokens,
+            InputTokensAfterCache = usage.InputTokensAfterCache,
+            WriteTokensAfterCache = usage.WriteTokensAfterCache,
         };
 
         try

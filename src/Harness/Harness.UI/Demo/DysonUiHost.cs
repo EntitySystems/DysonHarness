@@ -4281,7 +4281,15 @@ public sealed class DysonUiHost : IAsyncDisposable
                         continue;
 
                     var summary = await DysonTurnSummarizer
-                        .SummarizeAsync(provider, _http, turn, reason, cancellationToken: cancellationToken);
+                        .SummarizeAsync(
+                            provider,
+                            _http,
+                            turn,
+                            reason,
+                            cancellationToken: cancellationToken,
+                            recordUsage: session is OpenAiCompatibleAgentSession openAi
+                                ? (usage, token) => openAi.AppendUsageAsync(provider, usage, token)
+                                : null);
 
                     turn.ContextSummary = summary;
                     session.AppendLog($"Turn {turnId:D} summarized, reason: {reason}");

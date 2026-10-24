@@ -50,8 +50,9 @@ Wire (Responses API): nested `reasoning.effort` — same Dyson Responses client 
 | `DefaultReasoningEffort` / `ReasoningModes` | Freeform; Responses sends nested `reasoning.effort` |
 | Nested `reasoning.effort` | Wired on Responses |
 | `prompt_cache_key` | Always sent (session-scoped) |
-| Responses tool-loop (CLIProxy managed) | Stateless: `store: false`, no `previous_response_id`; full local `reasoning` → `function_call` → `function_call_output` replay |
-| `prompt_cache_options` / explicit breakpoints | **Omitted** for CLIProxy managed |
+| Prompt cache | Full replay every tool hop keeps a stable prefix and `prompt_cache_key`. No Anthropic `cache_control` and no Claude cache-anchor user message |
+| Responses tool-loop (CLIProxy managed) | `store: false`, no `previous_response_id`; full local `reasoning` → `function_call` → `function_call_output` replay |
+| `prompt_cache_options` / explicit breakpoints | **Omitted** (`ManagedSource=cliproxy-kimi`) |
 | Direct Kimi Code API key | Separate manual provider — see [kimi-code.md](kimi-code.md) |
 
 ## Gotchas

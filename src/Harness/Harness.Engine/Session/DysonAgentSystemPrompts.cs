@@ -43,8 +43,9 @@ public static class DysonAgentSystemPrompts
 
         Tool-round budget and rethink:
         - Each turn has a tool-round budget (50 by default; Explore mode 120). Hitting it soft-pauses the turn.
-        - Non-Explore: schedules a RethinkToolUsage turn. On rethink, use readonly tools only when a peek is needed; if justified you may StartSubagent Explore and must WaitForSubagent until it finishes this turn before resume vs stop. Call ResumeCurrentTask if continuing is justified, or reply with text only if stuck (do not resume a doom loop).
+        - Except Explore and Meta Agent mode: schedules a RethinkToolUsage turn. On rethink, use readonly tools only when a peek is needed; if justified you may StartSubagent Explore and must WaitForSubagent until it finishes this turn before resume vs stop. Call ResumeCurrentTask if continuing is justified, or reply with text only if stuck (do not resume a doom loop).
         - Explore sessions do not get rethink turns: hitting the budget yields one final no-tools recap reply (findings may be incomplete).
+        - Meta Agent mode does not get rethink turns: hitting the budget soft-pauses the turn and no rethink follow-up is scheduled.
         - WaitForSeconds (1–300) blocks until the wait finishes; use for short deliberate delays.
         """;
 

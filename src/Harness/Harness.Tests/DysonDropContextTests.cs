@@ -19,6 +19,7 @@ public class DysonDropContextTests
         AssertHasDroppableOlderTurn();
         AssertShouldInjectGate();
         AssertThrottle();
+        AssertMetaAgentDoesNotInject();
         AssertDecisionLogging();
         await AssertPromptWithTurnPrependsDropContextAsync();
         AssertOutgoingCounterCountsTranscript();
@@ -206,6 +207,27 @@ public class DysonDropContextTests
             throw new InvalidOperationException("5 user turns after DropContext must allow inject.");
     }
 
+    private static void AssertMetaAgentDoesNotInject()
+    {
+        var session = OverLimitSession(DysonAgentModes.MetaAgent);
+        if (DysonDropContextFlow.ShouldInjectDropContext(session))
+            throw new InvalidOperationException("Meta Agent must not inject DropContext.");
+
+        var decision = DysonDropContextFlow.EvaluateInject(session);
+        if (decision.ShouldInject || decision.SkipReason != "meta-agent")
+            throw new InvalidOperationException("Meta Agent over-limit must skip with reason 'meta-agent'.");
+
+        if (DysonDropContextFlow.TryBeginInject(session))
+            throw new InvalidOperationException("TryBeginInject must be false for Meta Agent.");
+
+        if (session.SnapshotLog().Any(l => l.Contains("drop-context:", StringComparison.Ordinal)))
+            throw new InvalidOperationException("Meta Agent skip must not be session-logged.");
+
+        var drone = OverLimitSession(DysonAgentModes.MetaAgentDrone);
+        if (!DysonDropContextFlow.ShouldInjectDropContext(drone))
+            throw new InvalidOperationException("Meta Agent Drone over-limit must still inject DropContext.");
+    }
+
     private static void AssertDecisionLogging()
     {
         var session = OverLimitSession();
@@ -257,9 +279,9 @@ public class DysonDropContextTests
             throw new InvalidOperationException("PromptWithTurn inject must log drop-context: inject.");
     }
 
-    private static StubSession OverLimitSession()
+    private static StubSession OverLimitSession(string? mode = null)
     {
-        var session = new StubSession(DysonAgentModes.Work)
+        var session = new StubSession(mode ?? DysonAgentModes.Work)
         {
             MaxTargetContextTokens = 1,
         };

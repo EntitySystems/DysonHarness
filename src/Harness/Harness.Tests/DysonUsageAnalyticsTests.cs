@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text;
 using DysonHarness;
 
 namespace Harness.Tests;
@@ -294,6 +296,175 @@ public class DysonUsageAnalyticsTests
         Assert.Equal(31, recap.Totals.WriteTokensAfterCache);
     }
 
+    [Fact]
+    public async Task Missing_usage_writes_nothing_and_zero_usage_still_appends()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var repo = DysonTempDb.Usage(accessor);
+        using var http = new HttpClient();
+        var provider = UsageProvider();
+        var session = UsageSession(provider, http, repo);
+
+        await session.AppendUsageAsync(provider, null);
+        var none = await repo.ListAsync();
+        Assert.False(none.IsError);
+        Assert.Empty(none.Value);
+
+        await session.AppendUsageAsync(provider, new DysonParsedUsage());
+        var zeros = await repo.ListAsync();
+        Assert.False(zeros.IsError);
+        var zero = Assert.Single(zeros.Value);
+        Assert.Equal(0, zero.InputTokens);
+        Assert.Equal(0, zero.WriteTokens);
+        Assert.Equal(0, zero.CacheTokens);
+        Assert.Equal(0, zero.CacheWriteTokens);
+        Assert.Equal(0, zero.InputTokensAfterCache);
+        Assert.Equal(0, zero.WriteTokensAfterCache);
+        Assert.Equal("summarizer-slug", zero.ModelSlug);
+        Assert.Equal("Summarizer", zero.ModelDisplayAlias);
+        Assert.Equal("low", zero.ReasoningEffort);
+        Assert.Equal("wd-usage", zero.WorkDirectoryName);
+        Assert.Equal(Guid.Empty, zero.SessionId);
+        Assert.Equal(Guid.Empty, zero.RootSessionId);
+
+        await session.AppendUsageAsync(
+            provider,
+            new DysonParsedUsage
+            {
+                InputTokens = 9,
+                WriteTokens = 4,
+                CacheTokens = 2,
+                CacheWriteTokens = 1,
+                InputTokensAfterCache = 7,
+                WriteTokensAfterCache = 4,
+            });
+        var both = await repo.ListAsync();
+        Assert.False(both.IsError);
+        Assert.Equal(2, both.Value.Count);
+        Assert.Equal(9, both.Value[0].InputTokens);
+        Assert.Equal(4, both.Value[0].WriteTokens);
+        Assert.Equal(7, both.Value[0].InputTokensAfterCache);
+    }
+
+    [Fact]
+    public async Task Summarizers_append_only_when_usage_object_is_present()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var repo = DysonTempDb.Usage(accessor);
+        var provider = UsageProvider();
+        using var idle = new HttpClient();
+        var session = UsageSession(provider, idle, repo);
+
+        using var withUsage = JsonClient(
+            """
+            {
+              "choices": [{ "message": { "role": "assistant", "content": "Auth uses JwtBearer." } }],
+              "usage": { "prompt_tokens": 11, "completion_tokens": 4 }
+            }
+            """);
+        var summary = await DysonTurnSummarizer.SummarizeAsync(
+            provider,
+            withUsage,
+            SummaryTurn(),
+            recordUsage: (usage, ct) => session.AppendUsageAsync(provider, usage, ct));
+        Assert.Equal("Auth uses JwtBearer.", summary);
+        var listed = await repo.ListAsync();
+        Assert.False(listed.IsError);
+        var row = Assert.Single(listed.Value);
+        Assert.Equal(11, row.InputTokens);
+        Assert.Equal(4, row.WriteTokens);
+        Assert.Equal("summarizer-slug", row.ModelSlug);
+        Assert.Equal("wd-usage", row.WorkDirectoryName);
+
+        using var missing = JsonClient(
+            """
+            { "choices": [{ "message": { "role": "assistant", "content": "no usage" } }] }
+            """);
+        var noUsage = await DysonTurnSummarizer.SummarizeAsync(
+            provider,
+            missing,
+            SummaryTurn(),
+            recordUsage: (usage, ct) => session.AppendUsageAsync(provider, usage, ct));
+        Assert.Equal("no usage", noUsage);
+        Assert.Single((await repo.ListAsync()).Value);
+
+        using var failed = ErrorClient();
+        var fallback = await DysonTurnSummarizer.SummarizeAsync(
+            provider,
+            failed,
+            SummaryTurn(),
+            recordUsage: (usage, ct) => session.AppendUsageAsync(provider, usage, ct));
+        Assert.Contains("[turn summarizer failed:", fallback);
+        Assert.Single((await repo.ListAsync()).Value);
+
+        using var webUsage = JsonClient(
+            """
+            {
+              "choices": [{ "message": { "role": "assistant", "content": "fetched title" } }],
+              "usage": { "prompt_tokens": 0, "completion_tokens": 0 }
+            }
+            """);
+        var web = await DysonWebSearchSummarizer.SummarizeAsync(
+            provider,
+            webUsage,
+            "WebFetch",
+            "{}",
+            "<html>hi</html>",
+            recordUsage: (usage, ct) => session.AppendUsageAsync(provider, usage, ct));
+        Assert.Equal("fetched title", web);
+        var afterZero = await repo.ListAsync();
+        Assert.False(afterZero.IsError);
+        Assert.Equal(2, afterZero.Value.Count);
+        Assert.Equal(0, afterZero.Value[0].InputTokens);
+        Assert.Equal(0, afterZero.Value[0].WriteTokens);
+
+        using var webMissing = JsonClient(
+            """
+            { "choices": [{ "message": { "role": "assistant", "content": "raw kept" } }] }
+            """);
+        var webNo = await DysonWebSearchSummarizer.SummarizeAsync(
+            provider,
+            webMissing,
+            "WebFetch",
+            "{}",
+            "<html>hi</html>",
+            recordUsage: (usage, ct) => session.AppendUsageAsync(provider, usage, ct));
+        Assert.Equal("raw kept", webNo);
+        Assert.Equal(2, (await repo.ListAsync()).Value.Count);
+
+        using var webFail = ErrorClient();
+        var webFallback = await DysonWebSearchSummarizer.SummarizeAsync(
+            provider,
+            webFail,
+            "WebFetch",
+            "{}",
+            "<html>hi</html>",
+            recordUsage: (usage, ct) => session.AppendUsageAsync(provider, usage, ct));
+        Assert.Contains("[web summarizer failed:", webFallback);
+        Assert.Equal(2, (await repo.ListAsync()).Value.Count);
+
+        using var empty = JsonClient(
+            """
+            {
+              "choices": [{ "message": { "role": "assistant", "content": "   " } }],
+              "usage": { "prompt_tokens": 5, "completion_tokens": 1 }
+            }
+            """);
+        var emptySummary = await DysonTurnSummarizer.SummarizeAsync(
+            provider,
+            empty,
+            SummaryTurn(),
+            recordUsage: (usage, ct) => session.AppendUsageAsync(provider, usage, ct));
+        Assert.Contains("[turn summarizer failed:", emptySummary);
+        var afterEmpty = await repo.ListAsync();
+        Assert.False(afterEmpty.IsError);
+        Assert.Equal(3, afterEmpty.Value.Count);
+        Assert.Equal(5, afterEmpty.Value[0].InputTokens);
+        Assert.Equal(1, afterEmpty.Value[0].WriteTokens);
+    }
+
     private static DysonUsageRequestEntity Row(
         Guid rootSessionId,
         string workDirectoryName,
@@ -345,4 +516,75 @@ public class DysonUsageAnalyticsTests
             CacheTokens = cache,
             WriteTokensAfterCache = writeAfterCache,
         };
+
+    private static OpenAiCompatibleAgentProvider UsageProvider()
+    {
+        var entity = new DysonModelProviderEntity
+        {
+            Id = Guid.NewGuid(),
+            DisplayName = "usage-test",
+            ProviderKind = DysonProviderKinds.OpenAICompatible,
+            BaseUrl = "https://example.test/v1",
+            ApiKey = "sk-test",
+            OpenAiApiMode = DysonOpenAiApiModes.Completions,
+        };
+        return new OpenAiCompatibleAgentProvider(
+            entity,
+            new DysonModelSlugEntity
+            {
+                Id = Guid.NewGuid(),
+                ProviderId = entity.Id,
+                Slug = "summarizer-slug",
+                DisplayAlias = "Summarizer",
+                Provider = entity,
+            },
+            "low");
+    }
+
+    private static OpenAiCompatibleAgentSession UsageSession(
+        OpenAiCompatibleAgentProvider provider,
+        HttpClient http,
+        IDysonUsageAnalyticsRepository usage) =>
+        new(
+            DysonAgentModes.Work,
+            new DysonAgentSessionConfig(),
+            provider,
+            http,
+            Path.GetTempPath(),
+            usageAnalytics: usage,
+            workDirectoryName: "wd-usage");
+
+    private static DysonAgentTurn SummaryTurn() =>
+        new()
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "inspect the auth middleware",
+            AssistantText = "JwtBearer is registered",
+            StartedUtc = DateTime.UtcNow,
+            CompletedUtc = DateTime.UtcNow,
+        };
+
+    private static HttpClient JsonClient(string json) =>
+        new(
+            new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            }),
+            disposeHandler: true);
+
+    private static HttpClient ErrorClient() =>
+        new(
+            new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.BadGateway)
+            {
+                Content = new StringContent("nope"),
+            }),
+            disposeHandler: true);
+
+    private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(respond(request));
+    }
 }

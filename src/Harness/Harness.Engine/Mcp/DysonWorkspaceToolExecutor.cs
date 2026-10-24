@@ -3421,7 +3421,10 @@ public sealed partial class DysonWorkspaceToolExecutor
                 rawContent,
                 summarizePrompt,
                 tokens,
-                cancellationToken)
+                cancellationToken,
+                _session is OpenAiCompatibleAgentSession openAi
+                    ? (usage, token) => openAi.AppendUsageAsync(provider, usage, token)
+                    : null)
             .ConfigureAwait(false);
 
         return Ok(call, summary);

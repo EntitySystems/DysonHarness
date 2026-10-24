@@ -60,8 +60,9 @@ Wire (Responses API): nested `reasoning.effort`. Dyson's default modes (`none �
 
 | Topic | Behaviour |
 | ----- | --------- |
-| Tool loop | Stateless like other managed providers: `store:false`, no `previous_response_id`, full local reasoning replay |
-| Body shaping (xAI only) | drops `previous_response_id`, `prompt_cache_retention`, `safety_identifier`, `stream_options`, `stop`; keeps `prompt_cache_key`; ≤ 200 tools; null `content`/invalid `encrypted_content` stripped from reasoning items (foreign blobs from a provider switch: empty, padded, whitespace, `gAAAA…`, non-base64, too short, > 8 MiB); invalid `compaction` items dropped; adjacent summary-only reasoning items merged |
+| Tool loop | Full replay every tool hop: `store:false`, no `previous_response_id`, stable prefix, `prompt_cache_key`. In-flight reasoning items stay in the replay. Finished turns still omit Responses reasoning items |
+| Prompt cache | No Anthropic `cache_control` and no Claude cache-anchor user line. `prompt_cache_options` omitted (`ManagedSource` set). Native `xai-grok` copies `prompt_cache_key` to `x-grok-conv-id`. Legacy `cliproxy-grok` uses the same prefix and `prompt_cache_key` and does not get that header or `cache_control` |
+| Body shaping (native xAI only) | Unchanged. Drops `previous_response_id`, `prompt_cache_retention`, `safety_identifier`, `stream_options`, `stop`; keeps `prompt_cache_key`; ≤ 200 tools; null `content`/invalid `encrypted_content` stripped from reasoning items (foreign blobs from a provider switch: empty, padded, whitespace, `gAAAA…`, non-base64, too short, > 8 MiB); invalid `compaction` items dropped; adjacent summary-only reasoning items merged. That cleanup stays deterministic so hop N and hop N+1 still share a prefix after `Apply`. Legacy `cliproxy-grok` does not run this sanitizer |
 | Streaming | If `response.completed.output` is empty, output is rebuilt from `response.output_item.done` (port of `xaiPatchCompletedOutput`) |
 | Attachments | `/files` uploads are skipped (data-URL path) |
 | Summarizers / web-search summaries | Still POST `/chat/completions` on the session provider; whether the chat-proxy serves it is **unknown**, they degrade to their existing fallback on error |

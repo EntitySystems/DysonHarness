@@ -7,6 +7,12 @@ public static class DysonCliProxyPaths
     public const string ConfigFileName = "config.yaml";
     public const string KeysFileName = "keys.json";
 
+    /// <summary>
+    /// Empty-or-not file under <see cref="InstallRoot"/>. Present means the install-global
+    /// CLIProxy process stays stopped. Absent (the default) means on; start stays lazy.
+    /// </summary>
+    public const string DisabledFlagFileName = "disabled";
+
     public static string InstallRoot =>
         Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "external", "cliproxy"));
 
@@ -22,6 +28,11 @@ public static class DysonCliProxyPaths
 
     public static string ConfigPath => Path.Combine(InstallRoot, ConfigFileName);
 
+    public static string DisabledFlagPath => Path.Combine(InstallRoot, DisabledFlagFileName);
+
+    /// <summary>True when <see cref="DisabledFlagPath"/> exists. Missing file means the proxy is on.</summary>
+    public static bool IsDisabled => File.Exists(DisabledFlagPath);
+
     public static string AuthsDirectory => Path.Combine(InstallRoot, AuthsDirectoryName);
 
     public static string ExecutableFileName =>
@@ -36,7 +47,7 @@ public static class DysonCliProxyPaths
     /// <summary>
     /// Delete sibling version folders under <paramref name="installRoot"/> except
     /// <paramref name="keepVersion"/>. Skips <c>auths/</c> and files
-    /// (<c>config.yaml</c>, <c>keys.json</c>). Call only on force reinstall.
+    /// (<c>config.yaml</c>, <c>keys.json</c>, <c>disabled</c>). Call only on force reinstall.
     /// </summary>
     public static void PruneObsoleteVersionDirectories(string installRoot, string keepVersion)
     {
