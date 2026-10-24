@@ -60,7 +60,7 @@
                                Busy="ContextStepBusy"
                                OnSetEffort="OnSetEffort"
                                OnModesChanged="OnModesChanged" />
-            <div class="models-panel__context" title="Default max target context (blank = harness 100K)">
+            <div class="models-panel__context" title="Default max target context (blank = harness 200K)">
                 <span class="models-panel__effort-label">context</span>
                 <button type="button"
                         class="composer-context-limit__step"
@@ -70,7 +70,7 @@
                 <span class="composer-context-limit__value">
                     @(Slug.DefaultMaxTargetContextTokens is int d
                         ? DysonMaxTargetContextTokens.FormatCompact(d)
-                        : "100K")
+                        : DysonMaxTargetContextTokens.FormatCompact(DysonMaxTargetContextTokens.HarnessDefault))
                 </span>
                 <button type="button"
                         class="composer-context-limit__step"

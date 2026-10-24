@@ -82,6 +82,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     private DysonUserDialogUiState? _pendingUserDialogUi;
     private DysonFileViewerState? _fileViewer;
     private IDisposable? _fileViewerRequestedSub;
+    private IDisposable? _contextTokensChangedSub;
+    private int _lastNotifiedLiveContextTokens;
     private int _fileViewerEpoch;
     private DysonSkillViewerState? _skillViewer;
     private readonly List<string> _pendingSkillNames = [];
@@ -176,6 +178,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         });
         _fileViewerRequestedSub = Bus.Subscribe<DysonFileViewerOpenRequestedEvent>(
             BusScopeKey, HandleFileViewerOpenRequestedAsync).Value;
+        _contextTokensChangedSub = Bus.Subscribe<DysonSessionContextTokensChangedEvent>(
+            DysonBusScopes.Wildcard, OnContextTokensChanged).Value;
         _theme.Changed += OnThemeChanged;
         _runtimeAttachment = runtimeAttachment;
         _usageAnalytics = usageAnalytics;
@@ -795,8 +799,8 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     /// <summary>
     /// Effective max target context for the composer stepper
-    /// (session override → slug default → 100K; 0 = Off).
-    /// Meta Agent is pinned at 150K via <see cref="DysonAgentSession.ResolveEffectiveMaxTargetContextTokens"/>.
+    /// (session override → slug default → 200K; 0 = Off).
+    /// Meta Agent is pinned at 180K via <see cref="DysonAgentSession.ResolveEffectiveMaxTargetContextTokens"/>.
     /// </summary>
     public int SessionMaxTargetContextTokens =>
         _session is not null
@@ -806,12 +810,26 @@ public sealed class DysonUiHost : IAsyncDisposable
                 _pendingSlugDefaultMaxTargetContextTokens);
 
     /// <summary>
-    /// Cached estimated outgoing context tokens for the focused session (0 before the first compute).
-    /// Cheap field read — safe on the render path. Refreshed off-thread at turn boundaries via
-    /// <see cref="RefreshCachedOutgoingContextTokensAsync"/>; never recomputes synchronously here.
+    /// Composer chip value for the focused session: <see cref="DysonAgentSession.LiveContextTokens"/> while a
+    /// turn runs (pushed by <see cref="DysonSessionContextTokensChangedEvent"/>), else the cached idle estimate
+    /// refreshed off-thread via <see cref="RefreshCachedOutgoingContextTokensAsync"/>. Cheap field reads only.
     /// </summary>
     public int SessionOutgoingContextTokens =>
-        _session?.CachedOutgoingContextTokens ?? 0;
+        _session?.LiveContextTokens ?? 0;
+
+    /// <summary>
+    /// Runs on the session loop thread (synchronous bus fan-out): compare and coalesced
+    /// <see cref="Notify"/> only. Components marshal through <c>InvokeAsync</c>.
+    /// </summary>
+    private void OnContextTokensChanged(DysonSessionContextTokensChangedEvent evt)
+    {
+        if (_disposed || _session is not { } focused || focused.PersistenceId != evt.PersistenceId)
+            return;
+        if (Interlocked.Exchange(ref _lastNotifiedLiveContextTokens, evt.Tokens) == evt.Tokens)
+            return;
+
+        Notify(DysonHostChangeKind.Streaming);
+    }
 
     /// <summary>Last provider-reported prompt/input tokens (optional secondary).</summary>
     public int? SessionLastReportedPromptTokens =>
@@ -4032,7 +4050,7 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         if (string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
         {
-            LastError = "Meta Agent context is fixed at 150K.";
+            LastError = "Meta Agent context is fixed at 180K.";
             Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
             return new VoidResult<string>(LastError);
         }
@@ -7541,7 +7559,6 @@ public sealed class DysonUiHost : IAsyncDisposable
                         return persistDropped;
 
                     await session.ApplyChildReportWatchAsync(token).ConfigureAwait(false);
-                    await session.ApplyMetaMaintenanceTickAsync(last, token).ConfigureAwait(false);
 
                     EnqueueHostFollowUpWork(session);
                 }
@@ -8357,6 +8374,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         _notifyCoalescer.Dispose();
         _fileViewerRequestedSub?.Dispose();
         _fileViewerRequestedSub = null;
+        _contextTokensChangedSub?.Dispose();
+        _contextTokensChangedSub = null;
         RevokeFileViewerPreview(_fileViewer);
         _fileViewer = null;
         if (_ownsBus)

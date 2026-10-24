@@ -220,7 +220,7 @@
                 </div>
             </div>
             <div class="composer__footer-secondary">
-                <div class="composer-context-limit" title="@(ContextLimitLocked ? "Meta Agent context is fixed at 150K" : "Max target context (0 = Off). DropContext injects when estimated outgoing tokens exceed this.")">
+                <div class="composer-context-limit" title="@(ContextLimitLocked ? "Meta Agent context is fixed at 180K" : "Max target context (0 = Off). Context is summarized automatically when it passes the limit.")">
                     <span class="composer-effort__label">Context</span>
                     @if (!ContextLimitLocked)
                     {

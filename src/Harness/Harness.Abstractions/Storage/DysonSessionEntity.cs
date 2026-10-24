@@ -34,10 +34,17 @@ public sealed class DysonSessionEntity
     public string? ReasoningEffort { get; set; }
 
     /// <summary>
-    /// Session max target context tokens. Null = inherit slug / harness default (100K);
-    /// 0 = Off (no DropContext inject).
+    /// Session max target context tokens. Null = inherit slug / harness default (200K);
+    /// 0 = Off (no compaction).
     /// </summary>
     public int? MaxTargetContextTokens { get; set; }
+
+    /// <summary>
+    /// Turn whose live context passed the limit and has not been compacted yet. Set when the trip is
+    /// recorded, cleared after the compaction summary succeeds. Non-null on activate or at prompt start
+    /// means the session summarizes before it sends anything.
+    /// </summary>
+    public Guid? CompactionPendingTurnId { get; set; }
 
     public DysonMcpAccessMode McpAccessMode { get; set; }
     public DysonSessionStatus Status { get; set; }

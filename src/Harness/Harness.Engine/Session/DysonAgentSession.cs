@@ -45,8 +45,11 @@ public abstract class DysonAgentSession
     private int _cachedOutgoingContextTokens;
     private int _cachedOutgoingContextTokensGeneration = -1;
     private int _outgoingContextTokensRefreshInFlight;
+    private int _liveContextTokens;
+    private Guid _contextLimitTrippedTurnId;
+    private Guid _compactionRequestedTurnId;
+    private Task _compactionMarkerWrites = Task.CompletedTask;
     private int _childReportRemindersSent;
-    private int _turnsSinceMetaMaintenance;
     private bool _subagentReportAccepted;
     private string? _systemPromptSuffix;
 
@@ -191,18 +194,6 @@ public abstract class DysonAgentSession
     /// synthesizes immediately for Interrupted descendants.
     /// </summary>
     public int ChildReportRemindersSent => _childReportRemindersSent;
-
-    /// <summary>
-    /// Completed non-<see cref="DysonAgentTurnKind.MetaMaintenance"/> turns since the
-    /// last meta-maintenance tick. In-memory only (like <see cref="ChildReportRemindersSent"/>):
-    /// a restart re-counts from zero, which at worst delays one tick. A stored counter
-    /// would add a column for no behavioural gain.
-    /// </summary>
-    public int TurnsSinceMetaMaintenance
-    {
-        get => _turnsSinceMetaMaintenance;
-        internal set => _turnsSinceMetaMaintenance = value;
-    }
 
     /// <summary>
     /// Serializes <c>useWorktree: true</c> Meta Agent Drone spawns from this session so the
@@ -1483,6 +1474,9 @@ public abstract class DysonAgentSession
     /// <summary>True when at least one harness follow-up turn is still queued on the session.</summary>
     public bool HasPendingTurn => !_pendingTurns.IsEmpty;
 
+    /// <summary>True when a queued harness turn has <paramref name="kind"/> (e.g. a CompactConversation FullSummarize).</summary>
+    internal bool HasPendingTurnOfKind(DysonAgentTurnKind kind) => _pendingTurns.Any(t => t.Kind == kind);
+
     /// <summary>Drops all queued harness turns (e.g. on interrupt).</summary>
     public void ClearPendingTurns()
     {
@@ -1537,7 +1531,7 @@ public abstract class DysonAgentSession
 
     /// <summary>
     /// Marks <paramref name="turn"/> as the in-flight prompt turn until disposed.
-    /// Nestable (DropContext inject inside another prompt). Call after <see cref="AddTurn"/>.
+    /// Nestable (an inline harness turn inside another prompt). Call after <see cref="AddTurn"/>.
     /// A Completed/Failed root or child is reopened to <see cref="DysonSessionStatus.Active"/>
     /// at the start of a new in-flight prompt. Stopped/Interrupted stay locked.
     /// Pushes first so <c>DysonTaskLifecycleFlow.Evaluate</c> no-ops while this prompt is in flight
@@ -1572,13 +1566,6 @@ public abstract class DysonAgentSession
     public bool IsInExpandThoughtProcessPhase =>
         IsInPhase(DysonAgentTurnKind.ExpandThoughtProcess);
 
-    /// <summary>
-    /// True while the in-flight turn is <see cref="DysonAgentTurnKind.DropContext"/>
-    /// (blocks nested DropContext inject).
-    /// </summary>
-    public bool IsInDropContextPhase =>
-        IsInPhase(DysonAgentTurnKind.DropContext);
-
     private bool IsInPhase(DysonAgentTurnKind kind)
     {
         var inFlight = InFlightPromptTurn;
@@ -1607,7 +1594,7 @@ public abstract class DysonAgentSession
 
     /// <summary>
     /// Session override for max target context tokens.
-    /// Null = inherit slug / harness default; 0 = Off (no DropContext inject).
+    /// Null = inherit slug / harness default; 0 = Off (no compaction).
     /// </summary>
     public int? MaxTargetContextTokens { get; set; }
 
@@ -1620,8 +1607,8 @@ public abstract class DysonAgentSession
     public int? LastReportedPromptTokens { get; set; }
 
     /// <summary>
-    /// Cascade: session override if set → slug default if set → harness 100K.
-    /// 0 means Off / unlimited (no inject). Meta Agent is pinned to
+    /// Cascade: session override if set → slug default if set → harness 200K.
+    /// 0 means Off / unlimited (no compaction). Meta Agent is pinned to
     /// <see cref="DysonMaxTargetContextTokens.MetaAgentFixed"/> and ignores the
     /// session/slug values (composer stepper cannot move it).
     /// </summary>
@@ -1634,10 +1621,203 @@ public abstract class DysonAgentSession
     /// Estimated tokens for the outbound Completions/Responses payload (idle: no in-flight rounds).
     /// Uncached, authoritative, synchronous — rebuilds the full provider payload every call. Callers on a
     /// UI render path must use <see cref="CachedOutgoingContextTokens"/> / <see cref="RefreshOutgoingContextTokensAsync"/>
-    /// instead; this stays the ground truth used by <see cref="DysonDropContextFlow.EvaluateInject"/> and tests.
+    /// instead; this stays the ground truth used by tests.
     /// </summary>
     public int EstimateOutgoingContextTokens() =>
-        DysonOutgoingContextTokens.Count(this, TokenCounter);
+        DysonOutgoingContextTokens.Count(this, TokenCounter, PreserveReasoningTraces);
+
+    /// <summary>
+    /// Live context while a turn runs: the built request count before each send, then provider
+    /// input + output tokens after each response. Idle (0) falls back to <see cref="CachedOutgoingContextTokens"/>.
+    /// </summary>
+    public int LiveContextTokens
+    {
+        get
+        {
+            var live = Volatile.Read(ref _liveContextTokens);
+            return live > 0 ? live : CachedOutgoingContextTokens;
+        }
+    }
+
+    /// <summary>
+    /// Sets <see cref="LiveContextTokens"/>, publishes <see cref="DysonSessionContextTokensChangedEvent"/>, and
+    /// trips compaction once per turn when the count passes a non-Off limit: records the pending flag and DB marker
+    /// (<see cref="RecordCompactionPending"/>), then publishes <see cref="DysonSessionContextLimitReachedEvent"/>.
+    /// </summary>
+    internal void ReportLiveContextTokens(DysonAgentTurn turn, int tokens)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+
+        var limit = ResolveEffectiveMaxTargetContextTokens();
+        var bus = PersistenceId == Guid.Empty ? null : Config.Bus;
+        var scope = DysonBusScopes.Session(PersistenceId);
+        var previous = Interlocked.Exchange(ref _liveContextTokens, tokens);
+        if (previous != tokens)
+            bus?.Publish(scope, new DysonSessionContextTokensChangedEvent(PersistenceId, tokens, limit));
+
+        if (limit <= 0 || tokens <= limit || _contextLimitTrippedTurnId == turn.Id)
+            return;
+
+        if (!DysonCompactionFlow.CanCompact(this, turn))
+        {
+            if (previous <= limit && DysonCompactionFlow.IsCompactionContinuation(turn))
+                AppendLog($"compaction: continuation is over the limit before its first tool round (live={tokens} max={limit}); sending without compacting");
+            return;
+        }
+
+        _contextLimitTrippedTurnId = turn.Id;
+        AppendLog($"compaction: context limit reached (live={tokens} max={limit})");
+        RecordCompactionPending(turn.Id);
+        bus?.Publish(scope, new DysonSessionContextLimitReachedEvent(PersistenceId, turn.Id, tokens, limit));
+    }
+
+    /// <summary>
+    /// Subscribes this session to its own <see cref="DysonSessionContextLimitReachedEvent"/> for one prompt turn
+    /// (fast path; <see cref="ReportLiveContextTokens"/> also sets the flag directly). Null when there is no bus
+    /// or no persistence id.
+    /// </summary>
+    internal IDisposable? WatchContextLimit()
+    {
+        if (Config.Bus is not { } bus || PersistenceId == Guid.Empty)
+            return null;
+
+        var sub = bus.Subscribe<DysonSessionContextLimitReachedEvent>(
+            DysonBusScopes.Session(PersistenceId),
+            evt => _compactionRequestedTurnId = evt.TurnId);
+        return sub.IsSuccess ? sub.Value : null;
+    }
+
+    /// <summary>True when the live counter tripped compaction for <paramref name="turn"/>; the tool loop stops at the next safe point.</summary>
+    internal bool IsCompactionRequested(DysonAgentTurn turn) =>
+        turn.Id != Guid.Empty && _compactionRequestedTurnId == turn.Id;
+
+    /// <summary>
+    /// A recorded trip has not been compacted yet: this process, or the
+    /// <see cref="DysonSessionEntity.CompactionPendingTurnId"/> marker loaded on activate or at prompt start.
+    /// </summary>
+    internal bool IsCompactionPending => _compactionRequestedTurnId != Guid.Empty;
+
+    /// <summary>Ordered background writes of the pending-compaction marker (awaited by tests).</summary>
+    internal Task CompactionMarkerWrites => _compactionMarkerWrites;
+
+    /// <summary>Sets the in-memory flag and persists the marker so a restart or a missed bus event still compacts.</summary>
+    internal void RecordCompactionPending(Guid turnId)
+    {
+        if (_compactionRequestedTurnId == turnId)
+            return;
+
+        _compactionRequestedTurnId = turnId;
+        QueueCompactionMarkerWrite(turnId);
+    }
+
+    /// <summary>Compaction succeeded: clears the flag and the persisted marker.</summary>
+    internal void ClearCompactionPending()
+    {
+        if (!IsCompactionPending)
+            return;
+
+        _compactionRequestedTurnId = Guid.Empty;
+        QueueCompactionMarkerWrite(null);
+    }
+
+    /// <summary>
+    /// Prompt start: when nothing is pending in memory, reads the DB marker (another host, a failed earlier write,
+    /// or a restart). A failed read keeps the in-memory state.
+    /// </summary>
+    internal async Task<bool> RefreshCompactionPendingAsync(CancellationToken cancellationToken)
+    {
+        if (IsCompactionPending || SessionStore is not { } store || PersistenceId == Guid.Empty)
+            return IsCompactionPending;
+
+        var read = await store.GetCompactionPendingTurnIdAsync(PersistenceId, cancellationToken).ConfigureAwait(false);
+        if (read.IsError)
+            AppendLog($"compaction: pending marker read failed: {read.Error}");
+        else if (read.Value is { } turnId && turnId != Guid.Empty)
+            _compactionRequestedTurnId = turnId;
+
+        return IsCompactionPending;
+    }
+
+    private void QueueCompactionMarkerWrite(Guid? turnId)
+    {
+        if (SessionStore is not { } store || PersistenceId == Guid.Empty)
+            return;
+
+        var sessionId = PersistenceId;
+        var previous = _compactionMarkerWrites;
+        _compactionMarkerWrites = Task.Run(async () =>
+        {
+            await previous.ConfigureAwait(false);
+            try
+            {
+                var write = await store.UpdateSessionMetaAsync(
+                        new DysonSessionMetaUpdate
+                        {
+                            SessionId = sessionId,
+                            UpdateCompactionPending = true,
+                            CompactionPendingTurnId = turnId,
+                        })
+                    .ConfigureAwait(false);
+                if (write.IsError)
+                    AppendLog($"compaction: pending marker write failed: {write.Error}");
+            }
+            catch (Exception ex)
+            {
+                // Background write: a throw would also break every later write in the chain.
+                AppendLog($"compaction: pending marker write failed: {ex.Message}");
+            }
+        });
+    }
+
+    /// <summary>Turn ended: <see cref="LiveContextTokens"/> falls back to the idle estimate.</summary>
+    internal void EndLiveContextTokens() => Volatile.Write(ref _liveContextTokens, 0);
+
+    /// <summary>
+    /// Recomputes <see cref="CachedOutgoingContextTokens"/> and publishes <see cref="LiveContextTokens"/> as
+    /// <see cref="DysonSessionContextTokensChangedEvent"/>. After a summary excludes turns, an idle chip would
+    /// otherwise show the pre-compaction cache until the next request.
+    /// </summary>
+    internal async Task PublishContextTokensAfterExclusionAsync()
+    {
+        await RefreshOutgoingContextTokensAsync().ConfigureAwait(false);
+        if (Config.Bus is { } bus && PersistenceId != Guid.Empty)
+        {
+            bus.Publish(
+                DysonBusScopes.Session(PersistenceId),
+                new DysonSessionContextTokensChangedEvent(
+                    PersistenceId,
+                    LiveContextTokens,
+                    ResolveEffectiveMaxTargetContextTokens()));
+        }
+    }
+
+    /// <summary>
+    /// Whether finished turns replay their stored reasoning items in a full Responses rebuild.
+    /// Set once per prompt turn by <see cref="RefreshPreserveReasoningTracesAsync"/> and held for the
+    /// turn so the prefix stays stable mid-loop. Default true (missing setting).
+    /// </summary>
+    public bool PreserveReasoningTraces { get; internal set; } = true;
+
+    /// <summary>
+    /// Reads <see cref="DysonAppSettingKeys.PreserveReasoningTraces"/> into <see cref="PreserveReasoningTraces"/>.
+    /// Meta Agent skips the read and is always true; no settings port or a failed read is true.
+    /// </summary>
+    internal async Task<bool> RefreshPreserveReasoningTracesAsync(CancellationToken cancellationToken)
+    {
+        var preserve = true;
+        if (!string.Equals(Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase)
+            && Config.AppSettings is { } settings)
+        {
+            var setting = await settings
+                .GetSettingAsync(DysonAppSettingKeys.PreserveReasoningTraces, cancellationToken)
+                .ConfigureAwait(false);
+            preserve = setting.IsError
+                || !string.Equals(setting.Value?.Trim(), "false", StringComparison.OrdinalIgnoreCase);
+        }
+
+        PreserveReasoningTraces = preserve;
+        return preserve;
+    }
 
     /// <summary>
     /// Monotonic counter bumped whenever the outgoing transcript materially changes: a turn is added,
@@ -2128,23 +2308,6 @@ public abstract class DysonAgentSession
                     .ConfigureAwait(false);
                 break;
         }
-    }
-
-    /// <summary>
-    /// After a completed turn is persisted: Meta Agent 15-turn maintenance tick
-    /// (evict older than 40 + enqueue one <see cref="DysonAgentTurnKind.MetaMaintenance"/>).
-    /// No-op outside Meta Agent mode.
-    /// </summary>
-    public Task<VoidResult<string>> ApplyMetaMaintenanceTickAsync(
-        DysonAgentTurn completedTurn,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(completedTurn);
-        return DysonMetaMaintenanceTick.ApplyAfterCompletedTurnAsync(
-            this,
-            completedTurn,
-            SessionStore,
-            cancellationToken);
     }
 
     /// <summary>
@@ -2836,10 +2999,12 @@ public abstract class DysonAgentSession
     public event EventHandler<DysonAgentTurn>? TurnAdded;
 
     /// <summary>
-    /// Raised when an existing turn changes without being appended (question answer record or clear).
-    /// Hosts re-upsert the row. Do not append another TurnStarted log.
+    /// Raised when an existing turn changes without being appended (question answer record or clear,
+    /// sub-agent compaction exclusions). Hosts re-upsert the row. Do not append another TurnStarted log.
     /// </summary>
     public event EventHandler<DysonAgentTurn>? TurnUpdated;
+
+    internal void RaiseTurnUpdated(DysonAgentTurn turn) => TurnUpdated?.Invoke(this, turn);
 
     /// <summary>Appends a turn to history and raises <see cref="TurnAdded"/>.</summary>
     protected void AddTurn(DysonAgentTurn turn)
@@ -2848,21 +3013,6 @@ public abstract class DysonAgentSession
         TurnHistory.Add(turn);
         BumpTranscriptGeneration();
         TurnAdded?.Invoke(this, turn);
-    }
-
-    /// <summary>Hard-removes turns from in-memory history (meta-maintenance eviction).</summary>
-    internal void RemoveTurnsFromHistory(IReadOnlyList<DysonAgentTurn> turns)
-    {
-        ArgumentNullException.ThrowIfNull(turns);
-        if (turns.Count == 0)
-            return;
-
-        var ids = new HashSet<Guid>(turns.Count);
-        foreach (var turn in turns)
-            ids.Add(turn.Id);
-
-        if (TurnHistory.RemoveAll(t => ids.Contains(t.Id)) > 0)
-            BumpTranscriptGeneration();
     }
 
     /// <summary>
@@ -2884,6 +3034,7 @@ public abstract class DysonAgentSession
         DisplayTitle = state.Session.Title;
         Status = state.Session.Status;
         MaxTargetContextTokens = state.Session.MaxTargetContextTokens;
+        _compactionRequestedTurnId = state.Session.CompactionPendingTurnId ?? Guid.Empty;
         WorktreeEnabled = state.Session.WorktreeEnabled;
         WorktreeAbsolutePath = state.Session.WorktreeAbsolutePath;
         WorktreeBranch = state.Session.WorktreeBranch;
@@ -3302,13 +3453,6 @@ public abstract class DysonAgentSession
         DysonExpandThoughtProcess.CreateTurn(focus);
 
     /// <summary>
-    /// Creates a DropContext turn (prune older noise when over max target).
-    /// Does not append to <see cref="TurnHistory"/>.
-    /// </summary>
-    public DysonAgentTurn CreateDropContextTurn() =>
-        DysonDropContextFlow.CreateTurn();
-
-    /// <summary>
     /// Creates a FullSummarize turn (one session summary that replaces earlier turns).
     /// Does not append to <see cref="TurnHistory"/>.
     /// </summary>
@@ -3641,6 +3785,23 @@ public abstract class DysonAgentSession
         var result = ContextOptimizer.Optimize(TurnHistory, TokenCounter);
         BumpTranscriptGeneration();
         return result;
+    }
+
+    /// <summary>
+    /// Runs <see cref="OptimizeContextIfNeeded"/> only when <see cref="DysonAppSettingKeys.ToolHistoryCompaction"/>
+    /// is <c>"true"</c>: compaction rewrites already-cached prefix bytes. Missing setting, no settings port, or a
+    /// failed read is off. Call once at the start of a prompt turn.
+    /// </summary>
+    protected internal async Task OptimizeContextIfEnabledAsync(CancellationToken cancellationToken)
+    {
+        if (Config.AppSettings is not { } settings)
+            return;
+
+        var setting = await settings
+            .GetSettingAsync(DysonAppSettingKeys.ToolHistoryCompaction, cancellationToken)
+            .ConfigureAwait(false);
+        if (!setting.IsError && string.Equals(setting.Value?.Trim(), "true", StringComparison.OrdinalIgnoreCase))
+            OptimizeContextIfNeeded();
     }
 
     public abstract Task<VoidResult<string>> LoadFunctionalContextAsync(

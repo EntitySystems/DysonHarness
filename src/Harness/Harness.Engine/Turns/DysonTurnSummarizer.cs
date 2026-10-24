@@ -5,7 +5,8 @@ namespace DysonHarness;
 
 /// <summary>
 /// One-shot Completions summarizer for turn context compression (UI /summarize worker).
-/// Cap each summary at <see cref="MaxSummaryTokens"/> (tiktoken).
+/// Cap each /summarize result at <see cref="MaxSummaryTokens"/> (tiktoken); the live-compaction
+/// fallback (<see cref="SummarizeForCompactionAsync"/>) is not capped.
 /// </summary>
 public static class DysonTurnSummarizer
 {
@@ -88,6 +89,58 @@ public static class DysonTurnSummarizer
         if (string.IsNullOrWhiteSpace(raw))
             return "(empty turn)";
 
+        var summary = await RequestSummaryAsync(
+                provider, http, raw, reason, DysonTurnSummarizerPrompt.System, tokens, recordUsage, cancellationToken)
+            .ConfigureAwait(false);
+        return summary.IsError
+            ? Fallback(raw, summary.Error)
+            : DysonWebSearchSummarizer.TrimToMaxTokens(summary.Value, tokens, MaxSummaryTokens);
+    }
+
+    /// <summary>
+    /// Live-compaction fallback when the full summary request is over the model window: the same one-shot
+    /// request with <see cref="DysonTurnSummarizerPrompt.CompactionSystem"/>. The reply is not trimmed
+    /// (length is a prompt guideline only), and a failed request is an error, not an excerpt.
+    /// </summary>
+    public static async Task<Result<string, string>> SummarizeForCompactionAsync(
+        OpenAiCompatibleAgentProvider provider,
+        HttpClient http,
+        DysonAgentTurn history,
+        string? reason = null,
+        IDysonTokenCounter? tokens = null,
+        CancellationToken cancellationToken = default,
+        Func<DysonParsedUsage, CancellationToken, Task>? recordUsage = null)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(http);
+        ArgumentNullException.ThrowIfNull(history);
+
+        var raw = FormatTurnBody(history);
+        if (string.IsNullOrWhiteSpace(raw))
+            return Result<string, string>.AsError("Turn summarizer: no history to summarize.");
+
+        return await RequestSummaryAsync(
+                provider,
+                http,
+                raw,
+                reason,
+                DysonTurnSummarizerPrompt.CompactionSystem,
+                tokens ?? new DysonTiktokenTokenCounter(),
+                recordUsage,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task<Result<string, string>> RequestSummaryAsync(
+        OpenAiCompatibleAgentProvider provider,
+        HttpClient http,
+        string raw,
+        string? reason,
+        string system,
+        IDysonTokenCounter tokens,
+        Func<DysonParsedUsage, CancellationToken, Task>? recordUsage,
+        CancellationToken cancellationToken)
+    {
         try
         {
             var user = DysonTurnSummarizerPrompt.FormatUserMessage(raw, reason);
@@ -104,7 +157,7 @@ public static class DysonTurnSummarizer
                     new JsonObject
                     {
                         ["role"] = "system",
-                        ["content"] = DysonTurnSummarizerPrompt.System,
+                        ["content"] = system,
                     },
                     new JsonObject
                     {
@@ -119,20 +172,19 @@ public static class DysonTurnSummarizer
                 .ConfigureAwait(false);
 
             if (response.IsError)
-                return Fallback(raw, response.Error);
+                return Result<string, string>.AsError(response.Error);
 
             var parsed = OpenAiCompletionsClient.Parse(response.Value);
             if (parsed.IsError)
-                return Fallback(raw, parsed.Error);
+                return Result<string, string>.AsError(parsed.Error);
 
             if (parsed.Value.Usage is { } usage && recordUsage is not null)
                 await recordUsage(usage, cancellationToken).ConfigureAwait(false);
 
             var summary = parsed.Value.Content?.Trim() ?? "";
-            if (string.IsNullOrWhiteSpace(summary))
-                return Fallback(raw, "Turn summarizer returned empty content.");
-
-            return DysonWebSearchSummarizer.TrimToMaxTokens(summary, tokens, MaxSummaryTokens);
+            return string.IsNullOrWhiteSpace(summary)
+                ? Result<string, string>.AsError("Turn summarizer returned empty content.")
+                : Result<string, string>.AsValue(summary);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -140,7 +192,7 @@ public static class DysonTurnSummarizer
         }
         catch (Exception ex)
         {
-            return Fallback(raw, ex.Message);
+            return Result<string, string>.AsError(ex.Message);
         }
     }
 

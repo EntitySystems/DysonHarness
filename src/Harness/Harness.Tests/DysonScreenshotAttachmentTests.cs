@@ -594,9 +594,11 @@ public class DysonScreenshotAttachmentTests
         DysonToolCall call,
         DysonToolCallResult result)
     {
-        var attachment = result.BinaryAttachment
+        // A copy: the caller's attachment may already have been emitted as a data URL.
+        // That wire stays frozen; this build is the first emission of the file_id shape.
+        var emitted = CloneResultForWireShape(result);
+        var attachment = emitted.BinaryAttachment
             ?? throw new InvalidOperationException("Expected BinaryAttachment for upload test.");
-        attachment.FileId = null;
 
         var handler = new StubFilesUploadHandler("file-vision-shot-1");
         using var http = new HttpClient(handler);
@@ -623,7 +625,7 @@ public class DysonScreenshotAttachmentTests
         OpenAiFilesClient.EnsureBinaryFileIdsAsync(
             http,
             provider,
-            [result],
+            [emitted],
             onNote: null).GetAwaiter().GetResult();
 
         if (attachment.FileId != "file-vision-shot-1")
@@ -637,7 +639,7 @@ public class DysonScreenshotAttachmentTests
             currentFilePaths: null,
             inFlightRounds:
             [
-                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [emitted]),
             ]);
 
         var imagePart = FindResponsesInputImage(responses.Input)
@@ -651,9 +653,31 @@ public class DysonScreenshotAttachmentTests
             throw new InvalidOperationException(
                 "Responses with FileId must emit input_image.file_id + detail and no data URL/filename.");
         }
+    }
 
-        // Leave attachment without FileId so later history assertions stay on the data-URL path.
-        attachment.FileId = null;
+    private static DysonToolCallResult CloneResultForWireShape(DysonToolCallResult result)
+    {
+        var source = result.BinaryAttachment
+            ?? throw new InvalidOperationException("Expected BinaryAttachment.");
+        return new DysonToolCallResult
+        {
+            CallId = result.CallId,
+            ToolName = result.ToolName,
+            Stage = result.Stage,
+            IsError = result.IsError,
+            Content = result.Content,
+            BinaryAttachment = new DysonBinaryAttachment
+            {
+                FileName = source.FileName,
+                Extension = source.Extension,
+                MimeType = source.MimeType,
+                Base64Data = source.Base64Data,
+                HtmlRef = source.HtmlRef,
+                RemoteUrl = source.RemoteUrl,
+                ObjectKey = source.ObjectKey,
+                RemoteUrlExpiresUtc = source.RemoteUrlExpiresUtc,
+            },
+        };
     }
 
     private static void AssertCompletionsImageUrlEquals(JsonArray messages, string expectedUrl)

@@ -229,13 +229,6 @@ public class DysonTurnSummarizerTests
 
     private static void AssertDropReplacesSummarizeTool()
     {
-        if (DysonDropContextFlow.Instruction.Contains("SummarizeTurns", StringComparison.Ordinal)
-            || !DysonDropContextFlow.Instruction.Contains("DropTurnContext", StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                "DropContext Instruction must use DropTurnContext and not mention SummarizeTurns.");
-        }
-
         var preamble = DysonAgentSystemPrompts.SharedPreamble;
         if (preamble.IndexOf("SummarizeTurns", StringComparison.Ordinal) >= 0
             || preamble.IndexOf("DropTurnContext", StringComparison.Ordinal) < 0)

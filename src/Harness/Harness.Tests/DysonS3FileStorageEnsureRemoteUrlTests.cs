@@ -33,6 +33,33 @@ public class DysonS3FileStorageEnsureRemoteUrlTests
     }
 
     [Fact]
+    public async Task EnsureRemoteUrlAsync_does_not_resign_a_captured_wire()
+    {
+        using var storage = CreateClient();
+        const string url = "https://s3.example.com/dyson/shot.jpg?X-Amz-Signature=abc";
+        var image = new DysonBinaryAttachment
+        {
+            FileName = "shot.jpg",
+            Extension = ".jpg",
+            MimeType = "image/jpeg",
+            Base64Data = Convert.ToBase64String([0xFF, 0xD8, 0xFF, 0xD9]),
+            RemoteUrl = url,
+            ObjectKey = "dyson/2026/09/abc-shot.jpg",
+            RemoteUrlExpiresUtc = DateTime.UtcNow.AddMinutes(-1),
+        };
+        image.CaptureInFlightWire();
+
+        var result = await storage.EnsureRemoteUrlAsync(image);
+        if (result.IsError
+            || image.RemoteUrl != url
+            || image.ObjectKey != "dyson/2026/09/abc-shot.jpg")
+        {
+            throw new InvalidOperationException(
+                "A captured in-flight URL must not be re-signed when the presign expires.");
+        }
+    }
+
+    [Fact]
     public async Task EnsureRemoteUrlAsync_fails_without_bytes_when_url_missing_or_expired()
     {
         using var storage = CreateClient();

@@ -44,8 +44,54 @@ public sealed class DysonBinaryAttachment
     /// <summary>UTC expiry of <see cref="RemoteUrl"/> (presigned GET lifetime).</summary>
     public DateTime? RemoteUrlExpiresUtc { get; set; }
 
+    /// <summary>
+    /// True after the first in-flight transcript emission. Later <see cref="RemoteUrl"/> /
+    /// <see cref="FileId"/> writes must not change that hop's replay.
+    /// </summary>
+    /// <remarks>
+    /// ponytail: the snapshot lives on this instance only. A new process resolves once,
+    /// then freezes again; persisting the snapshot would keep an expired URL forever.
+    /// </remarks>
+    internal bool InFlightWireCaptured { get; private set; }
+
+    /// <summary>Trimmed HTTPS URL from the first in-flight emission, or null when that emission had none.</summary>
+    internal string? CapturedRemoteUrl { get; private set; }
+
+    /// <summary>Files id from the first in-flight emission, or null when that emission had none.</summary>
+    internal string? CapturedFileId { get; private set; }
+
     public bool IsImage =>
         MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Locks the URL and file id that the next replay must use. A second call is a no-op.
+    /// </summary>
+    internal void CaptureInFlightWire()
+    {
+        if (InFlightWireCaptured)
+            return;
+
+        CapturedRemoteUrl = string.IsNullOrWhiteSpace(RemoteUrl) ? null : RemoteUrl.Trim();
+        CapturedFileId = string.IsNullOrEmpty(FileId) ? null : FileId;
+        InFlightWireCaptured = true;
+    }
+
+    /// <summary>
+    /// Wire fields for one emission. <paramref name="capture"/> freezes them the first time
+    /// this attachment is sent on an in-flight hop.
+    /// </summary>
+    internal (string? RemoteUrl, string? FileId) GetReplayWire(bool capture)
+    {
+        if (capture)
+            CaptureInFlightWire();
+
+        if (InFlightWireCaptured)
+            return (CapturedRemoteUrl, CapturedFileId);
+
+        return (
+            string.IsNullOrWhiteSpace(RemoteUrl) ? null : RemoteUrl.Trim(),
+            string.IsNullOrEmpty(FileId) ? null : FileId);
+    }
 }
 
 public sealed class DysonToolCallResult
@@ -104,6 +150,22 @@ public sealed class DysonToolCallResult
             return this;
 
         var source = BinaryAttachment;
+        var wire = source.GetReplayWire(capture: false);
+        var slim = new DysonBinaryAttachment
+        {
+            FileName = source.FileName,
+            Extension = source.Extension,
+            MimeType = source.MimeType,
+            Base64Data = "",
+            FileId = wire.FileId,
+            HtmlRef = source.HtmlRef,
+            RemoteUrl = wire.RemoteUrl,
+            ObjectKey = source.ObjectKey,
+            RemoteUrlExpiresUtc = source.RemoteUrlExpiresUtc,
+        };
+        if (source.InFlightWireCaptured)
+            slim.CaptureInFlightWire();
+
         return new DysonToolCallResult
         {
             CallId = CallId,
@@ -111,18 +173,7 @@ public sealed class DysonToolCallResult
             Stage = Stage,
             IsError = IsError,
             Content = Content,
-            BinaryAttachment = new DysonBinaryAttachment
-            {
-                FileName = source.FileName,
-                Extension = source.Extension,
-                MimeType = source.MimeType,
-                Base64Data = "",
-                FileId = source.FileId,
-                HtmlRef = source.HtmlRef,
-                RemoteUrl = source.RemoteUrl,
-                ObjectKey = source.ObjectKey,
-                RemoteUrlExpiresUtc = source.RemoteUrlExpiresUtc,
-            },
+            BinaryAttachment = slim,
             HtmlVisualization = HtmlVisualization,
             GeneratedImageArtifacts = GeneratedImageArtifacts,
             EndsCurrentTurn = EndsCurrentTurn,
@@ -137,7 +188,7 @@ public sealed class DysonToolCallResult
     public DysonToolCallResult ForPersistence()
     {
         if (BinaryAttachment is { IsImage: true } attachment
-            && !string.IsNullOrWhiteSpace(attachment.RemoteUrl))
+            && !string.IsNullOrWhiteSpace(attachment.GetReplayWire(capture: false).RemoteUrl))
         {
             return WithoutLocalBytes();
         }

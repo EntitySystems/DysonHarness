@@ -16,7 +16,7 @@ public sealed class DysonModelSlugEntity
 
     /// <summary>
     /// Default max target context tokens for new sessions on this slug.
-    /// Null = harness default (100K).
+    /// Null = harness default (200K).
     /// </summary>
     public int? DefaultMaxTargetContextTokens { get; set; }
 

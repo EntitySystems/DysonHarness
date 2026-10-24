@@ -3,27 +3,27 @@ using DysonHarness;
 namespace Harness.Tests;
 
 /// <summary>
-/// ponytail: Meta Agent MaxTargetContextTokens is pinned at 150K; drones keep the cascade.
+/// ponytail: Meta Agent MaxTargetContextTokens is pinned at 180K; drones keep the cascade.
 /// </summary>
 public class DysonMetaAgentContextCapTests
 {
     [Fact]
-    public void Meta_agent_resolves_to_150K_even_when_configured_otherwise()
+    public void Meta_agent_resolves_to_180K_even_when_configured_otherwise()
     {
         var meta = new StubSession(DysonAgentModes.MetaAgent)
         {
             MaxTargetContextTokens = 400_000,
             SlugDefaultMaxTargetContextTokens = 250_000,
         };
-        Assert.Equal(150_000, meta.ResolveEffectiveMaxTargetContextTokens());
+        Assert.Equal(180_000, meta.ResolveEffectiveMaxTargetContextTokens());
         Assert.Equal(DysonMaxTargetContextTokens.MetaAgentFixed, meta.ResolveEffectiveMaxTargetContextTokens());
 
         meta.MaxTargetContextTokens = 0;
-        Assert.Equal(150_000, meta.ResolveEffectiveMaxTargetContextTokens());
+        Assert.Equal(180_000, meta.ResolveEffectiveMaxTargetContextTokens());
 
         meta.MaxTargetContextTokens = null;
         meta.SlugDefaultMaxTargetContextTokens = null;
-        Assert.Equal(150_000, meta.ResolveEffectiveMaxTargetContextTokens());
+        Assert.Equal(180_000, meta.ResolveEffectiveMaxTargetContextTokens());
     }
 
     [Fact]

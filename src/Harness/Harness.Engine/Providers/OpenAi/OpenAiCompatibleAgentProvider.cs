@@ -82,9 +82,18 @@ public sealed class OpenAiCompatibleAgentProvider : DysonAgentProvider
     /// CLIProxy loopback rewrite applies only when <see cref="DysonManagedSources.IsCliProxy"/>.
     /// </summary>
     public string? ManagedSource { get; }
+    /// <summary>
+    /// Identity stamped on stored reasoning items (<see cref="DysonAgentTurn.ReasoningItemsSource"/>):
+    /// <see cref="ManagedSource"/>, else the base URL's scheme://host:port, else <see cref="ProviderId"/>.
+    /// Unmanaged providers all share a null ManagedSource, so the URL keeps their blobs apart.
+    /// </summary>
+    public string? ReasoningSourceTag =>
+        ManagedSource
+        ?? (Uri.TryCreate(BaseUrl, UriKind.Absolute, out var uri) ? uri.GetLeftPart(UriPartial.Authority) : null)
+        ?? ProviderId?.ToString();
     /// <summary>Top-level request reasoning_effort; null/empty = omit.</summary>
     public string? ReasoningEffort { get; set; }
-    /// <summary>Slug default max target context; null = harness 100K.</summary>
+    /// <summary>Slug default max target context; null = harness 200K.</summary>
     public int? DefaultMaxTargetContextTokens { get; }
 
     public static string? NormalizeReasoningEffort(string? value) =>

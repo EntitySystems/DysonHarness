@@ -509,7 +509,7 @@ public static class DysonMetaAgentTools
             Name = "CompactConversation",
             Description =
                 "Enqueue a full session summary that replaces earlier turns in later transcripts. " +
-                "Use before the 40-turn cap bites, or whenever the thread drifts.",
+                "Context is summarized automatically when it passes the limit; use this whenever the thread drifts.",
             InputSchemaJson = """
                 {
                   "type": "object",

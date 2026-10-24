@@ -13,9 +13,10 @@ public static class DysonOutgoingContextTokens
 
     /// <summary>
     /// Build Completions or Responses payload for <paramref name="session"/> (API mode from provider)
-    /// and count string-leaf tokens via <paramref name="counter"/>.
+    /// and count string-leaf tokens via <paramref name="counter"/>. <paramref name="preserveReasoning"/>
+    /// must match the value passed to the live <see cref="OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull"/>.
     /// </summary>
-    public static int Count(DysonAgentSession session, IDysonTokenCounter counter)
+    public static int Count(DysonAgentSession session, IDysonTokenCounter counter, bool preserveReasoning = false)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(counter);
@@ -28,24 +29,44 @@ public static class DysonOutgoingContextTokens
 
         if (useResponses)
         {
-            var built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            return CountBuilt(
+                OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+                    session,
+                    currentUserPrompt: null,
+                    currentFilePaths: null,
+                    inFlightRounds: null,
+                    previousResponseId: null,
+                    preserveReasoning: preserveReasoning),
+                counter);
+        }
+
+        return CountBuilt(
+            OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
                 session,
                 currentUserPrompt: null,
                 currentFilePaths: null,
-                inFlightRounds: null,
-                previousResponseId: null);
-            return CountStringLeaf(built.Instructions, counter)
-                   + CountNode(built.Input, counter)
-                   + CountNode(built.Tools, counter);
-        }
+                inFlightRounds: null),
+            counter);
+    }
 
-        var completions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
-            session,
-            currentUserPrompt: null,
-            currentFilePaths: null,
-            inFlightRounds: null);
-        return CountNode(completions.Messages, counter)
-               + CountNode(completions.Tools, counter);
+    /// <summary>Counts an already-built Responses request (instructions + input + tools), including in-flight rounds.</summary>
+    public static int CountBuilt(
+        OpenAiCacheFriendlyTranscriptBuilder.BuiltResponsesRequest built,
+        IDysonTokenCounter counter)
+    {
+        ArgumentNullException.ThrowIfNull(built);
+        return CountStringLeaf(built.Instructions, counter)
+               + CountNode(built.Input, counter)
+               + CountNode(built.Tools, counter);
+    }
+
+    /// <summary>Counts an already-built Completions request (messages + tools), including in-flight rounds.</summary>
+    public static int CountBuilt(
+        OpenAiCacheFriendlyTranscriptBuilder.BuiltCompletionsRequest built,
+        IDysonTokenCounter counter)
+    {
+        ArgumentNullException.ThrowIfNull(built);
+        return CountNode(built.Messages, counter) + CountNode(built.Tools, counter);
     }
 
     /// <summary>Walk JSON and accumulate tiktoken counts for string leaves (image data URLs → placeholder).</summary>

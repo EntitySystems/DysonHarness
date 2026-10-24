@@ -51,6 +51,14 @@ public interface IDysonSessionRepository
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// <see cref="DysonSessionEntity.CompactionPendingTurnId"/> only (read at prompt start).
+    /// Missing or cross-subject session → error.
+    /// </summary>
+    Task<Result<Guid?, string>> GetCompactionPendingTurnIdAsync(
+        Guid sessionId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Current-subject sessions with <see cref="DysonSessionStatus.Active"/> that still have
     /// at least one turn whose <see cref="DysonTurnEntity.CompletedUtc"/> is null.
     /// Cross-subject rows are never returned.

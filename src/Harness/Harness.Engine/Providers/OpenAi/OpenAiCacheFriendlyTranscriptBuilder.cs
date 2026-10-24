@@ -100,8 +100,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             for (var i = 0; i < inFlightRounds.Count; i++)
             {
                 // Data-URL / Files / non-image re-emit on every in-flight round so hop N+1
-                // still starts with the bytes hop N sent. RemoteUrl images already re-emit.
-                // Finished turns keep attachments off.
+                // still starts with the bytes hop N sent. The first emission freezes the
+                // URL, file id, or data URL; a later RemoteUrl / FileId write is ignored.
+                // Finished turns keep data-URL / Files / non-image attachments off.
                 AppendToolRoundCompletions(
                     messages,
                     inFlightRounds[i],
@@ -140,13 +141,16 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     /// Full Responses rebuild (after compaction, new user turn, mid-loop fallback, or managed replay).
     /// Direct OpenAI: <c>store: true</c> and optional <paramref name="previousResponseId"/> for chaining.
     /// Managed/CLIProxy: <c>store: false</c>, never chains; replays reasoning → function_call → outputs.
+    /// <paramref name="preserveReasoning"/>: finished turns also replay their stored reasoning items
+    /// when the stored source matches the current <see cref="OpenAiCompatibleAgentProvider.ReasoningSourceTag"/>.
     /// </summary>
     public static BuiltResponsesRequest BuildResponsesFull(
         DysonAgentSession session,
         string? currentUserPrompt,
         IReadOnlyList<string>? currentFilePaths,
         IReadOnlyList<InFlightToolRound>? inFlightRounds = null,
-        string? previousResponseId = null)
+        string? previousResponseId = null,
+        bool preserveReasoning = false)
     {
         ArgumentNullException.ThrowIfNull(session);
 
@@ -155,7 +159,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         var instructions = BuildSystemText(session);
         var input = new JsonArray();
 
-        AppendHistoryAsResponsesInput(input, session, claudeCache);
+        AppendHistoryAsResponsesInput(input, session, claudeCache, preserveReasoning);
 
         var liveComments = LiveAnchoredComments(session);
         var nextComment = 0;
@@ -164,7 +168,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         {
             for (var i = 0; i < inFlightRounds.Count; i++)
             {
-                // Same prefix rule as Completions: every earlier round's binary stays.
+                // Same prefix rule as Completions: every earlier round's binary stays,
+                // including the URL / file id / data URL frozen on its first emission.
                 AppendToolRoundResponses(
                     input,
                     inFlightRounds[i],
@@ -235,7 +240,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         foreach (var result in newResults)
         {
             if (!result.IsError && result.BinaryAttachment is { } attachment)
-                AppendResponsesBinaryAttachment(input, attachment);
+                AppendResponsesBinaryAttachment(input, attachment, captureWire: true);
         }
 
         return new BuiltResponsesRequest(
@@ -306,11 +311,12 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         DysonAgentTurn turn,
         int index,
         bool responses,
-        bool stampClaude)
+        bool stampClaude,
+        bool captureWire)
     {
         var content = responses
-            ? BuildResponsesTurnUserContent(session, turn, index)
-            : BuildCompletionsTurnUserContent(session, turn, index);
+            ? BuildResponsesTurnUserContent(session, turn, index, captureWire)
+            : BuildCompletionsTurnUserContent(session, turn, index, captureWire);
         return stampClaude ? WithClaudeCacheOnLastTextPart(content, responses) : content;
     }
 
@@ -438,7 +444,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                         turn,
                         i,
                         responses: false,
-                        stampClaude: claudeCache && incompleteCurrent),
+                        stampClaude: claudeCache && incompleteCurrent,
+                        captureWire: incompleteCurrent),
                 });
             }
 
@@ -467,7 +474,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             }
 
             // History: data-URL / Files stay off; RemoteUrl images still re-emit.
-            AppendTurnToolsWithComments(messages, turn, comments, responses: false);
+            AppendTurnToolsWithComments(messages, turn, comments, responses: false, replayReasoning: false);
 
             if (!string.IsNullOrEmpty(turn.AssistantText))
             {
@@ -483,8 +490,10 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     private static void AppendHistoryAsResponsesInput(
         JsonArray input,
         DysonAgentSession session,
-        bool claudeCache)
+        bool claudeCache,
+        bool preserveReasoning)
     {
+        var currentSource = (session.Provider as OpenAiCompatibleAgentProvider)?.ReasoningSourceTag;
         var turns = session.Turns;
         var incompleteIndex = FindIncompleteCurrentIndex(session);
         for (var i = 0; i < turns.Count; i++)
@@ -530,7 +539,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                         turn,
                         i,
                         responses: true,
-                        stampClaude: claudeCache && incompleteCurrent),
+                        stampClaude: claudeCache && incompleteCurrent,
+                        captureWire: incompleteCurrent),
                 });
             }
 
@@ -557,10 +567,19 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 continue;
             }
 
-            AppendTurnToolsWithComments(input, turn, comments, responses: true);
+            // Foreign blobs (another provider source) would be rejected; drop them.
+            var replayReasoning = preserveReasoning
+                && string.Equals(turn.ReasoningItemsSource, currentSource, StringComparison.Ordinal);
+            AppendTurnToolsWithComments(input, turn, comments, responses: true, replayReasoning);
 
             if (!string.IsNullOrEmpty(turn.AssistantText))
             {
+                if (replayReasoning && turn.FinalReasoningItems is { Count: > 0 } finalReasoning)
+                {
+                    foreach (var item in finalReasoning)
+                        input.Add(item.DeepClone());
+                }
+
                 input.Add(new JsonObject
                 {
                     ["role"] = "assistant",
@@ -639,17 +658,19 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
     /// <summary>
     /// Completed turn tools. Recorded <see cref="DysonAgentTurn.ToolRoundCallCounts"/> that sum to
-    /// <see cref="DysonAgentTurn.ToolCalls"/> replay each round through the in-flight appenders
-    /// (no reasoning items). Otherwise one chunk per comment-anchor span (legacy). Anchor 0 is
+    /// <see cref="DysonAgentTurn.ToolCalls"/> replay each round through the in-flight appenders,
+    /// with that round's stored reasoning items when <paramref name="replayReasoning"/> (Responses
+    /// only). Otherwise one chunk per comment-anchor span (legacy, no reasoning). Anchor 0 is
     /// already emitted. Null anchors follow all tools, before the final assistant text.
     /// </summary>
     private static void AppendTurnToolsWithComments(
         JsonArray target,
         DysonAgentTurn turn,
         List<DysonReasoningSegment> comments,
-        bool responses)
+        bool responses,
+        bool replayReasoning)
     {
-        if (TryAppendRecordedToolRounds(target, turn, comments, responses))
+        if (TryAppendRecordedToolRounds(target, turn, comments, responses, replayReasoning))
             return;
 
         var calls = turn.ToolCalls;
@@ -678,7 +699,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         JsonArray target,
         DysonAgentTurn turn,
         List<DysonReasoningSegment> comments,
-        bool responses)
+        bool responses,
+        bool replayReasoning)
     {
         var counts = turn.ToolRoundCallCounts;
         if (counts.Count == 0)
@@ -703,12 +725,16 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         var next = 0;
         var offset = 0;
         var cumulative = 0;
-        foreach (var count in counts)
+        for (var roundIndex = 0; roundIndex < counts.Count; roundIndex++)
         {
+            var count = counts[roundIndex];
             if (count > 0)
             {
                 var slice = turn.ToolCalls.GetRange(offset, count);
-                var round = new InFlightToolRound(slice, ResultsForCalls(turn, slice));
+                var reasoning = replayReasoning && responses
+                    ? turn.ToolRoundReasoningItems.ElementAtOrDefault(roundIndex)
+                    : null;
+                var round = new InFlightToolRound(slice, ResultsForCalls(turn, slice), reasoning);
                 if (responses)
                     AppendToolRoundResponses(target, round, includeBinaryAttachments: false);
                 else
@@ -866,7 +892,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 && result is { IsError: false, BinaryAttachment: { } attachment }
                 && ShouldEmitBinaryAttachment(attachment, includeBinaryAttachments))
             {
-                AppendCompletionsBinaryAttachment(messages, attachment);
+                AppendCompletionsBinaryAttachment(messages, attachment, includeBinaryAttachments);
             }
         }
     }
@@ -896,7 +922,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 && result is { IsError: false, BinaryAttachment: { } attachment }
                 && ShouldEmitBinaryAttachment(attachment, includeBinaryAttachments))
             {
-                AppendResponsesBinaryAttachment(input, attachment);
+                AppendResponsesBinaryAttachment(input, attachment, includeBinaryAttachments);
             }
         }
     }
@@ -904,13 +930,15 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     /// <summary>
     /// RemoteUrl images emit on every rebuild (in-flight + history). Data-URL / Files / non-image
     /// emit on every in-flight round (<paramref name="includeBinaryAttachments"/>) and stay off
-    /// for finished turns.
+    /// for finished turns. A frozen in-flight wire keeps that choice: a RemoteUrl written after
+    /// a data-URL emission does not start appearing in history.
     /// </summary>
     private static bool ShouldEmitBinaryAttachment(
         DysonBinaryAttachment attachment,
         bool includeBinaryAttachments) =>
-        (attachment.IsImage && !string.IsNullOrWhiteSpace(attachment.RemoteUrl))
-        || includeBinaryAttachments;
+        includeBinaryAttachments
+        || (attachment.IsImage
+            && !string.IsNullOrWhiteSpace(attachment.GetReplayWire(capture: false).RemoteUrl));
 
     /// <summary>
     /// Completions: short tool ack already emitted; follow with a user multimodal message.
@@ -919,8 +947,10 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     /// </summary>
     private static void AppendCompletionsBinaryAttachment(
         JsonArray messages,
-        DysonBinaryAttachment attachment)
+        DysonBinaryAttachment attachment,
+        bool captureWire)
     {
+        var wire = attachment.GetReplayWire(captureWire);
         var parts = new JsonArray
         {
             new JsonObject
@@ -937,7 +967,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 ["type"] = "image_url",
                 ["image_url"] = new JsonObject
                 {
-                    ["url"] = BuildImageUrl(attachment),
+                    ["url"] = ImageUrlFromWire(attachment, wire.RemoteUrl),
                     ["detail"] = "auto",
                 },
             });
@@ -969,8 +999,10 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     /// </summary>
     private static void AppendResponsesBinaryAttachment(
         JsonArray input,
-        DysonBinaryAttachment attachment)
+        DysonBinaryAttachment attachment,
+        bool captureWire)
     {
+        var wire = attachment.GetReplayWire(captureWire);
         var parts = new JsonArray
         {
             new JsonObject
@@ -981,13 +1013,13 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         };
 
         if (attachment.IsImage)
-            AppendResponsesInputImage(parts, attachment);
-        else if (!string.IsNullOrEmpty(attachment.FileId))
+            AppendResponsesInputImage(parts, attachment, wire);
+        else if (!string.IsNullOrEmpty(wire.FileId))
         {
             parts.Add(new JsonObject
             {
                 ["type"] = "input_file",
-                ["file_id"] = attachment.FileId,
+                ["file_id"] = wire.FileId,
             });
         }
         else
@@ -1007,25 +1039,28 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         });
     }
 
-    private static void AppendResponsesInputImage(JsonArray parts, DysonBinaryAttachment attachment)
+    private static void AppendResponsesInputImage(
+        JsonArray parts,
+        DysonBinaryAttachment attachment,
+        (string? RemoteUrl, string? FileId) wire)
     {
-        if (!string.IsNullOrWhiteSpace(attachment.RemoteUrl))
+        if (!string.IsNullOrWhiteSpace(wire.RemoteUrl))
         {
             parts.Add(new JsonObject
             {
                 ["type"] = "input_image",
-                ["image_url"] = BuildImageUrl(attachment),
+                ["image_url"] = wire.RemoteUrl,
                 ["detail"] = "auto",
             });
             return;
         }
 
-        if (!string.IsNullOrEmpty(attachment.FileId))
+        if (!string.IsNullOrEmpty(wire.FileId))
         {
             parts.Add(new JsonObject
             {
                 ["type"] = "input_image",
-                ["file_id"] = attachment.FileId,
+                ["file_id"] = wire.FileId,
                 ["detail"] = "auto",
             });
             return;
@@ -1039,14 +1074,9 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         });
     }
 
-    /// <summary>HTTPS RemoteUrl when set; otherwise a data URL. Images only.</summary>
-    private static string BuildImageUrl(DysonBinaryAttachment attachment)
-    {
-        if (!string.IsNullOrWhiteSpace(attachment.RemoteUrl))
-            return attachment.RemoteUrl.Trim();
-
-        return BuildDataUrl(attachment);
-    }
+    /// <summary>Frozen or live HTTPS RemoteUrl when set; otherwise a data URL. Images only.</summary>
+    private static string ImageUrlFromWire(DysonBinaryAttachment attachment, string? remoteUrl) =>
+        string.IsNullOrWhiteSpace(remoteUrl) ? BuildDataUrl(attachment) : remoteUrl;
 
     private static string BuildDataUrl(DysonBinaryAttachment attachment) =>
         $"data:{attachment.MimeType};base64,{attachment.Base64Data}";
@@ -1138,7 +1168,8 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     private static string FormatTurnUserContent(
         DysonAgentSession session,
         DysonAgentTurn turn,
-        int zeroBasedIndex)
+        int zeroBasedIndex,
+        bool captureWire)
     {
         var sb = new StringBuilder();
         sb.Append("[turnId=");
@@ -1156,7 +1187,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             sb.Append(turn.HiddenInstruction.Trim());
         }
 
-        AppendLiveImageUrls(sb, turn);
+        AppendLiveImageUrls(sb, turn, captureWire);
 
         if (turn.UserImages.Count > 0)
         {
@@ -1196,16 +1227,19 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         || turn.UserImages.Count > 0;
 
     /// <summary>
-    /// <c>Attached urls:</c> from each user image whose <see cref="DysonBinaryAttachment.RemoteUrl"/>
-    /// is set right now. Skips images with no URL. Does not write the URL into
-    /// <see cref="DysonAgentTurn.HiddenInstruction"/> or clear <see cref="DysonBinaryAttachment.Base64Data"/>.
+    /// <c>Attached urls:</c> from each user image whose replay URL is set. The in-flight turn
+    /// freezes that URL on first emission. A finished turn that was never frozen still follows
+    /// the attachment's current <see cref="DysonBinaryAttachment.RemoteUrl"/>. Skips images with
+    /// no URL. Does not write the URL into <see cref="DysonAgentTurn.HiddenInstruction"/> or
+    /// clear <see cref="DysonBinaryAttachment.Base64Data"/>.
     /// </summary>
-    private static void AppendLiveImageUrls(StringBuilder sb, DysonAgentTurn turn)
+    private static void AppendLiveImageUrls(StringBuilder sb, DysonAgentTurn turn, bool captureWire)
     {
         var wroteHeader = false;
         foreach (var image in turn.UserImages)
         {
-            if (string.IsNullOrWhiteSpace(image.RemoteUrl))
+            var url = image.GetReplayWire(captureWire).RemoteUrl;
+            if (string.IsNullOrWhiteSpace(url))
                 continue;
 
             if (!wroteHeader)
@@ -1220,7 +1254,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
             sb.Append("- ");
             sb.Append(image.FileName);
             sb.Append(' ');
-            sb.AppendLine(image.RemoteUrl.Trim());
+            sb.AppendLine(url);
         }
     }
 
@@ -1300,9 +1334,10 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     private static JsonNode BuildCompletionsTurnUserContent(
         DysonAgentSession session,
         DysonAgentTurn turn,
-        int zeroBasedIndex)
+        int zeroBasedIndex,
+        bool captureWire)
     {
-        var text = FormatTurnUserContent(session, turn, zeroBasedIndex);
+        var text = FormatTurnUserContent(session, turn, zeroBasedIndex, captureWire);
         if (turn.UserImages.Count == 0)
             return text;
 
@@ -1317,12 +1352,13 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
         foreach (var image in turn.UserImages)
         {
+            var wire = image.GetReplayWire(captureWire);
             parts.Add(new JsonObject
             {
                 ["type"] = "image_url",
                 ["image_url"] = new JsonObject
                 {
-                    ["url"] = BuildImageUrl(image),
+                    ["url"] = ImageUrlFromWire(image, wire.RemoteUrl),
                     ["detail"] = "auto",
                 },
             });
@@ -1338,9 +1374,10 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     private static JsonNode BuildResponsesTurnUserContent(
         DysonAgentSession session,
         DysonAgentTurn turn,
-        int zeroBasedIndex)
+        int zeroBasedIndex,
+        bool captureWire)
     {
-        var text = FormatTurnUserContent(session, turn, zeroBasedIndex);
+        var text = FormatTurnUserContent(session, turn, zeroBasedIndex, captureWire);
         if (turn.UserImages.Count == 0)
             return text;
 
@@ -1354,7 +1391,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         };
 
         foreach (var image in turn.UserImages)
-            AppendResponsesInputImage(parts, image);
+            AppendResponsesInputImage(parts, image, image.GetReplayWire(captureWire));
 
         return parts;
     }

@@ -15,7 +15,7 @@ public class DysonFullSummarizeTests
         AssertCreateTurn();
         AssertShouldApplyAfterCompletion();
         AssertApplyDropsEarlierKeepsSelf();
-        AssertApplyTrimsOverCap();
+        AssertApplyKeepsLongSummary();
         AssertApplySkipsAlreadyExcluded();
         AssertNotTaskEndReflectionTrigger();
     }
@@ -32,18 +32,16 @@ public class DysonFullSummarizeTests
 
     private static void AssertInstruction()
     {
-        if (DysonFullSummarizeFlow.MaxSummaryCharacters != 6_000)
-            throw new InvalidOperationException("MaxSummaryCharacters must be 6,000.");
-
         var instruction = DysonFullSummarizeFlow.Instruction;
-        if (!instruction.Contains("6,000 characters", StringComparison.Ordinal)
+        if (!instruction.Contains("under about 35,000 tokens (roughly 140,000 characters)", StringComparison.Ordinal)
+            || instruction.Contains("6,000", StringComparison.Ordinal)
             || !instruction.Contains("Do not call tools", StringComparison.Ordinal)
             || !instruction.Contains("exclude every previous turn", StringComparison.Ordinal)
             || !instruction.Contains("DropTurnContext", StringComparison.Ordinal)
             || instruction.Contains("SummarizeTurns", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "Instruction must mention 6,000 characters, no tools, and drop-after.");
+                "Instruction must give the 35K-token guideline, no tools, and drop-after.");
         }
     }
 
@@ -118,29 +116,20 @@ public class DysonFullSummarizeTests
         }
     }
 
-    private static void AssertApplyTrimsOverCap()
+    private static void AssertApplyKeepsLongSummary()
     {
         var session = new StubSession();
         var earlier = Completed(DysonAgentTurnKind.Normal, "old");
         var summary = DysonFullSummarizeFlow.CreateTurn();
-        summary.AssistantText = new string('x', DysonFullSummarizeFlow.MaxSummaryCharacters + 25);
+        var text = new string('x', 50_000);
+        summary.AssistantText = text;
         summary.CompletedUtc = DateTime.UtcNow;
         session.AddTurnForTest(earlier);
         session.AddTurnForTest(summary);
 
         DysonFullSummarizeFlow.ApplyAfterCompletion(session, summary);
-        if (summary.AssistantText is null
-            || summary.AssistantText.Length != DysonFullSummarizeFlow.MaxSummaryCharacters)
-        {
-            throw new InvalidOperationException(
-                "ApplyAfterCompletion must hard-trim AssistantText over 6,000 characters.");
-        }
-
-        var exact = DysonFullSummarizeFlow.CreateTurn();
-        exact.AssistantText = new string('y', DysonFullSummarizeFlow.MaxSummaryCharacters);
-        DysonFullSummarizeFlow.ApplyAfterCompletion(session, exact);
-        if (exact.AssistantText.Length != DysonFullSummarizeFlow.MaxSummaryCharacters)
-            throw new InvalidOperationException("Text at the 6,000 cap must not be trimmed further.");
+        if (!string.Equals(summary.AssistantText, text, StringComparison.Ordinal) || !earlier.IsExcludedFromContext)
+            throw new InvalidOperationException("ApplyAfterCompletion must keep a long summary intact.");
     }
 
     private static void AssertApplySkipsAlreadyExcluded()

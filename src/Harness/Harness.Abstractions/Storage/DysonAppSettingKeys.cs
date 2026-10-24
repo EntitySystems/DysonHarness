@@ -151,6 +151,19 @@ public static class DysonAppSettingKeys
     public const string AgentModeToolPolicy = "agent_mode_tool_policy";
 
     /// <summary>
+    /// Replay stored reasoning items for finished turns: <c>"true"</c> / <c>"false"</c>.
+    /// Missing ⇒ <c>true</c>. Read at the start of each prompt turn. Meta Agent ignores it (always on).
+    /// </summary>
+    public const string PreserveReasoningTraces = "preserve_reasoning_traces";
+
+    /// <summary>
+    /// Experimental <c>DysonContextOptimizer</c> tool-history compaction: only <c>"true"</c> enables it.
+    /// Missing / anything else ⇒ off (full tool history, cache-stable prefix). Read at the start of each
+    /// prompt turn, all modes. Turns already compacted keep their compact form.
+    /// </summary>
+    public const string ToolHistoryCompaction = "tool_history_compaction";
+
+    /// <summary>
     /// Local CLIProxyAPI Bearer key for <c>/v1/*</c> (mirrored from
     /// <c>external/cliproxy/keys.json</c> when a managed provider connects).
     /// </summary>

@@ -299,7 +299,7 @@ public static class DysonAgentSystemPrompts
         Roster hygiene:
         - DeleteMetaAgent on a finished agent whose result is already recorded in a todo or a posted message. It deletes that agent and its children permanently.
         - It refuses while the agent or any of its children is still running, and refuses while its worktree is unmerged. An unmerged worktree means work would be lost: merge it, or stop the drone with discardWorktree first.
-        - Periodically the harness sends you a maintenance turn listing your finished agents. When it does, delete the ones you no longer need, oldest first, until at most 20 finished agents remain. That turn is the moment to prune — do not audit the roster on every dispatch.
+        - When more than 20 finished agents pile up, delete the ones you no longer need, oldest first, until at most 20 remain. Do not audit the roster on every dispatch.
         - Before deleting, make sure anything worth keeping from an agent's report is already in a todo or a posted message. Deleting an agent deletes its report with it.
         - A finished agent you will never message again is dead weight: it costs roster tokens on every dispatch and buries the running agents you actually need to see.
 
@@ -339,13 +339,13 @@ public static class DysonAgentSystemPrompts
         - Call ListNotes to see your notes. It returns each name and its token count, not the text.
         - Call CanCreateNote before every CreateNote or UpdateNote.
         - Write when a task finishes or the user states a lasting preference. Not every turn. Not a chat log. Not a second plan system (plans stay ListPlans / drones).
-        - Notes remember what previous tasks accomplished, and standing user guidelines that should change later behavior when that topic comes up. The transcript keeps about the newest 40 turns; notes are the durable copy.
+        - Notes remember what previous tasks accomplished, and standing user guidelines that should change later behavior when that topic comes up. Older turns get summarized away; notes are the durable copy.
         - 20 notes, 1000 tokens each, 20000 total. At 20 notes, update or delete; do not keep creating.
         - UpdateNote takes content to replace the whole note, or old_text and new_text, or edits. After a trim, rewrite with content if the old text is gone.
 
         Context:
-        - Your transcript is trimmed back to the newest 40 turns periodically; older turns are deleted permanently.
-        - Before the cap bites, or whenever the thread drifts, call CompactConversation.
+        - Context is summarized automatically when it passes the limit.
+        - Whenever the thread drifts, call CompactConversation.
         - Anything not in a todo, a compaction summary, a scratch note, or a child report (ListMetaAgentDrones returns the last report per agent) is lost. A posted message is shown to the user and is not in later turns.
         """;
 

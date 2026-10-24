@@ -167,10 +167,12 @@ public sealed class DysonS3FileStorage : IDisposable
     }
 
     /// <summary>
-    /// No-op when <see cref="DysonBinaryAttachment.RemoteUrl"/> is still valid (non-empty and
-    /// unexpired). Otherwise uploads <see cref="DysonBinaryAttachment.Base64Data"/> and sets
+    /// No-op when the attachment's in-flight wire is already captured, or when
+    /// <see cref="DysonBinaryAttachment.RemoteUrl"/> is still valid (non-empty and unexpired).
+    /// Otherwise uploads <see cref="DysonBinaryAttachment.Base64Data"/> and sets
     /// RemoteUrl / ObjectKey / RemoteUrlExpiresUtc on the same instance.
-    /// Does not re-sign a still-valid URL (signature rotation would bust prompt cache).
+    /// Does not replace an already-emitted URL, and does not re-sign a still-valid URL
+    /// (a new signature or expiry would bust the prompt-cache prefix).
     /// </summary>
     public async Task<Result<DysonBinaryAttachment, string>> EnsureRemoteUrlAsync(
         DysonBinaryAttachment image,
@@ -180,7 +182,7 @@ public sealed class DysonS3FileStorage : IDisposable
         if (!image.IsImage)
             return Result<DysonBinaryAttachment, string>.AsError("Only images can be uploaded to file storage.");
 
-        if (HasValidRemoteUrl(image))
+        if (image.InFlightWireCaptured || HasValidRemoteUrl(image))
             return Result<DysonBinaryAttachment, string>.AsValue(image);
 
         if (string.IsNullOrWhiteSpace(image.Base64Data))

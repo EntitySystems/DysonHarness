@@ -6,6 +6,12 @@ Simulated quota-relevant tokens for one hierarchy: root Meta Agent, Meta Agent D
 - **current** — this checkout: `tools[]` only, tool rounds collapsed when the turn is replayed, optimizer on every prompt once the turn count sticks, rename mandate only while the user turn is in flight.
 - **plan 151** — per-round replay without previous-turn reasoning, optimizer in batches, rename mandate kept on that same user message. Not built here; this file only models it.
 
+**Status since these numbers were run.** The tables below are the original simulation and were not re-run. The checkout has since moved past both modeled columns:
+
+- Finished turns replay their stored Responses reasoning items when `preserve_reasoning_traces` is on (default; Meta Agent always) and the provider source matches. A next prompt no longer drops the reasoning objects the in-flight hops sent, so scenario G's once-per-turn miss is gone with the setting on. That matches the "replaying that reasoning too" figure under G. Completions (A–F) never carried reasoning and are unchanged. See the reasoning rule in [README.md](README.md#openai-compatible-provider).
+- `DysonContextOptimizer` is off by default (`tool_history_compaction`, experimental). With it off, no history rewrite happens on any prompt: full tool JSON stays in history, so gross input and cache read go up and the optimizer cache writes go away. The optimizer rows below describe the setting turned on.
+- The automatic Drop Context inject is removed. The scripted DropTurnContext in scenario B now only happens if the agent calls `DropTurnContext` itself. Over the limit, the harness instead pauses the turn and summarizes ([context compaction](README.md#context-compaction)): one summary request built to reuse the cached prefix, then a new prefix that starts at the summary.
+
 ## Cost index
 
 Not a bill. Weights are a comparable Anthropic-style index on quota-relevant input tokens:
@@ -48,8 +54,8 @@ The old column adds a second copy of that role's `tools[]` token count into the 
 - Plan 151: delete the sticky count check. Trigger when the number of non-excluded, not-yet-optimized turns outside that same window is `>= 10`, **or** their eligible text is over 10,000. One pass still compacts everything currently outside the window. `OptimizeContextIfNeeded` runs at the start of `PromptWithTurnAsync`, **before** `AddTurn` (`OpenAiCompatibleAgentSession`), so the new turn is not in the count yet.
 - Eligible text follows `BuildUnoptimizedEligibleText`: tool name, arguments JSON, and `FormatResponseLog`, not the wire JSON. This sim uses the measured per-round eligible size below.
 - Rename mandate (`DysonSessionInitialization.RenameSessionReviewMandate`, **53** tokens) is appended by `FormatTurnUserContent` only while `incompleteCurrent` is true, on chrome-skipped slots 1, 9, 17, …. Plan 151 removes that bail. Plan-mode `PlanFirstTurnMandate` (**79** tokens) is the same bug; these scenarios are not Plan mode, so it does not fire.
-- DropTurnContext (`DysonDropContextFlow`): no plan-151 code change. Scenario B forces one extra call at user turn 16, then marks the oldest 6 turns excluded. The real inject also needs the session over its max-target token cap (`EvaluateInject`); that cap is not modeled. Keep-4 and the 5-user-turn throttle are why a single inject is the right shape.
-- Responses reasoning (`AppendToolRoundResponses`) is on the in-flight hop only. Plan 151 does not store it. Scenario G is the only Responses run. A–F are Completions-shaped (no reasoning items).
+- DropTurnContext: scenario B forces one extra call at user turn 16, then marks the oldest 6 turns excluded. When this was simulated, that call came from the harness Drop Context inject (`DysonDropContextFlow`, since removed); it is now only agent-initiated.
+- Responses reasoning (`AppendToolRoundResponses`): at simulation time it was on the in-flight hop only, and plan 151 did not store it. It is now stored per round and replayed for finished turns when preservation is on (see the status note above). Scenario G is the only Responses run. A–F are Completions-shaped (no reasoning items).
 
 ### Repeated sample (estimated text, measured token counts)
 
@@ -184,9 +190,9 @@ Cold workers dwarf the plan on the short-worker tree, and they do not on the lon
 
 - **Cold child caches.** A new meta drone or worker pays a full cache write of its own system text and `tools[]`. Nothing in plan 151 shares the parent's prefix. Scenario F is almost entirely this.
 - **Full worker catalogs.** Section 5 of plan 151 leaves Explore / Drone / review catalogs on `CreateDefault` minus structural gates. The worker `tools[]` measured here is larger than the root Meta Agent allowlist.
-- **DropTurnContext.** Still one extra full-size call when over the cap, then a prefix break at the first excluded turn. Bytes before that turn stay valid. Same before and after the plan (scenario B).
-- **One Responses reasoning miss per completed turn.** In-flight hops still send reasoning and cache against each other. The next user prompt omits those items, so the prefix breaks at the first reasoning object. Completions never sent them, so A–F do not pay this. Legacy turns with no `ToolRoundCallCounts` stay one collapsed chunk.
-- **The token-cap compaction.** A fat unoptimized tail outside the keep-2 window still compacts in one pass once it exceeds 10,000 eligible tokens. That pass is a real prefix edit. Plan 151 only stops the *every prompt* edit that the sticky turn-count check causes.
+- **DropTurnContext.** One extra full-size call, then a prefix break at the first excluded turn. Bytes before that turn stay valid. Same before and after the plan (scenario B). Now agent-initiated only.
+- **One Responses reasoning miss per completed turn** (fixed since, while `preserve_reasoning_traces` is on). At simulation time the next user prompt omitted the in-flight reasoning items, so the prefix broke at the first reasoning object. Stored reasoning now replays for finished turns from the same provider source; turning the setting off, or switching provider, brings the miss back. Completions never sent them, so A–F do not pay this. Legacy turns with no `ToolRoundCallCounts` stay one collapsed chunk.
+- **The token-cap compaction.** With `tool_history_compaction` on, a fat unoptimized tail outside the keep-2 window still compacts in one pass once it exceeds 10,000 eligible tokens. That pass is a real prefix edit. With the setting off (the default) it never runs.
 - **Open-rules, models, and git blocks** are outside the plan. Open-rules is in the measured prefix. A git-status block that changes every prompt would break the prefix in front of the transcript on every column; it is not modeled.
 
 ## Do not treat these as measured
@@ -195,7 +201,7 @@ Cold workers dwarf the plan on the short-worker tree, and they do not on the lon
 - **Round size.** One synthetic `ReadFile` round (672-character result) repeated for every hop. Real shells, greps, and file slices are often larger. Heavier results scale the plan-151 savings up and do not scale the cold prefix. Collapsed history is charged the **same token count** as the per-round sum; only the cache key differs. The JSON envelope is a bit smaller in reality.
 - **User and assistant sizes** are short on purpose so the tables show prefix and tool-history effects, not chatter. Child first-turn mandates are the measured `BuildChildFirstPrompt` strings plus the sample task.
 - **Reasoning item** is a synthetic JSON object (62 tokens), not a captured Responses trace. Scenario G's miss scales with the real item.
-- **Drop shape** is scripted (one call, six oldest turns), not `EvaluateInject`'s max-target comparison. The resume is a 32-token stand-in.
+- **Drop shape** is scripted (one call, six oldest turns); it was never tied to the max-target comparison of the removed inject. The resume is a 32-token stand-in. Live context compaction is not modeled.
 - **Duplicate catalog** size equals current `tools[]` tokens. The old `FormatToolsForPrompt` text was not recovered.
 - **No** comments, images, context files, retries, or summarizer calls. Optimizer keep-recent is 2. Drop keep-recent (4) only matters because the excluded turns are the oldest ones, so the break is at the start of the transcript.
 

@@ -764,7 +764,6 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
                         return persistDropped;
 
                     await session.ApplyChildReportWatchAsync(token).ConfigureAwait(false);
-                    await session.ApplyMetaMaintenanceTickAsync(last, token).ConfigureAwait(false);
 
                     RaiseChanged(DysonRuntimeChangeKind.SessionGraph, sessionId);
                 }

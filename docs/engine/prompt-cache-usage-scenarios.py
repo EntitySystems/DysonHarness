@@ -31,7 +31,7 @@ COMPACT_LINE = 48  # FormatCompactToolLine for that round
 ASSISTANT = 24
 REASONING = 62  # one synthetic Responses reasoning item
 RENAME_EXTRA = 53  # RenameSessionReviewMandate added to a 35-token user message (88-35)
-DROP_USER = 275  # [turnId] header (22) + DysonDropContextFlow.Instruction (253)
+DROP_USER = 275  # [turnId] header (22) + the removed DysonDropContextFlow.Instruction (253), kept for scenario B
 RESUME = 32
 ROOT_USER = 35
 META_DRONE_FIRST_USER = 756
@@ -567,6 +567,30 @@ def build() -> str:
         "rename mandate kept on that same user message. Not built here; this file only models it."
     )
     parts.append("")
+    parts.append(
+        "**Status since these numbers were run.** The tables below are the original simulation and were not re-run. "
+        "The checkout has since moved past both modeled columns:"
+    )
+    parts.append("")
+    parts.append(
+        "- Finished turns replay their stored Responses reasoning items when `preserve_reasoning_traces` is on "
+        "(default; Meta Agent always) and the provider source matches. A next prompt no longer drops the reasoning "
+        "objects the in-flight hops sent, so scenario G's once-per-turn miss is gone with the setting on. "
+        "That matches the \"replaying that reasoning too\" figure under G. Completions (A–F) never carried reasoning "
+        "and are unchanged. See the reasoning rule in [README.md](README.md#openai-compatible-provider)."
+    )
+    parts.append(
+        "- `DysonContextOptimizer` is off by default (`tool_history_compaction`, experimental). With it off, no history "
+        "rewrite happens on any prompt: full tool JSON stays in history, so gross input and cache read go up and the "
+        "optimizer cache writes go away. The optimizer rows below describe the setting turned on."
+    )
+    parts.append(
+        "- The automatic Drop Context inject is removed. The scripted DropTurnContext in scenario B now only happens "
+        "if the agent calls `DropTurnContext` itself. Over the limit, the harness instead pauses the turn and summarizes "
+        "([context compaction](README.md#context-compaction)): one summary request built to reuse the cached prefix, "
+        "then a new prefix that starts at the summary."
+    )
+    parts.append("")
     parts.append("## Cost index")
     parts.append("")
     parts.append(
@@ -670,13 +694,14 @@ def build() -> str:
         f"(**{PLAN_MANDATE}** tokens) is the same bug; these scenarios are not Plan mode, so it does not fire."
     )
     parts.append(
-        "- DropTurnContext (`DysonDropContextFlow`): no plan-151 code change. Scenario B forces one extra call "
-        "at user turn 16, then marks the oldest 6 turns excluded. The real inject also needs the session over "
-        "its max-target token cap (`EvaluateInject`); that cap is not modeled. Keep-4 and the 5-user-turn throttle are why a single inject is the right shape."
+        "- DropTurnContext: scenario B forces one extra call at user turn 16, then marks the oldest 6 turns excluded. "
+        "When this was simulated, that call came from the harness Drop Context inject (`DysonDropContextFlow`, since removed); "
+        "it is now only agent-initiated."
     )
     parts.append(
-        "- Responses reasoning (`AppendToolRoundResponses`) is on the in-flight hop only. "
-        "Plan 151 does not store it. Scenario G is the only Responses run. A–F are Completions-shaped (no reasoning items)."
+        "- Responses reasoning (`AppendToolRoundResponses`): at simulation time it was on the in-flight hop only, "
+        "and plan 151 did not store it. It is now stored per round and replayed for finished turns when preservation "
+        "is on (see the status note above). Scenario G is the only Responses run. A–F are Completions-shaped (no reasoning items)."
     )
     parts.append("")
     parts.append("### Repeated sample (estimated text, measured token counts)")
@@ -760,18 +785,20 @@ def build() -> str:
         "minus structural gates. The worker `tools[]` measured here is larger than the root Meta Agent allowlist."
     )
     parts.append(
-        "- **DropTurnContext.** Still one extra full-size call when over the cap, then a prefix break at the first "
-        "excluded turn. Bytes before that turn stay valid. Same before and after the plan (scenario B)."
+        "- **DropTurnContext.** One extra full-size call, then a prefix break at the first "
+        "excluded turn. Bytes before that turn stay valid. Same before and after the plan (scenario B). Now agent-initiated only."
     )
     parts.append(
-        "- **One Responses reasoning miss per completed turn.** In-flight hops still send reasoning and cache against "
-        "each other. The next user prompt omits those items, so the prefix breaks at the first reasoning object. "
+        "- **One Responses reasoning miss per completed turn** (fixed since, while `preserve_reasoning_traces` is on). "
+        "At simulation time the next user prompt omitted the in-flight reasoning items, so the prefix broke at the first "
+        "reasoning object. Stored reasoning now replays for finished turns from the same provider source; turning the "
+        "setting off, or switching provider, brings the miss back. "
         "Completions never sent them, so A–F do not pay this. Legacy turns with no `ToolRoundCallCounts` stay one collapsed chunk."
     )
     parts.append(
-        "- **The token-cap compaction.** A fat unoptimized tail outside the keep-2 window still compacts in one pass "
-        "once it exceeds 10,000 eligible tokens. That pass is a real prefix edit. Plan 151 only stops the "
-        "*every prompt* edit that the sticky turn-count check causes."
+        "- **The token-cap compaction.** With `tool_history_compaction` on, a fat unoptimized tail outside the keep-2 window "
+        "still compacts in one pass once it exceeds 10,000 eligible tokens. That pass is a real prefix edit. "
+        "With the setting off (the default) it never runs."
     )
     parts.append(
         "- **Open-rules, models, and git blocks** are outside the plan. Open-rules is in the measured prefix. "
@@ -796,8 +823,8 @@ def build() -> str:
         "- **Reasoning item** is a synthetic JSON object (62 tokens), not a captured Responses trace. Scenario G's miss scales with the real item."
     )
     parts.append(
-        "- **Drop shape** is scripted (one call, six oldest turns), not `EvaluateInject`'s max-target comparison. "
-        "The resume is a 32-token stand-in."
+        "- **Drop shape** is scripted (one call, six oldest turns); it was never tied to the max-target comparison "
+        "of the removed inject. The resume is a 32-token stand-in. Live context compaction is not modeled."
     )
     parts.append(
         "- **Duplicate catalog** size equals current `tools[]` tokens. The old `FormatToolsForPrompt` text was not recovered."

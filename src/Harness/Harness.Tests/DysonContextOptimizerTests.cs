@@ -19,6 +19,45 @@ public class DysonContextOptimizerTests
         AssertOptimizeAdvancesInBatches();
     }
 
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("false", false)]
+    [InlineData("true", true)]
+    public async Task AutomaticCompactionRunsOnlyWhenSettingIsTrue(string? value, bool expectCompacted)
+    {
+        var settings = new FakeSettings();
+        if (value is not null)
+            settings.Values[DysonAppSettingKeys.ToolHistoryCompaction] = value;
+
+        var session = SessionWithTinyTurns(new DysonAgentSessionConfig { AppSettings = settings });
+        await session.OptimizeContextIfEnabledAsync(CancellationToken.None);
+
+        Assert.Equal(expectCompacted, session.Turns[0].ToolHistoryOptimized);
+    }
+
+    [Fact]
+    public async Task AutomaticCompactionIsOffWithoutSettingsOrOnReadFailure()
+    {
+        var noStore = SessionWithTinyTurns(new DysonAgentSessionConfig());
+        await noStore.OptimizeContextIfEnabledAsync(CancellationToken.None);
+        Assert.False(noStore.Turns[0].ToolHistoryOptimized);
+
+        var failing = SessionWithTinyTurns(new DysonAgentSessionConfig
+        {
+            AppSettings = new FakeSettings { Fail = true, Values = { [DysonAppSettingKeys.ToolHistoryCompaction] = "true" } },
+        });
+        await failing.OptimizeContextIfEnabledAsync(CancellationToken.None);
+        Assert.False(failing.Turns[0].ToolHistoryOptimized);
+    }
+
+    private static StubSession SessionWithTinyTurns(DysonAgentSessionConfig config)
+    {
+        var session = new StubSession(config);
+        for (var i = 0; i < 12; i++)
+            session.AddTurnForTest(TinyToolTurn($"c{i}"));
+        return session;
+    }
+
     private static void AssertFormatCompactToolLineUsesTaggedShape()
     {
         var call = new DysonToolCall
@@ -329,9 +368,29 @@ public class DysonContextOptimizerTests
 
     private sealed class StubProvider : DysonAgentProvider;
 
-    private sealed class StubSession() : DysonAgentSession(
+    private sealed class FakeSettings : IDysonSubjectSettingsRepository
+    {
+        public Dictionary<string, string> Values { get; } = [];
+        public bool Fail { get; init; }
+
+        public Task<VoidResult<string>> EnsureSubjectAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(VoidResult<string>.Success);
+
+        public Task<Result<string?, string>> GetSettingAsync(string key, CancellationToken cancellationToken = default)
+        {
+            if (Fail)
+                return Task.FromResult(Result<string?, string>.AsError("db down"));
+            Values.TryGetValue(key, out var value);
+            return Task.FromResult(Result<string?, string>.AsValue(value));
+        }
+
+        public Task<VoidResult<string>> SetSettingAsync(string key, string? value, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class StubSession(DysonAgentSessionConfig? config = null) : DysonAgentSession(
         DysonAgentModes.Work,
-        new DysonAgentSessionConfig(),
+        config ?? new DysonAgentSessionConfig(),
         new StubProvider())
     {
         public void AddTurnForTest(DysonAgentTurn turn) => AddTurn(turn);

@@ -594,30 +594,13 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
     private async Task<VoidResult<string>> PromptWithTurnAsync(
         DysonAgentTurn turn,
         string promptForReply,
-        CancellationToken cancellationToken,
-        bool allowDropContextInject = true)
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(turn);
 
         ApplyUiTheme(Config.UiTheme);
 
-        OptimizeContextIfNeeded();
-
-        if (allowDropContextInject
-            && turn.Kind != DysonAgentTurnKind.DropContext
-            && turn.Kind != DysonAgentTurnKind.FullSummarize
-            && DysonDropContextFlow.TryBeginInject(this))
-        {
-            var dropTurn = CreateDropContextTurn();
-            var drop = await PromptWithTurnAsync(
-                    dropTurn,
-                    dropTurn.Instruction ?? "Drop context",
-                    cancellationToken,
-                    allowDropContextInject: false)
-                .ConfigureAwait(false);
-            if (drop.IsError)
-                return drop;
-        }
+        await OptimizeContextIfEnabledAsync(cancellationToken).ConfigureAwait(false);
 
         AppendLog($"prompt: {Truncate(turn.Instruction ?? turn.Kind.ToString(), 120)}");
         var wasTerminal = IsTerminal;

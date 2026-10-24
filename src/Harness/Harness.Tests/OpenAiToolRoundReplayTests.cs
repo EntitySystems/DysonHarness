@@ -7,21 +7,166 @@ namespace Harness.Tests;
 
 /// <summary>
 /// Completed turns with recorded round counts replay the same tool blocks as the in-flight
-/// rebuild. Responses reasoning from a finished turn stays off. Legacy turns stay one chunk.
+/// rebuild. Responses reasoning from a finished turn replays only when preserveReasoning is on
+/// and the stored source matches. Legacy turns stay one chunk.
 /// </summary>
 public class OpenAiToolRoundReplayTests
 {
+    private const string ReasoningMarker = "SECRET_REASONING_BLOB";
+    private const string FinalReasoningMarker = "FINAL_REASONING_BLOB";
+
     [Fact]
     public void Run()
     {
-        AssertRecordedRoundsMatchInFlightAndDropReasoning();
+        AssertRecordedRoundsMatchInFlight();
         AssertLegacyTurnStaysOneCompletionsChunk();
         AssertRoundCountsRoundTrip();
     }
 
-    private static void AssertRecordedRoundsMatchInFlightAndDropReasoning()
+    [Fact]
+    public void FinishedTurnReasoningReplaysOnlyWhenOnAndSourceMatches()
     {
-        const string reasoningMarker = "SECRET_REASONING_BLOB";
+        var session = new StubSession();
+        var turn = FinishedTurnWithReasoning(source: null);
+        session.AddTurnForTest(turn);
+
+        var on = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session, null, null, preserveReasoning: true).Input;
+        var types = on.OfType<JsonObject>().Select(o => o["type"]?.GetValue<string>() ?? o["role"]?.GetValue<string>()).ToList();
+        Assert.Equal(
+            new string?[] { "user", "reasoning", "function_call", "function_call_output", "reasoning", "assistant" },
+            types);
+        Assert.Contains(ReasoningMarker, on[1]!.ToJsonString());
+        Assert.Contains(FinalReasoningMarker, on[4]!.ToJsonString());
+
+        var off = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session, null, null, preserveReasoning: false).Input.ToJsonString();
+        Assert.DoesNotContain(ReasoningMarker, off);
+        Assert.DoesNotContain(FinalReasoningMarker, off);
+
+        // Completions never replays reasoning items.
+        var completions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(session, null, null)
+            .Messages.ToJsonString();
+        Assert.DoesNotContain(ReasoningMarker, completions);
+        Assert.DoesNotContain(FinalReasoningMarker, completions);
+
+        turn.ReasoningItemsSource = DysonManagedSources.CliProxyCodex;
+        var foreign = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session, null, null, preserveReasoning: true).Input.ToJsonString();
+        Assert.DoesNotContain(ReasoningMarker, foreign);
+        Assert.DoesNotContain(FinalReasoningMarker, foreign);
+    }
+
+    [Fact]
+    public void UnmanagedProvidersWithDifferentBaseUrlsDoNotShareReasoning()
+    {
+        var local = UnmanagedProvider("http://localhost:1234/v1");
+        var other = UnmanagedProvider("https://api.example.com/v1");
+        Assert.Equal("http://localhost:1234", local.ReasoningSourceTag);
+        Assert.Equal("https://api.example.com", other.ReasoningSourceTag);
+
+        var session = new StubSession { Provider = local };
+        session.AddTurnForTest(FinishedTurnWithReasoning(local.ReasoningSourceTag));
+        Assert.Contains(ReasoningMarker, BuildPreserving(session));
+
+        session.Provider = other;
+        Assert.DoesNotContain(ReasoningMarker, BuildPreserving(session));
+
+        // Same host, different path: same server, blobs stay valid.
+        session.Provider = UnmanagedProvider("http://LOCALHOST:1234/v1/");
+        Assert.Contains(ReasoningMarker, BuildPreserving(session));
+
+        // Older rows stored a null source; they only match a null current tag.
+        var legacy = new StubSession { Provider = local };
+        legacy.AddTurnForTest(FinishedTurnWithReasoning(source: null));
+        Assert.DoesNotContain(ReasoningMarker, BuildPreserving(legacy));
+        legacy.Provider = new StubProvider();
+        Assert.Contains(ReasoningMarker, BuildPreserving(legacy));
+    }
+
+    private static string BuildPreserving(DysonAgentSession session) =>
+        OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session, null, null, preserveReasoning: true).Input.ToJsonString();
+
+    private static OpenAiCompatibleAgentProvider UnmanagedProvider(string baseUrl)
+    {
+        var entity = new DysonModelProviderEntity
+        {
+            Id = Guid.NewGuid(),
+            DisplayName = "Custom",
+            ProviderKind = DysonProviderKinds.OpenAICompatible,
+            BaseUrl = baseUrl,
+            OpenAiApiMode = DysonOpenAiApiModes.Responses,
+        };
+        return new OpenAiCompatibleAgentProvider(entity, new DysonModelSlugEntity
+        {
+            Id = Guid.NewGuid(),
+            ProviderId = entity.Id,
+            Slug = "model",
+            DisplayAlias = "model",
+            Provider = entity,
+        });
+    }
+
+    [Fact]
+    public async Task PreserveSettingIsReadPerTurnAndMetaAgentIsAlwaysOn()
+    {
+        var off = new FakeSettings { Values = { [DysonAppSettingKeys.PreserveReasoningTraces] = "false" } };
+
+        var work = new StubSession(DysonAgentModes.Work, new DysonAgentSessionConfig { AppSettings = off });
+        work.AddTurnForTest(FinishedTurnWithReasoning(source: null));
+        Assert.False(await work.RefreshPreserveReasoningTracesAsync(CancellationToken.None));
+        Assert.DoesNotContain(ReasoningMarker, BuildWithSessionSetting(work));
+
+        var meta = new StubSession(DysonAgentModes.MetaAgent, new DysonAgentSessionConfig { AppSettings = off });
+        meta.AddTurnForTest(FinishedTurnWithReasoning(source: null));
+        var readsBefore = off.Reads;
+        Assert.True(await meta.RefreshPreserveReasoningTracesAsync(CancellationToken.None));
+        Assert.Equal(readsBefore, off.Reads);
+        Assert.Contains(ReasoningMarker, BuildWithSessionSetting(meta));
+
+        Assert.True(await new StubSession(DysonAgentModes.Work, new DysonAgentSessionConfig { AppSettings = new FakeSettings() })
+            .RefreshPreserveReasoningTracesAsync(CancellationToken.None));
+        Assert.True(await new StubSession(DysonAgentModes.Work, new DysonAgentSessionConfig { AppSettings = new FakeSettings { Fail = true } })
+            .RefreshPreserveReasoningTracesAsync(CancellationToken.None));
+
+        off.Values.Remove(DysonAppSettingKeys.PreserveReasoningTraces);
+        Assert.True(await work.RefreshPreserveReasoningTracesAsync(CancellationToken.None));
+        Assert.Contains(ReasoningMarker, BuildWithSessionSetting(work));
+    }
+
+    private static string BuildWithSessionSetting(DysonAgentSession session) =>
+        OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session, null, null, preserveReasoning: session.PreserveReasoningTraces).Input.ToJsonString();
+
+    private static DysonAgentTurn FinishedTurnWithReasoning(string? source)
+    {
+        var turn = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "do the tool",
+            StartedUtc = DateTime.UtcNow,
+        };
+        turn.ToolCalls.Add(Call("c1", "Grep"));
+        turn.ResponseLog.Enqueue(Result("c1", "Grep", "one"));
+        turn.ToolRoundCallCounts.Add(1);
+        turn.RecordReasoningItems([Reasoning("rs_1", ReasoningMarker)], source, finalRound: false);
+        turn.RecordReasoningItems([Reasoning("rs_2", FinalReasoningMarker)], source, finalRound: true);
+        turn.AssistantText = "done";
+        turn.CompletedUtc = DateTime.UtcNow;
+        return turn;
+    }
+
+    private static JsonObject Reasoning(string id, string blob) => new()
+    {
+        ["type"] = "reasoning",
+        ["id"] = id,
+        ["encrypted_content"] = blob,
+    };
+
+    private static void AssertRecordedRoundsMatchInFlight()
+    {
+        const string reasoningMarker = ReasoningMarker;
         const string comment = "steer after the first round";
         var calls = new List<DysonToolCall>
         {
@@ -45,8 +190,11 @@ public class OpenAiToolRoundReplayTests
         turn.ToolCalls.AddRange(calls);
         foreach (var result in results)
             turn.ResponseLog.Enqueue(result);
+        var reasoning = Reasoning("rs_test", reasoningMarker);
         turn.ToolRoundCallCounts.Add(2);
+        turn.RecordReasoningItems([reasoning], sourceTag: null, finalRound: false);
         turn.ToolRoundCallCounts.Add(1);
+        turn.RecordReasoningItems([], sourceTag: null, finalRound: false);
         turn.RestoreReasoningLog(
         [
             new DysonReasoningSegment(
@@ -59,12 +207,6 @@ public class OpenAiToolRoundReplayTests
         var session = new StubSession();
         session.AddTurnForTest(turn);
 
-        var reasoning = new JsonObject
-        {
-            ["type"] = "reasoning",
-            ["id"] = "rs_test",
-            ["encrypted_content"] = reasoningMarker,
-        };
         IReadOnlyList<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound> rounds =
         [
             new(
@@ -85,7 +227,9 @@ public class OpenAiToolRoundReplayTests
         var doneCompletions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
             session, currentUserPrompt: null, currentFilePaths: null);
         var doneResponses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
-            session, currentUserPrompt: null, currentFilePaths: null);
+            session, currentUserPrompt: null, currentFilePaths: null, preserveReasoning: true);
+        var doneResponsesOff = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session, currentUserPrompt: null, currentFilePaths: null, preserveReasoning: false);
 
         var liveTools = ToolRegionCompletions(inflightCompletions.Messages);
         var doneTools = ToolRegionCompletions(doneCompletions.Messages);
@@ -103,12 +247,11 @@ public class OpenAiToolRoundReplayTests
                 $"Responses tool region diverged.\nLive: {liveResponses}\nDone: {doneResponsesRegion}");
         }
 
-        var doneJson = doneResponses.Input.ToJsonString();
-        if (doneJson.Contains(reasoningMarker, StringComparison.Ordinal))
-            throw new InvalidOperationException("Completed Responses must omit finished-turn reasoning.");
+        if (!liveResponses.Contains(reasoningMarker, StringComparison.Ordinal))
+            throw new InvalidOperationException("In-flight Responses must carry the reasoning item.");
 
-        if (!inflightResponses.Input.ToJsonString().Contains(reasoningMarker, StringComparison.Ordinal))
-            throw new InvalidOperationException("In-flight Responses must still carry the reasoning item.");
+        if (doneResponsesOff.Input.ToJsonString().Contains(reasoningMarker, StringComparison.Ordinal))
+            throw new InvalidOperationException("preserveReasoning off must omit finished-turn reasoning.");
 
         if (!doneTools.Contains(comment, StringComparison.Ordinal)
             || doneTools.IndexOf("\"c2\"", StringComparison.Ordinal) > doneTools.IndexOf(comment, StringComparison.Ordinal)
@@ -185,6 +328,21 @@ public class OpenAiToolRoundReplayTests
             """{"toolCalls":[],"tracked":[],"responseLog":[]}""");
         if (legacy.ToolRoundCallCounts.Count != 0)
             throw new InvalidOperationException("Old tool-state rows must deserialize with empty round counts.");
+        Assert.Empty(legacy.ToolRoundReasoningItems);
+        Assert.Null(legacy.FinalReasoningItems);
+        Assert.Null(legacy.ReasoningItemsSource);
+
+        // No reasoning stored ⇒ no reasoning keys in the row.
+        Assert.DoesNotContain("reasoning", json, StringComparison.OrdinalIgnoreCase);
+
+        var withReasoning = FinishedTurnWithReasoning(DysonManagedSources.CliProxyCodex);
+        var reasoningJson = DysonTurnToolStateSerializer.CaptureFromTurn(withReasoning);
+        var restoredReasoning = new DysonAgentTurn();
+        DysonTurnToolStateSerializer.ApplyToTurn(restoredReasoning, reasoningJson);
+        Assert.Equal(DysonManagedSources.CliProxyCodex, restoredReasoning.ReasoningItemsSource);
+        var round = Assert.Single(restoredReasoning.ToolRoundReasoningItems);
+        Assert.Equal(ReasoningMarker, Assert.Single(round!)["encrypted_content"]?.GetValue<string>());
+        Assert.Equal(FinalReasoningMarker, Assert.Single(restoredReasoning.FinalReasoningItems!)["encrypted_content"]?.GetValue<string>());
     }
 
     private static string ToolRegionCompletions(JsonArray messages)
@@ -218,8 +376,7 @@ public class OpenAiToolRoundReplayTests
                 continue;
 
             var type = obj["type"]?.GetValue<string>();
-            if (string.Equals(type, "function_call", StringComparison.Ordinal)
-                || string.Equals(type, "function_call_output", StringComparison.Ordinal))
+            if (type is "reasoning" or "function_call" or "function_call_output")
             {
                 sb.Append(obj.ToJsonString());
                 continue;
@@ -252,10 +409,30 @@ public class OpenAiToolRoundReplayTests
 
     private sealed class StubProvider : DysonAgentProvider;
 
-    private sealed class StubSession() : DysonAgentSession(
-        DysonAgentModes.Work,
-        new DysonAgentSessionConfig(),
-        new StubProvider())
+    private sealed class FakeSettings : IDysonSubjectSettingsRepository
+    {
+        public Dictionary<string, string> Values { get; } = [];
+        public bool Fail { get; init; }
+        public int Reads { get; private set; }
+
+        public Task<VoidResult<string>> EnsureSubjectAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(VoidResult<string>.Success);
+
+        public Task<Result<string?, string>> GetSettingAsync(string key, CancellationToken cancellationToken = default)
+        {
+            Reads++;
+            if (Fail)
+                return Task.FromResult(Result<string?, string>.AsError("db down"));
+            Values.TryGetValue(key, out var value);
+            return Task.FromResult(Result<string?, string>.AsValue(value));
+        }
+
+        public Task<VoidResult<string>> SetSettingAsync(string key, string? value, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class StubSession(string mode = DysonAgentModes.Work, DysonAgentSessionConfig? config = null)
+        : DysonAgentSession(mode, config ?? new DysonAgentSessionConfig(), new StubProvider())
     {
         public void AddTurnForTest(DysonAgentTurn turn) => AddTurn(turn);
 

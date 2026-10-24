@@ -465,7 +465,8 @@ public class DysonSessionRuntimeTests
         Assert.NotNull(earlier.CompletedUtc);
 
         var summary = DysonFullSummarizeFlow.CreateTurn();
-        summary.AssistantText = new string('x', DysonFullSummarizeFlow.MaxSummaryCharacters + 10);
+        const int longSummary = 9_000;
+        summary.AssistantText = new string('x', longSummary);
         var second = await harness.Runtime.ExecutePromptAsync(
             session,
             (live, _) =>
@@ -476,7 +477,7 @@ public class DysonSessionRuntimeTests
         Assert.True(second.IsSuccess, second.IsError ? second.Error : null);
         Assert.True(earlier.IsExcludedFromContext);
         Assert.False(summary.IsExcludedFromContext);
-        Assert.Equal(DysonFullSummarizeFlow.MaxSummaryCharacters, summary.AssistantText!.Length);
+        Assert.Equal(longSummary, summary.AssistantText!.Length);
         Assert.NotNull(summary.CompletedUtc);
 
         await harness.Runtime.FlushPersistenceAsync();
@@ -488,7 +489,7 @@ public class DysonSessionRuntimeTests
         var persistedSummary = Assert.Single(full.Value.Turns, t => t.Id == summary.Id);
         Assert.False(persistedSummary.IsExcludedFromContext);
         Assert.Equal(DysonAgentTurnKind.FullSummarize, persistedSummary.Kind);
-        Assert.Equal(DysonFullSummarizeFlow.MaxSummaryCharacters, persistedSummary.AssistantText!.Length);
+        Assert.Equal(longSummary, persistedSummary.AssistantText!.Length);
     }
 
     [Fact]

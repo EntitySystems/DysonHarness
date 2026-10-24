@@ -252,6 +252,62 @@ public class OpenAiResponsesStoreChainTests
         Assert.Contains("shot.png", doneCompletions.Messages.ToJsonString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task InFlight_emitted_vision_wire_survives_later_url_and_file_id_writes()
+    {
+        AssertReplayKeepsFirstWire(
+            ImageAttachment(remoteUrl: null, fileId: null),
+            mutate: attachment =>
+            {
+                attachment.RemoteUrl = "https://s3.example.com/dyson/shot.png?X-Amz-Signature=later";
+                attachment.FileId = "file-later";
+            },
+            mustContain: "data:image/png;base64,ROUND0PNGDATA",
+            mustNotContain: "X-Amz-Signature=later");
+
+        const string firstUrl = "https://s3.example.com/dyson/shot.png?X-Amz-Signature=first";
+        const string resignedUrl = "https://s3.example.com/dyson/shot.png?X-Amz-Signature=resigned";
+        AssertReplayKeepsFirstWire(
+            ImageAttachment(firstUrl, fileId: null),
+            mutate: attachment =>
+            {
+                attachment.RemoteUrl = resignedUrl;
+                attachment.RemoteUrlExpiresUtc = DateTime.UtcNow.AddMinutes(-1);
+                attachment.FileId = "file-after-url";
+            },
+            mustContain: firstUrl,
+            mustNotContain: "X-Amz-Signature=resigned");
+
+        AssertReplayKeepsFirstWire(
+            ImageAttachment(remoteUrl: null, fileId: "file-vision-1"),
+            mutate: attachment =>
+            {
+                attachment.FileId = "file-vision-2";
+                attachment.RemoteUrl = resignedUrl;
+            },
+            mustContain: "file-vision-1",
+            mustNotContain: "file-vision-2",
+            responsesOnly: true);
+
+        AssertReplayKeepsFirstWire(
+            new DysonBinaryAttachment
+            {
+                FileName = "dxcompiler.dll",
+                Extension = ".dll",
+                MimeType = "application/octet-stream",
+                Base64Data = "DLLBYTES",
+                FileId = "file-dll-1",
+            },
+            mutate: attachment => attachment.FileId = "file-dll-2",
+            mustContain: "file-dll-1",
+            mustNotContain: "file-dll-2",
+            responsesOnly: true);
+
+        AssertInFlightUserImageKeepsFirstUrl(firstUrl, resignedUrl);
+        AssertInFlightUserImageDataUrlStaysDataUrl();
+        await AssertCapturedWireSkipsFilesUpload();
+    }
+
     private static void AssertClaudePlainUserTextIsStable(OpenAiCompatibleAgentProvider provider, bool responses)
     {
         var session = new OpenAiProviderSession(provider);
@@ -557,6 +613,190 @@ public class OpenAiResponsesStoreChainTests
         }
 
         return count;
+    }
+
+    private static void AssertReplayKeepsFirstWire(
+        DysonBinaryAttachment attachment,
+        Action<DysonBinaryAttachment> mutate,
+        string mustContain,
+        string mustNotContain,
+        bool responsesOnly = false)
+    {
+        var session = new OpenAiProviderSession(MakeProvider("gpt-4o", null));
+        var round0 = RoundWithAttachment(attachment, "img0");
+        var round1 = ToolRound("next1");
+
+        OpenAiCacheFriendlyTranscriptBuilder.BuiltCompletionsRequest? hop1Completions = null;
+        if (!responsesOnly)
+        {
+            hop1Completions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+                session, null, null, [round0]);
+        }
+
+        var hop1Responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session, null, null, [round0]);
+        mutate(attachment);
+
+        if (hop1Completions is not null)
+        {
+            var hop2Completions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+                session, null, null, [round0, round1]);
+            AssertJsonPrefix(hop1Completions.Messages, hop2Completions.Messages);
+            AssertWire(hop2Completions.Messages.ToJsonString(), mustContain, mustNotContain, "Completions");
+        }
+
+        var hop2Responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session, null, null, [round0, round1]);
+        AssertJsonPrefix(hop1Responses.Input, hop2Responses.Input);
+        AssertWire(hop2Responses.Input.ToJsonString(), mustContain, mustNotContain, "Responses");
+    }
+
+    private static void AssertInFlightUserImageKeepsFirstUrl(string firstUrl, string resignedUrl)
+    {
+        var image = ImageAttachment(firstUrl, fileId: null);
+        var session = new OpenAiProviderSession(MakeProvider("gpt-4o", null));
+        var turn = PlainTurn("see the shot");
+        turn.AddUserImage(image);
+        session.AddTurnForTest(turn);
+        var round0 = ToolRound("c1");
+        var round1 = ToolRound("c2");
+
+        var hop1Completions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session, null, null, [round0]);
+        var hop1Responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session, null, null, [round0]);
+        image.RemoteUrl = resignedUrl;
+        image.FileId = "file-user-later";
+
+        var hop2Completions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session, null, null, [round0, round1]);
+        var hop2Responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session, null, null, [round0, round1]);
+        AssertJsonPrefix(hop1Completions.Messages, hop2Completions.Messages);
+        AssertJsonPrefix(hop1Responses.Input, hop2Responses.Input);
+        AssertWire(hop2Completions.Messages.ToJsonString(), firstUrl, resignedUrl, "Completions user image");
+        AssertWire(hop2Responses.Input.ToJsonString(), firstUrl, resignedUrl, "Responses user image");
+        if (!hop2Completions.Messages.ToJsonString().Contains("- shot.png " + firstUrl, StringComparison.Ordinal)
+            || !hop2Responses.Input.ToJsonString().Contains("- shot.png " + firstUrl, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Attached urls must keep the URL from the first in-flight emission.");
+        }
+    }
+
+    private static void AssertInFlightUserImageDataUrlStaysDataUrl()
+    {
+        var image = ImageAttachment(remoteUrl: null, fileId: null);
+        var session = new OpenAiProviderSession(MakeProvider("gpt-4o", null));
+        var turn = PlainTurn("see the shot");
+        turn.AddUserImage(image);
+        session.AddTurnForTest(turn);
+        var round0 = ToolRound("c1");
+        var round1 = ToolRound("c2");
+        var hop1Completions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session, null, null, [round0]);
+        var hop1Responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session, null, null, [round0]);
+        image.RemoteUrl = "https://s3.example.com/dyson/shot.png?X-Amz-Signature=later";
+        image.FileId = "file-user-later";
+        var hop2Completions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session, null, null, [round0, round1]);
+        var hop2Responses = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+            session, null, null, [round0, round1]);
+        AssertJsonPrefix(hop1Completions.Messages, hop2Completions.Messages);
+        AssertJsonPrefix(hop1Responses.Input, hop2Responses.Input);
+        const string marker = "data:image/png;base64,ROUND0PNGDATA";
+        AssertWire(hop2Completions.Messages.ToJsonString(), marker, "X-Amz-Signature=later", "Completions user data");
+        AssertWire(hop2Responses.Input.ToJsonString(), marker, "file-user-later", "Responses user data");
+        if (hop2Completions.Messages.ToJsonString().Contains("Attached urls:", StringComparison.Ordinal)
+            || hop2Responses.Input.ToJsonString().Contains("Attached urls:", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Attached urls must not appear after the first emission omitted them.");
+        }
+    }
+
+    private static async Task AssertCapturedWireSkipsFilesUpload()
+    {
+        var attachment = new DysonBinaryAttachment
+        {
+            FileName = "shot.png",
+            Extension = ".png",
+            MimeType = "image/png",
+            Base64Data = Convert.ToBase64String([1, 2, 3, 4]),
+        };
+        attachment.CaptureInFlightWire();
+        var handler = new RecordingFilesHandler();
+        using var http = new HttpClient(handler);
+        await OpenAiFilesClient.EnsureBinaryFileIdsAsync(
+            http,
+            MakeProvider("gpt-4o", null),
+            [attachment]);
+        if (handler.Calls != 0 || !string.IsNullOrEmpty(attachment.FileId))
+        {
+            throw new InvalidOperationException(
+                "Files upload must not replace a wire that was already emitted as a data URL.");
+        }
+    }
+
+    private static void AssertWire(string json, string mustContain, string mustNotContain, string label)
+    {
+        if (!json.Contains(mustContain, StringComparison.Ordinal)
+            || json.Contains(mustNotContain, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{label} replay changed an already-emitted vision wire.");
+        }
+    }
+
+    private static DysonBinaryAttachment ImageAttachment(string? remoteUrl, string? fileId) =>
+        new()
+        {
+            FileName = "shot.png",
+            Extension = ".png",
+            MimeType = "image/png",
+            Base64Data = "ROUND0PNGDATA",
+            RemoteUrl = remoteUrl,
+            FileId = fileId,
+        };
+
+    private static OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound RoundWithAttachment(
+        DysonBinaryAttachment attachment,
+        string callId) =>
+        new(
+            [
+                new DysonToolCall
+                {
+                    CallId = callId,
+                    ToolName = "LoadBinary",
+                    Stage = 0,
+                    ArgumentsJson = "{}",
+                },
+            ],
+            [
+                new DysonToolCallResult
+                {
+                    CallId = callId,
+                    ToolName = "LoadBinary",
+                    Stage = 0,
+                    Content = """{"fileName":"shot.png"}""",
+                    BinaryAttachment = attachment,
+                },
+            ]);
+
+    private sealed class RecordingFilesHandler : HttpMessageHandler
+    {
+        public int Calls { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Calls++;
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"id":"file-should-not-be-used"}"""),
+            });
+        }
     }
 
     private static OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound ToolRound(

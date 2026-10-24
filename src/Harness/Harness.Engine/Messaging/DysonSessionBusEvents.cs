@@ -27,6 +27,19 @@ public sealed record DysonSessionTurnAddedEvent(
     Guid TurnId,
     DysonAgentTurnKind Kind) : IDysonMessageBusEvent;
 
+/// <summary>Live outgoing-context count changed mid-turn (per request and per response). Limit 0 = Off.</summary>
+public sealed record DysonSessionContextTokensChangedEvent(
+    Guid PersistenceId,
+    int Tokens,
+    int Limit) : IDysonMessageBusEvent;
+
+/// <summary>Live context passed the effective limit; published at most once per turn.</summary>
+public sealed record DysonSessionContextLimitReachedEvent(
+    Guid PersistenceId,
+    Guid TurnId,
+    int Tokens,
+    int Limit) : IDysonMessageBusEvent;
+
 public sealed record DysonParentEventsChangedEvent(
     Guid PersistenceId,
     bool HasPendingAsk,
