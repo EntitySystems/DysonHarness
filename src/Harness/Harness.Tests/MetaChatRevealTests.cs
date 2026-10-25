@@ -5,16 +5,16 @@ namespace Harness.Tests;
 public class MetaChatRevealTests
 {
     [Fact]
-    public void CharStagger_is_reading_speed_doubled()
+    public void CharStagger_is_eighty_tokens_per_second()
     {
-        // 238 wpm × 1.2 × 2 ≈ 572 wpm. ~5.7 characters per word including the trailing space
-        // → ~54.3 characters/second. 1000/55 ≈ 18.18 ms per grapheme.
-        const double wordsPerMinute = 238d * 1.2 * 2d;
-        var charactersPerSecond = wordsPerMinute * 5.7d / 60d;
-        var staggerMs = (int)Math.Round(1000d / 55d);
+        // 80 tok/s × 4 chars/token = 320 chars/s → 3.125 ms per grapheme.
+        const double charactersPerSecond = MetaChatReveal.TokensPerSecond * (double)MetaChatReveal.CharsPerToken;
+        var staggerMs = 1000d / charactersPerSecond;
 
-        Assert.InRange(charactersPerSecond, 54d, 55d);
-        Assert.Equal(18, staggerMs);
+        Assert.Equal(80, MetaChatReveal.TokensPerSecond);
+        Assert.Equal(4, MetaChatReveal.CharsPerToken);
+        Assert.Equal(320d, charactersPerSecond);
+        Assert.Equal(3.125d, staggerMs);
         Assert.Equal(MetaChatReveal.CharStaggerMs, staggerMs);
     }
 

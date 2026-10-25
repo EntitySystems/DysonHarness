@@ -7,11 +7,20 @@ namespace Harness.UI.Components.Meta;
 public static class MetaChatReveal
 {
     /// <summary>
+    /// Tokens per second. The user asked the reveal to feel like an LLM stream at 80 tok/s.
+    /// </summary>
+    public const int TokensPerSecond = 80;
+
+    /// <summary>Characters counted per token when turning the rate into a per-grapheme stagger.</summary>
+    public const int CharsPerToken = 4;
+
+    /// <summary>
     /// Milliseconds between grapheme clusters.
-    /// 238 wpm × 1.2 × 2 (user asked to double) ≈ 572 wpm ≈ 55 chars/s ≈ 18 ms per char.
+    /// 80 tok/s × 4 chars/token = 320 chars/s → 1000/320 = 3.125 ms per char.
+    /// Fractional on purpose: an int stagger would be 3 ms (~333 chars/s) and drift the rate.
     /// Keep in sync with dysonMetaReveal.staggerMs.
     /// </summary>
-    public const int CharStaggerMs = 18;
+    public const double CharStaggerMs = 1000d / (TokensPerSecond * CharsPerToken);
 
     /// <summary>
     /// Ids already on screen are history. Anything new after <paramref name="primed"/> is live.

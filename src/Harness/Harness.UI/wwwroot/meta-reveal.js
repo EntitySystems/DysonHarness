@@ -7,9 +7,10 @@
  * Blazor never declared those spans, so they survive its diffs; paint is a no-op once
  * the same text is wrapped.
  *
- * ponytail: one span per grapheme, capped. Past maxChars the post shows at once rather
- * than building thousands of nodes. Upgrade path: reveal a window of graphemes and
- * recycle spans if a long post should still animate.
+ * ponytail: one span per grapheme, capped. 80 tok/s × 4 chars/token = 320 chars/s, so
+ * 2500 graphemes finished in ~7.8 s and cut typical posts off the animation. 6000 is
+ * ~19 s and still one span each, unwrapped when the timeout fires. Upgrade path: reveal
+ * a window of graphemes and recycle spans if a longer post should still animate.
  *
  * No timer per character. One setTimeout unmasks the trailing actions. Folding does not
  * wait on animationend — the blanket prefers-reduced-motion rule suppresses that event.
@@ -20,13 +21,13 @@ window.dysonMetaReveal = {
 
   /**
    * Stagger between grapheme clusters, in ms.
-   * 238 wpm × 1.2 × 2 (user asked to double) ≈ 572 wpm ≈ 55 chars/s ≈ 18 ms per char.
-   * Keep in sync with MetaChatReveal.CharStaggerMs.
+   * 80 tok/s × 4 chars/token = 320 chars/s → 1000/320 = 3.125 ms per char.
+   * Keep in sync with MetaChatReveal.CharStaggerMs (TokensPerSecond, CharsPerToken).
    */
-  staggerMs: 18,
+  staggerMs: 3.125,
 
-  /** Past this many graphemes the post shows at once. A 2s JS cap cannot cover a long reveal. */
-  maxChars: 2500,
+  /** Past this many graphemes the post shows at once (~19 s at 320 chars/s). */
+  maxChars: 6000,
 
   paint: function (el, text) {
     if (!el) return;
