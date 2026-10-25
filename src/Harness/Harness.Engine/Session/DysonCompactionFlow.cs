@@ -5,7 +5,8 @@ namespace DysonHarness;
 /// history. Runs after a turn paused mid-work at a safe point (then queues a resuming
 /// <see cref="DysonAgentTurnKind.Continuation"/>), after any turn that ended over the limit (no Continuation),
 /// and before a prompt when an earlier trip is still pending (DB marker).
-/// <see cref="DysonFullSummarizeFlow.ApplyAfterCompletion"/> excludes earlier turns.
+/// <see cref="DysonFullSummarizeFlow.ApplyAfterCompletion"/> excludes earlier turns, and a successful
+/// summary then drops queued harness follow-ups (<see cref="DysonQueuedTurnAfterSummary"/>).
 /// </summary>
 public static class DysonCompactionFlow
 {
@@ -69,16 +70,30 @@ public static class DysonCompactionFlow
             StartedUtc = DateTime.UtcNow,
         };
 
+    /// <summary>
+    /// The one continuation a successful summary re-queues. <see cref="DysonAgentTurn.AfterSummaryResume"/>
+    /// lets the same clear keep it while dropping every older resume.
+    /// </summary>
+    public static DysonAgentTurn CreateFreshContinuationTurn() =>
+        new()
+        {
+            Kind = DysonAgentTurnKind.Continuation,
+            Instruction = ContinuationInstruction,
+            StartedUtc = DateTime.UtcNow,
+            AfterSummaryResume = true,
+        };
+
     public const string FailedTitle = "Context compaction failed";
 
     /// <summary>
     /// Runs the summary turn through <paramref name="runSummaryTurn"/> (provider-specific, tools not executed),
     /// excludes earlier turns, and clears the pending marker.
     /// <paramref name="endedTurn"/> is the turn that just finalized (null: before a prompt, for a trip that was
-    /// not compacted yet). <paramref name="resume"/> queues a Continuation and is only for a turn paused mid-work
-    /// with <see cref="PausedNote"/>; a finished turn queues nothing, and turns already queued still run after.
-    /// On a failed summary nothing is excluded or queued, the summary turn is closed out of context, and the
-    /// marker stays so the next prompt or activate retries.
+    /// not compacted yet). <paramref name="resume"/> is only for a turn paused mid-work with <see cref="PausedNote"/>.
+    /// On success, queued harness follow-ups are dropped and one fresh Continuation is queued when anything was
+    /// dropped or the turn was paused; parent injections, user prompts, and external events stay. On a failed
+    /// summary nothing is excluded or queued, the summary turn is closed out of context, and the marker stays
+    /// so the next prompt or activate retries.
     /// </summary>
     public static async Task<VoidResult<string>> RunAsync(
         DysonAgentSession session,
@@ -118,7 +133,8 @@ public static class DysonCompactionFlow
         // Root hosts apply (and persist) after the prompt returns with FullSummarize last. Children
         // (KickOffChildPrompt has no host apply step) and a pre-prompt summary (not last) apply here
         // and persist through the hosts' TurnUpdated upsert.
-        if (session.Parent is not null || endedTurn is null)
+        var appliedInline = session.Parent is not null || endedTurn is null;
+        if (appliedInline)
         {
             foreach (var dropped in DysonFullSummarizeFlow.ApplyAfterCompletion(session, summary))
                 session.RaiseTurnUpdated(dropped);
@@ -126,13 +142,32 @@ public static class DysonCompactionFlow
         }
 
         session.ClearCompactionPending();
-        if (resume)
-        {
-            session.EnqueuePendingTurn(CreateContinuationTurn());
-            session.AppendLog("compaction: continuation queued");
-        }
+        // The fresh continuation is queued here for every session: it is what a paused turn resumes
+        // with, and a root host drains it into the FIFO afterwards. The queue clear itself stays on the
+        // apply path (children and a pre-prompt summary here; a root after the prompt returns), so a
+        // failed summary, which returns above, never clears anything.
+        if (resume || appliedInline)
+            QueueFreshContinuationIfNeeded(session, resume);
 
         return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// After a successful summary: drop queued harness follow-ups, then queue one fresh Continuation
+    /// when anything was dropped or the turn was paused mid-work. The old compaction Continuation is
+    /// not kept. An empty queue that was not a pause queues nothing.
+    /// </summary>
+    public static void QueueFreshContinuationIfNeeded(
+        DysonAgentSession session,
+        bool resume,
+        int alsoDropped = 0)
+    {
+        var dropped = DysonQueuedTurnAfterSummary.RetainPendingTurns(session) + alsoDropped;
+        if (dropped == 0 && !resume)
+            return;
+
+        session.EnqueuePendingTurn(CreateFreshContinuationTurn());
+        session.AppendLog("compaction: continuation queued");
     }
 
     /// <summary>A failed summary must not stay in context: its instruction would replay as a live request.</summary>

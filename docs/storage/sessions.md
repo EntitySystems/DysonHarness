@@ -147,7 +147,7 @@ No mode hard-deletes turn rows any more (the Meta Agent 40-turn window is gone).
 
 - The turn that ended: for a mid-work pause, Success with its tool state and reasoning items kept and `AssistantText` = the `Paused for context compaction` note; for a turn that finished over the limit, its normal reply.
 - One `FullSummarize` turn whose `AssistantText` is the summary, stored as written (no character cap; the prompt asks for under about 35,000 tokens). `ApplyAfterCompletion` sets `IsExcludedFromContext` on every earlier turn, and those rows are upserted.
-- One `Continuation` turn, queued after the summary, only for a mid-work pause.
+- One fresh `Continuation` turn, queued after the summary, only when queued harness follow-ups were dropped or the turn was a mid-work pause. The continuation already sitting in the queue is dropped and replaced; it is not "whatever was already queued". Parent-inject turns, user prompts, and subagent-report / shell-exited / parent-event turns stay queued. A failed summary clears nothing.
 - `sessions.CompactionPendingTurnId` set while the trip is open and cleared after the summary succeeds. A pending trip found on activate or at prompt start puts the `FullSummarize` turn **before** the new prompt's turn.
 - A failed summary leaves a `FullSummarize` row with `AgentTitle` `Context compaction failed`, the error in `AssistantText`, and `IsExcludedFromContext` true; the marker stays set.
 

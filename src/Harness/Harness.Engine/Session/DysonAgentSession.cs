@@ -1221,7 +1221,9 @@ public abstract class DysonAgentSession
             var queuedParentMessages = new List<DysonAgentTurn>();
             while (child.TryDequeuePendingTurn(out var queued))
             {
-                if (queued.Instruction?.StartsWith(InjectedSubagentPromptPrefix, StringComparison.Ordinal) == true)
+                if (queued.Instruction?.StartsWith(
+                        DysonQueuedTurnAfterSummary.InjectedSubagentPromptPrefix,
+                        StringComparison.Ordinal) == true)
                     queuedParentMessages.Add(queued);
             }
 
@@ -1901,22 +1903,20 @@ public abstract class DysonAgentSession
 
     private void RaiseParentEventsChanged() => ParentEventsChanged?.Invoke(this, EventArgs.Empty);
 
-    private const string InjectedSubagentPromptPrefix =
-        "Harness injection: the parent sent instructions via TriggerSubagentEvent.";
-
     private static string BuildInjectedSubagentPrompt(string payload, bool reportReenabled)
     {
         var body = payload.Trim();
+        var prefix = DysonQueuedTurnAfterSummary.InjectedSubagentPromptPrefix;
         if (reportReenabled)
         {
             return
-                InjectedSubagentPromptPrefix + " Follow them and continue your task.\n"
+                prefix + " Follow them and continue your task.\n"
                 + "SubmitSubagentReport is enabled again for this assignment and must be called when the new work is done or blocked.\n\n"
                 + body;
         }
 
         return
-            InjectedSubagentPromptPrefix + " Follow them and continue your task.\n\n"
+            prefix + " Follow them and continue your task.\n\n"
             + body;
     }
 

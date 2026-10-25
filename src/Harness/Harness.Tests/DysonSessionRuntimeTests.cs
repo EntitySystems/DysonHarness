@@ -493,6 +493,52 @@ public class DysonSessionRuntimeTests
     }
 
     [Fact]
+    public async Task Summary_drops_stale_fifo_items_keeps_inject_and_session_continuation()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var created = await harness.Runtime.CreateRootAsync(RootRequest());
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+        var session = Assert.IsType<StubSession>(created.Value);
+        var sessionId = session.PersistenceId;
+
+        var inject = DysonAgentSession.CreateNormalTurn(
+            DysonQueuedTurnAfterSummary.InjectedSubagentPromptPrefix + " Follow them.\n\nkeep this");
+        var rethink = DysonRethinkToolUsageFlow.CreateTurn();
+        var startNew = DysonAgentSession.CreateNormalTurn("next step");
+        startNew.FromStartNewTurn = true;
+        Assert.True(harness.Runtime.EnqueuePrompt(sessionId, rethink).IsSuccess);
+        Assert.True(harness.Runtime.EnqueuePrompt(sessionId, startNew).IsSuccess);
+        Assert.True(harness.Runtime.EnqueuePrompt(sessionId, DysonCompactionFlow.CreateContinuationTurn()).IsSuccess);
+        Assert.True(harness.Runtime.EnqueuePrompt(sessionId, inject).IsSuccess);
+        Assert.Equal(4, harness.Runtime.GetQueuedPromptCount(sessionId));
+
+        var earlier = DysonAgentSession.CreateNormalTurn("old work");
+        var summary = DysonFullSummarizeFlow.CreateTurn();
+        summary.AssistantText = "# Session summary: queue";
+        var ran = await harness.Runtime.ExecutePromptAsync(
+            session,
+            (live, _) =>
+            {
+                var stub = Assert.IsType<StubSession>(live);
+                stub.AddTurnForTest(earlier);
+                stub.AddTurnForTest(summary);
+                return Task.FromResult(VoidResult<string>.Success);
+            });
+        Assert.True(ran.IsSuccess, ran.IsError ? ran.Error : null);
+
+        // FIFO lost the stale rethink, StartNewTurn and old continuation, and kept the inject.
+        // The one fresh continuation is queued on the session, for the host drain to copy in.
+        Assert.Equal(1, harness.Runtime.GetQueuedPromptCount(sessionId));
+        Assert.True(harness.Runtime.TryDequeuePrompt(sessionId, out var kept));
+        Assert.Same(inject, kept.Turn);
+        Assert.Equal(0, harness.Runtime.GetQueuedPromptCount(sessionId));
+        Assert.True(session.TryDequeuePendingTurn(out var fresh));
+        Assert.True(fresh.AfterSummaryResume);
+        Assert.True(DysonCompactionFlow.IsCompactionContinuation(fresh));
+        Assert.False(session.TryDequeuePendingTurn(out _));
+    }
+
+    [Fact]
     public async Task Prompt_queue_is_fifo_and_preserves_turn_identity()
     {
         await using var harness = await Harness.CreateAsync();

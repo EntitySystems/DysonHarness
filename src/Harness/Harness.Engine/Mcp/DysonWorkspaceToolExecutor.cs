@@ -1233,6 +1233,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
 
         var turn = DysonAgentSession.CreateNormalTurn(promptInstructions);
+        turn.FromStartNewTurn = true;
         _session.EnqueuePendingTurn(turn);
 
         return Ok(

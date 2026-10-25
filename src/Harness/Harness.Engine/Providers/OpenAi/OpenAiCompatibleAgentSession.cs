@@ -718,8 +718,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     /// <summary>
     /// Shared end-of-turn check for every successful exit of the tool loop (final reply, end-turn tool,
     /// budget soft pause, child report). A turn paused at a safe point summarizes and queues a Continuation.
-    /// Any other turn summarizes without one when it ended over the limit or a trip is pending; turns already
-    /// queued (StartNewTurn, rethink) run after. A cancelled run keeps the marker for the next prompt.
+    /// Any other turn summarizes when it ended over the limit or a trip is pending. A successful summary
+    /// drops queued harness follow-ups (StartNewTurn, rethink) and queues one fresh Continuation only when
+    /// something was dropped or the turn was paused. A cancelled run keeps the marker for the next prompt.
     /// </summary>
     private async Task<VoidResult<string>> CompactAtTurnEndAsync(
         DysonAgentTurn turn,
