@@ -3497,10 +3497,10 @@ code, .mono {
   animation: dyson-fade-in var(--motion-slow) var(--ease);
 }
 
-/* Appended by wwwroot/meta-reveal.js around words of a live Meta Agent post.
+/* Appended by wwwroot/meta-reveal.js around graphemes of a live Meta Agent post.
    Same reason as .dyson-stream-chunk: JS nodes have no scope attribute. Opacity only.
-   Duration matches dysonMetaReveal.fadeMs; delay is set per word in JS. */
-.dyson-meta-reveal__word {
+   Duration matches dysonMetaReveal.fadeMs; delay is set per grapheme in JS. */
+.dyson-meta-reveal__char {
   animation: dyson-fade-in 200ms var(--ease) both;
 }
 

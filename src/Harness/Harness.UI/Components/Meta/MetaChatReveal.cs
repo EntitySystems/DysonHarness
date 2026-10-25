@@ -7,12 +7,11 @@ namespace Harness.UI.Components.Meta;
 public static class MetaChatReveal
 {
     /// <summary>
-    /// Milliseconds between words.
-    /// 238 wpm (average adult silent reading) × 1.2 ≈ 286 wpm ≈ 4.76 words/s ≈ 210 ms/word.
-    /// About 27 characters/second at ~5.7 characters per word including the trailing space
-    /// (286 × 5.7 / 60 ≈ 27). Keep in sync with dysonMetaReveal.staggerMs.
+    /// Milliseconds between grapheme clusters.
+    /// 238 wpm (average adult silent reading) × 1.2 ≈ 286 wpm ≈ 27.5 chars/s
+    /// (286 × 5.7 / 60 ≈ 27.2; 1000/27.5 ≈ 36). Keep in sync with dysonMetaReveal.staggerMs.
     /// </summary>
-    public const int WordStaggerMs = 210;
+    public const int CharStaggerMs = 36;
 
     /// <summary>
     /// Ids already on screen are history. Anything new after <paramref name="primed"/> is live.
