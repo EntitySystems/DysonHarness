@@ -13,6 +13,8 @@
     var showModel = DysonSubagentHostLogic.ShowNestedModelLabel(_state.ModelLabel, ParentModelLabel);
     <button type="button"
             class="meta-child-row"
+            data-status="@_state.Status"
+            data-running="@(_state.IsRunning ? "true" : null)"
             title="@AccessibleName"
             aria-label="@AccessibleName"
             @onclick="NavigateAsync">

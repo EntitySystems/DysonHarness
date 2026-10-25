@@ -375,6 +375,12 @@ public static class DysonToolCallUi
         return null;
     }
 
+    /// <summary>Inject chip: omitted / 0 timeoutSeconds is interrupt-now, a positive value is the wait (max 20).</summary>
+    public static string InjectTimeoutLabel(string? argumentsJson) =>
+        GetInt(argumentsJson, "timeoutSeconds") is int s and > 0
+            ? $"wait {Math.Min(s, DysonAgentSession.MaxInjectWaitSeconds)}s"
+            : "interrupt";
+
     public static bool GetBool(string? argumentsJson, string propertyName, bool defaultValue = false)
     {
         if (!TryParseObject(argumentsJson, out var root))
@@ -947,10 +953,9 @@ public static class DysonToolCallUi
     private static CollapsedSummary SummarizeTriggerSubagent(string? argumentsJson)
     {
         var id = GetInt(argumentsJson, "subagentId");
-        var interrupt = GetBool(argumentsJson, "interruptSubagent");
         var payload = Truncate(GetString(argumentsJson, "payload"), 36);
         var text = id is int i ? $"#{i}" : "event";
-        text += interrupt ? " · interrupt" : " · queue";
+        text += " · " + InjectTimeoutLabel(argumentsJson);
         if (!string.IsNullOrEmpty(payload))
             text += $" · {payload}";
         return TextSummary(Truncate(text, SummaryMaxLength));

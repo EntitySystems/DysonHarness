@@ -66,5 +66,5 @@ artifacts/
 ## Local scratch artifacts
 /.tmp/
 
-## Isolated build outputs (dev UI on :5180 holds bin/; drones redirect here)
+## Isolated build outputs (installed DysonHarness.exe may lock bin/; drones redirect here)
 .buildtmp/

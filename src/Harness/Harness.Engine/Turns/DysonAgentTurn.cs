@@ -34,6 +34,16 @@ public sealed class DysonAgentTurn
     public bool AllowEnqueue => DysonAgentTurnKindRules.AllowsEnqueue(Kind);
 
     /// <summary>
+    /// Set on the one fresh compaction continuation a successful summary re-queues.
+    /// A summary clear keeps a Continuation carrying it and drops every older resume, so the
+    /// continuation the summary just wrote is not cancelled by the same clear.
+    /// </summary>
+    public bool AfterSummaryResume { get; init; }
+
+    /// <summary>Queued by the StartNewTurn tool. A successful summary drops it (a composer prompt never has it).</summary>
+    public bool FromStartNewTurn { get; set; }
+
+    /// <summary>
     /// Workspace-relative plan path for <see cref="DysonAgentTurnKind.PlanResult"/> /
     /// <see cref="DysonAgentTurnKind.BeginBuildPlan"/> turns
     /// (forward slashes, e.g. <c>.dyson/plans/slug-hash.md</c>).

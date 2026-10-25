@@ -93,6 +93,10 @@ public class DysonMetaAgentDirectiveTests
         var text = Prompt("Meta Agent");
         MustContain(text, DysonAgentSystemPrompts.SharedPreamble.Trim(), "Meta Agent ForMode shared preamble");
         MustContain(text, "never block", "Meta Agent ForMode");
+        MustContain(
+            text,
+            "Passing timeoutSeconds ≥ 1 on MessageMetaAgentDrone blocks this turn for at most that many seconds (max 20) and then returns; the default (omit it) does not block.",
+            "Meta Agent ForMode");
         MustNotContain(text, "BrowserWaitForNavigation", "Meta Agent ForMode");
         MustContain(text, "Reuse over re-spawn", "Meta Agent ForMode");
         MustContain(text, "You cannot touch the filesystem", "Meta Agent ForMode");

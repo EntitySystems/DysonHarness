@@ -38,11 +38,13 @@ public class DysonParentEventTests
         {
             Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "first")).IsSuccess);
             await child.PromptStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "queued second")).IsSuccess);
+            Assert.True((await parent.QueueSubagentEventAsync(child.Id, "queued second")).IsSuccess);
             child.EnqueuePendingTurn(DysonAgentSession.CreateNormalTurn("stale harness follow-up"));
-            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "queued third")).IsSuccess);
+            Assert.True((await parent.QueueSubagentEventAsync(child.Id, "queued third")).IsSuccess);
 
-            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "urgent fourth", interruptSubagent: true)).IsSuccess);
+            var urgent = await parent.TriggerSubagentEventAsync(child.Id, "urgent fourth");
+            Assert.True(urgent.IsSuccess);
+            Assert.Contains("\"status\":\"interrupted\"", urgent.Value, StringComparison.Ordinal);
 
             // FIFO, no duplicates, harness follow-up dropped; the interrupt turn itself is not queued.
             Assert.True(child.TryDequeuePendingTurn(out var kept));
@@ -55,6 +57,182 @@ public class DysonParentEventTests
         {
             child.CancelBackgroundRunForTest();
         }
+    }
+
+    [Fact]
+    public async Task Idle_inject_with_timeout_omitted_is_delivered_without_waiting()
+    {
+        var parent = new StubSession();
+        var child = new HangingChildSession();
+        parent.RegisterForTest(child);
+        try
+        {
+            var idle = await parent.TriggerSubagentEventAsync(child.Id, "go");
+            Assert.True(idle.IsSuccess, idle.IsError ? idle.Error : null);
+            Assert.Contains("\"status\":\"delivered\"", idle.Value, StringComparison.Ordinal);
+            Assert.Contains("\"waitedMs\":0", idle.Value, StringComparison.Ordinal);
+            await child.PromptStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            child.CancelBackgroundRunForTest();
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0)]
+    public async Task Busy_inject_with_zero_timeout_interrupts_immediately(int? timeoutSeconds)
+    {
+        var parent = new StubSession();
+        var child = new HangingChildSession();
+        parent.RegisterForTest(child);
+        try
+        {
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "first")).IsSuccess);
+            await child.PromptStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var urgent = await parent.TriggerSubagentEventAsync(child.Id, "urgent", timeoutSeconds);
+            Assert.True(urgent.IsSuccess, urgent.IsError ? urgent.Error : null);
+            Assert.Contains("\"status\":\"interrupted\"", urgent.Value, StringComparison.Ordinal);
+            await child.PromptFinished.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.True(child.CancelledCount >= 1);
+        }
+        finally
+        {
+            child.CancelBackgroundRunForTest();
+        }
+    }
+
+    [Fact]
+    public async Task Busy_inject_interrupts_after_a_positive_timeout()
+    {
+        var parent = new StubSession();
+        var child = new HangingChildSession();
+        parent.RegisterForTest(child);
+        try
+        {
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "first")).IsSuccess);
+            await child.PromptStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var late = await parent.TriggerSubagentEventAsync(child.Id, "after wait", timeoutSeconds: 1);
+            Assert.True(late.IsSuccess, late.IsError ? late.Error : null);
+            Assert.Contains("\"status\":\"interrupted\"", late.Value, StringComparison.Ordinal);
+            await child.PromptFinished.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.True(child.CancelledCount >= 1);
+            Assert.False(child.HasPendingTurn);
+        }
+        finally
+        {
+            child.CancelBackgroundRunForTest();
+        }
+    }
+
+    [Fact]
+    public async Task Busy_inject_is_delivered_when_the_turn_ends_before_the_timeout()
+    {
+        var parent = new StubSession();
+        var child = new HangingChildSession();
+        parent.RegisterForTest(child);
+        try
+        {
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "first")).IsSuccess);
+            await child.PromptStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var pending = parent.TriggerSubagentEventAsync(child.Id, "next", timeoutSeconds: 10);
+            await Task.Delay(50);
+            Assert.False(pending.IsCompleted);
+            child.Release.TrySetResult();
+
+            var delivered = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(delivered.IsSuccess, delivered.IsError ? delivered.Error : null);
+            Assert.Contains("\"status\":\"delivered\"", delivered.Value, StringComparison.Ordinal);
+            Assert.Equal(0, child.CancelledCount);
+        }
+        finally
+        {
+            child.CancelBackgroundRunForTest();
+        }
+    }
+
+    [Fact]
+    public void Inject_timeout_clamps_to_twenty_and_defaults_to_zero()
+    {
+        Assert.Equal(0, DysonAgentSession.ClampInjectWaitSeconds(null));
+        Assert.Equal(7, DysonAgentSession.ClampInjectWaitSeconds(7));
+        Assert.Equal(DysonAgentSession.MaxInjectWaitSeconds, DysonAgentSession.ClampInjectWaitSeconds(25));
+        Assert.Equal(20, DysonAgentSession.MaxInjectWaitSeconds);
+    }
+
+    [Fact]
+    public async Task Negative_inject_timeout_errors_and_does_not_enqueue()
+    {
+        var parent = new StubSession();
+        var child = new HangingChildSession();
+        parent.RegisterForTest(child);
+
+        var negative = await parent.TriggerSubagentEventAsync(child.Id, "nope", timeoutSeconds: -1);
+        Assert.True(negative.IsError);
+        Assert.False(child.HasPendingTurn);
+        Assert.Equal(0, child.PromptCount);
+    }
+
+    [Fact]
+    public async Task Caller_cancel_during_inject_wait_leaves_payload_queued()
+    {
+        var parent = new StubSession();
+        var child = new HangingChildSession();
+        parent.RegisterForTest(child);
+        try
+        {
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "first")).IsSuccess);
+            await child.PromptStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => parent.TriggerSubagentEventAsync(child.Id, "stay queued", timeoutSeconds: 10, cts.Token));
+            Assert.True(child.HasPendingTurn);
+            Assert.Equal(0, child.CancelledCount);
+        }
+        finally
+        {
+            child.CancelBackgroundRunForTest();
+        }
+    }
+
+    [Fact]
+    public async Task Inject_tools_reject_the_legacy_interrupt_property()
+    {
+        using var http = new HttpClient();
+        var work = new StubSession();
+        var workChild = new HangingChildSession();
+        work.RegisterForTest(workChild);
+        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(work, Path.GetTempPath(), http);
+        var trigger = await executor.ExecuteAsync(new DysonToolCall
+        {
+            CallId = "1",
+            ToolName = "TriggerSubagentEvent",
+            Stage = 0,
+            ArgumentsJson = $$"""{"subagentId":{{workChild.Id}},"payload":"x","interruptSubagent":true}""",
+        });
+        Assert.True(trigger.IsError);
+        Assert.Contains("unknown property interruptSubagent", trigger.Content, StringComparison.Ordinal);
+        Assert.Equal(0, workChild.PromptCount);
+
+        var meta = new StubSession(DysonAgentModes.MetaAgent);
+        var drone = new HangingChildSession();
+        meta.RegisterForTest(drone);
+        var metaExecutor = await DysonWorkspaceTestFs.CreateExecutorAsync(meta, Path.GetTempPath(), http);
+        var message = await metaExecutor.ExecuteAsync(new DysonToolCall
+        {
+            CallId = "2",
+            ToolName = "MessageMetaAgentDrone",
+            Stage = 0,
+            ArgumentsJson = $$"""{"agentId":{{drone.Id}},"message":"x","interrupt":false}""",
+        });
+        Assert.True(message.IsError);
+        Assert.Contains("unknown property interrupt", message.Content, StringComparison.Ordinal);
+        Assert.Equal(0, drone.PromptCount);
     }
 
     [Fact]
@@ -277,7 +455,7 @@ public class DysonParentEventTests
             throw new InvalidOperationException("Expected child HasPendingParentEventWait.");
 
         var interrupted = await parent
-            .TriggerSubagentEventAsync(child.Id, "new instructions", interruptSubagent: true)
+            .TriggerSubagentEventAsync(child.Id, "new instructions")
             .ConfigureAwait(false);
         if (interrupted.IsError
             || interrupted.Value.IndexOf("interrupted", StringComparison.OrdinalIgnoreCase) < 0)
@@ -307,15 +485,18 @@ public class DysonParentEventTests
         await Task.Delay(25).ConfigureAwait(false);
 
         var queued = await parent
-            .TriggerSubagentEventAsync(child.Id, "should fail", interruptSubagent: false)
+            .TriggerSubagentEventAsync(child.Id, "should fail", timeoutSeconds: 1)
             .ConfigureAwait(false);
         if (!queued.IsError
             || queued.Error.IndexOf("awaiting a parent-event reply", StringComparison.OrdinalIgnoreCase) < 0)
         {
             throw new InvalidOperationException(
-                "Expected non-interrupt fail while child waiting: " +
+                "Expected positive-timeout fail while child waiting: " +
                 (queued.IsError ? queued.Error : queued.Value));
         }
+
+        if (!child.HasPendingParentEventWait || child.HasPendingTurn)
+            throw new InvalidOperationException("Positive-timeout fail must leave the wait pending and enqueue nothing.");
 
         var pending = parent.PendingOrRecentParentEvents
             .First(e => e.Status == DysonParentEventStatus.Pending);
@@ -351,10 +532,10 @@ public class DysonParentEventTests
             var json = injected.Value;
             if ((json.IndexOf("\"reopened\":true", StringComparison.Ordinal) < 0
                     && json.IndexOf("\"reopened\": true", StringComparison.Ordinal) < 0)
-                || json.IndexOf("queued", StringComparison.OrdinalIgnoreCase) < 0)
+                || json.IndexOf("delivered", StringComparison.OrdinalIgnoreCase) < 0)
             {
                 throw new InvalidOperationException(
-                    "Expected inject JSON with reopened:true and queued: " + json);
+                    "Expected inject JSON with reopened:true and delivered: " + json);
             }
 
             if (child.Status != DysonSessionStatus.Active)
@@ -675,6 +856,10 @@ public class DysonParentEventTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public readonly TaskCompletionSource PromptFinished =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        /// <summary>Completing it ends every hang without cancellation (turn finished normally).</summary>
+        public readonly TaskCompletionSource Release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int CancelledCount;
 
         public void CancelBackgroundRunForTest() => CancelBackgroundRun();
 
@@ -686,8 +871,13 @@ public class DysonParentEventTests
             PromptStarted.TrySetResult();
             try
             {
-                await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+                await Release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
                 return VoidResult<string>.Success;
+            }
+            catch (OperationCanceledException)
+            {
+                Interlocked.Increment(ref CancelledCount);
+                throw;
             }
             finally
             {

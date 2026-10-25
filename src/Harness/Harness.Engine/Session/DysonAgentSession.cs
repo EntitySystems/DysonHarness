@@ -33,6 +33,10 @@ public abstract class DysonAgentSession
     private readonly HashSet<int> _waitConsumedCompletionSubagentIds = [];
     private readonly object _waitingOnGate = new();
     private readonly ConcurrentQueue<DysonAgentTurn> _pendingTurns = new();
+    // Parent waits on a positive inject timeout; signalled when KickOffChildPrompt starts that turn.
+    private readonly ConcurrentDictionary<Guid, TaskCompletionSource> _injectWaiters = new();
+    // ponytail: one lock serializes the inject interrupt tail (cancel + requeue + kick); the wait is not locked.
+    private readonly object _injectInterruptGate = new();
     private readonly Stack<DysonAgentTurn> _inFlightPromptStack = new();
     private TaskCompletionSource<Result<string, string>>? _parentEventWaitTcs;
     private TaskCompletionSource<Result<string, string>>? _askQuestionTcs;
@@ -1178,15 +1182,43 @@ public abstract class DysonAgentSession
         return Result<string, string>.AsValue(error);
     }
 
+    /// <summary>Upper bound for <c>timeoutSeconds</c> on parent → child inject.</summary>
+    public const int MaxInjectWaitSeconds = 20;
+
+    /// <summary>Omitted means 0 (interrupt now); values above <see cref="MaxInjectWaitSeconds"/> clamp.</summary>
+    public static int ClampInjectWaitSeconds(int? timeoutSeconds) =>
+        Math.Clamp(timeoutSeconds ?? 0, 0, MaxInjectWaitSeconds);
+
     /// <summary>
-    /// Parent → child inject. Default queues next-turn prompt; <paramref name="interruptSubagent"/> cancels
-    /// in-flight turn (and any parent-event wait) then starts immediately.
+    /// Parent → child inject (<c>TriggerSubagentEvent</c> / <c>MessageMetaAgentDrone</c>).
+    /// <paramref name="timeoutSeconds"/> omitted or 0 cancels the in-flight turn (and any parent-event wait)
+    /// and runs the payload now. 1–20 waits for the child to start this injection at its next turn boundary,
+    /// then interrupts. A positive timeout fails fast while the child awaits a parent-event reply.
+    /// An idle child starts the injection immediately (<c>delivered</c>).
     /// </summary>
-    public async Task<Result<string, string>> TriggerSubagentEventAsync(
+    public Task<Result<string, string>> TriggerSubagentEventAsync(
         int subagentId,
         string payload,
-        bool interruptSubagent = false,
-        CancellationToken cancellationToken = default)
+        int? timeoutSeconds = null,
+        CancellationToken cancellationToken = default) =>
+        InjectSubagentEventAsync(subagentId, payload, timeoutSeconds, queueOnly: false, cancellationToken);
+
+    /// <summary>
+    /// BeginBuildPlan reuse: queue for the child's next turn and return <c>queued</c> without waiting or
+    /// interrupting. Not reachable from either tool schema.
+    /// </summary>
+    internal Task<Result<string, string>> QueueSubagentEventAsync(
+        int subagentId,
+        string payload,
+        CancellationToken cancellationToken = default) =>
+        InjectSubagentEventAsync(subagentId, payload, timeoutSeconds: null, queueOnly: true, cancellationToken);
+
+    private async Task<Result<string, string>> InjectSubagentEventAsync(
+        int subagentId,
+        string payload,
+        int? timeoutSeconds,
+        bool queueOnly,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -1196,12 +1228,17 @@ public abstract class DysonAgentSession
         if (string.IsNullOrWhiteSpace(payload))
             return Result<string, string>.AsError("TriggerSubagentEvent: payload is required.");
 
-        var trimmed = payload.Trim();
+        if (timeoutSeconds < 0)
+            return Result<string, string>.AsError("TriggerSubagentEvent: timeoutSeconds must be 0 or greater.");
 
-        if (child.HasPendingParentEventWait && !interruptSubagent)
+        var trimmed = payload.Trim();
+        var waitSeconds = ClampInjectWaitSeconds(timeoutSeconds);
+
+        if (child.HasPendingParentEventWait && (queueOnly || waitSeconds > 0))
         {
             return Result<string, string>.AsError(
-                "TriggerSubagentEvent: child is awaiting a parent-event reply; pass interruptSubagent=true to cancel that wait and inject.");
+                "TriggerSubagentEvent: child is awaiting a parent-event reply; a wait cannot be consumed at a turn boundary. "
+                + "Omit timeoutSeconds (or pass 0) to cancel that wait and inject.");
         }
 
         var reopened = child.TryReopenForNewParentTask();
@@ -1211,36 +1248,31 @@ public abstract class DysonAgentSession
         // Full text (the prompt: line is truncated); persisted as a LogLine and shown by InspectSubagentLog.
         child.AppendLog($"PARENT MESSAGE: {trimmed}");
 
-        if (interruptSubagent)
+        var turn = CreateInjectedSubagentTurn(trimmed, reportReenabled: reopened);
+        string Json(string status, long waitedMs) => JsonSerializer.Serialize(new
         {
-            child.CancelPendingParentEventWait(
-                "cancelled by parent TriggerSubagentEvent");
-            child.CancelBackgroundRun();
-            // Drop queued harness follow-ups, but keep earlier parent messages: they run after
-            // the interrupt turn instead of being silently discarded.
-            var queuedParentMessages = new List<DysonAgentTurn>();
-            while (child.TryDequeuePendingTurn(out var queued))
-            {
-                if (queued.Instruction?.StartsWith(InjectedSubagentPromptPrefix, StringComparison.Ordinal) == true)
-                    queuedParentMessages.Add(queued);
-            }
+            subagentId,
+            persistenceId = child.PersistenceId,
+            status,
+            waitedMs,
+            reopened,
+        });
 
-            foreach (var queued in queuedParentMessages)
-                child.EnqueuePendingTurn(queued);
-            var runCts = new CancellationTokenSource();
-            child.AttachBackgroundRun(runCts);
-            KickOffChildPrompt(child, CreateInjectedSubagentTurn(trimmed, reportReenabled: reopened), runCts);
-
-            return Result<string, string>.AsValue(JsonSerializer.Serialize(new
-            {
-                subagentId,
-                persistenceId = child.PersistenceId,
-                status = "interrupted",
-                reopened,
-            }));
+        var busy = child.HasActiveBackgroundRun || child.HasPendingParentEventWait;
+        if (!queueOnly && waitSeconds == 0 && busy)
+        {
+            InterruptChildWith(child, turn);
+            return Result<string, string>.AsValue(Json("interrupted", 0));
         }
 
-        child.EnqueuePendingTurn(CreateInjectedSubagentTurn(trimmed, reportReenabled: reopened));
+        TaskCompletionSource? started = null;
+        if (!queueOnly && busy)
+        {
+            started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            child._injectWaiters[turn.Id] = started;
+        }
+
+        child.EnqueuePendingTurn(turn);
         if (!child.HasActiveBackgroundRun)
         {
             var runCts = new CancellationTokenSource();
@@ -1251,13 +1283,94 @@ public abstract class DysonAgentSession
                 runCts.Dispose();
         }
 
-        return Result<string, string>.AsValue(JsonSerializer.Serialize(new
+        if (started is null)
+            return Result<string, string>.AsValue(Json(queueOnly ? "queued" : "delivered", 0));
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            subagentId,
-            persistenceId = child.PersistenceId,
-            status = "queued",
-            reopened,
-        }));
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(waitSeconds), cancellationToken).ConfigureAwait(false);
+            return Result<string, string>.AsValue(Json("delivered", clock.ElapsedMilliseconds));
+        }
+        catch (TimeoutException)
+        {
+            // Pull this payload back out of the queue. If a drain already took it, the drain wins.
+            lock (child._injectInterruptGate)
+            {
+                if (!started.Task.IsCompleted && child.TryRemovePendingTurn(turn))
+                {
+                    child._injectWaiters.TryRemove(turn.Id, out _);
+                    InterruptChildWith(child, turn);
+                    return Result<string, string>.AsValue(Json("interrupted", clock.ElapsedMilliseconds));
+                }
+            }
+
+            // A drain dequeued it and is about to start it. Grace-wait so a Stop/clear that dropped it
+            // instead cannot hang the parent.
+            try
+            {
+                await started.Task.WaitAsync(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+                return Result<string, string>.AsValue(Json("delivered", clock.ElapsedMilliseconds));
+            }
+            catch (TimeoutException)
+            {
+                child._injectWaiters.TryRemove(turn.Id, out _);
+                return Result<string, string>.AsError(
+                    "TriggerSubagentEvent: the injection left the child's queue without starting (child stopped or queue cleared).");
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The parent gave up waiting: leave the payload queued and do not interrupt the child.
+            child._injectWaiters.TryRemove(turn.Id, out _);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Cancel the child's in-flight turn and parent-event wait, drop queued harness follow-ups while keeping
+    /// earlier parent messages FIFO, then start <paramref name="turn"/> now.
+    /// </summary>
+    private static void InterruptChildWith(DysonAgentSession child, DysonAgentTurn turn)
+    {
+        lock (child._injectInterruptGate)
+        {
+            child.CancelPendingParentEventWait("cancelled by parent TriggerSubagentEvent");
+            child.CancelBackgroundRun();
+            var queuedParentMessages = new List<DysonAgentTurn>();
+            while (child.TryDequeuePendingTurn(out var queued))
+            {
+                if (!ReferenceEquals(queued, turn)
+                    && queued.Instruction?.StartsWith(
+                        DysonQueuedTurnAfterSummary.InjectedSubagentPromptPrefix,
+                        StringComparison.Ordinal) == true)
+                    queuedParentMessages.Add(queued);
+            }
+
+            foreach (var queued in queuedParentMessages)
+                child.EnqueuePendingTurn(queued);
+            var runCts = new CancellationTokenSource();
+            child.AttachBackgroundRun(runCts);
+            KickOffChildPrompt(child, turn, runCts);
+        }
+    }
+
+    /// <summary>Removes <paramref name="turn"/> from the pending queue, keeping the order of the rest.</summary>
+    private bool TryRemovePendingTurn(DysonAgentTurn turn)
+    {
+        var rest = new List<DysonAgentTurn>();
+        var found = false;
+        while (_pendingTurns.TryDequeue(out var queued))
+        {
+            if (ReferenceEquals(queued, turn))
+                found = true;
+            else
+                rest.Add(queued);
+        }
+
+        foreach (var queued in rest)
+            _pendingTurns.Enqueue(queued);
+        return found;
     }
 
     /// <summary>Root-only: block until the host UI answers (composer Ask popover).</summary>
@@ -1901,22 +2014,20 @@ public abstract class DysonAgentSession
 
     private void RaiseParentEventsChanged() => ParentEventsChanged?.Invoke(this, EventArgs.Empty);
 
-    private const string InjectedSubagentPromptPrefix =
-        "Harness injection: the parent sent instructions via TriggerSubagentEvent.";
-
     private static string BuildInjectedSubagentPrompt(string payload, bool reportReenabled)
     {
         var body = payload.Trim();
+        var prefix = DysonQueuedTurnAfterSummary.InjectedSubagentPromptPrefix;
         if (reportReenabled)
         {
             return
-                InjectedSubagentPromptPrefix + " Follow them and continue your task.\n"
+                prefix + " Follow them and continue your task.\n"
                 + "SubmitSubagentReport is enabled again for this assignment and must be called when the new work is done or blocked.\n\n"
                 + body;
         }
 
         return
-            InjectedSubagentPromptPrefix + " Follow them and continue your task.\n\n"
+            prefix + " Follow them and continue your task.\n\n"
             + body;
     }
 
@@ -2748,6 +2859,9 @@ public abstract class DysonAgentSession
         ArgumentNullException.ThrowIfNull(child);
         ArgumentNullException.ThrowIfNull(turn);
         ArgumentNullException.ThrowIfNull(runCts);
+
+        if (child._injectWaiters.TryRemove(turn.Id, out var injectStarted))
+            injectStarted.TrySetResult();
 
         _ = Task.Run(async () =>
         {

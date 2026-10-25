@@ -1,32 +1,55 @@
+/* Nested children of a meta agent card: a tree guide with an elbow per row. */
 .meta-child-rows {
   display: flex;
   flex-direction: column;
-  padding: 0 8px 6px 12px;
+  gap: 1px;
+  margin: 0 var(--sp-2) var(--sp-2) 22px;
+  padding-left: var(--sp-2);
+  border-left: 1px solid var(--border-subtle);
 }
 
 .meta-child-rows ::deep .meta-child-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
   width: 100%;
   min-width: 0;
-  padding: 2px 4px;
+  padding: var(--sp-1) var(--sp-2);
   border: 0;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
-  font-size: 11px;
+  font: inherit;
+  font-size: var(--fs-sm);
   text-align: left;
   cursor: pointer;
+  transition: background var(--motion-fast) var(--ease);
+}
+
+/* Elbow from the guide line into the row. */
+.meta-child-rows ::deep .meta-child-row::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--sp-2) - 1px);
+  top: 50%;
+  width: 10px;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .meta-child-rows ::deep .meta-child-row:hover {
   background: var(--bg-hover);
 }
 
+.meta-child-rows ::deep .meta-child-row:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .meta-child-rows ::deep .meta-child-row__icon {
   flex: 0 0 auto;
-  width: 12px;
-  height: 12px;
+  width: 13px;
+  height: 13px;
   -webkit-mask: var(--subagent-mode-icon) center / contain no-repeat;
   mask: var(--subagent-mode-icon) center / contain no-repeat;
 }
@@ -41,17 +64,34 @@
 
 .meta-child-rows ::deep .meta-child-row__name {
   flex: 1 1 auto;
+  min-width: 6ch;
 }
 
 .meta-child-rows ::deep .meta-child-row__step {
   flex: 0 1 auto;
-  font-weight: 400;
+  font-weight: var(--fw-regular);
   color: var(--text-muted);
+}
+
+/* Status ink on the step text (mixed toward --text for contrast). */
+.meta-child-rows ::deep .meta-child-row[data-status="Completed"] .meta-child-row__step {
+  color: color-mix(in srgb, var(--success) 78%, var(--text));
+}
+
+.meta-child-rows ::deep .meta-child-row[data-status="Failed"] .meta-child-row__step {
+  color: color-mix(in srgb, var(--danger) 78%, var(--text));
+}
+
+.meta-child-rows ::deep .meta-child-row[data-running] .meta-child-row__step {
+  color: var(--accent-text);
 }
 
 .meta-child-rows ::deep .meta-child-row__id {
   flex: 0 0 auto;
-  font-size: 10px;
+  padding: 0 4px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunken);
+  font-size: var(--fs-2xs);
   color: var(--text-muted);
   white-space: nowrap;
 }
@@ -63,7 +103,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
 }
 
 .meta-child-rows ::deep .meta-child-row__spinner {
@@ -72,6 +114,11 @@
 }
 
 .meta-child-rows ::deep .meta-child-row--more {
-  color: var(--text-muted);
+  color: var(--accent-text);
+  font-size: var(--fs-xs);
   cursor: pointer;
+}
+
+.meta-child-rows ::deep .meta-child-row--more:hover {
+  text-decoration: underline;
 }

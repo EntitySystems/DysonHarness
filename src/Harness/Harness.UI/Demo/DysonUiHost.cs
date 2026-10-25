@@ -947,17 +947,16 @@ public sealed class DysonUiHost : IAsyncDisposable
                     }
                 }
 
-                if (runtime.TryPeekPrompt(id, out var peeked))
-                {
-                    var instruction = peeked.Turn.Instruction ?? peeked.Turn.Kind.ToString();
-                    return [new QueuedPrompt(
-                        peeked.Id,
-                        DysonSubagentHostLogic.PromptFirstLine(instruction),
-                        instruction,
-                        TurnHasQueuedAttachments(peeked.Turn))];
-                }
-
-                return [];
+                // Projection diverged (a summary classified the FIFO). Copy the surviving
+                // FIFO so the composer count is the FIFO count, not a stale copy.
+                var rebuilt = CopyHostPromptProjection(id, runtime);
+                return rebuilt
+                    .Select(e => new QueuedPrompt(
+                        e.Id,
+                        e.FirstLine,
+                        e.Turn.Instruction ?? e.Turn.Kind.ToString(),
+                        TurnHasQueuedAttachments(e.Turn)))
+                    .ToArray();
             }
 
             lock (_promptQueueGate)
@@ -3930,6 +3929,66 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pendingReasoningEffort = effort;
         Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
         return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Non-null (<c>"{provider} / {slug}"</c>) when picking <paramref name="modelSlugId"/> on the focused
+    /// session needs <see cref="ConvertSessionToSlugAsync"/> (Demo session, OpenAI-compatible slug)
+    /// instead of <see cref="SetSessionModelSlugAsync"/>. Null on any lookup error (the slug path reports it).
+    /// </summary>
+    public async Task<string?> ProviderConversionTargetAsync(
+        Guid? modelSlugId,
+        CancellationToken cancellationToken = default)
+    {
+        if (_session is null || modelSlugId is not Guid id
+            || SessionProviderKind(_session.Provider) == DysonProviderKinds.OpenAICompatible)
+        {
+            return null;
+        }
+
+        var slug = await _models.GetSlugAsync(id, cancellationToken).ConfigureAwait(false);
+        return slug.IsSuccess
+            && DysonSessionProviderConversion.Kind(slug.Value) == DysonProviderKinds.OpenAICompatible
+                ? $"{slug.Value.Provider?.DisplayName} / {slug.Value.Slug}"
+                : null;
+    }
+
+    /// <summary>
+    /// Converts the focused root session to an OpenAI-compatible slug in place (same id, same turns):
+    /// persists the slug, drops the live object (and its loaded children), and reloads the id.
+    /// Refuses while the session, its children, queued prompts, a summary, or voice mode are live.
+    /// </summary>
+    public async Task<VoidResult<string>> ConvertSessionToSlugAsync(
+        Guid targetModelSlugId,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+        if (_session is not { PersistenceId: var sessionId } session || sessionId == Guid.Empty)
+            return FailConvert("No active session.");
+
+        if (CanStopExecution(sessionId) || session.HasAnySummarizingTurn || session.Config.Voice is not null)
+            return FailConvert("Wait for the current turn to finish.");
+
+        var converted = await DysonSessionProviderConversion.ConvertSessionProviderAsync(
+                _sessions, _models, sessionId, targetModelSlugId, cancellationToken)
+            .ConfigureAwait(false);
+        if (converted.IsError)
+            return FailConvert(converted.Error);
+
+        ClearFocus();
+        UnregisterSessionTree(sessionId);
+        if (TryGetAttachedRuntime(out var runtime))
+            await runtime.ReleaseSessionTreeAsync(sessionId).ConfigureAwait(false);
+
+        // Same path as opening the session from the list; the row now resolves to OpenAI-compatible.
+        return await LoadAndFocusSessionAsync(sessionId, cancellationToken).ConfigureAwait(false);
+    }
+
+    private VoidResult<string> FailConvert(string message)
+    {
+        LastError = message;
+        Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
+        return new VoidResult<string>(message);
     }
 
     /// <summary>
@@ -7539,7 +7598,18 @@ public sealed class DysonUiHost : IAsyncDisposable
 
                     IReadOnlyList<DysonAgentTurn> dropped = [];
                     if (DysonFullSummarizeFlow.ShouldApplyAfterCompletion(last.Kind))
+                    {
                         dropped = DysonFullSummarizeFlow.ApplyAfterCompletion(session, last);
+                        // Runtime-owned sessions clear inside ExecutePromptCoreAsync. Host-owned
+                        // roots clear here, before the follow-up drain copies survivors into the FIFO.
+                        if (!IsRuntimeOwned(session))
+                        {
+                            // Classify the FIFO before the fresh continuation is queued, so the host
+                            // drain below copies it in instead of the clear dropping it.
+                            RetainHostPromptsAfterSummary(sessionId);
+                            DysonCompactionFlow.QueueFreshContinuationIfNeeded(session, resume: false);
+                        }
+                    }
 
                     // Persist every unfinished turn (PlanResult may append after the prompt turn).
                     foreach (var turn in session.Turns)
@@ -7649,6 +7719,38 @@ public sealed class DysonUiHost : IAsyncDisposable
         EnqueueHostFollowUpWork(session);
         _ = DrainAutoTurnsAsync(session.PersistenceId);
         _ = DrainQueuedPromptsAsync(session.PersistenceId);
+    }
+
+    /// <summary>
+    /// Runtime FIFO is the authority. Snapshot it (order kept) and replace the circuit
+    /// display copy, which otherwise only tracks enqueue and one-at-a-time dequeue.
+    /// </summary>
+    private List<QueuedPromptEntry> CopyHostPromptProjection(Guid sessionId, DysonSessionRuntime runtime)
+    {
+        var surviving = runtime.GetQueuedPrompts(sessionId).Select(ToHostQueuedEntry).ToList();
+
+        lock (_promptQueueGate)
+        {
+            if (surviving.Count == 0)
+                _promptQueues.Remove(sessionId);
+            else
+                _promptQueues[sessionId] = surviving;
+        }
+
+        return surviving;
+    }
+
+    private void RetainHostPromptsAfterSummary(Guid sessionId)
+    {
+        lock (_promptQueueGate)
+        {
+            if (!_promptQueues.TryGetValue(sessionId, out var list))
+                return;
+
+            list.RemoveAll(entry => !DysonQueuedTurnAfterSummary.KeepAfterSummary(entry.Turn));
+            if (list.Count == 0)
+                _promptQueues.Remove(sessionId);
+        }
     }
 
     private void EnqueueHostFollowUpWork(DysonAgentSession session)

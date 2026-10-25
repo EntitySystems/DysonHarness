@@ -39,6 +39,18 @@ public static class DysonUiWebHost
         if (!builder.Environment.IsDevelopment())
             builder.WebHost.UseStaticWebAssets();
 
+        // Debug port. launchSettings.json (http/https profiles) is 5181, but `dotnet run
+        // --no-launch-profile` never reads that file and would otherwise fall back to Kestrel
+        // :5000. Development with no explicit URL binds 5181. The installed Windows shell does
+        // not use a fixed port: App.xaml.cs passes http://127.0.0.1:0 (ephemeral loopback).
+        // Published linux/osx Harness.UI has no launchSettings and is Production, so it keeps
+        // the Kestrel default (http://localhost:5000) unless the caller passes a URL.
+        // An explicit URL still wins: --urls, ASPNETCORE_URLS, or DysonUiWebHostOptions.Urls.
+        if (builder.Environment.IsDevelopment()
+            && string.IsNullOrWhiteSpace(options.Urls)
+            && string.IsNullOrWhiteSpace(builder.Configuration["urls"]))
+            builder.WebHost.UseUrls("http://localhost:5181");
+
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
         builder.Services.AddApexCharts();
@@ -126,11 +138,9 @@ public static class DysonUiWebHost
             return new DysonCliProxyHost(factory.CreateClient("cliproxy"));
         });
         builder.Services.AddHttpClient("cliproxy");
-        builder.Services.AddScoped(sp =>
-        {
-            var factory = sp.GetRequiredService<IHttpClientFactory>();
-            return factory.CreateClient();
-        });
+        // Process lifetime, not the circuit. AdoptLiveSession (4f35c0d) hands this client to
+        // DysonSessionRuntime; disposing it with the circuit made the next request throw ObjectDisposedException.
+        AddSessionHttpClient(builder.Services);
         // Native xAI/Grok: host-level client identity overrides (config Dyson:XaiGrok), a plain "xai-oauth" client for
         // the OAuth endpoints, and XaiGrokRequestHandler on the DEFAULT client (acts only on dyson-xai:<guid> bearers).
         builder.Services.AddSingleton(
@@ -300,6 +310,13 @@ public static class DysonUiWebHost
 
         return app;
     }
+
+    /// <summary>
+    /// Default named client (<see cref="XaiGrokRequestHandler"/> is registered on that name) as a singleton.
+    /// <see cref="IHttpClientFactory"/> owns the handler pipeline, so this registration does not dispose the client.
+    /// </summary>
+    internal static void AddSessionHttpClient(IServiceCollection services) =>
+        services.AddSingleton(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient());
 
     private static int _processExceptionHooksRegistered;
 

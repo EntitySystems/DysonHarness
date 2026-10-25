@@ -1,0 +1,69 @@
+/* Header: "Sessions" label on the left, icon buttons on the right in one row. */
+.session-list__actions {
+  flex-wrap: nowrap;
+  gap: 2px;
+}
+
+.session-list__actions .btn-icon {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+}
+
+/* Meta mode entry point: own full-width row above the Sessions header, icon + "Meta" label. */
+.session-list__meta {
+  width: 100%;
+  justify-content: flex-start;
+  margin-bottom: 12px;
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent-text);
+  box-shadow: none;
+  font-weight: var(--fw-semibold);
+}
+
+.session-list__meta:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.session-list__meta:focus-visible {
+  box-shadow: var(--accent-glow);
+}
+
+.session-list__meta-icon {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  -webkit-mask: url("icons/meta-agent.svg") center / contain no-repeat;
+  mask: url("icons/meta-agent.svg") center / contain no-repeat;
+}
+
+/* Rows: sans meta line with stable digits; active row gets a left accent pill. */
+.list-item__title-text {
+  font-size: var(--fs-md);
+}
+
+.list-item__meta {
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.list-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  transform: scaleY(0);
+  transition: transform var(--motion-base) var(--ease-spring);
+}
+
+.list-item.is-active::before {
+  transform: scaleY(1);
+}
