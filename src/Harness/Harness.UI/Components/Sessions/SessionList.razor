@@ -6,6 +6,16 @@
 @inject DysonUiHost Host
 
 <div class="session-list">
+    <button type="button"
+            class="btn session-list__meta"
+            title="Meta agent mode"
+            aria-label="Meta agent mode"
+            disabled="@(!OnOpenMetaAgent.HasDelegate)"
+            @onclick="OnOpenMetaAgentAsync">
+        <span class="session-list__meta-icon" aria-hidden="true"></span>
+        <span>Meta</span>
+    </button>
+
     <div class="session-list__header">
         <div class="sidebar__section-label">Sessions</div>
         <div class="btn-row session-list__actions">
@@ -22,14 +32,6 @@
                 aria-label="Refresh"
                 @onclick="OnRefreshAsync">
             <img src="icons/refresh.svg" alt="" />
-        </button>
-        <button type="button"
-                class="btn btn-ghost btn-icon session-list__meta"
-                title="Meta agent mode"
-                aria-label="Meta agent mode"
-                disabled="@(!OnOpenMetaAgent.HasDelegate)"
-                @onclick="OnOpenMetaAgentAsync">
-            <img src="icons/meta-agent.svg" alt="" />
         </button>
         <button type="button"
                 class="btn btn-ghost btn-icon session-list__clear"
