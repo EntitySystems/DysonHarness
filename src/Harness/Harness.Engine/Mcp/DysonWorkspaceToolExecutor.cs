@@ -984,10 +984,13 @@ public sealed partial class DysonWorkspaceToolExecutor
     {
         int subagentId;
         string payload;
-        var interrupt = false;
+        int? timeoutSeconds;
         try
         {
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            if (doc.RootElement.TryGetProperty("interruptSubagent", out _))
+                return Error(call, "TriggerSubagentEvent: unknown property interruptSubagent. Use timeoutSeconds (omit = interrupt now).");
+
             var id = GetInt(doc.RootElement, "subagentId");
             if (id is null or < 1)
                 return Error(call, "TriggerSubagentEvent: subagentId (≥ 1) is required.");
@@ -998,7 +1001,10 @@ public sealed partial class DysonWorkspaceToolExecutor
                 return Error(call, payloadResult.Error);
             payload = payloadResult.Value;
 
-            interrupt = GetBool(doc.RootElement, "interruptSubagent");
+            var timeout = GetInjectTimeoutSeconds(doc.RootElement);
+            if (timeout.IsError)
+                return Error(call, "TriggerSubagentEvent: " + timeout.Error);
+            timeoutSeconds = timeout.Value;
         }
         catch (JsonException)
         {
@@ -1006,7 +1012,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
 
         var triggered = await _session
-            .TriggerSubagentEventAsync(subagentId, payload, interrupt, cancellationToken)
+            .TriggerSubagentEventAsync(subagentId, payload, timeoutSeconds, cancellationToken)
             .ConfigureAwait(false);
         return triggered.IsError ? Error(call, triggered.Error) : Ok(call, triggered.Value);
     }
@@ -3590,6 +3596,16 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (prop.ValueKind == JsonValueKind.String && long.TryParse(prop.GetString(), out var parsed))
             return parsed;
         return null;
+    }
+
+    /// <summary>Optional non-negative integer <c>timeoutSeconds</c> for parent → child inject (null when omitted).</summary>
+    private static Result<int?, string> GetInjectTimeoutSeconds(JsonElement root)
+    {
+        if (!root.TryGetProperty("timeoutSeconds", out var prop) || prop.ValueKind == JsonValueKind.Null)
+            return Result<int?, string>.AsValue(null);
+        if (prop.ValueKind != JsonValueKind.Number || !prop.TryGetInt32(out var seconds) || seconds < 0)
+            return Result<int?, string>.AsError("timeoutSeconds must be a non-negative integer.");
+        return Result<int?, string>.AsValue(seconds);
     }
 
     private static bool GetBool(JsonElement root, string name, bool defaultValue = false)

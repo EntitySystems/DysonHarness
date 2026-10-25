@@ -370,7 +370,10 @@ public static class DysonMetaAgentTools
             Name = "MessageMetaAgentDrone",
             Description =
                 "Send a follow-up instruction to an existing drone, explore, or review (reopens a terminal drone). " +
-                "Prefer this over creating a second drone for the same work. Non-blocking.",
+                "Prefer this over creating a second drone for the same work. " +
+                "Default (timeoutSeconds omitted) interrupts the drone's in-flight turn and runs the message now, which also cancels a pending parent-event wait. " +
+                "Returns immediately unless timeoutSeconds ≥ 1 (max 20): then it waits for the drone to start the message at its next turn boundary, and interrupts after the timeout. " +
+                "A positive timeout fails immediately while the drone awaits a parent-event reply.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -381,9 +384,10 @@ public static class DysonMetaAgentTools
                       "description": "Runtime id of the drone, explore, or review."
                     },
                     "message": { "type": "string", "description": "Instruction injected into the child." },
-                    "interrupt": {
-                      "type": "boolean",
-                      "description": "When true, cancel the in-flight child turn and run immediately (default false = queue)."
+                    "timeoutSeconds": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Seconds to wait for the drone to consume this message at its next turn boundary. Omit or 0 = interrupt immediately. 1–20 waits, then interrupts. Values above 20 are clamped to 20. Below 0 is an error."
                     }
                   },
                   "required": ["agentId", "message"]

@@ -597,9 +597,11 @@ public sealed class DysonMcpPipeline
         {
             Name = "TriggerSubagentEvent",
             Description =
-                "Parent → child: inject a prompt. Default (interruptSubagent=false) queues for the child’s next turn. " +
-                "interruptSubagent=true cancels the in-flight child turn (and any pending parent-event wait) and runs the payload immediately. " +
-                "Fails without interrupt when the child is awaiting a parent-event reply. Returns quickly (queued vs interrupted). " +
+                "Parent → child: inject a prompt. Default (timeoutSeconds omitted or 0) cancels the in-flight child turn and runs the payload now; " +
+                "that also cancels a pending parent-event wait and discards the child's question. " +
+                "timeoutSeconds 1–20 waits for the child to start the payload at its next turn boundary, then interrupts (above 20 clamps to 20). " +
+                "A positive timeout fails immediately while the child awaits a parent-event reply. " +
+                "An idle child starts the payload at once. Result status: delivered or interrupted, with waitedMs. " +
                 "Injecting into a child that already submitted a report reopens it (`Active`) so SubmitSubagentReport works again.",
             InputSchemaJson = """
                 {
@@ -614,9 +616,10 @@ public sealed class DysonMcpPipeline
                       "type": "string",
                       "description": "Prompt/instructions injected into the child."
                     },
-                    "interruptSubagent": {
-                      "type": "boolean",
-                      "description": "If true, cancel in-flight child turn (and any pending parent-event wait) and run payload immediately. Default false = enqueue for next turn."
+                    "timeoutSeconds": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Seconds to wait for the child to consume this injection at its next turn boundary. Omit or 0 = interrupt immediately (cancel the in-flight turn and run this prompt as a new turn). 1–20 waits, then interrupts if the child has not consumed it. Values above 20 are clamped to 20. Below 0 is an error."
                     }
                   },
                   "required": ["subagentId", "payload"]
