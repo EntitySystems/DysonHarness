@@ -20,10 +20,10 @@ window.dysonMetaReveal = {
 
   /**
    * Stagger between grapheme clusters, in ms.
-   * 238 wpm silent reading × 1.2 ≈ 286 wpm ≈ 27.5 chars/s (1000/27.5 ≈ 36).
+   * 238 wpm × 1.2 × 2 (user asked to double) ≈ 572 wpm ≈ 55 chars/s ≈ 18 ms per char.
    * Keep in sync with MetaChatReveal.CharStaggerMs.
    */
-  staggerMs: 36,
+  staggerMs: 18,
 
   /** Past this many graphemes the post shows at once. A 2s JS cap cannot cover a long reveal. */
   maxChars: 2500,

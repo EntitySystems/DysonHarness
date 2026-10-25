@@ -8,10 +8,10 @@ public static class MetaChatReveal
 {
     /// <summary>
     /// Milliseconds between grapheme clusters.
-    /// 238 wpm (average adult silent reading) × 1.2 ≈ 286 wpm ≈ 27.5 chars/s
-    /// (286 × 5.7 / 60 ≈ 27.2; 1000/27.5 ≈ 36). Keep in sync with dysonMetaReveal.staggerMs.
+    /// 238 wpm × 1.2 × 2 (user asked to double) ≈ 572 wpm ≈ 55 chars/s ≈ 18 ms per char.
+    /// Keep in sync with dysonMetaReveal.staggerMs.
     /// </summary>
-    public const int CharStaggerMs = 36;
+    public const int CharStaggerMs = 18;
 
     /// <summary>
     /// Ids already on screen are history. Anything new after <paramref name="primed"/> is live.
