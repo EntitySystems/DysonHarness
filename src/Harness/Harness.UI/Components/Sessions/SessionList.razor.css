@@ -11,13 +11,33 @@
   min-height: 28px;
 }
 
-/* Meta mode entry point: accent-tinted ghost so it is discoverable. */
+/* Meta mode entry point: own full-width row above the Sessions header, icon + "Meta" label. */
 .session-list__meta {
-  background: var(--accent-softer);
+  width: 100%;
+  justify-content: flex-start;
+  margin-bottom: 12px;
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent-text);
+  box-shadow: none;
+  font-weight: var(--fw-semibold);
 }
 
 .session-list__meta:hover:not(:disabled) {
-  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.session-list__meta:focus-visible {
+  box-shadow: var(--accent-glow);
+}
+
+.session-list__meta-icon {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  -webkit-mask: url("icons/meta-agent.svg") center / contain no-repeat;
+  mask: url("icons/meta-agent.svg") center / contain no-repeat;
 }
 
 /* Rows: sans meta line with stable digits; active row gets a left accent pill. */
