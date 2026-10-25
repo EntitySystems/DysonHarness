@@ -17,7 +17,7 @@
             @foreach (var item in _items)
             {
                 <div @key="item.Key"
-                     class="meta-chat__msg @(item.Role == MetaChatRole.User ? "meta-chat__msg--user" : "meta-chat__msg--agent") @(item.Pending ? "meta-chat__msg--pending" : null)">
+                     class="meta-chat__msg @(item.Role == MetaChatRole.User ? "meta-chat__msg--user" : "meta-chat__msg--agent") @(item.Pending ? "meta-chat__msg--pending" : null) @(_reveal.Contains(item.Key) ? "meta-chat__msg--reveal" : null)">
                     <div class="meta-chat__msg-bar">
                         <span class="meta-chat__avatar" aria-hidden="true"></span>
                         <span class="meta-chat__msg-role">@(item.Role == MetaChatRole.User ? "You" : "Meta agent")</span>
@@ -51,7 +51,8 @@
                     }
                     @if (!string.IsNullOrWhiteSpace(item.Text))
                     {
-                        <div class="meta-chat__body turn-block__body">@MarkdownRenderer.ToHtml(item.Text)</div>
+                        <div class="meta-chat__body turn-block__body"
+                             @ref="_bodies[item.Key]">@MarkdownRenderer.ToHtml(item.Text)</div>
                     }
                     @if (item.UserQuestion is { } question)
                     {
@@ -156,9 +157,13 @@
 @code {
     private ElementReference _feedEl;
     private bool _attached;
+    private bool _revealPrimed;
     private int _renderVersion;
     private int _lastScrolledRenderVersion = -1;
     private IReadOnlyList<MetaChatItem> _items = [];
+    private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _reveal = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ElementReference> _bodies = new(StringComparer.Ordinal);
     private readonly HashSet<string> _actionBusy = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _actionResults = new(StringComparer.Ordinal);
     private readonly Dictionary<Guid, QuestionDraft> _drafts = [];
@@ -337,6 +342,17 @@
     protected override void OnParametersSet()
     {
         _items = MetaChatItems.Build(Turns, Queued);
+        var keys = new string[_items.Count];
+        for (var i = 0; i < _items.Count; i++)
+            keys[i] = _items[i].Key;
+
+        foreach (var key in MetaChatReveal.LiveKeys(keys, _seen, _revealPrimed))
+        {
+            if (key.StartsWith("a:", StringComparison.Ordinal))
+                _reveal.Add(key);
+        }
+
+        _revealPrimed = true;
         _renderVersion++;
     }
 
@@ -349,10 +365,24 @@
             attached = true;
         }
 
+        if (_reveal.Count > 0)
+        {
+            foreach (var item in _items)
+            {
+                if (!_reveal.Contains(item.Key) || !_bodies.TryGetValue(item.Key, out var body))
+                    continue;
+                var failure = await DysonCircuitJs.InvokeVoidAsync(
+                    Js, "dysonMetaReveal.paint", body, item.Text);
+                if (failure is JSException)
+                    _reveal.Remove(item.Key);
+            }
+        }
+
         if (attached && _renderVersion != _lastScrolledRenderVersion)
         {
             _lastScrolledRenderVersion = _renderVersion;
             await DysonCircuitJs.InvokeVoidAsync(Js, "dysonChat.scrollToBottom", _feedEl);
         }
     }
+
 }

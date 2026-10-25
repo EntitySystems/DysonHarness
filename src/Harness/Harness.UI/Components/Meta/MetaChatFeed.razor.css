@@ -33,8 +33,9 @@
   min-width: 0;
 }
 
-/* A1: only the newest few items animate, so a history load does not cascade. */
-.meta-chat-feed__list > .meta-chat__msg:nth-last-child(-n+3) {
+/* A1: only the newest few items animate, so a history load does not cascade.
+   A live reveal owns its own word fade, so that row does not also rise. */
+.meta-chat-feed__list > .meta-chat__msg:nth-last-child(-n+3):not(.meta-chat__msg--reveal) {
   animation: dyson-msg-in var(--motion-base) var(--ease) both;
 }
 
