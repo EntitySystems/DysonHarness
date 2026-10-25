@@ -24,7 +24,7 @@
     {
       "Path": "rules/rules_ui_restart.md",
       "Mode": "AgentOptional",
-      "Description": "Local UI restart on port 5180 after UI/engine changes"
+      "Description": "Local debug UI restart on port 5181 after UI/engine changes; never stop the installed DysonHarness.exe"
     },
     {
       "Path": "rules/rules_ui_css.md",

@@ -103,7 +103,7 @@ Patch instructions for [dysonharness.com](https://dysonharness.com) (Website rep
 
 1. **Windows (recommended):** download `DysonHarness-{version}-win-x64.msi` and install (default is per-user; no elevation). A successful install also starts the app automatically. You can launch again from the Start Menu shortcut **Dyson Harness**, or run `%LocalAppData%\Programs\DysonHarness\DysonHarness.exe`.
 2. **Windows (portable):** download the `win-x64` zip, unzip, and run `DysonHarness.exe` (desktop CEF shell; no separate browser URL needed).
-3. **Linux / macOS:** download the zip for your RID, unzip, run `Harness.UI`, and open the agent shell URL printed in the console (default http://localhost:5180) if the browser does not open automatically.
+3. **Linux / macOS:** download the zip for your RID, unzip, run `Harness.UI`, and open the URL printed in the console (Kestrel default http://localhost:5000; there is no `launchSettings.json` in the publish output) if the browser does not open automatically. Local debug (`dotnet run`, Development) uses http://localhost:5181 instead — see [UI](../ui/README.md). The Windows MSI shell does not listen on either port; it binds an ephemeral loopback address inside `DysonHarness.exe`.
 
 Builds on `master` and `release-preview` resolve app mode to **Prod** (`DysonProd` app data) via `GITHUB_REF_NAME` in the resolve-app-mode scripts — channel is independent of Dev/Test/Prod. See [storage/models.md](../storage/models.md).
 
