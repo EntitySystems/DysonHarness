@@ -73,7 +73,9 @@
   --accent-softer: color-mix(in srgb, var(--accent) 7%, transparent);
   --accent-border: color-mix(in srgb, var(--accent) 38%, transparent);
   --accent-glow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
-  --accent-strong: color-mix(in srgb, var(--accent-solid) 88%, #fff);
+  /* Primary hover. White-ink presets darken (a lighter fill would drop white text under 4.5:1);
+     amber/green (dark ink) override this with a lighter tint. */
+  --accent-strong: color-mix(in srgb, var(--accent) 70%, #000);
   /* Fill behind on-accent text. Darkened for white ink (blue/red/purple); raw for dark ink. */
   --accent-solid: color-mix(in srgb, var(--accent) 78%, #000);
   --accent-gradient: linear-gradient(180deg, color-mix(in srgb, var(--accent-solid) 95%, #fff), var(--accent-solid));
@@ -443,9 +445,9 @@ code, .mono {
 
 .sidebar__brand {
   min-height: var(--shell-header-height);
-  padding: 14px 14px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-glass);
+  padding: 12px 12px 10px 14px;
+  box-shadow: 0 1px 0 var(--border-subtle);
+  background: var(--surface-chrome);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -460,9 +462,9 @@ code, .mono {
 }
 
 .sidebar__title {
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  font-size: 13px;
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.005em;
+  font-size: var(--fs-lg);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -508,7 +510,7 @@ code, .mono {
 .app-shell--sidebar-collapsed .sidebar__brand {
   justify-content: center;
   padding: 10px 8px;
-  border-bottom: none;
+  box-shadow: none;
   /* Brand text now stays in flow (shrunk to 0 by its own min-width: 0); drop the gap so
      the toggle stays centred exactly where `display: none` used to leave it. */
   gap: 0;
@@ -521,19 +523,20 @@ code, .mono {
 .badge {
   display: inline-flex;
   align-items: center;
-  padding: 2px 7px;
-  border-radius: var(--radius-sm);
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
   background: var(--accent-soft);
   color: var(--accent-text);
   border: 1px solid transparent;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  line-height: 1.5;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
 }
 
 .sidebar__section {
-  padding: 10px 10px 0;
+  padding: 12px 10px 0;
 }
 
 .sidebar__section--sessions {
@@ -558,7 +561,8 @@ code, .mono {
 
 .sidebar__section-label {
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin: 0 4px 6px;
@@ -581,24 +585,26 @@ code, .mono {
 
 .sidebar__footer {
   margin-top: auto;
-  border-top: 1px solid var(--border);
-  padding: 10px;
+  box-shadow: 0 -1px 0 var(--border-subtle);
+  padding: 8px 10px;
 }
 
 .sidebar__settings-link {
-  display: block;
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
   color: var(--text-muted);
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   transition: background var(--motion-fast) var(--ease),
     color var(--motion-fast) var(--ease),
     box-shadow var(--motion-fast) var(--ease);
 }
 
 .sidebar__settings-link:hover {
-  background: var(--accent-soft);
-  color: var(--accent-text);
+  background: var(--bg-hover);
+  color: var(--text);
 }
 
 /* Splash — boot overlay until work directories are hydrated */
@@ -966,18 +972,19 @@ code, .mono {
   width: auto;
   max-width: 28rem;
   text-align: left;
-  font-size: 12px;
-  padding: 4px 8px;
-  border: 1px solid var(--border-strong);
-  background: var(--bg-3);
+  font-size: var(--fs-sm);
+  min-height: 28px;
+  padding: 3px 10px 3px 12px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-sunken);
   color: var(--text);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   transition: background var(--motion) var(--ease), border-color var(--motion) var(--ease), box-shadow var(--motion) var(--ease);
 }
 
 .model-slug-picker__trigger:hover {
   background: var(--bg-hover);
-  border-color: var(--accent);
+  border-color: var(--border-strong);
 }
 
 .model-slug-picker__trigger-label {
@@ -1883,9 +1890,10 @@ code, .mono {
   flex-direction: column;
   width: min(440px, 100%);
   max-height: min(70vh, 480px);
-  background: var(--surface-glass);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
+  /* Opaque for legibility; the --shadow-3 ring replaces the old border. */
+  background: var(--surface-raised);
+  border: 0;
+  border-radius: var(--radius-xl);
   box-shadow: var(--shadow-3);
   overflow: hidden;
 }
@@ -1895,20 +1903,20 @@ code, .mono {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border);
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .confirm-dialog__header h3 {
   margin: 0;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
 }
 
 .confirm-dialog__body {
   flex: 1;
   overflow: auto;
-  padding: 12px 14px;
+  padding: 14px 18px;
 }
 
 .confirm-dialog__message {
@@ -1924,8 +1932,8 @@ code, .mono {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
-  padding: 12px 14px;
-  border-top: 1px solid var(--border);
+  padding: 12px 18px 14px;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .confirm-dialog__progress {
@@ -1959,9 +1967,8 @@ code, .mono {
 }
 
 .confirm-dialog__confirm--danger:hover:not(:disabled) {
-  filter: brightness(1.06);
   border-color: var(--danger);
-  background: var(--danger);
+  background: color-mix(in srgb, var(--danger) 86%, #000);
 }
 
 /* Update available — same shell as confirm-dialog, clearer version layout */
@@ -2111,9 +2118,9 @@ code, .mono {
   gap: 2px;
   text-align: left;
   width: 100%;
-  padding: 8px 9px;
+  padding: var(--sp-2) var(--sp-3);
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   /* Covers hover *and* the .is-active swap when the active session changes. */
   transition: background var(--motion-fast) var(--ease),
@@ -2126,16 +2133,12 @@ code, .mono {
 }
 
 .list-item.is-active {
-  background: var(--accent-soft);
-  border-color: var(--accent-border);
-}
-
-.session-list .list-item.is-active {
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--bg-active);
+  border-color: transparent;
 }
 
 .list-item__title {
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2161,13 +2164,15 @@ code, .mono {
 
 .list-item__meta {
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 .session-list .list-item {
+  position: relative;
   flex-direction: row;
   align-items: flex-start;
   gap: 4px;
+  padding-right: var(--sp-1);
 }
 
 .session-list .list-item__main {
@@ -2215,17 +2220,20 @@ code, .mono {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  border: 1px solid var(--border-strong);
+  min-height: 30px;
+  /* Transparent border keeps box sizes stable; --shadow-1 draws the edge. */
+  border: 1px solid transparent;
   background: var(--bg-3);
   color: var(--text);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  padding: 0 var(--sp-3);
+  font-weight: var(--fw-medium);
+  box-shadow: var(--shadow-1);
   transition: background var(--motion) var(--ease), border-color var(--motion) var(--ease), box-shadow var(--motion) var(--ease), color var(--motion) var(--ease), transform var(--motion-instant) var(--ease);
 }
 
 .btn:hover:not(:disabled) {
-  background: var(--accent-soft);
-  border-color: var(--accent);
+  background: var(--bg-hover);
 }
 
 /* Press feedback. transform is safe here: a button is never an ancestor of the sticky
@@ -2240,21 +2248,19 @@ code, .mono {
 }
 
 .btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-gradient);
   color: var(--text-on-accent);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .btn-primary:hover:not(:disabled) {
-  filter: brightness(1.06);
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-strong);
 }
 
 .btn-ghost {
   background: transparent;
   border-color: transparent;
+  box-shadow: none;
 }
 
 .btn-row {
@@ -2265,9 +2271,9 @@ code, .mono {
 
 /* Compact square icon buttons (SVG via <img>) */
 .btn-icon {
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
   padding: 0;
   gap: 0;
 }
@@ -2286,19 +2292,19 @@ code, .mono {
   opacity: 1;
 }
 
+/* Glyph ink follows --text-on-accent: white on blue/red/purple, near-black on amber/green. */
 .btn-icon.btn-primary img {
-  /* dark glyph on accent fill */
-  filter: none;
+  filter: brightness(0) invert(1);
   opacity: 1;
 }
 
-.btn-icon.btn-primary:hover:not(:disabled) {
-  border-color: var(--accent);
+:is([data-accent="amber"], [data-accent="green"]) .btn-icon.btn-primary img {
+  filter: brightness(0);
+  opacity: 0.88;
 }
 
 .btn-icon.btn-ghost:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  background: var(--bg-hover);
 }
 
 .btn-icon.btn-ghost:hover:not(:disabled) img {
@@ -2316,8 +2322,8 @@ code, .mono {
   opacity: 1;
 }
 
-[data-theme="light"] .btn-icon.btn-primary img {
-  filter: brightness(0) invert(1);
+[data-theme="light"] .btn-icon.btn-ghost:hover:not(:disabled) img {
+  filter: none;
 }
 
 .field {
@@ -2578,10 +2584,10 @@ code, .mono {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: 4px;
+  padding: 5px;
   background: var(--surface-glass);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
+  border: 0;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-2);
 }
 
@@ -2604,7 +2610,7 @@ code, .mono {
 }
 
 .session-header__tools-menu-item:hover {
-  background: var(--accent-soft);
+  background: var(--bg-hover);
 }
 
 .shells-modal-backdrop {
@@ -3436,8 +3442,8 @@ code, .mono {
 }
 
 .empty-state {
-  color: var(--text-dim);
-  padding: 24px 16px;
+  color: var(--text-muted);
+  padding: 32px 20px;
   text-align: center;
 }
 
@@ -3462,11 +3468,14 @@ code, .mono {
 
 .error-banner {
   margin: 8px 14px 0;
-  padding: 8px 10px;
+  padding: 8px 12px 8px 15px;
   border-radius: var(--radius-md);
-  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
-  background: color-mix(in srgb, var(--danger) 12%, var(--bg-1));
-  color: var(--danger);
+  border: 0;
+  /* 3px left bar instead of a full border. */
+  box-shadow: inset 3px 0 0 var(--danger);
+  background: var(--danger-soft);
+  /* Pulled toward --text so the ink clears 4.5:1 on the soft wash in both themes. */
+  color: color-mix(in srgb, var(--danger) 78%, var(--text));
 }
 
 /* Home LastError toast: flex + dismiss; border thickness depletes over 20s */
@@ -3715,10 +3724,10 @@ code, .mono {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: 4px;
+  padding: 5px;
   background: var(--surface-glass);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
+  border: 0;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-2);
 }
 
@@ -3738,7 +3747,7 @@ code, .mono {
 }
 
 .turn-block__context-menu-item:hover:not(:disabled) {
-  background: var(--accent-soft);
+  background: var(--bg-hover);
 }
 
 .turn-block__context-menu-item:disabled {
@@ -4690,22 +4699,25 @@ code, .mono {
   display: flex;
   flex-direction: column;
   gap: 0;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  background: var(--surface-glass);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
   overflow: visible;
-  transition: border-color var(--motion) var(--ease), box-shadow var(--motion) var(--ease), background var(--motion) var(--ease);
+  transition: border-color var(--motion) var(--ease), box-shadow var(--motion) var(--ease), background var(--motion) var(--ease), outline-color var(--motion) var(--ease);
 }
 
 .composer-shell:focus-within {
-  border-color: var(--accent);
-  box-shadow: var(--accent-glow);
+  border-color: var(--accent-border);
+  box-shadow: var(--accent-glow), var(--shadow-2);
 }
 
 .composer-shell.is-drop-target {
   border-color: var(--accent);
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
   box-shadow: var(--accent-glow);
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg-2));
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-raised));
 }
 
 .composer__prompt {
@@ -4728,13 +4740,13 @@ code, .mono {
   align-items: center;
   gap: 2px;
   max-width: 18rem;
-  padding: 2px 2px 2px 8px;
-  font-size: 12px;
+  padding: 2px 2px 2px 10px;
+  font-size: var(--fs-sm);
   line-height: 1.25;
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border-strong));
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-full);
-  background: var(--accent-soft);
-  color: var(--accent-text);
+  background: var(--surface-sunken);
+  color: var(--text);
 }
 
 .composer-context__label {
@@ -4765,13 +4777,13 @@ code, .mono {
 
 .composer-context__remove {
   flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: none;
   border-radius: var(--radius-full);
   background: transparent;
-  color: var(--accent-text);
+  color: var(--text-muted);
   cursor: pointer;
   font-size: 15px;
   line-height: 1;
@@ -4781,7 +4793,8 @@ code, .mono {
 }
 
 .composer-context__remove:hover {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  background: var(--bg-hover);
+  color: var(--text);
   opacity: 1;
 }
 
@@ -4792,10 +4805,11 @@ code, .mono {
   width: 48px;
   height: 48px;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border-strong));
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   overflow: hidden;
-  background: var(--bg-1);
+  background: var(--surface-sunken);
+  box-shadow: var(--shadow-1);
 }
 
 .composer-context__thumb-open {
@@ -4833,12 +4847,12 @@ code, .mono {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--composer-attach-size, 30px);
-  height: var(--composer-attach-size, 30px);
+  width: var(--composer-attach-size, 32px);
+  height: var(--composer-attach-size, 32px);
   padding: 0;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  background: var(--bg-1);
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
   color: var(--text-muted);
   cursor: pointer;
   font-size: 14px;
@@ -4849,9 +4863,8 @@ code, .mono {
 }
 
 .composer-attach:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent-text);
-  background: var(--accent-soft);
+  color: var(--text);
+  background: var(--bg-hover);
 }
 
 .composer-attach:disabled {
@@ -5454,10 +5467,11 @@ code, .mono {
   gap: 8px;
   width: 100%;
   text-align: left;
-  font-size: 12px;
-  padding: 4px 8px;
-  border: 1px solid var(--border-strong);
-  background: var(--surface-glass);
+  font-size: var(--fs-sm);
+  min-height: 34px;
+  padding: 5px 12px 5px 10px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-sunken);
   color: var(--text);
   border-radius: var(--radius-md);
   transition: background var(--motion) var(--ease), border-color var(--motion) var(--ease), box-shadow var(--motion) var(--ease);
@@ -5465,7 +5479,7 @@ code, .mono {
 
 .workdir-switcher__trigger:hover:not(:disabled) {
   background: var(--bg-hover);
-  border-color: var(--accent);
+  border-color: var(--border-strong);
 }
 
 .workdir-switcher__trigger:disabled {
@@ -5930,29 +5944,43 @@ code, .mono {
   overflow: hidden;
 }
 
+/* Segmented control: the ::before track sits behind the tabs; the active tab is a raised pill. */
 .rail-tabs__tabs {
   box-sizing: border-box;
+  position: relative;
+  isolation: isolate;
   flex: 0 0 var(--shell-header-height);
   height: var(--shell-header-height);
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border);
+  gap: 2px;
+  padding: 12px 13px;
+  box-shadow: 0 1px 0 var(--border-subtle);
+}
+
+.rail-tabs__tabs::before {
+  content: "";
+  position: absolute;
+  inset: 9px 10px;
+  z-index: -1;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
 }
 
 .rail-tabs__tab {
   flex: 1 1 0;
   margin: 0;
-  padding: 5px 6px;
+  padding: 4px 6px;
   border: 1px solid transparent;
   border-radius: var(--radius-full);
   background: transparent;
-  color: var(--text-dim);
-  font-size: 11px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh);
+  text-transform: none;
+  letter-spacing: 0;
   cursor: pointer;
   text-align: center;
   transition: background var(--motion) var(--ease), border-color var(--motion) var(--ease), color var(--motion) var(--ease), box-shadow var(--motion) var(--ease), transform var(--motion-instant) var(--ease);
@@ -5964,13 +5992,17 @@ code, .mono {
 
 .rail-tabs__tab:hover:not(.rail-tabs__tab--active) {
   color: var(--text);
-  background: var(--bg-hover);
 }
 
 .rail-tabs__tab--active {
-  color: var(--accent-text);
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
+}
+
+/* Tab swap: the active panel is re-created by @if, so its children fade in (opacity only). */
+.rail-tabs__body > * {
+  animation: dyson-fade-in 160ms var(--ease) both;
 }
 
 .rail-tabs__body {
@@ -6397,10 +6429,10 @@ code, .mono {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: 4px;
+  padding: 5px;
   background: var(--surface-glass);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
+  border: 0;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-2);
 }
 
@@ -6420,7 +6452,7 @@ code, .mono {
 }
 
 .file-tree__context-menu-item:hover {
-  background: var(--accent-soft);
+  background: var(--bg-hover);
 }
 
 .file-tree__empty,
@@ -7076,11 +7108,13 @@ code, .mono {
 
 /* Models ? UX overhaul additions */
 .btn--sm {
+  min-height: 28px;
   padding: 0.32rem 0.6rem;
   font-size: 0.78rem;
 }
 
 .btn--xs {
+  min-height: 24px;
   padding: 0.2rem 0.45rem;
   font-size: 0.7rem;
 }
@@ -7800,9 +7834,27 @@ code, .mono {
 }
 
 .effort-picker__caret {
-  font-size: 9px;
   color: var(--text-muted);
-  line-height: 1;
+}
+
+/* CSS chevron for the ▾ caret spans: the glyph is hidden (font-size 0) and the box draws a
+   rotated corner, so markup and accessible text stay as they are. */
+.effort-picker__caret,
+.model-slug-picker__trigger-caret,
+.workdir-switcher__trigger-caret,
+.agent-mode-picker__trigger-caret,
+.composer-stop__caret {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  margin: 0 2px 3px 4px;
+  font-size: 0;
+  line-height: 0;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  opacity: 0.8;
 }
 
 .effort-picker__backdrop {
@@ -7821,14 +7873,14 @@ code, .mono {
   max-height: min(50vh, 360px);
   overflow: auto;
   background: var(--surface-glass);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
+  border: 0;
+  border-radius: var(--radius-lg);
   padding: 8px;
   box-shadow: var(--shadow-2);
 }
 
 .effort-picker__section-label {
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -7840,18 +7892,18 @@ code, .mono {
   display: flex;
   align-items: center;
   width: 100%;
-  padding: 4px 8px;
+  padding: 5px 8px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   text-align: left;
   cursor: pointer;
 }
 
 .effort-picker__option:hover {
-  background: var(--accent-soft);
+  background: var(--bg-hover);
 }
 
 .effort-picker__option.is-selected {
@@ -7872,8 +7924,16 @@ code, .mono {
   --dyson-pop-origin: bottom center;
 }
 
+/* Composer effort pill (shared by the chat and meta composers). */
 .composer-effort__trigger {
   align-self: center;
+  min-height: 28px;
+  padding: 3px 10px 3px 12px;
+  border-color: var(--border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  box-shadow: none;
+  font-size: var(--fs-sm);
 }
 
 /* Composer Stop menu — panel opens upward over the footer */
@@ -7884,12 +7944,14 @@ code, .mono {
 
 .composer-stop__trigger {
   color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  border-color: transparent;
+  border-radius: var(--radius-full);
+  background: var(--danger-soft);
 }
 
 .composer-stop__trigger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--danger) 12%, var(--bg-3));
-  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 24%, transparent);
+  border-color: transparent;
 }
 
 /* Live Stop must beat .btn:disabled { opacity: 0.5 } */
@@ -7899,7 +7961,7 @@ code, .mono {
   pointer-events: auto;
   cursor: pointer;
   color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  border-color: transparent;
 }
 
 .composer-stop__spinner {
@@ -7911,12 +7973,6 @@ code, .mono {
   border-top-color: var(--danger);
   border-radius: 50%;
   animation: turn-block-spin 0.65s linear infinite;
-}
-
-.composer-stop__caret {
-  font-size: 9px;
-  line-height: 1;
-  opacity: 0.8;
 }
 
 .composer-stop__backdrop {
@@ -7934,8 +7990,8 @@ code, .mono {
   z-index: 1200;
   min-width: 168px;
   background: var(--surface-glass);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
+  border: 0;
+  border-radius: var(--radius-lg);
   padding: 8px;
   box-shadow: var(--shadow-2);
 }
@@ -7949,13 +8005,13 @@ code, .mono {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   text-align: left;
   cursor: pointer;
 }
 
 .composer-stop__option:hover:not(:disabled) {
-  background: var(--accent-soft);
+  background: var(--bg-hover);
 }
 
 .composer-stop__option:disabled {
@@ -7983,7 +8039,6 @@ code, .mono {
   .plugin-modal,
   .composer-help-modal,
   .prompt-user-dialog,
-  .confirm-dialog,
   .workdir-modal,
   .file-viewer-modal,
   .toolchain-flow-modal,
@@ -7992,6 +8047,21 @@ code, .mono {
   .file-viewer-comment-popup {
     background: color-mix(in srgb, var(--surface-glass) 86%, transparent);
     backdrop-filter: blur(14px) saturate(1.15);
+  }
+
+  /* Modal backdrops soften what sits behind the dialog. */
+  .confirm-dialog-backdrop,
+  .model-slug-modal-backdrop,
+  .skill-search-modal-backdrop,
+  .plugin-modal-backdrop,
+  .composer-help-modal-backdrop,
+  .prompt-user-dialog-backdrop,
+  .shells-modal-backdrop,
+  .agent-mode-modal-backdrop,
+  .workdir-modal-backdrop,
+  .file-viewer-modal-backdrop,
+  .toolchain-flow-modal-backdrop {
+    backdrop-filter: blur(4px);
   }
 }
 
