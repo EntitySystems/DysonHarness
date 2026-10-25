@@ -8,16 +8,7 @@
 <div class="session-list">
     <div class="session-list__header">
         <div class="sidebar__section-label">Sessions</div>
-        <button type="button"
-                class="btn btn-ghost btn-icon session-list__clear"
-                title="Delete inactive sessions"
-                aria-label="Delete inactive sessions"
-                disabled="@(!HasDeletableSessions)"
-                @onclick="OnDeleteInactiveClickAsync">
-            <img src="icons/trash.svg" alt="" />
-        </button>
-    </div>
-    <div class="btn-row" style="margin-bottom:8px;">
+        <div class="btn-row session-list__actions">
         <button type="button"
                 class="btn btn-primary btn-icon"
                 title="New session"
@@ -33,13 +24,22 @@
             <img src="icons/refresh.svg" alt="" />
         </button>
         <button type="button"
-                class="btn btn-ghost btn-icon"
+                class="btn btn-ghost btn-icon session-list__meta"
                 title="Meta agent mode"
                 aria-label="Meta agent mode"
                 disabled="@(!OnOpenMetaAgent.HasDelegate)"
                 @onclick="OnOpenMetaAgentAsync">
             <img src="icons/meta-agent.svg" alt="" />
         </button>
+        <button type="button"
+                class="btn btn-ghost btn-icon session-list__clear"
+                title="Delete inactive sessions"
+                aria-label="Delete inactive sessions"
+                disabled="@(!HasDeletableSessions)"
+                @onclick="OnDeleteInactiveClickAsync">
+            <img src="icons/trash.svg" alt="" />
+        </button>
+        </div>
     </div>
 
     @if (!string.IsNullOrEmpty(Error))

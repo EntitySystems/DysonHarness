@@ -1,0 +1,49 @@
+/* Header: "Sessions" label on the left, icon buttons on the right in one row. */
+.session-list__actions {
+  flex-wrap: nowrap;
+  gap: 2px;
+}
+
+.session-list__actions .btn-icon {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+}
+
+/* Meta mode entry point: accent-tinted ghost so it is discoverable. */
+.session-list__meta {
+  background: var(--accent-softer);
+}
+
+.session-list__meta:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+/* Rows: sans meta line with stable digits; active row gets a left accent pill. */
+.list-item__title-text {
+  font-size: var(--fs-md);
+}
+
+.list-item__meta {
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.list-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  transform: scaleY(0);
+  transition: transform var(--motion-base) var(--ease-spring);
+}
+
+.list-item.is-active::before {
+  transform: scaleY(1);
+}
