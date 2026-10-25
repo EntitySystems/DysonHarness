@@ -50,6 +50,12 @@ public sealed class DysonSessionMetaUpdate
     /// <summary>Session max target context; null = inherit; 0 = Off.</summary>
     public int? MaxTargetContextTokens { get; init; }
 
+    /// <summary>When true, write <see cref="CompactionPendingTurnId"/> (null clears the marker).</summary>
+    public bool UpdateCompactionPending { get; init; }
+
+    /// <summary>Pending live-compaction trip; null = none.</summary>
+    public Guid? CompactionPendingTurnId { get; init; }
+
     /// <summary>When set, updates persisted <c>AgentMode</c> (mid-session mode switch).</summary>
     public string? AgentMode { get; init; }
 

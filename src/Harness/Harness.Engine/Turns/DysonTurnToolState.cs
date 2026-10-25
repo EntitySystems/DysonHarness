@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace DysonHarness;
@@ -9,6 +10,18 @@ public sealed class DysonTurnToolState
     public List<DysonToolCall> ToolCalls { get; set; } = [];
     public List<DysonPersistedTrackedToolCall> Tracked { get; set; } = [];
     public List<DysonToolCallResult> ResponseLog { get; set; } = [];
+
+    /// <summary>Per-round call counts. Omitted on old rows.</summary>
+    public List<int> ToolRoundCallCounts { get; set; } = [];
+
+    /// <summary>Raw reasoning items per tool round, index-aligned with <see cref="ToolRoundCallCounts"/>. Null when none.</summary>
+    public List<List<JsonObject>?>? ToolRoundReasoningItems { get; set; }
+
+    /// <summary>Raw reasoning items of the final no-tool round. Null when none.</summary>
+    public List<JsonObject>? FinalReasoningItems { get; set; }
+
+    /// <summary>ReasoningSourceTag that produced the reasoning items (null = none stored or an older row).</summary>
+    public string? ReasoningItemsSource { get; set; }
 }
 
 public sealed class DysonPersistedTrackedToolCall
@@ -72,7 +85,21 @@ public static class DysonTurnToolStateSerializer
                 .. turn.ResponseLog.Select(r =>
                     stripAttachments ? r.ForPersistence() : r),
             ],
+            ToolRoundCallCounts = [.. turn.ToolRoundCallCounts],
         };
+
+        if (turn.ToolRoundReasoningItems.Any(items => items is { Count: > 0 }))
+        {
+            state.ToolRoundReasoningItems =
+            [
+                .. turn.ToolRoundReasoningItems.Select(items => items is { Count: > 0 } ? items.ToList() : null),
+            ];
+        }
+
+        if (turn.FinalReasoningItems is { Count: > 0 } final)
+            state.FinalReasoningItems = [.. final];
+        if (state.ToolRoundReasoningItems is not null || state.FinalReasoningItems is not null)
+            state.ReasoningItemsSource = turn.ReasoningItemsSource;
 
         return Serialize(state);
     }
@@ -84,6 +111,14 @@ public static class DysonTurnToolStateSerializer
         var state = Deserialize(toolStateJson);
         turn.ToolCalls.Clear();
         turn.ToolCalls.AddRange(state.ToolCalls);
+        turn.ToolRoundCallCounts.Clear();
+        if (state.ToolRoundCallCounts is { Count: > 0 })
+            turn.ToolRoundCallCounts.AddRange(state.ToolRoundCallCounts);
+        turn.ToolRoundReasoningItems.Clear();
+        if (state.ToolRoundReasoningItems is { Count: > 0 })
+            turn.ToolRoundReasoningItems.AddRange(state.ToolRoundReasoningItems);
+        turn.FinalReasoningItems = state.FinalReasoningItems is { Count: > 0 } ? state.FinalReasoningItems : null;
+        turn.ReasoningItemsSource = state.ReasoningItemsSource;
         turn.RestoreTrackedCalls(state.Tracked);
         turn.RestoreResponseLog(state.ResponseLog);
     }

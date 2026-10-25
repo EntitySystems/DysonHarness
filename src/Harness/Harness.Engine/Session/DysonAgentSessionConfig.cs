@@ -54,7 +54,7 @@ public class DysonAgentSessionConfig
     public DysonAgentProvider? SummarizerProvider { get; set; }
 
     /// <summary>
-    /// Optional provider for turn context summarization (<c>SummarizeTurns</c>).
+    /// Optional provider for the UI /summarize turn summarizer worker.
     /// Null ⇒ use the session <see cref="DysonAgentSession.Provider"/>.
     /// </summary>
     public DysonAgentProvider? TurnSummarizerProvider { get; set; }
@@ -88,6 +88,13 @@ public class DysonAgentSessionConfig
     /// Null ⇒ inherit the parent session provider.
     /// </summary>
     public DysonAgentProvider? MetaAgentDroneDefaultProvider { get; set; }
+
+    /// <summary>
+    /// Host-owned settings port. When set, Agent Behavior subagent defaults are read live from the
+    /// database on each child start (<see cref="TryGetSubagentDefaultWhenSlugOmittedAsync"/>) instead of
+    /// the <c>*DefaultProvider</c> snapshot. Children share this config instance.
+    /// </summary>
+    public IDysonSubjectSettingsRepository? AppSettings { get; set; }
 
     /// <summary>
     /// Dedicated direct-OpenAI provider identity for image generation.
@@ -140,6 +147,45 @@ public class DysonAgentSessionConfig
     }
 
     /// <summary>
+    /// Same resolve order as <see cref="TryGetSubagentDefaultWhenSlugOmitted"/>, but when <see cref="AppSettings"/>
+    /// and <paramref name="models"/> are set the role default is read from the database now (no snapshot fallback,
+    /// so a cleared setting inherits). A failed read returns null (inherit).
+    /// </summary>
+    public async Task<DysonAgentProvider?> TryGetSubagentDefaultWhenSlugOmittedAsync(
+        string? modelSlug,
+        string? agentMode,
+        IDysonModelRepository? models,
+        CancellationToken cancellationToken = default)
+    {
+        if (!string.IsNullOrWhiteSpace(modelSlug))
+            return null;
+
+        if (AppSettings is null || models is null || SubagentDefaultSettingKeys(agentMode) is not { } keys)
+            return TryGetSubagentDefaultProvider(agentMode);
+
+        var loaded = await OpenAiCompatibleAgentProvider
+            .TryLoadFromSettingAsync(AppSettings, models, keys.SlugKey, keys.EffortKey, cancellationToken)
+            .ConfigureAwait(false);
+        return loaded.IsError ? null : loaded.Value;
+    }
+
+    private static (string SlugKey, string EffortKey)? SubagentDefaultSettingKeys(string? agentMode)
+    {
+        if (string.Equals(agentMode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase))
+            return (DysonAppSettingKeys.ExploreModelSlugId, DysonAppSettingKeys.ExploreReasoningEffort);
+        if (string.Equals(agentMode, DysonAgentModes.Drone, StringComparison.OrdinalIgnoreCase))
+            return (DysonAppSettingKeys.DroneModelSlugId, DysonAppSettingKeys.DroneReasoningEffort);
+        if (string.Equals(agentMode, DysonAgentModes.SecurityReview, StringComparison.OrdinalIgnoreCase))
+            return (DysonAppSettingKeys.SecurityReviewModelSlugId, DysonAppSettingKeys.SecurityReviewReasoningEffort);
+        if (string.Equals(agentMode, DysonAgentModes.BugReview, StringComparison.OrdinalIgnoreCase))
+            return (DysonAppSettingKeys.BugReviewModelSlugId, DysonAppSettingKeys.BugReviewReasoningEffort);
+        if (string.Equals(agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
+            return (DysonAppSettingKeys.MetaAgentDroneModelSlugId, DysonAppSettingKeys.MetaAgentDroneReasoningEffort);
+
+        return null;
+    }
+
+    /// <summary>
     /// Optional process-wide browser control (Windows CefSharp host).
     /// Null ⇒ browser MCP tools are omitted from the catalog.
     /// </summary>
@@ -178,4 +224,17 @@ public class DysonAgentSessionConfig
     /// When set, preferred over <see cref="DisabledTools"/> for catalog builds.
     /// </summary>
     public DysonToolPolicyDocument? ToolPolicy { get; set; }
+
+    /// <summary>
+    /// Root Meta Agent only, set by <see cref="DysonAgentSession.SetVoiceMode"/> while voice mode is on.
+    /// Non-null adds SpeakToUser and the voice prompt block. Not persisted.
+    /// </summary>
+    public DysonVoiceMode? Voice { get; set; }
+
+    /// <summary>
+    /// Subject's work-directory focus (the work directory on screen).
+    /// Set by the host on every session it builds. Not persisted.
+    /// Null is the same as nobody owning the application for the work-directory tools.
+    /// </summary>
+    public DysonWorkDirectoryFocus? Focus { get; set; }
 }

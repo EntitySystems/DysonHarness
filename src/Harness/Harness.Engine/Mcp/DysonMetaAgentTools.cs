@@ -21,7 +21,6 @@ public static class DysonMetaAgentTools
     /// <summary>Shared tools kept from the default catalog (canonical schemas).</summary>
     private static readonly string[] SharedToolNames =
     [
-        "SummarizeTurns",
         "CreateTodo",
         "ListTodos",
         "UpdateTodo",
@@ -46,8 +45,10 @@ public static class DysonMetaAgentTools
         "ListNotes",
         "ListPlans",
         "ListTodos",
+        "ListWorkdirs",
         "LoadSkill",
         "MessageMetaAgentDrone",
+        "OpenWorkdirsPanel",
         "PostConversationMessage",
         "PostUserQuestion",
         "ReadMetaAgentDroneLog",
@@ -62,11 +63,31 @@ public static class DysonMetaAgentTools
         "StartAsyncMetaAgentDrone",
         "StartAsyncSecurityReviewAgent",
         "StopMetaAgentDrone",
-        "SummarizeTurns",
+        "SwitchWorkdir",
         "UpdateNote",
         "UpdateTodo",
         "WriteTempFile",
     ];
+
+    /// <summary>
+    /// Root Meta Agent only, and only while <see cref="DysonAgentSessionConfig.Voice"/> is set.
+    /// Not in <see cref="AllowedToolNames"/>: voice off keeps the exact allowlist.
+    /// </summary>
+    public static readonly DysonMcpTool SpeakToUser = new()
+    {
+        Name = "SpeakToUser",
+        Description =
+            "Voice mode only. Speak text aloud to the user with text-to-speech. Queues the speech and returns at once; calls play in order. Use short sentences, plain English words, and few acronyms. Call it before PostConversationMessage; the posted message carries the technical detail. Speech stops when the user starts talking.",
+        InputSchemaJson = """
+            {
+              "type": "object",
+              "properties": {
+                "text": { "type": "string", "description": "What to say aloud. Short plain-English sentences. At most 600 characters." }
+              },
+              "required": ["text"]
+            }
+            """,
+    };
 
     /// <summary>
     /// Names that must never appear in the Meta Agent catalog.
@@ -170,6 +191,7 @@ public static class DysonMetaAgentTools
     /// <summary>
     /// Meta Agent Drone: keep the Work catalog (including <c>TriggerParentEvent</c>),
     /// drop Ask/dialog FromParent tools, add the two review tools, <c>ReadMetaPlan</c>, <c>EditMetaPlan</c>, and a <c>SubmitMetaPlan</c> seam.
+    /// Does not copy <see cref="AllowedToolNames"/>. ListWorkdirs, OpenWorkdirsPanel, and SwitchWorkdir stay on the root catalog only.
     /// </summary>
     public static void ApplyDroneAllowlist(DysonMcpPipeline pipeline)
     {
@@ -269,11 +291,12 @@ public static class DysonMetaAgentTools
             Description =
                 "Spawn a read-only Explore agent (non-blocking). Returns immediately with agentId / persistenceId; never waits. " +
                 "Use before briefing a drone when you need a fact about the code. " +
-                "Call ListMetaAgentDrones before dispatching.",
+                "Before calling this tool, call ListMetaAgentDrones. If an existing agent already owns the work, reuse it with MessageMetaAgentDrone instead of spawning a duplicate.",
             InputSchemaJson = ReadOnlyChildInputSchemaJson,
         };
 
-        foreach (var tool in CreateReviewTools())
+        foreach (var tool in CreateReviewTools(
+            "Before calling this tool, call ListMetaAgentDrones. If an existing agent already owns the work, reuse it with MessageMetaAgentDrone instead of spawning a duplicate."))
             yield return tool;
 
         yield return new DysonMcpTool
@@ -486,7 +509,7 @@ public static class DysonMetaAgentTools
             Name = "CompactConversation",
             Description =
                 "Enqueue a full session summary that replaces earlier turns in later transcripts. " +
-                "Use before the 40-turn cap bites, or whenever the thread drifts.",
+                "Context is summarized automatically when it passes the limit; use this whenever the thread drifts.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -523,7 +546,7 @@ public static class DysonMetaAgentTools
             Name = "ListPlans",
             Description =
                 "List plans for this work directory (planId, title, status, buildAgentId, updatedUtc). " +
-                "No path, no body, no note. Use after compaction to recover planIds.",
+                "No path, no body, no note. Use after compaction to recover planIds. Archived plans are omitted.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -561,7 +584,8 @@ public static class DysonMetaAgentTools
                 "Dispatch one Meta Agent Drone in its own worktree as the coordinator for the whole plan (or message an existing drone via agentId) and set status to building. " +
                 "The brief names the planId, not the plan body — the drone calls ReadMetaPlan. " +
                 "Do not split one plan across several drones; the builder runs its own workers. " +
-                $"Counts toward the {MaxRunningWorktreeDrones} running useWorktree true drones.",
+                $"Counts toward the {MaxRunningWorktreeDrones} running useWorktree true drones. " +
+                "Before calling this tool, call ListMetaAgentDrones. If an existing drone already owns this plan, pass its agentId instead of spawning a duplicate.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -572,6 +596,14 @@ public static class DysonMetaAgentTools
                       "type": "integer",
                       "minimum": 1,
                       "description": "Reuse this existing drone instead of spawning a new one."
+                    },
+                    "modelSlug": {
+                      "type": "string",
+                      "description": "Optional model slug or display alias. Omit uses the Settings Meta Agent Drone default (same spawn as StartAsyncMetaAgentDrone with the slug omitted). Does not inherit the parent chat model when that default is set. Ignored when agentId reuses an existing drone."
+                    },
+                    "reasoningEffort": {
+                      "type": "string",
+                      "description": "Optional freeform reasoning_effort. Omit keeps the settings default effort when modelSlug is also omitted; when modelSlug is set, omit uses that slug's defaultEffort. Ignored when agentId reuses an existing drone."
                     }
                   },
                   "required": ["planId"]
@@ -582,7 +614,9 @@ public static class DysonMetaAgentTools
         yield return new DysonMcpTool
         {
             Name = "DeletePlan",
-            Description = "Permanently delete a plan row by planId. Irreversible. No filesystem involvement.",
+            Description =
+                "Archive a plan by planId. The row stays in the database with its status unchanged and shows under Archived on the plans list, where the user can restore it. " +
+                "Not a hard delete. No filesystem involvement. Refuses while status is building.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -742,15 +776,65 @@ public static class DysonMetaAgentTools
                 }
                 """,
         };
+
+        // Root Meta Agent only. Not voice-gated. Not yielded from the drone tools.
+        yield return new DysonMcpTool
+        {
+            Name = "ListWorkdirs",
+            Description =
+                "List this subject's work directories. " +
+                "Returns a JSON array of { id, name, path, active }. path is the absolute path. " +
+                "Only the meta agent of the work directory on screen may call this.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {}
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "OpenWorkdirsPanel",
+            Description =
+                "Open the existing work-directories panel. No parameters. " +
+                "Only the meta agent of the work directory on screen may call this. " +
+                "Does nothing when that panel is not on screen.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {}
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "SwitchWorkdir",
+            Description =
+                "Switch the work directory on screen. id is that work directory's Guid. " +
+                "Only the meta agent of the work directory currently on screen may call this. " +
+                "Does not turn voice mode off.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string", "description": "Work directory id (Guid)." }
+                  },
+                  "required": ["id"]
+                }
+                """,
+        };
     }
 
-    private static IEnumerable<DysonMcpTool> CreateReviewTools()
+    private static IEnumerable<DysonMcpTool> CreateReviewTools(string beforeSpawn)
     {
         yield return new DysonMcpTool
         {
             Name = "StartAsyncBugReviewAgent",
             Description =
-                "Spawn a read-only Bug Review that reports findings, does not implement fixes, returns {agentId, persistenceId}, never waits, and does not get its own worktree.",
+                "Spawn a read-only Bug Review that reports findings, does not implement fixes, returns {agentId, persistenceId}, never waits, and does not get its own worktree. " +
+                beforeSpawn,
             InputSchemaJson = ReadOnlyChildInputSchemaJson,
         };
 
@@ -758,33 +842,43 @@ public static class DysonMetaAgentTools
         {
             Name = "StartAsyncSecurityReviewAgent",
             Description =
-                "Spawn a read-only Security Review that reports findings, does not implement fixes, returns {agentId, persistenceId}, never waits, and does not get its own worktree.",
+                "Spawn a read-only Security Review that reports findings, does not implement fixes, returns {agentId, persistenceId}, never waits, and does not get its own worktree. " +
+                beforeSpawn,
             InputSchemaJson = ReadOnlyChildInputSchemaJson,
         };
     }
 
     /// <summary>
+    /// The one <c>ReadMetaPlan</c> definition: on the default catalog (<see cref="DysonMcpPipeline.CreateDefault"/>) for every
+    /// mode, and re-added by <see cref="CreatePlanBodyTools"/> on the two meta allowlists.
+    /// </summary>
+    public static DysonMcpTool CreateReadMetaPlanTool() => new()
+    {
+        Name = "ReadMetaPlan",
+        Description =
+            "Load a plan by planId (title + markdown + status). Returns the full markdown with no character cap. " +
+            "The markdown is exactly the text EditMetaPlan matches old_text against; old_text may come from anywhere in it. " +
+            "When you are presented with a plan number or planId and asked to build or follow that plan, and a plan path is not specified, call this tool before editing and treat the returned markdown as the brief. " +
+            "A path, when one is also given, is not a substitute: if the id is the authority, still call this tool. " +
+            "If your brief names a planId, read it before you start — it is the authoritative brief and it is kept current.",
+        InputSchemaJson = """
+            {
+              "type": "object",
+              "properties": {
+                "planId": { "type": "integer", "description": "Positive plan id." }
+              },
+              "required": ["planId"]
+            }
+            """,
+    };
+
+    /// <summary>
     /// <c>ReadMetaPlan</c> and <c>EditMetaPlan</c>: on both the root Meta Agent (it cannot match old_text without
-    /// the body) and every Meta Agent Drone. <c>SubmitMetaPlan</c> stays drone-only.
+    /// the body) and every Meta Agent Drone. <c>EditMetaPlan</c> is meta-only; <c>SubmitMetaPlan</c> stays drone-only.
     /// </summary>
     private static IEnumerable<DysonMcpTool> CreatePlanBodyTools()
     {
-        yield return new DysonMcpTool
-        {
-            Name = "ReadMetaPlan",
-            Description =
-                "Load a plan by planId (title + markdown + status). The markdown is exactly the text EditMetaPlan matches old_text against. " +
-                "If your brief names a planId, read it before you start — it is the authoritative brief and it is kept current.",
-            InputSchemaJson = """
-                {
-                  "type": "object",
-                  "properties": {
-                    "planId": { "type": "integer", "description": "Positive plan id." }
-                  },
-                  "required": ["planId"]
-                }
-                """,
-        };
+        yield return CreateReadMetaPlanTool();
 
         yield return new DysonMcpTool
         {
@@ -840,7 +934,8 @@ public static class DysonMetaAgentTools
 
     private static IEnumerable<DysonMcpTool> CreateMetaAgentDroneTools()
     {
-        foreach (var tool in CreateReviewTools())
+        foreach (var tool in CreateReviewTools(
+            "Before calling this tool, call ListSubagents. If an existing subagent already owns the work, reuse it with TriggerSubagentEvent instead of spawning a duplicate."))
             yield return tool;
 
         yield return new DysonMcpTool

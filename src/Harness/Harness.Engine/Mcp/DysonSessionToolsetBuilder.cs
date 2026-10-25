@@ -41,7 +41,7 @@ public static class DysonSessionToolsetBuilder
         config.PluginMcpHost?.ApplyToPipeline(pipeline);
         ApplyImageGenerationProviderGate(pipeline, config);
         ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
-        ApplyModeCatalog(pipeline, agentMode);
+        ApplyModeCatalog(pipeline, agentMode, config);
         return pipeline;
     }
 
@@ -69,7 +69,7 @@ public static class DysonSessionToolsetBuilder
         config.PluginMcpHost?.ApplyToPipeline(pipeline);
         ApplyImageGenerationProviderGate(pipeline, config);
         ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
-        ApplyModeCatalog(pipeline, agentMode);
+        ApplyModeCatalog(pipeline, agentMode, config);
         return pipeline;
     }
 
@@ -117,7 +117,7 @@ public static class DysonSessionToolsetBuilder
         config.PluginMcpHost?.ApplyToPipeline(pipeline);
         ApplyImageGenerationProviderGate(pipeline, config);
         ApplyDisabledTools(pipeline, ResolveDisabledTools(config, agentMode, modelSlugId));
-        ApplyModeCatalog(pipeline, agentMode);
+        ApplyModeCatalog(pipeline, agentMode, config);
     }
 
     /// <summary>
@@ -159,15 +159,21 @@ public static class DysonSessionToolsetBuilder
     /// <summary>
     /// Meta Agent: strip to the allowlist (no project file/shell/wait/completion; temp-scoped WriteTempFile and ReadTempFile stay).
     /// Browser tools already on the pipeline stay. Meta Agent never completes.
+    /// SpeakToUser is added only when <see cref="DysonAgentSessionConfig.Voice"/> is set.
     /// Meta Agent Drone: drop AskQuestionFromParent and PromptUserDialogFromParent
     /// (TriggerParentEvent stays) and add ReadMetaPlan / EditMetaPlan / SubmitMetaPlan.
     /// </summary>
-    private static void ApplyModeCatalog(DysonMcpPipeline pipeline, string agentMode)
+    private static void ApplyModeCatalog(
+        DysonMcpPipeline pipeline,
+        string agentMode,
+        DysonAgentSessionConfig config)
     {
         if (string.Equals(agentMode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
         {
             OmitRootTaskCompletionTools(pipeline);
             DysonMetaAgentTools.ApplyAllowlist(pipeline);
+            if (config.Voice is not null)
+                pipeline.Tools[DysonMetaAgentTools.SpeakToUser.Name] = DysonMetaAgentTools.SpeakToUser;
             return;
         }
 

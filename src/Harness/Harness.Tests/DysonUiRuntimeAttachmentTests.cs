@@ -350,6 +350,11 @@ public class DysonUiRuntimeAttachmentTests
             CancellationToken cancellationToken = default) =>
             Unused<DysonPersistedSession>();
 
+        public Task<Result<Guid?, string>> GetCompactionPendingTurnIdAsync(
+            Guid sessionId,
+            CancellationToken cancellationToken = default) =>
+            Unused<Guid?>();
+
         public Task<Result<IReadOnlyList<DysonSessionUnfinishedWorkSummary>, string>>
             ListActiveSessionsWithUnfinishedTurnsAsync(
                 CancellationToken cancellationToken = default)
@@ -457,6 +462,11 @@ public class DysonUiRuntimeAttachmentTests
             Guid sessionId,
             CancellationToken cancellationToken = default) =>
             Unused<DysonPersistedSession>();
+
+        public Task<Result<Guid?, string>> GetCompactionPendingTurnIdAsync(
+            Guid sessionId,
+            CancellationToken cancellationToken = default) =>
+            Unused<Guid?>();
 
         public Task<Result<IReadOnlyList<DysonSessionUnfinishedWorkSummary>, string>>
             ListActiveSessionsWithUnfinishedTurnsAsync(

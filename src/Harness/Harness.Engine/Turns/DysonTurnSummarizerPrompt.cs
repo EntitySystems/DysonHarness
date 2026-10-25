@@ -1,7 +1,7 @@
 namespace DysonHarness;
 
 /// <summary>
-/// Editable constants for the turn-context summarizer (SummarizeTurns worker).
+/// Editable constants for the turn-context summarizer (UI /summarize worker).
 /// Summarizer system/user text never enters the main agent transcript.
 /// </summary>
 public static class DysonTurnSummarizerPrompt
@@ -15,6 +15,17 @@ public static class DysonTurnSummarizerPrompt
         - Drop chatter, repetition, and tool-call boilerplate that no longer matters.
         - Prefer short bullets. Stay well under 2000 tokens; never exceed that budget.
         - Do not invent facts. If the turn is empty or unusable, say so briefly.
+        """;
+
+    /// <summary>System instruction for the live-compaction fallback summary (whole recent history, not one turn).</summary>
+    public const string CompactionSystem = """
+        You write the context-compaction summary for an AI coding agent session. The harness replaces the whole session history with your summary, so it is the only context the agent keeps.
+
+        Goals:
+        - Keep concrete facts: the goal, decisions, file paths, APIs, commands, constraints, errors, open tool state, and the next steps.
+        - Drop chatter, repetition, and tool-call boilerplate that no longer matters.
+        - Keep the summary under about 35,000 tokens (roughly 140,000 characters). The harness does not trim it.
+        - Do not invent facts. If the history is empty or unusable, say so briefly.
         """;
 
     /// <summary>

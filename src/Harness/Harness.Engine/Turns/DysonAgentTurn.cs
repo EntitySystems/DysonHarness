@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text;
+using System.Text.Json.Nodes;
 
 namespace DysonHarness;
 
@@ -163,6 +164,44 @@ public sealed class DysonAgentTurn
 
     /// <summary>Source tool calls for this turn (stage + name + args).</summary>
     public List<DysonToolCall> ToolCalls { get; } = [];
+
+    /// <summary>
+    /// Tool-call counts per model round, in send order. Empty on legacy turns.
+    /// Persisted inside tool-state JSON (not its own column).
+    /// </summary>
+    public List<int> ToolRoundCallCounts { get; } = [];
+
+    /// <summary>
+    /// Raw Responses reasoning items per tool round, index-aligned with <see cref="ToolRoundCallCounts"/>
+    /// (null = none; shorter on legacy turns). Persisted inside tool-state JSON.
+    /// </summary>
+    public List<IReadOnlyList<JsonObject>?> ToolRoundReasoningItems { get; } = [];
+
+    /// <summary>Reasoning items of the final no-tool round; replayed right before the assistant message.</summary>
+    public IReadOnlyList<JsonObject>? FinalReasoningItems { get; set; }
+
+    /// <summary>
+    /// <see cref="OpenAiCompatibleAgentProvider.ReasoningSourceTag"/> that produced the stored reasoning items.
+    /// Replay drops them when the session's current tag differs; null (older rows) matches only a null tag.
+    /// </summary>
+    public string? ReasoningItemsSource { get; set; }
+
+    /// <summary>
+    /// Stores one round's reasoning items: a tool round (call right after the matching
+    /// <see cref="ToolRoundCallCounts"/> add) or the final no-tool round. Non-empty items retag
+    /// <see cref="ReasoningItemsSource"/>.
+    /// </summary>
+    public void RecordReasoningItems(IReadOnlyList<JsonObject> items, string? sourceTag, bool finalRound)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        var stored = items.Count > 0 ? items : null;
+        if (finalRound)
+            FinalReasoningItems = stored;
+        else
+            ToolRoundReasoningItems.Add(stored);
+        if (stored is not null)
+            ReasoningItemsSource = sourceTag;
+    }
 
     /// <summary>
     /// Tools called this turn with live status (Queued → Working → Completed|Failed).

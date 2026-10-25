@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 
 using DysonHarness;
@@ -25,6 +26,27 @@ public class DysonMetaAgentToolsetTests
 
         foreach (var tool in DysonMcpPipeline.CreateBrowserTools())
             Assert.Contains(tool.Name, pipeline.Tools.Keys);
+
+        var session = new StubSession(
+            DysonAgentModes.MetaAgent,
+            config: new DysonAgentSessionConfig { BrowserControl = new DysonNullBrowserControl() });
+        Assert.Contains(DysonAgentSystemPrompts.MetaAgentBrowserSentence, session.SystemPrompt, StringComparison.Ordinal);
+
+        var plain = new StubSession(DysonAgentModes.MetaAgent);
+        Assert.DoesNotContain("BrowserWaitForNavigation", plain.SystemPrompt, StringComparison.Ordinal);
+
+        var deniedNames = DysonMcpPipeline.CreateBrowserTools()
+            .Select(tool => tool.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var denied = new StubSession(
+            DysonAgentModes.MetaAgent,
+            config: new DysonAgentSessionConfig
+            {
+                BrowserControl = new DysonNullBrowserControl(),
+                DisabledTools = deniedNames,
+            });
+        Assert.DoesNotContain("BrowserNavigate", denied.McpPipeline.Tools.Keys);
+        Assert.DoesNotContain("BrowserWaitForNavigation", denied.SystemPrompt, StringComparison.Ordinal);
 
         foreach (var name in new[]
         {
@@ -94,12 +116,113 @@ public class DysonMetaAgentToolsetTests
         Assert.False(item.TryGetProperty("worktreeBranch", out _));
     }
 
+    [Fact]
+    public void Workdir_tools_only_on_root_meta_catalog()
+    {
+        var voice = (DysonVoiceMode)RuntimeHelpers.GetUninitializedObject(typeof(DysonVoiceMode));
+        foreach (var config in new DysonAgentSessionConfig[]
+        {
+            new(),
+            new() { Voice = voice },
+        })
+        {
+            var meta = DysonSessionToolsetBuilder.Build(config, DysonAgentModes.MetaAgent);
+            Assert.Contains("ListWorkdirs", meta.Tools.Keys);
+            Assert.Contains("OpenWorkdirsPanel", meta.Tools.Keys);
+            Assert.Contains("SwitchWorkdir", meta.Tools.Keys);
+        }
+
+        foreach (var mode in new[]
+        {
+            DysonAgentModes.MetaAgentDrone,
+            DysonAgentModes.Drone,
+            DysonAgentModes.Work,
+            DysonAgentModes.Explore,
+        })
+        {
+            var pipeline = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), mode);
+            Assert.DoesNotContain("ListWorkdirs", pipeline.Tools.Keys);
+            Assert.DoesNotContain("OpenWorkdirsPanel", pipeline.Tools.Keys);
+            Assert.DoesNotContain("SwitchWorkdir", pipeline.Tools.Keys);
+        }
+    }
+
+    [Fact]
+    public void SpeakToUser_OnlyOnRootMetaAgent_WhenVoiceOn()
+    {
+        var voice = (DysonVoiceMode)RuntimeHelpers.GetUninitializedObject(typeof(DysonVoiceMode));
+        var voiced = new DysonAgentSessionConfig { Voice = voice };
+
+        var on = DysonSessionToolsetBuilder.Build(voiced, DysonAgentModes.MetaAgent);
+        Assert.True(on.Tools.ContainsKey("SpeakToUser"));
+        foreach (var name in DysonMetaAgentTools.AllowedToolNames)
+            Assert.Contains(name, on.Tools.Keys);
+
+        var off = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.MetaAgent);
+        Assert.False(off.Tools.ContainsKey("SpeakToUser"));
+
+        foreach (var mode in new[]
+        {
+            DysonAgentModes.MetaAgentDrone,
+            DysonAgentModes.Drone,
+            DysonAgentModes.Explore,
+            DysonAgentModes.BugReview,
+            DysonAgentModes.SecurityReview,
+            DysonAgentModes.Ask,
+            DysonAgentModes.Plan,
+            DysonAgentModes.Work,
+        })
+        {
+            var pipeline = DysonSessionToolsetBuilder.Build(voiced, mode);
+            Assert.False(pipeline.Tools.ContainsKey("SpeakToUser"), mode);
+        }
+    }
+
+    [Fact]
+    public void SetVoiceMode_RootMetaAgent_RebuildsPromptAndCatalog()
+    {
+        var voice = (DysonVoiceMode)RuntimeHelpers.GetUninitializedObject(typeof(DysonVoiceMode));
+        var session = new StubSession(DysonAgentModes.MetaAgent, "models-block");
+        var turnedOn = session.SetVoiceMode(voice);
+        Assert.True(turnedOn.IsSuccess);
+        Assert.Contains("SpeakToUser", session.SystemPrompt, StringComparison.Ordinal);
+        Assert.Contains("[voice input]", session.SystemPrompt, StringComparison.Ordinal);
+        Assert.Contains("models-block", session.SystemPrompt, StringComparison.Ordinal);
+        Assert.True(session.McpPipeline.Tools.ContainsKey("SpeakToUser"));
+        Assert.Equal(1, session.SystemPromptGeneration);
+
+        var same = session.SetVoiceMode(voice);
+        Assert.True(same.IsSuccess);
+        Assert.Equal(1, session.SystemPromptGeneration);
+
+        var turnedOff = session.SetVoiceMode(null);
+        Assert.True(turnedOff.IsSuccess);
+        Assert.False(session.McpPipeline.Tools.ContainsKey("SpeakToUser"));
+        Assert.DoesNotContain("Voice mode (on):", session.SystemPrompt, StringComparison.Ordinal);
+        Assert.Contains("models-block", session.SystemPrompt, StringComparison.Ordinal);
+        Assert.Equal(2, session.SystemPromptGeneration);
+
+        var work = new StubSession(DysonAgentModes.Work);
+        var denied = work.SetVoiceMode(voice);
+        Assert.True(denied.IsError);
+        Assert.Contains("root Meta Agent", denied.Error, StringComparison.Ordinal);
+
+        var parent = new StubSession(DysonAgentModes.Work);
+        var child = new StubSession(DysonAgentModes.MetaAgent);
+        parent.RegisterForTest(child);
+        Assert.True(child.SetVoiceMode(voice).IsError);
+    }
+
     private sealed class StubProvider : DysonAgentProvider;
 
-    private sealed class StubSession(string mode) : DysonAgentSession(
+    private sealed class StubSession(
+        string mode,
+        string? suffix = null,
+        DysonAgentSessionConfig? config = null) : DysonAgentSession(
         mode,
-        new DysonAgentSessionConfig(),
-        new StubProvider())
+        config ?? new DysonAgentSessionConfig(),
+        new StubProvider(),
+        suffix)
     {
         public void RegisterForTest(DysonAgentSession child) => RegisterSubagent(child);
 

@@ -52,6 +52,34 @@
             fixes confirmed bugs once, verifies them, and reports anything unresolved.
         </p>
 
+        <label class="checkbox-row" style="margin-top:16px;">
+            <input type="checkbox"
+                   checked="@_preserveReasoningTraces"
+                   @onchange="OnPreserveReasoningTracesChangedAsync" />
+            Preserve reasoning traces
+        </label>
+        <p class="settings-page__copy" style="margin:0;">
+            Finished turns resend the model's reasoning items to the same provider (better cache reuse, larger requests).
+            Applies from the next turn. Meta Agent always preserves.
+        </p>
+
+        <label class="checkbox-row" style="margin-top:16px;">
+            <input type="checkbox"
+                   checked="@_toolHistoryCompaction"
+                   @onchange="OnToolHistoryCompactionChangedAsync" />
+            Tool-history compaction (experimental)
+        </label>
+        <p class="settings-page__copy" style="margin:0;">
+            Off keeps the full tool history so the prompt prefix stays cache-stable. Applies from the next turn, all modes.
+        </p>
+        @if (_toolHistoryCompaction)
+        {
+            <p class="agent-behavior__warning" role="alert">
+                Experimental: rewrites older tool calls and results into short stubs. This breaks provider prompt
+                caching and can lose detail the model needs. Turns already compacted stay compacted if you turn it off.
+            </p>
+        }
+
         <div class="settings-page__picker-stack">
         <div class="settings-page__picker-group">
             <div class="settings-page__picker-row">
@@ -117,7 +145,7 @@
                                   OnPick="OnTurnSummarizerEffortPickedAsync" />
                 </div>
             <p class="settings-page__copy">
-                Model used by SummarizeTurns / the turn context menu to compress older turns into transcript stubs.
+                Model used by /summarize and the turn context menu to compress older turns into transcript stubs.
                 Leave as “Use session model” to reuse the chat model.
             </p>
         </div>
@@ -278,6 +306,8 @@
     private readonly Dictionary<Guid, IReadOnlyList<string>> _slugReasoningModes = new();
     private string _automaticCodeReview = DysonAutomaticCodeReviewSetting.None;
     private string _automaticCodeReviewAction = DysonAutomaticCodeReviewSetting.ReportOnly;
+    private bool _preserveReasoningTraces = true;
+    private bool _toolHistoryCompaction;
     private Guid? _imageGenerationSlugId;
     private Guid? _fallbackChatSlugId;
     private Guid? _turnSummarizerSlugId;
@@ -317,6 +347,24 @@
         }
 
         _automaticCodeReviewAction = action.Value;
+
+        var preserve = await AppSettings.GetSettingAsync(DysonAppSettingKeys.PreserveReasoningTraces);
+        if (preserve.IsError)
+        {
+            _error = preserve.Error;
+            return;
+        }
+
+        _preserveReasoningTraces = !string.Equals(preserve.Value?.Trim(), "false", StringComparison.OrdinalIgnoreCase);
+
+        var compaction = await AppSettings.GetSettingAsync(DysonAppSettingKeys.ToolHistoryCompaction);
+        if (compaction.IsError)
+        {
+            _error = compaction.Error;
+            return;
+        }
+
+        _toolHistoryCompaction = string.Equals(compaction.Value?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
 
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.ImageGenerationModelSlugId, v => _imageGenerationSlugId = v))
             return;
@@ -469,6 +517,42 @@
         var set = await AppSettings.SetSettingAsync(
             DysonAppSettingKeys.AutomaticCodeReviewAction,
             _automaticCodeReviewAction);
+        if (set.IsError)
+        {
+            _error = set.Error;
+            return;
+        }
+
+        _saved = true;
+    }
+
+    private async Task OnPreserveReasoningTracesChangedAsync(ChangeEventArgs e)
+    {
+        _error = null;
+        _saved = false;
+        _preserveReasoningTraces = e.Value is true;
+
+        // Missing row means on; only the opt-out is stored.
+        var value = _preserveReasoningTraces ? null : "false";
+        var set = await Task.Run(() => AppSettings.SetSettingAsync(DysonAppSettingKeys.PreserveReasoningTraces, value));
+        if (set.IsError)
+        {
+            _error = set.Error;
+            return;
+        }
+
+        _saved = true;
+    }
+
+    private async Task OnToolHistoryCompactionChangedAsync(ChangeEventArgs e)
+    {
+        _error = null;
+        _saved = false;
+        _toolHistoryCompaction = e.Value is true;
+
+        // Missing row means off; only the opt-in is stored.
+        var value = _toolHistoryCompaction ? "true" : null;
+        var set = await Task.Run(() => AppSettings.SetSettingAsync(DysonAppSettingKeys.ToolHistoryCompaction, value));
         if (set.IsError)
         {
             _error = set.Error;

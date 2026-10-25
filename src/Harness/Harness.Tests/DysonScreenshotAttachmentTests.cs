@@ -8,7 +8,8 @@ using ImageMagick;
 namespace Harness.Tests;
 
 /// <summary>
-/// ponytail: BrowserTakeScreenshot BinaryAttachment + Magick compress + one-shot multimodal.
+/// ponytail: BrowserTakeScreenshot BinaryAttachment + Magick compress.
+/// In-flight rebuilds re-emit the data URL; completed history drops it.
 /// </summary>
 public class DysonScreenshotAttachmentTests
 {
@@ -321,7 +322,7 @@ public class DysonScreenshotAttachmentTests
         // Mocked Files upload → Responses prefer file_id (no data URL).
         AssertResponsesImageFileIdViaUpload(session, call, result);
 
-        // Later in-flight round: prior screenshot round must not re-emit the image.
+        // Later full rebuild: round 0's data-URL image stays so the next hop's prefix matches.
         var laterCall = new DysonToolCall
         {
             CallId = "other1",
@@ -345,10 +346,10 @@ public class DysonScreenshotAttachmentTests
                 new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
                 new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([laterCall], [laterResult]),
             ]);
-        if (multiRound.Messages.ToJsonString().Contains("image_url", StringComparison.Ordinal))
+        if (!multiRound.Messages.ToJsonString().Contains("data:image/jpeg;base64,", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "Prior screenshot round must not re-emit image_url after a later in-flight round.");
+                "Prior screenshot round must still emit its data-URL image on a later in-flight rebuild.");
         }
 
         // History after assistant reply: ack only.
@@ -593,9 +594,11 @@ public class DysonScreenshotAttachmentTests
         DysonToolCall call,
         DysonToolCallResult result)
     {
-        var attachment = result.BinaryAttachment
+        // A copy: the caller's attachment may already have been emitted as a data URL.
+        // That wire stays frozen; this build is the first emission of the file_id shape.
+        var emitted = CloneResultForWireShape(result);
+        var attachment = emitted.BinaryAttachment
             ?? throw new InvalidOperationException("Expected BinaryAttachment for upload test.");
-        attachment.FileId = null;
 
         var handler = new StubFilesUploadHandler("file-vision-shot-1");
         using var http = new HttpClient(handler);
@@ -622,7 +625,7 @@ public class DysonScreenshotAttachmentTests
         OpenAiFilesClient.EnsureBinaryFileIdsAsync(
             http,
             provider,
-            [result],
+            [emitted],
             onNote: null).GetAwaiter().GetResult();
 
         if (attachment.FileId != "file-vision-shot-1")
@@ -636,7 +639,7 @@ public class DysonScreenshotAttachmentTests
             currentFilePaths: null,
             inFlightRounds:
             [
-                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [emitted]),
             ]);
 
         var imagePart = FindResponsesInputImage(responses.Input)
@@ -650,9 +653,31 @@ public class DysonScreenshotAttachmentTests
             throw new InvalidOperationException(
                 "Responses with FileId must emit input_image.file_id + detail and no data URL/filename.");
         }
+    }
 
-        // Leave attachment without FileId so later history assertions stay on the data-URL path.
-        attachment.FileId = null;
+    private static DysonToolCallResult CloneResultForWireShape(DysonToolCallResult result)
+    {
+        var source = result.BinaryAttachment
+            ?? throw new InvalidOperationException("Expected BinaryAttachment.");
+        return new DysonToolCallResult
+        {
+            CallId = result.CallId,
+            ToolName = result.ToolName,
+            Stage = result.Stage,
+            IsError = result.IsError,
+            Content = result.Content,
+            BinaryAttachment = new DysonBinaryAttachment
+            {
+                FileName = source.FileName,
+                Extension = source.Extension,
+                MimeType = source.MimeType,
+                Base64Data = source.Base64Data,
+                HtmlRef = source.HtmlRef,
+                RemoteUrl = source.RemoteUrl,
+                ObjectKey = source.ObjectKey,
+                RemoteUrlExpiresUtc = source.RemoteUrlExpiresUtc,
+            },
+        };
     }
 
     private static void AssertCompletionsImageUrlEquals(JsonArray messages, string expectedUrl)

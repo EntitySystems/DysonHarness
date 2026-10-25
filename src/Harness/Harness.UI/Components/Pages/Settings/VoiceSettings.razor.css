@@ -1,0 +1,207 @@
+/* Wide page: install list beside the active / train / try cards, which flow into as many
+   ~300px columns as fit (multi-column, so short cards do not leave row gaps). */
+.settings-page--voice {
+  max-width: none;
+}
+
+.voice__intro {
+  max-width: 100ch;
+}
+
+.voice-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.voice-layout__side {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+/* Nothing installed yet: let the install list take the full row. */
+.voice-layout__side:not(:has(> *)) {
+  display: none;
+}
+
+.voice__note {
+  margin: 8px 0 0;
+}
+
+.voice-models {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.voice-model {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 12px;
+  min-height: 32px;
+}
+
+.voice-model__action {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+}
+
+.voice-model__check {
+  margin: 0;
+  width: 16px;
+  height: 16px;
+}
+
+.voice-model__name {
+  color: var(--text);
+}
+
+.voice-model__state {
+  grid-column: 2;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.voice-active__options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.voice-active__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.voice-steps {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.voice-step {
+  display: grid;
+  grid-template-columns: minmax(180px, max-content) 1fr;
+  gap: 2px 12px;
+  color: var(--text);
+}
+
+.voice-step__state {
+  color: var(--text-muted);
+}
+
+.voice-step--running .voice-step__id {
+  color: var(--accent-text);
+}
+
+.voice-step--failed .voice-step__state {
+  color: var(--danger);
+}
+
+.voice-step__detail {
+  grid-column: 1 / -1;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.voice-train__consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--text);
+}
+
+.voice-train__consent input {
+  margin-top: 3px;
+  flex: 0 0 auto;
+}
+
+.voice-train__record {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.voice-train__record span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.voice-train__transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.voice-train__file {
+  margin-top: 8px;
+}
+
+.voice-train__result {
+  margin-top: 8px;
+}
+
+.voice-try {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.voice-try__label {
+  color: var(--text);
+}
+
+.voice-try__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.voice-try__text {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.voice-try__mic,
+.voice-try__text,
+.voice-try__transcript {
+  background: var(--bg-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+}
+
+.voice-try__mic,
+.voice-try__transcript {
+  width: 100%;
+}
+
+.voice-try__transcript {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.voice-try__status {
+  color: var(--text-muted);
+  font-size: 12px;
+}

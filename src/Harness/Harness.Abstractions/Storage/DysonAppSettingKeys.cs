@@ -30,7 +30,7 @@ public static class DysonAppSettingKeys
     public const string WebSearchSummarizerReasoningEffort = "web_search_summarizer_reasoning_effort";
 
     /// <summary>
-    /// Guid string of the model slug used for turn context summarization (<c>SummarizeTurns</c>).
+    /// Guid string of the model slug used for the UI /summarize turn summarizer worker.
     /// Empty / missing ⇒ use the session model.
     /// </summary>
     public const string TurnSummarizerModelSlugId = "turn_summarizer_model_slug_id";
@@ -151,6 +151,19 @@ public static class DysonAppSettingKeys
     public const string AgentModeToolPolicy = "agent_mode_tool_policy";
 
     /// <summary>
+    /// Replay stored reasoning items for finished turns: <c>"true"</c> / <c>"false"</c>.
+    /// Missing ⇒ <c>true</c>. Read at the start of each prompt turn. Meta Agent ignores it (always on).
+    /// </summary>
+    public const string PreserveReasoningTraces = "preserve_reasoning_traces";
+
+    /// <summary>
+    /// Experimental <c>DysonContextOptimizer</c> tool-history compaction: only <c>"true"</c> enables it.
+    /// Missing / anything else ⇒ off (full tool history, cache-stable prefix). Read at the start of each
+    /// prompt turn, all modes. Turns already compacted keep their compact form.
+    /// </summary>
+    public const string ToolHistoryCompaction = "tool_history_compaction";
+
+    /// <summary>
     /// Local CLIProxyAPI Bearer key for <c>/v1/*</c> (mirrored from
     /// <c>external/cliproxy/keys.json</c> when a managed provider connects).
     /// </summary>
@@ -213,4 +226,89 @@ public static class DysonAppSettingKeys
     /// plaintext token storage). Missing ⇒ Connect is refused until accepted.
     /// </summary>
     public const string XaiGrokConsentAccepted = "xai_grok_consent_accepted";
+
+    /// <summary>Preferred speech-to-text <c>speech_models.RuntimeId</c>. Missing ⇒ the single installed Input row.</summary>
+    public const string SpeechInputModelId = "speech_input_model_id";
+
+    /// <summary>
+    /// BCP-47 tag for speech-to-text. The installer writes <c>en-US</c> when this is missing and Nemotron is installed.
+    /// </summary>
+    public const string SpeechInputLanguage = "speech_input_language";
+
+    /// <summary>
+    /// The active text-to-speech <c>speech_models.RuntimeId</c> (Pocket TTS, Qwen3-TTS, or Chatterbox Turbo). Written by
+    /// Settings → Voice and by the speech installer commit when missing. Set but not installed ⇒ synthesis error, no
+    /// fallback. Missing ⇒ the single installed Output row.
+    /// </summary>
+    public const string SpeechOutputModelId = "speech_output_model_id";
+
+    /// <summary>
+    /// Default output <c>speech_voices.VoiceId</c> when synthesis gets no voice id; Train TTS model sets it to the new
+    /// voice. Used only when it names a voice of the engine speaking; else Pocket ⇒ <c>alba</c>, Chatterbox ⇒
+    /// <c>turbo</c>, Qwen ⇒ its newest voice.
+    /// </summary>
+    public const string SpeechOutputVoiceId = "speech_output_voice_id";
+
+    /// <summary>
+    /// Optional sentence spoken instead of the accept beep. Empty / missing ⇒ the beep.
+    /// Empty/whitespace delete via <c>SetSettingAsync</c>. The clip is not stored in this value.
+    /// </summary>
+    public const string SpeechAcceptSentence = "speech_accept_sentence";
+
+    /// <summary>
+    /// Optional sentence played instead of the listen beep when a stored wake name matches.
+    /// Empty / missing ⇒ the beep. Empty/whitespace delete via <c>SetSettingAsync</c>.
+    /// The clip is not stored in this value.
+    /// </summary>
+    public const string SpeechListenSentence = "speech_listen_sentence";
+
+    /// <summary>
+    /// Selected microphone for Settings → Voice live recording. Value is <c>DysonAudioInputDevice.Id</c>
+    /// (the NAudio device number on Windows). Missing ⇒ the first listed device. A saved id that is no longer
+    /// listed is not swapped for another microphone.
+    /// </summary>
+    public const string SpeechInputDeviceId = "speech_input_device_id";
+
+    /// <summary>
+    /// CrispASR GGUF sidecar device: <c>cpu</c> or <c>gpu</c> (Vulkan runtime, <c>--gpu-backend vulkan</c>).
+    /// Missing, blank, or any other value ⇒ CPU.
+    /// </summary>
+    public const string SpeechCrispDevice = "speech_crisp_device";
+
+    /// <summary>
+    /// Python speech torch: <c>rocm</c> selects AMD ROCm PyTorch in <c>torch-rocm/</c>. Missing, blank, or any other
+    /// value is the CPU torch in <c>torch/</c>. <c>cuda</c> is not a stored value.
+    /// </summary>
+    public const string SpeechTorchDevice = "speech_torch_device";
+
+    /// <summary>
+    /// Low-latency is one job per sentence for Python Qwen, Chatterbox, Pocket, and Crisp GGUF TTS.
+    /// Reliable, missing, blank, or any other value is one job of the full text.
+    /// </summary>
+    public const string SpeechResponseMode = "speech_response_mode";
+
+    /// <summary>
+    /// Whisper tiny/base runtime. Not <see cref="SpeechCrispDevice"/>. The installer writes
+    /// <see cref="SpeechWhisperRuntimeCpu"/> when this key is missing and a Whisper row was installed.
+    /// </summary>
+    public const string SpeechWhisperRuntime = "speech_whisper_runtime";
+
+    public const string SpeechWhisperRuntimeCpu = "cpu";
+
+    public const string SpeechWhisperRuntimeVulkan = "vulkan";
+
+    public const string SpeechWhisperRuntimeNpu = "npu";
+
+    /// <summary>
+    /// <paramref name="value"/> must be <c>cpu</c>, <c>vulkan</c>, or <c>npu</c> after trim.
+    /// <c>gpu</c> is not Vulkan. Blank is not CPU.
+    /// </summary>
+    public static Result<string, string> ParseSpeechWhisperRuntime(string? value)
+    {
+        var text = value?.Trim() ?? "";
+        if (text is SpeechWhisperRuntimeCpu or SpeechWhisperRuntimeVulkan or SpeechWhisperRuntimeNpu)
+            return Result<string, string>.AsValue(text);
+        return Result<string, string>.AsError(
+            "Whisper runtime must be cpu, vulkan, or npu. Choose it in Settings → Voice.");
+    }
 }

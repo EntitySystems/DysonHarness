@@ -1,0 +1,10 @@
+.agent-behavior__warning {
+    margin: 8px 0 0;
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+    border-left: 3px solid var(--warning);
+    background: color-mix(in srgb, var(--warning) 12%, var(--bg-1));
+    color: var(--text);
+    font-size: 0.9em;
+}

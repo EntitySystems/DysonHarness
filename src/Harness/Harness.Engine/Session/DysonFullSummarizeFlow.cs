@@ -6,16 +6,14 @@ namespace DysonHarness;
 /// </summary>
 public static class DysonFullSummarizeFlow
 {
-    public const int MaxSummaryCharacters = 6_000;
-
     public const string Instruction = """
         Write a full session summary that can replace every earlier turn in later provider transcripts.
 
         This turn is the last chance to read the complete history. When this turn finishes, the harness will exclude every previous turn from future model context. Your reply becomes the only remaining context. Do not assume the user will re-state the task.
 
-        Hard limits:
-        - Stay under 6,000 characters. The harness will hard-trim anything over that cap.
-        - Do not call tools. Do not call CompleteTask, ExpandThoughtProcess, StartNewTurn, SummarizeTurns, DropTurnContext, or RestoreTurnContext.
+        Limits:
+        - Keep the summary under about 35,000 tokens (roughly 140,000 characters). The harness does not trim it.
+        - Do not call tools. Do not call CompleteTask, ExpandThoughtProcess, StartNewTurn, DropTurnContext, or RestoreTurnContext.
         - Do not start subagents. Do not edit files. Do not run shells.
         - Start the reply with a single Markdown H1 title that names the thread (e.g. "# Session summary: …").
 
@@ -62,9 +60,9 @@ public static class DysonFullSummarizeFlow
         kind == DysonAgentTurnKind.FullSummarize;
 
     /// <summary>
-    /// Hard-trims <paramref name="completedTurn"/> assistant text to
-    /// <see cref="MaxSummaryCharacters"/> and excludes every earlier in-context turn.
-    /// Does not exclude the FullSummarize turn itself. In-memory only (no persist).
+    /// Excludes every earlier in-context turn; the summary text is kept as written (length is a prompt
+    /// guideline only). Does not exclude the FullSummarize turn itself. In-memory only (no persist); when
+    /// anything was excluded, the post-exclusion context size is recomputed and published in the background.
     /// </summary>
     /// <returns>Turns newly marked <see cref="DysonAgentTurn.IsExcludedFromContext"/> (for persist wiring).</returns>
     public static IReadOnlyList<DysonAgentTurn> ApplyAfterCompletion(
@@ -73,9 +71,6 @@ public static class DysonFullSummarizeFlow
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(completedTurn);
-
-        if (completedTurn.AssistantText is { Length: > MaxSummaryCharacters } text)
-            completedTurn.AssistantText = text[..MaxSummaryCharacters];
 
         var bound = session.Turns.Count;
         for (var i = 0; i < session.Turns.Count; i++)
@@ -100,6 +95,10 @@ public static class DysonFullSummarizeFlow
             dropped.Add(turn);
         }
 
-        return dropped ?? [];
+        if (dropped is null)
+            return [];
+
+        _ = session.PublishContextTokensAfterExclusionAsync();
+        return dropped;
     }
 }

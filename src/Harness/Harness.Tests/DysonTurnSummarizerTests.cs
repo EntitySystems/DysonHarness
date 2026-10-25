@@ -1,12 +1,9 @@
-using System.Net;
-using System.Text;
-using System.Text.Json.Nodes;
 using DysonHarness;
 
 namespace Harness.Tests;
 
 /// <summary>
-/// ponytail: SummarizeTurns worker caps, claims/dedupe/enqueue flag, MCP skip/reason, transcript stubs, SQLite existing-row ContextSummary upsert (Xunit Fact).
+/// ponytail: UI /summarize worker caps, claims/gate, no SummarizeTurns MCP tool, DropTurnContext resume schema, transcript stubs, SQLite existing-row ContextSummary upsert (Xunit Fact).
 /// </summary>
 public class DysonTurnSummarizerTests
 {
@@ -18,9 +15,7 @@ public class DysonTurnSummarizerTests
         AssertPersistenceRoundTrip();
         await AssertContextSummaryPersistsOnExistingRowUpsertAsync();
         AssertTranscriptEmitsSummaryStub();
-        AssertDropContextPrefersSummarize();
-        await AssertSummarizeTurnsToolAsync();
-        await AssertSummarizeTurnsSkipsHasSummaryAndClaimAsync();
+        AssertDropReplacesSummarizeTool();
     }
 
     private static void AssertCapsAndHelpers()
@@ -232,116 +227,25 @@ public class DysonTurnSummarizerTests
         }
     }
 
-    private static void AssertDropContextPrefersSummarize()
+    private static void AssertDropReplacesSummarizeTool()
     {
-        if (!DysonDropContextFlow.Instruction.Contains("SummarizeTurns", StringComparison.Ordinal)
-            || !DysonDropContextFlow.Instruction.Contains("Prefer SummarizeTurns", StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                "DropContext Instruction must prefer SummarizeTurns over DropTurnContext.");
-        }
-
         var preamble = DysonAgentSystemPrompts.SharedPreamble;
-        if (preamble.IndexOf("SummarizeTurns", StringComparison.Ordinal) < 0
+        if (preamble.IndexOf("SummarizeTurns", StringComparison.Ordinal) >= 0
             || preamble.IndexOf("DropTurnContext", StringComparison.Ordinal) < 0)
         {
             throw new InvalidOperationException(
-                "SharedPreamble must mention SummarizeTurns and DropTurnContext.");
+                "SharedPreamble must mention DropTurnContext and not SummarizeTurns.");
         }
 
         var tools = DysonMcpPipeline.CreateDefault(DysonMcpAccessMode.FullAccess).Tools;
-        if (!tools.ContainsKey("SummarizeTurns"))
-            throw new InvalidOperationException("Default catalog must register SummarizeTurns.");
-    }
+        if (tools.ContainsKey("SummarizeTurns"))
+            throw new InvalidOperationException("Default catalog must not register SummarizeTurns.");
 
-    private static async Task AssertSummarizeTurnsToolAsync()
-    {
-        var handler = new StubCompletionsHandler("Bullet facts about the turn.");
-        using var http = new HttpClient(handler);
-        var provider = CreateOpenAiProvider();
-        var session = new StubSession(DysonAgentModes.Work, provider);
-        session.ConfigureRootForTest();
-        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
-
-        var older = new DysonAgentTurn
+        if (!tools.TryGetValue("DropTurnContext", out var drop)
+            || !drop.InputSchemaJson.Contains("\"required\": [\"turnIds\", \"reason\", \"resume\"]", StringComparison.Ordinal))
         {
-            Kind = DysonAgentTurnKind.Normal,
-            Instruction = "explore dead end",
-            AssistantText = "lots of noise",
-            StartedUtc = DateTime.UtcNow,
-            CompletedUtc = DateTime.UtcNow,
-        };
-        session.AddTurnForTest(older);
-
-        var excluded = new DysonAgentTurn
-        {
-            Kind = DysonAgentTurnKind.Normal,
-            Instruction = "already dropped",
-            AssistantText = "gone",
-            IsExcludedFromContext = true,
-            StartedUtc = DateTime.UtcNow,
-            CompletedUtc = DateTime.UtcNow,
-        };
-        session.AddTurnForTest(excluded);
-
-        var current = new DysonAgentTurn
-        {
-            Kind = DysonAgentTurnKind.Normal,
-            Instruction = "continue",
-            StartedUtc = DateTime.UtcNow,
-        };
-        session.AddTurnForTest(current);
-
-        var missingReason = await executor.ExecuteAsync(new DysonToolCall
-        {
-            CallId = "s0",
-            ToolName = "SummarizeTurns",
-            Stage = 0,
-            ArgumentsJson = $$"""{"turnIds":["{{older.Id}}"]}""",
-        }).ConfigureAwait(false);
-        if (!missingReason.IsError
-            || missingReason.Content.IndexOf("reason", StringComparison.OrdinalIgnoreCase) < 0)
-        {
-            throw new InvalidOperationException(
-                "SummarizeTurns must require reason: " + missingReason.Content);
+            throw new InvalidOperationException("DropTurnContext schema must require resume.");
         }
-
-        var result = await executor.ExecuteAsync(new DysonToolCall
-        {
-            CallId = "s1",
-            ToolName = "SummarizeTurns",
-            Stage = 0,
-            ArgumentsJson = $$"""{"turnIds":["{{older.Id}}","{{current.Id}}","{{excluded.Id}}","{{Guid.NewGuid()}}"],"reason":"compress"}""",
-        }).ConfigureAwait(false);
-        if (result.IsError)
-            throw new InvalidOperationException("SummarizeTurns should succeed: " + result.Content);
-
-        if (string.IsNullOrWhiteSpace(older.ContextSummary)
-            || !older.ContextSummary.Contains("Bullet facts", StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                "SummarizeTurns must set ContextSummary on eligible turns: " + older.ContextSummary);
-        }
-
-        if (current.ContextSummary is not null)
-            throw new InvalidOperationException("In-flight turn must not be summarized.");
-        if (excluded.ContextSummary is not null)
-            throw new InvalidOperationException("Excluded turn must be skipped.");
-
-        if (result.Content.IndexOf("partial", StringComparison.OrdinalIgnoreCase) < 0
-            || result.Content.IndexOf("in-flight", StringComparison.OrdinalIgnoreCase) < 0
-            || result.Content.IndexOf("excluded", StringComparison.OrdinalIgnoreCase) < 0)
-        {
-            throw new InvalidOperationException(
-                "SummarizeTurns should report skipped in-flight/excluded: " + result.Content);
-        }
-
-        var log = $"Turn {older.Id:D} summarized, reason: compress";
-        if (!session.SnapshotLog().Any(l => l.Equals(log, StringComparison.Ordinal)))
-            throw new InvalidOperationException("SummarizeTurns must AppendLog: " + log);
-
-        if (handler.CallCount < 1)
-            throw new InvalidOperationException("SummarizeTurns must call Completions once per eligible turn.");
     }
 
     private static void AssertSummarizeClaimsAndGate()
@@ -391,128 +295,6 @@ public class DysonTurnSummarizerTests
             throw new InvalidOperationException("Summarize gate waiter did not proceed after Exit.");
         if (!entered)
             throw new InvalidOperationException("Summarize gate waiter must enter after Exit.");
-    }
-
-    private static async Task AssertSummarizeTurnsSkipsHasSummaryAndClaimAsync()
-    {
-        var handler = new StubCompletionsHandler("Should not be called.");
-        using var http = new HttpClient(handler);
-        var provider = CreateOpenAiProvider();
-        var session = new StubSession(DysonAgentModes.Work, provider);
-        session.ConfigureRootForTest();
-        var executor = await DysonWorkspaceTestFs.CreateExecutorAsync(session, Path.GetTempPath(), http);
-
-        var already = new DysonAgentTurn
-        {
-            Kind = DysonAgentTurnKind.Normal,
-            Instruction = "done",
-            AssistantText = "done",
-            ContextSummary = "already compact",
-            StartedUtc = DateTime.UtcNow,
-            CompletedUtc = DateTime.UtcNow,
-        };
-        session.AddTurnForTest(already);
-
-        var claimed = new DysonAgentTurn
-        {
-            Kind = DysonAgentTurnKind.Normal,
-            Instruction = "in progress elsewhere",
-            AssistantText = "noise",
-            StartedUtc = DateTime.UtcNow,
-            CompletedUtc = DateTime.UtcNow,
-        };
-        session.AddTurnForTest(claimed);
-
-        // Pad so neither is the "current" in-flight turn.
-        session.AddTurnForTest(new DysonAgentTurn
-        {
-            Kind = DysonAgentTurnKind.Normal,
-            Instruction = "current",
-            StartedUtc = DateTime.UtcNow,
-        });
-
-        if (!session.TryBeginSummarizeTurn(claimed.Id))
-            throw new InvalidOperationException("Test setup must claim turn.");
-
-        var result = await executor.ExecuteAsync(new DysonToolCall
-        {
-            CallId = "s-dedupe",
-            ToolName = "SummarizeTurns",
-            Stage = 0,
-            ArgumentsJson = $$"""{"turnIds":["{{already.Id}}","{{claimed.Id}}"],"reason":"dedupe"}""",
-        }).ConfigureAwait(false);
-        if (result.IsError)
-            throw new InvalidOperationException("SummarizeTurns dedupe path should succeed: " + result.Content);
-
-        if (result.Content.IndexOf("already summarized", StringComparison.OrdinalIgnoreCase) < 0
-            || result.Content.IndexOf("already summarizing", StringComparison.OrdinalIgnoreCase) < 0)
-        {
-            throw new InvalidOperationException(
-                "SummarizeTurns must skip HasSummary and held claims: " + result.Content);
-        }
-
-        if (handler.CallCount != 0)
-            throw new InvalidOperationException("SummarizeTurns must not LLM-summarize skipped turns.");
-
-        if (!string.Equals(already.ContextSummary, "already compact", StringComparison.Ordinal))
-            throw new InvalidOperationException("HasSummary turn must keep existing ContextSummary.");
-
-        if (claimed.ContextSummary is not null)
-            throw new InvalidOperationException("Claimed turn must not be overwritten.");
-
-        session.EndSummarizeTurn(claimed.Id);
-    }
-
-    private static OpenAiCompatibleAgentProvider CreateOpenAiProvider()
-    {
-        var entity = new DysonModelProviderEntity
-        {
-            Id = Guid.NewGuid(),
-            DisplayName = "test",
-            ProviderKind = DysonProviderKinds.OpenAICompatible,
-            BaseUrl = "https://api.openai.com/v1",
-            ApiKey = "sk-test",
-        };
-        return new OpenAiCompatibleAgentProvider(
-            entity,
-            new DysonModelSlugEntity
-            {
-                Id = Guid.NewGuid(),
-                ProviderId = entity.Id,
-                Slug = "gpt-test",
-                DisplayAlias = "gpt-test",
-                Provider = entity,
-            });
-    }
-
-    private sealed class StubCompletionsHandler(string content) : HttpMessageHandler
-    {
-        public int CallCount { get; private set; }
-
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
-        {
-            CallCount++;
-            var body = new JsonObject
-            {
-                ["choices"] = new JsonArray
-                {
-                    new JsonObject
-                    {
-                        ["message"] = new JsonObject
-                        {
-                            ["role"] = "assistant",
-                            ["content"] = content,
-                        },
-                    },
-                },
-            };
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"),
-            });
-        }
     }
 
     private sealed class StubProvider : DysonAgentProvider;

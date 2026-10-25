@@ -12,7 +12,7 @@ namespace DysonHarness;
 /// Executes workspace-scoped MCP tools against a work directory root, plus RenameSession,
 /// GetDateTime, GetOpenRulesConfig, InitializeOpenRules, WaitForSeconds, ShellExecute, long-running shell tools, subagent spawn/list/report tools,
 /// inter-agent events / AskQuestion / PromptUserDialog, session todo CRUD, task completion tools, ResumeCurrentTask,
-/// ExpandThoughtProcess / StartNewTurn / SummarizeTurns / DropTurnContext / RestoreTurnContext, in-process web search/fetch tools,
+/// ExpandThoughtProcess / StartNewTurn / DropTurnContext / RestoreTurnContext, in-process web search/fetch tools,
 /// <c>JsonDynamicStructuredLanguageToolchain</c>, browser control tools
 /// (when <see cref="DysonAgentSessionConfig.BrowserControl"/> is set), and custom MCP tools
 /// (when <see cref="DysonAgentSessionConfig.CustomMcpHost"/> is set and active), and explicitly
@@ -98,6 +98,10 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "MessageMetaAgentDrone" => await MessageMetaAgentDroneAsync(call, cancellationToken).ConfigureAwait(false),
                 "DeleteMetaAgent" => await DeleteMetaAgentAsync(call, cancellationToken).ConfigureAwait(false),
                 "PostConversationMessage" => PostConversationMessage(call),
+                "SpeakToUser" => await SpeakToUser(call, cancellationToken).ConfigureAwait(false),
+                "ListWorkdirs" => await ListWorkdirsAsync(call, cancellationToken).ConfigureAwait(false),
+                "OpenWorkdirsPanel" => await OpenWorkdirsPanelAsync(call).ConfigureAwait(false),
+                "SwitchWorkdir" => await SwitchWorkdirAsync(call, cancellationToken).ConfigureAwait(false),
                 "PostUserQuestion" => PostUserQuestion(call),
                 "CompactConversation" => CompactConversation(call),
                 "RemoveTodos" => await RemoveTodosAsync(call, cancellationToken).ConfigureAwait(false),
@@ -132,7 +136,6 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "StartNewTurn" => StartNewTurn(call),
                 "DropTurnContext" => await DropTurnContextAsync(call, cancellationToken).ConfigureAwait(false),
                 "RestoreTurnContext" => await RestoreTurnContextAsync(call, cancellationToken).ConfigureAwait(false),
-                "SummarizeTurns" => await SummarizeTurnsAsync(call, cancellationToken).ConfigureAwait(false),
                 "WaitForSeconds" => await WaitForSecondsAsync(call, cancellationToken).ConfigureAwait(false),
                 "JsonDynamicStructuredLanguageToolchain" => await JsonDynamicStructuredLanguageToolchainAsync(call, cancellationToken).ConfigureAwait(false),
                 "ListTodos" => await ListTodosAsync(call, cancellationToken).ConfigureAwait(false),
@@ -233,14 +236,15 @@ public sealed partial class DysonWorkspaceToolExecutor
         string content,
         DysonBinaryAttachment? binaryAttachment = null,
         bool endsCurrentTurn = false,
-        DysonHtmlVisualization? htmlVisualization = null) =>
+        DysonHtmlVisualization? htmlVisualization = null,
+        bool applyContentLimit = true) =>
         new()
         {
             CallId = call.CallId,
             ToolName = call.ToolName,
             Stage = call.Stage,
             IsError = false,
-            Content = DysonToolResultLimits.TruncateContent(content),
+            Content = applyContentLimit ? DysonToolResultLimits.TruncateContent(content) : content,
             BinaryAttachment = binaryAttachment,
             HtmlVisualization = htmlVisualization,
             EndsCurrentTurn = endsCurrentTurn,
@@ -1242,140 +1246,13 @@ public sealed partial class DysonWorkspaceToolExecutor
             endsCurrentTurn: true);
     }
 
-    private async Task<DysonToolCallResult> SummarizeTurnsAsync(
-        DysonToolCall call,
-        CancellationToken cancellationToken)
-    {
-        IReadOnlyList<string>? turnIdStrings;
-        string reason;
-        try
-        {
-            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
-            var parsed = TryParseOptionalStringArray(doc.RootElement, "turnIds");
-            if (parsed.IsError)
-                return Error(call, parsed.Error);
-            turnIdStrings = parsed.Value;
-
-            var reasonResult = RequireString(doc.RootElement, "reason");
-            if (reasonResult.IsError)
-                return Error(call, "SummarizeTurns: reason (non-empty string) is required.");
-            reason = reasonResult.Value;
-        }
-        catch (JsonException)
-        {
-            return Error(call, "SummarizeTurns: invalid JSON arguments.");
-        }
-
-        if (turnIdStrings is null || turnIdStrings.Count == 0)
-            return Error(call, "SummarizeTurns: turnIds (non-empty array) is required.");
-
-        var provider = ResolveTurnSummarizerProvider();
-        if (provider is null)
-            return Error(call, "SummarizeTurns: no OpenAI-compatible provider available for turn summarization.");
-
-        var currentId = _session.Turns.Count > 0 ? _session.Turns[^1].Id : Guid.Empty;
-        var summarized = new List<string>();
-        var skipped = new List<string>();
-
-        await _session.EnterSummarizeGateAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            foreach (var raw in turnIdStrings)
-            {
-                if (!Guid.TryParse(raw, out var id))
-                {
-                    skipped.Add($"{raw}: invalid guid");
-                    continue;
-                }
-
-                if (id == currentId)
-                {
-                    skipped.Add($"{id:D}: cannot summarize the in-flight turn");
-                    continue;
-                }
-
-                var match = _session.Turns.FirstOrDefault(t => t.Id == id);
-                if (match is null)
-                {
-                    skipped.Add($"{id:D}: unknown turn id");
-                    continue;
-                }
-
-                if (match.IsExcludedFromContext)
-                {
-                    skipped.Add($"{id:D}: turn is excluded from context");
-                    continue;
-                }
-
-                if (match.Kind is DysonAgentTurnKind.DisplayInfo or DysonAgentTurnKind.WorktreeCreating)
-                {
-                    skipped.Add($"{id:D}: chrome turns are not summarized");
-                    continue;
-                }
-
-                if (DysonTurnSummarizer.HasSummary(match))
-                {
-                    skipped.Add($"{id:D}: already summarized");
-                    continue;
-                }
-
-                if (!_session.TryBeginSummarizeTurn(id))
-                {
-                    skipped.Add($"{id:D}: already summarizing");
-                    continue;
-                }
-
-                try
-                {
-                    if (DysonTurnSummarizer.HasSummary(match))
-                    {
-                        skipped.Add($"{id:D}: already summarized");
-                        continue;
-                    }
-
-                    var summary = await DysonTurnSummarizer
-                        .SummarizeAsync(provider, _http, match, reason, cancellationToken: cancellationToken)
-                        .ConfigureAwait(false);
-
-                    match.ContextSummary = summary;
-                    summarized.Add(id.ToString("D"));
-                    _session.AppendLog($"Turn {id:D} summarized, reason: {reason}");
-
-                    if (_store is not null && _session.PersistenceId != Guid.Empty)
-                    {
-                        var sequence = IndexOfTurn(match);
-                        var entity = DysonTurnPersistence.ToEntity(match, _session.PersistenceId, sequence);
-                        var upserted = await _store.UpsertTurnAsync(entity, cancellationToken).ConfigureAwait(false);
-                        if (upserted.IsError)
-                            return Error(call, upserted.Error);
-                    }
-                }
-                finally
-                {
-                    _session.EndSummarizeTurn(id);
-                }
-            }
-        }
-        finally
-        {
-            _session.ExitSummarizeGate();
-        }
-
-        return Ok(call, JsonSerializer.Serialize(new
-        {
-            status = skipped.Count == 0 ? "ok" : "partial",
-            reason,
-            summarized,
-            skipped,
-        }));
-    }
-
     private async Task<DysonToolCallResult> DropTurnContextAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
         IReadOnlyList<string>? turnIdStrings;
         string reason;
+        string resume;
         try
         {
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
@@ -1388,6 +1265,11 @@ public sealed partial class DysonWorkspaceToolExecutor
             if (reasonResult.IsError)
                 return Error(call, "DropTurnContext: reason (non-empty string) is required.");
             reason = reasonResult.Value;
+
+            var resumeResult = RequireString(doc.RootElement, "resume");
+            if (resumeResult.IsError)
+                return Error(call, "DropTurnContext: resume (non-empty string) is required.");
+            resume = resumeResult.Value;
         }
         catch (JsonException)
         {
@@ -1397,9 +1279,18 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (turnIdStrings is null || turnIdStrings.Count == 0)
             return Error(call, "DropTurnContext: turnIds (non-empty array) is required.");
 
-        var currentId = _session.Turns.Count > 0 ? _session.Turns[^1].Id : Guid.Empty;
+        if (new DysonTiktokenTokenCounter().CountTokens(resume) > MaxDropResumeTokens)
+            return Error(call, $"DropTurnContext: resume must be under {MaxDropResumeTokens} tokens.");
+
+        var invoking = _session.InFlightPromptTurn;
+        if (invoking is null && _session.Turns.Count > 0)
+            invoking = _session.Turns[^1];
+
+        var invokingId = invoking?.Id ?? Guid.Empty;
         var dropped = new List<string>();
         var skipped = new List<string>();
+        var listed = new List<string>();
+        var newlyExcluded = new List<DysonAgentTurn>();
 
         foreach (var raw in turnIdStrings)
         {
@@ -1409,7 +1300,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 continue;
             }
 
-            if (id == currentId)
+            if (id == invokingId)
             {
                 skipped.Add($"{id:D}: cannot drop the in-flight turn");
                 continue;
@@ -1422,24 +1313,43 @@ public sealed partial class DysonWorkspaceToolExecutor
                 continue;
             }
 
+            var idText = id.ToString("D");
             if (match.IsExcludedFromContext)
             {
-                dropped.Add(id.ToString("D"));
+                NoteDropped(dropped, listed, idText);
                 continue;
             }
 
             match.IsExcludedFromContext = true;
             _session.BumpTranscriptGeneration();
-            dropped.Add(id.ToString("D"));
-            _session.AppendLog($"Turn {id:D} dropped, reason: {reason}");
+            _session.AppendLog($"Turn {idText} dropped, reason: {reason}");
+            newlyExcluded.Add(match);
 
-            if (_store is not null && _session.PersistenceId != Guid.Empty)
+            var upserted = await UpsertTurnIfPersistedAsync(match, cancellationToken).ConfigureAwait(false);
+            if (upserted.IsError)
+                return Error(call, upserted.Error);
+
+            NoteDropped(dropped, listed, idText);
+        }
+
+        // Resume lives on the calling turn's reply. Ids are injected after the token check.
+        if (listed.Count > 0)
+        {
+            if (invoking is null)
             {
-                var sequence = IndexOfTurn(match);
-                var entity = DysonTurnPersistence.ToEntity(match, _session.PersistenceId, sequence);
-                var upserted = await _store.UpsertTurnAsync(entity, cancellationToken).ConfigureAwait(false);
-                if (upserted.IsError)
-                    return Error(call, upserted.Error);
+                await RollbackNewlyExcludedAsync(newlyExcluded, cancellationToken).ConfigureAwait(false);
+                return Error(call, "DropTurnContext: no invoking turn to store the resume.");
+            }
+
+            var priorAssistant = invoking.AssistantText;
+            invoking.AssistantText = AppendDropResume(priorAssistant, FormatDropResumeBlock(listed, resume));
+            _session.BumpTranscriptGeneration();
+            var stored = await UpsertTurnIfPersistedAsync(invoking, cancellationToken).ConfigureAwait(false);
+            if (stored.IsError)
+            {
+                invoking.AssistantText = priorAssistant;
+                await RollbackNewlyExcludedAsync(newlyExcluded, cancellationToken).ConfigureAwait(false);
+                return Error(call, stored.Error);
             }
         }
 
@@ -1447,9 +1357,74 @@ public sealed partial class DysonWorkspaceToolExecutor
         {
             status = skipped.Count == 0 ? "ok" : "partial",
             reason,
+            resume,
             dropped,
             skipped,
         }));
+    }
+
+    /// <summary>Marker prefixed onto the calling turn when <c>DropTurnContext</c> stores its resume.</summary>
+    internal const string DropResumeMarker = "Dropped turn ids:";
+
+    /// <summary>Ids first (code-injected), then the model resume. Not counted against the resume token cap.</summary>
+    internal static string FormatDropResumeBlock(IReadOnlyList<string> turnIds, string resume)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(DropResumeMarker);
+        foreach (var id in turnIds)
+        {
+            sb.Append("- ");
+            sb.AppendLine(id);
+        }
+
+        sb.AppendLine();
+        sb.Append(resume);
+        return sb.ToString();
+    }
+
+    /// <summary>Appends a drop-resume block. Existing assistant text is kept.</summary>
+    internal static string AppendDropResume(string? existing, string block)
+    {
+        if (string.IsNullOrEmpty(existing))
+            return block;
+
+        return existing.TrimEnd() + "\n\n---\n\n" + block;
+    }
+
+    /// <summary>
+    /// Final model text replaces <paramref name="prior"/> unless that text is a drop resume.
+    /// A drop resume stays after the closing reply so later transcripts still list the ids.
+    /// </summary>
+    internal static string MergeAssistantTextPreservingDropResume(string? prior, string modelBody)
+    {
+        if (string.IsNullOrEmpty(prior)
+            || prior.IndexOf(DropResumeMarker, StringComparison.Ordinal) < 0)
+        {
+            return modelBody;
+        }
+
+        if (string.IsNullOrWhiteSpace(modelBody) || modelBody.Contains(prior, StringComparison.Ordinal))
+            return string.IsNullOrWhiteSpace(modelBody) ? prior : modelBody;
+
+        return modelBody.TrimEnd() + "\n\n---\n\n" + prior;
+    }
+
+    private static void NoteDropped(List<string> dropped, List<string> listed, string idText)
+    {
+        dropped.Add(idText);
+        if (!listed.Contains(idText))
+            listed.Add(idText);
+    }
+
+    private async Task RollbackNewlyExcludedAsync(
+        List<DysonAgentTurn> newlyExcluded,
+        CancellationToken cancellationToken)
+    {
+        foreach (var turn in newlyExcluded)
+        {
+            turn.IsExcludedFromContext = false;
+            _ = await UpsertTurnIfPersistedAsync(turn, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task<DysonToolCallResult> RestoreTurnContextAsync(
@@ -1504,18 +1479,15 @@ public sealed partial class DysonWorkspaceToolExecutor
             }
 
             match.IsExcludedFromContext = false;
+            // A summary on this turn would still hide the body. The drop resume lives on the caller, not here.
+            match.ContextSummary = null;
             _session.BumpTranscriptGeneration();
             restored.Add(id.ToString("D"));
             _session.AppendLog($"Turn {id:D} restored, reason: {reason}");
 
-            if (_store is not null && _session.PersistenceId != Guid.Empty)
-            {
-                var sequence = IndexOfTurn(match);
-                var entity = DysonTurnPersistence.ToEntity(match, _session.PersistenceId, sequence);
-                var upserted = await _store.UpsertTurnAsync(entity, cancellationToken).ConfigureAwait(false);
-                if (upserted.IsError)
-                    return Error(call, upserted.Error);
-            }
+            var upserted = await UpsertTurnIfPersistedAsync(match, cancellationToken).ConfigureAwait(false);
+            if (upserted.IsError)
+                return Error(call, upserted.Error);
         }
 
         return Ok(call, JsonSerializer.Serialize(new
@@ -1525,6 +1497,20 @@ public sealed partial class DysonWorkspaceToolExecutor
             restored,
             skipped,
         }));
+    }
+
+    /// <summary>Max tiktoken count for the model-written <c>DropTurnContext</c> resume.</summary>
+    internal const int MaxDropResumeTokens = 1000;
+
+    private Task<VoidResult<string>> UpsertTurnIfPersistedAsync(
+        DysonAgentTurn turn,
+        CancellationToken cancellationToken)
+    {
+        if (_store is null || _session.PersistenceId == Guid.Empty)
+            return Task.FromResult(VoidResult<string>.Success);
+
+        var entity = DysonTurnPersistence.ToEntity(turn, _session.PersistenceId, IndexOfTurn(turn));
+        return _store.UpsertTurnAsync(entity, cancellationToken);
     }
 
     private int IndexOfTurn(DysonAgentTurn match)
@@ -3435,7 +3421,10 @@ public sealed partial class DysonWorkspaceToolExecutor
                 rawContent,
                 summarizePrompt,
                 tokens,
-                cancellationToken)
+                cancellationToken,
+                _session is OpenAiCompatibleAgentSession openAi
+                    ? (usage, token) => openAi.AppendUsageAsync(provider, usage, token)
+                    : null)
             .ConfigureAwait(false);
 
         return Ok(call, summary);
@@ -3444,14 +3433,6 @@ public sealed partial class DysonWorkspaceToolExecutor
     private OpenAiCompatibleAgentProvider? ResolveSummarizerProvider()
     {
         if (_session.Config.SummarizerProvider is OpenAiCompatibleAgentProvider configured)
-            return configured;
-
-        return _session.Provider as OpenAiCompatibleAgentProvider;
-    }
-
-    private OpenAiCompatibleAgentProvider? ResolveTurnSummarizerProvider()
-    {
-        if (_session.Config.TurnSummarizerProvider is OpenAiCompatibleAgentProvider configured)
             return configured;
 
         return _session.Provider as OpenAiCompatibleAgentProvider;

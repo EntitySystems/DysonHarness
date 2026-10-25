@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -393,6 +394,7 @@ public class DysonManagedSourcesTests
     [InlineData("cliproxy-codex", true)]
     [InlineData("cliproxy-grok", true)]
     [InlineData("cliproxy-meta", true)]
+    [InlineData("xai-grok", false)]
     [InlineData("openrouter", false)]
     [InlineData("orcarouter", false)]
     [InlineData(null, false)]
@@ -456,6 +458,8 @@ public class DysonCliProxyPathsPruneTests
             var keys = Path.Combine(root.FullName, DysonCliProxyPaths.KeysFileName);
             File.WriteAllText(config, "host: \"127.0.0.1\"");
             File.WriteAllText(keys, "{}");
+            var disabled = Path.Combine(root.FullName, DysonCliProxyPaths.DisabledFlagFileName);
+            File.WriteAllText(disabled, "off\n");
             Directory.CreateDirectory(Path.Combine(root.FullName, "not-a-version"));
 
             DysonCliProxyPaths.PruneObsoleteVersionDirectories(root.FullName, pin);
@@ -467,6 +471,7 @@ public class DysonCliProxyPathsPruneTests
             Assert.True(File.Exists(Path.Combine(auths.FullName, "codex-oauth.json")));
             Assert.True(File.Exists(config));
             Assert.True(File.Exists(keys));
+            Assert.Equal("off\n", File.ReadAllText(disabled));
             Assert.True(Directory.Exists(Path.Combine(root.FullName, "not-a-version")));
         }
         finally
@@ -492,6 +497,8 @@ public class DysonCliProxyDownloaderForceTests
             File.WriteAllText(Path.Combine(auths.FullName, "codex-oauth.json"), "{}");
             File.WriteAllText(Path.Combine(root.FullName, DysonCliProxyPaths.ConfigFileName), "keep-config");
             File.WriteAllText(Path.Combine(root.FullName, DysonCliProxyPaths.KeysFileName), "{}");
+            var disabled = Path.Combine(root.FullName, DysonCliProxyPaths.DisabledFlagFileName);
+            File.WriteAllText(disabled, "off\n");
 
             using var http = new HttpClient(new FailImmediatelyHandler());
             var downloader = new DysonCliProxyDownloader(http);
@@ -503,6 +510,7 @@ public class DysonCliProxyDownloaderForceTests
             Assert.True(File.Exists(Path.Combine(auths.FullName, "codex-oauth.json")));
             Assert.Equal("keep-config", File.ReadAllText(Path.Combine(root.FullName, DysonCliProxyPaths.ConfigFileName)));
             Assert.True(File.Exists(Path.Combine(root.FullName, DysonCliProxyPaths.KeysFileName)));
+            Assert.Equal("off\n", File.ReadAllText(disabled));
         }
         finally
         {
@@ -520,5 +528,232 @@ public class DysonCliProxyDownloaderForceTests
             {
                 Content = new StringContent("no network"),
             });
+    }
+}
+
+public class DysonCliProxyOffSwitchTests
+{
+    [Fact]
+    public void Disabled_flag_lives_under_the_install_root()
+    {
+        Assert.Equal("disabled", DysonCliProxyPaths.DisabledFlagFileName);
+        Assert.Equal(
+            Path.Combine(DysonCliProxyPaths.InstallRoot, "disabled"),
+            DysonCliProxyPaths.DisabledFlagPath);
+    }
+
+    [Fact]
+    public void Custom_loopback_url_is_not_treated_as_a_cliproxy_source()
+    {
+        Assert.True(DysonManagedSources.IsCliProxy(DysonManagedSources.CliProxyGrok));
+        Assert.False(DysonManagedSources.IsCliProxy(DysonManagedSources.XaiGrok));
+        Assert.False(DysonManagedSources.IsCliProxy(DysonManagedSources.OpenRouter));
+        Assert.False(DysonManagedSources.IsCliProxy(DysonManagedSources.OrcaRouter));
+        Assert.False(DysonManagedSources.IsCliProxy(null));
+
+        var custom = new OpenAiCompatibleAgentProvider(new DysonModelProviderEntity
+        {
+            DisplayName = "Loopback",
+            ProviderKind = DysonProviderKinds.OpenAICompatible,
+            BaseUrl = "http://127.0.0.1:8317",
+            ApiKey = "local",
+        }, slug: null);
+        Assert.Null(custom.ManagedSource);
+        Assert.Equal("http://127.0.0.1:8317", custom.BaseUrl);
+        Assert.Equal("local", custom.ApiKey);
+
+        var legacy = new OpenAiCompatibleAgentProvider(new DysonModelProviderEntity
+        {
+            DisplayName = "Legacy Grok",
+            ProviderKind = DysonProviderKinds.OpenAICompatible,
+            ManagedSource = DysonManagedSources.CliProxyGrok,
+            BaseUrl = "https://example.invalid/v1",
+            ApiKey = "stale",
+        }, slug: null);
+        Assert.Equal(DysonCliProxyHost.DefaultLocalBaseUrl, legacy.BaseUrl);
+        Assert.Equal(DysonCliProxyHost.DefaultApiKey, legacy.ApiKey);
+
+        var native = new OpenAiCompatibleAgentProvider(new DysonModelProviderEntity
+        {
+            DisplayName = "Grok",
+            ProviderKind = DysonProviderKinds.OpenAICompatible,
+            ManagedSource = DysonManagedSources.XaiGrok,
+            BaseUrl = "https://example.invalid/v1",
+            ApiKey = "dyson-xai:keep",
+        }, slug: null);
+        Assert.Equal(XaiGrokClientProfile.ChatProxyBaseUrl, native.BaseUrl);
+        Assert.NotEqual(DysonCliProxyHost.DefaultLocalBaseUrl, native.BaseUrl);
+        Assert.Equal("dyson-xai:keep", native.ApiKey);
+    }
+
+    [Fact]
+    public async Task Off_switch_stops_the_process_and_refuses_to_start()
+    {
+        var flag = DysonCliProxyPaths.DisabledFlagPath;
+        var hadFlag = File.Exists(flag);
+        var previous = hadFlag ? await File.ReadAllTextAsync(flag) : null;
+        Process? sleeper = null;
+        string? sleeperExe = null;
+        var handler = new CountingHandler();
+        using var http = new HttpClient(handler);
+        await using var host = new DysonCliProxyHost(http);
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                StopInstallRootProxies();
+                Directory.CreateDirectory(DysonCliProxyPaths.InstallRoot);
+                sleeperExe = Path.Combine(DysonCliProxyPaths.InstallRoot, "cli-proxy-api.exe");
+                File.Copy(
+                    Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                    sleeperExe,
+                    overwrite: true);
+                sleeper = Process.Start(new ProcessStartInfo
+                {
+                    FileName = sleeperExe,
+                    Arguments = "/d /c ping -n 60 127.0.0.1 > nul",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                });
+                Assert.NotNull(sleeper);
+                Assert.True(
+                    await WaitUntilVisibleAsync(sleeper),
+                    sleeper.HasExited
+                        ? $"sleeper exited immediately ({sleeper.ExitCode})"
+                        : "sleeper was not visible to the process scan");
+            }
+
+            var off = await host.SetDisabledAsync(true);
+            Assert.False(off.IsError);
+            Assert.True(DysonCliProxyPaths.IsDisabled);
+            Assert.True(File.Exists(flag));
+
+            if (sleeper is not null)
+            {
+                if (!sleeper.HasExited)
+                    sleeper.WaitForExit(6_000);
+                Assert.True(sleeper.HasExited);
+            }
+
+            var ensure = await host.EnsureRunningAsync();
+            Assert.True(ensure.IsError);
+            Assert.Equal(DysonCliProxyHost.DisabledError, ensure.Error);
+
+            var restart = await host.RestartAsync();
+            Assert.Equal(DysonCliProxyHost.DisabledError, restart.Error);
+
+            var reinstall = await host.ReinstallAndRestartAsync();
+            Assert.Equal(DysonCliProxyHost.DisabledError, reinstall.Error);
+            Assert.Equal(0, handler.Calls);
+
+            var on = await host.SetDisabledAsync(false);
+            Assert.False(on.IsError);
+            Assert.False(DysonCliProxyPaths.IsDisabled);
+            Assert.False(File.Exists(flag));
+            Assert.Equal(0, handler.Calls);
+            Assert.False(await host.IsDisabledAsync());
+        }
+        finally
+        {
+            try
+            {
+                if (sleeper is { HasExited: false })
+                    sleeper.Kill(entireProcessTree: true);
+            }
+            catch
+            {
+                // best-effort
+            }
+
+            sleeper?.Dispose();
+            if (sleeperExe is not null)
+            {
+                try { File.Delete(sleeperExe); }
+                catch { /* the process may still be releasing the file */ }
+            }
+
+            try
+            {
+                if (hadFlag)
+                    await File.WriteAllTextAsync(flag, previous ?? "off\n");
+                else if (File.Exists(flag))
+                    File.Delete(flag);
+            }
+            catch
+            {
+                // best-effort restore
+            }
+        }
+    }
+
+    private static void StopInstallRootProxies()
+    {
+        foreach (var process in Process.GetProcessesByName("cli-proxy-api"))
+        {
+            try
+            {
+                var path = process.MainModule?.FileName;
+                if (path is null
+                    || !path.StartsWith(DysonCliProxyPaths.InstallRoot, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(3_000);
+            }
+            catch
+            {
+                // best-effort
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        }
+    }
+
+    private static async Task<bool> WaitUntilVisibleAsync(Process sleeper)
+    {
+        for (var i = 0; i < 40; i++)
+        {
+            if (sleeper.HasExited)
+                return false;
+
+            var visible = false;
+            foreach (var process in Process.GetProcessesByName("cli-proxy-api"))
+            {
+                try
+                {
+                    if (process.Id == sleeper.Id)
+                        visible = true;
+                }
+                finally
+                {
+                    process.Dispose();
+                }
+            }
+
+            if (visible)
+                return true;
+
+            await Task.Delay(50);
+        }
+
+        return false;
+    }
+
+    private sealed class CountingHandler : HttpMessageHandler
+    {
+        public int Calls;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Calls++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}"),
+            });
+        }
     }
 }

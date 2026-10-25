@@ -1,0 +1,228 @@
+@using DysonHarness
+@using Harness.UI.Services
+@inject IDysonSpeechModelRepository SpeechModels
+@inject DysonActiveTextToSpeech Tts
+@inject IDysonSubjectSettingsRepository Settings
+@inject ConfirmDialogService Confirm
+
+@if (_show)
+{
+    <div class="settings-page__panel panel voice-clones">
+        <div class="tool-panel__title">Voices</div>
+        @if (_voices.Count == 0)
+        {
+            <p class="settings-page__copy">No voices yet. Train one above.</p>
+        }
+        else
+        {
+            <ul class="voice-clones__list">
+                @foreach (var row in _voices)
+                {
+                    var voice = row;
+                    <li class="voice-clones__row">
+                        @if (_renamingId == voice.VoiceId)
+                        {
+                            <input class="voice-clones__rename" maxlength="64" @bind="_renameText" @bind:event="oninput"
+                                   aria-label="@($"Rename {voice.DisplayName}")" />
+                            <span class="voice-clones__model">@ModelName</span>
+                        }
+                        else
+                        {
+                            <span class="voice-clones__name">@voice.DisplayName</span>
+                            @if (IsInUse(voice))
+                            {
+                                <span class="voice-clones__badge">In use</span>
+                            }
+                            <span class="voice-clones__model">@ModelName</span>
+                        }
+                        <span class="voice-clones__actions">
+                            @if (_renamingId == voice.VoiceId)
+                            {
+                                <button type="button" class="btn btn-primary" disabled="@_busy" @onclick="() => SaveRenameAsync(voice)">Save</button>
+                                <button type="button" class="btn btn-ghost" disabled="@_busy" @onclick="CancelRename">Cancel</button>
+                            }
+                            else
+                            {
+                                <button type="button" class="btn btn-ghost" disabled="@_busy" @onclick="() => UseAsync(voice)">Use</button>
+                                <button type="button" class="btn btn-ghost" disabled="@_busy" @onclick="() => BeginRename(voice)">Rename</button>
+                                @if (voice.SourceFileName is not null)
+                                {
+                                    <button type="button" class="btn btn-ghost" disabled="@_busy" @onclick="() => DeleteAsync(voice)">Delete</button>
+                                }
+                            }
+                        </span>
+                    </li>
+                }
+            </ul>
+        }
+        @if (!string.IsNullOrWhiteSpace(_error))
+        {
+            <p class="voice-clones__error" role="alert">@_error</p>
+        }
+    </div>
+}
+
+@code {
+    private List<DysonSpeechVoiceEntity> _voices = [];
+    private string? _selectedVoiceId;
+    private string? _renamingId;
+    private string _renameText = "";
+    private string? _error;
+    private string? _seenRuntime;
+    private int _seenVersion = int.MinValue;
+    private bool _show;
+    private bool _busy;
+
+    [Parameter] public string? RuntimeId { get; set; }
+    [Parameter] public string? ModelName { get; set; }
+    [Parameter] public int Version { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (string.Equals(_seenRuntime, RuntimeId, StringComparison.Ordinal) && _seenVersion == Version)
+            return;
+        _seenRuntime = RuntimeId;
+        _seenVersion = Version;
+        await ReloadAsync();
+    }
+
+    private static bool CanEnroll(string? runtimeId) =>
+        DysonSpeechTryout.ShowsRecordedTrain(runtimeId) || runtimeId == DysonChatterboxSpeech.Id;
+
+    /// <summary>
+    /// Selected <c>speech_output_voice_id</c> when it is one of these rows; otherwise the resolver fallback
+    /// (Pocket alba, Chatterbox turbo, else newest). Display only — speech still resolves in the engine.
+    /// </summary>
+    private bool IsInUse(DysonSpeechVoiceEntity row)
+    {
+        var selected = (_selectedVoiceId ?? "").Trim();
+        var match = _voices.FirstOrDefault(v =>
+            string.Equals(v.VoiceId, selected, StringComparison.OrdinalIgnoreCase));
+        if (match is not null)
+            return string.Equals(row.VoiceId, match.VoiceId, StringComparison.Ordinal);
+
+        var fallback = RuntimeId == DysonPocketSpeech.Id
+            ? DysonPocketSpeech.DefaultVoiceId
+            : RuntimeId == DysonChatterboxSpeech.Id
+                ? DysonChatterboxSpeech.CatalogVoiceId
+                : _voices.MaxBy(v => v.CreatedUtc)?.VoiceId;
+        return fallback is not null
+            && string.Equals(row.VoiceId, fallback, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task ReloadAsync()
+    {
+        _renamingId = null;
+        _error = null;
+        if (string.IsNullOrWhiteSpace(RuntimeId))
+        {
+            _voices = [];
+            _show = false;
+            return;
+        }
+
+        var listed = await SpeechModels.ListVoicesAsync(RuntimeId);
+        if (listed.IsError)
+        {
+            _voices = [];
+            _error = listed.Error;
+            _show = true;
+            return;
+        }
+
+        _voices = listed.Value.ToList();
+        var setting = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechOutputVoiceId);
+        _selectedVoiceId = setting.IsSuccess ? setting.Value : null;
+        if (setting.IsError)
+            _error = setting.Error;
+        _show = _voices.Count > 0 || CanEnroll(RuntimeId);
+    }
+
+    private async Task UseAsync(DysonSpeechVoiceEntity voice)
+    {
+        if (_busy || string.IsNullOrWhiteSpace(RuntimeId))
+            return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            var used = await Tts.SetVoiceAsync(voice.VoiceId);
+            if (used.IsError)
+            {
+                _error = used.Error;
+                return;
+            }
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void BeginRename(DysonSpeechVoiceEntity voice)
+    {
+        _renamingId = voice.VoiceId;
+        _renameText = voice.DisplayName;
+        _error = null;
+    }
+
+    private void CancelRename()
+    {
+        _renamingId = null;
+        _renameText = "";
+    }
+
+    private async Task SaveRenameAsync(DysonSpeechVoiceEntity voice)
+    {
+        if (_busy || RuntimeId is not string runtimeId || runtimeId.Length == 0)
+            return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            var renamed = await SpeechModels.RenameVoiceAsync(runtimeId, voice.VoiceId, _renameText);
+            if (renamed.IsError)
+            {
+                _error = renamed.Error;
+                return;
+            }
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteAsync(DysonSpeechVoiceEntity voice)
+    {
+        if (_busy || RuntimeId is not string runtimeId || runtimeId.Length == 0 || voice.SourceFileName is null)
+            return;
+        var ok = await Confirm.ConfirmAsync(
+            "Delete voice",
+            $"Delete {voice.DisplayName}? The voice files and the row are removed.");
+        if (!ok)
+            return;
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var deleted = await Tts.DeleteVoiceAsync(runtimeId, voice.VoiceId);
+            if (deleted.IsError)
+            {
+                _error = deleted.Error;
+                return;
+            }
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

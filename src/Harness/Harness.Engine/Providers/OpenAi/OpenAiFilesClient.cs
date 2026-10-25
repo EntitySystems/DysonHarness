@@ -107,6 +107,8 @@ public sealed class OpenAiFilesClient(HttpClient http)
     /// <summary>
     /// Uploads missing <see cref="DysonBinaryAttachment.FileId"/> values for Responses.
     /// Failures leave <see cref="DysonBinaryAttachment.FileId"/> unset (data-URL fallback).
+    /// Skips an attachment whose in-flight wire was already emitted, so a later upload
+    /// cannot replace a data URL or file id the model already saw.
     /// </summary>
     public static async Task EnsureBinaryFileIdsAsync(
         HttpClient http,
@@ -126,7 +128,7 @@ public sealed class OpenAiFilesClient(HttpClient http)
         OpenAiFilesClient? client = null;
         foreach (var attachment in attachments)
         {
-            if (!string.IsNullOrEmpty(attachment.FileId))
+            if (attachment.InFlightWireCaptured || !string.IsNullOrEmpty(attachment.FileId))
                 continue;
 
             byte[] bytes;

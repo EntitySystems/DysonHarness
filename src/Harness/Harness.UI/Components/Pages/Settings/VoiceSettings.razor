@@ -1,0 +1,901 @@
+@page "/settings/voice"
+@layout SettingsLayout
+@using DysonHarness
+@using Harness.UI.Services
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.Extensions.DependencyInjection
+@implements IDisposable
+@inject DysonSpeechInstaller Installer
+@inject IDysonSpeechModelRepository SpeechModels
+@inject DysonActiveTextToSpeech Tts
+@inject DysonActiveSpeechToText Stt
+@inject IDysonSubjectSettingsRepository Settings
+@inject ConfirmDialogService ConfirmDialog
+@inject IServiceProvider Services
+@inject DysonUiHost Host
+
+<PageTitle>Voice — Settings</PageTitle>
+
+<div class="settings-page settings-page--voice">
+    <h1 class="settings-page__title">Voice</h1>
+    <p class="settings-page__copy voice__intro">
+        Local speech to text and text to speech. Each install lands on its own in the app-data folder below, not in
+        the app directory. Python installs share one private Python and a CPU or ROCm PyTorch: Phonon 2 uses Fermion BPS packed
+        weights, and Pocket TTS, Qwen3-TTS 0.6B Base, and Chatterbox Turbo use safetensors. Qwen3-TTS downloads about
+        2.5 GB and is slower than Pocket. Chatterbox Turbo is English only and downloads about 3.0 GB. GGUF installs
+        use native Windows runtimes and no Python: Nemotron 3.5 streaming speech to text on transcribe.cpp, and
+        Phonon 2, Pocket TTS, Qwen3-TTS, and Chatterbox Turbo on CrispASR. Either format of a model can be installed.
+        The active model radios show which one is used. Push-to-talk in the Meta Agent composer uses the active
+        speech-to-text model. Windows x64 only in this release.
+    </p>
+
+    @if (!string.IsNullOrWhiteSpace(_error))
+    {
+        <div class="error-banner" role="alert">@_error</div>
+    }
+
+    <div class="voice-layout">
+    <div class="settings-page__panel panel">
+        <ul class="voice-models">
+            @foreach (var row in OrderedRows)
+            {
+                var id = row.RuntimeId;
+                <li class="voice-model">
+                    @if (row.IsInstalled)
+                    {
+                        <span class="voice-model__check" aria-hidden="true"></span>
+                    }
+                    else
+                    {
+                        <input id="voice-model-@id"
+                               class="voice-model__check"
+                               type="checkbox"
+                               checked="@_selected.Contains(id)"
+                               disabled="@_busy"
+                               @onchange="e => Toggle(id, e.Value is true)" />
+                    }
+                    <label class="voice-model__name" for="voice-model-@id">@row.DisplayName</label>
+                    <span class="voice-model__state">
+                        @(row.Capability == DysonSpeechCapability.Input ? "Speech to text" : "Text to speech")
+                        · @(row.IsInstalled ? "installed" : "not installed")
+                    </span>
+                    @if (row.IsInstalled)
+                    {
+                        <button type="button" class="btn btn-ghost voice-model__action" disabled="@_busy"
+                                @onclick="() => UninstallModelAsync(row)">Uninstall</button>
+                    }
+                </li>
+            }
+        </ul>
+
+        <ul class="settings-facts">
+            <li class="settings-facts__row">
+                <span class="settings-facts__label">Folder</span>
+                <span class="settings-facts__value mono">@Installer.InstallRoot</span>
+            </li>
+        </ul>
+
+        @if (!string.IsNullOrWhiteSpace(_probe?.Note) && !_busy && AnyInstalled)
+        {
+            <p class="settings-page__copy voice__note">@_probe.Note</p>
+        }
+
+        <div class="btn-row">
+            <button type="button"
+                    class="btn btn-primary"
+                    disabled="@(_busy || _selected.Count == 0)"
+                    aria-busy="@_installing"
+                    @onclick="InstallAsync">
+                @(_installing && !_repairing ? "Installing…" : "Install selected")
+            </button>
+            @if (_installing)
+            {
+                <button type="button" class="btn btn-ghost" @onclick="Cancel">Cancel</button>
+            }
+            else if (AnyInstalled)
+            {
+                <button type="button" class="btn btn-ghost" disabled="@_busy" @onclick="UninstallAsync">Uninstall everything</button>
+            }
+        </div>
+
+        @if (_steps.Count > 0)
+        {
+            <ol class="voice-steps" aria-live="polite">
+                @foreach (var id in DysonSpeechInstaller.StepIds)
+                {
+                    if (!_steps.TryGetValue(id, out var step))
+                        continue;
+                    <li class="voice-step voice-step--@step.State.ToString().ToLowerInvariant()">
+                        <span class="voice-step__id mono">@id</span>
+                        <span class="voice-step__state">@StateLabel(step)</span>
+                        @if (!string.IsNullOrWhiteSpace(step.Detail))
+                        {
+                            <span class="voice-step__detail">@step.Detail</span>
+                        }
+                    </li>
+                }
+            </ol>
+        }
+    </div>
+
+    <div class="voice-layout__side">
+    @if (AnyCrispInstalled)
+    {
+        <div class="settings-page__panel panel voice-active">
+            <div class="tool-panel__title">CrispASR device</div>
+            <div class="voice-active__options" role="radiogroup" aria-label="CrispASR device">
+                <label class="voice-active__option">
+                    <input type="radio" name="voice-crisp-device" value="cpu" checked="@(!_crispGpu)"
+                           disabled="@_busy" @onchange="() => SetCrispDeviceAsync(false)" />
+                    <span>CPU</span>
+                </label>
+                <label class="voice-active__option">
+                    <input type="radio" name="voice-crisp-device" value="gpu" checked="@_crispGpu"
+                           disabled="@_busy" @onchange="() => SetCrispDeviceAsync(true)" />
+                    <span>GPU (Vulkan)</span>
+                </label>
+            </div>
+            <div class="btn-row">
+                <button type="button" class="btn btn-ghost" disabled="@_busy" aria-busy="@_repairing"
+                        @onclick="RepairCrispAsync">@(_repairing ? "Repairing…" : "Repair CrispASR runtimes")</button>
+            </div>
+        </div>
+    }
+
+    @if (AnyWhisperInstalled)
+    {
+        <div class="settings-page__panel panel voice-active">
+            <div class="tool-panel__title">Whisper runtime</div>
+            <div class="voice-active__options" role="radiogroup" aria-label="Whisper runtime">
+                <label class="voice-active__option">
+                    <input type="radio" name="voice-whisper-runtime" value="cpu" checked="@(_whisperRuntime == DysonAppSettingKeys.SpeechWhisperRuntimeCpu)"
+                           disabled="@_busy" @onchange="() => SetWhisperRuntimeAsync(DysonAppSettingKeys.SpeechWhisperRuntimeCpu)" />
+                    <span>CPU</span>
+                </label>
+                <label class="voice-active__option">
+                    <input type="radio" name="voice-whisper-runtime" value="vulkan" checked="@(_whisperRuntime == DysonAppSettingKeys.SpeechWhisperRuntimeVulkan)"
+                           disabled="@_busy" @onchange="() => SetWhisperRuntimeAsync(DysonAppSettingKeys.SpeechWhisperRuntimeVulkan)" />
+                    <span>GPU (Vulkan)</span>
+                </label>
+                <label class="voice-active__option">
+                    <input type="radio" name="voice-whisper-runtime" value="npu" checked="@(_whisperRuntime == DysonAppSettingKeys.SpeechWhisperRuntimeNpu)"
+                           disabled="@_busy" @onchange="() => SetWhisperRuntimeAsync(DysonAppSettingKeys.SpeechWhisperRuntimeNpu)" />
+                    <span>Intel NPU</span>
+                </label>
+            </div>
+        </div>
+    }
+
+    <div class="settings-page__panel panel">
+        <SpeechTorchDevice Busy="_busy" Repairing="_repairingTorch" OnRepair="RepairTorchAsync" />
+    </div>
+
+    <div class="settings-page__panel panel voice-active">
+        <div class="tool-panel__title">Response</div>
+        <div class="voice-active__options" role="radiogroup" aria-label="Speech response">
+            <label class="voice-active__option">
+                <input type="radio" name="voice-response-mode" value="low-latency" checked="@_lowLatency"
+                       disabled="@_busy" @onchange="() => SetResponseModeAsync(true)" />
+                <span>Low latency response</span>
+            </label>
+            <label class="voice-active__option">
+                <input type="radio" name="voice-response-mode" value="reliable" checked="@(!_lowLatency)"
+                       disabled="@_busy" @onchange="() => SetResponseModeAsync(false)" />
+                <span>Reliable response</span>
+            </label>
+        </div>
+        <p class="settings-page__copy voice__note">Low latency speaks one job per sentence. Reliable speaks the whole text as one job. Every speech model follows this.</p>
+    </div>
+
+    @if (InstalledStt.Count > 0 || _inputError is not null)
+    {
+        <div class="settings-page__panel panel voice-active">
+            <div class="tool-panel__title">Active speech-to-text</div>
+            <div class="voice-active__options" role="radiogroup" aria-label="Active speech-to-text model">
+                @foreach (var row in InstalledStt)
+                {
+                    var id = row.RuntimeId;
+                    <label class="voice-active__option">
+                        <input type="radio" name="voice-active-stt" value="@id" checked="@(id == _inputId)"
+                               disabled="@_busy" @onchange="() => SetActiveInputAsync(id)" />
+                        <span>@row.DisplayName</span>
+                    </label>
+                }
+                @if (StaleInput is { } staleInput)
+                {
+                    <label class="voice-active__option">
+                        <input type="radio" name="voice-active-stt" checked disabled />
+                        <span>@staleInput (not installed)</span>
+                    </label>
+                }
+            </div>
+            @if (_inputError is not null)
+            {
+                <p class="settings-page__copy voice__note">@_inputError</p>
+            }
+        </div>
+    }
+
+    @if (_tryout is not null)
+    {
+        <VoiceWakeNames Tryout="_tryout" />
+        <VoiceAcceptSentence Tryout="_tryout" Tts="Tts" InstallRoot="@Installer.InstallRoot" />
+        <VoiceListenSentence Tryout="_tryout" Tts="Tts" InstallRoot="@Installer.InstallRoot" />
+    }
+
+    @if (InstalledTts.Count > 0 || _activeError is not null)
+    {
+        <div class="settings-page__panel panel voice-active">
+            <div class="tool-panel__title">Active text-to-speech</div>
+            <div class="voice-active__options" role="radiogroup" aria-label="Active text-to-speech model">
+                @foreach (var row in InstalledTts)
+                {
+                    var id = row.RuntimeId;
+                    <label class="voice-active__option">
+                        <input type="radio" name="voice-active" value="@id" checked="@(id == _activeId)"
+                               disabled="@_busy" @onchange="() => SetActiveAsync(id)" />
+                        <span>@row.DisplayName</span>
+                    </label>
+                }
+                @if (StaleActive is { } stale)
+                {
+                    <label class="voice-active__option">
+                        <input type="radio" name="voice-active" checked disabled />
+                        <span>@stale (not installed)</span>
+                    </label>
+                }
+            </div>
+            @if (_activeError is not null)
+            {
+                <p class="settings-page__copy voice__note">@_activeError</p>
+            }
+        </div>
+    }
+
+    @if (ActiveRow is { SupportsVoicePrompt: true } active)
+    {
+        <div class="settings-page__panel panel voice-train">
+            <div class="tool-panel__title">Train TTS model · @active.DisplayName</div>
+            <p class="settings-page__copy">@TrainCopy(active.RuntimeId)</p>
+            @if (DysonSpeechTryout.ShowsRecordedTrain(active.RuntimeId))
+            {
+                <label class="voice-train__consent">
+                    <input type="checkbox" @bind="_voiceConsent" disabled="@_busy" />
+                    <span>I confirm this is my own voice or I have the speaker's consent.</span>
+                </label>
+            }
+            @if (DysonSpeechTryout.ShowsTrainTranscript(active.RuntimeId))
+            {
+                <div class="voice-train__transcript">
+                    <label class="voice-try__label" for="voice-train-transcript">Read this aloud</label>
+                    <textarea id="voice-train-transcript" class="voice-try__transcript" rows="3"
+                              @bind="_trainTranscript" @bind:event="oninput" disabled="@_busy"></textarea>
+                </div>
+            }
+            @if (DysonSpeechTryout.ShowsRecordedTrain(active.RuntimeId) && _tryout is not null)
+            {
+                <div class="voice-train__record">
+                    <button type="button" class="btn btn-primary"
+                            disabled="@(!_voiceConsent || _busy)"
+                            @onclick="RecordTrainAsync">Record 10 seconds</button>
+                    @if (_trainRecording)
+                    {
+                        <span role="status">@(_trainSecondsLeft > 0 ? $"{_trainSecondsLeft} s" : "Finishing…")</span>
+                    }
+                </div>
+            }
+            <div class="voice-train__file">
+                <InputFile accept="@TrainAccept(active.RuntimeId)" OnChange="OnTrainFileAsync"
+                           disabled="@(!CanPickTrainClip(active.RuntimeId))" />
+                @if (!_busy && !CanPickTrainClip(active.RuntimeId))
+                {
+                    <p class="settings-page__copy voice__note">Tick the consent box to choose a clip.</p>
+                }
+            </div>
+            @if (_training)
+            {
+                <p class="settings-page__copy voice__note" role="status">Making the voice…</p>
+            }
+            @if (!string.IsNullOrWhiteSpace(_trainResult))
+            {
+                <div class="@(_trainOk ? "voice-train__result" : "error-banner voice-train__result")" role="status">@_trainResult</div>
+            }
+        </div>
+        <VoiceCloneList RuntimeId="@active.RuntimeId" ModelName="@active.DisplayName" Version="_voiceListVersion" />
+    }
+
+    @if (_tryout is not null && (_inputId is not null || _activeId is not null))
+    {
+        <div class="settings-page__panel panel voice-try">
+            <div class="tool-panel__title">Try speech</div>
+            @if (_inputId is not null)
+            {
+                <label class="voice-try__label" for="voice-mic">Microphone</label>
+                <select id="voice-mic" class="voice-try__mic" disabled="@(_busy || _recording)"
+                        @onchange="OnMicChangedAsync">
+                    @if (_micId is null)
+                    {
+                        <option value="" selected disabled>Select a microphone</option>
+                    }
+                    @foreach (var mic in _mics)
+                    {
+                        <option value="@mic.Id" selected="@(mic.Id == _micId)">@mic.Name</option>
+                    }
+                </select>
+                @if (!string.IsNullOrWhiteSpace(_micNote))
+                {
+                    <p class="settings-page__copy voice__note">@_micNote</p>
+                }
+            }
+            @if (_activeId is not null)
+            {
+                <label class="voice-try__label" for="voice-speak">Speak</label>
+                <div class="voice-try__row">
+                    <input id="voice-speak" class="voice-try__text" @bind="_speakText" @bind:event="oninput"
+                           disabled="@_busy" placeholder="Text to speak" />
+                    <button type="button" class="btn btn-primary"
+                            disabled="@(_busy || string.IsNullOrWhiteSpace(_speakText))"
+                            @onclick="PlaySpeechAsync">Play</button>
+                    @if (_playing)
+                    {
+                        <span class="voice-try__status" role="status">Playing…</span>
+                    }
+                </div>
+            }
+            @if (_inputId is not null)
+            {
+                <div class="voice-try__row">
+                    <button type="button" class="btn btn-primary" aria-pressed="@_recording"
+                            disabled="@(_micId is null || (_busy && !_recording))"
+                            @onclick="ToggleRecordAsync">@(_recording ? "Stop recording" : "Record")</button>
+                </div>
+                <label class="voice-try__label" for="voice-transcript">Transcript</label>
+                <textarea id="voice-transcript" class="voice-try__transcript" readonly rows="4"
+                          aria-live="polite">@_transcript</textarea>
+            }
+        </div>
+    }
+    </div>
+    </div>
+</div>
+
+@code {
+    private readonly Dictionary<string, DysonSpeechInstallStep> _steps = [];
+    private readonly HashSet<string> _selected = [];
+    private List<DysonSpeechModelEntity> _rows = [];
+    private DysonSpeechInstallStatus? _probe;
+    private string? _activeId;
+    private string? _activeSetting;
+    private string? _activeError;
+    private string? _inputId;
+    private string? _inputSetting;
+    private string? _inputError;
+    private bool _voiceConsent;
+    private string _trainTranscript = "";
+    private string? _seenTrainModelId;
+    private CancellationTokenSource? _cts;
+    private bool _busy;
+    private bool _installing;
+    private bool _repairing;
+    private bool _repairingTorch;
+    private bool _crispGpu;
+    private string _whisperRuntime = "";
+    private bool _lowLatency;
+    private bool _training;
+    private bool _disposed;
+    private string? _error;
+    private string? _trainResult;
+    private bool _trainOk;
+    private int _voiceListVersion;
+    private DysonSpeechTryout? _tryout;
+    private List<DysonAudioInputDevice> _mics = [];
+    private string? _micId;
+    private string? _micNote;
+    private string _speakText = "";
+    private string _transcript = "";
+    private bool _playing;
+    private int _playGeneration;
+    private bool _recording;
+    private bool _trainRecording;
+    private int _trainSecondsLeft;
+    private CancellationTokenSource? _recordCts;
+    private CancellationTokenSource? _trainCountdownCts;
+
+    private IEnumerable<DysonSpeechModelEntity> OrderedRows =>
+        _rows.OrderBy(r => DysonSpeechInstaller.ModelIds.Contains(r.RuntimeId)
+            ? DysonSpeechInstaller.ModelIds.TakeWhile(id => id != r.RuntimeId).Count()
+            : int.MaxValue);
+
+    private List<DysonSpeechModelEntity> InstalledTts =>
+        OrderedRows.Where(r => r.IsInstalled && r.IsEnabled && r.Capability.HasFlag(DysonSpeechCapability.Output)).ToList();
+
+    private List<DysonSpeechModelEntity> InstalledStt =>
+        OrderedRows.Where(r => r.IsInstalled && r.IsEnabled && r.Capability.HasFlag(DysonSpeechCapability.Input)).ToList();
+
+    private DysonSpeechModelEntity? ActiveRow => _rows.FirstOrDefault(r => r.RuntimeId == _activeId);
+
+    /// <summary>The saved active model when it is no longer installed (shown, never silently replaced).</summary>
+    private string? StaleActive => _activeId is null && !string.IsNullOrWhiteSpace(_activeSetting)
+        ? _rows.FirstOrDefault(r => r.RuntimeId == _activeSetting)?.DisplayName ?? _activeSetting
+        : null;
+
+    /// <summary>The saved active speech-to-text model when it is no longer installed.</summary>
+    private string? StaleInput => _inputId is null && !string.IsNullOrWhiteSpace(_inputSetting)
+        ? _rows.FirstOrDefault(r => r.RuntimeId == _inputSetting)?.DisplayName ?? _inputSetting
+        : null;
+
+    private bool AnyInstalled => _rows.Any(r => r.IsInstalled) || _probe?.RuntimeInstalled == true;
+
+    private bool AnyCrispInstalled => _rows.Any(r => r.IsInstalled && DysonGgufSpeechModels.CrispIds.Contains(r.RuntimeId));
+
+    private bool AnyWhisperInstalled => _rows.Any(r => r.IsInstalled && DysonGgufSpeechModels.IsWhisper(r.RuntimeId));
+
+    protected override async Task OnInitializedAsync()
+    {
+        _tryout = Services.GetService<DysonSpeechTryout>();
+        await Host.EnsureRuntimeAttachedAsync();
+        var ensure = await SpeechModels.EnsureBuiltInAsync();
+        if (ensure.IsError)
+            _error = ensure.Error;
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        var list = await SpeechModels.ListAsync();
+        if (list.IsError)
+            _error = list.Error;
+        else
+            _rows = list.Value.ToList();
+        _probe = await Installer.ProbeAsync();
+        _selected.RemoveWhere(id => _rows.Any(r => r.RuntimeId == id && r.IsInstalled));
+
+        var setting = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechOutputModelId);
+        _activeSetting = setting.IsSuccess ? setting.Value : null;
+        var active = await Tts.ResolveActiveAsync();
+        _activeId = active.IsSuccess ? active.Value : null;
+        var anyTts = _rows.Any(r => r.IsInstalled && r.Capability.HasFlag(DysonSpeechCapability.Output));
+        _activeError = active.IsError && (anyTts || !string.IsNullOrWhiteSpace(_activeSetting)) ? active.Error : null;
+        if (!string.Equals(_activeId, _seenTrainModelId, StringComparison.Ordinal))
+        {
+            _voiceConsent = false;
+            _trainTranscript = DysonSpeechTryout.ShowsTrainTranscript(_activeId)
+                ? DysonSpeechTryout.ReadAloudSentence
+                : "";
+            _seenTrainModelId = _activeId;
+        }
+
+        var crispDevice = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechCrispDevice);
+        _crispGpu = crispDevice.IsSuccess && string.Equals(crispDevice.Value?.Trim(), "gpu", StringComparison.OrdinalIgnoreCase);
+        var whisperRuntime = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechWhisperRuntime);
+        _whisperRuntime = whisperRuntime.IsSuccess ? whisperRuntime.Value?.Trim() ?? "" : "";
+        var responseMode = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechResponseMode);
+        _lowLatency = responseMode.IsSuccess && string.Equals(responseMode.Value?.Trim(), "low-latency", StringComparison.OrdinalIgnoreCase);
+
+        var inputSetting = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechInputModelId);
+        _inputSetting = inputSetting.IsSuccess ? inputSetting.Value : null;
+        var input = await Stt.ResolveActiveAsync();
+        _inputId = input.IsSuccess ? input.Value : null;
+        var anyStt = _rows.Any(r => r.IsInstalled && r.Capability.HasFlag(DysonSpeechCapability.Input));
+        _inputError = input.IsError && (anyStt || !string.IsNullOrWhiteSpace(_inputSetting)) ? input.Error : null;
+        if (_tryout is not null && _inputId is not null)
+            await LoadMicsAsync();
+        else if (!_recording)
+        {
+            _mics = [];
+            _micId = null;
+        }
+    }
+
+    private void Toggle(string id, bool on)
+    {
+        if (on)
+            _selected.Add(id);
+        else
+            _selected.Remove(id);
+    }
+
+    private Task InstallAsync() => StreamStepsAsync(ct => Installer.InstallAsync(SpeechModels, Settings, _selected.ToList(), ct));
+
+    private async Task RepairCrispAsync()
+    {
+        _repairing = true;
+        try
+        {
+            await StreamStepsAsync(ct => Installer.RepairCrispRuntimesAsync(SpeechModels, Settings, ct));
+        }
+        finally
+        {
+            _repairing = false;
+        }
+    }
+
+    private async Task RepairTorchAsync()
+    {
+        _repairingTorch = true;
+        try
+        {
+            await StreamStepsAsync(ct => Installer.RepairTorchRuntimesAsync(SpeechModels, Settings, ct));
+        }
+        finally
+        {
+            _repairingTorch = false;
+        }
+    }
+
+    private async Task SetCrispDeviceAsync(bool gpu) =>
+        await RunAsync(() => Settings.SetSettingAsync(DysonAppSettingKeys.SpeechCrispDevice, gpu ? "gpu" : "cpu"));
+
+    private async Task SetWhisperRuntimeAsync(string value) =>
+        await RunAsync(async () =>
+        {
+            var set = await Settings.SetSettingAsync(DysonAppSettingKeys.SpeechWhisperRuntime, value);
+            if (set.IsSuccess)
+                _whisperRuntime = value;
+            return set;
+        });
+
+    private async Task SetResponseModeAsync(bool lowLatency) =>
+        await RunAsync(() => Settings.SetSettingAsync(DysonAppSettingKeys.SpeechResponseMode, lowLatency ? "low-latency" : "reliable"));
+
+    private async Task StreamStepsAsync(Func<CancellationToken, IAsyncEnumerable<DysonSpeechInstallStep>> run)
+    {
+        _error = null;
+        _trainResult = null;
+        _steps.Clear();
+        _cts?.Dispose();
+        _cts = new CancellationTokenSource();
+        _busy = _installing = true;
+        try
+        {
+            await foreach (var step in run(_cts.Token))
+            {
+                if (_disposed)
+                    continue;
+                _steps[step.StepId] = step;
+                if (step.State == DysonSpeechStepState.Failed)
+                    _error = step.Detail;
+                StateHasChanged();
+            }
+        }
+        finally
+        {
+            _busy = _installing = false;
+            if (!_disposed)
+                await ReloadAsync();
+        }
+    }
+
+    private void Cancel() => _cts?.Cancel();
+
+    private async Task UninstallModelAsync(DysonSpeechModelEntity row)
+    {
+        var ok = await ConfirmDialog.ConfirmAsync(
+            $"Uninstall {row.DisplayName}",
+            $"Delete {row.DisplayName} files? Python, torch and other models stay.",
+            confirmLabel: "Uninstall");
+        if (!ok)
+            return;
+
+        await RunAsync(() => Installer.UninstallModelAsync(SpeechModels, row.RuntimeId));
+    }
+
+    private async Task UninstallAsync()
+    {
+        var ok = await ConfirmDialog.ConfirmAsync(
+            "Uninstall everything",
+            $"Delete {Installer.InstallRoot} (Python, torch, every model, and voices)? Install selected downloads it again.",
+            confirmLabel: "Uninstall");
+        if (!ok)
+            return;
+
+        await RunAsync(() => Installer.UninstallAsync(SpeechModels));
+    }
+
+    private async Task SetActiveAsync(string id) => await RunAsync(() => Tts.SetActiveAsync(id));
+
+    private async Task SetActiveInputAsync(string id) => await RunAsync(() => Stt.SetActiveAsync(id));
+
+    private async Task RunAsync(Func<Task<VoidResult<string>>> action)
+    {
+        _error = null;
+        _trainResult = null;
+        _busy = true;
+        try
+        {
+            var result = await action();
+            if (result.IsError)
+                _error = result.Error;
+            _steps.Clear();
+        }
+        finally
+        {
+            _busy = false;
+            await ReloadAsync();
+        }
+    }
+
+    private bool VoiceModeBlocksTryout()
+    {
+        if (Host.Voice?.IsOn != true)
+            return false;
+
+        _error = "Turn voice mode off before using play or record here.";
+        return true;
+    }
+
+    private async Task RecordTrainAsync()
+    {
+        if (_tryout is null || _disposed || _busy)
+            return;
+        if (VoiceModeBlocksTryout())
+            return;
+        _trainResult = null;
+        _busy = true;
+        _trainRecording = true;
+        _trainCountdownCts?.Dispose();
+        _trainCountdownCts = new CancellationTokenSource();
+        var countdown = CountTrainAsync(_trainCountdownCts.Token);
+        try
+        {
+            var transcript = string.IsNullOrWhiteSpace(_trainTranscript) ? null : _trainTranscript.Trim();
+            var result = await _tryout.EnrollRecordedVoiceAsync(
+                Stt, Tts, _micId, CancellationToken.None, transcript);
+            if (_disposed)
+                return;
+            _trainOk = result.IsSuccess;
+            _trainResult = result.IsError
+                ? result.Error
+                : $"{result.Value.DisplayName} saved and selected.";
+            if (result.IsSuccess)
+                _voiceListVersion++;
+        }
+        finally
+        {
+            _trainRecording = false;
+            _busy = false;
+            _trainCountdownCts.Cancel();
+            try
+            {
+                await countdown;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+    }
+
+    private async Task CountTrainAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            for (var left = 10; left >= 1; left--)
+            {
+                if (_disposed)
+                    return;
+                _trainSecondsLeft = left;
+                StateHasChanged();
+                await Task.Delay(1000, cancellationToken);
+            }
+
+            if (_disposed)
+                return;
+            _trainSecondsLeft = 0;
+            StateHasChanged();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async Task OnTrainFileAsync(InputFileChangeEventArgs e)
+    {
+        _trainResult = null;
+        _busy = _training = true;
+        try
+        {
+            if (DysonSpeechTryout.ShowsRecordedTrain(_activeId) && !_voiceConsent)
+            {
+                _trainOk = false;
+                _trainResult = "Confirm this is your own voice, or that you have the speaker's consent, before uploading a clip.";
+                return;
+            }
+
+            var file = e.File;
+            await using var clip = file.OpenReadStream(DysonPhononSpeech.MaxAudioBytes);
+            var transcript = string.IsNullOrWhiteSpace(_trainTranscript) ? null : _trainTranscript.Trim();
+            var result = await Tts.PrepareVoiceAsync(clip, file.Name, transcript: transcript);
+            _trainOk = result.IsSuccess;
+            _trainResult = result.IsError ? result.Error : $"{result.Value.DisplayName} saved and selected.";
+            if (result.IsSuccess)
+                _voiceListVersion++;
+        }
+        finally
+        {
+            _busy = _training = false;
+        }
+    }
+
+    // GGUF voice clones take .wav. Python Qwen records, but its file picker stays .mp3.
+    private static string TrainAccept(string runtimeId) =>
+        DysonSpeechTryout.ShowsRecordedTrain(runtimeId) && runtimeId != DysonQwenSpeech.Id
+            ? ".wav,audio/wav"
+            : ".mp3,audio/mpeg";
+
+    private bool CanPickTrainClip(string runtimeId) =>
+        !_busy && (!DysonSpeechTryout.ShowsRecordedTrain(runtimeId) || _voiceConsent);
+
+    private static string TrainCopy(string runtimeId) => DysonGgufSpeechModels.CrispBackend(runtimeId) switch
+    {
+        "pocket-tts" =>
+            "Pocket TTS GGUF clones a voice from one short .wav clip (enrollment, not a fine-tune). "
+            + "The safetensors Pocket install cannot clone. Output keeps CrispASR's AI watermark.",
+        "qwen3-tts" =>
+            "Qwen3-TTS GGUF clones a voice from one .wav clip plus its exact transcript "
+            + "(in-context voice prompt, not a fine-tune). Output keeps CrispASR's AI watermark.",
+        "chatterbox-turbo" =>
+            "Chatterbox Turbo GGUF clones a voice from one .wav clip (enrollment, not a fine-tune). "
+            + "Output keeps CrispASR's AI watermark.",
+        _ => runtimeId switch
+        {
+            DysonQwenSpeech.Id =>
+                "Qwen3-TTS makes a voice from one short clip of clear speech (about 5\u201315 s): Record 10 seconds, or one .mp3. "
+                + "This saves a speaker embedding (voice prompt); it does not retrain the model. The clip is not kept.",
+            DysonChatterboxSpeech.Id =>
+                "Chatterbox Turbo (English only) makes a voice from one .mp3 of clear English speech longer than 5 seconds "
+                + "(it uses up to 15 s). This saves a voice prompt (speaker embedding and speech tokens); it does not retrain "
+                + "the model. The clip is not kept. Output carries Resemble's Perth watermark.",
+            _ =>
+                "Pocket TTS takes one .mp3 clip. The installed public weights cannot make a voice from audio, "
+                + "so this reports why and saves nothing; speech keeps using the alba voice.",
+        },
+    };
+
+
+    private static string StateLabel(DysonSpeechInstallStep step) => step.State switch
+    {
+        DysonSpeechStepState.Done => "done",
+        DysonSpeechStepState.Failed => "failed",
+        _ when step.Download is { } d && d.TotalBytes is > 0 =>
+            $"{FormatBytes(d.BytesReceived)} / {FormatBytes(d.TotalBytes.Value)} ({(d.Fraction ?? 0) * 100:0}%)",
+        _ => "running…",
+    };
+
+    private static string FormatBytes(long bytes) => bytes switch
+    {
+        < 1024 * 1024 => $"{bytes / 1024.0:0.0} KB",
+        < 1024L * 1024 * 1024 => $"{bytes / (1024.0 * 1024.0):0.0} MB",
+        _ => $"{bytes / (1024.0 * 1024.0 * 1024.0):0.00} GB",
+    };
+
+    private async Task LoadMicsAsync()
+    {
+        var listed = await _tryout!.ListMicrophonesAsync();
+        if (listed.IsError)
+        {
+            _micNote = listed.Error;
+            _mics = [];
+            _micId = null;
+            return;
+        }
+
+        _mics = listed.Value.ToList();
+        var saved = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechInputDeviceId);
+        var savedId = saved.IsSuccess ? saved.Value : null;
+        if (string.IsNullOrWhiteSpace(savedId))
+        {
+            var first = DysonSpeechInputDevice.Resolve(_mics, null);
+            _micId = first.IsSuccess ? first.Value.Id : null;
+            _micNote = first.IsError ? first.Error : null;
+            return;
+        }
+
+        var resolved = DysonSpeechInputDevice.Resolve(_mics, savedId);
+        if (resolved.IsError)
+        {
+            _micId = null;
+            _micNote = resolved.Error;
+            return;
+        }
+
+        _micId = resolved.Value.Id;
+        _micNote = null;
+    }
+
+    private async Task OnMicChangedAsync(ChangeEventArgs e)
+    {
+        var id = e.Value?.ToString();
+        if (string.IsNullOrWhiteSpace(id))
+            return;
+        var saved = await DysonSpeechInputDevice.SaveAsync(Settings, _mics, id);
+        if (saved.IsError)
+        {
+            _error = saved.Error;
+            return;
+        }
+
+        _micId = id;
+        _micNote = null;
+    }
+
+    private async Task PlaySpeechAsync()
+    {
+        if (_tryout is null || _disposed)
+            return;
+        if (VoiceModeBlocksTryout())
+            return;
+        _error = null;
+        var generation = ++_playGeneration;
+        _playing = true;
+        try
+        {
+            var result = await _tryout.PlayAsync(_speakText, outputInstalled: _activeId is not null, CancellationToken.None);
+            if (_disposed || generation != _playGeneration)
+                return;
+            if (result.IsError)
+                _error = result.Error;
+        }
+        finally
+        {
+            if (generation == _playGeneration)
+                _playing = false;
+        }
+    }
+
+    private async Task ToggleRecordAsync()
+    {
+        if (_tryout is null || _disposed)
+            return;
+        if (_recording)
+        {
+            _recordCts?.Cancel();
+            _tryout.StopRecording();
+            return;
+        }
+
+        if (VoiceModeBlocksTryout())
+            return;
+
+        _error = null;
+        _transcript = "";
+        _recordCts?.Dispose();
+        _recordCts = new CancellationTokenSource();
+        _recording = true;
+        try
+        {
+            await foreach (var update in _tryout.RecordAsync(_micId, _inputId is not null, _recordCts.Token))
+            {
+                if (_disposed)
+                    return;
+                if (update.IsError)
+                {
+                    _error = update.Error;
+                    break;
+                }
+
+                _transcript = update.Value;
+                StateHasChanged();
+            }
+        }
+        finally
+        {
+            _recording = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _recordCts?.Cancel();
+        _recordCts?.Dispose();
+        _trainCountdownCts?.Cancel();
+        _trainCountdownCts?.Dispose();
+        if (Host.Voice?.IsOn == true)
+            return;
+
+        _tryout?.StopPlayback();
+        _tryout?.StopRecording();
+    }
+}

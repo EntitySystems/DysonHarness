@@ -732,14 +732,15 @@ public class DysonGrepLoadBinaryTests
         DysonToolCallResult result,
         string fileName)
     {
-        var attachment = result.BinaryAttachment
+        // A copy: the caller's attachment may already have been emitted as a data URL.
+        var emitted = CloneResultForWireShape(result);
+        var attachment = emitted.BinaryAttachment
             ?? throw new InvalidOperationException("Expected BinaryAttachment for upload test.");
-        attachment.FileId = null;
 
         var handler = new StubFilesUploadHandler("file-vision-png-1", expectedPurpose: "vision");
         using var http = new HttpClient(handler);
         var provider = MakeFilesTestProvider();
-        OpenAiFilesClient.EnsureBinaryFileIdsAsync(http, provider, [result]).GetAwaiter().GetResult();
+        OpenAiFilesClient.EnsureBinaryFileIdsAsync(http, provider, [emitted]).GetAwaiter().GetResult();
 
         if (attachment.FileId != "file-vision-png-1" || handler.LastPurpose != "vision")
             throw new InvalidOperationException("Image upload must set FileId with purpose=vision.");
@@ -750,7 +751,7 @@ public class DysonGrepLoadBinaryTests
             currentFilePaths: null,
             inFlightRounds:
             [
-                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [emitted]),
             ]);
 
         var imagePart = FindResponsesPart(responses.Input, "input_image")
@@ -765,8 +766,6 @@ public class DysonGrepLoadBinaryTests
             throw new InvalidOperationException(
                 "Responses with FileId must emit input_image.file_id + detail and no data URL/filename.");
         }
-
-        attachment.FileId = null;
     }
 
     private static void AssertFilenameOnCompletionsFilePart(JsonArray messages, string fileName)
@@ -814,14 +813,14 @@ public class DysonGrepLoadBinaryTests
         DysonToolCallResult result,
         string fileName)
     {
-        var attachment = result.BinaryAttachment
+        var emitted = CloneResultForWireShape(result);
+        var attachment = emitted.BinaryAttachment
             ?? throw new InvalidOperationException("Expected BinaryAttachment for dll upload test.");
-        attachment.FileId = null;
 
         var handler = new StubFilesUploadHandler("file-userdata-dll-1", expectedPurpose: "user_data");
         using var http = new HttpClient(handler);
         var provider = MakeFilesTestProvider();
-        OpenAiFilesClient.EnsureBinaryFileIdsAsync(http, provider, [result]).GetAwaiter().GetResult();
+        OpenAiFilesClient.EnsureBinaryFileIdsAsync(http, provider, [emitted]).GetAwaiter().GetResult();
 
         if (attachment.FileId != "file-userdata-dll-1" || handler.LastPurpose != "user_data")
             throw new InvalidOperationException("Non-image upload must set FileId with purpose=user_data.");
@@ -832,7 +831,7 @@ public class DysonGrepLoadBinaryTests
             currentFilePaths: null,
             inFlightRounds:
             [
-                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [result]),
+                new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound([call], [emitted]),
             ]);
 
         var filePart = FindResponsesPart(responses.Input, "input_file")
@@ -845,8 +844,31 @@ public class DysonGrepLoadBinaryTests
             throw new InvalidOperationException(
                 "Responses with FileId must emit input_file.file_id only (label carries filename).");
         }
+    }
 
-        attachment.FileId = null;
+    private static DysonToolCallResult CloneResultForWireShape(DysonToolCallResult result)
+    {
+        var source = result.BinaryAttachment
+            ?? throw new InvalidOperationException("Expected BinaryAttachment.");
+        return new DysonToolCallResult
+        {
+            CallId = result.CallId,
+            ToolName = result.ToolName,
+            Stage = result.Stage,
+            IsError = result.IsError,
+            Content = result.Content,
+            BinaryAttachment = new DysonBinaryAttachment
+            {
+                FileName = source.FileName,
+                Extension = source.Extension,
+                MimeType = source.MimeType,
+                Base64Data = source.Base64Data,
+                HtmlRef = source.HtmlRef,
+                RemoteUrl = source.RemoteUrl,
+                ObjectKey = source.ObjectKey,
+                RemoteUrlExpiresUtc = source.RemoteUrlExpiresUtc,
+            },
+        };
     }
 
     private static bool HasInputTextLabel(JsonArray input, string fileName)

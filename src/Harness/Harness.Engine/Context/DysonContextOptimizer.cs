@@ -21,15 +21,17 @@ public sealed class DysonContextOptimizer
     public int KeepRecentTurns { get; init; } = DefaultKeepRecentTurns;
 
     /// <summary>
-    /// True when transcript has at least <see cref="MaxTurnsBeforeOptimize"/> turns,
-    /// or unoptimized (eligible) tool/response text exceeds <see cref="MaxUnoptimizedTokens"/>.
+    /// True when not-yet-optimized turns outside the keep window reach
+    /// <see cref="MaxTurnsBeforeOptimize"/>, or that same eligible text exceeds
+    /// <see cref="MaxUnoptimizedTokens"/>. A later prompt does not fire until another full batch
+    /// is outside the window or the token cap is crossed.
     /// </summary>
     public bool ShouldOptimize(IReadOnlyList<DysonAgentTurn> turns, IDysonTokenCounter tokens)
     {
         ArgumentNullException.ThrowIfNull(turns);
         ArgumentNullException.ThrowIfNull(tokens);
 
-        if (turns.Count >= MaxTurnsBeforeOptimize)
+        if (CountEligibleUnoptimized(turns) >= MaxTurnsBeforeOptimize)
             return true;
 
         var unoptimizedText = BuildUnoptimizedEligibleText(turns);
@@ -113,6 +115,22 @@ public sealed class DysonContextOptimizer
     {
         var keep = Math.Max(0, KeepRecentTurns);
         return Math.Max(0, turnCount - keep);
+    }
+
+    private int CountEligibleUnoptimized(IReadOnlyList<DysonAgentTurn> turns)
+    {
+        var compactUntil = GetCompactUntilExclusive(turns.Count);
+        var count = 0;
+        for (var i = 0; i < compactUntil; i++)
+        {
+            var turn = turns[i];
+            if (turn.IsExcludedFromContext || turn.ToolHistoryOptimized)
+                continue;
+
+            count++;
+        }
+
+        return count;
     }
 
     private string BuildUnoptimizedEligibleText(IReadOnlyList<DysonAgentTurn> turns)

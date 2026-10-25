@@ -2,7 +2,8 @@ namespace DysonHarness;
 
 /// <summary>
 /// Inputs for retained-scope non-UI session config. Theme is an immutable snapshot — this
-/// builder never captures <c>ThemeService</c>, browser control, or circuit state.
+/// builder never captures <c>ThemeService</c> or circuit state. An injected
+/// <see cref="IDysonBrowserControl"/> is assigned onto the config; none registered stays null.
 /// </summary>
 internal sealed class DysonUiAgentSessionRuntimeConfigRequest
 {
@@ -53,8 +54,9 @@ internal sealed class DysonUiAgentSessionRuntimeConfigLease : IAsyncDisposable
 
 /// <summary>
 /// Retained-scope composition of the same non-UI <see cref="DysonAgentSessionConfig"/> that
-/// <c>DysonUiHost.BuildSessionConfigAsync</c> builds for a root demo session. Does not resolve
-/// theme, browser, Razor, JS, or host/circuit services.
+/// <c>DysonUiHost.BuildSessionConfigAsync</c> builds for a root demo session. Assigns an
+/// injected <see cref="IDysonBrowserControl"/> when one is registered. Does not resolve
+/// theme, Razor, JS, or host/circuit services.
 /// </summary>
 internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
     IDysonWorkDirectoryRepository workDirectories,
@@ -66,7 +68,10 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
     DysonPluginContributionResolver pluginContributions,
     DysonPluginMcpGrantService pluginMcpGrants,
     DysonPluginMcpResolver pluginMcpResolver,
-    DysonMessageBus? bus = null)
+    DysonMessageBus? bus = null,
+    DysonWorkDirectoryFocus? focus = null,
+    DysonVoiceMode? voice = null,
+    IDysonBrowserControl? browserControl = null)
 {
     private readonly IDysonWorkDirectoryRepository _workDirectories =
         workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
@@ -115,10 +120,15 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
 
         var config = new DysonAgentSessionConfig
         {
+            BrowserControl = browserControl,
             PluginContributions = contributions,
             UiTheme = request.Theme,
             Bus = _bus,
+            Focus = focus,
+            AppSettings = _appSettings,
         };
+        if (voice is { IsOn: true } && DysonSessionPolicy.IsMetaAgent(request.AgentMode))
+            config.Voice = voice;
         MergePluginCustomAgents(config, contributions);
         if (request.McpAccessMode is { } mode)
             config.McpAccessMode = mode;
@@ -404,44 +414,11 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
         Action<OpenAiCompatibleAgentProvider> assign,
         CancellationToken cancellationToken)
     {
-        var setting = await _appSettings
-            .GetSettingAsync(settingKey, cancellationToken)
+        var loaded = await OpenAiCompatibleAgentProvider
+            .TryLoadFromSettingAsync(_appSettings, _models, settingKey, effortSettingKey, cancellationToken)
             .ConfigureAwait(false);
-
-        if (setting.IsError
-            || string.IsNullOrWhiteSpace(setting.Value)
-            || !Guid.TryParse(setting.Value, out var slugId)
-            || slugId == Guid.Empty)
-        {
-            return;
-        }
-
-        var slugResult = await _models.GetSlugAsync(slugId, cancellationToken).ConfigureAwait(false);
-        if (slugResult.IsError
-            || slugResult.Value is null
-            || !IsOpenAiCompatibleSlug(slugResult.Value))
-        {
-            return;
-        }
-
-        var effortSetting = await _appSettings
-            .GetSettingAsync(effortSettingKey, cancellationToken)
-            .ConfigureAwait(false);
-        var effortOverride = effortSetting.IsError
-            ? null
-            : OpenAiCompatibleAgentProvider.NormalizeReasoningEffort(effortSetting.Value);
-
-        assign(new OpenAiCompatibleAgentProvider(slugResult.Value, effortOverride));
-    }
-
-    private static bool IsOpenAiCompatibleSlug(DysonModelSlugEntity slug)
-    {
-        var provider = slug.Provider;
-        var kind = DysonProviderKinds.EffectiveKind(
-            provider?.ProviderKind ?? DysonProviderKinds.Demo,
-            provider?.BaseUrl,
-            provider?.ApiKey);
-        return string.Equals(kind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal);
+        if (!loaded.IsError && loaded.Value is { } provider)
+            assign(provider);
     }
 
     private static Guid? NormalizeWorkDirectoryId(Guid? workDirectoryId) =>

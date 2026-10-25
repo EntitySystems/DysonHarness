@@ -16,7 +16,8 @@
     <Sidebar>
         <Sidebar>
             <WorkDirectory>
-                <WorkDirectorySwitcher ActiveWorkDirectoryId="_activeWorkDirectoryId"
+                <WorkDirectorySwitcher @ref="_workdirSwitcher"
+                                       ActiveWorkDirectoryId="_activeWorkDirectoryId"
                                        ActiveWorkDirectoryIdChanged="OnWorkDirectoryChanged" />
             </WorkDirectory>
             <SessionList>
@@ -55,7 +56,7 @@
                             @onclick="OpenFullSessionAsync">
                         Open full session
                     </button>
-                    <a class="btn" href="/">← Back to agent</a>
+                    <a class="btn" href="/" @onclick="LeaveMetaAsync" @onclick:preventDefault="true">← Back to agent</a>
                 </div>
             </header>
 
@@ -130,7 +131,8 @@
                                         }
                                     </div>
                                 }
-                                <textarea class="meta-composer__prompt"
+                                <textarea @ref="_prompt"
+                                          class="meta-composer__prompt"
                                           rows="3"
                                           placeholder="Message the meta agent…"
                                           disabled="@ComposerDisabled"
@@ -153,6 +155,12 @@
                                             @onclick="OpenFilePickerAsync">
                                         <span class="composer-attach__icon" aria-hidden="true"></span>
                                     </button>
+                                    <PushToTalkButton AgentMode="@DysonAgentModes.MetaAgent"
+                                                      Disabled="@(ComposerDisabled || _voiceOn)"
+                                                      Textarea="_prompt"
+                                                      @bind-Text="_draft"
+                                                      OnError="Host.ReportError" />
+                                    <VoiceModeButton OnChanged="OnVoiceModeChanged" />
                                     <ModelSlugPicker @ref="_modelPicker"
                                                      SelectedSlugId="_selectedSlugId"
                                                      SelectedSlugIdChanged="OnSelectedSlugIdChangedAsync" />
@@ -161,7 +169,7 @@
                                                           Disabled="@ComposerDisabled"
                                                           OnPick="OnReasoningEffortChangedAsync" />
                                 </div>
-                                <span class="list-item__meta">Ctrl+Enter to send · paste/drop files or images</span>
+                                <span class="list-item__meta">Ctrl+Enter to send · paste/drop files or images · hold Ctrl+M to talk · voice mode: say the agent name</span>
                                 <ComposerStopMenu />
                                 <button type="button"
                                         class="btn btn-primary"
@@ -271,6 +279,11 @@
     private bool _vizOpen;
     private Guid? _vizFocusId;
     private ElementReference _shell;
+    private ElementReference _prompt;
+    private WorkDirectorySwitcher? _workdirSwitcher;
+    private Func<Task>? _openPanelHook;
+    private Func<Guid, Task>? _switchHook;
+    private bool _voiceOn;
     private bool _imageCaptureBound;
     private bool _dragOver;
     private int _fileInputKey;
@@ -346,6 +359,7 @@
         {
             _chatLinksRef ??= DotNetObjectReference.Create(Host);
             await DysonCircuitJs.InvokeVoidAsync(Js, "dysonChatLinks.install", _chatLinksRef);
+            BindFocusHooks();
         }
 
         if (_imageCaptureBound || _unknownWorkDirectory)
@@ -361,6 +375,8 @@
         _activeWorkDirectoryId = WorkDirectoryId;
         if (_loadedWorkDirectoryId == WorkDirectoryId)
             return;
+
+        Host.Focus?.SetActive(WorkDirectoryId);
         _loadedWorkDirectoryId = WorkDirectoryId;
         _tasksOpen = false;
         _vizOpen = false;
@@ -370,6 +386,7 @@
         _workDirectoryName = get.IsSuccess ? get.Value.Name : null;
         if (_unknownWorkDirectory)
         {
+            Host.Focus?.SetActive(null);
             _sessions = [];
             _sessionReady = false;
             _metaSessionId = null;
@@ -808,6 +825,7 @@
     // updates once navigation lands, so hold the selection locally first.
     private async Task OnWorkDirectoryChanged(Guid? id)
     {
+        Host.Focus?.SetActive(id);
         if (id is Guid wd && wd == WorkDirectoryId)
             return;
 
@@ -826,8 +844,41 @@
     private Task PersistWorkDirectoryAsync(Guid? id) =>
         DysonCircuitJs.InvokeVoidAsync(Js, "dysonWorkdir.set", id?.ToString()).AsTask();
 
+    private void OnVoiceModeChanged(bool on) => _voiceOn = on;
+
+    private async Task LeaveMetaAsync() =>
+        await DysonCircuitJs.NavigateAsync(Js, "/");
+
+    private void BindFocusHooks()
+    {
+        var focus = Host.Focus;
+        if (focus is null)
+            return;
+
+        _openPanelHook ??= () => InvokeAsync(() => _workdirSwitcher?.Open());
+        _switchHook ??= id => InvokeAsync(async () =>
+        {
+            if (_workdirSwitcher is not null)
+                await _workdirSwitcher.SelectAsync(id);
+        });
+        focus.OpenPanel = _openPanelHook;
+        focus.SwitchTo = _switchHook;
+    }
+
+    private void UnbindFocusHooks()
+    {
+        var focus = Host.Focus;
+        if (focus is null)
+            return;
+        if (ReferenceEquals(focus.OpenPanel, _openPanelHook))
+            focus.OpenPanel = null;
+        if (ReferenceEquals(focus.SwitchTo, _switchHook))
+            focus.SwitchTo = null;
+    }
+
     public async ValueTask DisposeAsync()
     {
+        UnbindFocusHooks();
         _hostSub?.Dispose();
         _hostSub = null;
         DisposeAgentsListSubscriptions();

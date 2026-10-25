@@ -430,29 +430,6 @@ public sealed class DysonMcpPipeline
         return baseDescription;
     }
 
-    /// <summary>Formats the tools dictionary into a prompt-injectable catalog string.</summary>
-    public string FormatToolsForPrompt()
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("## Available MCP tools");
-        sb.AppendLine(
-            "Every tool call must include harness fields: callId (optional; assigned if omitted), stage (int; required). " +
-            "Calls are ordered by stage; same stage runs concurrently.");
-        sb.AppendLine();
-
-        foreach (var tool in Tools.Values.OrderBy(t => t.Name, StringComparer.Ordinal))
-        {
-            sb.Append("### ");
-            sb.AppendLine(tool.Name);
-            sb.AppendLine(tool.Description);
-            sb.AppendLine("Input schema:");
-            sb.AppendLine(tool.InputSchemaJson);
-            sb.AppendLine();
-        }
-
-        return sb.ToString().TrimEnd();
-    }
-
     /// <summary>
     /// Layer catalog gating for inter-agent + Ask tools.
     /// Depth 0 = root, 1 = L1 child, 2+ = deeper.
@@ -1319,7 +1296,8 @@ public sealed class DysonMcpPipeline
                 "Optional contextFiles preloads work-relative files into the child’s first turn as File context (path visible as `[File: relative/path]` before contents). The caller is encouraged to share relevant files so the subagent does not need to load them manually. " +
                 "Optional modelSlug picks a different model (slug or display alias; omit to inherit parent). " +
                 "Optional reasoningEffort overrides the child’s reasoning_effort (omit/null → chosen slug’s defaultEffort; when inheriting parent model, omit keeps the parent’s current effort). " +
-                "Cannot spawn a child whose agentMode is Plan (Plan is top-level only). A Plan parent may StartSubagent Explore. Explore parents cannot spawn. A classic Drone may spawn Explore only (not another Drone). A Meta Agent Drone may spawn Drone workers; they share its worktree and never merge.",
+                "Cannot spawn a child whose agentMode is Plan (Plan is top-level only). A Plan parent may StartSubagent Explore. Explore parents cannot spawn. A classic Drone may spawn Explore only (not another Drone). A Meta Agent Drone may spawn Drone workers; they share its worktree and never merge. " +
+                "Before calling this tool, call ListSubagents. If an existing subagent already owns the work, reuse it with TriggerSubagentEvent instead of spawning a duplicate.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1734,7 +1712,8 @@ public sealed class DysonMcpPipeline
             Description =
                 "Queue an ExpandThoughtProcess reformulation turn, hard-end the current turn, then auto-continue with a Normal turn. " +
                 "Use when context is noisy or the plan is unclear. Optional focus clarifies what to reformulate. " +
-                "Prefer SummarizeTurns for verbose-but-useful older turns; DropTurnContext for true noise only.",
+                "To shrink history, call DropTurnContext with a model-written resume (under 1000 tokens) of what the dropped turns held; " +
+                "drop at least a few large turns that do little for the current task.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1771,37 +1750,13 @@ public sealed class DysonMcpPipeline
 
         yield return new DysonMcpTool
         {
-            Name = "SummarizeTurns",
-            Description =
-                "Compress listed turn ids (from [turnId=…] history headers) into compact context stubs via a harness worker. " +
-                "Callable anytime. Requires reason. Prefer over DropTurnContext when useful facts remain. " +
-                "Re-summarize overwrites an existing stub. Does not delete turns.",
-            InputSchemaJson = """
-                {
-                  "type": "object",
-                  "properties": {
-                    "turnIds": {
-                      "type": "array",
-                      "items": { "type": "string" },
-                      "description": "Turn Guids from [turnId=…] transcript headers to summarize for future model context."
-                    },
-                    "reason": {
-                      "type": "string",
-                      "description": "Why these turns should be summarized for future model context."
-                    }
-                  },
-                  "required": ["turnIds", "reason"]
-                }
-                """,
-        };
-
-        yield return new DysonMcpTool
-        {
             Name = "DropTurnContext",
             Description =
-                "Exclude listed turn ids (from [turnId=…] history headers) from future provider transcripts. " +
-                "Callable anytime. Requires reason. Prefer SummarizeTurns when useful facts remain; use Drop for true noise only. " +
-                "Does not delete turns; RestoreTurnContext or UI can restore. Prefer keep when unsure.",
+                "Shrink history: exclude listed turn ids (from [turnId=…] history headers) from future provider transcripts. " +
+                "Callable anytime. Requires reason and resume: your own short account of what the dropped turns included (not a harness synthesis). " +
+                "Empty resume or one over 1000 tokens fails the whole call and drops nothing. " +
+                "Drop at least a few turns, preferring large ones that do little for the current task — not only true noise. " +
+                "Does not delete turns. The harness appends your resume plus the dropped ids onto this turn's reply. RestoreTurnContext brings a turn back and does not remove that reply.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1814,9 +1769,13 @@ public sealed class DysonMcpPipeline
                     "reason": {
                       "type": "string",
                       "description": "Why these turns should be excluded from future model context."
+                    },
+                    "resume": {
+                      "type": "string",
+                      "description": "Your short account (under 1000 tokens) of what the dropped turns included: name each turn id and what it held. The harness appends it to this turn's reply after a code-injected id list; it is not stored on the dropped turns."
                     }
                   },
-                  "required": ["turnIds", "reason"]
+                  "required": ["turnIds", "reason", "resume"]
                 }
                 """,
         };
@@ -1891,6 +1850,8 @@ public sealed class DysonMcpPipeline
                 }
                 """,
         };
+
+        yield return DysonMetaAgentTools.CreateReadMetaPlanTool();
 
         yield return new DysonMcpTool
         {

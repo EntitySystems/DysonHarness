@@ -4,7 +4,13 @@ namespace DysonHarness;
 public static class DysonMaxTargetContextTokens
 {
     /// <summary>Harness default when session and slug defaults are unset.</summary>
-    public const int HarnessDefault = 100_000;
+    public const int HarnessDefault = 200_000;
+
+    /// <summary>
+    /// Meta Agent root pin. Ignores session and slug overrides.
+    /// Meta Agent Drones keep <see cref="Resolve"/>.
+    /// </summary>
+    public const int MetaAgentFixed = 180_000;
 
     /// <summary>Composer ± stepper increment.</summary>
     public const int Step = 10_000;
@@ -14,7 +20,7 @@ public static class DysonMaxTargetContextTokens
 
     /// <summary>
     /// Cascade: session override if set → slug default if set → <see cref="HarnessDefault"/>.
-    /// 0 means Off / unlimited (no DropContext inject).
+    /// 0 means Off / unlimited (no compaction).
     /// </summary>
     public static int Resolve(int? sessionOverride, int? slugDefault)
     {

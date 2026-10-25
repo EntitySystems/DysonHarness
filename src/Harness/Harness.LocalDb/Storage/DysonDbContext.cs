@@ -33,6 +33,9 @@ public sealed class DysonDbContext : DbContext
     public DbSet<DysonPluginHookReviewEntity> PluginHookReviews => Set<DysonPluginHookReviewEntity>();
     public DbSet<DysonPluginHookAuditEntity> PluginHookAudits => Set<DysonPluginHookAuditEntity>();
     public DbSet<DysonUsageRequestEntity> UsageRequests => Set<DysonUsageRequestEntity>();
+    public DbSet<DysonSpeechModelEntity> SpeechModels => Set<DysonSpeechModelEntity>();
+    public DbSet<DysonSpeechVoiceEntity> SpeechVoices => Set<DysonSpeechVoiceEntity>();
+    public DbSet<DysonSpeechWakeNameEntity> SpeechWakeNames => Set<DysonSpeechWakeNameEntity>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -336,6 +339,48 @@ public sealed class DysonDbContext : DbContext
             e.HasIndex(x => new { x.SubjectId, x.OccurredUtc });
             e.HasIndex(x => new { x.SubjectId, x.WorkDirectoryName });
             e.HasIndex(x => new { x.SubjectId, x.RootSessionId });
+        });
+
+        modelBuilder.Entity<DysonSpeechModelEntity>(e =>
+        {
+            e.ToTable("speech_models");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.SubjectId).IsRequired();
+            e.Property(x => x.RuntimeId).IsRequired();
+            e.Property(x => x.DisplayName).IsRequired();
+            e.Property(x => x.RuntimeKind).IsRequired();
+            e.Property(x => x.Capability).HasConversion<int>();
+            e.HasIndex(x => new { x.SubjectId, x.RuntimeId }).IsUnique();
+            e.HasIndex(x => x.SubjectId);
+        });
+
+        modelBuilder.Entity<DysonSpeechVoiceEntity>(e =>
+        {
+            e.ToTable("speech_voices");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.SubjectId).IsRequired();
+            e.Property(x => x.VoiceId).IsRequired();
+            e.Property(x => x.ModelRuntimeId).IsRequired();
+            e.Property(x => x.DisplayName).IsRequired();
+            e.Property(x => x.Variant).IsRequired();
+            e.HasIndex(x => new { x.SubjectId, x.ModelRuntimeId, x.VoiceId }).IsUnique();
+            e.HasIndex(x => x.SubjectId);
+        });
+
+        modelBuilder.Entity<DysonSpeechWakeNameEntity>(e =>
+        {
+            e.ToTable("speech_wake_names");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.SubjectId).IsRequired();
+            e.Property(x => x.Variant1).IsRequired();
+            e.Property(x => x.Variant2).IsRequired();
+            e.Property(x => x.Variant3).IsRequired();
+            e.Property(x => x.Variant4).IsRequired();
+            e.Property(x => x.Variant5).IsRequired();
+            e.Property(x => x.Variant6).IsRequired();
+            e.Property(x => x.Variant7).IsRequired();
+            e.Property(x => x.Variant8).IsRequired();
+            e.HasIndex(x => x.SubjectId).IsUnique();
         });
     }
 

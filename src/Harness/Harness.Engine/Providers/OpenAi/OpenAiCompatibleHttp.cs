@@ -115,6 +115,23 @@ public static class OpenAiCompatibleHttp
     }
 
     /// <summary>
+    /// Provider rejected the request as over the model window (OpenAI <c>context_length_exceeded</c>,
+    /// Anthropic "prompt is too long", xAI "maximum prompt length", and similar wording).
+    /// </summary>
+    public static bool IsContextLengthError(string? error)
+    {
+        if (string.IsNullOrEmpty(error))
+            return false;
+
+        return error.Contains("context_length_exceeded", StringComparison.OrdinalIgnoreCase)
+               || error.Contains("context length", StringComparison.OrdinalIgnoreCase)
+               || error.Contains("context window", StringComparison.OrdinalIgnoreCase)
+               || error.Contains("prompt is too long", StringComparison.OrdinalIgnoreCase)
+               || error.Contains("maximum prompt length", StringComparison.OrdinalIgnoreCase)
+               || error.Contains("too many tokens", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Parses a 3-digit HTTP status from an <c>OpenAI API NNN</c> error prefix.
     /// The digit run must be exactly three characters (or followed by a non-digit).
     /// </summary>

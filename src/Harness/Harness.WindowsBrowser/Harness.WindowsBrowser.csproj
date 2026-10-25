@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Harness.Abstractions\Harness.Abstractions.csproj" />
+    <ProjectReference Include="..\Harness.Engine\Harness.Engine.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -24,6 +25,8 @@
   <ItemGroup>
     <PackageReference Include="CefSharp.Wpf.NETCore" Version="149.0.40" />
     <PackageReference Include="CefSharp.Wpf.HwndHost" Version="149.0.40" />
+    <!-- Live speech playback (DysonWindowsAudioPlayback). Windows-only project; never reference from Engine/UI. -->
+    <PackageReference Include="NAudio.WinMM" Version="3.2.0" />
   </ItemGroup>
 
 </Project>

@@ -149,6 +149,8 @@ public static class DysonUiWebHost
         builder.Services.AddScoped<ManagedInferenceProviderCatalog>();
 #if WINDOWS
         builder.Services.AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>();
+        builder.Services.AddSingleton<IDysonAudioPlayback, DysonWindowsAudioPlayback>();
+        builder.Services.AddSingleton<IDysonAudioCapture, DysonWindowsAudioCapture>();
 #endif
         builder.Services.AddSingleton<IDysonSessionRuntimeScopeFactory, DysonUiSessionRuntimeScopeFactory>();
         builder.Services.AddSingleton<DysonSessionRuntimeRegistry>();
@@ -158,6 +160,8 @@ public static class DysonUiWebHost
         builder.Services.AddScoped<DysonUiRuntimeAttachment>();
         builder.Services.AddScoped<IDysonAgentSessionRuntimeFactory, DysonUiAgentSessionRuntimeFactory>();
         builder.Services.AddScoped<DysonUiAgentSessionRuntimeConfigBuilder>();
+        // In-memory work-directory owner. One per scope, including the retained subject scope. Not Windows-only. Not a singleton.
+        builder.Services.AddScoped<DysonWorkDirectoryFocus>();
         builder.Services.AddScoped<DysonSessionRuntime>();
         builder.Services.AddScoped<DysonUiHost>();
         builder.Services.AddSingleton<DysonFilePreviewStore>();
@@ -187,6 +191,32 @@ public static class DysonUiWebHost
             var factory = sp.GetRequiredService<IHttpClientFactory>();
             return new DysonEmbeddedRuntimeInstaller(factory.CreateClient("embedded-runtimes"));
         });
+        builder.Services.AddSingleton(sp =>
+        {
+            var version = DysonAppVersionInfo.Local;
+            var root = DysonSpeechPaths.GetInstallRoot(
+                DysonBuildInfo.Current,
+                version.IsStampedRelease ? version.EffectiveChannel : null);
+            var factory = sp.GetRequiredService<IHttpClientFactory>();
+            return new DysonSpeechInstaller(factory.CreateClient("embedded-runtimes"), root);
+        });
+        builder.Services.AddScoped(sp => new DysonActiveSpeechToText(
+            sp.GetRequiredService<IDysonSpeechModelRepository>(),
+            sp.GetRequiredService<IDysonSubjectSettingsRepository>(),
+            sp.GetRequiredService<DysonSpeechInstaller>().InstallRoot));
+        builder.Services.AddScoped<IDysonSpeechToText>(sp => sp.GetRequiredService<DysonActiveSpeechToText>());
+        builder.Services.AddScoped(sp => new DysonActiveTextToSpeech(
+            sp.GetRequiredService<IDysonSpeechModelRepository>(),
+            sp.GetRequiredService<IDysonSubjectSettingsRepository>(),
+            sp.GetRequiredService<DysonSpeechInstaller>().InstallRoot));
+        builder.Services.AddScoped<IDysonTextToSpeech>(sp => sp.GetRequiredService<DysonActiveTextToSpeech>());
+#if WINDOWS
+        // Circuit Settings and the retained voice service each get a tryout. Both share the singleton playback and capture devices.
+        builder.Services.AddScoped<DysonSpeechTryout>();
+        // One voice service in the retained subject scope (DysonSessionRuntime.Voice). Circuits must not resolve it.
+        // Not a singleton and not a static.
+        builder.Services.AddScoped<DysonVoiceMode>();
+#endif
 
         if (hostingMode == DysonHostingMode.Cloud)
             builder.Services.AddScoped<CircuitHandler, DysonCloudSubjectCircuitHandler>();
@@ -232,6 +262,13 @@ public static class DysonUiWebHost
             {
                 // ignore shutdown races
             }
+
+            DysonPhononSpeech.StopSidecar();
+            DysonCrispSpeech.StopSidecar();
+            DysonNemotronSpeech.Stop();
+            DysonPocketSpeech.StopBridge();
+            DysonQwenSpeech.StopBridge();
+            DysonChatterboxSpeech.StopBridge();
         });
 
         if (!app.Environment.IsDevelopment())

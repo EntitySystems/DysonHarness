@@ -23,8 +23,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     /// <summary>
     /// Soft-closes <paramref name="turn"/> after tool-round budget exhaustion and optionally enqueues
     /// a <see cref="DysonAgentTurnKind.RethinkToolUsage"/> follow-up. Always returns Success
-    /// (never an exhaustion error string). Does not enqueue rethink when already on rethink, or when
-    /// session mode is Explore (Explore uses a no-tools recap instead).
+    /// (never an exhaustion error string). Does not enqueue rethink when already on rethink, when
+    /// session mode is Explore (Explore uses a no-tools recap instead), or when session mode is
+    /// Meta Agent (no ResumeCurrentTask). Meta Agent Drone still enqueues rethink.
     /// </summary>
     public static VoidResult<string> SoftPauseAfterToolLoopExhaustion(
         DysonAgentSession session,
@@ -44,6 +45,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             session.Mode,
             DysonAgentModes.Explore,
             StringComparison.OrdinalIgnoreCase);
+        var isMetaAgent = DysonSessionPolicy.IsMetaAgent(session.Mode);
 
         string text;
         if (isRethink)
@@ -55,6 +57,11 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         {
             text = DysonRethinkToolUsageFlow.ExploreBudgetExhaustedFallback;
         }
+        else if (isMetaAgent)
+        {
+            text =
+                $"# Tool rounds paused\n\nTool loop reached the {maxRounds}-round budget without a final reply.";
+        }
         else
         {
             text =
@@ -65,7 +72,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         turn.FinishStreaming();
         turn.FinishReasoningStreaming();
 
-        if (!isRethink && !isExplore)
+        if (!isRethink && !isExplore && !isMetaAgent)
             session.EnqueuePendingTurn(DysonRethinkToolUsageFlow.CreateTurn());
 
         return VoidResult<string>.Success;
@@ -128,6 +135,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     private readonly IDysonPlanRepository? _plans;
     // ponytail: one hop per prompt; Explore recap shares this so a main-loop hop is not repeated
     private bool _fallbackAppliedThisTurn;
+    private Guid _pausedForCompactionTurnId;
 
     public OpenAiCompatibleAgentSession(
         string agentMode,
@@ -522,7 +530,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         string? reasoningEffort,
         CancellationToken cancellationToken)
     {
-        if (Config.TryGetSubagentDefaultWhenSlugOmitted(modelSlug, agentMode)
+        if (await Config.TryGetSubagentDefaultWhenSlugOmittedAsync(modelSlug, agentMode, _models, cancellationToken)
+                .ConfigureAwait(false)
             is OpenAiCompatibleAgentProvider modeDefault)
         {
             if (reasoningEffort is null)
@@ -666,37 +675,104 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     private async Task<VoidResult<string>> PromptWithTurnAsync(
         DysonAgentTurn turn,
         IReadOnlyList<string> filePaths,
-        CancellationToken cancellationToken,
-        bool allowDropContextInject = true)
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(turn);
         ArgumentNullException.ThrowIfNull(filePaths);
 
         _fallbackAppliedThisTurn = false;
         ApplyUiTheme(Config.UiTheme);
+        var preserveReasoning = await RefreshPreserveReasoningTracesAsync(cancellationToken).ConfigureAwait(false);
 
         // Compaction before the next provider request so the new prefix stays byte-stable.
-        OptimizeContextIfNeeded();
+        await OptimizeContextIfEnabledAsync(cancellationToken).ConfigureAwait(false);
 
-        if (allowDropContextInject
-            && turn.Kind != DysonAgentTurnKind.DropContext
-            && turn.Kind != DysonAgentTurnKind.FullSummarize
-            && DysonDropContextFlow.TryBeginInject(this))
+        try
         {
-            var drop = await PromptWithTurnAsync(
-                    CreateDropContextTurn(),
-                    [],
-                    cancellationToken,
-                    allowDropContextInject: false)
+            // A trip not compacted yet (failed summary, cancelled end of turn, restart mid-trip)
+            // summarizes before anything of this turn is sent.
+            if (DysonCompactionFlow.CanCompact(this, turn)
+                && await RefreshCompactionPendingAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var compacted = await DysonCompactionFlow
+                    .RunAsync(this, endedTurn: null, resume: false, RunCompactionSummaryTurnAsync, cancellationToken)
+                    .ConfigureAwait(false);
+                if (compacted.IsError)
+                    return compacted;
+            }
+
+            var result = await RunTurnLoopAsync(turn, filePaths, preserveReasoning, cancellationToken)
                 .ConfigureAwait(false);
-            if (drop.IsError)
-                return drop;
+            return await CompactAtTurnEndAsync(turn, result, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new VoidResult<string>("Prompt was cancelled.");
+        }
+        finally
+        {
+            EndLiveContextTokens();
+        }
+    }
+
+    /// <summary>
+    /// Shared end-of-turn check for every successful exit of the tool loop (final reply, end-turn tool,
+    /// budget soft pause, child report). A turn paused at a safe point summarizes and queues a Continuation.
+    /// Any other turn summarizes without one when it ended over the limit or a trip is pending; turns already
+    /// queued (StartNewTurn, rethink) run after. A cancelled run keeps the marker for the next prompt.
+    /// </summary>
+    private async Task<VoidResult<string>> CompactAtTurnEndAsync(
+        DysonAgentTurn turn,
+        VoidResult<string> result,
+        CancellationToken cancellationToken)
+    {
+        if (result.IsError)
+            return result;
+
+        if (turn.Kind == DysonAgentTurnKind.FullSummarize)
+        {
+            // The host apply step excludes every earlier turn: this summary is the compaction.
+            ClearCompactionPending();
+            return result;
         }
 
+        var paused = _pausedForCompactionTurnId == turn.Id;
+        if (!paused)
+        {
+            var limit = ResolveEffectiveMaxTargetContextTokens();
+            var live = LiveContextTokens;
+            var over = limit > 0 && live > limit;
+            if (!DysonCompactionFlow.CanCompact(this, turn)
+                || !(over || IsCompactionPending)
+                || HasPendingTurnOfKind(DysonAgentTurnKind.FullSummarize))
+            {
+                return result;
+            }
+
+            AppendLog($"compaction: turn ended with context over the limit or pending (live={live} max={limit})");
+            if (cancellationToken.IsCancellationRequested)
+            {
+                RecordCompactionPending(turn.Id);
+                return result;
+            }
+        }
+
+        return await DysonCompactionFlow
+            .RunAsync(this, turn, resume: paused, RunCompactionSummaryTurnAsync, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<VoidResult<string>> RunTurnLoopAsync(
+        DysonAgentTurn turn,
+        IReadOnlyList<string> filePaths,
+        bool preserveReasoning,
+        CancellationToken cancellationToken)
+    {
         AppendLog($"prompt: {Truncate(turn.Instruction ?? turn.Kind.ToString(), 120)}");
         var wasTerminal = IsTerminal;
         AddTurn(turn);
         using var inFlightPrompt = BeginInFlightPrompt(turn);
+        using var contextLimitWatch = WatchContextLimit();
         if (wasTerminal && !IsTerminal)
             await PersistReopenAsync("new in-flight prompt").ConfigureAwait(false);
 
@@ -724,6 +800,15 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         const string childReportMissing =
             "Child PromptAsync ended without SubmitSubagentReport.";
         var maxRounds = ResolveMaxToolRounds();
+        var stoppedForCompaction = false;
+
+        // Safe point 1: count the built request; when compaction is requested it is not sent.
+        bool StopBeforeSend(int requestTokens)
+        {
+            ReportLiveContextTokens(turn, requestTokens);
+            stoppedForCompaction = IsCompactionRequested(turn);
+            return stoppedForCompaction;
+        }
 
         try
         {
@@ -752,6 +837,10 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                                 this,
                                 previousResponseId,
                                 inFlight[^1].Results);
+                            // Delta: last live count (prior response) plus the new outputs.
+                            if (StopBeforeSend(LiveContextTokens
+                                    + DysonOutgoingContextTokens.CountNode(built.Input, TokenCounter)))
+                                return Result<OpenAiModelReply, string>.AsError(CompactionPauseReason);
                         }
                         else
                         {
@@ -764,9 +853,12 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                                 currentUserPrompt: harnessFollowUp,
                                 currentFilePaths: null,
                                 inFlightRounds: inFlight,
-                                previousResponseId: supportsResponsesChaining ? previousResponseId : null);
+                                previousResponseId: supportsResponsesChaining ? previousResponseId : null,
+                                preserveReasoning: preserveReasoning);
                             if (round == 0 && filePaths.Count > 0)
                                 AppendPathsToLastUser(built.Input, filePaths);
+                            if (StopBeforeSend(DysonOutgoingContextTokens.CountBuilt(built, TokenCounter)))
+                                return Result<OpenAiModelReply, string>.AsError(CompactionPauseReason);
                         }
 
                         var streamed = await ConsumeStreamWithTransientRetryAsync(
@@ -790,9 +882,12 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                                 currentUserPrompt: harnessFollowUp,
                                 currentFilePaths: null,
                                 inFlightRounds: inFlight,
-                                previousResponseId: null);
+                                previousResponseId: null,
+                                preserveReasoning: preserveReasoning);
                             if (round == 0 && filePaths.Count > 0)
                                 AppendPathsToLastUser(retryBuilt.Input, filePaths);
+                            if (StopBeforeSend(DysonOutgoingContextTokens.CountBuilt(retryBuilt, TokenCounter)))
+                                return Result<OpenAiModelReply, string>.AsError(CompactionPauseReason);
 
                             streamed = await ConsumeStreamWithTransientRetryAsync(
                                 () => _responses.StreamCreateAsync(OpenAiProvider, retryBuilt, cancellationToken),
@@ -812,6 +907,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                         inFlightRounds: inFlight);
                     if (round == 0 && filePaths.Count > 0)
                         AppendPathsToLastUser(completionsBuilt.Messages, filePaths);
+                    if (StopBeforeSend(DysonOutgoingContextTokens.CountBuilt(completionsBuilt, TokenCounter)))
+                        return Result<OpenAiModelReply, string>.AsError(CompactionPauseReason);
 
                     return await ConsumeStreamWithTransientRetryAsync(
                         () => _completions.StreamCreateAsync(OpenAiProvider, completionsBuilt, cancellationToken),
@@ -820,7 +917,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 }
 
                 var replyResult = await ConsumeCurrentProviderRoundAsync().ConfigureAwait(false);
-                if (replyResult.IsError
+                if (!stoppedForCompaction
+                    && replyResult.IsError
                     && await TryApplyChatFallbackAsync(replyResult.Error, cancellationToken)
                         .ConfigureAwait(false))
                 {
@@ -832,6 +930,12 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     supportsResponsesChaining = useResponses
                         && OpenAiCompatibleHttp.SupportsResponsesServerChaining(OpenAiProvider);
                     replyResult = await ConsumeCurrentProviderRoundAsync().ConfigureAwait(false);
+                }
+
+                if (stoppedForCompaction)
+                {
+                    AppendLog($"tool round {round + 1}: not sent, paused for context compaction");
+                    return PauseForCompaction(turn);
                 }
 
                 if (replyResult.IsError)
@@ -854,6 +958,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     AppendLog(reply.UsageCacheHint);
                 if (reply.PromptTokens is int promptTokens)
                     LastReportedPromptTokens = promptTokens;
+                ReportResponseContextTokens(turn, reply);
 
                 if (supportsResponsesChaining && !string.IsNullOrEmpty(reply.ResponseId))
                     previousResponseId = reply.ResponseId;
@@ -907,6 +1012,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                         reply.ToolCalls.ToList(),
                         roundResults,
                         reply.ReasoningOutputItems.Count > 0 ? reply.ReasoningOutputItems : null));
+                    turn.ToolRoundCallCounts.Add(reply.ToolCalls.Count);
+                    turn.RecordReasoningItems(reply.ReasoningOutputItems, OpenAiProvider.ReasoningSourceTag, finalRound: false);
 
                     AppendLog($"tool round {round + 1}: {reply.ToolCalls.Count} call(s)");
 
@@ -928,6 +1035,14 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
                     // Continuing tool loop — interim assistant words (not final reply).
                     CommitInterimText(turn, reply.Content, round);
+
+                    // Safe point 2: this round's tools ran and are in inFlight; no next hop.
+                    if (IsCompactionRequested(turn))
+                    {
+                        AppendLog($"tool round {round + 1}: paused for context compaction");
+                        return PauseForCompaction(turn);
+                    }
+
                     continue;
                 }
 
@@ -970,6 +1085,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
                 // Title parse only at finalize — preview stays raw (incl. mid-stream H1) until then.
                 CommitReasoningRound(turn, reply, round, isFinalAssistant: true);
+                turn.RecordReasoningItems(reply.ReasoningOutputItems, OpenAiProvider.ReasoningSourceTag, finalRound: true);
                 ApplyAssistantText(turn, text);
                 turn.FinishStreaming();
                 turn.FinishReasoningStreaming();
@@ -1000,8 +1116,167 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         {
             // Every other exit (end-turn tool, soft-pause, error, cancel) closes intake before the
             // in-flight scope pops, so a late comment takes the queued-prompt fallback.
+            // The live count stays until the caller's end-of-turn compaction check.
             turn.CloseCommentIntake();
         }
+    }
+
+    private const string CompactionPauseReason = "Paused for context compaction.";
+
+    /// <summary>Per-response live count: provider input + output when usage is present, else request count + reply estimate.</summary>
+    private void ReportResponseContextTokens(DysonAgentTurn turn, OpenAiModelReply reply)
+    {
+        if (reply.Usage is { InputTokens: > 0 } usage)
+        {
+            ReportLiveContextTokens(turn, usage.InputTokens + usage.WriteTokens);
+            return;
+        }
+
+        var estimate = TokenCounter.CountTokens(reply.Content ?? "");
+        foreach (var call in reply.ToolCalls)
+            estimate += TokenCounter.CountTokens(call.ToolName) + TokenCounter.CountTokens(call.ArgumentsJson ?? "");
+        ReportLiveContextTokens(turn, LiveContextTokens + estimate);
+    }
+
+    /// <summary>
+    /// Finalizes <paramref name="turn"/> (tools and reasoning kept) with <see cref="DysonCompactionFlow.PausedNote"/>.
+    /// <see cref="CompactAtTurnEndAsync"/> then summarizes and queues the resuming Continuation.
+    /// </summary>
+    private VoidResult<string> PauseForCompaction(DysonAgentTurn turn)
+    {
+        turn.ClearStreamingPreview();
+        turn.ClearReasoningPreview();
+        turn.FinalizeIncompleteTools(OpenAiCacheFriendlyTranscriptBuilder.IncompleteToolResultContent);
+        ApplyAssistantText(turn, DysonCompactionFlow.PausedNote);
+        turn.FinishStreaming();
+        turn.FinishReasoningStreaming();
+        _pausedForCompactionTurnId = turn.Id;
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Inline FullSummarize turn for compaction: one full rebuild, no tool calls executed, no compaction re-entry.
+    /// Tools stay on the wire so the request keeps the turn's prompt-cache prefix.
+    /// A context-length rejection (or an empty reply) falls back to <see cref="DysonTurnSummarizer"/>
+    /// over trimmed recent history.
+    /// </summary>
+    private async Task<VoidResult<string>> RunCompactionSummaryTurnAsync(
+        DysonAgentTurn summary,
+        CancellationToken cancellationToken)
+    {
+        AddTurn(summary);
+        using var inFlightPrompt = BeginInFlightPrompt(summary);
+
+        async Task<Result<OpenAiModelReply, string>> ConsumeSummaryAsync()
+        {
+            if (string.Equals(OpenAiProvider.OpenAiApiMode, DysonOpenAiApiModes.Responses, StringComparison.Ordinal))
+            {
+                await EnsureRemoteUrlsForVisionAsync([], cancellationToken).ConfigureAwait(false);
+                await EnsureResponsesVisionFileIdsAsync([], cancellationToken).ConfigureAwait(false);
+                var built = OpenAiCacheFriendlyTranscriptBuilder.BuildResponsesFull(
+                    this,
+                    currentUserPrompt: null,
+                    currentFilePaths: null,
+                    inFlightRounds: null,
+                    previousResponseId: null,
+                    preserveReasoning: PreserveReasoningTraces);
+                ReportLiveContextTokens(summary, DysonOutgoingContextTokens.CountBuilt(built, TokenCounter));
+                return await ConsumeStreamWithTransientRetryAsync(
+                    () => _responses.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
+                    summary,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            await EnsureRemoteUrlsForVisionAsync([], cancellationToken).ConfigureAwait(false);
+            var completions = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+                this,
+                currentUserPrompt: null,
+                currentFilePaths: null,
+                inFlightRounds: null);
+            ReportLiveContextTokens(summary, DysonOutgoingContextTokens.CountBuilt(completions, TokenCounter));
+            return await ConsumeStreamWithTransientRetryAsync(
+                () => _completions.StreamCreateAsync(OpenAiProvider, completions, cancellationToken),
+                summary,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            var replyResult = await ConsumeSummaryAsync().ConfigureAwait(false);
+            if (replyResult.IsError
+                && !OpenAiCompatibleHttp.IsContextLengthError(replyResult.Error)
+                && await TryApplyChatFallbackAsync(replyResult.Error, cancellationToken).ConfigureAwait(false))
+            {
+                replyResult = await ConsumeSummaryAsync().ConfigureAwait(false);
+            }
+
+            string? text = null;
+            if (replyResult.IsSuccess)
+            {
+                var reply = replyResult.Value;
+                await RecordUsageAsync(reply, cancellationToken).ConfigureAwait(false);
+                if (reply.PromptTokens is int promptTokens)
+                    LastReportedPromptTokens = promptTokens;
+                CommitReasoningRound(summary, reply, roundIndex: 0, isFinalAssistant: true);
+                text = reply.Content;
+            }
+            else if (!OpenAiCompatibleHttp.IsContextLengthError(replyResult.Error))
+            {
+                CommitReasoningRound(summary, reply: null, roundIndex: 0, isFinalAssistant: true);
+                summary.ClearStreamingPreview();
+                summary.ClearReasoningPreview();
+                return new VoidResult<string>(replyResult.Error);
+            }
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                AppendLog(replyResult.IsError
+                    ? "compaction: summary request over the model window; trimmed summarizer fallback"
+                    : "compaction: summary reply was empty; trimmed summarizer fallback");
+                var fallback = await SummarizeTrimmedHistoryAsync(summary, cancellationToken).ConfigureAwait(false);
+                if (fallback.IsError)
+                {
+                    summary.ClearStreamingPreview();
+                    summary.ClearReasoningPreview();
+                    return new VoidResult<string>(fallback.Error);
+                }
+
+                text = "# Session summary: context compaction\n\n" + fallback.Value;
+            }
+
+            summary.ClearStreamingPreview();
+            summary.ClearReasoningPreview();
+            ApplyAssistantText(summary, text);
+            summary.FinishStreaming();
+            summary.FinishReasoningStreaming();
+            AppendLog($"compaction: summary complete ({summary.AssistantText?.Length ?? 0} chars)");
+            return VoidResult<string>.Success;
+        }
+        finally
+        {
+            summary.CloseCommentIntake();
+        }
+    }
+
+    private Task<Result<string, string>> SummarizeTrimmedHistoryAsync(DysonAgentTurn summary, CancellationToken cancellationToken)
+    {
+        var history = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = DysonCompactionFlow.FormatRecentHistory(
+                this,
+                summary.Id,
+                DysonTurnSummarizerPrompt.MaxInputChars - 200),
+            StartedUtc = DateTime.UtcNow,
+        };
+        return DysonTurnSummarizer.SummarizeForCompactionAsync(
+            OpenAiProvider,
+            _http,
+            history,
+            DysonCompactionFlow.FallbackSummaryReason,
+            TokenCounter,
+            cancellationToken,
+            (usage, token) => AppendUsageAsync(OpenAiProvider, usage, token));
     }
 
     /// <summary>
@@ -1034,7 +1309,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     currentUserPrompt: DysonRethinkToolUsageFlow.ExploreBudgetRecapInstruction,
                     currentFilePaths: null,
                     inFlightRounds: inFlight,
-                    previousResponseId: null);
+                    previousResponseId: null,
+                    preserveReasoning: PreserveReasoningTraces);
                 built.Tools.Clear();
                 return await ConsumeStreamWithTransientRetryAsync(
                     () => _responses.StreamCreateAsync(OpenAiProvider, built, cancellationToken),
@@ -1100,31 +1376,42 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         return VoidResult<string>.Success;
     }
 
-    private async Task RecordUsageAsync(OpenAiModelReply reply, CancellationToken cancellationToken)
+    private Task RecordUsageAsync(OpenAiModelReply reply, CancellationToken cancellationToken) =>
+        AppendUsageAsync(OpenAiProvider, reply.Usage, cancellationToken);
+
+    /// <summary>
+    /// Appends one <c>usage_requests</c> row when <paramref name="usage"/> is non-null.
+    /// A missing usage object writes nothing. A real usage object of zeros still appends.
+    /// Model identity is <paramref name="provider"/> (the model that produced the usage).
+    /// </summary>
+    public async Task AppendUsageAsync(
+        OpenAiCompatibleAgentProvider provider,
+        DysonParsedUsage? usage,
+        CancellationToken cancellationToken = default)
     {
-        if (_usageAnalytics is null)
+        ArgumentNullException.ThrowIfNull(provider);
+        if (_usageAnalytics is null || usage is null)
             return;
 
-        var parsed = reply.Usage ?? new DysonParsedUsage();
-        var alias = string.IsNullOrWhiteSpace(OpenAiProvider.DisplayAlias)
-            ? OpenAiProvider.Slug
-            : OpenAiProvider.DisplayAlias;
+        var alias = string.IsNullOrWhiteSpace(provider.DisplayAlias)
+            ? provider.Slug
+            : provider.DisplayAlias;
         var row = new DysonUsageRequestEntity
         {
             Id = Guid.NewGuid(),
             WorkDirectoryName = _workDirectoryName,
             SessionId = PersistenceId,
             RootSessionId = ResolveRootPersistenceId(),
-            ModelSlug = OpenAiProvider.Slug,
+            ModelSlug = provider.Slug,
             ModelDisplayAlias = alias,
-            ReasoningEffort = OpenAiProvider.ReasoningEffort ?? "",
+            ReasoningEffort = provider.ReasoningEffort ?? "",
             OccurredUtc = DateTime.UtcNow,
-            InputTokens = parsed.InputTokens,
-            CacheTokens = parsed.CacheTokens,
-            WriteTokens = parsed.WriteTokens,
-            CacheWriteTokens = parsed.CacheWriteTokens,
-            InputTokensAfterCache = parsed.InputTokensAfterCache,
-            WriteTokensAfterCache = parsed.WriteTokensAfterCache,
+            InputTokens = usage.InputTokens,
+            CacheTokens = usage.CacheTokens,
+            WriteTokens = usage.WriteTokens,
+            CacheWriteTokens = usage.CacheWriteTokens,
+            InputTokensAfterCache = usage.InputTokensAfterCache,
+            WriteTokensAfterCache = usage.WriteTokensAfterCache,
         };
 
         try
@@ -1169,8 +1456,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     /// <summary>
     /// Upload in-context UserImages and every image BinaryAttachment (in-flight + completed
     /// history) when <see cref="DysonAgentSessionConfig.FileStorage"/> is set. No-op when
-    /// RemoteUrl is still valid. Failures are logged; data-URL remains a last-resort for
-    /// images that still have local bytes.
+    /// the in-flight wire is already captured or RemoteUrl is still valid. Failures are
+    /// logged; data-URL remains a last-resort for images that still have local bytes.
+    /// A captured wire is not rewritten with a new presign.
     /// </summary>
     private async Task EnsureRemoteUrlsForVisionAsync(
         IReadOnlyList<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound> inFlight,
@@ -1574,16 +1862,13 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
     private static void ApplyAssistantText(DysonAgentTurn turn, string text)
     {
+        var prior = turn.AssistantText;
         var parsed = DysonAgentTurn.TryParseAgentTitle(text);
+        var body = parsed.IsSuccess ? parsed.Value.Body : text;
         if (parsed.IsSuccess)
-        {
             turn.AgentTitle = parsed.Value.Title;
-            turn.AssistantText = parsed.Value.Body;
-        }
-        else
-        {
-            turn.AssistantText = text;
-        }
+
+        turn.AssistantText = DysonWorkspaceToolExecutor.MergeAssistantTextPreservingDropResume(prior, body);
     }
 
     /// <summary>

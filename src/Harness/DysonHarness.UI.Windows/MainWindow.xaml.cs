@@ -40,6 +40,8 @@ public partial class MainWindow : Window
         browser.LifeSpanHandler = handlers;
         browser.RequestHandler = handlers;
         browser.MenuHandler = new ShellContextMenuHandler();
+        // Composer push-to-talk: microphone only.
+        browser.PermissionHandler = new DysonShellMicPermission();
         browser.FrameLoadEnd += OnFrameLoadEnd;
         browser.Address = _appUrl.AbsoluteUri;
 

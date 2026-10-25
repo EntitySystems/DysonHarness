@@ -22,6 +22,8 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
     private readonly ConcurrentDictionary<DysonAgentSession, byte> _hookedSessions = new();
     private readonly ConcurrentDictionary<DysonAgentSession, IDisposable> _sessionEventTokens = new();
     private readonly DysonSessionEventPublisher? _sessionEvents;
+    private readonly DysonWorkDirectoryFocus? _focus;
+    private readonly DysonVoiceMode? _voice;
     private readonly ConcurrentDictionary<Guid, DysonAgentSessionRuntimeLease> _leasesById = new();
     private readonly ConcurrentDictionary<Guid, EventHandler<DysonToolCallStatusChangedEventArgs>> _toolHandlers = new();
     private readonly ConcurrentDictionary<Guid, byte> _busySessions = new();
@@ -48,12 +50,16 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         IDysonSubjectContext subjectContext,
         IDysonSessionRepository sessions,
         IDysonAgentSessionRuntimeFactory sessionFactory,
-        DysonSessionEventPublisher? sessionEvents = null)
+        DysonSessionEventPublisher? sessionEvents = null,
+        DysonWorkDirectoryFocus? focus = null,
+        DysonVoiceMode? voice = null)
     {
         ArgumentNullException.ThrowIfNull(subjectContext);
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _sessionFactory = sessionFactory ?? throw new ArgumentNullException(nameof(sessionFactory));
         _sessionEvents = sessionEvents;
+        _focus = focus;
+        _voice = voice;
 
         var normalized = DysonSessionRuntimeRegistry.NormalizeSubjectId(subjectContext.SubjectId);
         if (normalized.IsError)
@@ -67,6 +73,23 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
     /// so a later rebound scoped context cannot change this runtime's identity.
     /// </summary>
     public string SubjectId => _subjectId;
+
+    /// <summary>Subject work-directory focus from the retained scope. Null when the host did not supply one.</summary>
+    public DysonWorkDirectoryFocus? Focus => _focus;
+
+    /// <summary>Subject voice service from the retained scope. Null off Windows.</summary>
+    public DysonVoiceMode? Voice => _voice;
+
+    /// <summary>
+    /// Copy of the live session map. <see cref="ConcurrentDictionary{TKey,TValue}"/> is the only guard.
+    /// </summary>
+    public IReadOnlyList<DysonAgentSession> SnapshotLiveSessions()
+    {
+        if (_disposed != 0)
+            return [];
+
+        return _sessionsById.Values.ToArray();
+    }
 
     /// <summary>Current runtime-level error, if any. Circuit-local UI errors stay on the facade.</summary>
     public string? LastError { get; private set; }
@@ -383,13 +406,57 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
             if (created.IsError)
                 return FailSession(created.Error);
 
-            return await AdoptFactoryLeaseAsync(created.Value, parentSessionId: null, cancellationToken)
+            var adopted = await AdoptFactoryLeaseAsync(created.Value, parentSessionId: null, cancellationToken)
                 .ConfigureAwait(false);
+            if (adopted.IsSuccess)
+                AttachSharedVoice(adopted.Value);
+            return adopted;
         }
         finally
         {
             _graphGate.Release();
         }
+    }
+
+    /// <summary>
+    /// Registers <paramref name="session"/> as the live instance for its persistence id
+    /// when none is mapped. Returns the already-mapped instance otherwise (same reference
+    /// or a different object). Does not construct or load a second session.
+    /// </summary>
+    public Result<DysonAgentSession, string> AdoptLiveSession(DysonAgentSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        if (_disposed != 0)
+            return Result<DysonAgentSession, string>.AsError("Session runtime has been disposed.");
+
+        if (session.PersistenceId == Guid.Empty)
+            return FailSession("Session is not persisted.");
+
+        var id = session.PersistenceId;
+        if (_sessionsById.TryGetValue(id, out var mapped))
+        {
+            AttachSharedVoice(mapped);
+            return Result<DysonAgentSession, string>.AsValue(mapped);
+        }
+
+        // ponytail: TryAdd so a racing adopt cannot replace the mapped graph. No merge.
+        if (!_sessionsById.TryAdd(id, session))
+        {
+            if (_sessionsById.TryGetValue(id, out mapped))
+            {
+                AttachSharedVoice(mapped);
+                return Result<DysonAgentSession, string>.AsValue(mapped);
+            }
+
+            return FailSession("Session is already registered.");
+        }
+
+        EnsureRegistered(session);
+        AttachSharedVoice(session);
+        ClearLastError();
+        RaiseChanged(DysonRuntimeChangeKind.SessionGraph, id);
+        return Result<DysonAgentSession, string>.AsValue(session);
     }
 
     public async Task<Result<DysonAgentSession, string>> LoadSessionAsync(
@@ -405,7 +472,10 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
             return FailSession("Session id is required.");
 
         if (_sessionsById.TryGetValue(sessionId, out var live))
+        {
+            AttachSharedVoice(live);
             return Result<DysonAgentSession, string>.AsValue(live);
+        }
 
         await _graphGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -414,7 +484,10 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
                 return Result<DysonAgentSession, string>.AsError("Session runtime has been disposed.");
 
             if (_sessionsById.TryGetValue(sessionId, out live))
+            {
+                AttachSharedVoice(live);
                 return Result<DysonAgentSession, string>.AsValue(live);
+            }
 
             var loaded = await _sessionFactory.LoadAsync(sessionId, cancellationToken)
                 .ConfigureAwait(false);
@@ -427,8 +500,11 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
             if (full.IsSuccess)
                 parentId = full.Value.Session.ParentSessionId;
 
-            return await AdoptFactoryLeaseAsync(loaded.Value, parentId, cancellationToken)
+            var adopted = await AdoptFactoryLeaseAsync(loaded.Value, parentId, cancellationToken)
                 .ConfigureAwait(false);
+            if (adopted.IsSuccess)
+                AttachSharedVoice(adopted.Value);
+            return adopted;
         }
         finally
         {
@@ -524,6 +600,18 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
             _lifetimeGate.Release();
         }
 
+        if (_voice is not null)
+        {
+            try
+            {
+                await _voice.StopAsync(DysonVoiceStopReason.AppExit).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // App exit still disposes sessions if the mic driver throws.
+            }
+        }
+
         await FlushExecutionAsync().ConfigureAwait(false);
         await FlushPersistenceAsync().ConfigureAwait(false);
 
@@ -559,6 +647,20 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         {
             _graphGate.Release();
         }
+    }
+
+    /// <summary>
+    /// While voice is on, a root meta session loaded or created later gets the shared service.
+    /// Same instance is a no-op inside <see cref="DysonAgentSession.SetVoiceMode"/>.
+    /// </summary>
+    private void AttachSharedVoice(DysonAgentSession session)
+    {
+        if (_voice is not { IsOn: true })
+            return;
+        if (session.Parent is not null || !DysonSessionPolicy.IsMetaAgent(session.Mode))
+            return;
+
+        session.SetVoiceMode(_voice);
     }
 
     internal IDysonSessionRepository Sessions => _sessions;
@@ -662,7 +764,6 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
                         return persistDropped;
 
                     await session.ApplyChildReportWatchAsync(token).ConfigureAwait(false);
-                    await session.ApplyMetaMaintenanceTickAsync(last, token).ConfigureAwait(false);
 
                     RaiseChanged(DysonRuntimeChangeKind.SessionGraph, sessionId);
                 }

@@ -1,10 +1,13 @@
+using System.Text.Json.Nodes;
+
 using DysonHarness;
 
 namespace Harness.Tests;
 
 /// <summary>
 /// Plan first-turn Explore mandate + chrome-skipped rename-review slots on
-/// Completions and Responses transcripts (ephemeral, not stored on Instruction).
+/// Completions and Responses transcripts (kept on that user message after completion;
+/// not stored on Instruction).
 /// </summary>
 public class DysonPlanFirstTurnMandateTests
 {
@@ -21,12 +24,12 @@ public class DysonPlanFirstTurnMandateTests
         AssertPlanMandateAbsentOnSecondPlanTurn();
         AssertPlanMandateAbsentOnWorkFirstTurn();
         AssertPlanMandateAbsentOnAskFirstTurn();
-        AssertPlanMandateAbsentOnCompletedFirstPlanTurn();
+        AssertPlanMandatePresentOnCompletedFirstPlanTurn();
         AssertRenameReviewPresentCleanWorkFirstTurn();
         AssertRenameReviewPresentAskCta();
         AssertRenameReviewAndPlanMandatePresentPickerSwitch();
         AssertRenameReviewAbsentOnSecondEligibleTurn();
-        AssertRenameReviewAbsentOnCompletedFirstTurn();
+        AssertRenameReviewPresentOnCompletedFirstTurn();
         AssertStartSubagentCatalogWording();
     }
 
@@ -90,7 +93,11 @@ public class DysonPlanFirstTurnMandateTests
         session.AppendModeSwitchTurn(DysonAgentModes.Work, DysonAgentModes.Plan);
         session.AddTurnForTest(Completed(DysonAgentSession.CreateNormalTurn("first plan prompt")));
         session.AddTurnForTest(DysonAgentSession.CreateNormalTurn("second plan prompt"));
-        AssertBoth(session, json => MustNotContain(json, PlanNeedle, "second Plan prompt"));
+        AssertBoth(session, json => AssertUserMessageOmits(
+            json,
+            "second plan prompt",
+            PlanNeedle,
+            "second Plan prompt"));
     }
 
     private static void AssertPlanMandateAbsentOnWorkFirstTurn()
@@ -113,11 +120,15 @@ public class DysonPlanFirstTurnMandateTests
         AssertBoth(session, json => MustNotContain(json, PlanNeedle, "Ask first turn"));
     }
 
-    private static void AssertPlanMandateAbsentOnCompletedFirstPlanTurn()
+    private static void AssertPlanMandatePresentOnCompletedFirstPlanTurn()
     {
+        var turn = Completed(DysonAgentSession.CreateNormalTurn("already planned"));
+        if (turn.Instruction!.Contains(PlanNeedle, StringComparison.Ordinal))
+            throw new InvalidOperationException("Instruction must stay free of the Plan mandate.");
+
         var session = new StubSession(DysonAgentModes.Plan);
-        session.AddTurnForTest(Completed(DysonAgentSession.CreateNormalTurn("already planned")));
-        AssertBoth(session, json => MustNotContain(json, PlanNeedle, "completed first Plan turn"));
+        session.AddTurnForTest(turn);
+        AssertBoth(session, json => MustContain(json, PlanNeedle, "completed first Plan turn"));
     }
 
     private static void AssertRenameReviewPresentCleanWorkFirstTurn()
@@ -167,14 +178,22 @@ public class DysonPlanFirstTurnMandateTests
         session.AppendDisplayInfoTurn("Ask me anything");
         session.AddTurnForTest(Completed(DysonAgentSession.CreateNormalTurn("first eligible")));
         session.AddTurnForTest(DysonAgentSession.CreateNormalTurn("second eligible"));
-        AssertBoth(session, json => MustNotContain(json, RenameNeedle, "eligible slot 2"));
+        AssertBoth(session, json => AssertUserMessageOmits(
+            json,
+            "second eligible",
+            RenameNeedle,
+            "eligible slot 2"));
     }
 
-    private static void AssertRenameReviewAbsentOnCompletedFirstTurn()
+    private static void AssertRenameReviewPresentOnCompletedFirstTurn()
     {
+        var turn = Completed(DysonAgentSession.CreateNormalTurn("already answered"));
+        if (turn.Instruction!.Contains(RenameNeedle, StringComparison.Ordinal))
+            throw new InvalidOperationException("Instruction must stay free of the rename mandate.");
+
         var session = new StubSession(DysonAgentModes.Work);
-        session.AddTurnForTest(Completed(DysonAgentSession.CreateNormalTurn("already answered")));
-        AssertBoth(session, json => MustNotContain(json, RenameNeedle, "completed first turn"));
+        session.AddTurnForTest(turn);
+        AssertBoth(session, json => MustContain(json, RenameNeedle, "completed first turn"));
     }
 
     private static void AssertStartSubagentCatalogWording()
@@ -201,6 +220,14 @@ public class DysonPlanFirstTurnMandateTests
         {
             throw new InvalidOperationException(
                 "StartSubagent description must contain the Work/Drone Explore-blocker wait policy.");
+        }
+
+        const string listBeforeSpawn =
+            "Before calling this tool, call ListSubagents. If an existing subagent already owns the work, reuse it with TriggerSubagentEvent instead of spawning a duplicate.";
+        if (!start.Description.Contains(listBeforeSpawn, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "StartSubagent description must tell the caller to list subagents and reuse with TriggerSubagentEvent.");
         }
 
         if (!pipeline.Tools.TryGetValue("WaitForSubagent", out var wait))
@@ -250,6 +277,32 @@ public class DysonPlanFirstTurnMandateTests
     {
         if (json.Contains(needle, StringComparison.Ordinal))
             throw new InvalidOperationException($"{label}: transcript must not contain '{needle}'.");
+    }
+
+    private static void AssertUserMessageOmits(string json, string promptNeedle, string mandateNeedle, string label)
+    {
+        var root = JsonNode.Parse(json) as JsonArray
+            ?? throw new InvalidOperationException($"{label}: expected a JSON array.");
+        string? message = null;
+        foreach (var node in root)
+        {
+            if (node is not JsonObject obj)
+                continue;
+            if (!string.Equals(obj["role"]?.GetValue<string>(), "user", StringComparison.Ordinal))
+                continue;
+            if (obj["content"]?.GetValue<string>() is not { } text)
+                continue;
+            if (text.Contains(promptNeedle, StringComparison.Ordinal))
+                message = text;
+        }
+
+        if (message is null)
+            throw new InvalidOperationException($"{label}: user message '{promptNeedle}' missing.");
+        if (message.Contains(mandateNeedle, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{label}: that user message must not contain '{mandateNeedle}'.");
+        }
     }
 
     private static DysonAgentTurn Completed(DysonAgentTurn turn)

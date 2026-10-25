@@ -410,6 +410,101 @@ public sealed partial class DysonWorkspaceToolExecutor
         return Ok(call, """{"ok":true}""");
     }
 
+    private async Task<DysonToolCallResult> SpeakToUser(DysonToolCall call, CancellationToken cancellationToken)
+    {
+        var denied = RejectUnlessMetaAgent(call, "SpeakToUser");
+        if (denied is not null)
+            return denied;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var text = RequireString(doc.RootElement, "text");
+            if (text.IsError)
+                return Error(call, text.Error);
+
+            var voice = _session.Config.Voice;
+            if (voice is null)
+                return Error(call, "SpeakToUser: voice mode is off.");
+
+            var focus = _session.Config.Focus;
+            var name = focus is null
+                ? ""
+                : await focus.GetDisplayNameAsync(_workDirectoryId, cancellationToken).ConfigureAwait(false);
+
+            var spoken = voice.Speak(text.Value, _workDirectoryId, name);
+            if (spoken.IsError)
+                return Error(call, "SpeakToUser: " + spoken.Error);
+
+            return Ok(call, """{"ok":true}""");
+        }
+        catch (JsonException)
+        {
+            return Error(call, "SpeakToUser: invalid JSON arguments.");
+        }
+    }
+
+    private async Task<DysonToolCallResult> ListWorkdirsAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var denied = RejectUnlessMetaAgent(call, "ListWorkdirs");
+        if (denied is not null)
+            return denied;
+
+        var focus = _session.Config.Focus;
+        if (focus is null)
+            return Error(call, DysonWorkDirectoryFocus.NotOwnerMessage);
+
+        var listed = await focus.ListJsonAsync(_workDirectoryId, cancellationToken).ConfigureAwait(false);
+        return listed.IsError ? Error(call, listed.Error) : Ok(call, listed.Value);
+    }
+
+    private async Task<DysonToolCallResult> OpenWorkdirsPanelAsync(DysonToolCall call)
+    {
+        var denied = RejectUnlessMetaAgent(call, "OpenWorkdirsPanel");
+        if (denied is not null)
+            return denied;
+
+        var focus = _session.Config.Focus;
+        if (focus is null)
+            return Error(call, DysonWorkDirectoryFocus.NotOwnerMessage);
+
+        var opened = await focus.OpenPanelAsync(_workDirectoryId).ConfigureAwait(false);
+        return opened.IsError ? Error(call, opened.Error) : Ok(call, """{"ok":true}""");
+    }
+
+    private async Task<DysonToolCallResult> SwitchWorkdirAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        var denied = RejectUnlessMetaAgent(call, "SwitchWorkdir");
+        if (denied is not null)
+            return denied;
+
+        Guid id;
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var raw = RequireString(doc.RootElement, "id");
+            if (raw.IsError)
+                return Error(call, "SwitchWorkdir: " + raw.Error);
+            if (!Guid.TryParse(raw.Value, out id))
+                return Error(call, "SwitchWorkdir: id must be a Guid.");
+        }
+        catch (JsonException)
+        {
+            return Error(call, "SwitchWorkdir: invalid JSON arguments.");
+        }
+
+        var focus = _session.Config.Focus;
+        if (focus is null)
+            return Error(call, DysonWorkDirectoryFocus.NotOwnerMessage);
+
+        var switched = await focus.SwitchAsync(_workDirectoryId, id, cancellationToken).ConfigureAwait(false);
+        return switched.IsError ? Error(call, switched.Error) : Ok(call, """{"ok":true}""");
+    }
+
     private const int MaxConversationActions = 8;
     private const int MaxUserQuestionChoices = 12;
 
@@ -667,13 +762,6 @@ public sealed partial class DysonWorkspaceToolExecutor
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
-        if (!IsMetaAgentOrDrone())
-        {
-            return Error(
-                call,
-                "ReadMetaPlan is only available in Meta Agent and Meta Agent Drone modes.");
-        }
-
         long planId;
         try
         {
@@ -698,14 +786,18 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (loaded.IsError)
             return Error(call, loaded.Error);
 
+        // Full body, no 64KiB clip: EditMetaPlan old_text must be copyable from anywhere in the markdown.
         var plan = loaded.Value;
-        return Ok(call, JsonSerializer.Serialize(new
-        {
-            planId = plan.Id,
-            title = plan.Title,
-            markdown = plan.Markdown,
-            status = plan.Status.ToString().ToLowerInvariant(),
-        }));
+        return Ok(
+            call,
+            JsonSerializer.Serialize(new
+            {
+                planId = plan.Id,
+                title = plan.Title,
+                markdown = plan.Markdown,
+                status = plan.Status.ToString().ToLowerInvariant(),
+            }),
+            applyContentLimit: false);
     }
 
     private async Task<DysonToolCallResult> ListPlansAsync(
@@ -725,7 +817,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (_workDirectoryId == Guid.Empty)
             return Error(call, "Work directory is required to list plans.");
 
-        var listed = await _plans.ListAsync(_workDirectoryId, cancellationToken).ConfigureAwait(false);
+        var listed = await _plans.ListAsync(_workDirectoryId, cancellationToken: cancellationToken).ConfigureAwait(false);
         if (listed.IsError)
             return Error(call, listed.Error);
 
@@ -814,6 +906,8 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         long planId;
         string? extraInstructions;
+        string? modelSlug;
+        string? reasoningEffort;
         int? agentId;
         try
         {
@@ -823,6 +917,8 @@ public sealed partial class DysonWorkspaceToolExecutor
                 return Error(call, DysonMetaAgentTools.PlanIdMustBePositiveMessage);
             planId = id.Value;
             extraInstructions = GetOptionalString(doc.RootElement, "extraInstructions");
+            modelSlug = GetOptionalString(doc.RootElement, "modelSlug");
+            reasoningEffort = GetOptionalString(doc.RootElement, "reasoningEffort");
             agentId = GetInt(doc.RootElement, "agentId");
             if (agentId is < 1)
                 return Error(call, "BeginBuildPlan: agentId (≥ 1) is required when provided.");
@@ -843,6 +939,14 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Error(call, loaded.Error);
 
         var plan = loaded.Value;
+        // Before any spawn/trigger: UpdateAsync would refuse the archived row only after a drone exists.
+        if (plan.ArchivedUtc is not null)
+        {
+            return Error(
+                call,
+                $"BeginBuildPlan: plan {planId} is archived. The user restores it from the Archived section.");
+        }
+
         var liveBuilder = FindLiveBuilder(plan.BuildAgentId);
         if (liveBuilder is not null
             && (agentId is null || agentId.Value != liveBuilder.Id))
@@ -876,8 +980,8 @@ public sealed partial class DysonWorkspaceToolExecutor
                     brief,
                     context: null,
                     initialTodos: null,
-                    modelSlug: null,
-                    reasoningEffort: null,
+                    modelSlug,
+                    reasoningEffort,
                     useWorktree: true,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -957,16 +1061,17 @@ public sealed partial class DysonWorkspaceToolExecutor
                 $"DeletePlan: plan {planId} is Building. Call SetPlanStatus with stale, or stop the builder first.");
         }
 
-        var deleted = await _plans.DeleteAsync(planId, _workDirectoryId, cancellationToken).ConfigureAwait(false);
-        if (deleted.IsError)
-            return Error(call, deleted.Error);
+        var archived = await _plans.ArchiveAsync(planId, _workDirectoryId, cancellationToken).ConfigureAwait(false);
+        if (archived.IsError)
+            return Error(call, archived.Error);
 
         PublishPlansChanged(planId);
-        _session.AppendLog($"DeletePlan #{planId}: {reason}");
+        _session.AppendLog($"DeletePlan #{planId} archived: {reason}");
         return Ok(call, JsonSerializer.Serialize(new
         {
             ok = true,
             planId,
+            archived = true,
         }));
     }
 

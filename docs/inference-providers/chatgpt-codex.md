@@ -97,12 +97,13 @@ Documented HTTP paths:
 | Nested `reasoning.effort` | Wired on Responses (`OpenAiResponsesClient` → `reasoning: { effort }`) |
 | Nested `reasoning.mode` | Upstream contract; **not wired yet** |
 | `prompt_cache_key` | Always sent (session-scoped) |
-| `prompt_cache_options` / explicit breakpoints | Direct `api.openai.com` GPT-5.6+ only — **omitted** for CLIProxy managed (`ManagedSource=cliproxy-codex`) |
+| `prompt_cache_options` / explicit breakpoints | Direct and custom GPT-5.6+ (`ManagedSource` null) — **omitted** for CLIProxy managed (`ManagedSource=cliproxy-codex`) |
+| Prompt cache (CLIProxy managed) | Full replay every tool hop: stable prefix, `prompt_cache_key`, no Anthropic `cache_control`, no Claude cache-anchor line |
 | ChatGPT OAuth + `ChatGPT-Account-ID` (direct) | Prefer CLIProxy managed provider; direct harness OAuth **not wired** |
 | Base `https://chatgpt.com/backend-api/codex` | **not wired** as a first-party Dyson endpoint (CLIProxy mediates) |
 | Codex SDK / `codex exec` host | **not wired yet** |
-| Responses tool-loop (direct API key) | `store: true` + `previous_response_id` delta hops (`function_call_output` only); always resends `instructions` + `tools`. On exact 400 “No tool call found for function call output…”, one full-replay retry |
-| Responses tool-loop (CLIProxy managed) | Stateless: `store: false`, never `previous_response_id`; full local replay `reasoning` (with `encrypted_content`) → `function_call` → `function_call_output`; `include: ["reasoning.encrypted_content"]` |
+| Responses tool-loop (direct API key, and any custom Responses row with `ManagedSource` unset) | Store chaining: `store: true` + `previous_response_id` delta hops (`function_call_output` only); always resends `instructions` + `tools`. On exact 400 “No tool call found for function call output…”, one full-replay retry. Later tool hops stay on that chain |
+| Responses tool-loop (CLIProxy managed) | Full replay every tool hop: `store: false`, never `previous_response_id`; stable prefix; `reasoning` (with `encrypted_content`) → `function_call` → `function_call_output`; `include: ["reasoning.encrypted_content"]`. No `cache_control` |
 | `call_id` | Always model `call_…` (never item `fc_…` / Guid) for `function_call_output` |
 
 ## Gotchas

@@ -9,16 +9,15 @@ public static class DysonExpandThoughtProcess
         The system requires you to lay out a small plan for the agent to use as reference in the next turns.
         Express the localized problem, formulate an understanding, and give guidance for the next turns.
         Use this turn to reformulate the problem so you do not get confused as context grows.
-        Stay concise and actionable. Do not call tools unless essential to clarify a factual gap or to drop truly irrelevant context; prefer writing the plan in your reply.
+        Stay concise and actionable. Do not call tools unless essential to clarify a factual gap or to drop low-value context; prefer writing the plan in your reply.
 
-        Context hygiene (optional SummarizeTurns / DropTurnContext — also available on Normal turns):
-        - Each prior turn in history is labeled with its turn id (see turn header in the transcript). Use those ids with SummarizeTurns or DropTurnContext (requires reason).
-        - Prefer SummarizeTurns when earlier turns still have useful facts but are too verbose for later prompts.
-        - If earlier turns in this session are entirely irrelevant to the current problem and would cause major confusion if kept in the model context, call DropTurnContext with those turn ids to exclude them from future provider transcripts.
-        - Only drop turns that are true noise with no remaining purpose for this task (wrong rabbit hole, obsolete exploration, superseded dead end).
-        - When in doubt, do not drop anything. Prefer summarize over drop; prefer keeping context over aggressive pruning.
-        - RestoreTurnContext is available to undo a drop if you need those turns back; do not treat restore as required hygiene.
-        - After summarizing/dropping (if any), write your reformulation assuming excluded turns will not appear in later prompts.
+        Context hygiene (optional DropTurnContext — also available on Normal turns):
+        - Each prior turn in history is labeled with its turn id (see turn header in the transcript). Use those ids with DropTurnContext (requires turnIds, reason, and resume).
+        - When several earlier turns are large and serve little purpose for the current task, drop at least a few of them; prefer those over small turns that still matter.
+        - resume is required and must stay under 1000 tokens: your own account of what the dropped turns included (name each turn id and what it held). An empty or over-cap resume fails the whole call and drops nothing.
+        - The harness appends the resume to this turn's reply, prefixed with the dropped turn ids. Later transcripts keep that reply; the dropped turns themselves are omitted.
+        - RestoreTurnContext brings a dropped turn back and does not remove that reply; do not treat restore as required hygiene.
+        - After dropping (if any), write your reformulation assuming dropped turns are omitted and the resume stays on this turn's reply.
         """;
 
     /// <summary>

@@ -22,8 +22,8 @@ public enum DysonAgentTurnKind
     /// </summary>
     ModeSwitch = 12,
     /// <summary>
-    /// Context budget hygiene: agent may DropTurnContext on turns older than the last four
-    /// when estimated outgoing tokens exceed the session max target.
+    /// Obsolete: the harness no longer creates these (the automatic Drop Context inject was removed).
+    /// Kept so old rows still load and render.
     /// </summary>
     DropContext = 13,
     /// <summary>
@@ -47,7 +47,8 @@ public enum DysonAgentTurnKind
     /// </summary>
     WorktreeCreating = 17,
     /// <summary>
-    /// Meta Agent maintenance tick: prune finished agents and/or evict old turns.
+    /// Obsolete: the harness no longer creates these (the Meta Agent maintenance tick was removed).
+    /// Kept so old rows still load and render.
     /// </summary>
     MetaMaintenance = 18,
     /// <summary>

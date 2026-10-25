@@ -30,7 +30,7 @@ public static class DysonUserImagesSerializer
                 MimeType = image.MimeType,
                 Base64Data = image.Base64Data,
                 HtmlRef = string.IsNullOrWhiteSpace(image.HtmlRef) ? null : image.HtmlRef.Trim(),
-                RemoteUrl = string.IsNullOrWhiteSpace(image.RemoteUrl) ? null : image.RemoteUrl.Trim(),
+                RemoteUrl = image.GetReplayWire(capture: false).RemoteUrl,
                 ObjectKey = string.IsNullOrWhiteSpace(image.ObjectKey) ? null : image.ObjectKey.Trim(),
                 RemoteUrlExpiresUtc = image.RemoteUrlExpiresUtc,
             });

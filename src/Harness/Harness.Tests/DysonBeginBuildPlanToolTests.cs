@@ -108,4 +108,69 @@ public class DysonBeginBuildPlanToolTests
         Assert.Contains(drone.PromptInstructions, i => i.Contains(planId.ToString(), StringComparison.Ordinal));
         Assert.DoesNotContain(drone.PromptInstructions, i => i.Contains("layout-only", StringComparison.OrdinalIgnoreCase));
     }
+
+    [Fact]
+    public async Task Spawn_forwards_supplied_modelSlug_and_reasoningEffort()
+    {
+        await using var fixture = await DysonPlanToolFixture.CreateAsync();
+        var planId = await fixture.CreatePlanAsync("Model");
+
+        using var http = new HttpClient();
+        var session = new DysonPlanToolStubSession(DysonAgentModes.MetaAgent);
+        var executor = await fixture.ExecutorAsync(session, http);
+
+        var started = await executor.ExecuteAsync(new DysonToolCall
+        {
+            CallId = "1",
+            ToolName = "BeginBuildPlan",
+            Stage = 0,
+            ArgumentsJson = $$"""{"planId":{{planId}},"modelSlug":"grok-4.7","reasoningEffort":"high"}""",
+        });
+        Assert.False(started.IsError, started.Content);
+        Assert.Equal("grok-4.7", session.LastModelSlug);
+        Assert.Equal("high", session.LastReasoningEffort);
+    }
+
+    [Fact]
+    public async Task Spawn_leaves_model_and_effort_null_when_omitted()
+    {
+        await using var fixture = await DysonPlanToolFixture.CreateAsync();
+        var planId = await fixture.CreatePlanAsync("Omit");
+
+        using var http = new HttpClient();
+        var session = new DysonPlanToolStubSession(DysonAgentModes.MetaAgent);
+        var executor = await fixture.ExecutorAsync(session, http);
+
+        var started = await executor.ExecuteAsync(new DysonToolCall
+        {
+            CallId = "1",
+            ToolName = "BeginBuildPlan",
+            Stage = 0,
+            ArgumentsJson = $$"""{"planId":{{planId}}}""",
+        });
+        Assert.False(started.IsError, started.Content);
+        Assert.Null(session.LastModelSlug);
+        Assert.Null(session.LastReasoningEffort);
+    }
+
+    [Fact]
+    public void BeginBuildPlan_schema_model_fields_are_optional()
+    {
+        var pipeline = DysonSessionToolsetBuilder.Build(
+            new DysonAgentSessionConfig(),
+            DysonAgentModes.MetaAgent);
+
+        Assert.True(pipeline.Tools.TryGetValue("BeginBuildPlan", out var begin));
+        using var beginDoc = JsonDocument.Parse(begin!.InputSchemaJson);
+        var props = beginDoc.RootElement.GetProperty("properties");
+        Assert.Equal("string", props.GetProperty("modelSlug").GetProperty("type").GetString());
+        Assert.Equal("string", props.GetProperty("reasoningEffort").GetProperty("type").GetString());
+        var required = beginDoc.RootElement.GetProperty("required");
+        Assert.Equal(1, required.GetArrayLength());
+        Assert.Equal("planId", required[0].GetString());
+
+        Assert.True(pipeline.Tools.TryGetValue("StartAsyncExploreAgent", out var explore));
+        using var exploreDoc = JsonDocument.Parse(explore!.InputSchemaJson);
+        Assert.False(exploreDoc.RootElement.GetProperty("properties").TryGetProperty("modelSlug", out _));
+    }
 }

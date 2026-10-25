@@ -112,6 +112,16 @@ public sealed class DysonSessionRepository(
         return _accessor.RunAsync((db, ct) => GetFullSessionCoreAsync(db, subjectId, sessionId, ct), cancellationToken);
     }
 
+    public Task<Result<Guid?, string>> GetCompactionPendingTurnIdAsync(
+        Guid sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        var subjectId = _subjectContext.SubjectId;
+        return _accessor.RunAsync(
+            (db, ct) => GetCompactionPendingTurnIdCoreAsync(db, subjectId, sessionId, ct),
+            cancellationToken);
+    }
+
     public Task<Result<IReadOnlyList<DysonSessionUnfinishedWorkSummary>, string>>
         ListActiveSessionsWithUnfinishedTurnsAsync(CancellationToken cancellationToken = default)
     {
@@ -294,6 +304,9 @@ public sealed class DysonSessionRepository(
 
             if (update.UpdateMaxTargetContextTokens)
                 entity.MaxTargetContextTokens = update.MaxTargetContextTokens;
+
+            if (update.UpdateCompactionPending)
+                entity.CompactionPendingTurnId = update.CompactionPendingTurnId;
 
             if (update.AgentMode is not null)
                 entity.AgentMode = update.AgentMode;
@@ -585,6 +598,31 @@ public sealed class DysonSessionRepository(
         {
             return Result<DysonPersistedSession, string>.AsError(
                 $"Failed to load full session: {ex.Message}");
+        }
+    }
+
+    private static async Task<Result<Guid?, string>> GetCompactionPendingTurnIdCoreAsync(
+        DysonDbContext db,
+        string subjectId,
+        Guid sessionId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var row = await db.Sessions
+                .AsNoTracking()
+                .Where(s => s.Id == sessionId && s.SubjectId == subjectId)
+                .Select(s => new { s.CompactionPendingTurnId })
+                .FirstOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            return row is null
+                ? Result<Guid?, string>.AsError($"Session '{sessionId}' not found.")
+                : Result<Guid?, string>.AsValue(row.CompactionPendingTurnId);
+        }
+        catch (Exception ex) when (!DysonDbAccessor.IsSqliteBusyOrLocked(ex))
+        {
+            return Result<Guid?, string>.AsError($"Failed to read compaction marker: {ex.Message}");
         }
     }
 

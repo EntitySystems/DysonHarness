@@ -4,23 +4,16 @@ using DysonHarness;
 namespace Harness.Tests;
 
 /// <summary>
-/// ponytail: DropContext kind/flow, max-target resolve cascade, outgoing token counter,
-/// inject gate / throttle / PromptWithTurn seam (Xunit Fact).
+/// ponytail: DropContext kind (old rows), max-target resolve cascade, outgoing token counter (Xunit Fact).
 /// </summary>
 public class DysonDropContextTests
 {
     [Fact]
-    public async Task Run()
+    public void Run()
     {
         AssertKindAndDisplay();
-        AssertFactoryAndPhase();
         AssertResolveCascade();
         AssertFormatCompact();
-        AssertHasDroppableOlderTurn();
-        AssertShouldInjectGate();
-        AssertThrottle();
-        AssertDecisionLogging();
-        await AssertPromptWithTurnPrependsDropContextAsync();
         AssertOutgoingCounterCountsTranscript();
         AssertTryParsePromptTokens();
         AssertImagePlaceholder();
@@ -36,50 +29,19 @@ public class DysonDropContextTests
             throw new InvalidOperationException($"DropContext label expected 'Drop context', got '{label}'.");
     }
 
-    private static void AssertFactoryAndPhase()
-    {
-        if (DysonDropContextFlow.KeepRecentTurns != 4)
-            throw new InvalidOperationException("KeepRecentTurns must be 4.");
-
-        if (DysonDropContextFlow.MinUserTurnsBetweenInject != 5)
-            throw new InvalidOperationException("MinUserTurnsBetweenInject must be 5.");
-
-        var turn = DysonDropContextFlow.CreateTurn();
-        if (turn.Kind != DysonAgentTurnKind.DropContext
-            || string.IsNullOrWhiteSpace(turn.Instruction)
-            || !turn.Instruction.Contains("DropTurnContext", StringComparison.Ordinal)
-            || !turn.Instruction.Contains("SummarizeTurns", StringComparison.Ordinal)
-            || !turn.Instruction.Contains("last 4", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException(
-                "CreateTurn must set DropContext kind and mention SummarizeTurns / DropTurnContext / last 4.");
-        }
-
-        var session = new StubSession(DysonAgentModes.Work);
-        if (session.IsInDropContextPhase)
-            throw new InvalidOperationException("Empty session must not be in DropContext phase.");
-
-        session.AddTurnForTest(turn);
-        if (!session.IsInDropContextPhase)
-            throw new InvalidOperationException("In-flight DropContext turn must set IsInDropContextPhase.");
-
-        turn.CompletedUtc = DateTime.UtcNow;
-        if (session.IsInDropContextPhase)
-            throw new InvalidOperationException("Completed DropContext must clear IsInDropContextPhase.");
-    }
-
     private static void AssertResolveCascade()
     {
-        if (DysonMaxTargetContextTokens.Resolve(null, null) != DysonMaxTargetContextTokens.HarnessDefault)
-            throw new InvalidOperationException("Null session+slug must resolve to harness 100K.");
+        if (DysonMaxTargetContextTokens.Resolve(null, null) != DysonMaxTargetContextTokens.HarnessDefault
+            || DysonMaxTargetContextTokens.HarnessDefault != 200_000)
+            throw new InvalidOperationException("Null session+slug must resolve to harness 200K.");
 
-        if (DysonMaxTargetContextTokens.Resolve(null, 200_000) != 200_000)
+        if (DysonMaxTargetContextTokens.Resolve(null, 120_000) != 120_000)
             throw new InvalidOperationException("Slug default must win when session is null.");
 
-        if (DysonMaxTargetContextTokens.Resolve(50_000, 200_000) != 50_000)
+        if (DysonMaxTargetContextTokens.Resolve(50_000, 120_000) != 50_000)
             throw new InvalidOperationException("Session override must win over slug default.");
 
-        if (DysonMaxTargetContextTokens.Resolve(0, 200_000) != 0)
+        if (DysonMaxTargetContextTokens.Resolve(0, 120_000) != 0)
             throw new InvalidOperationException("Session 0 (Off) must win over slug default.");
 
         var session = new StubSession(DysonAgentModes.Work)
@@ -105,164 +67,6 @@ public class DysonDropContextTests
             throw new InvalidOperationException("0 estimate must format as 0.");
         if (DysonMaxTargetContextTokens.FormatCompact(12_400) != "12.4K")
             throw new InvalidOperationException("12_400 must format as 12.4K.");
-    }
-
-    private static void AssertHasDroppableOlderTurn()
-    {
-        var turns = new List<DysonAgentTurn>();
-        for (var i = 0; i < 4; i++)
-            turns.Add(Normal($"t{i}"));
-
-        if (DysonDropContextFlow.HasDroppableOlderTurn(turns))
-            throw new InvalidOperationException("4 turns or fewer must not be droppable.");
-
-        turns.Insert(0, Normal("old"));
-        if (!DysonDropContextFlow.HasDroppableOlderTurn(turns))
-            throw new InvalidOperationException("Turn before keep-recent window must be droppable.");
-
-        turns[0].IsExcludedFromContext = true;
-        if (DysonDropContextFlow.HasDroppableOlderTurn(turns))
-            throw new InvalidOperationException("Already-excluded older turn must not count as droppable.");
-    }
-
-    private static void AssertShouldInjectGate()
-    {
-        var session = new StubSession(DysonAgentModes.Work)
-        {
-            MaxTargetContextTokens = 0,
-        };
-        for (var i = 0; i < 5; i++)
-            session.AddTurnForTest(Normal($"seed-{i}"));
-
-        if (DysonDropContextFlow.ShouldInjectDropContext(session))
-            throw new InvalidOperationException("Off (0) must never inject DropContext.");
-
-        var off = DysonDropContextFlow.EvaluateInject(session);
-        if (off.ShouldInject || off.SkipReason != "off")
-            throw new InvalidOperationException("Off must evaluate skip reason 'off'.");
-
-        session.MaxTargetContextTokens = 1;
-        if (!DysonDropContextFlow.ShouldInjectDropContext(session))
-            throw new InvalidOperationException("Tiny max with droppable history must inject (first).");
-
-        session.AddTurnForTest(DysonDropContextFlow.CreateTurn());
-        if (DysonDropContextFlow.ShouldInjectDropContext(session))
-            throw new InvalidOperationException("In-flight DropContext must block nested inject.");
-
-        var inPhase = DysonDropContextFlow.EvaluateInject(session);
-        if (inPhase.SkipReason != "in-phase")
-            throw new InvalidOperationException("In-flight DropContext must evaluate skip reason 'in-phase'.");
-    }
-
-    private static void AssertThrottle()
-    {
-        var session = OverLimitSession();
-
-        // First inject allowed (never DropContext'd).
-        if (!DysonDropContextFlow.ShouldInjectDropContext(session))
-            throw new InvalidOperationException("First over-limit inject must be allowed.");
-
-        if (DysonDropContextFlow.CountUserTurnsSinceLatestDropContext(session.Turns) != int.MaxValue)
-            throw new InvalidOperationException("No prior DropContext must report MaxValue user-turn count.");
-
-        var drop = DysonDropContextFlow.CreateTurn();
-        drop.CompletedUtc = DateTime.UtcNow;
-        session.AddTurnForTest(drop);
-
-        // 0 user turns since DropContext → throttle.
-        if (DysonDropContextFlow.CountUserTurnsSinceLatestDropContext(session.Turns) != 0)
-            throw new InvalidOperationException("Immediate post-DropContext user-turn count must be 0.");
-
-        var throttled = DysonDropContextFlow.EvaluateInject(session);
-        if (throttled.ShouldInject || throttled.SkipReason != "throttle")
-            throw new InvalidOperationException("Fewer than 5 user turns after DropContext must skip throttle.");
-
-        // 4 Normal turns — still throttle.
-        for (var i = 0; i < 4; i++)
-            session.AddTurnForTest(Normal($"post-drop-{i}"));
-
-        if (DysonDropContextFlow.CountUserTurnsSinceLatestDropContext(session.Turns) != 4)
-            throw new InvalidOperationException("Expected 4 user turns since DropContext.");
-
-        if (DysonDropContextFlow.ShouldInjectDropContext(session))
-            throw new InvalidOperationException("4 user turns after DropContext must still throttle.");
-
-        // InitializeSession counts toward the 5.
-        session.AddTurnForTest(new DysonAgentTurn
-        {
-            Kind = DysonAgentTurnKind.InitializeSession,
-            Instruction = "init",
-            StartedUtc = DateTime.UtcNow,
-            CompletedUtc = DateTime.UtcNow,
-        });
-
-        if (DysonDropContextFlow.CountUserTurnsSinceLatestDropContext(session.Turns) != 5)
-            throw new InvalidOperationException("InitializeSession must count as a user turn for throttle.");
-
-        if (!DysonDropContextFlow.ShouldInjectDropContext(session))
-            throw new InvalidOperationException("5 user turns after DropContext must allow inject.");
-    }
-
-    private static void AssertDecisionLogging()
-    {
-        var session = OverLimitSession();
-        if (!DysonDropContextFlow.TryBeginInject(session))
-            throw new InvalidOperationException("TryBeginInject must return true when gate passes.");
-
-        var logs = session.SnapshotLog();
-        if (!logs.Any(l => l.StartsWith("drop-context: inject (", StringComparison.Ordinal)))
-            throw new InvalidOperationException("Inject must AppendLog drop-context: inject …");
-
-        var drop = DysonDropContextFlow.CreateTurn();
-        drop.CompletedUtc = DateTime.UtcNow;
-        session.AddTurnForTest(drop);
-
-        if (DysonDropContextFlow.TryBeginInject(session))
-            throw new InvalidOperationException("TryBeginInject must return false while throttled.");
-
-        logs = session.SnapshotLog();
-        if (!logs.Any(l => l.Contains("drop-context: skip (throttle;", StringComparison.Ordinal)))
-            throw new InvalidOperationException("Over-max throttle skip must AppendLog skip reason.");
-    }
-
-    /// <summary>
-    /// Thin PromptWithTurn seam: when over limit, DropContext is prepended before the user turn.
-    /// </summary>
-    private static async Task AssertPromptWithTurnPrependsDropContextAsync()
-    {
-        var session = OverLimitSession();
-        var user = Normal("user prompt after over-limit");
-        user.CompletedUtc = null;
-
-        var result = await session.PromptWithTurnForTestAsync(user).ConfigureAwait(false);
-        if (result.IsError)
-            throw new InvalidOperationException($"PromptWithTurnForTestAsync failed: {result.Error}");
-
-        if (session.Turns.Count < 2)
-            throw new InvalidOperationException("Inject path must append DropContext then user turn.");
-
-        var drop = session.Turns[^2];
-        var last = session.Turns[^1];
-        if (drop.Kind != DysonAgentTurnKind.DropContext)
-            throw new InvalidOperationException("Second-to-last turn must be injected DropContext.");
-
-        if (!ReferenceEquals(last, user) || last.Kind != DysonAgentTurnKind.Normal)
-            throw new InvalidOperationException("Last turn must be the original user turn.");
-
-        var logs = session.SnapshotLog();
-        if (!logs.Any(l => l.StartsWith("drop-context: inject (", StringComparison.Ordinal)))
-            throw new InvalidOperationException("PromptWithTurn inject must log drop-context: inject.");
-    }
-
-    private static StubSession OverLimitSession()
-    {
-        var session = new StubSession(DysonAgentModes.Work)
-        {
-            MaxTargetContextTokens = 1,
-        };
-        for (var i = 0; i < 5; i++)
-            session.AddTurnForTest(Normal($"over-limit-{i}"));
-        return session;
     }
 
     private static void AssertOutgoingCounterCountsTranscript()
@@ -322,15 +126,6 @@ public class DysonDropContextTests
         }
     }
 
-    private static DysonAgentTurn Normal(string instruction) =>
-        new()
-        {
-            Kind = DysonAgentTurnKind.Normal,
-            Instruction = instruction,
-            StartedUtc = DateTime.UtcNow,
-            CompletedUtc = DateTime.UtcNow,
-        };
-
     private sealed class StubProvider : DysonAgentProvider;
 
     private sealed class StubSession(string mode) : DysonAgentSession(
@@ -339,34 +134,6 @@ public class DysonDropContextTests
         new StubProvider())
     {
         public void AddTurnForTest(DysonAgentTurn turn) => AddTurn(turn);
-
-        /// <summary>
-        /// Mirrors OpenAI/Demo <c>PromptWithTurnAsync</c> DropContext inject seam (no provider I/O).
-        /// </summary>
-        public async Task<VoidResult<string>> PromptWithTurnForTestAsync(
-            DysonAgentTurn turn,
-            bool allowDropContextInject = true)
-        {
-            ArgumentNullException.ThrowIfNull(turn);
-
-            OptimizeContextIfNeeded();
-
-            if (allowDropContextInject
-                && turn.Kind != DysonAgentTurnKind.DropContext
-                && turn.Kind != DysonAgentTurnKind.FullSummarize
-                && DysonDropContextFlow.TryBeginInject(this))
-            {
-                var dropTurn = CreateDropContextTurn();
-                var drop = await PromptWithTurnForTestAsync(dropTurn, allowDropContextInject: false)
-                    .ConfigureAwait(false);
-                if (drop.IsError)
-                    return drop;
-            }
-
-            AddTurn(turn);
-            turn.CompletedUtc ??= DateTime.UtcNow;
-            return VoidResult<string>.Success;
-        }
 
         public override Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
             string agentMode,

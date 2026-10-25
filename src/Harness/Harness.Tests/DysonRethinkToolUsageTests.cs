@@ -13,10 +13,14 @@ public class DysonRethinkToolUsageTests
     {
         AssertEnumAndFactories();
         AssertRethinkInstructionContent();
+        AssertMetaAgentPromptDoesNotPromiseRethink();
         AssertMaxToolRounds();
         AssertSoftPauseEnqueuesRethink();
         AssertSoftPauseOnRethinkDoesNotReenqueue();
         AssertSoftPauseOnExploreDoesNotEnqueue();
+        AssertSoftPauseOnMetaAgentDoesNotEnqueue();
+        AssertSoftPauseOnMetaAgentDroneEnqueues();
+        AssertSoftPauseOnReviewModesStillEnqueue();
         await AssertResumePhaseGuardAndEnqueue();
         await AssertResumeSurvivesPlanResultAppend();
         await AssertResumeSurvivesPrematureCompletedUtc();
@@ -116,6 +120,50 @@ public class DysonRethinkToolUsageTests
         }
     }
 
+    private static void AssertMetaAgentPromptDoesNotPromiseRethink()
+    {
+        var meta = PromptFor(DysonAgentModes.MetaAgent);
+        if (meta.IndexOf("Meta Agent mode does not get rethink turns", StringComparison.Ordinal) < 0
+            || meta.IndexOf("Non-Explore: schedules a RethinkToolUsage turn", StringComparison.Ordinal) >= 0)
+        {
+            throw new InvalidOperationException(
+                "Meta Agent prompt must say Meta Agent mode does not get a rethink turn.");
+        }
+
+        foreach (var mode in new[]
+        {
+            DysonAgentModes.MetaAgentDrone,
+            DysonAgentModes.BugReview,
+            DysonAgentModes.SecurityReview,
+        })
+        {
+            var prompt = PromptFor(mode);
+            if (prompt.IndexOf("schedules a RethinkToolUsage turn", StringComparison.Ordinal) < 0
+                || prompt.IndexOf($"{mode} does not get rethink", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                throw new InvalidOperationException(
+                    $"{mode} prompt must still say a rethink turn is scheduled.");
+            }
+        }
+
+        var explore = PromptFor(DysonAgentModes.Explore);
+        if (explore.IndexOf(
+                "Explore sessions do not get rethink turns: hitting the budget yields one final no-tools recap reply (findings may be incomplete).",
+                StringComparison.Ordinal) < 0)
+        {
+            throw new InvalidOperationException(
+                "Explore prompt must keep the no-rethink recap sentence.");
+        }
+    }
+
+    private static string PromptFor(string mode)
+    {
+        var prompt = DysonAgentSystemPrompts.ForMode(mode);
+        if (prompt.IsError)
+            throw new InvalidOperationException(prompt.Error);
+        return prompt.Value;
+    }
+
     private static void AssertMaxToolRounds()
     {
         if (OpenAiCompatibleAgentSession.MaxToolRounds != 50
@@ -201,6 +249,70 @@ public class DysonRethinkToolUsageTests
         {
             throw new InvalidOperationException(
                 "Explore soft-pause fallback must note incomplete findings.");
+        }
+    }
+
+    private static void AssertSoftPauseOnMetaAgentDoesNotEnqueue()
+    {
+        var session = new StubSession(DysonAgentModes.MetaAgent);
+        var turn = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "orchestrate",
+            StartedUtc = DateTime.UtcNow,
+        };
+        session.AddTurnForTest(turn);
+
+        var result = OpenAiCompatibleAgentSession.SoftPauseAfterToolLoopExhaustion(
+            session, turn, OpenAiCompatibleAgentSession.MaxToolRounds);
+        if (result.IsError)
+            throw new InvalidOperationException("Meta Agent soft-pause must not return an error string.");
+
+        if (session.TryDequeuePendingTurn(out _))
+        {
+            throw new InvalidOperationException(
+                "Soft-pause on Meta Agent must not enqueue RethinkToolUsage.");
+        }
+
+        if (string.IsNullOrWhiteSpace(turn.AssistantText)
+            || turn.AssistantText.IndexOf("rethink", StringComparison.OrdinalIgnoreCase) >= 0
+            || turn.AssistantText.IndexOf("ResumeCurrentTask", StringComparison.Ordinal) >= 0)
+        {
+            throw new InvalidOperationException(
+                "Meta Agent soft-pause note must not promise a rethink turn.");
+        }
+    }
+
+    private static void AssertSoftPauseOnMetaAgentDroneEnqueues() =>
+        AssertSoftPauseEnqueuesForMode(DysonAgentModes.MetaAgentDrone);
+
+    private static void AssertSoftPauseOnReviewModesStillEnqueue()
+    {
+        AssertSoftPauseEnqueuesForMode(DysonAgentModes.BugReview);
+        AssertSoftPauseEnqueuesForMode(DysonAgentModes.SecurityReview);
+    }
+
+    private static void AssertSoftPauseEnqueuesForMode(string mode)
+    {
+        var session = new StubSession(mode);
+        var turn = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = mode,
+            StartedUtc = DateTime.UtcNow,
+        };
+        session.AddTurnForTest(turn);
+
+        var result = OpenAiCompatibleAgentSession.SoftPauseAfterToolLoopExhaustion(
+            session, turn, OpenAiCompatibleAgentSession.MaxToolRounds);
+        if (result.IsError)
+            throw new InvalidOperationException($"Soft-pause on {mode} must not return an error string.");
+
+        if (!session.TryDequeuePendingTurn(out var pending)
+            || pending.Kind != DysonAgentTurnKind.RethinkToolUsage)
+        {
+            throw new InvalidOperationException(
+                $"Soft-pause on {mode} must enqueue RethinkToolUsage.");
         }
     }
 

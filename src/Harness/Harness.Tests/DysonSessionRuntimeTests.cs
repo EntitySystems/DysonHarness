@@ -465,7 +465,8 @@ public class DysonSessionRuntimeTests
         Assert.NotNull(earlier.CompletedUtc);
 
         var summary = DysonFullSummarizeFlow.CreateTurn();
-        summary.AssistantText = new string('x', DysonFullSummarizeFlow.MaxSummaryCharacters + 10);
+        const int longSummary = 9_000;
+        summary.AssistantText = new string('x', longSummary);
         var second = await harness.Runtime.ExecutePromptAsync(
             session,
             (live, _) =>
@@ -476,7 +477,7 @@ public class DysonSessionRuntimeTests
         Assert.True(second.IsSuccess, second.IsError ? second.Error : null);
         Assert.True(earlier.IsExcludedFromContext);
         Assert.False(summary.IsExcludedFromContext);
-        Assert.Equal(DysonFullSummarizeFlow.MaxSummaryCharacters, summary.AssistantText!.Length);
+        Assert.Equal(longSummary, summary.AssistantText!.Length);
         Assert.NotNull(summary.CompletedUtc);
 
         await harness.Runtime.FlushPersistenceAsync();
@@ -488,7 +489,7 @@ public class DysonSessionRuntimeTests
         var persistedSummary = Assert.Single(full.Value.Turns, t => t.Id == summary.Id);
         Assert.False(persistedSummary.IsExcludedFromContext);
         Assert.Equal(DysonAgentTurnKind.FullSummarize, persistedSummary.Kind);
-        Assert.Equal(DysonFullSummarizeFlow.MaxSummaryCharacters, persistedSummary.AssistantText!.Length);
+        Assert.Equal(longSummary, persistedSummary.AssistantText!.Length);
     }
 
     [Fact]
@@ -690,6 +691,51 @@ public class DysonSessionRuntimeTests
         Assert.Same(created.Value, adopted.Value);
         await duplicate.Value.DisposeAsync();
         Assert.Equal(1, harness.Factory.DisposeCalls);
+    }
+
+    [Fact]
+    public async Task AdoptLiveSession_voice_target_is_the_focused_instance_and_a_twin_cannot_start_a_turn()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var row = await harness.Sessions.CreateSessionAsync(new DysonSessionCreateRequest
+        {
+            RuntimeId = 0,
+            AgentMode = DysonAgentModes.Work,
+            Title = "focused",
+            SystemPromptSnapshot = "focused",
+        });
+        Assert.True(row.IsSuccess, row.IsError ? row.Error : null);
+
+        var focused = new StubSession();
+        focused.BindStore(harness.Sessions);
+        focused.SetPersistenceIdForTest(row.Value);
+
+        var adopted = harness.Runtime.AdoptLiveSession(focused);
+        Assert.True(adopted.IsSuccess, adopted.IsError ? adopted.Error : null);
+        Assert.Same(focused, adopted.Value);
+        Assert.True(harness.Runtime.TryGetSession(focused.PersistenceId, out var found));
+        Assert.True(ReferenceEquals(focused, found));
+
+        var loaded = await harness.Runtime.LoadSessionAsync(focused.PersistenceId);
+        Assert.True(loaded.IsSuccess, loaded.IsError ? loaded.Error : null);
+        Assert.Same(focused, loaded.Value);
+        Assert.Equal(0, harness.Factory.LoadCalls);
+
+        var twin = new StubSession();
+        twin.BindStore(harness.Sessions);
+        twin.SetPersistenceIdForTest(focused.PersistenceId);
+
+        var rejected = harness.Runtime.AdoptLiveSession(twin);
+        Assert.True(rejected.IsSuccess, rejected.IsError ? rejected.Error : null);
+        Assert.Same(focused, rejected.Value);
+        Assert.True(harness.Runtime.TryGetSession(focused.PersistenceId, out var still));
+        Assert.Same(focused, still);
+
+        var prompted = await harness.Runtime.ExecutePromptAsync(
+            twin,
+            (_, _) => Task.FromResult(VoidResult<string>.Success));
+        Assert.True(prompted.IsError);
+        Assert.Null(twin.InFlightPromptTurn);
     }
 
     private static DysonAgentSessionRuntimeCreateRequest RootRequest() =>

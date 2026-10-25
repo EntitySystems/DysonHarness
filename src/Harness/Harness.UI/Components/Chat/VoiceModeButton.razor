@@ -1,0 +1,219 @@
+@namespace Harness.UI.Components.Chat
+@using DysonHarness
+@using Harness.UI.Demo
+@implements IAsyncDisposable
+@inject DysonUiHost Host
+
+@* Root Meta Agent voice mode. Windows only; a missing service is the off tooltip, not a hidden control. *@
+<button type="button"
+        class="@CssClass"
+        title="@Title"
+        aria-label="@Title"
+        aria-pressed="@_on"
+        aria-disabled="@Blocked"
+        @onclick="ClickAsync"
+        @onfocus="RefreshRequirementsAsync"
+        @onmouseenter="RefreshRequirementsAsync">
+    <span class="voice-mode__icon" aria-hidden="true"></span>
+</button>
+
+@code {
+    private static readonly TimeSpan RefreshGap = TimeSpan.FromSeconds(2);
+    private const string NotWindowsTitle = "Voice mode needs the Windows app.";
+    private const string OffTitle = "Voice mode: say the agent name, then talk. Click to turn on.";
+    private const string OnTitle = "Voice mode on. Say the agent name, then talk. Click to turn off.";
+    private const string CapturingTitle = "Listening… pause 3 seconds to send.";
+    private const string SpeakingTitle = "Speaking. Say the agent name to interrupt.";
+
+    private DysonVoiceMode? _voice;
+    private string? _blockReason;
+    private bool _on;
+    private bool _busy;
+    private bool _hooked;
+    private bool _disposed;
+    private bool _checking;
+    private bool _ready;
+    private int _checkGeneration;
+    private DateTime _checkedUtc = DateTime.MinValue;
+
+    /// <summary>Raised when voice mode turns on or off, so the page can disable push-to-talk.</summary>
+    [Parameter] public EventCallback<bool> OnChanged { get; set; }
+
+    private bool Blocked => _ready && (_voice is null || _blockReason is not null);
+
+    private string Title
+    {
+        get
+        {
+            if (!_ready)
+                return OffTitle;
+            if (_voice is null)
+                return NotWindowsTitle;
+            if (_blockReason is not null)
+                return _blockReason;
+            if (!_on)
+                return OffTitle;
+            if (_voice.IsSpeaking)
+                return SpeakingTitle;
+            if (_voice.IsCapturing)
+                return CapturingTitle;
+            return OnTitle;
+        }
+    }
+
+    private string CssClass
+    {
+        get
+        {
+            if (Blocked)
+                return "voice-mode voice-mode--off";
+            if (!_on || _voice is null)
+                return "voice-mode";
+            if (_voice.IsSpeaking)
+                return "voice-mode is-on is-speaking";
+            if (_voice.IsCapturing)
+                return "voice-mode is-on is-capturing";
+            return "voice-mode is-on";
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _voice = Host.Voice;
+        _ready = true;
+        if (_voice is { IsOn: true })
+        {
+            Subscribe();
+            _on = true;
+            await OnChanged.InvokeAsync(true);
+        }
+
+        await RefreshRequirementsAsync();
+    }
+
+    private async Task ClickAsync()
+    {
+        if (!_ready || _disposed || _busy || Blocked)
+            return;
+        if (_on)
+        {
+            await TurnOffAsync();
+            return;
+        }
+
+        if (_voice is null)
+            return;
+
+        _busy = true;
+        _checkGeneration++;
+        try
+        {
+            var started = await _voice.StartAsync();
+            if (started.IsError)
+            {
+                if (!_disposed)
+                    _blockReason = started.Error;
+                return;
+            }
+
+            var attached = await Host.SetMetaVoiceModeAsync(_voice);
+            if (attached.IsError)
+            {
+                await Host.SetMetaVoiceModeAsync(null);
+                if (!_disposed)
+                    Host.ReportError(attached.Error);
+                return;
+            }
+
+            if (_disposed)
+                return;
+
+            Subscribe();
+            _on = true;
+            _blockReason = null;
+            await OnChanged.InvokeAsync(true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task TurnOffAsync()
+    {
+        if (!_on && _voice is not { IsOn: true })
+            return;
+
+        Unsubscribe();
+        _on = false;
+        var off = await Host.SetMetaVoiceModeAsync(null);
+        if (off.IsError && !_disposed)
+            Host.ReportError(off.Error);
+
+        if (!_disposed)
+        {
+            await OnChanged.InvokeAsync(false);
+            _checkedUtc = DateTime.MinValue;
+            await RefreshRequirementsAsync();
+        }
+    }
+
+    private async Task RefreshRequirementsAsync()
+    {
+        if (_voice is null || _on || _disposed || _checking)
+            return;
+        if (DateTime.UtcNow - _checkedUtc < RefreshGap)
+            return;
+
+        _checking = true;
+        _checkedUtc = DateTime.UtcNow;
+        var generation = ++_checkGeneration;
+        try
+        {
+            var result = await _voice.CheckRequirementsAsync();
+            if (_disposed || _on || generation != _checkGeneration)
+                return;
+            _blockReason = result.IsError ? result.Error : null;
+        }
+        finally
+        {
+            _checking = false;
+        }
+    }
+
+    private void Subscribe()
+    {
+        if (_hooked || _voice is null)
+            return;
+        _voice.StateChanged += OnStateChanged;
+        _hooked = true;
+    }
+
+    private void Unsubscribe()
+    {
+        if (!_hooked || _voice is null)
+            return;
+        _voice.StateChanged -= OnStateChanged;
+        _hooked = false;
+    }
+
+    private void OnStateChanged() => PostToCircuit(StateHasChanged);
+
+    private void PostToCircuit(Action action)
+    {
+        try
+        {
+            _ = InvokeAsync(action);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        Unsubscribe();
+        return ValueTask.CompletedTask;
+    }
+}

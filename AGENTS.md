@@ -31,6 +31,7 @@ AI model harness.
 - UI CSS isolation: [rules/rules_ui_css.md](rules/rules_ui_css.md) (new CSS in `<Component>.razor.css`; tokens/keyframes stay in `app.css`)
 - Blazor circuit: [rules/rules_blazor_circuit.md](rules/rules_blazor_circuit.md) (no sync or blocking work on the circuit without a thread-pool hop)
 - Ponytail (lazy senior, mandatory): [rules/rules_ponytail.md](rules/rules_ponytail.md)
+- Management model (Dyson only): [rules/rules_management_model.md](rules/rules_management_model.md) (every root Meta Agent `StartAsyncMetaAgentDrone` and `BeginBuildPlan` sets `modelSlug` `grok-4.7` and `reasoningEffort` `high` — omit selects the Settings Meta Agent Drone default, not the parent; workers, explores, and reviews inherit the parent model)
 - Cursor rules migration: [rules/rules_cursor_rules.md](rules/rules_cursor_rules.md) (aimed at Cursor; `.cursor/` is gitignored, rules live in `rules/`)
 - Model roles: [rules/rules_model_roles.md](rules/rules_model_roles.md) (migrated from `.cursor/rules/model-roles.mdc`)
 

@@ -1,0 +1,180 @@
+@using DysonHarness
+@implements IAsyncDisposable
+@inject IDysonSpeechModelRepository SpeechModels
+@inject DysonActiveSpeechToText Stt
+@inject IDysonSubjectSettingsRepository Settings
+@inject DysonUiHost Host
+
+<div class="settings-page__panel panel voice-wake">
+    <div class="tool-panel__title">Agent name for voice mode</div>
+    <p class="settings-page__copy">
+        Say the agent's name 8 different ways, for example 'Dyson', 'Hey Dyson', 'OK Dyson'.
+        Voice mode starts listening when the transcript matches any of these texts.
+        Check each one; a misheard name will never match.
+    </p>
+    @for (var n = 1; n <= 8; n++)
+    {
+        var index = n - 1;
+        <div class="voice-wake__row">
+            <label class="voice-wake__label" for="@($"voice-wake-{n}")">Variant @n</label>
+            <input id="@($"voice-wake-{n}")" class="voice-wake__text" maxlength="200"
+                   @bind="_variants[index]" @bind:event="oninput" disabled="@_busy" />
+            <button type="button" class="btn"
+                    aria-disabled="@RecordBlocked(index)"
+                    title="@RecordTitle(index)"
+                    @onclick="() => ToggleRecordAsync(index)">@(_recordingIndex == index ? "Stop" : "Record")</button>
+        </div>
+    }
+    <div class="btn-row">
+        <button type="button" class="btn btn-primary" disabled="@(!CanSave)" @onclick="SaveAsync">Save</button>
+    </div>
+    @if (!string.IsNullOrWhiteSpace(_status))
+    {
+        <p class="@(_statusOk ? "settings-page__copy voice-wake__status" : "settings-page__copy voice-wake__status voice-wake__status--error")" role="status">@_status</p>
+    }
+</div>
+
+@code {
+    private const string NotInstalledTitle = "Speech to text is not installed. Open Settings → Voice.";
+
+    private readonly string[] _variants = ["", "", "", "", "", "", "", ""];
+    private int? _recordingIndex;
+    private CancellationTokenSource? _recordCts;
+    private bool _inputReady;
+    private bool _busy;
+    private bool _disposed;
+    private string? _status;
+    private bool _statusOk;
+
+    /// <summary>Settings → Voice tryout. Null off Windows; this card is not mounted then.</summary>
+    [Parameter] public DysonSpeechTryout? Tryout { get; set; }
+
+    private bool CanSave =>
+        !_busy && _recordingIndex is null && _variants.All(v => !string.IsNullOrWhiteSpace(v));
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshInputAsync();
+        var names = await SpeechModels.GetWakeNamesAsync();
+        if (_disposed)
+            return;
+        if (names.IsError)
+        {
+            _statusOk = false;
+            _status = names.Error;
+            return;
+        }
+
+        if (names.Value.Count == 8)
+        {
+            for (var i = 0; i < 8; i++)
+                _variants[i] = names.Value[i];
+        }
+    }
+
+    private bool RecordBlocked(int index) =>
+        !_inputReady || _busy || (_recordingIndex is int current && current != index);
+
+    private string RecordTitle(int index)
+    {
+        if (!_inputReady)
+            return NotInstalledTitle;
+        return _recordingIndex == index ? "Stop" : "Record for 4 seconds";
+    }
+
+    private async Task<bool> RefreshInputAsync()
+    {
+        var active = await Stt.ResolveActiveAsync();
+        _inputReady = active.IsSuccess;
+        return _inputReady;
+    }
+
+    private async Task ToggleRecordAsync(int index)
+    {
+        var tryout = Tryout;
+        if (_disposed || tryout is null || _busy)
+            return;
+
+        if (_recordingIndex is int current)
+        {
+            if (current != index)
+                return;
+            _recordCts?.Cancel();
+            await Task.Run(tryout.StopRecording);
+            return;
+        }
+
+        if (Host.Voice?.IsOn == true)
+        {
+            _statusOk = false;
+            _status = "Turn voice mode off before using play or record here.";
+            return;
+        }
+
+        if (!await RefreshInputAsync())
+            return;
+
+        var saved = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechInputDeviceId);
+        _status = null;
+        _recordCts?.Dispose();
+        _recordCts = new CancellationTokenSource();
+        _recordCts.CancelAfter(TimeSpan.FromSeconds(4));
+        _recordingIndex = index;
+        try
+        {
+            await foreach (var update in tryout.RecordAsync(
+                               saved.IsSuccess ? saved.Value : null,
+                               inputInstalled: true,
+                               _recordCts.Token))
+            {
+                if (_disposed)
+                    return;
+                if (update.IsError)
+                {
+                    _statusOk = false;
+                    _status = update.Error;
+                    break;
+                }
+
+                _variants[index] = update.Value;
+                StateHasChanged();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            if (_recordingIndex == index)
+                _recordingIndex = null;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!CanSave)
+            return;
+        _busy = true;
+        _status = null;
+        try
+        {
+            var saved = await SpeechModels.SaveWakeNamesAsync(_variants);
+            _statusOk = saved.IsSuccess;
+            _status = saved.IsError ? saved.Error : "Saved.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        _recordCts?.Cancel();
+        var tryout = Tryout;
+        if (tryout is not null && _recordingIndex is not null)
+            await Task.Run(tryout.StopRecording);
+        _recordCts?.Dispose();
+    }
+}
