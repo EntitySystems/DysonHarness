@@ -138,11 +138,9 @@ public static class DysonUiWebHost
             return new DysonCliProxyHost(factory.CreateClient("cliproxy"));
         });
         builder.Services.AddHttpClient("cliproxy");
-        builder.Services.AddScoped(sp =>
-        {
-            var factory = sp.GetRequiredService<IHttpClientFactory>();
-            return factory.CreateClient();
-        });
+        // Process lifetime, not the circuit. AdoptLiveSession (4f35c0d) hands this client to
+        // DysonSessionRuntime; disposing it with the circuit made the next request throw ObjectDisposedException.
+        AddSessionHttpClient(builder.Services);
         // Native xAI/Grok: host-level client identity overrides (config Dyson:XaiGrok), a plain "xai-oauth" client for
         // the OAuth endpoints, and XaiGrokRequestHandler on the DEFAULT client (acts only on dyson-xai:<guid> bearers).
         builder.Services.AddSingleton(
@@ -312,6 +310,13 @@ public static class DysonUiWebHost
 
         return app;
     }
+
+    /// <summary>
+    /// Default named client (<see cref="XaiGrokRequestHandler"/> is registered on that name) as a singleton.
+    /// <see cref="IHttpClientFactory"/> owns the handler pipeline, so this registration does not dispose the client.
+    /// </summary>
+    internal static void AddSessionHttpClient(IServiceCollection services) =>
+        services.AddSingleton(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient());
 
     private static int _processExceptionHooksRegistered;
 
