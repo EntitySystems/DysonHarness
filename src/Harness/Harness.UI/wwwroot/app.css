@@ -3208,39 +3208,8 @@ code, .mono {
   padding: 10px 8px;
 }
 
-.subagent-card {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-2);
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-  transition: background var(--motion) var(--ease), border-color var(--motion) var(--ease), box-shadow var(--motion) var(--ease);
-}
-
-.subagent-card:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-1);
-}
-
-.subagent-card__icon {
-  flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  align-self: flex-start;
-  margin-top: 1px;
-  background-color: var(--text-muted);
-  -webkit-mask: var(--subagent-mode-icon) center / contain no-repeat;
-  mask: var(--subagent-mode-icon) center / contain no-repeat;
-}
-
+/* Mode tint classes are shared by SubagentCard and MetaAgentChildRow; the card block lives in
+   Components/Chat/SubagentCard.razor.css. The spinner stays global (reused + reduced-motion carve-out). */
 .subagent-card__icon--explore {
   background-color: var(--warning);
 }
@@ -3255,54 +3224,6 @@ code, .mono {
 
 .subagent-card__icon--other {
   background-color: var(--text-muted);
-}
-
-.subagent-card__text {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.subagent-card__title {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.35;
-}
-
-.subagent-card__name,
-.subagent-card__step {
-  min-width: 0;
-  flex: 1 1 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.subagent-card__id {
-  flex: 0 0 auto;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.subagent-card__step {
-  font-weight: 400;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.subagent-card__model {
-  margin-top: 2px;
-  font-size: 11px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .subagent-card__spinner {
@@ -4310,6 +4231,56 @@ code, .mono {
   background: transparent;
   font-size: 12px;
   line-height: 1.45;
+}
+
+/* Meta chat markdown (MarkupString: must stay global, scoped CSS cannot reach it). */
+.meta-chat__body.turn-block__body {
+  font-size: var(--fs-lg);
+  line-height: var(--lh-loose);
+}
+
+.meta-chat__body h1,
+.meta-chat__body h2,
+.meta-chat__body h3 {
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+}
+
+.meta-chat__body h2 {
+  padding-bottom: 0.3em;
+  box-shadow: 0 1px 0 var(--border-subtle);
+}
+
+.meta-chat__body li::marker {
+  color: var(--accent);
+}
+
+.meta-chat__body code {
+  padding: 0.1em 0.35em;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+}
+
+.meta-chat__body pre {
+  padding: var(--sp-3) var(--sp-4);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  box-shadow: var(--shadow-1);
+}
+
+.meta-chat__body pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.meta-chat__body blockquote {
+  margin: 0 0 0.75em;
+  padding: 0 0 0 var(--sp-3);
+  box-shadow: inset 3px 0 0 var(--accent-border);
+  color: var(--text-muted);
 }
 
 /* ColorCode token colors. Keep these scoped: names such as .string and .comment

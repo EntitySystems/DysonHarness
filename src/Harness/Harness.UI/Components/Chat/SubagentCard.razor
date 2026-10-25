@@ -10,12 +10,16 @@
     var icon = ResolveModeIcon(_state?.AgentMode);
     <button type="button"
             class="subagent-card"
+            data-status="@(_state?.Status)"
+            data-running="@(_state?.IsRunning == true ? "true" : null)"
             title="@CardAccessibleName"
             aria-label="@CardAccessibleName"
             @onclick="NavigateAsync">
-        <span class="subagent-card__icon @icon.ColorClass"
-              style="--subagent-mode-icon: url('@icon.Url')"
-              aria-hidden="true"></span>
+        <span class="subagent-card__tile" aria-hidden="true">
+            <span class="subagent-card__icon @icon.ColorClass"
+                  style="--subagent-mode-icon: url('@icon.Url')"
+                  aria-hidden="true"></span>
+        </span>
         <div class="subagent-card__text">
             <div class="subagent-card__title">
                 <span class="subagent-card__name">@(_state?.Title ?? "Subagent")</span>

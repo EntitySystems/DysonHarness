@@ -36,27 +36,32 @@
         <div class="meta-stage">
             <header class="meta-stage__header">
                 <div class="meta-stage__heading">
+                    <span class="meta-stage__mark" aria-hidden="true"></span>
                     <h1 class="meta-stage__title">Meta agent</h1>
-                    <span class="meta-stage__subtitle mono">@(_workDirectoryName ?? WorkDirectoryId.ToString())</span>
+                    <span class="meta-stage__subtitle mono" title="@(_workDirectoryName ?? WorkDirectoryId.ToString())">@(_workDirectoryName ?? WorkDirectoryId.ToString())</span>
                 </div>
                 <div class="meta-stage__actions">
                     <button type="button"
                             class="btn"
                             disabled="@(!IsMetaFocused)"
                             @onclick="ToggleTasks">
-                        Tasks
+                        <span class="meta-stage__icon meta-stage__icon--tasks" aria-hidden="true"></span>
+                        <span class="meta-stage__label">Tasks</span>
                     </button>
                     <button type="button" class="btn" disabled="@(!IsMetaFocused)" @onclick="OpenVisualizations">
-                        Visualizations
+                        <span class="meta-stage__icon meta-stage__icon--viz" aria-hidden="true"></span>
+                        <span class="meta-stage__label">Visualizations</span>
                     </button>
                     <button type="button"
                             class="btn"
                             disabled="@(!CanOpenFullSession)"
                             title="Open this Meta Agent session in the full chat UI"
                             @onclick="OpenFullSessionAsync">
-                        Open full session
+                        <span class="meta-stage__icon meta-stage__icon--open" aria-hidden="true"></span>
+                        <span class="meta-stage__label">Open full session</span>
                     </button>
-                    <a class="btn" href="/" @onclick="LeaveMetaAsync" @onclick:preventDefault="true">← Back to agent</a>
+                    <span class="meta-stage__divider" aria-hidden="true"></span>
+                    <a class="btn" href="/" @onclick="LeaveMetaAsync" @onclick:preventDefault="true"><span class="meta-stage__icon meta-stage__icon--back" aria-hidden="true"></span><span class="meta-stage__label">Back to agent</span></a>
                 </div>
             </header>
 
@@ -169,16 +174,17 @@
                                                           Disabled="@ComposerDisabled"
                                                           OnPick="OnReasoningEffortChangedAsync" />
                                 </div>
-                                <span class="list-item__meta">Ctrl+Enter to send · paste/drop files or images · hold Ctrl+M to talk · voice mode: say the agent name</span>
                                 <ComposerStopMenu />
                                 <button type="button"
-                                        class="btn btn-primary"
+                                        class="btn btn-primary meta-composer__send"
                                         disabled="@(ComposerDisabled || !CanSend)"
                                         @onclick="SendAsync">
-                                    Send
+                                    <span class="meta-composer__send-icon" aria-hidden="true"></span>
+                                    <span class="meta-composer__send-label">Send</span>
                                 </button>
                             </div>
                         </div>
+                        <span class="list-item__meta meta-composer__hint">Ctrl+Enter to send · paste/drop files or images · hold Ctrl+M to talk · voice mode: say the agent name</span>
                     </div>
 
                     <section class="meta-agents" aria-label="Agents and files">
@@ -207,6 +213,7 @@
                                         @if (childIds.Count == 0)
                                         {
                                             <div class="meta-agents__empty">
+                                                <span class="meta-agents__empty-icon" aria-hidden="true"></span>
                                                 <p class="meta-agents__empty-title">No agents yet</p>
                                                 <p class="meta-agents__empty-hint">Drones and explores appear here when the meta agent dispatches them.</p>
                                             </div>

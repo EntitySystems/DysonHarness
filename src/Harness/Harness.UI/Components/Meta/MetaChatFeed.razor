@@ -19,6 +19,7 @@
                 <div @key="item.Key"
                      class="meta-chat__msg @(item.Role == MetaChatRole.User ? "meta-chat__msg--user" : "meta-chat__msg--agent") @(item.Pending ? "meta-chat__msg--pending" : null)">
                     <div class="meta-chat__msg-bar">
+                        <span class="meta-chat__avatar" aria-hidden="true"></span>
                         <span class="meta-chat__msg-role">@(item.Role == MetaChatRole.User ? "You" : "Meta agent")</span>
                         @if (item.Pending)
                         {
@@ -143,6 +144,7 @@
             @if (SessionBusy)
             {
                 <div class="meta-chat__working" aria-live="polite">
+                    <span class="meta-chat__avatar" aria-hidden="true"></span>
                     <span class="subagent-card__spinner" aria-hidden="true"></span>
                     <span>Working…</span>
                 </div>

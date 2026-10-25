@@ -7,7 +7,7 @@
 @inject DysonMessageBus Bus
 
 <div class="meta-plan-list">
-    <div class="sidebar__section-label">Plans</div>
+    <div class="sidebar__section-label meta-plan-list__label">Plans <span class="meta-plan-list__count">@_plans.Count</span></div>
 
     @if (!string.IsNullOrEmpty(_error))
     {
