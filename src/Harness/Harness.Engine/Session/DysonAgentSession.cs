@@ -3276,6 +3276,9 @@ public abstract class DysonAgentSession
         {
             if (_todos.Any(t => string.Equals(t.TaskCode, code, StringComparison.Ordinal)))
                 return Result<DysonSessionTodo, string>.AsError($"Todo TaskCode '{code}' already exists.");
+
+            if (_todos.Count >= DysonSessionTodoLimits.MaxPerSession)
+                return Result<DysonSessionTodo, string>.AsError(DysonSessionTodoLimits.LimitMessage);
         }
 
         var now = DateTime.UtcNow;
@@ -3426,6 +3429,12 @@ public abstract class DysonAgentSession
 
             RestoreTodos(replaced.Value);
             return replaced;
+        }
+
+        if (items.Count > DysonSessionTodoLimits.MaxPerSession)
+        {
+            return Result<IReadOnlyList<DysonSessionTodo>, string>.AsError(
+                DysonSessionTodoLimits.LimitMessage);
         }
 
         var now = DateTime.UtcNow;

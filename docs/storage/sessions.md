@@ -71,7 +71,9 @@ Each session (root or subagent) owns its own list. Cascade-deleted with the sess
 | `Status` | int enum `DysonSessionTodoStatus`: `0=Pending`, `1=Ongoing`, `2=Complete` |
 | `CommentsJson` | JSON `string[]` (default `[]`); append-only via update `appendComment`, or full replace via `comments` |
 | `Sequence` | int create/replace order within the session |
-| `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
+| `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC. `UpdatedUtc` bumps on every update (status, display name, comments). Every entity `DateTime` is read back with `DateTimeKind.Utc` (`UtcDateTimeValueConverter`); stored TEXT is unchanged |
+
+A session holds at most 50 todos, completed included (`DysonSessionTodoLimits.MaxPerSession`). `CreateTodo` returns a Result error at the cap; `ReplaceTodos` fails the whole replace when the incoming count is over 50. Enforced for every session kind.
 
 Runtime mirror: `DysonSessionTodo` (same fields; `Comments` as `IReadOnlyList<string>`). Covered by `DysonSessionTodoTests` in `Harness.Tests`.
 

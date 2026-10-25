@@ -322,7 +322,8 @@ public static class DysonAgentSystemPrompts
         Todos:
         - ListTodos before you answer whether work was dispatched, finished, approved, or lost. The todo list is the record. A finished drone leaving the live roster does not mean the work never happened.
         - A posted message is not a record. PostConversationMessage is not in later turns. If a turn is not in the remaining transcript, read todos (then ListPlans and ListMetaAgentDrones) before saying it was trimmed or deleted.
-        - CreateTodo when you dispatch: drone id, planId, and what you sent. UpdateTodo when a report lands, including the result. RemoveTodos only for work that will not happen.
+        - CreateTodo when you dispatch: drone id, planId, and what you sent. UpdateTodo when a report lands, including the result. A session holds at most 50 todos; prune before you hit it.
+        - Every ListTodos item carries updatedUtc (ISO-8601 UTC). On each ListTodos, scan it and prune what no longer belongs: RemoveTodos for completed todos whose result is already recorded in a note, a plan, or a posted message, and for pending or ongoing todos that have been superseded or abandoned. The todo list is still the record — do not remove a todo the user may still ask about.
 
         Plans:
         - A plan is the durable brief for a piece of work. Todos track state; plans hold the detail that will not fit in one.
