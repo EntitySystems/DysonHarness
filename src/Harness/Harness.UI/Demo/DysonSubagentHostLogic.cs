@@ -257,8 +257,8 @@ public static class DysonSubagentHostLogic
             _ => null,
         };
 
-    /// <summary>Agents-tab nested rows shown before <c>+N more</c>.</summary>
-    public const int NestedAgentRowCap = 4;
+    /// <summary>Agents-tab nested rows shown before <c>Show all (N)</c>.</summary>
+    public const int NestedAgentRowCap = 3;
 
     /// <summary>
     /// First <see cref="NestedAgentRowCap"/> items, or <paramref name="rows"/> itself when it already fits.
@@ -282,7 +282,7 @@ public static class DysonSubagentHostLogic
         && evt.ParentPersistenceId == parentPersistenceId
         && evt.ChildPersistenceId != Guid.Empty;
 
-    /// <summary>Status wake-up for the agents list (unmounted row, or the +N more count).</summary>
+    /// <summary>Status wake-up for the agents list (unmounted row, or the Show all count).</summary>
     public static bool AffectsAgentsList(Guid parentPersistenceId, DysonSubagentStatusChangedEvent evt) =>
         parentPersistenceId != Guid.Empty
         && evt.ParentPersistenceId == parentPersistenceId

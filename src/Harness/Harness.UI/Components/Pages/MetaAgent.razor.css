@@ -207,13 +207,12 @@
   border-radius: var(--radius-md);
   background: var(--surface-raised);
   box-shadow: var(--shadow-1);
-  overflow: hidden;
-  transition: box-shadow var(--motion-fast) var(--ease), transform var(--motion-fast) var(--ease);
+  overflow: visible;
+  transition: box-shadow var(--motion-fast) var(--ease);
 }
 
 .meta-agents__item:hover {
   box-shadow: var(--shadow-2);
-  transform: translateY(-1px);
 }
 
 /* Running child: 3px accent rail on the item. */

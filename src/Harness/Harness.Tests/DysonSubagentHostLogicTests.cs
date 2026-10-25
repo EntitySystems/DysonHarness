@@ -427,21 +427,20 @@ public class DysonSubagentHostLogicTests
         if (empty.Visible.Count != 0 || empty.HiddenCount != 0 || !ReferenceEquals(empty.Visible, Array.Empty<int>()))
             throw new InvalidOperationException("Empty nested rows should stay the same list with nothing hidden.");
 
+        var three = new[] { 3, 2, 1 };
+        var cappedThree = DysonSubagentHostLogic.CapNestedRows(three);
+        if (cappedThree.HiddenCount != 0 || !ReferenceEquals(cappedThree.Visible, three))
+            throw new InvalidOperationException("Three nested rows should stay the same list with nothing hidden.");
+
         var four = new[] { 4, 3, 2, 1 };
         var cappedFour = DysonSubagentHostLogic.CapNestedRows(four);
-        if (cappedFour.HiddenCount != 0 || !ReferenceEquals(cappedFour.Visible, four))
-            throw new InvalidOperationException("Four nested rows should stay the same list with nothing hidden.");
-
-        var five = new[] { 5, 4, 3, 2, 1 };
-        var cappedFive = DysonSubagentHostLogic.CapNestedRows(five);
-        if (cappedFive.HiddenCount != 1
-            || cappedFive.Visible.Count != 4
-            || cappedFive.Visible[0] != 5
-            || cappedFive.Visible[1] != 4
-            || cappedFive.Visible[2] != 3
-            || cappedFive.Visible[3] != 2)
+        if (cappedFour.HiddenCount != 1
+            || cappedFour.Visible.Count != 3
+            || cappedFour.Visible[0] != 4
+            || cappedFour.Visible[1] != 3
+            || cappedFour.Visible[2] != 2)
         {
-            throw new InvalidOperationException("Five nested rows should keep the first four and hide one, without reordering.");
+            throw new InvalidOperationException("Four nested rows should keep the first three and hide one, without reordering.");
         }
 
         if (DysonSubagentHostLogic.NestedStatusText("Thinking 2", DysonSessionStatus.Failed) != "Thinking 2")

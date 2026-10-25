@@ -11,7 +11,8 @@
     var parentModelLabel = ParentPersistenceId == Guid.Empty
         ? null
         : Host.GetSubagentCardState(ParentPersistenceId)?.ModelLabel;
-    var expanded = _expanded && rows.Count > DysonSubagentHostLogic.NestedAgentRowCap;
+    var expanded = IsExpanded
+        && rows.Count > DysonSubagentHostLogic.NestedAgentRowCap;
     var visible = rows;
     var hiddenCount = 0;
     if (!expanded && rows.Count > 0)
@@ -30,11 +31,19 @@
         }
         @if (hiddenCount > 0)
         {
-            <button type="button" class="meta-child-row meta-child-row--more" @onclick="Expand">+@hiddenCount more</button>
+            <button type="button"
+                    class="meta-child-row meta-child-row--more"
+                    aria-expanded="false"
+                    aria-label="Show all @rows.Count subagents"
+                    @onclick="Expand">Show all (@rows.Count)</button>
         }
         else if (expanded)
         {
-            <button type="button" class="meta-child-row meta-child-row--more" @onclick="Collapse">Show less</button>
+            <button type="button"
+                    class="meta-child-row meta-child-row--more"
+                    aria-expanded="true"
+                    aria-label="Show fewer subagents"
+                    @onclick="Collapse">Show less</button>
         }
     </div>
 }
@@ -44,7 +53,14 @@
 
     [Parameter] public EventCallback AfterNavigate { get; set; }
 
-    private bool _expanded;
+    /// <summary>
+    /// Page-owned expand set. Survives roster refreshes; absent means collapsed.
+    /// </summary>
+    [Parameter] public HashSet<Guid>? ExpandedIds { get; set; }
+
+    private bool IsExpanded =>
+        ExpandedIds is not null && ExpandedIds.Contains(ParentPersistenceId);
+
     private Guid _boundParentId;
     private IDisposable? _sub;
 
@@ -55,7 +71,6 @@
 
         DisposeSubscriptions();
         _boundParentId = ParentPersistenceId;
-        _expanded = false;
         SubscribeIfNeeded();
     }
 
@@ -118,9 +133,15 @@
         return null;
     }
 
-    private void Expand() => _expanded = true;
+    private void Expand()
+    {
+        if (ExpandedIds is null || ParentPersistenceId == Guid.Empty)
+            return;
 
-    private void Collapse() => _expanded = false;
+        ExpandedIds.Add(ParentPersistenceId);
+    }
+
+    private void Collapse() => ExpandedIds?.Remove(ParentPersistenceId);
 
     private sealed class CompositeDisposable : IDisposable
     {
