@@ -11,15 +11,17 @@
 }
 
 .session-todos-modal__counts {
-  font-size: 12px;
-  font-weight: 450;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-regular);
   color: var(--text-muted);
   white-space: nowrap;
 }
 
 .session-todos-modal__close {
   min-width: 28px;
-  padding: 2px 8px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: var(--radius-full);
   font-size: 18px;
   line-height: 1;
 }
@@ -28,14 +30,14 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 12px 14px 14px;
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
   overflow: hidden;
 }
 
 .session-todos__board {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--sp-3);
   align-items: stretch;
   flex: 1 1 auto;
   min-height: 0;
@@ -45,10 +47,10 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 8px;
+  background: var(--surface-sunken);
+  border: 0;
+  border-radius: var(--radius-lg);
+  padding: var(--sp-2);
 }
 
 .session-todos__column-header {
@@ -56,16 +58,31 @@
   top: 0;
   z-index: 1;
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  margin: 0 0 8px;
-  padding: 4px 6px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
   border-radius: var(--radius-md);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
   letter-spacing: 0.02em;
   text-transform: lowercase;
+}
+
+/* Status dot in the lane colour. */
+.session-todos__column-header::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.session-todos__column-count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
 }
 
 .session-todos__column-header--pending {
@@ -74,13 +91,13 @@
 }
 
 .session-todos__column-header--ongoing {
-  background: color-mix(in srgb, var(--warning) 18%, var(--bg-2));
-  color: var(--warning);
+  background: var(--warning-soft);
+  color: color-mix(in srgb, var(--warning) 78%, var(--text));
 }
 
 .session-todos__column-header--complete {
-  background: color-mix(in srgb, var(--success) 18%, var(--bg-2));
-  color: var(--success);
+  background: var(--success-soft);
+  color: color-mix(in srgb, var(--success) 78%, var(--text));
 }
 
 .session-todos__column-body {
@@ -91,7 +108,8 @@
 
 .session-todos__column-empty {
   margin: 0;
-  font-size: 12px;
+  padding: var(--sp-2);
+  font-size: var(--fs-sm);
   color: var(--text-dim);
 }
 
@@ -101,27 +119,29 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--sp-2);
 }
 
 .session-todos__item {
-  background: var(--bg-3);
-  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  border: 0;
   border-radius: var(--radius-md);
-  padding: 8px 10px;
+  box-shadow: var(--shadow-1);
+  padding: var(--sp-2) var(--sp-3);
 }
 
 .session-todos__name {
   display: block;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
   color: var(--text);
 }
 
 .session-todos__code {
   display: block;
   margin-top: 2px;
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
   color: var(--text-dim);
 }
 
@@ -135,7 +155,7 @@
 }
 
 .session-todos__comments li {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-muted);
   line-height: 1.4;
   overflow-wrap: anywhere;
