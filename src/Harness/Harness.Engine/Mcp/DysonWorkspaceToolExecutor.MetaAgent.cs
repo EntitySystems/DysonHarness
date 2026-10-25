@@ -287,10 +287,13 @@ public sealed partial class DysonWorkspaceToolExecutor
     {
         int agentId;
         string message;
-        var interrupt = false;
+        int? timeoutSeconds;
         try
         {
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            if (doc.RootElement.TryGetProperty("interrupt", out _))
+                return Error(call, "MessageMetaAgentDrone: unknown property interrupt. Use timeoutSeconds (omit = interrupt now).");
+
             var id = GetInt(doc.RootElement, "agentId");
             if (id is null or < 1)
                 return Error(call, "MessageMetaAgentDrone: agentId (≥ 1) is required.");
@@ -300,7 +303,10 @@ public sealed partial class DysonWorkspaceToolExecutor
             if (messageResult.IsError)
                 return Error(call, messageResult.Error);
             message = messageResult.Value;
-            interrupt = GetBool(doc.RootElement, "interrupt");
+            var timeout = GetInjectTimeoutSeconds(doc.RootElement);
+            if (timeout.IsError)
+                return Error(call, "MessageMetaAgentDrone: " + timeout.Error);
+            timeoutSeconds = timeout.Value;
         }
         catch (JsonException)
         {
@@ -308,7 +314,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
 
         var triggered = await _session
-            .TriggerSubagentEventAsync(agentId, message, interrupt, cancellationToken)
+            .TriggerSubagentEventAsync(agentId, message, timeoutSeconds, cancellationToken)
             .ConfigureAwait(false);
         return triggered.IsError ? Error(call, triggered.Error) : Ok(call, triggered.Value);
     }
@@ -966,7 +972,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 return Error(call, $"Unknown agentId {reuseId}.");
 
             var triggered = await _session
-                .TriggerSubagentEventAsync(reuseId, brief, interruptSubagent: false, cancellationToken)
+                .QueueSubagentEventAsync(reuseId, brief, cancellationToken)
                 .ConfigureAwait(false);
             if (triggered.IsError)
                 return Error(call, triggered.Error);

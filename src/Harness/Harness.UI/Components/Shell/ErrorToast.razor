@@ -20,6 +20,14 @@
     /// <summary>DysonTransition state class — the owner gates this component, so it cannot self-animate.</summary>
     [Parameter] public string? MotionClass { get; set; }
 
+    /// <summary>
+    /// Page-owned error (Meta <c>_error</c>). When it matches <see cref="Message"/>, dismiss and
+    /// expiry clear it instead of <see cref="DysonUiHost.LastError"/>. Home leaves this unset.
+    /// </summary>
+    [Parameter] public string? PageError { get; set; }
+
+    [Parameter] public EventCallback OnPageErrorCleared { get; set; }
+
     private CancellationTokenSource? _cts;
 
     protected override void OnInitialized()
@@ -32,18 +40,29 @@
     {
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(20), ct);
+            await Task.Delay(ErrorToastLifetime.Duration, ct);
         }
         catch (OperationCanceledException)
         {
             return;
         }
 
+        await InvokeAsync(Clear);
+    }
+
+    private void Dismiss() => Clear();
+
+    private void Clear()
+    {
+        if (string.Equals(PageError, Message, StringComparison.Ordinal))
+        {
+            _ = OnPageErrorCleared.InvokeAsync();
+            return;
+        }
+
         if (string.Equals(Host.LastError, Message, StringComparison.Ordinal))
             Host.ClearLastError();
     }
-
-    private void Dismiss() => Host.ClearLastError();
 
     public void Dispose()
     {

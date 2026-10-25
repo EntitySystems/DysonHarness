@@ -18,6 +18,7 @@
 @inject ThemeService Theme
 @inject IJSRuntime Js
 @inject ILogger<Home> Logger
+@inject Harness.UI.Services.ConfirmDialogService ConfirmDialog
 
 <AppShell>
     <Sidebar>
@@ -331,7 +332,9 @@
 
     private async Task OnSelectedSlugIdChangedAsync(Guid? id)
     {
-        var result = await Host.SetSessionModelSlugAsync(id);
+        var result = await Host.ProviderConversionTargetAsync(id) is { } target
+            ? await ModelSlugConversion.ConfirmAndConvertAsync(Host, ConfirmDialog, id!.Value, target)
+            : await Host.SetSessionModelSlugAsync(id);
         if (result.IsError)
         {
             SyncSelectedSlugFromSession();

@@ -274,6 +274,16 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         return Result<DysonQueuedPrompt, string>.AsValue(entry);
     }
 
+    /// <summary>Read-only FIFO snapshot (order kept) for display projections.</summary>
+    public IReadOnlyList<DysonQueuedPrompt> GetQueuedPrompts(Guid sessionId)
+    {
+        if (_disposed != 0 || sessionId == Guid.Empty)
+            return [];
+
+        lock (_promptQueueGate)
+            return _promptQueues.TryGetValue(sessionId, out var queue) ? [.. queue] : [];
+    }
+
     public bool TryPeekPrompt(Guid sessionId, [NotNullWhen(true)] out DysonQueuedPrompt? prompt)
     {
         prompt = null;
@@ -552,6 +562,29 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
     }
 
     /// <summary>
+    /// Unmaps <paramref name="sessionId"/> and its mapped descendants and disposes their leases,
+    /// without touching the database (provider-kind conversion reloads the same id afterwards).
+    /// Cancels their prompt tokens and clears their queues, so callers must only release idle sessions.
+    /// </summary>
+    public async Task ReleaseSessionTreeAsync(Guid sessionId)
+    {
+        if (_disposed != 0 || sessionId == Guid.Empty)
+            return;
+
+        await FlushPersistenceAsync().ConfigureAwait(false);
+        await _graphGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await UnregisterSessionTreeAsync(sessionId).ConfigureAwait(false);
+            RaiseChanged(DysonRuntimeChangeKind.SessionGraph, sessionId);
+        }
+        finally
+        {
+            _graphGate.Release();
+        }
+    }
+
+    /// <summary>
     /// Loaded live mode, else the persisted row. Missing rows are not Meta Agent
     /// (delete then returns not-found).
     /// </summary>
@@ -745,7 +778,15 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
 
                     IReadOnlyList<DysonAgentTurn> dropped = [];
                     if (DysonFullSummarizeFlow.ShouldApplyAfterCompletion(last.Kind))
+                    {
                         dropped = DysonFullSummarizeFlow.ApplyAfterCompletion(session, last);
+                        // Children and a pre-prompt summary already cleared _pendingTurns inside RunAsync.
+                        // Classify the FIFO first: QueueFreshContinuationIfNeeded enqueues the fresh
+                        // continuation onto the session queue, and a host drain copies it in afterwards.
+                        var fifoDropped = RetainPromptsAfterSummary(sessionId);
+                        if (session.Parent is null)
+                            DysonCompactionFlow.QueueFreshContinuationIfNeeded(session, resume: false, fifoDropped);
+                    }
 
                     foreach (var turn in session.Turns)
                     {
@@ -1368,6 +1409,39 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
     {
         lock (_promptQueueGate)
             return _promptQueues.Remove(sessionId);
+    }
+
+    /// <summary>
+    /// After a successful summary, drop harness follow-ups already copied into this session's FIFO.
+    /// Raises <see cref="DysonRuntimeChangeKind.Queue"/> when the queue changes.
+    /// </summary>
+    private int RetainPromptsAfterSummary(Guid sessionId)
+    {
+        var dropped = 0;
+        lock (_promptQueueGate)
+        {
+            if (!_promptQueues.TryGetValue(sessionId, out var queue))
+                return 0;
+
+            var kept = new Queue<DysonQueuedPrompt>();
+            while (queue.TryDequeue(out var entry))
+            {
+                if (DysonQueuedTurnAfterSummary.KeepAfterSummary(entry.Turn))
+                    kept.Enqueue(entry);
+                else
+                    dropped++;
+            }
+
+            if (kept.Count == 0)
+                _promptQueues.Remove(sessionId);
+            else
+                _promptQueues[sessionId] = kept;
+        }
+
+        if (dropped > 0)
+            RaiseChanged(DysonRuntimeChangeKind.Queue, sessionId);
+
+        return dropped;
     }
 
     private static IReadOnlyList<string> CopyFilePaths(IReadOnlyList<string>? filePaths)

@@ -1,0 +1,25 @@
+/* Decorative brand tile before "DysonHarness". */
+.sidebar__logo {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-gradient);
+  color: var(--text-on-accent);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: var(--shadow-1);
+}
+
+.sidebar__settings-icon {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  -webkit-mask: url("icons/cog.svg") center / contain no-repeat;
+  mask: url("icons/cog.svg") center / contain no-repeat;
+  opacity: 0.85;
+}

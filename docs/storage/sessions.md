@@ -147,7 +147,7 @@ No mode hard-deletes turn rows any more (the Meta Agent 40-turn window is gone).
 
 - The turn that ended: for a mid-work pause, Success with its tool state and reasoning items kept and `AssistantText` = the `Paused for context compaction` note; for a turn that finished over the limit, its normal reply.
 - One `FullSummarize` turn whose `AssistantText` is the summary, stored as written (no character cap; the prompt asks for under about 35,000 tokens). `ApplyAfterCompletion` sets `IsExcludedFromContext` on every earlier turn, and those rows are upserted.
-- One `Continuation` turn, queued after the summary, only for a mid-work pause.
+- One fresh `Continuation` turn, queued after the summary, only when queued harness follow-ups were dropped or the turn was a mid-work pause. The continuation already sitting in the queue is dropped and replaced; it is not "whatever was already queued". Parent-inject turns, user prompts, and subagent-report / shell-exited / parent-event turns stay queued. A failed summary clears nothing.
 - `sessions.CompactionPendingTurnId` set while the trip is open and cleared after the summary succeeds. A pending trip found on activate or at prompt start puts the `FullSummarize` turn **before** the new prompt's turn.
 - A failed summary leaves a `FullSummarize` row with `AgentTitle` `Context compaction failed`, the error in `AssistantText`, and `IsExcludedFromContext` true; the marker stays set.
 
@@ -180,6 +180,8 @@ Aggregate DTO: session entity + `IReadOnlyList` turns + `IReadOnlyList` log entr
 
 Demo path: `DemoDysonAgentSession.LoadAsync(sessionRepository, sessionId, provider)` (also used by the retained-scope runtime factory).
 OpenAI-compatible path: `OpenAiCompatibleAgentSession.LoadAsync(sessionRepository, sessionId, provider, http, workDirectoryAbsolutePath)` (host direct path, and the retained-scope runtime factory for every built-in agent mode; Completions vs Responses follows `OpenAiApiMode`).
+
+**Provider kind** has no column: it is implied by `ModelSlugId` → `model_slugs.ProviderId` → `model_providers.ProviderKind` (`EffectiveKind`). Converting a root Demo session to OpenAI-compatible (`DysonSessionProviderConversion.ConvertSessionProviderAsync`) rewrites only that FK, the reasoning effort (target slug default), and `MaxTargetContextTokens` when it equaled the old slug default; it appends one `LogLine` ("Converted provider from … to …"). Turns, summaries, exclusions, title, mode, worktree, and parent id are not rewritten. Children are refused (they keep their slug). No migration.
 
 **Worktree on resume/load:** if `WorktreeAbsolutePath` is set and that directory still exists, the host/factory binds the live session to that path (tools, shells, openrules). If the column is set but the folder is gone, load **clears** `WorktreeAbsolutePath` / `WorktreeBranch` (`UpdateWorktreeLocation` with nulls) and falls back to the registered work-directory `AbsolutePath`. `WorktreeEnabled` is kept. Process-restart recovery already finalizes an incomplete `WorktreeCreating` turn (`CompletedUtc` + `InterruptionReason`); the next Work send retries ensure if the path is still null.
 

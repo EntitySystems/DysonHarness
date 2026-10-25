@@ -6,22 +6,69 @@
   overflow: hidden;
 }
 
+/* Top bar: chrome surface, hairline shadow, and a static accent hairline that marks Meta mode. */
 .meta-stage__header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   min-height: var(--shell-header-height);
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-glass);
+  padding: 8px 16px;
+  background: var(--surface-chrome);
+  box-shadow: 0 1px 0 var(--border-subtle);
 }
 
-.meta-stage__heading { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.meta-stage__title { margin: 0; font-size: 15px; font-weight: 600; }
+.meta-stage__header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), transparent 60%);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.meta-stage__heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
+
+.meta-stage__mark {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.meta-stage__mark::before {
+  content: "";
+  width: 18px;
+  height: 18px;
+  background-color: currentColor;
+  -webkit-mask: url("icons/meta-agent.svg") center / contain no-repeat;
+  mask: url("icons/meta-agent.svg") center / contain no-repeat;
+}
+
+.meta-stage__title {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+}
+
 .meta-stage__subtitle {
+  max-width: 32ch;
+  padding: 2px 10px;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -30,8 +77,58 @@
 .meta-stage__actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   flex: 0 0 auto;
+}
+
+/* Ghost actions: no edge at rest, hover wash. */
+.meta-stage__actions .btn {
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+}
+
+.meta-stage__actions .btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.meta-stage__icon {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  -webkit-mask: var(--meta-icon) center / contain no-repeat;
+  mask: var(--meta-icon) center / contain no-repeat;
+}
+
+.meta-stage__icon--tasks { --meta-icon: url("icons/tasks.svg"); }
+.meta-stage__icon--viz { --meta-icon: url("icons/visualization.svg"); }
+.meta-stage__icon--open { --meta-icon: url("icons/open-external.svg"); }
+.meta-stage__icon--back { --meta-icon: url("icons/arrow-left.svg"); }
+
+.meta-stage__divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--border);
+}
+
+/* Icon-only top bar on narrow windows; the label stays for screen readers. */
+@media (max-width: 1279px) {
+  .meta-stage__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .meta-stage__actions .btn { width: 32px; padding: 0; }
 }
 
 .meta-stage__body {
@@ -45,10 +142,17 @@
 .meta-main {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
   min-height: 0;
-  padding: 16px;
+  padding: 16px 20px 10px;
+}
+
+/* The toast aligns with the centred feed column. */
+.meta-main ::deep .error-banner {
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
 }
 
 .meta-plans {
@@ -58,7 +162,7 @@
   min-width: 0;
   min-height: 0;
   padding: 16px 12px;
-  border-right: 1px solid var(--border);
+  box-shadow: inset -1px 0 0 var(--border-subtle);
   background: var(--surface-chrome);
   overflow: auto;
 }
@@ -68,15 +172,16 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  border-left: 1px solid var(--border);
+  box-shadow: inset 1px 0 0 var(--border-subtle);
   background: var(--surface-chrome);
   overflow: hidden;
+  container-type: inline-size;
 }
 
 .rail-tabs__body--agents {
   align-items: stretch;
   justify-content: flex-start;
-  padding: 4px 0 8px;
+  padding: 8px 10px 10px;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
@@ -99,10 +204,25 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-2);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
   overflow: hidden;
+  transition: box-shadow var(--motion-fast) var(--ease), transform var(--motion-fast) var(--ease);
+}
+
+.meta-agents__item:hover {
+  box-shadow: var(--shadow-2);
+  transform: translateY(-1px);
+}
+
+/* Running child: 3px accent rail on the item. */
+.meta-agents__item:has(> [data-running]) {
+  box-shadow: inset 3px 0 0 var(--accent), var(--shadow-1);
+}
+
+.meta-agents__item:has(> [data-status="Failed"]) {
+  background: color-mix(in srgb, var(--danger) 6%, var(--surface-raised));
 }
 
 .meta-agents__item ::deep .subagent-card,
@@ -126,62 +246,164 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 24px 8px;
+  padding: 32px 8px;
   text-align: center;
+}
+
+.meta-agents__empty-icon {
+  width: 32px;
+  height: 32px;
+  margin-bottom: 4px;
+  background-color: var(--text-faint);
+  -webkit-mask: url("icons/agent.svg") center / contain no-repeat;
+  mask: url("icons/agent.svg") center / contain no-repeat;
 }
 
 .meta-agents__empty-title {
   margin: 0;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
   color: var(--text-muted);
 }
 
 .meta-agents__empty-hint {
   margin: 0;
-  max-width: 16em;
-  font-size: 12px;
-  line-height: 1.4;
+  max-width: 17em;
+  font-size: var(--fs-sm);
+  line-height: var(--lh);
   color: var(--text-dim);
 }
 
+/* Messages float on the canvas; the feed list centres itself at 880px. */
 .meta-chat {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-1);
+  border: 0;
+  background: transparent;
 }
 
-.meta-composer { border-top: 0; padding: 0; background: transparent; }
+/* Floating composer card: the shell (textarea + chips) and the action row share one surface. */
+.meta-composer {
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-2);
+  transition: border-color var(--motion-fast) var(--ease), box-shadow var(--motion-fast) var(--ease);
+}
+
+.meta-composer:focus-within {
+  border-color: var(--accent-border);
+  box-shadow: var(--accent-glow), var(--shadow-2);
+}
+
+/* The card draws the edge; the inner shell stays flat (drop-target styling still applies). */
+.meta-composer .composer-shell {
+  border: 0;
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.meta-composer .composer-shell.is-drop-target {
+  background: var(--accent-softer);
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
 
 .meta-composer__prompt {
   width: 100%;
-  min-height: 72px;
+  min-height: 52px;
+  max-height: 40vh;
+  field-sizing: content;
   resize: none;
   border: 0;
   background: transparent;
   color: var(--text);
-  padding: 10px 12px;
+  padding: 14px 16px 6px;
   font: inherit;
+  font-size: var(--fs-md);
+  line-height: var(--lh);
+}
+
+.meta-composer__prompt::placeholder {
+  color: var(--text-dim);
 }
 
 .meta-composer__actions {
   justify-content: flex-end;
   align-items: center;
   gap: 8px;
+  padding: 6px 8px 8px 10px;
 }
 
 /* Model + effort sit left of the send controls; global .composer rules size the triggers. */
 .meta-composer__pickers {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   margin-right: auto;
+}
+
+.meta-composer__pickers ::deep .model-slug-picker__trigger-label {
+  max-width: 28ch;
+  font-family: var(--font-mono);
+}
+
+/* Round primary Send: label on wide windows, icon + sr-only label below 1280px. */
+.meta-composer__send {
+  min-height: 36px;
+  padding: 0 16px;
+  border-radius: var(--radius-full);
+}
+
+.meta-composer__send:disabled {
+  background: var(--bg-3);
+  color: var(--text-faint);
+  opacity: 1;
+}
+
+.meta-composer__send-icon {
+  display: none;
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  -webkit-mask: url("icons/send.svg") center / contain no-repeat;
+  mask: url("icons/send.svg") center / contain no-repeat;
+}
+
+@media (max-width: 1279px) {
+  .meta-composer__send { width: 36px; padding: 0; }
+  .meta-composer__send-icon { display: block; }
+  .meta-composer__send-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+
+.meta-composer__hint {
+  align-self: center;
+  max-width: 880px;
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+  text-align: center;
+}
+
+@media (min-width: 1600px) {
+  .meta-stage__body { grid-template-columns: 272px minmax(0, 1fr) 300px; }
 }
 
 @media (max-width: 1400px) {

@@ -105,7 +105,7 @@ public static class DysonAgentSystemPrompts
         - If you started an Explore, that Explore is always a blocker: WaitForSubagent until it finishes before any further parent work (implementation, extra mapping, new Drones, shells, or other tools). Do not fire-and-forget an Explore and keep working. Do not WaitForSubagent on Drones.
         - Never call WaitForSubagent while also expecting a child TriggerParentEvent / AskQuestionFromParent / PromptUserDialogFromParent — Wait blocks the orchestrator from addressing new parent events (deadlock). Prefer notification turns, or RespondToSubagentEvent for already-pending events (Respond works even mid-Wait).
         - When a harness continuation reports a subagent event, call RespondToSubagentEvent with the eventId so the child unblocks. askQuestion / promptUserDialog events are answered by the Auto UI (you do not Respond for those).
-        - Use TriggerSubagentEvent to inject instructions into a child (queued next turn by default; interruptSubagent=true cancels the child’s in-flight turn / pending parent-event wait and runs immediately). Follow-up work on a finished child is TriggerSubagentEvent (reuse the same child), not a new StartSubagent.
+        - Use TriggerSubagentEvent to inject instructions into a child (timeoutSeconds omitted = cancel the child’s in-flight turn / pending parent-event wait and run immediately; timeoutSeconds 1–20 = wait for the child’s next turn boundary, then interrupt; a positive timeout fails while the child awaits a parent-event reply). Follow-up work on a finished child is TriggerSubagentEvent (reuse the same child), not a new StartSubagent.
         - Root clarifying / design questions: AskQuestion (composer UI). Root concrete action choices: PromptUserDialog (modal). Do not use FromParent tools on the root.
         - Use ListSubagents to rediscover child ids after resume or when StartSubagent results are no longer in recent context; then InspectSubagentLog / StopSubagent / Wait as needed — never busy-wait in a tight loop.
         - If the task names a planId and does not give a plan path, call ReadMetaPlan before any edit. The markdown is the brief. A path does not replace that read when the id is the authority.
@@ -269,6 +269,7 @@ public static class DysonAgentSystemPrompts
 
         Hard rule: never block.
         - There is no WaitForSubagent in this mode. Dispatch, then end your turn.
+        - Passing timeoutSeconds ≥ 1 on MessageMetaAgentDrone blocks this turn for at most that many seconds (max 20) and then returns; the default (omit it) does not block.
         - A drone or explore finishing queues you a new turn automatically. That is how you learn results.
         - Do not idle-poll ReadMetaAgentDroneLog in a loop; read it only when the user asks about progress or a report looks wrong.
 
@@ -314,7 +315,7 @@ public static class DysonAgentSystemPrompts
         - A harness continuation that names an eventId is a Meta Agent Drone blocked inside TriggerParentEvent. It stays blocked until you call RespondToSubagentEvent with that subagentId, that eventId, and a reply string. Ending your turn does not answer it.
         - a parent-event continuation is mandatory. Before that turn ends, call RespondToSubagentEvent unless this is a question only the user can answer. Status (what landed, what is next): ack the same turn and PostConversationMessage that status. A question you already know: answer the same turn; do not ask the user. A question only the user can decide: PostUserQuestion the question, do not respond yet, keep subagentId and eventId; the answer arrives on the next user turn and carries the same event; then RespondToSubagentEvent with their answer. Do not start another drone for the same question. Do not end a status turn without the ack.
         - The meta chat does not show this continuation. PostConversationMessage may still relay the status. A question uses PostUserQuestion. Do not mention the continuation, the event, eventId, or subagentId.
-        - Do not MessageMetaAgentDrone that drone while it is waiting. Without interrupt the call fails. interrupt true cancels the wait and throws away the question.
+        - Do not MessageMetaAgentDrone that drone while it is waiting. The default call cancels the wait and throws away the question. A positive timeoutSeconds fails instead.
         - A drone report is still the final handoff. A question is not a failed report. If a report arrives with status failed and the summary is only a question, answer it by MessageMetaAgentDrone (the drone already finished) rather than treating the task as dead.
         - The user can reply mid-turn; those [User comment during turn] messages outrank your current plan.
 

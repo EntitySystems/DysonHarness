@@ -1,0 +1,167 @@
+/* Subagent card (moved whole from app.css in the UI refresh). The icon tint classes
+   (.subagent-card__icon--*) and .subagent-card__spinner stay global in app.css because
+   MetaAgentChildRow reuses them. */
+.subagent-card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease), box-shadow var(--motion-fast) var(--ease);
+}
+
+.subagent-card:hover {
+  background: var(--bg-hover);
+  box-shadow: var(--shadow-2);
+}
+
+.subagent-card:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* 26px tinted tile around the mask icon; carries the status dot. */
+.subagent-card__tile {
+  position: relative;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+}
+
+.subagent-card__tile:has(.subagent-card__icon--explore) {
+  background: var(--warning-soft);
+}
+
+.subagent-card__tile:has(.subagent-card__icon--drone) {
+  background: var(--accent-soft);
+}
+
+.subagent-card__tile:has(.subagent-card__icon--review) {
+  background: var(--danger-soft);
+}
+
+.subagent-card__icon {
+  width: 16px;
+  height: 16px;
+  background-color: var(--text-muted);
+  -webkit-mask: var(--subagent-mode-icon) center / contain no-repeat;
+  mask: var(--subagent-mode-icon) center / contain no-repeat;
+}
+
+/* Status dot (bottom-right of the tile). Idle/Active: hollow accent ring. */
+.subagent-card__tile::after,
+.subagent-card__tile::before {
+  content: "";
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  border-radius: var(--radius-full);
+}
+
+.subagent-card__tile::after {
+  border: 2px solid var(--accent-border);
+  background: var(--surface-raised);
+}
+
+.subagent-card[data-status="Completed"] .subagent-card__tile::after {
+  border-color: var(--surface-raised);
+  background: var(--success);
+}
+
+.subagent-card[data-status="Failed"] .subagent-card__tile::after {
+  border-color: var(--surface-raised);
+  background: var(--danger);
+}
+
+.subagent-card[data-status="Stopped"] .subagent-card__tile::after,
+.subagent-card[data-status="Interrupted"] .subagent-card__tile::after {
+  border-color: var(--text-dim);
+}
+
+.subagent-card[data-running] .subagent-card__tile::after {
+  border-color: var(--surface-raised);
+  background: var(--accent);
+}
+
+/* A7: running halo (opacity + scale on a pseudo-element only). */
+.subagent-card[data-running] .subagent-card__tile::before {
+  background: var(--accent);
+  animation: dyson-status-pulse var(--motion-pulse) var(--ease-standard) infinite;
+}
+
+.subagent-card__text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.subagent-card__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--sp-2);
+  min-width: 0;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+}
+
+.subagent-card__name {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.subagent-card__id {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunken);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-medium);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.subagent-card__step {
+  flex: 1 1 100%;
+  min-width: 0;
+  margin-top: 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh);
+  color: var(--text-muted);
+}
+
+.subagent-card__model {
+  margin-top: var(--sp-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -1,0 +1,128 @@
+/* Moved whole from app.css in the UI refresh. The shared
+   `.turn-visualization__frame, .session-visualizations-modal__frame` base rule stays global. */
+.session-visualizations-modal {
+  width: min(980px, 100%);
+  max-height: min(84vh, 760px);
+}
+
+.session-visualizations-modal__title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.session-visualizations-modal__count,
+.session-visualizations-modal__item-meta {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+.session-visualizations-modal__close {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: var(--radius-full);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.session-visualizations-modal__body {
+  padding: 0;
+}
+
+.session-visualizations-modal__layout {
+  display: grid;
+  grid-template-columns: minmax(190px, 260px) minmax(0, 1fr);
+  min-height: min(64vh, 560px);
+}
+
+.session-visualizations-modal__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: auto;
+  padding: var(--sp-2);
+  border-right: 0;
+  box-shadow: inset -1px 0 0 var(--border-subtle);
+}
+
+.session-visualizations-modal__item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease);
+}
+
+.session-visualizations-modal__item:hover {
+  background: var(--bg-hover);
+}
+
+.session-visualizations-modal__item.is-selected {
+  background: var(--bg-active);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.session-visualizations-modal__item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.session-visualizations-modal__item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+}
+
+.session-visualizations-modal__item-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-2xs);
+}
+
+.session-visualizations-modal__preview {
+  min-width: 0;
+  padding: var(--sp-4);
+  background: var(--surface-sunken);
+}
+
+.session-visualizations-modal__preview h4 {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+}
+
+.session-visualizations-modal__frame {
+  height: min(58vh, 520px);
+  border: 0;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+}
+
+@media (max-width: 680px) {
+  .session-visualizations-modal__layout {
+    grid-template-columns: 1fr;
+  }
+
+  .session-visualizations-modal__list {
+    max-height: 180px;
+    box-shadow: inset 0 -1px 0 var(--border-subtle);
+  }
+
+  .session-visualizations-modal__frame {
+    height: 45vh;
+  }
+}

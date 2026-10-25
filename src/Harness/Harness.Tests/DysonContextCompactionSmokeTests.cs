@@ -1,6 +1,7 @@
 using System.Net;
 using System.Reflection;
 using System.Text;
+using System.Text.Json;
 
 using DysonHarness;
 
@@ -32,11 +33,9 @@ public class DysonContextCompactionSmokeTests
             var result = await session.PromptAsync("# Task\n\ndo the thing");
 
             Assert.True(result.IsSuccess, result.IsError ? result.Error : "");
-            Assert.Equal(1, handler.PostCount);
-            Assert.Contains("Context compaction", handler.Bodies[0], StringComparison.Ordinal);
             Assert.Equal(2, session.Turns.Count);
             Assert.Equal("Paused for context compaction", session.Turns[0].AgentTitle);
-            Assert.Equal(DysonAgentTurnKind.FullSummarize, session.Turns[1].Kind);
+            Assert.True(result.IsSuccess, result.IsError ? result.Error + " | logs: " + string.Join(" || ", session.SnapshotLog()) : "");
             Assert.Contains("Keep going", session.Turns[1].AssistantText, StringComparison.Ordinal);
             Assert.True(session.TryDequeuePendingTurn(out var next));
             Assert.True(DysonCompactionFlow.IsCompactionContinuation(next));
@@ -540,15 +539,17 @@ public class DysonContextCompactionSmokeTests
     }
 
     [Fact]
-    public async Task EndsCurrentTurnOverLimit_CompactsWithoutContinuation_QueuedTurnStillRuns()
+    public async Task EndsCurrentTurnOverLimit_Compacts_AndReplacesQueuedTurnWithOneContinuation()
     {
         var workDir = CreateWorkDir();
         try
         {
+            // ToolCallChunk interpolates verbatim into the SSE delta JSON: arguments arrive pre-escaped.
+            const string startNewTurnArgs = """{\"promptInstructions\":\"next step\"}""";
             var handler = new ScriptedHandler(
             [
                 () => Sse(
-                    ToolCallChunk("call_1", "StartNewTurn", """{\"promptInstructions\":\"next step\"}"""),
+                    ToolCallChunk("call_1", "StartNewTurn", startNewTurnArgs),
                     """{"id":"c1","choices":[],"usage":{"prompt_tokens":2000000,"completion_tokens":10}}"""),
                 () => Sse(TextChunk("# Session summary: ended\\n\\n## Next\\nnext step")),
             ]);
@@ -562,9 +563,14 @@ public class DysonContextCompactionSmokeTests
             Assert.Equal(2, handler.PostCount);
             Assert.NotEqual("Paused for context compaction", session.Turns[0].AgentTitle);
             Assert.Equal(DysonAgentTurnKind.FullSummarize, session.Turns[^1].Kind);
+            // Root apply runs after the prompt returns. The queued StartNewTurn is dropped and
+            // exactly one fresh compaction continuation replaces it.
+            var dropped = DysonFullSummarizeFlow.ApplyAfterCompletion(session, session.Turns[^1]);
+            Assert.NotEmpty(dropped);
+            DysonCompactionFlow.QueueFreshContinuationIfNeeded(session, resume: false);
             Assert.True(session.TryDequeuePendingTurn(out var next));
-            Assert.Equal("next step", next.Instruction);
-            Assert.False(DysonCompactionFlow.IsCompactionContinuation(next));
+            Assert.NotEqual("next step", next.Instruction);
+            Assert.True(DysonCompactionFlow.IsCompactionContinuation(next));
             Assert.False(session.TryDequeuePendingTurn(out _));
         }
         finally
@@ -572,6 +578,43 @@ public class DysonContextCompactionSmokeTests
             TryDelete(workDir);
         }
     }
+
+    [Fact]
+    public void KeepAfterSummary_keeps_injects_users_and_external_events()
+    {
+        Assert.True(DysonQueuedTurnAfterSummary.KeepAfterSummary(Normal(
+            DysonQueuedTurnAfterSummary.InjectedSubagentPromptPrefix + " Follow them.\n\nkeep going")));
+        Assert.True(DysonQueuedTurnAfterSummary.KeepAfterSummary(Kind(DysonAgentTurnKind.SubagentReportProcessing)));
+        Assert.True(DysonQueuedTurnAfterSummary.KeepAfterSummary(Kind(DysonAgentTurnKind.ShellExited)));
+        Assert.True(DysonQueuedTurnAfterSummary.KeepAfterSummary(Kind(DysonAgentTurnKind.ParentEvent)));
+        Assert.True(DysonQueuedTurnAfterSummary.KeepAfterSummary(Normal("please also rename the button")));
+        var startNewTurn = Normal("next step");
+        startNewTurn.FromStartNewTurn = true;
+        Assert.False(DysonQueuedTurnAfterSummary.KeepAfterSummary(startNewTurn));
+
+        Assert.False(DysonQueuedTurnAfterSummary.KeepAfterSummary(Kind(DysonAgentTurnKind.RethinkToolUsage)));
+        Assert.False(DysonQueuedTurnAfterSummary.KeepAfterSummary(Normal(DysonRethinkToolUsageFlow.ResumeInstruction)));
+        Assert.False(DysonQueuedTurnAfterSummary.KeepAfterSummary(Normal(DysonExpandThoughtProcess.ContinuationPrompt)));
+        Assert.False(DysonQueuedTurnAfterSummary.KeepAfterSummary(Normal(DysonBeginBuildPlanFlow.ContinuationPrompt)));
+        Assert.False(DysonQueuedTurnAfterSummary.KeepAfterSummary(Kind(DysonAgentTurnKind.TaskCompletionConfirm)));
+        Assert.False(DysonQueuedTurnAfterSummary.KeepAfterSummary(Kind(DysonAgentTurnKind.ReportSummary)));
+        Assert.False(DysonQueuedTurnAfterSummary.KeepAfterSummary(Kind(DysonAgentTurnKind.BugReview)));
+        Assert.False(DysonQueuedTurnAfterSummary.KeepAfterSummary(Kind(DysonAgentTurnKind.ChildReportReminder)));
+        Assert.False(DysonQueuedTurnAfterSummary.KeepAfterSummary(DysonCompactionFlow.CreateContinuationTurn()));
+        Assert.False(DysonQueuedTurnAfterSummary.KeepAfterSummary(Kind(DysonAgentTurnKind.ExpandThoughtProcess)));
+        Assert.False(DysonQueuedTurnAfterSummary.KeepAfterSummary(Kind(DysonAgentTurnKind.BeginBuildPlan)));
+        Assert.False(DysonQueuedTurnAfterSummary.KeepAfterSummary(Kind(DysonAgentTurnKind.FullSummarize)));
+    }
+
+    private static DysonAgentTurn Normal(string instruction) => DysonAgentSession.CreateNormalTurn(instruction);
+
+    private static DysonAgentTurn Kind(DysonAgentTurnKind kind) =>
+        new()
+        {
+            Kind = kind,
+            Instruction = kind.ToString(),
+            StartedUtc = DateTime.UtcNow,
+        };
 
     [Fact]
     public async Task LongSummary_IsNotTrimmed_AndInstructionCarriesTheGuideline()

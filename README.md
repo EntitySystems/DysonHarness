@@ -97,8 +97,10 @@ dotnet run --project src/Harness/DysonHarness.UI.Windows
 **Browser app (any platform):**
 
 ```bash
-dotnet run --project src/Harness/Harness.UI --urls http://localhost:5180
+dotnet run --project src/Harness/Harness.UI --launch-profile http
 ```
+
+That is the debug UI on **http://localhost:5181** (`Properties/launchSettings.json`, Development). The installed Windows app (`DysonHarness.exe`) does not use that port: its in-process host binds an ephemeral loopback port. Published Linux/macOS zips keep the Kestrel default (http://localhost:5000) unless you pass a URL.
 
 Open the app, then **Settings → Models**.
 
