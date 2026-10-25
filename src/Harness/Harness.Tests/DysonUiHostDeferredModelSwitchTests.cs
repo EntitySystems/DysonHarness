@@ -280,6 +280,86 @@ public class DysonUiHostDeferredModelSwitchTests
         }
     }
 
+    [Fact]
+    public async Task Demo_session_converts_to_openai_session_with_same_id()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out SqliteConnection conn);
+        using var _keepAlive = conn;
+
+        var models = DysonTempDb.Models(accessor);
+        var sessions = DysonTempDb.Sessions(accessor);
+        var workDirs = DysonTempDb.WorkDirectories(accessor);
+        var plugins = DysonTempDb.Plugins(accessor);
+        var grants = new DysonPluginMcpGrantRepository(accessor, DysonFixedLocalSubjectContext.Instance);
+        var catalog = new DysonPluginCatalogService(plugins);
+        var mcpResolver = new DysonPluginMcpResolver();
+
+        using var http = new HttpClient();
+        await using var host = new DysonUiHost(
+            sessions,
+            models,
+            workDirs,
+            DysonTempDb.WorkDirectoryConfigurations(accessor),
+            DysonTempDb.Plans(accessor),
+            DysonTempDb.Settings(accessor),
+            DysonTempDb.Shells(accessor),
+            http,
+            new DysonCliProxyHost(http),
+            new DysonFilePreviewStore(),
+            catalog,
+            new DysonPluginContributionResolver(),
+            new DysonPluginMcpGrantService(plugins, grants, catalog, mcpResolver),
+            mcpResolver,
+            new DysonPluginLifecycleService(plugins),
+            new ThemeService(new ThemeJsRuntime("light", "#ABC")));
+
+        var workRoot = Path.Combine(Path.GetTempPath(), $"dyson-convert-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workRoot);
+        try
+        {
+            var wd = await workDirs.CreateAsync(workRoot, "Convert");
+            var demo = await models.CreateProviderAsync(new DysonModelProviderEntity
+            {
+                DisplayName = "Demo Local",
+                ProviderKind = DysonProviderKinds.Demo,
+            });
+            var demoSlug = await models.AddSlugAsync(demo.Value, "demo-a", "Demo A");
+            var oai = await models.CreateProviderAsync(new DysonModelProviderEntity
+            {
+                DisplayName = "Local OAI",
+                ProviderKind = DysonProviderKinds.OpenAICompatible,
+                BaseUrl = "http://127.0.0.1:1/v1",
+            });
+            var oaiSlug = await models.AddSlugAsync(oai.Value, "gpt-x", "GPT X");
+            Assert.True(wd.IsSuccess && demoSlug.IsSuccess && oaiSlug.IsSuccess);
+
+            var started = await host.StartNewSessionAsync(DysonAgentModes.Work, demoSlug.Value, wd.Value);
+            Assert.True(started.IsSuccess, started.IsError ? started.Error : null);
+            var sessionId = host.Session!.PersistenceId;
+
+            // Same-kind picks keep using SetSessionModelSlugAsync; only the cross-kind pick converts.
+            Assert.Null(await host.ProviderConversionTargetAsync(demoSlug.Value));
+            Assert.Equal("Local OAI / gpt-x", await host.ProviderConversionTargetAsync(oaiSlug.Value));
+
+            host.MarkSessionBusyForTests(sessionId);
+            var busy = await host.ConvertSessionToSlugAsync(oaiSlug.Value);
+            Assert.Equal("Wait for the current turn to finish.", busy.IsError ? busy.Error : null);
+            host.ClearSessionBusyForTests(sessionId);
+
+            var converted = await host.ConvertSessionToSlugAsync(oaiSlug.Value);
+            Assert.True(converted.IsSuccess, converted.IsError ? converted.Error : null);
+
+            var live = Assert.IsType<OpenAiCompatibleAgentSession>(host.Session);
+            Assert.Equal(sessionId, live.PersistenceId);
+            Assert.Equal(oaiSlug.Value, ((OpenAiCompatibleAgentProvider)live.Provider).SlugId);
+            Assert.Null(await host.ProviderConversionTargetAsync(oaiSlug.Value));
+        }
+        finally
+        {
+            try { Directory.Delete(workRoot, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
     private sealed class ThemeJsRuntime(string theme, string accent) : IJSRuntime
     {
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) =>

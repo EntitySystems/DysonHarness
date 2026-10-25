@@ -9,6 +9,7 @@
 @inject IDysonWorkDirectoryRepository WorkDirs
 @inject IDysonModelRepository ModelStore
 @inject IJSRuntime Js
+@inject Harness.UI.Services.ConfirmDialogService ConfirmDialog
 
 <PageTitle>Meta agent — @(_workDirectoryName ?? "DysonHarness")</PageTitle>
 
@@ -454,7 +455,9 @@
         if (!IsMetaFocused)
             return;
 
-        var result = await Host.SetSessionModelSlugAsync(id);
+        var result = await Host.ProviderConversionTargetAsync(id) is { } target
+            ? await ModelSlugConversion.ConfirmAndConvertAsync(Host, ConfirmDialog, id!.Value, target)
+            : await Host.SetSessionModelSlugAsync(id);
         _error = result.IsError ? result.Error : null;
         await SyncModelFromHostAsync();
     }

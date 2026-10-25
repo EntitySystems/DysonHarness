@@ -3932,6 +3932,66 @@ public sealed class DysonUiHost : IAsyncDisposable
     }
 
     /// <summary>
+    /// Non-null (<c>"{provider} / {slug}"</c>) when picking <paramref name="modelSlugId"/> on the focused
+    /// session needs <see cref="ConvertSessionToSlugAsync"/> (Demo session, OpenAI-compatible slug)
+    /// instead of <see cref="SetSessionModelSlugAsync"/>. Null on any lookup error (the slug path reports it).
+    /// </summary>
+    public async Task<string?> ProviderConversionTargetAsync(
+        Guid? modelSlugId,
+        CancellationToken cancellationToken = default)
+    {
+        if (_session is null || modelSlugId is not Guid id
+            || SessionProviderKind(_session.Provider) == DysonProviderKinds.OpenAICompatible)
+        {
+            return null;
+        }
+
+        var slug = await _models.GetSlugAsync(id, cancellationToken).ConfigureAwait(false);
+        return slug.IsSuccess
+            && DysonSessionProviderConversion.Kind(slug.Value) == DysonProviderKinds.OpenAICompatible
+                ? $"{slug.Value.Provider?.DisplayName} / {slug.Value.Slug}"
+                : null;
+    }
+
+    /// <summary>
+    /// Converts the focused root session to an OpenAI-compatible slug in place (same id, same turns):
+    /// persists the slug, drops the live object (and its loaded children), and reloads the id.
+    /// Refuses while the session, its children, queued prompts, a summary, or voice mode are live.
+    /// </summary>
+    public async Task<VoidResult<string>> ConvertSessionToSlugAsync(
+        Guid targetModelSlugId,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+        if (_session is not { PersistenceId: var sessionId } session || sessionId == Guid.Empty)
+            return FailConvert("No active session.");
+
+        if (CanStopExecution(sessionId) || session.HasAnySummarizingTurn || session.Config.Voice is not null)
+            return FailConvert("Wait for the current turn to finish.");
+
+        var converted = await DysonSessionProviderConversion.ConvertSessionProviderAsync(
+                _sessions, _models, sessionId, targetModelSlugId, cancellationToken)
+            .ConfigureAwait(false);
+        if (converted.IsError)
+            return FailConvert(converted.Error);
+
+        ClearFocus();
+        UnregisterSessionTree(sessionId);
+        if (TryGetAttachedRuntime(out var runtime))
+            await runtime.ReleaseSessionTreeAsync(sessionId).ConfigureAwait(false);
+
+        // Same path as opening the session from the list; the row now resolves to OpenAI-compatible.
+        return await LoadAndFocusSessionAsync(sessionId, cancellationToken).ConfigureAwait(false);
+    }
+
+    private VoidResult<string> FailConvert(string message)
+    {
+        LastError = message;
+        Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
+        return new VoidResult<string>(message);
+    }
+
+    /// <summary>
     /// Apply a stashed model slug for <paramref name="sessionId"/> (if any) onto the finished
     /// session before queued prompts drain.
     /// </summary>

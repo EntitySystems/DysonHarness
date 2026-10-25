@@ -239,6 +239,8 @@ Idle-without-report after two reminders **does** set `Failed` — that child was
 
 **Tool-history compaction** (`tool_history_compaction`) applies to Meta Agent like every other mode: off unless the setting is `"true"`.
 
+**Provider conversion.** A Meta session on a Demo slug converts to an OpenAI-compatible slug like any session: pick the slug in the composer `ModelSlugPicker`, confirm, and `DysonUiHost.ConvertSessionToSlugAsync` reloads the same session id (so `FindExistingMetaAgentSessionAsync` still binds it). Refused while busy. Children keep their slug. See [sessions.md](../storage/sessions.md#resume).
+
 ## Traps
 
 - `ListPlans` JSON is a closed property set. Adding `markdown` / `path` / `note` / a prune `notice` is a contract break (`DysonPlanStatusTests`).

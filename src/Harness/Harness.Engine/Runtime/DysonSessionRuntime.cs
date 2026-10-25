@@ -562,6 +562,29 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
     }
 
     /// <summary>
+    /// Unmaps <paramref name="sessionId"/> and its mapped descendants and disposes their leases,
+    /// without touching the database (provider-kind conversion reloads the same id afterwards).
+    /// Cancels their prompt tokens and clears their queues, so callers must only release idle sessions.
+    /// </summary>
+    public async Task ReleaseSessionTreeAsync(Guid sessionId)
+    {
+        if (_disposed != 0 || sessionId == Guid.Empty)
+            return;
+
+        await FlushPersistenceAsync().ConfigureAwait(false);
+        await _graphGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await UnregisterSessionTreeAsync(sessionId).ConfigureAwait(false);
+            RaiseChanged(DysonRuntimeChangeKind.SessionGraph, sessionId);
+        }
+        finally
+        {
+            _graphGate.Release();
+        }
+    }
+
+    /// <summary>
     /// Loaded live mode, else the persisted row. Missing rows are not Meta Agent
     /// (delete then returns not-found).
     /// </summary>
