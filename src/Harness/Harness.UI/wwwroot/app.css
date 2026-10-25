@@ -3407,7 +3407,7 @@ code, .mono {
   color: color-mix(in srgb, var(--danger) 78%, var(--text));
 }
 
-/* Home LastError toast: flex + dismiss; border thickness depletes over 20s */
+/* Session error toast (Home + Meta): flex + dismiss; border thickness depletes over 20s */
 .error-banner--toast {
   display: flex;
   align-items: center;

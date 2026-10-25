@@ -148,8 +148,8 @@
   padding: 16px 20px 10px;
 }
 
-/* Banners and the composer align with the centred feed column. */
-.meta-main > .error-banner {
+/* The toast aligns with the centred feed column. */
+.meta-main ::deep .error-banner {
   width: 100%;
   max-width: 880px;
   margin: 0 auto;

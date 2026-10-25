@@ -80,10 +80,13 @@
                     </aside>
 
                     <div class="meta-main">
-                        @if (!string.IsNullOrEmpty(BannerError))
-                        {
-                            <div class="error-banner">@BannerError</div>
-                        }
+                        <DysonTransition TItem="string" Item="BannerError" ExitMs="140" Context="errorToast">
+                            <ErrorToast @key="errorToast.Item"
+                                        Message="@errorToast.Item"
+                                        MotionClass="@errorToast.StateClass"
+                                        PageError="@_error"
+                                        OnPageErrorCleared="ClearPageError" />
+                        </DysonTransition>
 
                         <div class="meta-chat">
                             <MetaChatFeed @ref="_chatFeed"
@@ -297,8 +300,13 @@
     private int _fileInputKey;
     private DotNetObjectReference<MetaAgent>? _imageCaptureRef;
 
+    /// <summary>Toast gate. Null (not empty) is what clears <c>DysonTransition</c>.</summary>
     private string? BannerError =>
-        !string.IsNullOrEmpty(_error) ? _error : Host.LastError;
+        !string.IsNullOrEmpty(_error) ? _error
+        : string.IsNullOrEmpty(Host.LastError) ? null
+        : Host.LastError;
+
+    private void ClearPageError() => _error = null;
 
     private bool IsMetaFocused =>
         _sessionReady
