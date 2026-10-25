@@ -329,10 +329,20 @@ window.dysonChat = {
   setStick: function (el, value) {
     if (el) el._dysonStick = !!value;
   },
-  /** Only scrolls when stick is true. Programmatic scroll keeps stick true via the listener. */
-  scrollToBottom: function (el) {
-    if (!el || el._dysonStick === false) return;
+  /**
+   * Only scrolls when stick is true. Programmatic scroll keeps stick true via the listener.
+   * instant true: pin stick, jump now, then once more on the next frame so images, code
+   * blocks, and fonts that grow scrollHeight after the first paint do not leave the log short.
+   */
+  scrollToBottom: function (el, instant) {
+    if (!el || (el._dysonStick === false && instant !== true)) return;
+    if (instant === true) el._dysonStick = true;
     el.scrollTop = el.scrollHeight;
+    if (instant !== true) return;
+    var self = this;
+    requestAnimationFrame(function () {
+      self.scrollToBottom(el);
+    });
   }
 };
 

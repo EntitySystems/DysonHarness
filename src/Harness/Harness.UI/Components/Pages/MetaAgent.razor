@@ -230,6 +230,7 @@
                                                     <SubagentCard PersistenceId="id"
                                                                   AfterNavigate="InspectChildAsync" />
                                                     <MetaAgentChildRows ParentPersistenceId="id"
+                                                                        ExpandedIds="_expandedChildRows"
                                                                         AfterNavigate="InspectChildAsync" />
                                                 </div>
                                             }
@@ -285,6 +286,9 @@
     private Guid? _agentsListBoundId;
     private IDisposable? _agentsSpawnedSub;
     private IDisposable? _agentsStatusSub;
+
+    /// <summary>Drones whose nested rows are expanded. Page lifetime only.</summary>
+    private readonly HashSet<Guid> _expandedChildRows = [];
     private DotNetObjectReference<DysonUiHost>? _chatLinksRef;
     private bool _tasksOpen;
     private bool _vizOpen;

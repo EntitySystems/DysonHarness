@@ -157,6 +157,8 @@
 @code {
     private ElementReference _feedEl;
     private bool _attached;
+    private bool _entryScroll = true;
+    private string _entryAnchor = "";
     private bool _revealPrimed;
     private int _renderVersion;
     private int _lastScrolledRenderVersion = -1;
@@ -352,6 +354,14 @@
                 _reveal.Add(key);
         }
 
+        // First loaded history, or a different first item (navigate back, reload,
+        // workdir/session switch): jump to the newest message. A live append keeps
+        // the stick-gated scroll. Empty stays unpinned so the first load still jumps.
+        var anchor = _items.Count == 0 ? "" : _items[0].Key;
+        if (anchor.Length > 0 && anchor != _entryAnchor)
+            _entryScroll = true;
+        if (anchor.Length > 0)
+            _entryAnchor = anchor;
         _revealPrimed = true;
         _renderVersion++;
     }
@@ -381,7 +391,11 @@
         if (attached && _renderVersion != _lastScrolledRenderVersion)
         {
             _lastScrolledRenderVersion = _renderVersion;
-            await DysonCircuitJs.InvokeVoidAsync(Js, "dysonChat.scrollToBottom", _feedEl);
+            // instant on entry / session change: history is already in the DOM, but layout
+            // (markdown, images) may still grow. Live updates stay the stick-gated jump.
+            var entry = _entryScroll;
+            _entryScroll = false;
+            await DysonCircuitJs.InvokeVoidAsync(Js, "dysonChat.scrollToBottom", _feedEl, entry);
         }
     }
 
