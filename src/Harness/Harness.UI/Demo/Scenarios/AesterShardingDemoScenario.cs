@@ -51,13 +51,25 @@ public sealed class AesterShardingDemoScenario : IDysonDemoScenario
         if (started.IsError)
             return VoidResult<string>.AsError(started.Error);
 
+        var seeded = await SeedHistoryAsync(hooks, ct).ConfigureAwait(true);
+        if (seeded.IsError)
+            return seeded;
+
         await Step(500).ConfigureAwait(true);
         var planned = await hooks.AppendUserTurnAsync(
             "Plan a PostgreSQL schema for Aester Financials' ledger: double-entry journal, accounts, and balances. Write it up as a plan.",
-            "On it — I'll look around the backend first and then write the plan.",
+            assistantText: "",
             ct).ConfigureAwait(true);
         if (planned.IsError)
             return planned;
+
+        await Step(500).ConfigureAwait(true);
+        var confirmed = await hooks.AppendAssistantMessageAsync(
+            "You asked for a PostgreSQL schema plan for Aester Financials' ledger — a double-entry journal, accounts, and balances. I'm starting a planning drone to look around the backend and write it up.",
+            question: null,
+            ct).ConfigureAwait(true);
+        if (confirmed.IsError)
+            return VoidResult<string>.AsError(confirmed.Error);
 
         await Step(500).ConfigureAwait(true);
         var planner = await hooks.AddAgentAsync(null, "Draft the schema plan", DysonAgentModes.MetaAgentDrone, ct)
@@ -254,6 +266,39 @@ public sealed class AesterShardingDemoScenario : IDysonDemoScenario
             ct).ConfigureAwait(true);
         if (noted.IsError)
             return VoidResult<string>.AsError(noted.Error);
+
+        return VoidResult<string>.Success;
+    }
+
+    private static readonly (string Title, string Markdown, DysonPlanStatus Status, TimeSpan Age, bool Archived)[] History =
+    [
+        ("Auth service token rotation",
+            "## Context\n\nAccess tokens live for an hour and refresh tokens never expire.\n\n## Change\n\nRotate refresh tokens on use and revoke the previous one.\n",
+            DysonPlanStatus.Completed, TimeSpan.FromHours(6), false),
+        ("Payments webhook retry queue",
+            "## Context\n\nA failed webhook delivery is dropped.\n\n## Change\n\nQueue retries with backoff and a dead-letter after five attempts.\n",
+            DysonPlanStatus.Completed, TimeSpan.FromDays(2), false),
+        ("Statement PDF export",
+            "## Context\n\nCustomers ask for statements as PDFs.\n\n## Change\n\nRender the monthly statement server-side. Parked until the ledger schema lands.\n",
+            DysonPlanStatus.Stale, TimeSpan.FromDays(3), false),
+        ("Customer notification preferences",
+            "## Context\n\nEvery customer gets every email.\n\n## Change\n\nPer-customer opt-out for statements and payment receipts. Superseded.\n",
+            DysonPlanStatus.Completed, TimeSpan.FromDays(9), true),
+        ("Legacy CSV statement import",
+            "## Context\n\nOld statements arrive as CSV.\n\n## Change\n\nOne-off importer. Dropped once the SQLite backfill covered it.\n",
+            DysonPlanStatus.Stale, TimeSpan.FromDays(14), true),
+    ];
+
+    private static async Task<VoidResult<string>> SeedHistoryAsync(IDysonDemoHooks hooks, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        foreach (var (title, markdown, status, age, archived) in History)
+        {
+            var seeded = await hooks.CreatePlanAsync(title, markdown, ct, status, now - age, archived)
+                .ConfigureAwait(true);
+            if (seeded.IsError)
+                return VoidResult<string>.AsError(seeded.Error);
+        }
 
         return VoidResult<string>.Success;
     }

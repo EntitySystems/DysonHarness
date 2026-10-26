@@ -198,6 +198,12 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
     /// </summary>
     public void CancelDemoBackgroundRun() => CancelBackgroundRun();
 
+    /// <summary>
+    /// Demo scripting only: Meta Agent Drone children stay on the registered checkout instead of
+    /// forking a git worktree (the demo sandbox is a plain temp folder, not a repository).
+    /// </summary>
+    public bool SuppressDroneWorktrees { get; set; }
+
     public override async Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
         string agentMode,
         string task,
@@ -242,7 +248,10 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         if (attached.IsError)
             return Result<DysonStartSubagentResult, string>.AsError(attached.Error);
 
-        var (isolateWorktree, suppressWorktree) = ResolveMetaAgentDroneWorktree(agentMode);
+        var (isolateWorktree, suppressWorktree) = SuppressDroneWorktrees
+            && string.Equals(agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase)
+                ? (false, true)
+                : ResolveMetaAgentDroneWorktree(agentMode);
         var childWorktreeEnabled = suppressWorktree ? false : isolateWorktree || WorktreeEnabled;
         var childWorktreePath = suppressWorktree || isolateWorktree ? null : WorktreeAbsolutePath;
         var childWorktreeBranch = suppressWorktree || isolateWorktree ? null : WorktreeBranch;

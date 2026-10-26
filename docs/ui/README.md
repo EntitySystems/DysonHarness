@@ -68,7 +68,7 @@ The `/meta/{WorkDirectoryId:guid}` page is live: chat, agent cards, and an inter
 
 ## Demo mode
 
-Settings → Demo (`/settings/demo`) is preview/Debug only. The script lives in `Harness.UI/Demo/Scenarios`. `IDysonDemoScenario` is the timeline; `IDysonDemoHooks` is the only surface that touches the host and engine (start a sandbox work directory, append scripted turns, plans, inert child agents, cleanup). One scenario ships: "Planning + database sharding" for a fictional Aester Financials work directory. It makes no model calls.
+Settings → Demo (`/settings/demo`) is preview/Debug only. The script lives in `Harness.UI/Demo/Scenarios`. `IDysonDemoScenario` is the timeline; `IDysonDemoHooks` is the only surface that touches the host and engine (start a sandbox work directory, append scripted turns, plans, inert child agents, cleanup). One scenario ships: "Planning + database sharding" for a fictional Aester Financials work directory. It makes no model calls. The first user message is the plan request; the Meta Agent confirms it (restating the ask and saying a planning drone is starting) before the planning drone and its explores appear. Before that message the sandbox is seeded with earlier Aester plans (completed, stale, and archived, backdated) so the plans column looks lived-in; cleanup deletes them with the sandbox.
 
 Ctrl+J is bound by `wwwroot/dyson-demo.js` only while a demo is running, including after the script navigates to the Meta Agent page. The page's Stop button calls the same cancel. Cleanup runs on success and on cancel: it deletes the sandbox work directory, its sessions and plans, and returns to the previous work directory.
 

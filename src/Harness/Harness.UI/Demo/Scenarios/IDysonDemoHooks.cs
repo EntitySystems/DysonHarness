@@ -19,7 +19,13 @@ public interface IDysonDemoHooks
 
     Task<VoidResult<string>> AnswerQuestionAsync(Guid questionId, string selectedChoice, CancellationToken ct);
 
-    Task<Result<long, string>> CreatePlanAsync(string title, string markdown, CancellationToken ct);
+    Task<Result<long, string>> CreatePlanAsync(
+        string title,
+        string markdown,
+        CancellationToken ct,
+        DysonPlanStatus status = DysonPlanStatus.Draft,
+        DateTime? updatedUtc = null,
+        bool archived = false);
 
     Task<VoidResult<string>> OpenPlanAsync(long planId, CancellationToken ct);
 

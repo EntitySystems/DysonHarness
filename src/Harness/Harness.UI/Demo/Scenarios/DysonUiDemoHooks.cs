@@ -91,14 +91,19 @@ public sealed class DysonUiDemoHooks : IDysonDemoHooks
                 && focused.WorkDirectoryId == id
                 && focused.PersistenceId != Guid.Empty)
             {
+                focused.SuppressDroneWorktrees = true;
                 _scriptSession = focused;
                 _sessionId = focused.PersistenceId;
                 break;
             }
         }
 
+        // The script never prompts, but a non-demo session would spawn real provider-backed children.
         if (_scriptSession is null || _sessionId == Guid.Empty)
-            return Result<DysonDemoStart, string>.AsError("Meta Agent page did not open the sandbox session.");
+            return Result<DysonDemoStart, string>.AsError(
+                _host.Session is { } other && other is not DemoDysonAgentSession
+                    ? "Demo needs the Demo Mock model as the default model (the sandbox session opened on a real provider)."
+                    : "Meta Agent page did not open the sandbox session.");
 
         return Result<DysonDemoStart, string>.AsValue(
             new DysonDemoStart(id, _sessionId, _previousWorkDirectoryId));
@@ -110,7 +115,9 @@ public sealed class DysonUiDemoHooks : IDysonDemoHooks
         if (session is null)
             return Task.FromResult(VoidResult<string>.AsError("Demo session is not running."));
 
-        session.AppendScriptedExchange(instruction, assistantText);
+        session.AppendScriptedExchange(instruction, assistantText: "");
+        if (!string.IsNullOrWhiteSpace(assistantText))
+            session.AppendDisplayInfoTurn(assistantText);
         return Task.FromResult(VoidResult<string>.Success);
     }
 
@@ -151,7 +158,13 @@ public sealed class DysonUiDemoHooks : IDysonDemoHooks
             recorded.IsError ? VoidResult<string>.AsError(recorded.Error) : VoidResult<string>.Success);
     }
 
-    public async Task<Result<long, string>> CreatePlanAsync(string title, string markdown, CancellationToken ct)
+    public async Task<Result<long, string>> CreatePlanAsync(
+        string title,
+        string markdown,
+        CancellationToken ct,
+        DysonPlanStatus status = DysonPlanStatus.Draft,
+        DateTime? updatedUtc = null,
+        bool archived = false)
     {
         if (_workDirectoryId == Guid.Empty)
             return Result<long, string>.AsError("Demo work directory is not running.");
@@ -162,10 +175,18 @@ public sealed class DysonUiDemoHooks : IDysonDemoHooks
             title,
             markdown,
             planRelativePath: null,
-            DysonPlanStatus.Draft,
-            cancellationToken: ct).ConfigureAwait(true);
+            status,
+            cancellationToken: ct,
+            createdUtc: updatedUtc).ConfigureAwait(true);
         if (created.IsError)
             return created;
+
+        if (archived)
+        {
+            var shelved = await _plans.ArchiveAsync(created.Value, _workDirectoryId, ct).ConfigureAwait(true);
+            if (shelved.IsError)
+                return Result<long, string>.AsError(shelved.Error);
+        }
 
         _planIds.Add(created.Value);
         _bus.Publish(DysonBusScopes.WorkDirectory(_workDirectoryId), new DysonPlansChangedEvent(_workDirectoryId, created.Value));
@@ -194,6 +215,9 @@ public sealed class DysonUiDemoHooks : IDysonDemoHooks
             return updated;
 
         _bus.Publish(DysonBusScopes.WorkDirectory(_workDirectoryId), new DysonPlansChangedEvent(_workDirectoryId, planId));
+        // Mirrors the viewer's Build plan action, which closes the viewer before prompting.
+        if (status == DysonPlanStatus.Building)
+            _host.CloseFileViewer();
         return VoidResult<string>.Success;
     }
 
@@ -268,6 +292,7 @@ public sealed class DysonUiDemoHooks : IDysonDemoHooks
         var tempPath = _tempPath;
         var previous = _previousWorkDirectoryId;
         var planIds = _planIds.ToArray();
+        var liveSession = _scriptSession;
 
         _sessionId = Guid.Empty;
         _workDirectoryId = Guid.Empty;
@@ -281,9 +306,34 @@ public sealed class DysonUiDemoHooks : IDysonDemoHooks
 
         string? firstError = null;
 
+        // Leave the sandbox first so the page stops showing (and re-resuming) its session.
+        _host.CloseFileViewer();
+        if (previous is Guid previousId && previousId != Guid.Empty)
+        {
+            _host.Focus?.SetActive(previousId);
+            await DysonCircuitJs.InvokeVoidAsync(_js, "dysonWorkdir.set", previousId.ToString()).ConfigureAwait(true);
+            await DysonCircuitJs.NavigateAsync(_js, $"/meta/{previousId}").ConfigureAwait(true);
+        }
+        else
+        {
+            _host.Focus?.SetActive(null);
+            await DysonCircuitJs.InvokeVoidAsync(_js, "dysonWorkdir.set", (string?)null).ConfigureAwait(true);
+            await DysonCircuitJs.NavigateAsync(_js, "/").ConfigureAwait(true);
+        }
+
         if (sessionId != Guid.Empty)
         {
-            var deleted = await _sessions.DeleteSessionAsync(sessionId, ct).ConfigureAwait(true);
+            // Meta Agent roots are undeletable by policy (host, runtime, and repository).
+            // The sandbox root is demoted to Work, live and persisted, so the normal host
+            // delete unregisters it from this circuit and the runtime and cascades its rows.
+            liveSession?.ApplyAgentMode(DysonAgentModes.Work);
+            var demoted = await _sessions.UpdateSessionMetaAsync(
+                new DysonSessionMetaUpdate { SessionId = sessionId, AgentMode = DysonAgentModes.Work },
+                ct).ConfigureAwait(true);
+            if (demoted.IsError && !IsNotFound(demoted.Error))
+                firstError ??= demoted.Error;
+
+            var deleted = await _host.DeleteSessionAsync(sessionId, ct).ConfigureAwait(true);
             if (deleted.IsError && !IsNotFound(deleted.Error))
                 firstError ??= deleted.Error;
         }
@@ -313,19 +363,6 @@ public sealed class DysonUiDemoHooks : IDysonDemoHooks
 
         if (tempPath is not null)
             await DeleteTempAsync(tempPath).ConfigureAwait(true);
-
-        if (previous is Guid previousId && previousId != Guid.Empty)
-        {
-            _host.Focus?.SetActive(previousId);
-            await DysonCircuitJs.InvokeVoidAsync(_js, "dysonWorkdir.set", previousId.ToString()).ConfigureAwait(true);
-            await DysonCircuitJs.NavigateAsync(_js, $"/meta/{previousId}").ConfigureAwait(true);
-        }
-        else
-        {
-            _host.Focus?.SetActive(null);
-            await DysonCircuitJs.InvokeVoidAsync(_js, "dysonWorkdir.set", (string?)null).ConfigureAwait(true);
-            await DysonCircuitJs.NavigateAsync(_js, "/").ConfigureAwait(true);
-        }
 
         return firstError is null ? VoidResult<string>.Success : VoidResult<string>.AsError(firstError);
     }

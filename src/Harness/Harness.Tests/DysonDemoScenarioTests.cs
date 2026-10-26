@@ -32,6 +32,13 @@ public class DysonDemoScenarioTests
         Assert.True(result.IsSuccess, result.Error);
         Assert.DoesNotContain("cleanup", hooks.Calls);
 
+        var confirmationAt = hooks.Calls.FindIndex(c =>
+            c.StartsWith("assistant:", StringComparison.Ordinal) && c.Contains("planning drone", StringComparison.Ordinal));
+        var plannerAt = hooks.Calls.FindIndex(c =>
+            c.Contains("Meta Agent Drone:Draft the schema plan:", StringComparison.Ordinal));
+        Assert.True(confirmationAt >= 0 && plannerAt > confirmationAt,
+            "the confirmation reply lands before the planning drone");
+
         var explores = hooks.Agents.Where(a => a.Mode == "Explore").ToList();
         Assert.Equal(3, explores.Count);
         Assert.Equal(
@@ -54,7 +61,15 @@ public class DysonDemoScenarioTests
         Assert.Equal(6, workers.Count);
         Assert.All(workers, w => Assert.Equal(orchestratorId, w.ParentPersistenceId));
 
-        Assert.Contains("plan:Ledger schema for Aester Financials", hooks.Calls);
+        Assert.Contains("plan:Ledger schema for Aester Financials:Draft:active", hooks.Calls);
+        Assert.Contains("plan:Auth service token rotation:Completed:active", hooks.Calls);
+        Assert.Contains("plan:Payments webhook retry queue:Completed:active", hooks.Calls);
+        Assert.Contains("plan:Statement PDF export:Stale:active", hooks.Calls);
+        Assert.Contains("plan:Customer notification preferences:Completed:archived", hooks.Calls);
+        Assert.Contains("plan:Legacy CSV statement import:Stale:archived", hooks.Calls);
+        var firstUserAt = hooks.Calls.FindIndex(c => c.StartsWith("user:", StringComparison.Ordinal));
+        var historyAt = hooks.Calls.FindIndex(c => c.StartsWith("plan:Auth service token rotation:", StringComparison.Ordinal));
+        Assert.True(historyAt >= 0 && firstUserAt > historyAt, "history plans are seeded before the first user message");
         Assert.Contains("open:1", hooks.Calls);
         Assert.Contains($"plan-status:1:{DysonPlanStatus.Building}", hooks.Calls);
         Assert.Contains($"plan-status:1:{DysonPlanStatus.Completed}", hooks.Calls);
@@ -100,8 +115,10 @@ public class DysonDemoScenarioTests
             // The scenario may propagate the token instead of returning a failed result.
         }
 
-        Assert.InRange(hooks.Calls.Count, 1, 2);
+        Assert.InRange(hooks.Calls.Count, 1, 8);
         Assert.DoesNotContain("cleanup", hooks.Calls);
+        Assert.Contains("plan:Auth service token rotation:Completed:active", hooks.Calls);
+        Assert.DoesNotContain(hooks.Calls, c => c.Contains("Ledger schema", StringComparison.Ordinal));
         Assert.StartsWith("start:", hooks.Calls[0], StringComparison.Ordinal);
     }
 
@@ -156,10 +173,16 @@ public class DysonDemoScenarioTests
             return Task.FromResult(VoidResult<string>.Success);
         }
 
-        public Task<Result<long, string>> CreatePlanAsync(string title, string markdown, CancellationToken ct)
+        public Task<Result<long, string>> CreatePlanAsync(
+            string title,
+            string markdown,
+            CancellationToken ct,
+            DysonPlanStatus status = DysonPlanStatus.Draft,
+            DateTime? updatedUtc = null,
+            bool archived = false)
         {
             Enter();
-            Calls.Add($"plan:{title}");
+            Calls.Add($"plan:{title}:{status}:{(archived ? "archived" : "active")}");
             return Task.FromResult(Result<long, string>.AsValue(1L));
         }
 

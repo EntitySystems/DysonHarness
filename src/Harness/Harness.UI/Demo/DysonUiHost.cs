@@ -2244,7 +2244,11 @@ public sealed class DysonUiHost : IAsyncDisposable
                 {
                     Label = "Build plan",
                     IsPrimary = true,
-                    Invoke = () => PromptMetaPlanBuildAsync(id, title),
+                    Invoke = () =>
+                    {
+                        CloseFileViewer();
+                        return PromptMetaPlanBuildAsync(id, title);
+                    },
                 },
             ];
         }
