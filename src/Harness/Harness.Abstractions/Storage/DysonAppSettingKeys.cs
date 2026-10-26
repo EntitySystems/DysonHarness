@@ -311,4 +311,30 @@ public static class DysonAppSettingKeys
         return Result<string, string>.AsError(
             "Whisper runtime must be cpu, vulkan, or npu. Choose it in Settings → Voice.");
     }
+
+    /// <summary>
+    /// Nemotron 3.5 (transcribe.cpp) device: <see cref="SpeechNemotronDeviceCpu"/> or
+    /// <see cref="SpeechNemotronDeviceVulkan"/>. Missing or blank ⇒ Vulkan, which falls back to CPU
+    /// when no Vulkan device registered (the pre-setting AUTO behaviour).
+    /// </summary>
+    public const string SpeechNemotronDevice = "speech_nemotron_device";
+
+    public const string SpeechNemotronDeviceCpu = "cpu";
+
+    public const string SpeechNemotronDeviceVulkan = "vulkan";
+
+    /// <summary>
+    /// <paramref name="value"/> after trim: blank ⇒ <c>vulkan</c>; <c>cpu</c> or <c>vulkan</c> ⇒ itself;
+    /// anything else (including <c>gpu</c>) is an error.
+    /// </summary>
+    public static Result<string, string> ParseSpeechNemotronDevice(string? value)
+    {
+        var text = value?.Trim() ?? "";
+        if (text.Length == 0)
+            return Result<string, string>.AsValue(SpeechNemotronDeviceVulkan);
+        if (text is SpeechNemotronDeviceCpu or SpeechNemotronDeviceVulkan)
+            return Result<string, string>.AsValue(text);
+        return Result<string, string>.AsError(
+            "Nemotron 3.5 device must be cpu or vulkan. Choose it in Settings → Voice.");
+    }
 }

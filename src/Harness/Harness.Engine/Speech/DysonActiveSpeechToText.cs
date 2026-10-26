@@ -135,16 +135,64 @@ public sealed class DysonActiveSpeechToText(
             yield break;
         }
 
+        var vulkan = await NemotronVulkanAsync(cancellationToken).ConfigureAwait(false);
+        if (vulkan.IsError)
+        {
+            yield return Result<DysonSpeechChunk, string>.AsError(vulkan.Error);
+            yield break;
+        }
+
         await Task.Run(() => StopOthers(active.Value, whisperOnCrisp: null), CancellationToken.None).ConfigureAwait(false);
         await foreach (var chunk in DysonNemotronSpeech
-                           .TranscribeLiveAsync(_installRoot, pcm16kMono, cancellationToken)
+                           .TranscribeLiveAsync(_installRoot, vulkan.Value, pcm16kMono, cancellationToken)
                            .ConfigureAwait(false))
             yield return chunk;
+    }
+
+    /// <summary>
+    /// Writes <see cref="DysonAppSettingKeys.SpeechNemotronDevice"/> (<c>cpu</c> or <c>vulkan</c>) and, when Nemotron
+    /// is loaded and idle, frees it and reloads on the new device. A running stream finishes on the old device;
+    /// the next stream reloads. The native work runs on the thread pool.
+    /// </summary>
+    public async Task<VoidResult<string>> SetNemotronDeviceAsync(string device, CancellationToken cancellationToken = default)
+    {
+        var parsed = DysonAppSettingKeys.ParseSpeechNemotronDevice(device);
+        if (parsed.IsError)
+            return new VoidResult<string>(parsed.Error);
+
+        var set = await _settings.SetSettingAsync(DysonAppSettingKeys.SpeechNemotronDevice, parsed.Value, cancellationToken)
+            .ConfigureAwait(false);
+        if (set.IsError || !OperatingSystem.IsWindows())
+            return set;
+
+        var vulkan = parsed.Value == DysonAppSettingKeys.SpeechNemotronDeviceVulkan;
+        return await Task.Run(() => DysonNemotronSpeech.ApplyDevice(_installRoot, vulkan), CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<Result<bool, string>> NemotronVulkanAsync(CancellationToken cancellationToken)
+    {
+        var setting = await _settings.GetSettingAsync(DysonAppSettingKeys.SpeechNemotronDevice, cancellationToken)
+            .ConfigureAwait(false);
+        if (setting.IsError)
+            return Result<bool, string>.AsError(setting.Error);
+        var parsed = DysonAppSettingKeys.ParseSpeechNemotronDevice(setting.Value);
+        return parsed.IsError
+            ? Result<bool, string>.AsError(parsed.Error)
+            : Result<bool, string>.AsValue(parsed.Value == DysonAppSettingKeys.SpeechNemotronDeviceVulkan);
     }
 
     private async Task<Result<(IDysonSpeechToText Engine, bool? WhisperOnCrisp), string>> RouteAsync(
         string runtimeId, CancellationToken cancellationToken)
     {
+        if (runtimeId == DysonGgufSpeechModels.NemotronId)
+        {
+            var device = await NemotronVulkanAsync(cancellationToken).ConfigureAwait(false);
+            return device.IsError
+                ? Result<(IDysonSpeechToText, bool?), string>.AsError(device.Error)
+                : Result<(IDysonSpeechToText, bool?), string>.AsValue((new DysonNemotronSpeech(_installRoot, device.Value), null));
+        }
+
         if (!DysonGgufSpeechModels.IsWhisper(runtimeId))
         {
             var engine = Engine(runtimeId);
@@ -175,7 +223,6 @@ public sealed class DysonActiveSpeechToText(
     private IDysonSpeechToText? Engine(string runtimeId) => runtimeId switch
     {
         DysonPhononSpeech.Id => new DysonPhononSpeech(_installRoot),
-        DysonGgufSpeechModels.NemotronId => new DysonNemotronSpeech(_installRoot),
         DysonGgufSpeechModels.PhononGgufId or DysonGgufSpeechModels.PhononGgufQ8Id
             => new DysonCrispSpeech(_models, _settings, _installRoot, runtimeId),
         _ => null,

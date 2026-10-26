@@ -166,6 +166,25 @@
         </div>
     }
 
+    @if (NemotronInstalled)
+    {
+        <div class="settings-page__panel panel voice-active">
+            <div class="tool-panel__title">Nemotron 3.5 device</div>
+            <div class="voice-active__options" role="radiogroup" aria-label="Nemotron 3.5 device">
+                <label class="voice-active__option">
+                    <input type="radio" name="voice-nemotron-device" value="cpu" checked="@(_nemotronDevice == DysonAppSettingKeys.SpeechNemotronDeviceCpu)"
+                           disabled="@_busy" @onchange="() => SetNemotronDeviceAsync(DysonAppSettingKeys.SpeechNemotronDeviceCpu)" />
+                    <span>CPU</span>
+                </label>
+                <label class="voice-active__option">
+                    <input type="radio" name="voice-nemotron-device" value="vulkan" checked="@(_nemotronDevice == DysonAppSettingKeys.SpeechNemotronDeviceVulkan)"
+                           disabled="@_busy" @onchange="() => SetNemotronDeviceAsync(DysonAppSettingKeys.SpeechNemotronDeviceVulkan)" />
+                    <span>GPU (Vulkan)</span>
+                </label>
+            </div>
+        </div>
+    }
+
     <div class="settings-page__panel panel">
         <SpeechTorchDevice Busy="_busy" Repairing="_repairingTorch" OnRepair="RepairTorchAsync" />
     </div>
@@ -380,6 +399,7 @@
     private bool _repairingTorch;
     private bool _crispGpu;
     private string _whisperRuntime = "";
+    private string _nemotronDevice = "";
     private bool _lowLatency;
     private bool _training;
     private bool _disposed;
@@ -430,6 +450,8 @@
 
     private bool AnyWhisperInstalled => _rows.Any(r => r.IsInstalled && DysonGgufSpeechModels.IsWhisper(r.RuntimeId));
 
+    private bool NemotronInstalled => _rows.Any(r => r.IsInstalled && r.RuntimeId == DysonGgufSpeechModels.NemotronId);
+
     protected override async Task OnInitializedAsync()
     {
         _tryout = Services.GetService<DysonSpeechTryout>();
@@ -469,6 +491,9 @@
         _crispGpu = crispDevice.IsSuccess && string.Equals(crispDevice.Value?.Trim(), "gpu", StringComparison.OrdinalIgnoreCase);
         var whisperRuntime = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechWhisperRuntime);
         _whisperRuntime = whisperRuntime.IsSuccess ? whisperRuntime.Value?.Trim() ?? "" : "";
+        var nemotronDevice = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechNemotronDevice);
+        var nemotronParsed = DysonAppSettingKeys.ParseSpeechNemotronDevice(nemotronDevice.IsSuccess ? nemotronDevice.Value : null);
+        _nemotronDevice = nemotronParsed.IsSuccess ? nemotronParsed.Value : "";
         var responseMode = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechResponseMode);
         _lowLatency = responseMode.IsSuccess && string.Equals(responseMode.Value?.Trim(), "low-latency", StringComparison.OrdinalIgnoreCase);
 
@@ -534,6 +559,9 @@
                 _whisperRuntime = value;
             return set;
         });
+
+    private async Task SetNemotronDeviceAsync(string value) =>
+        await RunAsync(() => Stt.SetNemotronDeviceAsync(value));
 
     private async Task SetResponseModeAsync(bool lowLatency) =>
         await RunAsync(() => Settings.SetSettingAsync(DysonAppSettingKeys.SpeechResponseMode, lowLatency ? "low-latency" : "reliable"));

@@ -26,7 +26,7 @@ Classic Plan-mode artifacts are still files under `.dyson/plans/*.md` with **no*
 
 `DysonPlanEntity` is the EF row. Every row written today is `Kind = MetaPlan`. The UI plans column (`MetaPlanList`) lists through `ListAsync` and opens a row via `GetAsync` into `FileViewerOverlay` (`metaplan:{planId}/{slug}.md`). **Build** is a session message; the agent’s `BeginBuildPlan` tool is what sets `Status=Building`. Engine writes: Meta Agent Drone `SubmitMetaPlan`; Meta Agent and Meta Agent Drone `EditMetaPlan`; Meta Agent `SetPlanStatus` / `BeginBuildPlan` / `DeletePlan`. Those mutations publish `DysonPlansChangedEvent` on the work-directory bus scope so an open meta page refreshes without a reload. See [meta-agent.md](../engine/meta-agent.md).
 
-Deleting a work directory cascades these rows, archived or not. That is the only product hard delete. `IDysonWorkDirectoryRepository.DeleteAsync` still refuses a workdir that has sessions; cascade matters once the workdir itself goes away.
+Deleting a work directory cascades these rows, archived or not. That is the only product hard delete. `IDysonWorkDirectoryRepository.DeleteAsync` deletes the workdir's Meta Agent session trees in the same transaction and still refuses a workdir that has any other session; see [work-directories.md](work-directories.md).
 
 ## Archive
 

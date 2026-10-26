@@ -161,6 +161,43 @@ public class DysonSessionRuntimeTests
     }
 
     [Fact]
+    public async Task ReleaseWorkDirectoryMetaTrees_unregisters_idle_meta_root_and_keeps_row()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var wd = Guid.NewGuid();
+        var created = await harness.Runtime.CreateRootAsync(new DysonAgentSessionRuntimeCreateRequest
+        {
+            AgentMode = DysonAgentModes.MetaAgent,
+            WorkDirectoryId = wd,
+        });
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+        var sessionId = created.Value.PersistenceId;
+        // The recording factory does not persist WorkDirectoryId; link the row directly.
+        await harness.Accessor.RunAsync(async (db, ct) =>
+        {
+            db.WorkDirectories.Add(new DysonWorkDirectoryEntity
+            {
+                Id = wd,
+                SubjectId = harness.SubjectId,
+                Name = "release-test",
+                AbsolutePath = Path.Combine(Path.GetTempPath(), wd.ToString("N")),
+                CreatedUtc = DateTime.UtcNow,
+                LastOpenedUtc = DateTime.UtcNow,
+            });
+            var row = await db.Sessions.FindAsync([sessionId], ct);
+            row!.WorkDirectoryId = wd;
+            await DysonDbAccessor.SaveChangesAsync(db, ct);
+        });
+
+        var released = await harness.Runtime.ReleaseWorkDirectoryMetaTreesAsync(wd);
+
+        Assert.True(released.IsSuccess, released.IsError ? released.Error : null);
+        Assert.False(harness.Runtime.TryGetSession(sessionId, out _));
+        Assert.Equal(1, harness.Factory.DisposeCalls);
+        Assert.True((await harness.Sessions.GetFullSessionAsync(sessionId)).IsSuccess);
+    }
+
+    [Fact]
     public async Task Spawned_child_is_registered_after_persistence_id_assigned()
     {
         await using var harness = await Harness.CreateAsync();
