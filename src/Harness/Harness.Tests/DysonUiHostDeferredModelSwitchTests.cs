@@ -8,12 +8,12 @@ using Microsoft.JSInterop;
 namespace Harness.Tests;
 
 /// <summary>
-/// ponytail: busy SetSessionModelSlugAsync stashes without mutating Provider; flush applies before next prompt.
+/// Mid-turn SetSessionModelSlugAsync persists immediately; the engine swaps Provider at the next request / prompt end.
 /// </summary>
 public class DysonUiHostDeferredModelSwitchTests
 {
     [Fact]
-    public async Task Busy_switch_stashes_then_flush_applies_provider()
+    public async Task Busy_switch_persists_now_and_applies_at_next_request()
     {
         var accessor = DysonTempDb.OpenMemoryAccessor(out SqliteConnection conn);
         using var _keepAlive = conn;
@@ -99,29 +99,23 @@ public class DysonUiHostDeferredModelSwitchTests
             }
 
             host.MarkSessionBusyForTests(sessionId);
-            if (!host.IsBusy)
-                throw new InvalidOperationException("Expected IsBusy after MarkSessionBusyForTests.");
+            Assert.True(host.IsBusy);
+            var scope = session.BeginInFlightPrompt(DysonAgentSession.CreateNormalTurn("x"));
 
             var switched = await host.SetSessionModelSlugAsync(slugB.Value);
-            if (switched.IsError)
-                throw new InvalidOperationException($"Busy switch should succeed: {switched.Error}");
-            if (host.LastError is not null)
-                throw new InvalidOperationException($"Busy switch should clear LastError, got: {host.LastError}");
+            Assert.True(switched.IsSuccess, switched.IsError ? switched.Error : null);
+            Assert.Null(host.LastError);
 
-            if (session.Provider is not DemoDysonAgentProvider mid
-                || mid.SlugId != slugA.Value)
-            {
-                throw new InvalidOperationException("Busy switch must not mutate Provider mid-turn.");
-            }
+            // In-flight request keeps the old provider; the pick is visible and persisted at once.
+            Assert.Equal(slugA.Value, ((DemoDysonAgentProvider)session.Provider).SlugId);
+            Assert.Equal(slugB.Value, ((DemoDysonAgentProvider)session.SelectedProvider).SlugId);
+            var full = await sessions.GetFullSessionAsync(sessionId);
+            Assert.True(full.IsSuccess, full.IsError ? full.Error : null);
+            Assert.Equal(slugB.Value, full.Value.Session.ModelSlugId);
 
+            scope.Dispose();
             host.ClearSessionBusyForTests(sessionId);
-            await host.FlushPendingSessionModelSlugForTestsAsync(sessionId);
-
-            if (session.Provider is not DemoDysonAgentProvider after
-                || after.SlugId != slugB.Value)
-            {
-                throw new InvalidOperationException("Flush must apply pending slug before next prompt.");
-            }
+            Assert.Equal(slugB.Value, ((DemoDysonAgentProvider)session.Provider).SlugId);
 
             var plan = await host.SetSessionAgentModeAsync(DysonAgentModes.Plan);
             if (plan.IsError)
@@ -259,20 +253,10 @@ public class DysonUiHostDeferredModelSwitchTests
             if (busySwitch.IsError)
                 throw new InvalidOperationException($"Same-slug busy apply should succeed: {busySwitch.Error}");
             Assert.Same(before, session.Provider);
+            Assert.Same(before, session.SelectedProvider);
             Assert.Equal("high", ((DemoDysonAgentProvider)session.Provider).ReasoningEffort);
-
-            host.ClearSessionBusyForTests(sessionId);
-            await host.FlushPendingSessionModelSlugForTestsAsync(sessionId);
-
-            if (session.Provider is not DemoDysonAgentProvider flushed
-                || flushed.SlugId != slugB.Value)
-            {
-                throw new InvalidOperationException("Flush of a leftover same-slug stash must not swap provider.");
-            }
-
-            Assert.Same(before, session.Provider);
-            Assert.Equal("high", flushed.ReasoningEffort);
             Assert.Equal("high", host.SessionReasoningEffort);
+            host.ClearSessionBusyForTests(sessionId);
         }
         finally
         {

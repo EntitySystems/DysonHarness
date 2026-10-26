@@ -429,7 +429,7 @@
         if (!IsMetaFocused)
             return;
 
-        _selectedSlugId = Host.Session?.Provider switch
+        _selectedSlugId = Host.Session?.SelectedProvider switch
         {
             OpenAiCompatibleAgentProvider oai => oai.SlugId,
             DemoDysonAgentProvider demo => demo.SlugId,

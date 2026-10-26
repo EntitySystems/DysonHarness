@@ -53,8 +53,6 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly ConcurrentDictionary<Guid, byte> _busySessions = new();
     private readonly ConcurrentDictionary<Guid, byte> _runtimeOwnedSessionIds = new();
     private readonly ConcurrentDictionary<DysonAgentSession, byte> _runtimeOwnedSessions = new();
-    /// <summary>Model slug to apply after the in-flight prompt finishes (keyed by PersistenceId).</summary>
-    private readonly ConcurrentDictionary<Guid, Guid?> _pendingSessionModelSlugIds = new();
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _promptGates = new();
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _promptCtsBySession = new();
     private readonly Dictionary<Guid, List<QueuedPromptEntry>> _promptQueues = new();
@@ -790,7 +788,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// Null/empty = omit from requests.
     /// </summary>
     public string? SessionReasoningEffort =>
-        _session?.Provider switch
+        _session?.SelectedProvider switch
         {
             OpenAiCompatibleAgentProvider oai => oai.ReasoningEffort,
             DemoDysonAgentProvider demo => demo.ReasoningEffort,
@@ -3806,8 +3804,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// <summary>
     /// Apply a model slug to the focused session (same provider kind only).
     /// Resets session reasoning effort to the slug's default.
-    /// Same live slug is a no-op (no provider swap, effort reset, persist, or busy stash).
-    /// While busy, validates and stashes the slug for apply after the turn finishes.
+    /// Same selected slug is a no-op (no provider swap, effort reset, or persist).
+    /// Persists at once; while a turn runs the engine applies it at that turn's next provider request.
     /// With no session, preference is caller-owned (<c>_selectedSlugId</c>); updates pending effort to slug default.
     /// </summary>
     public async Task<VoidResult<string>> SetSessionModelSlugAsync(
@@ -3854,46 +3852,14 @@ public sealed class DysonUiHost : IAsyncDisposable
             return VoidResult<string>.Success;
         }
 
-        // Leftover picker callbacks re-apply the current slug; do not swap or stash a no-op.
-        if (SessionProviderSlugId(_session.Provider) == modelSlugId)
-        {
-            Notify(DysonHostChangeKind.Catalogs);
-            return VoidResult<string>.Success;
-        }
-
-        if (IsBusy)
-        {
-            var deferred = await ResolveProviderAsync(modelSlugId, reasoningEffort: null, cancellationToken)
-                .ConfigureAwait(false);
-            if (deferred.IsError)
-            {
-                LastError = deferred.Error;
-                Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
-                return new VoidResult<string>(deferred.Error);
-            }
-
-            var busyCurrentKind = SessionProviderKind(_session.Provider);
-            var busyNextKind = deferred.Value.Kind;
-            if (!string.Equals(busyCurrentKind, busyNextKind, StringComparison.Ordinal))
-            {
-                LastError = "Start a new session to switch provider kind";
-                Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
-                return new VoidResult<string>(LastError);
-            }
-
-            _pendingSessionModelSlugIds[_session.PersistenceId] = modelSlugId;
-            Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
-            return VoidResult<string>.Success;
-        }
-
         return await ApplySessionModelSlugCoreAsync(_session, modelSlugId, cancellationToken)
             .ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Resolve + same-kind check + swap <see cref="DysonAgentSession.Provider"/> + persist.
-    /// Same live slug is a no-op (including flush of a leftover pending).
-    /// Does not mutate Provider mid-turn; callers must only invoke when the session is idle.
+    /// Resolve + same-kind check + <see cref="DysonAgentSession.SetModel"/> + persist. Busy or idle: the engine
+    /// applies a mid-turn pick at the next provider request of the running turn.
+    /// Re-picking the current selection is a no-op.
     /// </summary>
     private async Task<VoidResult<string>> ApplySessionModelSlugCoreAsync(
         DysonAgentSession session,
@@ -3902,7 +3868,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(session);
 
-        if (SessionProviderSlugId(session.Provider) == modelSlugId)
+        // Leftover picker callbacks re-apply the current slug; do not swap or reset effort.
+        if (SessionProviderSlugId(session.SelectedProvider) == modelSlugId)
         {
             Notify(DysonHostChangeKind.Catalogs);
             return VoidResult<string>.Success;
@@ -3918,7 +3885,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(providerResult.Error);
         }
 
-        var currentKind = SessionProviderKind(session.Provider);
+        var currentKind = SessionProviderKind(session.SelectedProvider);
         var nextKind = providerResult.Value.Kind;
         if (!string.Equals(currentKind, nextKind, StringComparison.Ordinal))
         {
@@ -3931,8 +3898,6 @@ public sealed class DysonUiHost : IAsyncDisposable
             string.Equals(nextKind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal)
                 ? providerResult.Value.OpenAi!
                 : providerResult.Value.Demo!;
-
-        session.Provider = nextProvider;
 
         Guid? slugId = nextProvider switch
         {
@@ -3948,12 +3913,18 @@ public sealed class DysonUiHost : IAsyncDisposable
             _ => null,
         };
 
-        session.SlugDefaultMaxTargetContextTokens = nextProvider switch
+        var switched = session.SetModel(nextProvider, nextProvider switch
         {
             OpenAiCompatibleAgentProvider oai => oai.DefaultMaxTargetContextTokens,
             DemoDysonAgentProvider demo => demo.DefaultMaxTargetContextTokens,
             _ => null,
-        };
+        });
+        if (switched.IsError)
+        {
+            LastError = switched.Error;
+            Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
+            return switched;
+        }
 
         if (session.PersistenceId != Guid.Empty)
         {
@@ -4041,41 +4012,10 @@ public sealed class DysonUiHost : IAsyncDisposable
         return new VoidResult<string>(message);
     }
 
-    /// <summary>
-    /// Apply a stashed model slug for <paramref name="sessionId"/> (if any) onto the finished
-    /// session before queued prompts drain.
-    /// </summary>
-    private async Task FlushPendingSessionModelSlugAsync(
-        Guid sessionId,
-        DysonAgentSession finishedSession,
-        CancellationToken cancellationToken)
-    {
-        if (!_pendingSessionModelSlugIds.TryRemove(sessionId, out var pendingSlugId))
-            return;
-
-        if (!_sessionsById.TryGetValue(sessionId, out var session))
-            session = finishedSession;
-
-        var result = await ApplySessionModelSlugCoreAsync(session, pendingSlugId, cancellationToken)
-            .ConfigureAwait(false);
-        if (result.IsError && ActiveSessionId == sessionId)
-            LastError = result.Error;
-    }
-
-    // ponytail: test hooks — busy stash + flush without running a full prompt turn.
+    // ponytail: test hooks — host busy flag without running a full prompt turn.
     internal void MarkSessionBusyForTests(Guid sessionId) => _busySessions[sessionId] = 0;
 
     internal void ClearSessionBusyForTests(Guid sessionId) => _busySessions.TryRemove(sessionId, out _);
-
-    internal Task FlushPendingSessionModelSlugForTestsAsync(
-        Guid sessionId,
-        CancellationToken cancellationToken = default)
-    {
-        if (_session is null || _session.PersistenceId != sessionId)
-            return Task.CompletedTask;
-
-        return FlushPendingSessionModelSlugAsync(sessionId, _session, cancellationToken);
-    }
 
     /// <summary>
     /// Session-scoped reasoning_effort override (does not change the slug default).
@@ -6299,7 +6239,6 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pendingReportsByParent.TryRemove(persistenceId, out _);
         _userStopGeneration.TryRemove(persistenceId, out _);
         _busySessions.TryRemove(persistenceId, out _);
-        _pendingSessionModelSlugIds.TryRemove(persistenceId, out _);
         _parentSessionIdByChild.TryRemove(persistenceId, out _);
 
         if (_autoTurnGates.TryRemove(persistenceId, out var gate))
@@ -6396,7 +6335,6 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pendingReportsByParent.Clear();
         _userStopGeneration.Clear();
         _busySessions.Clear();
-        _pendingSessionModelSlugIds.Clear();
         _lastTaskLifecycleActionBySession.Clear();
         foreach (var gate in _taskLifecycleGates.Values)
             gate.Dispose();
@@ -7701,10 +7639,6 @@ public sealed class DysonUiHost : IAsyncDisposable
 
             linked.Dispose();
 
-            // Apply deferred model switch before draining so the next (queued) prompt sees it.
-            await FlushPendingSessionModelSlugAsync(sessionId, session, CancellationToken.None)
-                .ConfigureAwait(false);
-
             _ = DrainAutoTurnsAsync(sessionId);
             _ = DrainQueuedPromptsAsync(sessionId);
         }
@@ -7744,9 +7678,6 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             if (!_disposed)
             {
-                await FlushPendingSessionModelSlugAsync(sessionId, session, CancellationToken.None)
-                    .ConfigureAwait(false);
-
                 _ = DrainAutoTurnsAsync(sessionId);
                 _ = DrainQueuedPromptsAsync(sessionId);
             }

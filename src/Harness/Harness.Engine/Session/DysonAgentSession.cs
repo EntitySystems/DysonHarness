@@ -473,6 +473,71 @@ public abstract class DysonAgentSession
         set => field = value ?? throw new ArgumentNullException(nameof(value));
     }
 
+    private readonly object _modelGate = new();
+    private (DysonAgentProvider Provider, int? SlugDefaultMaxTargetContextTokens)? _pendingModel;
+
+    /// <summary>
+    /// The user's current model selection: a switch picked mid-turn that the next provider request has not
+    /// applied yet, else <see cref="Provider"/>. UI pickers read this so a mid-turn pick shows at once.
+    /// </summary>
+    public DysonAgentProvider SelectedProvider
+    {
+        get
+        {
+            lock (_modelGate)
+                return _pendingModel?.Provider ?? Provider;
+        }
+    }
+
+    /// <summary>
+    /// Switches the session model. Safe from any thread. Idle: swaps <see cref="Provider"/> and
+    /// <see cref="SlugDefaultMaxTargetContextTokens"/> now. While a prompt is in flight the running request is
+    /// left alone; the switch lands at the next provider request of the same turn (<see cref="ApplyPendingModel"/>)
+    /// or when the prompt ends, whichever comes first. A later pick replaces an unapplied one.
+    /// </summary>
+    public VoidResult<string> SetModel(DysonAgentProvider provider, int? slugDefaultMaxTargetContextTokens)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        // Same provider kind only (as between turns): the session type owns the wire client.
+        if (provider.GetType() != Provider.GetType())
+            return new VoidResult<string>("Start a new session to switch provider kind");
+
+        lock (_modelGate)
+        {
+            _pendingModel = (provider, slugDefaultMaxTargetContextTokens);
+            if (_inFlightPromptStack.Count == 0)
+                ApplyPendingModelLocked();
+        }
+
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Request boundary: applies a pending <see cref="SetModel"/> pick so the next request resolves model, client,
+    /// endpoint, effort and context limit from one provider. True when the provider changed.
+    /// </summary>
+    protected internal bool ApplyPendingModel()
+    {
+        lock (_modelGate)
+            return ApplyPendingModelLocked();
+    }
+
+    private bool ApplyPendingModelLocked()
+    {
+        if (_pendingModel is not { } pending)
+            return false;
+
+        _pendingModel = null;
+        if (ReferenceEquals(pending.Provider, Provider))
+            return false;
+
+        Provider = pending.Provider;
+        SlugDefaultMaxTargetContextTokens = pending.SlugDefaultMaxTargetContextTokens;
+        if (_inFlightPromptStack.Count > 0)
+            AppendLog($"model: switched mid-turn to {FormatSubagentModelLabel(pending.Provider) ?? pending.Provider.GetType().Name}");
+        return true;
+    }
+
     /// <summary>
     /// Direct children. Each read copies the list so UI enumeration cannot race unregister.
     /// </summary>
@@ -1654,7 +1719,8 @@ public abstract class DysonAgentSession
     public IDisposable BeginInFlightPrompt(DysonAgentTurn turn)
     {
         ArgumentNullException.ThrowIfNull(turn);
-        _inFlightPromptStack.Push(turn);
+        lock (_modelGate)
+            _inFlightPromptStack.Push(turn);
         TryReopenForNewParentTask();
         if (_injectWaiters.TryRemove(turn.Id, out var injectStarted))
             injectStarted.TrySetResult();
@@ -1704,7 +1770,13 @@ public abstract class DysonAgentSession
             if (_disposed)
                 return;
             _disposed = true;
-            session._inFlightPromptStack.Pop();
+            // Under the model gate so a SetModel racing the prompt end is either applied here or applied by SetModel.
+            lock (session._modelGate)
+            {
+                session._inFlightPromptStack.Pop();
+                if (session._inFlightPromptStack.Count == 0)
+                    session.ApplyPendingModelLocked();
+            }
         }
     }
 
