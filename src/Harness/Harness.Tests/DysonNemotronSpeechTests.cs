@@ -41,6 +41,41 @@ public class DysonNemotronSpeechTests
         Assert.Equal(-1f, floats[2]);
     }
 
+    [Fact]
+    public void ParseSpeechNemotronDevice_defaults_blank_to_vulkan_and_rejects_other_values()
+    {
+        Assert.Equal("speech_nemotron_device", DysonAppSettingKeys.SpeechNemotronDevice);
+        Assert.Equal("vulkan", DysonAppSettingKeys.ParseSpeechNemotronDevice(null).Value);
+        Assert.Equal("vulkan", DysonAppSettingKeys.ParseSpeechNemotronDevice("  ").Value);
+        Assert.Equal("cpu", DysonAppSettingKeys.ParseSpeechNemotronDevice(" cpu ").Value);
+        Assert.Equal("vulkan", DysonAppSettingKeys.ParseSpeechNemotronDevice("vulkan").Value);
+        Assert.True(DysonAppSettingKeys.ParseSpeechNemotronDevice("gpu").IsError);
+        Assert.True(DysonAppSettingKeys.ParseSpeechNemotronDevice("npu").IsError);
+    }
+
+    [Fact]
+    public void NeedsReload_only_when_unloaded_or_the_root_or_device_changed()
+    {
+        Assert.True(DysonNemotronSpeech.NeedsReload(false, null, false, "r", false));
+        Assert.False(DysonNemotronSpeech.NeedsReload(true, "R", true, "r", true));
+        Assert.True(DysonNemotronSpeech.NeedsReload(true, "r", true, "r", false));
+        Assert.True(DysonNemotronSpeech.NeedsReload(true, "r", false, "r", true));
+        Assert.True(DysonNemotronSpeech.NeedsReload(true, "old", true, "r", true));
+    }
+
+    [Fact]
+    public async Task SetNemotronDevice_writes_the_setting_and_rejects_gpu_without_loading_the_dll()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        await using var _ = conn;
+        var settings = DysonTempDb.Settings(accessor);
+        var stt = new DysonActiveSpeechToText(DysonTempDb.Speech(accessor), settings, Path.GetTempPath());
+
+        Assert.True((await stt.SetNemotronDeviceAsync("gpu")).IsError);
+        Assert.True((await stt.SetNemotronDeviceAsync("cpu")).IsSuccess);
+        Assert.Equal("cpu", (await settings.GetSettingAsync(DysonAppSettingKeys.SpeechNemotronDevice)).Value);
+    }
+
     /// <summary>Opt-in: set <c>DYSON_NEMOTRON_SMOKE=1</c> to load the installed transcribe.dll. Skipped otherwise.</summary>
     [Fact]
     public async Task CheckRuntime_loads_the_installed_dll_when_smoke_is_opted_in()

@@ -11,7 +11,7 @@ namespace DysonHarness;
 /// <see cref="IDysonSpeechToText"/> for one WAV clip. The active model implements
 /// <see cref="IDysonLiveSpeechToText"/> and calls the static live method.
 /// </summary>
-public sealed class DysonNemotronSpeech(string installRoot) : IDysonSpeechToText
+public sealed class DysonNemotronSpeech(string installRoot, bool vulkan = true) : IDysonSpeechToText
 {
     /// <summary>About 560 ms of 16 kHz mono s16le. Engine does not reference the Windows capture project.</summary>
     internal const int FeedBytes = 17_920;
@@ -25,6 +25,13 @@ public sealed class DysonNemotronSpeech(string installRoot) : IDysonSpeechToText
     private const int AbiRunParams = 2;
     private const int AbiStreamParams = 3;
     private const int AbiStreamText = 10;
+
+    // transcribe.h v0.4.0 transcribe_backend_request.
+    private const int BackendCpu = 1;
+    private const int BackendVulkan = 3;
+
+    /// <summary><c>transcribe_model_load_params</c>: <c>uint64 struct_size</c> at 0, <c>backend</c> enum at 8.</summary>
+    private const int ModelLoadParamsBackendOffset = 8;
 
     /// <summary>
     /// Win-x64 MSVC layout of <c>transcribe_run_params</c> (v0.4.0): <c>uint64 struct_size</c> at 0,
@@ -45,9 +52,11 @@ public sealed class DysonNemotronSpeech(string installRoot) : IDysonSpeechToText
     private static IntPtr _model;
     private static IntPtr _session;
     private static string? _loadedRoot;
+    private static bool _loadedVulkan;
     private static bool _backendsReady;
 
     private readonly string _installRoot = installRoot ?? throw new ArgumentNullException(nameof(installRoot));
+    private readonly bool _vulkan = vulkan;
 
     public string RuntimeId => DysonGgufSpeechModels.NemotronId;
 
@@ -61,6 +70,31 @@ public sealed class DysonNemotronSpeech(string installRoot) : IDysonSpeechToText
         try
         {
             FreeNative();
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+
+    /// <summary>True when the loaded model must be freed and reopened for this root and device.</summary>
+    internal static bool NeedsReload(bool loaded, string? loadedRoot, bool loadedVulkan, string installRoot, bool vulkan) =>
+        !loaded || !string.Equals(loadedRoot, installRoot, StringComparison.OrdinalIgnoreCase) || loadedVulkan != vulkan;
+
+    /// <summary>
+    /// Device switch. Loaded and idle ⇒ free and reload on the new device now. A running stream keeps
+    /// <see cref="Gate"/>; it finishes on the old device and the next stream reloads. Not loaded ⇒ nothing.
+    /// Blocking native work: call on the thread pool.
+    /// </summary>
+    internal static VoidResult<string> ApplyDevice(string installRoot, bool vulkan)
+    {
+        if (!Gate.Wait(0))
+            return VoidResult<string>.Success;
+        try
+        {
+            if (_session == IntPtr.Zero || !NeedsReload(true, _loadedRoot, _loadedVulkan, installRoot, vulkan))
+                return VoidResult<string>.Success;
+            return EnsureLoaded(installRoot, vulkan);
         }
         finally
         {
@@ -137,16 +171,17 @@ public sealed class DysonNemotronSpeech(string installRoot) : IDysonSpeechToText
             yield break;
         }
 
-        await foreach (var chunk in RunStreamAsync(_installRoot, Blocks(pcm.Value, cancellationToken), cancellationToken).ConfigureAwait(false))
+        await foreach (var chunk in RunStreamAsync(_installRoot, _vulkan, Blocks(pcm.Value, cancellationToken), cancellationToken).ConfigureAwait(false))
             yield return chunk;
     }
 
     /// <summary>
     /// Live 16 kHz mono s16le. Not installed is an error before the DLL is touched. Off Windows is
-    /// "Nemotron 3.5 is Windows only." One stream at a time.
+    /// "Nemotron 3.5 is Windows only." One stream at a time. <paramref name="vulkan"/> false is CPU only.
     /// </summary>
     public static async IAsyncEnumerable<Result<DysonSpeechChunk, string>> TranscribeLiveAsync(
         string installRoot,
+        bool vulkan,
         IAsyncEnumerable<Result<byte[], string>> pcm,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -165,7 +200,7 @@ public sealed class DysonNemotronSpeech(string installRoot) : IDysonSpeechToText
             yield break;
         }
 
-        await foreach (var chunk in RunStreamAsync(installRoot, pcm, cancellationToken).ConfigureAwait(false))
+        await foreach (var chunk in RunStreamAsync(installRoot, vulkan, pcm, cancellationToken).ConfigureAwait(false))
             yield return chunk;
     }
 
@@ -193,6 +228,7 @@ public sealed class DysonNemotronSpeech(string installRoot) : IDysonSpeechToText
 
     private static async IAsyncEnumerable<Result<DysonSpeechChunk, string>> RunStreamAsync(
         string installRoot,
+        bool vulkan,
         IAsyncEnumerable<Result<byte[], string>> pcmBlocks,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -215,7 +251,7 @@ public sealed class DysonNemotronSpeech(string installRoot) : IDysonSpeechToText
             string? fatal = null;
             try
             {
-                var ensured = await Task.Run(() => EnsureLoaded(installRoot), CancellationToken.None).ConfigureAwait(false);
+                var ensured = await Task.Run(() => EnsureLoaded(installRoot, vulkan), CancellationToken.None).ConfigureAwait(false);
                 if (ensured.IsError)
                     fatal = ensured.Error;
                 else
@@ -421,9 +457,9 @@ public sealed class DysonNemotronSpeech(string installRoot) : IDysonSpeechToText
 
     private static int EndMs(long samples) => (int)Math.Min(int.MaxValue, samples * 1000 / SampleRate);
 
-    private static VoidResult<string> EnsureLoaded(string installRoot)
+    private static VoidResult<string> EnsureLoaded(string installRoot, bool vulkan)
     {
-        if (_session != IntPtr.Zero && string.Equals(_loadedRoot, installRoot, StringComparison.OrdinalIgnoreCase))
+        if (!NeedsReload(_session != IntPtr.Zero, _loadedRoot, _loadedVulkan, installRoot, vulkan))
             return VoidResult<string>.Success;
         FreeNative();
         try
@@ -457,6 +493,11 @@ public sealed class DysonNemotronSpeech(string installRoot) : IDysonSpeechToText
                 if (sessionParams.IsError)
                     return new VoidResult<string>(sessionParams.Error);
                 api.ModelLoadParamsInit(loadParams.Value);
+                if (api.StructSize(AbiModelLoadParams) < (nuint)(ModelLoadParamsBackendOffset + sizeof(int)))
+                    return new VoidResult<string>("transcribe_model_load_params is smaller than the v0.4.0 backend field.");
+                // Init leaves AUTO (first GPU, else CPU). Vulkan without a registered Vulkan device is CPU, never a crash.
+                var backend = vulkan && api.BackendAvailable(BackendVulkan) != 0 ? BackendVulkan : BackendCpu;
+                Marshal.WriteInt32(loadParams.Value, ModelLoadParamsBackendOffset, backend);
                 Marshal.WriteIntPtr(modelSlot, IntPtr.Zero);
                 var loaded = api.ModelLoadFile(modelPath, loadParams.Value, modelSlot);
                 if (loaded != 0)
@@ -487,6 +528,7 @@ public sealed class DysonNemotronSpeech(string installRoot) : IDysonSpeechToText
                 }
 
                 _loadedRoot = installRoot;
+                _loadedVulkan = vulkan;
                 return VoidResult<string>.Success;
             }
             finally
@@ -712,6 +754,7 @@ public sealed class DysonNemotronSpeech(string installRoot) : IDysonSpeechToText
             StatusString = BindFn<StatusStringFn>(library, "transcribe_status_string");
             StructSize = BindFn<StructSizeFn>(library, "transcribe_abi_struct_size");
             InitBackends = BindFn<InitBackendsFn>(library, "transcribe_init_backends");
+            BackendAvailable = BindFn<BackendAvailableFn>(library, "transcribe_backend_available");
             ModelLoadParamsInit = BindFn<InitFn>(library, "transcribe_model_load_params_init");
             ModelLoadFile = BindFn<ModelLoadFileFn>(library, "transcribe_model_load_file");
             ModelFree = BindFn<FreeFn>(library, "transcribe_model_free");
@@ -732,6 +775,7 @@ public sealed class DysonNemotronSpeech(string installRoot) : IDysonSpeechToText
         public StatusStringFn StatusString { get; }
         public StructSizeFn StructSize { get; }
         public InitBackendsFn InitBackends { get; }
+        public BackendAvailableFn BackendAvailable { get; }
         public InitFn ModelLoadParamsInit { get; }
         public ModelLoadFileFn ModelLoadFile { get; }
         public FreeFn ModelFree { get; }
@@ -761,6 +805,10 @@ public sealed class DysonNemotronSpeech(string installRoot) : IDysonSpeechToText
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate int InitBackendsFn(IntPtr artifactDir);
+
+        /// <summary>C <c>bool</c> is one byte.</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate byte BackendAvailableFn(int kind);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate void InitFn(IntPtr param);
