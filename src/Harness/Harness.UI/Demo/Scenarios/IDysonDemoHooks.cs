@@ -9,6 +9,8 @@ public sealed record DysonDemoAgent(Guid PersistenceId, int RuntimeId);
 
 public sealed record DysonDemoQuestion(string Question, IReadOnlyList<string> Choices);
 
+public sealed record DysonDemoVisualization(string Title, string Html, string Css, string JavaScript);
+
 public interface IDysonDemoHooks
 {
     Task<Result<DysonDemoStart, string>> StartAsync(string workDirectoryName, CancellationToken ct);
@@ -18,6 +20,12 @@ public interface IDysonDemoHooks
     Task<Result<Guid?, string>> AppendAssistantMessageAsync(string message, DysonDemoQuestion? question, CancellationToken ct);
 
     Task<VoidResult<string>> AnswerQuestionAsync(Guid questionId, string selectedChoice, CancellationToken ct);
+
+    /// <summary>DisplayInfo message carrying a rendered visualization (the same payload RenderHtmlVisualization produces). Returns its id.</summary>
+    Task<Result<Guid, string>> PostVisualizationAsync(string message, DysonDemoVisualization visualization, CancellationToken ct);
+
+    /// <summary>Opens the latest posted visualization in the Visualizations modal, as the feed's "View visualization" button does.</summary>
+    Task<VoidResult<string>> OpenVisualizationAsync(CancellationToken ct);
 
     Task<Result<long, string>> CreatePlanAsync(
         string title,
@@ -33,6 +41,7 @@ public interface IDysonDemoHooks
 
     Task<Result<DysonDemoAgent, string>> AddAgentAsync(Guid? parentPersistenceId, string title, string mode, CancellationToken ct);
 
+    /// <summary>Completed marks the agent done. Active only posts <paramref name="activity"/> as progress.</summary>
     Task<VoidResult<string>> SetAgentStatusAsync(Guid persistenceId, DysonSessionStatus status, string? activity, CancellationToken ct);
 
     Task<VoidResult<string>> CleanupAsync(CancellationToken ct);

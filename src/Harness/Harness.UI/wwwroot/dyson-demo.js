@@ -15,6 +15,14 @@ window.dysonDemo = (function () {
       handler = onKey;
       document.addEventListener("keydown", handler);
     },
+    openLatestVisualization: function () {
+      var buttons = Array.prototype.filter.call(
+        document.querySelectorAll(".meta-chat__actions button"),
+        function (b) { return b.textContent.trim() === "View visualization"; });
+      if (!buttons.length) return false;
+      buttons[buttons.length - 1].click();
+      return true;
+    },
     detach: function () {
       if (!handler) return;
       document.removeEventListener("keydown", handler);

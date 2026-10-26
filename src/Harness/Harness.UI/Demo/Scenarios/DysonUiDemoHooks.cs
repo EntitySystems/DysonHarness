@@ -158,6 +158,63 @@ public sealed class DysonUiDemoHooks : IDysonDemoHooks
             recorded.IsError ? VoidResult<string>.AsError(recorded.Error) : VoidResult<string>.Success);
     }
 
+    public Task<Result<Guid, string>> PostVisualizationAsync(
+        string message,
+        DysonDemoVisualization visualization,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(visualization);
+        var session = ResolveScriptSession();
+        if (session is null)
+            return Task.FromResult(Result<Guid, string>.AsError("Demo session is not running."));
+
+        // Same shape a real RenderHtmlVisualization call leaves: a completed tracked call whose result
+        // carries the payload. The Visualizations modal and the bubble's "View visualization" read it from there.
+        var payload = new DysonHtmlVisualization
+        {
+            Id = Guid.NewGuid(),
+            Title = visualization.Title,
+            Html = visualization.Html,
+            Css = visualization.Css,
+            JavaScript = visualization.JavaScript,
+        };
+        var callId = "demo-viz-" + payload.Id.ToString("N");
+        var turn = session.AppendDisplayInfoTurn(message, visualizationId: payload.Id);
+        turn.ToolCalls.Add(new DysonToolCall { CallId = callId, ToolName = "RenderHtmlVisualization", Stage = 1 });
+        turn.RestoreTrackedCalls(
+        [
+            new DysonPersistedTrackedToolCall
+            {
+                CallId = callId,
+                Status = DysonToolCallStatus.Completed,
+                Result = new DysonToolCallResult
+                {
+                    CallId = callId,
+                    ToolName = "RenderHtmlVisualization",
+                    Stage = 1,
+                    Content = "{\"visualizationId\":\"" + payload.Id + "\"}",
+                    HtmlVisualization = payload,
+                },
+            },
+        ]);
+        return Task.FromResult(Result<Guid, string>.AsValue(payload.Id));
+    }
+
+    public async Task<VoidResult<string>> OpenVisualizationAsync(CancellationToken ct)
+    {
+        // Click the feed's own "View visualization" button so the page opens its modal the normal way.
+        // The bubble renders on the next host notify, so poll briefly.
+        for (var i = 0; i < FocusPollAttempts / 5; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (await DysonCircuitJs.InvokeAsync<bool>(_js, "dysonDemo.openLatestVisualization").ConfigureAwait(true))
+                return VoidResult<string>.Success;
+            await Task.Delay(FocusPollMs, ct).ConfigureAwait(true);
+        }
+
+        return VoidResult<string>.AsError("The visualization button did not appear in the Meta Agent feed.");
+    }
+
     public async Task<Result<long, string>> CreatePlanAsync(
         string title,
         string markdown,
@@ -266,14 +323,15 @@ public sealed class DysonUiDemoHooks : IDysonDemoHooks
         string? activity,
         CancellationToken ct)
     {
-        if (status != DysonSessionStatus.Completed)
+        if (status is not (DysonSessionStatus.Completed or DysonSessionStatus.Active))
             return Task.FromResult(VoidResult<string>.AsError($"Demo status '{status}' is not supported."));
 
         var child = FindAgent(persistenceId);
         if (child is null)
             return Task.FromResult(VoidResult<string>.AsError("Demo agent was not found."));
 
-        if (child.Status != DysonSessionStatus.Completed)
+        // Active = a progress step only; the agent keeps running.
+        if (status == DysonSessionStatus.Completed && child.Status != DysonSessionStatus.Completed)
             child.TryMarkTerminal(DysonSessionStatus.Completed, activity);
 
         if (!string.IsNullOrEmpty(activity))

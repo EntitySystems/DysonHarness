@@ -420,7 +420,7 @@ public sealed class DysonPlanRepository(
             }
 
             var now = DateTime.UtcNow;
-            entity.ArchivedUtc = archive ? entity.UpdatedUtc : null;
+            entity.ArchivedUtc = archive ? now : null;
             entity.UpdatedUtc = now;
             await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;

@@ -28,9 +28,31 @@ public class DysonDemoScenarioTests
         var scenario = new AesterShardingDemoScenario();
 
         var result = await scenario.RunAsync(hooks, CancellationToken.None);
+        var endedAt = hooks.Clock.Elapsed;
 
         Assert.True(result.IsSuccess, result.Error);
         Assert.DoesNotContain("cleanup", hooks.Calls);
+
+        // Final segment: visualization request after the sharding answer, one drawing drone, the diagram, then a 2 s hold and the end.
+        var answeredAt = hooks.Calls.FindIndex(c => c.StartsWith("answer:", StringComparison.Ordinal));
+        var vizAskAt = hooks.Calls.FindIndex(c => c.StartsWith("user:Can you visualize the data schema", StringComparison.Ordinal));
+        var drawerAt = hooks.Calls.FindIndex(c => c.StartsWith("agent:Meta Agent Drone:Visualize Aester ledger schema:parent=root", StringComparison.Ordinal));
+        var postedAt = hooks.Calls.FindIndex(c => c.StartsWith("viz:Aester ledger schema", StringComparison.Ordinal));
+        Assert.True(answeredAt >= 0 && vizAskAt > answeredAt && drawerAt > vizAskAt && postedAt > drawerAt,
+            "visualization request, drone, and diagram follow the sharding answer in order");
+        var drawerId = hooks.Agents.Single(a => a.Title == "Visualize Aester ledger schema").PersistenceId;
+        Assert.True(hooks.Calls.Count(c => c.StartsWith($"status:{drawerId}:{DysonSessionStatus.Active}:", StringComparison.Ordinal)) >= 2,
+            "the drawing drone posts progress before it reports");
+        Assert.Contains(hooks.Calls, c => c.StartsWith($"status:{drawerId}:{DysonSessionStatus.Completed}:", StringComparison.Ordinal));
+        Assert.Equal("viz-open", hooks.Calls[^1]);
+        Assert.Contains("<svg", hooks.Visualization!.Html, StringComparison.Ordinal);
+        foreach (var table in new[] { "account", "journal_entry", "journal_line", "balance_snapshot", "Shard key" })
+            Assert.Contains(table, hooks.Visualization.Html, StringComparison.Ordinal);
+        Assert.Contains("#e09b58", hooks.Visualization.Css, StringComparison.Ordinal);
+        var held = endedAt - hooks.OpenedVisualizationAt;
+        Assert.True(held >= TimeSpan.FromMilliseconds(AesterShardingDemoScenario.VisualizationHoldMs - 100)
+            && held < TimeSpan.FromMilliseconds(AesterShardingDemoScenario.VisualizationHoldMs + 1500),
+            $"the run ends about {AesterShardingDemoScenario.VisualizationHoldMs} ms after the visualization opens (held {held.TotalMilliseconds} ms)");
 
         var confirmationAt = hooks.Calls.FindIndex(c =>
             c.StartsWith("assistant:", StringComparison.Ordinal) && c.Contains("planning drone", StringComparison.Ordinal));
@@ -50,7 +72,7 @@ public class DysonDemoScenarioTests
             explores.Select(a => a.Title).ToArray());
 
         var drones = hooks.Agents.Where(a => a.Mode == "Meta Agent Drone").ToList();
-        Assert.Equal(2, drones.Count);
+        Assert.Equal(3, drones.Count);
         Assert.Equal("Draft the schema plan", drones[0].Title);
         Assert.Null(drones[0].ParentPersistenceId);
         Assert.Equal("Build the Aester ledger schema", drones[1].Title);
@@ -134,6 +156,12 @@ public class DysonDemoScenarioTests
 
         public List<RecordedAgent> Agents { get; } = [];
 
+        public System.Diagnostics.Stopwatch Clock { get; } = System.Diagnostics.Stopwatch.StartNew();
+
+        public DysonDemoVisualization? Visualization { get; private set; }
+
+        public TimeSpan OpenedVisualizationAt { get; private set; }
+
         public Task<Result<DysonDemoStart, string>> StartAsync(string workDirectoryName, CancellationToken ct)
         {
             Calls.Add($"start:{workDirectoryName}");
@@ -170,6 +198,25 @@ public class DysonDemoScenarioTests
         {
             Enter();
             Calls.Add($"answer:{selectedChoice}");
+            return Task.FromResult(VoidResult<string>.Success);
+        }
+
+        public Task<Result<Guid, string>> PostVisualizationAsync(
+            string message,
+            DysonDemoVisualization visualization,
+            CancellationToken ct)
+        {
+            Enter();
+            Visualization = visualization;
+            Calls.Add($"viz:{visualization.Title}");
+            return Task.FromResult(Result<Guid, string>.AsValue(Guid.NewGuid()));
+        }
+
+        public Task<VoidResult<string>> OpenVisualizationAsync(CancellationToken ct)
+        {
+            Enter();
+            OpenedVisualizationAt = Clock.Elapsed;
+            Calls.Add("viz-open");
             return Task.FromResult(VoidResult<string>.Success);
         }
 

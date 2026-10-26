@@ -34,12 +34,15 @@ public sealed class AesterShardingDemoScenario : IDysonDemoScenario
         "\u0023\u0023 Out of scope\n\n" +
         "Sharding (a follow-up), reporting, and auth.\n";
 
+    /// <summary>How long the finished schema visualization stays on screen before the run ends.</summary>
+    public const int VisualizationHoldMs = 2000;
+
     public string Id => "aester-sharding";
 
     public string DisplayName => "Planning + database sharding";
 
     public string Description =>
-        "Runs a scripted Meta Agent session for a fictional Aester Financials ledger — plan, build, then a sharding question — with no provider calls.";
+        "Runs a scripted Meta Agent session for a fictional Aester Financials ledger — plan, build, a sharding question, then a schema visualization — with no provider calls.";
 
     public async Task<VoidResult<string>> RunAsync(IDysonDemoHooks hooks, CancellationToken ct)
     {
@@ -267,6 +270,60 @@ public sealed class AesterShardingDemoScenario : IDysonDemoScenario
         if (noted.IsError)
             return VoidResult<string>.AsError(noted.Error);
 
+        return await VisualizeAsync(hooks, ct).ConfigureAwait(true);
+    }
+
+    /// <summary>Final segment: the user asks for a picture of the schema; one drone draws it; it stays up, then the run ends.</summary>
+    private static async Task<VoidResult<string>> VisualizeAsync(IDysonDemoHooks hooks, CancellationToken ct)
+    {
+        async Task Step(int delayMs) => await Task.Delay(delayMs, ct).ConfigureAwait(true);
+
+        await Step(1500).ConfigureAwait(true);
+        var asked = await hooks.AppendUserTurnAsync(
+            "Can you visualize the data schema objects we've been discussing?",
+            "Sure. I'm starting a drone to draw the ledger schema: the tables, their fields and keys, and where a shard key would go.",
+            ct).ConfigureAwait(true);
+        if (asked.IsError)
+            return asked;
+
+        await Step(500).ConfigureAwait(true);
+        var drawer = await hooks.AddAgentAsync(null, "Visualize Aester ledger schema", DysonAgentModes.MetaAgentDrone, ct)
+            .ConfigureAwait(true);
+        if (drawer.IsError)
+            return VoidResult<string>.AsError(drawer.Error);
+
+        foreach (var progress in new[] { "Reading the ledger plan's data model", "Laying out account, journal, and balance tables" })
+        {
+            await Step(1000).ConfigureAwait(true);
+            var stepped = await hooks.SetAgentStatusAsync(drawer.Value.PersistenceId, DysonSessionStatus.Active, progress, ct)
+                .ConfigureAwait(true);
+            if (stepped.IsError)
+                return stepped;
+        }
+
+        await Step(1000).ConfigureAwait(true);
+        var drawn = await hooks.SetAgentStatusAsync(
+            drawer.Value.PersistenceId,
+            DysonSessionStatus.Completed,
+            "Rendered the ledger schema diagram",
+            ct).ConfigureAwait(true);
+        if (drawn.IsError)
+            return drawn;
+
+        await Step(500).ConfigureAwait(true);
+        var posted = await hooks.PostVisualizationAsync(
+            "Here is the ledger schema: account, journal_entry, journal_line, and balance_snapshot with their keys. journal_line.account_id is the shard key we'd use later; for now it stays one database.",
+            AesterSchemaVisualization.Create(),
+            ct).ConfigureAwait(true);
+        if (posted.IsError)
+            return VoidResult<string>.AsError(posted.Error);
+
+        var shown = await hooks.OpenVisualizationAsync(ct).ConfigureAwait(true);
+        if (shown.IsError)
+            return shown;
+
+        // Hold, then return: the runner's finally runs cleanup and restores the previous work dir.
+        await Step(VisualizationHoldMs).ConfigureAwait(true);
         return VoidResult<string>.Success;
     }
 
