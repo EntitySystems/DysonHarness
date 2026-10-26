@@ -32,8 +32,10 @@ public interface IDysonWorkDirectoryRepository
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Removes the work directory registration. Blocked when any sessions still reference it.
-    /// Does not delete the folder on disk.
+    /// Removes the work directory registration and, in the same transaction, its Meta Agent
+    /// session trees (with their turns, logs and todos) plus plans and workdir configuration.
+    /// Blocked when any other session still references it. Does not delete the folder on disk
+    /// or any drone git worktrees.
     /// </summary>
     Task<VoidResult<string>> DeleteAsync(
         Guid id,

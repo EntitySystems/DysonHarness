@@ -267,16 +267,40 @@ public sealed class DysonWorkDirectoryRepository(
             if (entity is null)
                 return new VoidResult<string>($"Work directory '{id}' not found.");
 
-            var sessionCount = await db.Sessions
-                .CountAsync(s => s.WorkDirectoryId == id && s.SubjectId == subjectId, cancellationToken)
+            // The workspace's Meta Agent tree is owned by the workdir (hidden from the sidebar and
+            // undeletable on its own), so it goes with it. Other sessions still block the delete.
+            var roots = await db.Sessions
+                .Where(s => s.WorkDirectoryId == id && s.SubjectId == subjectId && s.ParentSessionId == null)
+                .Select(s => new { s.Id, s.AgentMode })
+                .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
+
+            var metaTreeIds = new HashSet<Guid>();
+            foreach (var root in roots.Where(r => DysonSessionPolicy.IsMetaAgent(r.AgentMode)))
+            {
+                var tree = await DysonSessionRepository
+                    .RemoveSessionTreeAsync(db, subjectId, root.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                metaTreeIds.UnionWith(tree);
+            }
+
+            var referencing = await db.Sessions
+                .Where(s => s.WorkDirectoryId == id && s.SubjectId == subjectId)
+                .Select(s => s.Id)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var sessionCount = referencing.Count(s => !metaTreeIds.Contains(s));
 
             if (sessionCount > 0)
             {
+                // Nothing was saved: the tracked meta-tree removals are discarded with the context.
                 return new VoidResult<string>(
-                    $"Cannot remove work directory while {sessionCount} session(s) still reference it.");
+                    $"Cannot remove work directory while {sessionCount} session(s) still reference it. " +
+                    "Delete those sessions from the sidebar first.");
             }
 
+            // One SaveChanges = one transaction: meta trees deepest-first (turns, logs, todos cascade),
+            // then the workdir (plans, configuration, plugin installations cascade).
             db.WorkDirectories.Remove(entity);
             await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;

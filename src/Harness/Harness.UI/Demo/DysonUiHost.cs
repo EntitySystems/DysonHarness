@@ -2876,6 +2876,52 @@ public sealed class DysonUiHost : IAsyncDisposable
         return VoidResult<string>.Success;
     }
 
+    /// <summary>
+    /// Removes a work directory registration together with its Meta Agent session trees.
+    /// Live Meta Agent agents are stopped and released through the runtime first; if they will
+    /// not stop, nothing is deleted. Disk folders and drone worktrees are left in place.
+    /// </summary>
+    public async Task<VoidResult<string>> DeleteWorkDirectoryAsync(
+        Guid workDirectoryId,
+        CancellationToken cancellationToken = default)
+    {
+        var roots = await _sessions.ListSessionsAsync(workDirectoryId, rootsOnly: true, cancellationToken)
+            .ConfigureAwait(false);
+        if (roots.IsError)
+            return VoidResult<string>.AsError(roots.Error);
+
+        var metaRootIds = roots.Value
+            .Where(s => s.ParentSessionId is null && DysonSessionPolicy.IsMetaAgent(s.AgentMode))
+            .Select(s => s.Id)
+            .ToList();
+
+        var runtime = await TryAttachRuntimeForDemoAsync(cancellationToken).ConfigureAwait(false);
+        if (runtime is not null && metaRootIds.Count > 0)
+        {
+            var released = await runtime
+                .ReleaseWorkDirectoryMetaTreesAsync(workDirectoryId, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            if (released.IsError)
+                return released;
+        }
+
+        foreach (var rootId in metaRootIds)
+        {
+            if (ActiveSessionId is Guid active && CollectMappedDescendantIds(rootId).Contains(active))
+            {
+                CancelPrompt();
+                ClearFocus();
+            }
+
+            UnregisterSessionTree(rootId);
+        }
+
+        var deleted = await _workDirectories.DeleteAsync(workDirectoryId, cancellationToken)
+            .ConfigureAwait(false);
+        Notify(DysonHostChangeKind.SessionGraph);
+        return deleted;
+    }
+
     private async Task<bool> IsMetaAgentDeleteTargetAsync(
         Guid sessionId,
         DysonSessionRuntime? runtime,
