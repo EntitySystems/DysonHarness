@@ -24,7 +24,7 @@ Contracts: `IDysonSessionRepository` in `Harness.Abstractions`. Implementation: 
 | `WorktreeAbsolutePath` | string? — absolute git worktree checkout; null until created. Clearing after merge/remove is allowed. |
 | `WorktreeBranch` | string? — e.g. `dyson/{8-hex of session id}`; null until created |
 | `McpAccessMode` | enum |
-| `Status` | `Active`=0 / `Completed`=1 / `Stopped`=2 / `Failed`=3 / `Interrupted`=4 (child terminal after process-restart recovery; roots stay `Active` on that sweep. `Completed`/`Failed` **roots and children** may return to `Active` on a new in-flight prompt (`BeginInFlightPrompt` / `PromptAsync` / queued user turn / `PromptHarnessTurnAsync`; children also via parent `TriggerSubagentEvent`). In-memory reopen is `TryReopenForNewParentTask` at `BeginInFlightPrompt`; durable `Active` persist is `PersistReopenAsync` on the prompt path (roots and children) and on parent `TriggerSubagentEvent`. Do not reopen `Stopped`/`Interrupted`) |
+| `Status` | `Active`=0 / `Completed`=1 / `Stopped`=2 / `Failed`=3 / `Interrupted`=4 (child terminal after process-restart recovery; roots stay `Active` on that sweep. `Completed`/`Failed` **roots and children** (and `Interrupted` children, e.g. a drone resumed after a restart) may return to `Active` on a new in-flight prompt (`BeginInFlightPrompt` / `PromptAsync` / queued user turn / `PromptHarnessTurnAsync`; children also via parent `TriggerSubagentEvent`). In-memory reopen is `TryReopenForNewParentTask` at `BeginInFlightPrompt`; durable `Active` persist is `PersistReopenAsync` on the prompt path (roots and children) and on parent `TriggerSubagentEvent` (also `MessageMetaAgentDrone` / `BeginBuildPlan` reuse); the roster then shows `Active` with no `finishedAt`. Do not reopen `Stopped`) |
 | `Title` | Optional UI title (agent `RenameSession` / first prompt); mirrored live as `DysonAgentSession.DisplayTitle` |
 | `SystemPromptSnapshot` | Prompt at create time; updated on mid-session `ApplyAgentMode` |
 | `CreatedUtc`, `UpdatedUtc`, `LastActivityUtc` | `DateTime` UTC |
@@ -71,7 +71,9 @@ Each session (root or subagent) owns its own list. Cascade-deleted with the sess
 | `Status` | int enum `DysonSessionTodoStatus`: `0=Pending`, `1=Ongoing`, `2=Complete` |
 | `CommentsJson` | JSON `string[]` (default `[]`); append-only via update `appendComment`, or full replace via `comments` |
 | `Sequence` | int create/replace order within the session |
-| `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC |
+| `CreatedUtc`, `UpdatedUtc` | `DateTime` UTC. `UpdatedUtc` bumps on every update (status, display name, comments). Every entity `DateTime` is read back with `DateTimeKind.Utc` (`UtcDateTimeValueConverter`); stored TEXT is unchanged |
+
+A session holds at most 50 todos, completed included (`DysonSessionTodoLimits.MaxPerSession`). `CreateTodo` returns a Result error at the cap; `ReplaceTodos` fails the whole replace when the incoming count is over 50. Enforced for every session kind.
 
 Runtime mirror: `DysonSessionTodo` (same fields; `Comments` as `IReadOnlyList<string>`). Covered by `DysonSessionTodoTests` in `Harness.Tests`.
 
@@ -155,7 +157,7 @@ Who writes the rows: for a root session the host/runtime persist path applies th
 
 Older sessions may still contain `MetaMaintenance` turns and `EVICTED TURN …` log lines from the removed tick. They load and render as before.
 
-Reminder counters, `LastReportSummary`, and `ReadMetaAgentDroneLog` lines are in-memory (each `AppendLog` line is also persisted as a `LogLine` session_logs row, uncapped: `USER COMMENT (injected mid-turn, turn {id8}): …` on inject, `PARENT MESSAGE: …` on the child for `TriggerSubagentEvent`). A restart synthesizes Interrupted descendants immediately (parent Interrupt log) rather than reading a persisted reminder count.
+Reminder counters, `LastReportSummary`, and `ReadMetaAgentDroneLog` lines are in-memory (each `AppendLog` line is also persisted as a `LogLine` session_logs row, uncapped: `USER COMMENT (injected mid-turn, turn {id8}): …` on inject, `PARENT MESSAGE: …` on the child for `TriggerSubagentEvent`). A restart synthesizes Interrupted descendants immediately (parent Interrupt log) rather than reading a persisted reminder count. A restored `Stopped` child is treated as already reported: `RestoreFromPersisted` takes `LastReportSummary` from its last `SessionStatusChanged(Stopped)` log reason, so the restore-time child-report watch does not re-report it as `application restart`.
 
 `ListActiveSessionsWithUnfinishedTurnsAsync` is the subject-filtered recovery scan: current-subject sessions with `Status == Active` that still have at least one turn whose `CompletedUtc` is null. Each row includes unfinished-turn summaries (`TurnId`, `Sequence`, `Kind`, `CreatedUtc`, `InterruptionReason`). Cross-subject rows are never returned. This is not a distributed lease.
 

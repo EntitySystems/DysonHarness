@@ -104,7 +104,7 @@ Task<VoidResult<string>> DeleteAsync(long planId, Guid workDirectoryId, …);
 
 - **`ListAsync`** — metadata only. The projection omits `Markdown` (always null on listed `DysonPlan`s). Newest `UpdatedUtc` first, then highest `Id`. Archived rows are filtered in SQL (`ArchivedUtc == null`) unless `includeArchived`. The meta page list renders from `includeArchived: true` and splits on `ArchivedUtc`; it does not need the body.
 - **`GetAsync`** — full row including `Markdown`.
-- **`CreateAsync`** — insert; returns the database-assigned `planId` **after** save. See [traps](#traps).
+- **`CreateAsync`** — insert; returns the database-assigned `planId` **after** save. Optional `createdUtc` stamps both `CreatedUtc` and `UpdatedUtc` (UTC); omit for now. See [traps](#traps).
 - **`UpdateAsync`** — patch; bumps `UpdatedUtc`. Re-runs the shape invariant on the resulting row. Refuses an archived row (`Plan '{id}' is archived.`). See [traps](#traps).
 - **`ArchiveAsync`** / **`RestoreAsync`** — set / clear `ArchivedUtc`; see [Archive](#archive). Missing id: `Plan '{id}' not found.`
 - **`DeleteAsync`** — removes the row (body included). Irreversible; no filesystem involvement. No tool calls it; `DeletePlan` archives.

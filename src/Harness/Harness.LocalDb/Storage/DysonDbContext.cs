@@ -382,6 +382,18 @@ public sealed class DysonDbContext : DbContext
             e.Property(x => x.Variant8).IsRequired();
             e.HasIndex(x => x.SubjectId).IsUnique();
         });
+
+        // SQLite materializes DateTime as Unspecified. One converter stamps Kind=Utc on
+        // every DateTime property so JSON keeps the Z. Stored TEXT is unchanged.
+        var utc = new UtcDateTimeValueConverter();
+        var utcNullable = new NullableUtcDateTimeValueConverter();
+        foreach (var property in modelBuilder.Model.GetEntityTypes().SelectMany(t => t.GetProperties()))
+        {
+            if (property.ClrType == typeof(DateTime))
+                property.SetValueConverter(utc);
+            else if (property.ClrType == typeof(DateTime?))
+                property.SetValueConverter(utcNullable);
+        }
     }
 
     /// <summary>Opens a context for <paramref name="databasePath"/> and applies migrations.</summary>

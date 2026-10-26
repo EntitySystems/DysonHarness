@@ -815,14 +815,14 @@ public class DysonSessionTodoTests
         if (stopped.Status != DysonSessionStatus.Stopped)
             throw new InvalidOperationException("Expected Status unchanged after reopen no-op on Stopped.");
 
-        // Reopen is a no-op on Interrupted.
+        // Interrupted (application restart) reopens so a resumed drone reads Active.
         var interrupted = new StubSession();
         if (!interrupted.TryMarkTerminal(DysonSessionStatus.Interrupted, "interrupted"))
             throw new InvalidOperationException("Expected TryMarkTerminal Interrupted to succeed.");
-        if (interrupted.TryReopenForNewParentTask())
-            throw new InvalidOperationException("Expected TryReopenForNewParentTask false on Interrupted.");
-        if (interrupted.Status != DysonSessionStatus.Interrupted)
-            throw new InvalidOperationException("Expected Status unchanged after reopen no-op on Interrupted.");
+        if (!interrupted.TryReopenForNewParentTask())
+            throw new InvalidOperationException("Expected TryReopenForNewParentTask true on Interrupted.");
+        if (interrupted.Status != DysonSessionStatus.Active)
+            throw new InvalidOperationException("Expected Status Active after reopen on Interrupted.");
     }
 
     private static async Task AssertSubmitSubagentReportAutoSubmitOneFailure()

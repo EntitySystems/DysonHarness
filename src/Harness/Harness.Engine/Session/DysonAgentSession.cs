@@ -1645,8 +1645,9 @@ public abstract class DysonAgentSession
     /// <summary>
     /// Marks <paramref name="turn"/> as the in-flight prompt turn until disposed.
     /// Nestable (an inline harness turn inside another prompt). Call after <see cref="AddTurn"/>.
-    /// A Completed/Failed root or child is reopened to <see cref="DysonSessionStatus.Active"/>
-    /// at the start of a new in-flight prompt. Stopped/Interrupted stay locked.
+    /// A Completed/Failed/Interrupted root or child is reopened to <see cref="DysonSessionStatus.Active"/>
+    /// at the start of a new in-flight prompt. Stopped stays locked.
+    /// Also releases a parent inject waiter for <paramref name="turn"/> when the host (not KickOff) starts it.
     /// Pushes first so <c>DysonTaskLifecycleFlow.Evaluate</c> no-ops while this prompt is in flight
     /// (reopening to Active before push would leave a window where last turn is still ReportSummary/BugReview).
     /// </summary>
@@ -1655,6 +1656,8 @@ public abstract class DysonAgentSession
         ArgumentNullException.ThrowIfNull(turn);
         _inFlightPromptStack.Push(turn);
         TryReopenForNewParentTask();
+        if (_injectWaiters.TryRemove(turn.Id, out var injectStarted))
+            injectStarted.TrySetResult();
         return new InFlightPromptScope(this);
     }
 
@@ -2400,7 +2403,8 @@ public abstract class DysonAgentSession
         var action = DysonChildReportWatch.Evaluate(
             isChild: Parent is not null,
             status: Status,
-            hasReported: Status is DysonSessionStatus.Completed or DysonSessionStatus.Failed,
+            hasReported: Status is DysonSessionStatus.Completed or DysonSessionStatus.Failed
+                || _subagentReportAccepted,
             hasPendingWork: HasPendingTurn || InFlightPromptTurn is not null,
             remindersSent: _childReportRemindersSent);
 
@@ -2560,9 +2564,9 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
-    /// Reopens a Completed/Failed session so a new CompleteTask / SubmitSubagentReport cycle can run
+    /// Reopens a Completed/Failed/Interrupted session so a new CompleteTask / SubmitSubagentReport cycle can run
     /// after parent <c>TriggerSubagentEvent</c> or when a new in-flight prompt begins.
-    /// Stopped/Interrupted stay locked.
+    /// Interrupted (application restart) reopens so a resumed drone reads Active; Stopped stays locked.
     /// Sets <see cref="Status"/> to Active in memory; durable Active is written by the parent inject
     /// path or the prompt path (<see cref="PersistReopenAsync"/>).
     /// </summary>
@@ -2574,11 +2578,14 @@ public abstract class DysonAgentSession
         var changed = false;
         lock (_terminalGate)
         {
-            if (Status is not (DysonSessionStatus.Completed or DysonSessionStatus.Failed))
+            if (Status is not (DysonSessionStatus.Completed
+                or DysonSessionStatus.Failed
+                or DysonSessionStatus.Interrupted))
                 return false;
 
             previous = Status;
             Status = DysonSessionStatus.Active;
+            _subagentReportAccepted = false;
             next = Status;
             summary = LastReportSummary;
             _terminalTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -2987,7 +2994,7 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
-    /// Persist Active after a Completed/Failed session was reopened (parent inject or new in-flight prompt).
+    /// Persist Active after a Completed/Failed/Interrupted session was reopened (parent inject or new in-flight prompt).
     /// No-op when <see cref="SessionStore"/> is null or <see cref="PersistenceId"/> is empty.
     /// </summary>
     protected async Task PersistReopenAsync(string reason)
@@ -3152,6 +3159,14 @@ public abstract class DysonAgentSession
         WorktreeEnabled = state.Session.WorktreeEnabled;
         WorktreeAbsolutePath = state.Session.WorktreeAbsolutePath;
         WorktreeBranch = state.Session.WorktreeBranch;
+        if (Status == DysonSessionStatus.Stopped)
+        {
+            // Stop already reported to the parent at stop time. Restore that report so the restore-time
+            // child-report watch does not re-synthesize it as "application restart".
+            _subagentReportAccepted = true;
+            LastReportSummary = LastStoppedReason(state.Logs) ?? LastReportSummary;
+        }
+
         if (IsTerminal)
             _terminalTcs.TrySetResult((Status, LastReportSummary));
 
@@ -3209,6 +3224,24 @@ public abstract class DysonAgentSession
         }
 
         RestoreTodos(state.Todos);
+    }
+
+    /// <summary>Reason of the last persisted SessionStatusChanged(Stopped) log, if any.</summary>
+    private static string? LastStoppedReason(IReadOnlyList<DysonSessionLogEntry> logs)
+    {
+        string? reason = null;
+        foreach (var log in logs.OrderBy(l => l.Sequence))
+        {
+            if (!DysonSessionLogPayload.TryParseKind(log.Kind, out var kind)
+                || kind != DysonSessionLogKind.SessionStatusChanged)
+                continue;
+
+            var payload = DysonSessionLogPayload.Deserialize<DysonSessionLogSessionStatusChanged>(log.PayloadJson);
+            if (payload is { Status: DysonSessionStatus.Stopped } && !string.IsNullOrWhiteSpace(payload.Reason))
+                reason = payload.Reason;
+        }
+
+        return reason;
     }
 
     /// <summary>Replaces the in-memory todo list (e.g. after resume) and raises <see cref="TodosChanged"/>.</summary>
@@ -3276,6 +3309,9 @@ public abstract class DysonAgentSession
         {
             if (_todos.Any(t => string.Equals(t.TaskCode, code, StringComparison.Ordinal)))
                 return Result<DysonSessionTodo, string>.AsError($"Todo TaskCode '{code}' already exists.");
+
+            if (_todos.Count >= DysonSessionTodoLimits.MaxPerSession)
+                return Result<DysonSessionTodo, string>.AsError(DysonSessionTodoLimits.LimitMessage);
         }
 
         var now = DateTime.UtcNow;
@@ -3426,6 +3462,12 @@ public abstract class DysonAgentSession
 
             RestoreTodos(replaced.Value);
             return replaced;
+        }
+
+        if (items.Count > DysonSessionTodoLimits.MaxPerSession)
+        {
+            return Result<IReadOnlyList<DysonSessionTodo>, string>.AsError(
+                DysonSessionTodoLimits.LimitMessage);
         }
 
         var now = DateTime.UtcNow;
@@ -3673,6 +3715,19 @@ public abstract class DysonAgentSession
         };
         if (actions is { Count: > 0 })
             turn.RestoreConversationActions(actions);
+        AddTurn(turn);
+        return turn;
+    }
+
+    /// <summary>
+    /// Completed user+assistant turn, no provider. Demo scripting only.
+    /// Raises <see cref="TurnAdded"/> so host persistence and the chat feed work unchanged.
+    /// </summary>
+    public DysonAgentTurn AppendScriptedExchange(string userInstruction, string assistantText)
+    {
+        var turn = CreateNormalTurn(userInstruction);
+        turn.AssistantText = assistantText?.Trim() ?? "";
+        turn.FinishStreaming();
         AddTurn(turn);
         return turn;
     }

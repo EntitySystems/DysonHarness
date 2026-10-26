@@ -174,6 +174,10 @@ public static class DysonUiWebHost
         builder.Services.AddScoped<DysonWorkDirectoryFocus>();
         builder.Services.AddScoped<DysonSessionRuntime>();
         builder.Services.AddScoped<DysonUiHost>();
+#if DYSON_PREVIEW
+        builder.Services.AddScoped<IDysonDemoHooks, DysonUiDemoHooks>();
+        builder.Services.AddScoped<DysonDemoScenarioRunner>();
+#endif
         builder.Services.AddSingleton<DysonFilePreviewStore>();
         builder.Services.AddScoped<ThemeService>();
         builder.Services.AddScoped<ConfirmDialogService>();

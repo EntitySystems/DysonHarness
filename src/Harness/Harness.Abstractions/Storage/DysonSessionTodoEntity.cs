@@ -1,5 +1,14 @@
 namespace DysonHarness;
 
+/// <summary>Shared todo cap. Every todo counts, including completed. ponytail: a constant is enough.</summary>
+public static class DysonSessionTodoLimits
+{
+    public const int MaxPerSession = 50;
+
+    public const string LimitMessage =
+        "Todo limit reached (50/50). Remove todos that are no longer relevant with RemoveTodos (check updatedUtc in ListTodos) before adding a new one.";
+}
+
 public enum DysonSessionTodoStatus
 {
     Pending = 0,

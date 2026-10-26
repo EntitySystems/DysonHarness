@@ -30,7 +30,7 @@ Kept:
 | `ListMetaAgentDrones` | `FormatChildRosterJson(includeReports: true)` — `kind` (`drone` / `explore` / `other`), `worktreeBranch` (null for Explore), `lastReport`, `finishedAt`, plus the `ListSubagents` fields. Plain stable projection: no notices or counts (`DysonMetaAgentToolsetTests` byte-identical across calls). Prune guidance lives in the directive's roster-hygiene lines (past 20 finished agents, delete the ones no longer needed, oldest first), not here, so the cached prompt prefix is not busted on every dispatch. |
 | `ReadMetaAgentDroneLog` | `InspectSubagentLog` / `SnapshotLog`. In-memory; empty after process restart even though the child session row survives. Shows full-text `USER COMMENT (injected mid-turn, turn {id8}): …` and `PARENT MESSAGE: …` lines (the `prompt:` line stays truncated to 120 chars). An interrupting `MessageMetaAgentDrone` keeps earlier queued parent messages (FIFO) and runs them after the interrupt turn. |
 | `StopMetaAgentDrone` | `StopSubagentAsync`. Optional `discardWorktree` → `DysonSessionWorktree.RemoveAsync(..., force: true)` and clears worktree columns. |
-| `MessageMetaAgentDrone` | `TriggerSubagentEventAsync` (reopens `Completed`/`Failed`). Optional `timeoutSeconds`: omitted or 0 interrupts now and does not block; 1–20 blocks this turn until the drone starts the message or the timeout interrupts it. The old `interrupt` property is rejected. BeginBuildPlan reuse queues instead (`QueueSubagentEventAsync`). |
+| `MessageMetaAgentDrone` | `TriggerSubagentEventAsync` (reopens `Completed`/`Failed`/`Interrupted` to `Active` in memory and DB; `Stopped` stays locked). Optional `timeoutSeconds`: omitted or 0 interrupts now and does not block; 1–20 blocks this turn until the drone starts the message or the timeout interrupts it. The old `interrupt` property is rejected. BeginBuildPlan reuse queues instead (`QueueSubagentEventAsync`). |
 | `DeleteMetaAgent` | Terminal-only (walks descendants); then `_store.DeleteSessionAsync` (unmerged worktree still fails with the existing merge-or-delete message) and `UnregisterSubagent`. |
 | `PostConversationMessage` | `AppendDisplayInfoTurn`. Optional `actions` of `{ name, func }`. `open_plan:{id}`, `open_file:{path}`, and `open_url:{url}` are built-in and resolved on click without `RegisterConversationAction`. Any other key still uses the in-memory map (empty after restart; not copied to children). A bad id, a path outside the work directory, a non-http(s) URL, an unknown key, or a failed func is `Result` text on the bubble and the message stays. `MetaAgentDirective` (Talking to the user) instructs the model to attach one action per plan, workspace file, or http(s) URL the user would open, on status updates, questions, and results, up to 8. Meta Agent Drone has no `PostConversationMessage`. Optional `visualizationId` is separate from `actions`: a GUID of a successful visualization on this session adds a button that is not a func. Unknown or malformed is a tool error and no turn. Still `{ok:true}` when it posts. Still does not end the turn. Still not in the provider transcript. Assistant text is not shown on the meta page — this is the user-visible channel. Not for questions; those go through `PostUserQuestion`. |
 | `SpeakToUser` | Root Meta Agent only, and only while voice mode is on (`Config.Voice` non-null). Not in `AllowedToolNames` (the exact-allowlist fact stays the voice-off contract). Absent from Meta Agent Drone and every other mode. Required `text` (at most 600 characters). Queues text-to-speech on the one shared per-subject queue (`Speak(text, workDirectoryId, workDirectoryName)`; the name is the `DysonWorkDirectoryFocus.GetDisplayNameAsync` snapshot) and returns `{ok:true}` at once; calls from every root meta session play in order, one at a time. A meta session whose work directory is not on screen still speaks; the app prefixes it with `Message from workdir {name}: ` at play time. Call it before `PostConversationMessage`: speech is the short plain-English sentence, the post carries names, paths, ids, and detail. See [Voice mode](#voice-mode). |
@@ -54,7 +54,7 @@ Kept:
 | `CreateTodo` / `ListTodos` / `UpdateTodo` | Shared schemas. |
 | Browser tools (`CreateBrowserTools`) | Present only when `BrowserControl` is set and the name survived the denylist. Not in `AllowedToolNames`. `BrowserWaitForSelector` and `BrowserWaitForNavigation` return in this turn, bounded by required `timeoutMs`; they are not a stand-in for `WaitForSubagent`. A long `timeoutMs` stalls the orchestrator until the call returns. That sentence is appended to the root Meta Agent prompt (`WithBrowser`) only when at least one of those tools is on the catalog. |
 
-Todos are the record of dispatches; posted messages are not in later transcripts.
+Todos are the record of dispatches; posted messages are not in later transcripts. `ListTodos` returns `updatedUtc` (ISO-8601 UTC); the model prunes stale todos with `RemoveTodos`. A session holds at most 50 todos.
 
 ### Scratch notes
 
@@ -207,7 +207,7 @@ Not Meta-Agent-only. A child that goes terminal without `SubmitSubagentReport` w
 | `Active`, idle, unreported, reminders spent | `Synthesize` — child becomes `Failed` |
 | `Stopped` / `Interrupted` / `Failed` without a report | `Synthesize` immediately |
 
-`remindersSent` (`_childReportRemindersSent`) and `LastReportSummary` are **in-memory, per-process**. They are not session columns. After a restart the counter is gone.
+`remindersSent` (`_childReportRemindersSent`) and `LastReportSummary` are **in-memory, per-process**. They are not session columns. After a restart the counter is gone. A restored `Stopped` child counts as already reported (Stop synthesized at stop time): `RestoreFromPersisted` restores `LastReportSummary` from its last `SessionStatusChanged(Stopped)` reason, so the watch does not re-report it as `application restart`.
 
 ### Synthetic report
 
@@ -225,9 +225,11 @@ The widened guard is harness-only. An agent's own second `SubmitSubagentReport` 
 
 Idle-without-report after two reminders **does** set `Failed` — that child was still `Active`.
 
+Stop cancels whatever run is live. KickOff runs carry a run CTS; a child turn the host runs (report processing, queued continuation) gets a linked CTS attached in `OpenAiCompatibleAgentSession.PromptWithTurnAsync`, so `HasActiveBackgroundRun` is true and `CancelBackgroundRun` reaches it. A drone resumed after a restart is `Active` again (inject / BeginBuildPlan reuse reopens `Interrupted`), so `TryMarkTerminal(Stopped)` succeeds instead of returning the stale `Interrupted` / `application restart`.
+
 ### Recovery
 
-`DysonSessionRecoveryService` has no live session graph. For each Active descendant it marks `Interrupted` and appends one parent `Interrupt` log (`SubagentFailed`, summary `application restart`, child's `RuntimeId` / persistence id) via `PersistSyntheticParentReportAsync`. Idempotent if that log already exists. It does **not** call `SubmitSyntheticReportAsync` (nothing is in memory to accept a report). It does not replay model or tool calls. A persisted reminder counter would never be read: Interrupted descendants synthesize immediately on this path.
+`DysonSessionRecoveryService` has no live session graph. For each Active descendant it marks `Interrupted` and appends one parent `Interrupt` log (`SubagentFailed`, summary `application restart`, child's `RuntimeId` / persistence id) via `PersistSyntheticParentReportAsync`. Idempotent if that log already exists. It does **not** call `SubmitSyntheticReportAsync` (nothing is in memory to accept a report). It does not replay model or tool calls. A persisted reminder counter would never be read: Interrupted descendants synthesize immediately on this path. `Stopped` / `Completed` / `Failed` descendants are skipped: their status and last report are unchanged.
 
 ## Context: 180K cap, compaction, reasoning
 

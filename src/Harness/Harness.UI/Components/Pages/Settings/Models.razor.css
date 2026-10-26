@@ -1,0 +1,27 @@
+.models-settings {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+    gap: 14px;
+    align-items: start;
+}
+
+.models-settings__info {
+    padding: 12px 14px;
+    background: var(--surface-raised);
+    border: 0;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-1);
+}
+
+.models-settings__copy {
+    margin: 8px 0 12px;
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+@media (max-width: 900px) {
+    .models-settings {
+        grid-template-columns: 1fr;
+    }
+}

@@ -1355,7 +1355,8 @@ public sealed class DysonMcpPipeline
             Description =
                 "List todos for the current session (JSON array). " +
                 "Each session (root or subagent) owns its own list. " +
-                "Call this before SubmitSubagentReport to check for pending or ongoing work.",
+                "Call this before SubmitSubagentReport to check for pending or ongoing work. " +
+                "Each item includes createdUtc and updatedUtc (ISO-8601 UTC); updatedUtc is the last change to status, displayName, or comments.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -1368,7 +1369,8 @@ public sealed class DysonMcpPipeline
         {
             Name = "CreateTodo",
             Description =
-                "Create a todo on the current session’s list. TaskCode must be unique within the session.",
+                "Create a todo on the current session’s list. TaskCode must be unique within the session. " +
+                "A session holds at most 50 todos; prune with RemoveTodos before adding more.",
             InputSchemaJson = """
                 {
                   "type": "object",

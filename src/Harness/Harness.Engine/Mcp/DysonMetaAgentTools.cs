@@ -526,8 +526,9 @@ public static class DysonMetaAgentTools
         {
             Name = "RemoveTodos",
             Description =
-                "Remove todos by taskCode that are no longer going to happen. Meta Agent only. " +
-                "reason is required.",
+                "Remove todos by taskCode that are no longer relevant: completed work already recorded elsewhere, " +
+                "or pending/ongoing work superseded or abandoned. Keep todos the user may still ask about. " +
+                "Meta Agent only. reason is required.",
             InputSchemaJson = """
                 {
                   "type": "object",

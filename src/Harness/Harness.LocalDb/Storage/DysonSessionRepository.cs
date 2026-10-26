@@ -7,6 +7,9 @@ public sealed class DysonSessionRepository(
     DysonDbAccessor accessor,
     IDysonSubjectContext subjectContext) : IDysonSessionRepository
 {
+
+    public const string TodoLimitMessage =
+        "Todo limit reached (50/50). Remove todos that are no longer relevant with RemoveTodos (check updatedUtc in ListTodos) before adding a new one.";
     private static readonly JsonSerializerOptions TodoJsonOptions = new();
 
     private readonly DysonDbAccessor _accessor = accessor ?? throw new ArgumentNullException(nameof(accessor));
@@ -905,6 +908,12 @@ public sealed class DysonSessionRepository(
                     $"Todo TaskCode '{taskCode}' already exists on session '{request.SessionId}'.");
             }
 
+            var count = await db.SessionTodos
+                .CountAsync(t => t.SessionId == request.SessionId, cancellationToken)
+                .ConfigureAwait(false);
+            if (count >= DysonSessionTodoLimits.MaxPerSession)
+                return Result<DysonSessionTodo, string>.AsError(DysonSessionTodoLimits.LimitMessage);
+
             var now = DateTime.UtcNow;
             var sequence = await NextTodoSequenceAsync(db, request.SessionId, cancellationToken)
                 .ConfigureAwait(false);
@@ -1064,6 +1073,9 @@ public sealed class DysonSessionRepository(
                 return Result<IReadOnlyList<DysonSessionTodo>, string>.AsError(
                     $"Session '{sessionId}' not found.");
             }
+
+            if (items.Count > DysonSessionTodoLimits.MaxPerSession)
+                return Result<IReadOnlyList<DysonSessionTodo>, string>.AsError(DysonSessionTodoLimits.LimitMessage);
 
             var seen = new HashSet<string>(StringComparer.Ordinal);
             for (var i = 0; i < items.Count; i++)

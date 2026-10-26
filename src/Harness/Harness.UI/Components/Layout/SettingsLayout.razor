@@ -23,6 +23,10 @@
             <NavLink class="settings-shell__link" href="/settings/shells" Match="NavLinkMatch.All">Shells</NavLink>
             <NavLink class="settings-shell__link" href="/settings/plugins" Match="NavLinkMatch.All">Plugins</NavLink>
             <NavLink class="settings-shell__link" href="/settings/agent-modes" Match="NavLinkMatch.Prefix">Agent modes</NavLink>
+            @if (DysonPreviewFeatures.DemoModeEnabled)
+            {
+                <NavLink class="settings-shell__link" href="@DemoHref" Match="NavLinkMatch.All">Demo</NavLink>
+            }
         </nav>
 
         <div class="sidebar__footer">
@@ -38,6 +42,8 @@
 @code {
     /// <summary>Matches --motion-base, so the class outlives the animation it triggers.</summary>
     private const int NavEnterMs = 200;
+
+    private static string DemoHref => DysonPreviewFeatures.DemoModeEnabled ? "/settings/" + "demo" : "/settings/general";
 
     private bool _navEnter;
 
