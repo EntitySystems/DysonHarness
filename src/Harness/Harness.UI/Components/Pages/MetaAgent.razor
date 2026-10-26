@@ -510,15 +510,25 @@
         var existing = found.Value;
         if (existing is not null)
         {
-            var resume = await Host.ResumeSessionAsync(existing.Id);
-            if (resume.IsError)
+            if (Host.Session is { } already
+                && already.PersistenceId == existing.Id
+                && string.Equals(already.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
             {
-                _error = resume.Error;
-                return;
+                _metaSessionId = existing.Id;
+                BindAgentsListSubscriptions();
             }
+            else
+            {
+                var resume = await Host.ResumeSessionAsync(existing.Id);
+                if (resume.IsError)
+                {
+                    _error = resume.Error;
+                    return;
+                }
 
-            _metaSessionId = existing.Id;
-            BindAgentsListSubscriptions();
+                _metaSessionId = existing.Id;
+                BindAgentsListSubscriptions();
+            }
         }
         else
         {

@@ -40,4 +40,33 @@
     <ApplicationManifest>..\Harness.WindowsBrowser\app.manifest</ApplicationManifest>
   </PropertyGroup>
 
+  <!-- Stable Release drops the demo page, its CSS, the hotkey script, and scenario sources.
+       The Razor SDK still compiles @page routes when the page body is #if'd, so exclusion is required.
+       #if does not skip preprocessor-looking lines inside an inactive region, so scenario .cs files
+       are removed from Compile rather than relying on DYSON_PREVIEW. DysonPreviewFeatures.cs stays
+       compiled so tests can assert the flag is false.
+       The SDK re-adds *.razor.css as ScopedCssInput after the project ItemGroup, which then fails
+       BLAZOR102 against the missing component, so that item is removed again after discovery.
+       Debug always keeps them (DYSON_PREVIEW). Other files under Demo/ stay compiled. -->
+  <ItemGroup Condition="'$(DysonReleaseChannel)' == 'stable' AND '$(Configuration)' != 'Debug'">
+    <Content Remove="Components\Pages\Settings\DemoSettings.razor" />
+    <Content Remove="Components\Pages\Settings\DemoSettings.razor.css" />
+    <Content Remove="wwwroot\dyson-demo.js" />
+    <RazorComponent Remove="Components\Pages\Settings\DemoSettings.razor" />
+    <RazorGenerate Remove="Components\Pages\Settings\DemoSettings.razor" />
+    <None Remove="wwwroot\dyson-demo.js" />
+    <Compile Remove="Components\Pages\Settings\DemoSettings.razor" />
+    <Compile Remove="Demo\Scenarios\**\*.cs" />
+  </ItemGroup>
+
+  <Target Name="DropStableDemoScopedCss"
+          AfterTargets="ResolveScopedCssInputs"
+          BeforeTargets="ComputeCssScope"
+          Condition="'$(DysonReleaseChannel)' == 'stable' AND '$(Configuration)' != 'Debug'">
+    <ItemGroup>
+      <ScopedCssInput Remove="@(ScopedCssInput)"
+                      Condition="$([System.String]::Copy('%(Identity)').EndsWith('DemoSettings.razor.css'))" />
+    </ItemGroup>
+  </Target>
+
 </Project>

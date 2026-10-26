@@ -1,0 +1,43 @@
+@page "/settings/demo"
+@layout SettingsLayout
+@using Harness.UI.Demo
+@inject DysonDemoScenarioRunner Runner
+@implements IDisposable
+
+<PageTitle>Demo — Settings</PageTitle>
+
+<div class="settings-page">
+    <h1 class="settings-page__title">Demo</h1>
+    <p class="settings-page__copy">
+        Scripted Meta Agent sessions for local preview builds. Nothing here calls a model. Ctrl+J stops the running demo from any page.
+    </p>
+    @foreach (var scenario in DysonDemoScenarios.All)
+    {
+        <section class="demo-settings__card">
+            <h2 class="demo-settings__name">@scenario.DisplayName</h2>
+            <p class="demo-settings__description">@scenario.Description</p>
+            <button class="demo-settings__run" type="button" disabled="@Runner.IsRunning" @onclick="() => Run(scenario)">Run</button>
+        </section>
+    }
+    @if (Runner.IsRunning)
+    {
+        <p class="demo-settings__running">Demo running — Ctrl+J to stop</p>
+        <button class="demo-settings__stop" type="button" @onclick="Stop">Stop</button>
+    }
+    @if (!string.IsNullOrEmpty(Runner.LastError))
+    {
+        <p class="demo-settings__error">@Runner.LastError</p>
+    }
+</div>
+
+@code {
+    protected override void OnInitialized() => Runner.Changed += OnChanged;
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void Run(IDysonDemoScenario scenario) => Runner.Start(scenario);
+
+    private void Stop() => Runner.Cancel();
+
+    public void Dispose() => Runner.Changed -= OnChanged;
+}

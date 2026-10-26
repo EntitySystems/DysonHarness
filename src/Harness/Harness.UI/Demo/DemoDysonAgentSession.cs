@@ -192,6 +192,12 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         return Result<DemoDysonAgentSession, string>.AsValue(session);
     }
 
+    /// <summary>
+    /// Cancels the fire-and-forget demo echo <see cref="CreateChildAsync"/> starts.
+    /// Does not mark the child terminal. Demo scripting only.
+    /// </summary>
+    public void CancelDemoBackgroundRun() => CancelBackgroundRun();
+
     public override async Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
         string agentMode,
         string task,

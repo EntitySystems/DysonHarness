@@ -3687,6 +3687,19 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
+    /// Completed user+assistant turn, no provider. Demo scripting only.
+    /// Raises <see cref="TurnAdded"/> so host persistence and the chat feed work unchanged.
+    /// </summary>
+    public DysonAgentTurn AppendScriptedExchange(string userInstruction, string assistantText)
+    {
+        var turn = CreateNormalTurn(userInstruction);
+        turn.AssistantText = assistantText?.Trim() ?? "";
+        turn.FinishStreaming();
+        AddTurn(turn);
+        return turn;
+    }
+
+    /// <summary>
     /// Locks the DisplayInfo card for <paramref name="questionId"/>. Walks every turn, not only the latest.
     /// A second submit sees <see cref="DysonUserQuestion.Answer"/> and does not record again.
     /// </summary>
