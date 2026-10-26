@@ -44,7 +44,7 @@
     {
       "Path": "rules/rules_management_model.md",
       "Mode": "AutoInclude",
-      "Description": "grok-4.7 at high effort for every root Meta Agent StartAsyncMetaAgentDrone and BeginBuildPlan (management and authoring); omit still selects the Settings Meta Agent Drone default; workers, explores, and reviews inherit the parent model",
+      "Description": "claude-opus-5-5 high for complex tasks and planning, claude-sonnet-5-5 high for simple tasks, on every root Meta Agent StartAsyncMetaAgentDrone and BeginBuildPlan; omit still selects the Settings Meta Agent Drone default; workers, explores, and reviews inherit the parent model",
       "Providers": ["dyson"]
     },
     {
