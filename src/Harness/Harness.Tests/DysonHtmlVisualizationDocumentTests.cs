@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using DysonHarness;
 using Harness.UI.Demo;
 
@@ -30,5 +31,25 @@ public class DysonHtmlVisualizationDocumentTests
         {
             throw new InvalidOperationException("Visualization document isolation wrapper mismatch.");
         }
+    }
+
+    [Fact]
+    public void Create_EmitsTheSameNonceInCspAndInScriptAndStyle()
+    {
+        var document = DysonHtmlVisualizationDocument.Create(new DysonHtmlVisualization
+        {
+            Id = Guid.NewGuid(),
+            Title = "Nonce",
+            Html = "<p>n</p>",
+            Css = "p{}",
+            JavaScript = "1;",
+        });
+
+        var nonce = Regex.Match(document, "script-src 'nonce-([0-9a-f]{32})'").Groups[1].Value;
+        Assert.NotEmpty(nonce);
+        Assert.Contains($"style-src 'nonce-{nonce}'", document, StringComparison.Ordinal);
+        Assert.Contains($"<script nonce=\"{nonce}\">", document, StringComparison.Ordinal);
+        Assert.Contains($"style.nonce = '{nonce}';", document, StringComparison.Ordinal);
+        Assert.All(Regex.Matches(document, "[0-9a-f]{32}").Select(match => match.Value), value => Assert.Equal(nonce, value));
     }
 }
