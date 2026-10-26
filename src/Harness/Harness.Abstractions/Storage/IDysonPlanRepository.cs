@@ -35,7 +35,8 @@ public interface IDysonPlanRepository
         DysonPlanStatus status = DysonPlanStatus.Draft,
         string? note = null,
         Guid? buildAgentId = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        DateTime? createdUtc = null);
 
     /// <summary>
     /// Patch semantics (null argument = leave unchanged). Bumps <c>UpdatedUtc</c>.

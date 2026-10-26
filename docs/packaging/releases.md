@@ -54,6 +54,8 @@ Example: `2026.7.142`
 - `InformationalVersion` appends `+{shortSha}` (not in the zip filename)
 - Channel stamped as `-p:DysonReleaseChannel=stable|preview` (from the publishing branch)
 
+Preview features: `DYSON_PREVIEW` is defined for every project under `src/Harness` unless the build is not Debug and `-p:DysonReleaseChannel=stable` (`src/Harness/Directory.Build.props`). Debug builds define it even when the channel is stable, so local dev can run Settings → Demo. A Release build with the channel set to stable compiles out the demo page, its CSS, `wwwroot/dyson-demo.js`, `Harness.UI/Demo/Scenarios`, and the `DYSON_PREVIEW` symbol. `DysonPreviewFeatures` stays in the assembly with the flag false. The settings nav checks that flag, so the Demo link is not in the stable UI. The stable publish is the only one that passes that channel on a Release configuration.
+
 ### `version.json`
 
 `DysonHarness.UI.Windows` writes `version.json` next to `DysonHarness.exe` at build time (MSBuild target `GenerateVersionJson` → [`scripts/write-version-json.ps1`](../../scripts/write-version-json.ps1) / [`.sh`](../../scripts/write-version-json.sh), mirroring the `GenerateAppMode` pattern). It rides along in the publish folder → zip → MSI harvest. CI passes `-p:DysonReleaseChannel=…`; local builds leave the property empty and the script derives channel from `GITHUB_REF_NAME` / the current git branch (`master`/`main` → `stable`, `release-preview` → `preview`, else `preview`).

@@ -62,8 +62,17 @@ Local hosting (`DysonHostingMode` ≠ Cloud) enables `CircuitOptions.DetailedErr
 | `/settings/plugins` | `SettingsLayout` | Effective global + active-project installed-plugin management, including shadowing, inspection, enable/disable, protected variables, hook review, and uninstall data retention choice |
 | `/settings/agent-modes` | `SettingsLayout` | List of `DysonAgentModes.BuiltIns`; link to per-mode tool toggles |
 | `/settings/agent-modes/{Mode}` | `SettingsLayout` | Enable/disable MCP tools for one mode (`Uri.EscapeDataString` for spaces); persists denylist |
+| `/settings/demo` | `SettingsLayout` | Preview/Debug only (compiled unless `-p:DysonReleaseChannel=stable` on a non-Debug build). Scripted Meta Agent demo: "Planning + database sharding" for a fictional Aester Financials work directory. No model calls. Ctrl+J cancels from any page while it runs; the page shows Stop. Cleanup deletes the sandbox work dir, its sessions and plans, and returns to the previous work directory. |
 
 The `/meta/{WorkDirectoryId:guid}` page is live: chat, agent cards, and an interactive plans column (open + Build). `FileViewerOverlay` is mounted on this page.
+
+## Demo mode
+
+Settings → Demo (`/settings/demo`) is preview/Debug only. The script lives in `Harness.UI/Demo/Scenarios`. `IDysonDemoScenario` is the timeline; `IDysonDemoHooks` is the only surface that touches the host and engine (start a sandbox work directory, append scripted turns, plans, inert child agents, cleanup). One scenario ships: "Planning + database sharding" for a fictional Aester Financials work directory. It makes no model calls. The first user message is the plan request; the Meta Agent confirms it (restating the ask and saying a planning drone is starting) before the planning drone and its explores appear. Before that message the sandbox is seeded with earlier Aester plans (completed, stale, and archived, backdated) so the plans column looks lived-in; cleanup deletes them with the sandbox.
+
+Ctrl+J is bound by `wwwroot/dyson-demo.js` only while a demo is running, including after the script navigates to the Meta Agent page. The page's Stop button calls the same cancel. Cleanup runs on success and on cancel: it deletes the sandbox work directory, its sessions and plans, and returns to the previous work directory.
+
+A stable Release build (`-p:DysonReleaseChannel=stable` and not Debug) excludes `DemoSettings.razor`, its `.razor.css`, `dyson-demo.js`, and `Demo/Scenarios/*.cs`, and does not define `DYSON_PREVIEW`. The settings nav renders the Demo link only when `DysonPreviewFeatures.DemoModeEnabled` is true. The href is built in `@code` from two pieces, so the stable assembly does not contain the `/settings/demo` route string. `DysonPreviewFeatures` stays compiled so the flag can be asserted false. `DysonPreviewFeatures` stays compiled so the flag can be asserted false.
 
 ## Meta agent page
 

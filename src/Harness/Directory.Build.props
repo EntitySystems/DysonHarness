@@ -1,0 +1,5 @@
+<Project>
+  <PropertyGroup>
+    <DefineConstants Condition="'$(DysonReleaseChannel)' != 'stable' OR '$(Configuration)' == 'Debug'">$(DefineConstants);DYSON_PREVIEW</DefineConstants>
+  </PropertyGroup>
+</Project>
