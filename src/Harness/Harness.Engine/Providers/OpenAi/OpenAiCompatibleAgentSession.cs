@@ -680,6 +680,35 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         ArgumentNullException.ThrowIfNull(turn);
         ArgumentNullException.ThrowIfNull(filePaths);
 
+        // A child turn the host runs (report processing, queued continuations) has no KickOff CTS.
+        // Attach a linked one so StopSubagent / inject cancel it and liveness sees it as busy.
+        CancellationTokenSource? hostRunCts = null;
+        if (Parent is not null && !HasActiveBackgroundRun)
+        {
+            hostRunCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            AttachBackgroundRun(hostRunCts);
+            cancellationToken = hostRunCts.Token;
+        }
+
+        try
+        {
+            return await PromptWithTurnCoreAsync(turn, filePaths, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (hostRunCts is not null)
+            {
+                DetachBackgroundRun(hostRunCts);
+                hostRunCts.Dispose();
+            }
+        }
+    }
+
+    private async Task<VoidResult<string>> PromptWithTurnCoreAsync(
+        DysonAgentTurn turn,
+        IReadOnlyList<string> filePaths,
+        CancellationToken cancellationToken)
+    {
         _fallbackAppliedThisTurn = false;
         ApplyUiTheme(Config.UiTheme);
         var preserveReasoning = await RefreshPreserveReasoningTracesAsync(cancellationToken).ConfigureAwait(false);
