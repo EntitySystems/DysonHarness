@@ -703,6 +703,163 @@ public class DysonContextCompactionSmokeTests
     }
 
     [Fact]
+    public async Task TwoPausedTurns_ProduceOneSummaryAndOneContinuation()
+    {
+        using var http = new HttpClient(new ScriptedHandler([]));
+        var session = CreateSession(http, Path.GetTempPath());
+        var turns = TurnHistory(session);
+        var a = Normal("report processing");
+        var b = Normal("parent inject");
+        turns.Add(a);
+        turns.Add(b);
+
+        var calls = 0;
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<VoidResult<string>> RunSummary(DysonAgentTurn summary, CancellationToken _)
+        {
+            Interlocked.Increment(ref calls);
+            turns.Add(summary);
+            started.SetResult();
+            await release.Task;
+            return VoidResult<string>.Success;
+        }
+
+        var runA = DysonCompactionFlow.RunAsync(session, a, resume: true, RunSummary, CancellationToken.None);
+        await started.Task;
+        Assert.True(session.IsSummaryInFlight);
+        var runB = DysonCompactionFlow.RunAsync(session, b, resume: true, RunSummary, CancellationToken.None);
+        Assert.False(runB.IsCompleted);
+        Assert.Equal(1, calls);
+
+        release.SetResult();
+        var resultA = await runA;
+        var resultB = await runB;
+
+        Assert.True(resultA.IsSuccess, resultA.IsError ? resultA.Error : "");
+        Assert.True(resultB.IsSuccess, resultB.IsError ? resultB.Error : "");
+        Assert.Equal(1, calls);
+        Assert.Single(session.Turns, t => t.Kind == DysonAgentTurnKind.FullSummarize);
+        Assert.Contains(session.SnapshotLog(), l => l.Contains("summary already in flight", StringComparison.Ordinal));
+        Assert.True(session.TryDequeuePendingTurn(out var next));
+        Assert.True(DysonCompactionFlow.IsCompactionContinuation(next));
+        Assert.False(session.TryDequeuePendingTurn(out _));
+        Assert.False(session.IsSummaryInFlight);
+        Assert.False(session.IsCompactionPending);
+    }
+
+    [Fact]
+    public async Task AttachedPausedTurn_ResumesThroughOwnersContinuation()
+    {
+        using var http = new HttpClient(new ScriptedHandler([]));
+        var session = CreateSession(http, Path.GetTempPath());
+        var ended = Normal("ended over the limit");
+        var paused = Normal("paused");
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<VoidResult<string>> RunSummary(DysonAgentTurn _, CancellationToken __)
+        {
+            await release.Task;
+            return VoidResult<string>.Success;
+        }
+
+        // Owner did not pause (root, no continuation of its own); the attached caller did.
+        var owner = DysonCompactionFlow.RunAsync(session, ended, resume: false, RunSummary, CancellationToken.None);
+        var attached = DysonCompactionFlow.RunAsync(session, paused, resume: true, RunSummary, CancellationToken.None);
+        release.SetResult();
+        Assert.True((await owner).IsSuccess);
+        Assert.True((await attached).IsSuccess);
+
+        Assert.True(session.TryDequeuePendingTurn(out var next));
+        Assert.True(next.AfterSummaryResume);
+        Assert.False(session.TryDequeuePendingTurn(out _));
+    }
+
+    [Fact]
+    public async Task SummaryFailure_PropagatesToAttachedCaller()
+    {
+        using var http = new HttpClient(new ScriptedHandler([]));
+        var session = CreateSession(http, Path.GetTempPath());
+        var a = Normal("a");
+        var b = Normal("b");
+        var calls = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<VoidResult<string>> Fail(DysonAgentTurn _, CancellationToken __)
+        {
+            Interlocked.Increment(ref calls);
+            await release.Task;
+            return VoidResult<string>.AsError("provider down");
+        }
+
+        var runA = DysonCompactionFlow.RunAsync(session, a, resume: true, Fail, CancellationToken.None);
+        var runB = DysonCompactionFlow.RunAsync(session, b, resume: true, Fail, CancellationToken.None);
+        release.SetResult();
+        var resultA = await runA;
+        var resultB = await runB;
+
+        Assert.True(resultA.IsError);
+        Assert.True(resultB.IsError);
+        Assert.Same(resultA, resultB);
+        Assert.Contains("provider down", resultA.Error, StringComparison.Ordinal);
+        Assert.Equal(1, calls);
+        Assert.False(session.TryDequeuePendingTurn(out _));
+        Assert.True(session.IsCompactionPending);
+        Assert.False(session.IsSummaryInFlight);
+
+        var retried = await DysonCompactionFlow.RunAsync(
+            session,
+            endedTurn: null,
+            resume: false,
+            (_, _) => Task.FromResult(VoidResult<string>.Success),
+            CancellationToken.None);
+        Assert.True(retried.IsSuccess);
+        Assert.False(session.IsCompactionPending);
+    }
+
+    [Fact]
+    public void QueueFreshContinuation_DoesNotDuplicate()
+    {
+        using var http = new HttpClient(new ScriptedHandler([]));
+        var session = CreateSession(http, Path.GetTempPath());
+
+        DysonCompactionFlow.QueueFreshContinuationIfNeeded(session, resume: true);
+        DysonCompactionFlow.QueueFreshContinuationIfNeeded(session, resume: true);
+
+        Assert.True(session.TryDequeuePendingTurn(out var next));
+        Assert.True(DysonCompactionFlow.IsCompactionContinuation(next));
+        Assert.False(session.TryDequeuePendingTurn(out _));
+    }
+
+    [Fact]
+    public void TurnRanSince_SkipsAConcurrentTurnStillInFlight()
+    {
+        using var http = new HttpClient(new ScriptedHandler([]));
+        var session = CreateSession(http, Path.GetTempPath());
+        var turns = TurnHistory(session);
+        turns.Add(Normal("before"));
+        var before = session.Turns.Count;
+        var ran = Normal("ran");
+        var concurrent = Normal("still running");
+        turns.Add(ran);
+        turns.Add(concurrent);
+
+        using (session.BeginInFlightPrompt(concurrent))
+        {
+            Assert.True(session.TryGetTurnRanSince(before, out var last));
+            Assert.Same(ran, last);
+        }
+
+        Assert.True(session.TryGetTurnRanSince(before, out var newest));
+        Assert.Same(concurrent, newest);
+        Assert.True(session.TryGetTurnRanSince(session.Turns.Count, out var unchanged));
+        Assert.Same(concurrent, unchanged);
+    }
+
+    private static List<DysonAgentTurn> TurnHistory(DysonAgentSession session) =>
+        (List<DysonAgentTurn>)typeof(DysonAgentSession)
+            .GetProperty("TurnHistory", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(session)!;
+
+    [Fact]
     public void ContextLengthClassifier()
     {
         Assert.True(OpenAiCompatibleHttp.IsContextLengthError("OpenAI API 400 Bad Request: {\"code\":\"context_length_exceeded\"}"));

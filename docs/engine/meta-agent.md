@@ -234,7 +234,7 @@ The widened guard is harness-only. An agent's own second `SubmitSubagentReport` 
 
 Idle-without-report after two reminders **does** set `Failed` — that child was still `Active`.
 
-Stop cancels whatever run is live. KickOff runs carry a run CTS; a child turn the host runs (report processing, queued continuation) gets a linked CTS attached in `OpenAiCompatibleAgentSession.PromptWithTurnAsync`, so `HasActiveBackgroundRun` is true and `CancelBackgroundRun` reaches it. A drone resumed after a restart is `Active` again (inject / BeginBuildPlan reuse reopens `Interrupted`), so `TryMarkTerminal(Stopped)` succeeds instead of returning the stale `Interrupted` / `application restart`.
+Stop cancels whatever run is live. KickOff runs carry a run CTS; a child turn the host runs (report processing, queued continuation) gets a linked CTS attached in `OpenAiCompatibleAgentSession.PromptWithTurnAsync` (and the same in `DemoDysonAgentSession`), so `HasActiveBackgroundRun` is true and `CancelBackgroundRun` reaches it. A drone resumed after a restart is `Active` again (inject / BeginBuildPlan reuse reopens `Interrupted`), so `TryMarkTerminal(Stopped)` succeeds instead of returning the stale `Interrupted` / `application restart`.
 
 ### Recovery
 

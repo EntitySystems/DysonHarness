@@ -7622,12 +7622,13 @@ public sealed class DysonUiHost : IAsyncDisposable
 
             try
             {
+                var turnsBefore = session.Turns.Count;
                 var result = await run(session, token).ConfigureAwait(false);
                 if (result.IsError)
                     return result;
 
-                var last = session.Turns.Count > 0 ? session.Turns[^1] : null;
-                if (last is not null)
+                // The turn this prompt ran, not Turns[^1]: a concurrent child turn may be newer and still running.
+                if (session.TryGetTurnRanSince(turnsBefore, out var last))
                 {
                     // ShellExited: drop auto-read tail from Instruction before persist (transcript hygiene).
                     if (last.Kind == DysonAgentTurnKind.ShellExited)
@@ -7648,10 +7649,11 @@ public sealed class DysonUiHost : IAsyncDisposable
                         }
                     }
 
-                    // Persist every unfinished turn (PlanResult may append after the prompt turn).
-                    foreach (var turn in session.Turns)
+                    // Persist every unfinished turn (PlanResult may append after the prompt turn),
+                    // except one a concurrent prompt is still running.
+                    foreach (var turn in session.Turns.ToArray())
                     {
-                        if (turn.CompletedUtc is not null)
+                        if (turn.CompletedUtc is not null || session.IsTurnInFlight(turn.Id))
                             continue;
 
                         var complete = await PersistTurnCompletedAsync(session, turn, token)
@@ -7705,14 +7707,14 @@ public sealed class DysonUiHost : IAsyncDisposable
         Notify(DysonHostChangeKind.Busy);
         try
         {
+            var turnsBefore = session.Turns.Count;
             // Circuit/disposal tokens must not cancel a retained runtime prompt.
             var result = await runtime.ExecutePromptAsync(session, run, CancellationToken.None)
                 .ConfigureAwait(false);
             if (result.IsError)
                 return result;
 
-            var last = session.Turns.Count > 0 ? session.Turns[^1] : null;
-            if (last is not null)
+            if (session.TryGetTurnRanSince(turnsBefore, out var last))
             {
                 if (last.Kind == DysonAgentTurnKind.ShellExited)
                     DysonLongRunningShellExitedFlow.TrimInstructionAfterCompletion(last);

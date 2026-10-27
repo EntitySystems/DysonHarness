@@ -613,6 +613,35 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
     {
         ArgumentNullException.ThrowIfNull(turn);
 
+        // Same as OpenAiCompatibleAgentSession: a host-run child turn gets a linked run CTS so
+        // inject sees it as busy and StopSubagent cancels it.
+        CancellationTokenSource? hostRunCts = null;
+        if (Parent is not null && !HasActiveBackgroundRun)
+        {
+            hostRunCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            AttachBackgroundRun(hostRunCts);
+            cancellationToken = hostRunCts.Token;
+        }
+
+        try
+        {
+            return await PromptWithTurnCoreAsync(turn, promptForReply, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (hostRunCts is not null)
+            {
+                DetachBackgroundRun(hostRunCts);
+                hostRunCts.Dispose();
+            }
+        }
+    }
+
+    private async Task<VoidResult<string>> PromptWithTurnCoreAsync(
+        DysonAgentTurn turn,
+        string promptForReply,
+        CancellationToken cancellationToken)
+    {
         ApplyUiTheme(Config.UiTheme);
 
         await OptimizeContextIfEnabledAsync(cancellationToken).ConfigureAwait(false);
