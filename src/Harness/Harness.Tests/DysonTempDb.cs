@@ -91,6 +91,11 @@ internal static class DysonTempDb
         IDysonSubjectContext? subject = null) =>
         new(accessor, subject ?? DysonFixedLocalSubjectContext.Instance);
 
+    public static DysonMetaScratchFileRepository ScratchFiles(
+        DysonDbAccessor accessor,
+        IDysonSubjectContext? subject = null) =>
+        new(accessor, subject ?? DysonFixedLocalSubjectContext.Instance);
+
     public static DysonWorkDirectoryConfigurationRepository WorkDirectoryConfigurations(
         DysonDbAccessor accessor,
         IDysonSubjectContext? subject = null) =>

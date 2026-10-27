@@ -135,7 +135,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     private readonly IDysonPlanRepository? _plans;
     // ponytail: one hop per prompt; Explore recap shares this so a main-loop hop is not repeated
     private bool _fallbackAppliedThisTurn;
-    private Guid _pausedForCompactionTurnId;
+    // Per turn, not one field: two concurrent turns can both pause before either compacts.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> _pausedForCompactionTurnIds = new();
 
     public OpenAiCompatibleAgentSession(
         string agentMode,
@@ -756,6 +757,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         VoidResult<string> result,
         CancellationToken cancellationToken)
     {
+        var paused = _pausedForCompactionTurnIds.TryRemove(turn.Id, out _);
         if (result.IsError)
             return result;
 
@@ -766,7 +768,6 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             return result;
         }
 
-        var paused = _pausedForCompactionTurnId == turn.Id;
         if (!paused)
         {
             var limit = ResolveEffectiveMaxTargetContextTokens();
@@ -774,7 +775,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             var over = limit > 0 && live > limit;
             if (!DysonCompactionFlow.CanCompact(this, turn)
                 || !(over || IsCompactionPending)
-                || HasPendingTurnOfKind(DysonAgentTurnKind.FullSummarize))
+                || HasPendingTurnOfKind(DysonAgentTurnKind.FullSummarize)
+                || IsSummaryInFlight)
             {
                 return result;
             }
@@ -849,6 +851,18 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
                 async Task<Result<OpenAiModelReply, string>> ConsumeCurrentProviderRoundAsync()
                 {
+                    // Mid-turn model pick: this request resolves wire mode, chaining and limit from the new provider.
+                    if (ApplyPendingModelAtRequest(turn, inFlight))
+                    {
+                        previousResponseId = null;
+                        useResponses = string.Equals(
+                            OpenAiProvider.OpenAiApiMode,
+                            DysonOpenAiApiModes.Responses,
+                            StringComparison.Ordinal);
+                        supportsResponsesChaining = useResponses
+                            && OpenAiCompatibleHttp.SupportsResponsesServerChaining(OpenAiProvider);
+                    }
+
                     if (useResponses)
                     {
                         // Direct OpenAI: store+delta via previous_response_id when known.
@@ -1180,7 +1194,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         ApplyAssistantText(turn, DysonCompactionFlow.PausedNote);
         turn.FinishStreaming();
         turn.FinishReasoningStreaming();
-        _pausedForCompactionTurnId = turn.Id;
+        _pausedForCompactionTurnIds[turn.Id] = 0;
         return VoidResult<string>.Success;
     }
 
@@ -1199,6 +1213,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         async Task<Result<OpenAiModelReply, string>> ConsumeSummaryAsync()
         {
+            ApplyPendingModelAtRequest(summary, inFlight: null);
             if (string.Equals(OpenAiProvider.OpenAiApiMode, DysonOpenAiApiModes.Responses, StringComparison.Ordinal))
             {
                 await EnsureRemoteUrlsForVisionAsync([], cancellationToken).ConfigureAwait(false);
@@ -1328,6 +1343,14 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         async Task<Result<OpenAiModelReply, string>> ConsumeRecapAsync(bool recapUseResponses)
         {
+            if (ApplyPendingModelAtRequest(turn, inFlight))
+            {
+                recapUseResponses = string.Equals(
+                    OpenAiProvider.OpenAiApiMode,
+                    DysonOpenAiApiModes.Responses,
+                    StringComparison.Ordinal);
+            }
+
             if (recapUseResponses)
             {
                 await EnsureRemoteUrlsForVisionAsync(inFlight, cancellationToken)
@@ -1404,6 +1427,30 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         turn.FinishReasoningStreaming();
         AppendLog($"explore budget recap complete: {turn.AgentTitle ?? turn.Id.ToString("N")[..8]}");
         return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Provider-request boundary for a mid-turn <see cref="DysonAgentSession.SetModel"/> pick. True when the
+    /// provider changed. A new reasoning source drops this turn's stored reasoning blobs (in-flight rounds and
+    /// <see cref="DysonAgentTurn.ToolRoundReasoningItems"/>) so the new provider never gets foreign blobs.
+    /// </summary>
+    private bool ApplyPendingModelAtRequest(
+        DysonAgentTurn turn,
+        List<OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound>? inFlight)
+    {
+        var previousSource = OpenAiProvider.ReasoningSourceTag;
+        if (!ApplyPendingModel())
+            return false;
+
+        if (!string.Equals(previousSource, OpenAiProvider.ReasoningSourceTag, StringComparison.Ordinal))
+        {
+            for (var i = 0; i < (inFlight?.Count ?? 0); i++)
+                inFlight![i] = inFlight[i] with { ReasoningItems = null };
+            for (var i = 0; i < turn.ToolRoundReasoningItems.Count; i++)
+                turn.ToolRoundReasoningItems[i] = null;
+        }
+
+        return true;
     }
 
     private Task RecordUsageAsync(OpenAiModelReply reply, CancellationToken cancellationToken) =>

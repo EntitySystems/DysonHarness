@@ -1,0 +1,25 @@
+@namespace Harness.UI.Components.Chat
+@using DysonHarness
+@using Harness.UI.Demo
+
+<iframe class="@CssClass"
+        title="@Visualization.Title"
+        sandbox="allow-scripts"
+        referrerpolicy="no-referrer"
+        srcdoc="@_cache.Document"></iframe>
+
+@code {
+    // One cache per frame instance: parent renders never rebuild srcdoc, so the iframe document
+    // (sliders, running simulations) survives until this visualization's id or content changes.
+    private readonly DysonHtmlVisualizationSrcdocCache _cache = new();
+    private bool _render = true;
+
+    [Parameter, EditorRequired] public DysonHtmlVisualization Visualization { get; set; } = default!;
+    [Parameter] public string? CssClass { get; set; }
+
+    protected override void OnParametersSet() => _render = _cache.TryUpdate(Visualization);
+
+    protected override bool ShouldRender() => _render;
+
+    protected override void OnAfterRender(bool firstRender) => _render = false;
+}

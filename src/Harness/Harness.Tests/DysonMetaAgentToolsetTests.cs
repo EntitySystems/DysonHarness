@@ -71,6 +71,10 @@ public class DysonMetaAgentToolsetTests
         Assert.True(pipeline.Tools.ContainsKey("ReadMetaPlan"));
         Assert.True(pipeline.Tools.ContainsKey("EditMetaPlan"));
         Assert.True(pipeline.Tools.ContainsKey("SubmitMetaPlan"));
+        Assert.True(pipeline.Tools.ContainsKey("CreateMetaScratchFile"));
+        Assert.True(pipeline.Tools.ContainsKey("ReadMetaScratchFile"));
+        Assert.True(pipeline.Tools.ContainsKey("EditMetaScratchFile"));
+        Assert.True(pipeline.Tools.ContainsKey("DeleteMetaScratchFile"));
         Assert.True(pipeline.Tools.ContainsKey("ReadFile"));
         Assert.True(pipeline.Tools.ContainsKey("SubmitSubagentReport"));
         Assert.False(pipeline.Tools.ContainsKey("WriteTempFile"));

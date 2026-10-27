@@ -80,6 +80,39 @@ namespace Harness.LocalDb.Migrations
                     b.ToTable("configured_shells", (string)null);
                 });
 
+            modelBuilder.Entity("DysonHarness.DysonMetaScratchFileEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("SortIndex")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("WorkDirectoryId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("WorkDirectoryId", "SortIndex");
+
+                    b.ToTable("meta_scratch_files", (string)null);
+                });
+
             modelBuilder.Entity("DysonHarness.DysonModelFavoriteEntity", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1086,6 +1119,17 @@ namespace Harness.LocalDb.Migrations
                         .IsUnique();
 
                     b.ToTable("work_directories", (string)null);
+                });
+
+            modelBuilder.Entity("DysonHarness.DysonMetaScratchFileEntity", b =>
+                {
+                    b.HasOne("DysonHarness.DysonWorkDirectoryEntity", "WorkDirectory")
+                        .WithMany()
+                        .HasForeignKey("WorkDirectoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("WorkDirectory");
                 });
 
             modelBuilder.Entity("DysonHarness.DysonModelFavoriteEntity", b =>

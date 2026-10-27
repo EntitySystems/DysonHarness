@@ -1,0 +1,356 @@
+@namespace Harness.UI.Components.Meta
+@using System.Globalization
+@using DysonHarness
+@using Harness.UI.Demo
+@implements IDisposable
+@inject IDysonMetaScratchFileRepository Scratch
+@inject DysonUiHost Host
+@inject DysonMessageBus Bus
+
+<div class="meta-scratch-list">
+    <div class="sidebar__section-label meta-scratch-list__label">Scratch <span class="meta-scratch-list__count">@_files.Count</span></div>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="error-banner">@_error</div>
+    }
+
+    @if (_files.Count == 0 && string.IsNullOrEmpty(_error))
+    {
+        <div class="meta-scratch-list__empty">
+            <p class="meta-scratch-list__empty-title">No scratch files yet</p>
+        </div>
+    }
+    else if (_files.Count > 0)
+    {
+        <div class="meta-scratch-list__rows">
+            @for (var i = 0; i < _files.Count; i++)
+            {
+                var file = _files[i];
+                var index = i;
+                <div @key="file.Id"
+                     class="meta-scratch-row"
+                     role="button"
+                     tabindex="0"
+                     title="@($"{file.Title} — right-click to reorder or delete")"
+                     @onclick="() => OpenAsync(file)"
+                     @onkeydown="e => OnRowKeyDown(e, file, index)"
+                     @oncontextmenu="e => OnContextMenu(e, file)"
+                     @oncontextmenu:preventDefault="true"
+                     @oncontextmenu:stopPropagation="true">
+                    <div class="meta-scratch-row__title">
+                        @(string.IsNullOrWhiteSpace(file.Title) ? "Untitled" : file.Title)
+                    </div>
+                    <div class="meta-scratch-row__meta">
+                        <span class="meta-scratch-row__size">@FormatSize(file.ContentLength)</span>
+                        <span class="meta-scratch-row__time mono">@FormatRelative(file.UpdatedUtc)</span>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+<DysonTransition Item="_menuFile" ExitMs="90" RestoreFocus="true" OnEntered="FocusMenuBackdropAsync" Context="ctx">
+    <div class="meta-scratch-menu__backdrop"
+         tabindex="-1"
+         @ref="_menuBackdropEl"
+         @onclick="() => { if (!ctx.IsExiting) CloseMenu(); }"
+         @onkeydown="OnMenuBackdropKeyDown"></div>
+    <div class="meta-scratch-menu dyson-pop @ctx.StateClass"
+         role="menu"
+         aria-label="@(_confirmDelete ? "Confirm delete scratch file" : "Scratch file actions")"
+         style="left:@(_menuX.ToString(CultureInfo.InvariantCulture))px;top:@(_menuY.ToString(CultureInfo.InvariantCulture))px;--dyson-pop-origin:top left;"
+         @onclick:stopPropagation="true">
+        @if (_confirmDelete && ctx.Item is { } pending)
+        {
+            <p class="meta-scratch-menu__confirm">Delete “@pending.Title”? This cannot be undone.</p>
+            <button type="button"
+                    class="meta-scratch-menu__item meta-scratch-menu__item--danger"
+                    role="menuitem"
+                    disabled="@(ctx.IsExiting || _busy)"
+                    @onclick="() => DeleteAsync(pending)">
+                Delete
+            </button>
+            <button type="button"
+                    class="meta-scratch-menu__item"
+                    role="menuitem"
+                    disabled="@ctx.IsExiting"
+                    @onclick="CloseMenu">
+                Cancel
+            </button>
+        }
+        else if (ctx.Item is { } file)
+        {
+            var index = IndexOf(file.Id);
+            var first = index <= 0;
+            var last = index < 0 || index >= _files.Count - 1;
+            <button type="button"
+                    class="meta-scratch-menu__item"
+                    role="menuitem"
+                    disabled="@(ctx.IsExiting || _busy || first)"
+                    @onclick="() => MoveAsync(file, 0)">
+                Move to top
+            </button>
+            <button type="button"
+                    class="meta-scratch-menu__item"
+                    role="menuitem"
+                    disabled="@(ctx.IsExiting || _busy || first)"
+                    @onclick="() => MoveAsync(file, index - 1)">
+                Move up
+            </button>
+            <button type="button"
+                    class="meta-scratch-menu__item"
+                    role="menuitem"
+                    disabled="@(ctx.IsExiting || _busy || last)"
+                    @onclick="() => MoveAsync(file, index + 1)">
+                Move down
+            </button>
+            <button type="button"
+                    class="meta-scratch-menu__item meta-scratch-menu__item--danger"
+                    role="menuitem"
+                    disabled="@(ctx.IsExiting || _busy)"
+                    @onclick="AskDelete">
+                Delete…
+            </button>
+        }
+    </div>
+</DysonTransition>
+
+@code {
+    [Parameter] public Guid WorkDirectoryId { get; set; }
+
+    private IReadOnlyList<DysonMetaScratchFile> _files = [];
+    private DysonMetaScratchFile? _menuFile;
+    private bool _confirmDelete;
+    private double _menuX;
+    private double _menuY;
+    private ElementReference _menuBackdropEl;
+    private string? _error;
+    private bool _busy;
+    private Guid? _subscribedWorkDirectoryId;
+    private IDisposable? _sub;
+
+    protected override void OnParametersSet()
+    {
+        if (WorkDirectoryId == _subscribedWorkDirectoryId)
+            return;
+
+        DisposeSubscription();
+        _subscribedWorkDirectoryId = WorkDirectoryId;
+        SubscribeIfNeeded();
+    }
+
+    protected override Task OnParametersSetAsync() => RefreshAsync();
+
+    public async Task RefreshAsync()
+    {
+        _error = null;
+        if (WorkDirectoryId == Guid.Empty)
+        {
+            _files = [];
+            return;
+        }
+
+        var list = await Scratch.ListAsync(WorkDirectoryId);
+        if (list.IsError)
+        {
+            _error = list.Error;
+            return;
+        }
+
+        _files = list.Value;
+    }
+
+    private void SubscribeIfNeeded()
+    {
+        if (WorkDirectoryId == Guid.Empty)
+            return;
+
+        var sub = Bus.Subscribe<DysonMetaScratchFilesChangedEvent>(
+            DysonBusScopes.WorkDirectory(WorkDirectoryId),
+            OnScratchChanged);
+        if (sub.IsSuccess)
+            _sub = sub.Value;
+    }
+
+    private void OnScratchChanged(DysonMetaScratchFilesChangedEvent evt) => _ = InvokeAsync(async () =>
+    {
+        if (evt.WorkDirectoryId != WorkDirectoryId)
+            return;
+
+        await RefreshAsync();
+        StateHasChanged();
+    });
+
+    private void DisposeSubscription()
+    {
+        _sub?.Dispose();
+        _sub = null;
+    }
+
+    public void Dispose() => DisposeSubscription();
+
+    private Task OnRowKeyDown(KeyboardEventArgs e, DysonMetaScratchFile file, int index)
+    {
+        if (e.Key == "Enter")
+            return OpenAsync(file);
+
+        if (!e.AltKey)
+            return Task.CompletedTask;
+
+        if (e.Key == "ArrowUp")
+            return index > 0 ? MoveAsync(file, index - 1) : Task.CompletedTask;
+
+        if (e.Key == "ArrowDown")
+            return index < _files.Count - 1 ? MoveAsync(file, index + 1) : Task.CompletedTask;
+
+        return Task.CompletedTask;
+    }
+
+    private async Task OpenAsync(DysonMetaScratchFile file)
+    {
+        if (_busy)
+            return;
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var opened = await Host.OpenMetaScratchFileAsync(file.Id, WorkDirectoryId);
+            if (opened.IsError)
+                _error = opened.Error;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void OnContextMenu(MouseEventArgs e, DysonMetaScratchFile file)
+    {
+        _menuX = e.ClientX;
+        _menuY = e.ClientY;
+        _confirmDelete = false;
+        _menuFile = file;
+    }
+
+    private void CloseMenu()
+    {
+        _confirmDelete = false;
+        _menuFile = null;
+    }
+
+    private void AskDelete() => _confirmDelete = true;
+
+    private void OnMenuBackdropKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            CloseMenu();
+    }
+
+    /// <summary>Escape is handled on the backdrop, so focus has to land there when the menu opens.</summary>
+    private async Task FocusMenuBackdropAsync()
+    {
+        try
+        {
+            await _menuBackdropEl.FocusAsync();
+        }
+        catch
+        {
+            // Menu may already be gone.
+        }
+    }
+
+    private int IndexOf(long id)
+    {
+        for (var i = 0; i < _files.Count; i++)
+        {
+            if (_files[i].Id == id)
+                return i;
+        }
+
+        return -1;
+    }
+
+    /// <summary>Move, then publish; the scratch-changed subscriber refreshes the list.</summary>
+    private async Task MoveAsync(DysonMetaScratchFile file, int toPosition)
+    {
+        CloseMenu();
+        if (_busy)
+            return;
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var moved = await Scratch.MoveAsync(file.Id, WorkDirectoryId, toPosition);
+            if (moved.IsError)
+            {
+                _error = moved.Error;
+                return;
+            }
+
+            PublishChanged(file.Id);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>Hard delete (no archive). Confirm happens in the menu before this runs.</summary>
+    private async Task DeleteAsync(DysonMetaScratchFile file)
+    {
+        CloseMenu();
+        if (_busy)
+            return;
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var deleted = await Scratch.DeleteAsync(file.Id, WorkDirectoryId);
+            if (deleted.IsError)
+            {
+                _error = deleted.Error;
+                return;
+            }
+
+            PublishChanged(file.Id);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void PublishChanged(long id) =>
+        Bus.Publish(
+            DysonBusScopes.WorkDirectory(WorkDirectoryId),
+            new DysonMetaScratchFilesChangedEvent(WorkDirectoryId, id));
+
+    private static string FormatSize(int chars)
+    {
+        if (chars < 1000)
+            return $"{chars} chars";
+
+        var kilo = chars / 1000d;
+        return kilo >= 100
+            ? $"{kilo:0}K chars"
+            : $"{kilo:0.0}K chars";
+    }
+
+    private static string FormatRelative(DateTime utc)
+    {
+        var when = utc.Kind == DateTimeKind.Unspecified
+            ? DateTime.SpecifyKind(utc, DateTimeKind.Utc)
+            : utc.ToUniversalTime();
+        var elapsed = DateTime.UtcNow - when;
+        if (elapsed.TotalSeconds < 45) return "just now";
+        if (elapsed.TotalMinutes < 60) return $"{Math.Max(1, (int)elapsed.TotalMinutes)}m ago";
+        if (elapsed.TotalHours < 24) return $"{(int)elapsed.TotalHours}h ago";
+        if (elapsed.TotalDays < 7) return $"{(int)elapsed.TotalDays}d ago";
+        return when.ToLocalTime().ToString("d");
+    }
+}

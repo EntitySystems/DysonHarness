@@ -28,6 +28,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly IDysonWorkDirectoryRepository _workDirectories;
     private readonly IDysonWorkDirectoryConfigurationRepository _workDirectoryConfigurations;
     private readonly IDysonPlanRepository _plans;
+    private readonly IDysonMetaScratchFileRepository? _scratchFiles;
     private readonly IDysonSubjectSettingsRepository _appSettings;
     private readonly IDysonConfiguredShellRepository _configuredShells;
     private readonly DysonCliProxyHost _cliProxy;
@@ -53,8 +54,6 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly ConcurrentDictionary<Guid, byte> _busySessions = new();
     private readonly ConcurrentDictionary<Guid, byte> _runtimeOwnedSessionIds = new();
     private readonly ConcurrentDictionary<DysonAgentSession, byte> _runtimeOwnedSessions = new();
-    /// <summary>Model slug to apply after the in-flight prompt finishes (keyed by PersistenceId).</summary>
-    private readonly ConcurrentDictionary<Guid, Guid?> _pendingSessionModelSlugIds = new();
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _promptGates = new();
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _promptCtsBySession = new();
     private readonly Dictionary<Guid, List<QueuedPromptEntry>> _promptQueues = new();
@@ -148,7 +147,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         IDysonUsageAnalyticsRepository? usageAnalytics = null,
         DysonMessageBus? bus = null,
         DysonSessionEventPublisher? sessionEvents = null,
-        FileStorageConnectService? fileStorageConnect = null)
+        FileStorageConnectService? fileStorageConnect = null,
+        IDysonMetaScratchFileRepository? scratchFiles = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -156,6 +156,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _workDirectoryConfigurations = workDirectoryConfigurations
             ?? throw new ArgumentNullException(nameof(workDirectoryConfigurations));
         _plans = plans ?? throw new ArgumentNullException(nameof(plans));
+        _scratchFiles = scratchFiles;
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         _configuredShells = configuredShells ?? throw new ArgumentNullException(nameof(configuredShells));
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -790,7 +791,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// Null/empty = omit from requests.
     /// </summary>
     public string? SessionReasoningEffort =>
-        _session?.Provider switch
+        _session?.SelectedProvider switch
         {
             OpenAiCompatibleAgentProvider oai => oai.ReasoningEffort,
             DemoDysonAgentProvider demo => demo.ReasoningEffort,
@@ -2257,6 +2258,39 @@ public sealed class DysonUiHost : IAsyncDisposable
         return VoidResult<string>.Success;
     }
 
+    /// <summary>
+    /// Opens a DB-backed meta scratch file in the file viewer (no disk read, no actions).
+    /// Display path is <c>metascratch:{id}/{slug}.md</c>.
+    /// </summary>
+    public async Task<VoidResult<string>> OpenMetaScratchFileAsync(
+        long id,
+        Guid workDirectoryId,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+        if (_scratchFiles is null)
+        {
+            const string error = "Scratch files are not available in this session (no database).";
+            LastError = error;
+            Notify(DysonHostChangeKind.Error);
+            return VoidResult<string>.AsError(error);
+        }
+
+        var loaded = await _scratchFiles.GetAsync(id, workDirectoryId, cancellationToken).ConfigureAwait(true);
+        if (loaded.IsError)
+        {
+            LastError = loaded.Error;
+            Notify(DysonHostChangeKind.Error);
+            return VoidResult<string>.AsError(loaded.Error);
+        }
+
+        var file = loaded.Value;
+        var path = DysonMetaScratchDisplayPath.Format(file.Id, file.Title);
+        await OpenFileViewerContentAsync(path, file.Content ?? "", actions: null, cancellationToken)
+            .ConfigureAwait(true);
+        return VoidResult<string>.Success;
+    }
+
     private bool HasMetaAgentRuntime =>
         _session is { } session
         && session.PersistenceId != Guid.Empty
@@ -3509,6 +3543,18 @@ public sealed class DysonUiHost : IAsyncDisposable
                     ? Result<string, string>.AsError(opened.Error)
                     : Result<string, string>.AsValue("");
             }
+            case DysonBuiltInConversationKind.OpenScratch:
+            {
+                var workDirectoryId = SessionWorkDirectoryId(session);
+                if (workDirectoryId == Guid.Empty)
+                    return Result<string, string>.AsError("Work directory id is required.");
+
+                var opened = await OpenMetaScratchFileAsync(intent.PlanId, workDirectoryId, cancellationToken)
+                    .ConfigureAwait(true);
+                return opened.IsError
+                    ? Result<string, string>.AsError(opened.Error)
+                    : Result<string, string>.AsValue("");
+            }
             case DysonBuiltInConversationKind.OpenFile:
                 await OpenFileViewerAsync(intent.PathOrUrl ?? "", cancellationToken).ConfigureAwait(true);
                 return Result<string, string>.AsValue("");
@@ -3806,8 +3852,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     /// <summary>
     /// Apply a model slug to the focused session (same provider kind only).
     /// Resets session reasoning effort to the slug's default.
-    /// Same live slug is a no-op (no provider swap, effort reset, persist, or busy stash).
-    /// While busy, validates and stashes the slug for apply after the turn finishes.
+    /// Same selected slug is a no-op (no provider swap, effort reset, or persist).
+    /// Persists at once; while a turn runs the engine applies it at that turn's next provider request.
     /// With no session, preference is caller-owned (<c>_selectedSlugId</c>); updates pending effort to slug default.
     /// </summary>
     public async Task<VoidResult<string>> SetSessionModelSlugAsync(
@@ -3854,46 +3900,14 @@ public sealed class DysonUiHost : IAsyncDisposable
             return VoidResult<string>.Success;
         }
 
-        // Leftover picker callbacks re-apply the current slug; do not swap or stash a no-op.
-        if (SessionProviderSlugId(_session.Provider) == modelSlugId)
-        {
-            Notify(DysonHostChangeKind.Catalogs);
-            return VoidResult<string>.Success;
-        }
-
-        if (IsBusy)
-        {
-            var deferred = await ResolveProviderAsync(modelSlugId, reasoningEffort: null, cancellationToken)
-                .ConfigureAwait(false);
-            if (deferred.IsError)
-            {
-                LastError = deferred.Error;
-                Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
-                return new VoidResult<string>(deferred.Error);
-            }
-
-            var busyCurrentKind = SessionProviderKind(_session.Provider);
-            var busyNextKind = deferred.Value.Kind;
-            if (!string.Equals(busyCurrentKind, busyNextKind, StringComparison.Ordinal))
-            {
-                LastError = "Start a new session to switch provider kind";
-                Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
-                return new VoidResult<string>(LastError);
-            }
-
-            _pendingSessionModelSlugIds[_session.PersistenceId] = modelSlugId;
-            Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
-            return VoidResult<string>.Success;
-        }
-
         return await ApplySessionModelSlugCoreAsync(_session, modelSlugId, cancellationToken)
             .ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Resolve + same-kind check + swap <see cref="DysonAgentSession.Provider"/> + persist.
-    /// Same live slug is a no-op (including flush of a leftover pending).
-    /// Does not mutate Provider mid-turn; callers must only invoke when the session is idle.
+    /// Resolve + same-kind check + <see cref="DysonAgentSession.SetModel"/> + persist. Busy or idle: the engine
+    /// applies a mid-turn pick at the next provider request of the running turn.
+    /// Re-picking the current selection is a no-op.
     /// </summary>
     private async Task<VoidResult<string>> ApplySessionModelSlugCoreAsync(
         DysonAgentSession session,
@@ -3902,7 +3916,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(session);
 
-        if (SessionProviderSlugId(session.Provider) == modelSlugId)
+        // Leftover picker callbacks re-apply the current slug; do not swap or reset effort.
+        if (SessionProviderSlugId(session.SelectedProvider) == modelSlugId)
         {
             Notify(DysonHostChangeKind.Catalogs);
             return VoidResult<string>.Success;
@@ -3918,7 +3933,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>(providerResult.Error);
         }
 
-        var currentKind = SessionProviderKind(session.Provider);
+        var currentKind = SessionProviderKind(session.SelectedProvider);
         var nextKind = providerResult.Value.Kind;
         if (!string.Equals(currentKind, nextKind, StringComparison.Ordinal))
         {
@@ -3931,8 +3946,6 @@ public sealed class DysonUiHost : IAsyncDisposable
             string.Equals(nextKind, DysonProviderKinds.OpenAICompatible, StringComparison.Ordinal)
                 ? providerResult.Value.OpenAi!
                 : providerResult.Value.Demo!;
-
-        session.Provider = nextProvider;
 
         Guid? slugId = nextProvider switch
         {
@@ -3948,12 +3961,18 @@ public sealed class DysonUiHost : IAsyncDisposable
             _ => null,
         };
 
-        session.SlugDefaultMaxTargetContextTokens = nextProvider switch
+        var switched = session.SetModel(nextProvider, nextProvider switch
         {
             OpenAiCompatibleAgentProvider oai => oai.DefaultMaxTargetContextTokens,
             DemoDysonAgentProvider demo => demo.DefaultMaxTargetContextTokens,
             _ => null,
-        };
+        });
+        if (switched.IsError)
+        {
+            LastError = switched.Error;
+            Notify(DysonHostChangeKind.Catalogs | DysonHostChangeKind.Error);
+            return switched;
+        }
 
         if (session.PersistenceId != Guid.Empty)
         {
@@ -4041,41 +4060,10 @@ public sealed class DysonUiHost : IAsyncDisposable
         return new VoidResult<string>(message);
     }
 
-    /// <summary>
-    /// Apply a stashed model slug for <paramref name="sessionId"/> (if any) onto the finished
-    /// session before queued prompts drain.
-    /// </summary>
-    private async Task FlushPendingSessionModelSlugAsync(
-        Guid sessionId,
-        DysonAgentSession finishedSession,
-        CancellationToken cancellationToken)
-    {
-        if (!_pendingSessionModelSlugIds.TryRemove(sessionId, out var pendingSlugId))
-            return;
-
-        if (!_sessionsById.TryGetValue(sessionId, out var session))
-            session = finishedSession;
-
-        var result = await ApplySessionModelSlugCoreAsync(session, pendingSlugId, cancellationToken)
-            .ConfigureAwait(false);
-        if (result.IsError && ActiveSessionId == sessionId)
-            LastError = result.Error;
-    }
-
-    // ponytail: test hooks — busy stash + flush without running a full prompt turn.
+    // ponytail: test hooks — host busy flag without running a full prompt turn.
     internal void MarkSessionBusyForTests(Guid sessionId) => _busySessions[sessionId] = 0;
 
     internal void ClearSessionBusyForTests(Guid sessionId) => _busySessions.TryRemove(sessionId, out _);
-
-    internal Task FlushPendingSessionModelSlugForTestsAsync(
-        Guid sessionId,
-        CancellationToken cancellationToken = default)
-    {
-        if (_session is null || _session.PersistenceId != sessionId)
-            return Task.CompletedTask;
-
-        return FlushPendingSessionModelSlugAsync(sessionId, _session, cancellationToken);
-    }
 
     /// <summary>
     /// Session-scoped reasoning_effort override (does not change the slug default).
@@ -5500,6 +5488,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             BrowserControl = _browserControl,
             Bus = Bus,
+            MetaScratchFiles = _scratchFiles,
             PluginContributions = contributions,
             UiTheme = resolvedUiTheme,
             AppSettings = _appSettings,
@@ -6299,7 +6288,6 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pendingReportsByParent.TryRemove(persistenceId, out _);
         _userStopGeneration.TryRemove(persistenceId, out _);
         _busySessions.TryRemove(persistenceId, out _);
-        _pendingSessionModelSlugIds.TryRemove(persistenceId, out _);
         _parentSessionIdByChild.TryRemove(persistenceId, out _);
 
         if (_autoTurnGates.TryRemove(persistenceId, out var gate))
@@ -6396,7 +6384,6 @@ public sealed class DysonUiHost : IAsyncDisposable
         _pendingReportsByParent.Clear();
         _userStopGeneration.Clear();
         _busySessions.Clear();
-        _pendingSessionModelSlugIds.Clear();
         _lastTaskLifecycleActionBySession.Clear();
         foreach (var gate in _taskLifecycleGates.Values)
             gate.Dispose();
@@ -7635,12 +7622,13 @@ public sealed class DysonUiHost : IAsyncDisposable
 
             try
             {
+                var turnsBefore = session.Turns.Count;
                 var result = await run(session, token).ConfigureAwait(false);
                 if (result.IsError)
                     return result;
 
-                var last = session.Turns.Count > 0 ? session.Turns[^1] : null;
-                if (last is not null)
+                // The turn this prompt ran, not Turns[^1]: a concurrent child turn may be newer and still running.
+                if (session.TryGetTurnRanSince(turnsBefore, out var last))
                 {
                     // ShellExited: drop auto-read tail from Instruction before persist (transcript hygiene).
                     if (last.Kind == DysonAgentTurnKind.ShellExited)
@@ -7661,10 +7649,11 @@ public sealed class DysonUiHost : IAsyncDisposable
                         }
                     }
 
-                    // Persist every unfinished turn (PlanResult may append after the prompt turn).
-                    foreach (var turn in session.Turns)
+                    // Persist every unfinished turn (PlanResult may append after the prompt turn),
+                    // except one a concurrent prompt is still running.
+                    foreach (var turn in session.Turns.ToArray())
                     {
-                        if (turn.CompletedUtc is not null)
+                        if (turn.CompletedUtc is not null || session.IsTurnInFlight(turn.Id))
                             continue;
 
                         var complete = await PersistTurnCompletedAsync(session, turn, token)
@@ -7701,10 +7690,6 @@ public sealed class DysonUiHost : IAsyncDisposable
 
             linked.Dispose();
 
-            // Apply deferred model switch before draining so the next (queued) prompt sees it.
-            await FlushPendingSessionModelSlugAsync(sessionId, session, CancellationToken.None)
-                .ConfigureAwait(false);
-
             _ = DrainAutoTurnsAsync(sessionId);
             _ = DrainQueuedPromptsAsync(sessionId);
         }
@@ -7722,14 +7707,14 @@ public sealed class DysonUiHost : IAsyncDisposable
         Notify(DysonHostChangeKind.Busy);
         try
         {
+            var turnsBefore = session.Turns.Count;
             // Circuit/disposal tokens must not cancel a retained runtime prompt.
             var result = await runtime.ExecutePromptAsync(session, run, CancellationToken.None)
                 .ConfigureAwait(false);
             if (result.IsError)
                 return result;
 
-            var last = session.Turns.Count > 0 ? session.Turns[^1] : null;
-            if (last is not null)
+            if (session.TryGetTurnRanSince(turnsBefore, out var last))
             {
                 if (last.Kind == DysonAgentTurnKind.ShellExited)
                     DysonLongRunningShellExitedFlow.TrimInstructionAfterCompletion(last);
@@ -7744,9 +7729,6 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             if (!_disposed)
             {
-                await FlushPendingSessionModelSlugAsync(sessionId, session, CancellationToken.None)
-                    .ConfigureAwait(false);
-
                 _ = DrainAutoTurnsAsync(sessionId);
                 _ = DrainQueuedPromptsAsync(sessionId);
             }

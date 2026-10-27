@@ -9,17 +9,20 @@ internal sealed class DysonPlanToolFixture : IAsyncDisposable
     private DysonPlanToolFixture(
         SqliteConnection connection,
         DysonPlanRepository plans,
+        DysonMetaScratchFileRepository scratchFiles,
         Guid workDirectoryId,
         Guid otherWorkDirectoryId)
     {
         Connection = connection;
         Plans = plans;
+        ScratchFiles = scratchFiles;
         WorkDirectoryId = workDirectoryId;
         OtherWorkDirectoryId = otherWorkDirectoryId;
     }
 
     public SqliteConnection Connection { get; }
     public DysonPlanRepository Plans { get; }
+    public DysonMetaScratchFileRepository ScratchFiles { get; }
     public Guid WorkDirectoryId { get; }
     public Guid OtherWorkDirectoryId { get; }
 
@@ -28,21 +31,25 @@ internal sealed class DysonPlanToolFixture : IAsyncDisposable
         var accessor = DysonTempDb.OpenMemoryAccessor(out var connection);
         var subject = DysonTempDb.Subject();
         var plans = DysonTempDb.Plans(accessor, subject);
+        var scratchFiles = DysonTempDb.ScratchFiles(accessor, subject);
         var wd = await SeedWorkDirectoryAsync(accessor, subject.SubjectId);
         var other = await SeedWorkDirectoryAsync(accessor, subject.SubjectId);
-        return new DysonPlanToolFixture(connection, plans, wd, other);
+        return new DysonPlanToolFixture(connection, plans, scratchFiles, wd, other);
     }
 
     public Task<DysonWorkspaceToolExecutor> ExecutorAsync(
         DysonAgentSession session,
         HttpClient http,
-        Guid? workDirectoryId = null) =>
-        DysonWorkspaceTestFs.CreateExecutorAsync(
+        Guid? workDirectoryId = null)
+    {
+        session.Config.MetaScratchFiles = ScratchFiles;
+        return DysonWorkspaceTestFs.CreateExecutorAsync(
             session,
             Path.GetTempPath(),
             http,
             workDirectoryId: workDirectoryId ?? WorkDirectoryId,
             plans: Plans);
+    }
 
     public async Task<long> CreatePlanAsync(
         string title = "A plan",

@@ -71,7 +71,8 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
     DysonMessageBus? bus = null,
     DysonWorkDirectoryFocus? focus = null,
     DysonVoiceMode? voice = null,
-    IDysonBrowserControl? browserControl = null)
+    IDysonBrowserControl? browserControl = null,
+    IDysonMetaScratchFileRepository? scratchFiles = null)
 {
     private readonly IDysonWorkDirectoryRepository _workDirectories =
         workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
@@ -92,6 +93,7 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
     private readonly DysonPluginMcpResolver _pluginMcpResolver =
         pluginMcpResolver ?? throw new ArgumentNullException(nameof(pluginMcpResolver));
     private readonly DysonMessageBus? _bus = bus;
+    private readonly IDysonMetaScratchFileRepository? _scratchFiles = scratchFiles;
 
     public async Task<Result<DysonUiAgentSessionRuntimeConfigLease, string>> BuildAsync(
         DysonUiAgentSessionRuntimeConfigRequest request,
@@ -124,6 +126,7 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
             PluginContributions = contributions,
             UiTheme = request.Theme,
             Bus = _bus,
+            MetaScratchFiles = _scratchFiles,
             Focus = focus,
             AppSettings = _appSettings,
         };

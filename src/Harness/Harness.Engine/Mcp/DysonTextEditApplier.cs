@@ -56,8 +56,8 @@ public static class DysonTextEditApplier
 
     /// <summary>
     /// Applies <paramref name="edits"/> in order, each to the text the previous edit produced.
-    /// All-or-nothing: the first failure returns its index and no content. WriteFile, UpdateNote and
-    /// EditMetaPlan share this so match rules and error wording stay identical.
+    /// All-or-nothing: the first failure returns its index and no content. WriteFile, UpdateNote,
+    /// EditMetaPlan and EditMetaScratchFile share this so match rules and error wording stay identical.
     /// </summary>
     public static Result<BatchSuccess, BatchFailure> TryApplyEdits(string content, IReadOnlyList<Edit> edits)
     {

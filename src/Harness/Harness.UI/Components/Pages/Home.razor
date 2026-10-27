@@ -367,9 +367,9 @@
 
     private void SyncSelectedSlugFromSession()
     {
-        if (Host.Session?.Provider is OpenAiCompatibleAgentProvider oai)
+        if (Host.Session?.SelectedProvider is OpenAiCompatibleAgentProvider oai)
             _selectedSlugId = oai.SlugId;
-        else if (Host.Session?.Provider is DemoDysonAgentProvider demo)
+        else if (Host.Session?.SelectedProvider is DemoDysonAgentProvider demo)
             _selectedSlugId = demo.SlugId;
     }
 
