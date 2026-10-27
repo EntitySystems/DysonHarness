@@ -54,3 +54,7 @@ public sealed record DysonGitRepoChangedEvent(Guid WorkDirectoryId, string RepoR
 
 public sealed record DysonPlansChangedEvent(Guid WorkDirectoryId, long PlanId)
     : IDysonMessageBusEvent;
+
+/// <summary>A Meta scratch file was created, edited, deleted, or moved. Carries no body.</summary>
+public sealed record DysonMetaScratchFilesChangedEvent(Guid WorkDirectoryId, long ScratchFileId)
+    : IDysonMessageBusEvent;

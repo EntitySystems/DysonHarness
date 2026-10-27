@@ -7,6 +7,9 @@ public sealed class DysonSessionRepository(
     DysonDbAccessor accessor,
     IDysonSubjectContext subjectContext) : IDysonSessionRepository
 {
+
+    public const string TodoLimitMessage =
+        "Todo limit reached (50/50). Remove todos that are no longer relevant with RemoveTodos (check updatedUtc in ListTodos) before adding a new one.";
     private static readonly JsonSerializerOptions TodoJsonOptions = new();
 
     private readonly DysonDbAccessor _accessor = accessor ?? throw new ArgumentNullException(nameof(accessor));
@@ -798,33 +801,7 @@ public sealed class DysonSessionRepository(
                     "Merge or delete this session's worktree before deleting the session.");
             }
 
-            var ordered = new List<Guid>();
-            var pending = new Queue<Guid>();
-            pending.Enqueue(sessionId);
-            while (pending.Count > 0)
-            {
-                var id = pending.Dequeue();
-                ordered.Add(id);
-                var childIds = await db.Sessions
-                    .Where(s => s.ParentSessionId == id && s.SubjectId == subjectId)
-                    .Select(s => s.Id)
-                    .ToListAsync(cancellationToken)
-                    .ConfigureAwait(false);
-                foreach (var childId in childIds)
-                    pending.Enqueue(childId);
-            }
-
-            for (var i = ordered.Count - 1; i >= 0; i--)
-            {
-                var entity = i == 0
-                    ? root
-                    : await db.Sessions
-                        .FirstOrDefaultAsync(s => s.Id == ordered[i] && s.SubjectId == subjectId, cancellationToken)
-                        .ConfigureAwait(false);
-                if (entity is not null)
-                    db.Sessions.Remove(entity);
-            }
-
+            await RemoveSessionTreeAsync(db, subjectId, sessionId, cancellationToken).ConfigureAwait(false);
             await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;
         }
@@ -832,6 +809,46 @@ public sealed class DysonSessionRepository(
         {
             return new VoidResult<string>($"Failed to delete session: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Collects <paramref name="rootId"/> and its descendants (BFS) and marks them removed
+    /// deepest-first on <paramref name="db"/> without saving; <c>ParentSessionId</c> is
+    /// Restrict, turns/logs/todos cascade. Returns the collected ids (root first).
+    /// </summary>
+    internal static async Task<IReadOnlyList<Guid>> RemoveSessionTreeAsync(
+        DysonDbContext db,
+        string subjectId,
+        Guid rootId,
+        CancellationToken cancellationToken)
+    {
+        var ordered = new List<Guid>();
+        var pending = new Queue<Guid>();
+        pending.Enqueue(rootId);
+        while (pending.Count > 0)
+        {
+            var id = pending.Dequeue();
+            ordered.Add(id);
+            var childIds = await db.Sessions
+                .Where(s => s.ParentSessionId == id && s.SubjectId == subjectId)
+                .Select(s => s.Id)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var childId in childIds)
+                pending.Enqueue(childId);
+        }
+
+        for (var i = ordered.Count - 1; i >= 0; i--)
+        {
+            var targetId = ordered[i];
+            var entity = await db.Sessions
+                .FirstOrDefaultAsync(s => s.Id == targetId && s.SubjectId == subjectId, cancellationToken)
+                .ConfigureAwait(false);
+            if (entity is not null)
+                db.Sessions.Remove(entity);
+        }
+
+        return ordered;
     }
 
     private static async Task<Result<IReadOnlyList<DysonSessionTodo>, string>> ListTodosCoreAsync(
@@ -904,6 +921,12 @@ public sealed class DysonSessionRepository(
                 return Result<DysonSessionTodo, string>.AsError(
                     $"Todo TaskCode '{taskCode}' already exists on session '{request.SessionId}'.");
             }
+
+            var count = await db.SessionTodos
+                .CountAsync(t => t.SessionId == request.SessionId, cancellationToken)
+                .ConfigureAwait(false);
+            if (count >= DysonSessionTodoLimits.MaxPerSession)
+                return Result<DysonSessionTodo, string>.AsError(DysonSessionTodoLimits.LimitMessage);
 
             var now = DateTime.UtcNow;
             var sequence = await NextTodoSequenceAsync(db, request.SessionId, cancellationToken)
@@ -1064,6 +1087,9 @@ public sealed class DysonSessionRepository(
                 return Result<IReadOnlyList<DysonSessionTodo>, string>.AsError(
                     $"Session '{sessionId}' not found.");
             }
+
+            if (items.Count > DysonSessionTodoLimits.MaxPerSession)
+                return Result<IReadOnlyList<DysonSessionTodo>, string>.AsError(DysonSessionTodoLimits.LimitMessage);
 
             var seen = new HashSet<string>(StringComparer.Ordinal);
             for (var i = 0; i < items.Count; i++)

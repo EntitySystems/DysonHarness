@@ -8,5 +8,35 @@
     <p class="settings-page__copy">
         Manage providers and registered model slugs. The agent shell picks one slug when starting a new session.
     </p>
-    <ModelsPanel />
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="error-banner">@_error</div>
+    }
+    <div class="models-settings">
+        <ModelsPanel />
+        <aside class="models-settings__info panel">
+            <div class="tool-panel__title">EasyCLIProxyAPI</div>
+            <p class="models-settings__copy">
+                For easier inference provider management, and for multi-account setups with load balancing, use EasyCLIProxyAPI.
+            </p>
+            <button type="button" class="btn btn--sm" @onclick="OpenEasyCliProxyAsync">
+                EasyCLIProxyAPI on GitHub
+            </button>
+        </aside>
+    </div>
 </div>
+
+@code {
+    private const string EasyCliProxyUrl = "https://github.com/router-for-me/EasyCLIProxyAPI";
+    private string? _error;
+
+    [Inject] private DysonUiHost Host { get; set; } = null!;
+
+    private async Task OpenEasyCliProxyAsync()
+    {
+        _error = null;
+        var opened = await Task.Run(() => Host.OpenUrlInDefaultBrowser(EasyCliProxyUrl)).ConfigureAwait(true);
+        if (opened.IsError)
+            _error = opened.Error;
+    }
+}

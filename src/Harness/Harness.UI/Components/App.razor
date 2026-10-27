@@ -25,6 +25,10 @@
     <script src="@Assets["tools-col-resize.js"]"></script>
     <script src="@Assets["chat-external-links.js"]"></script>
     <script src="@Assets["dyson-mic.js"]"></script>
+    @if (DysonPreviewFeatures.DemoModeEnabled)
+    {
+        <script src="@Assets["dyson-demo.js"]"></script>
+    }
     <script src="@Assets["_framework/blazor.web.js"]"></script>
 </body>
 

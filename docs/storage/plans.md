@@ -26,7 +26,7 @@ Classic Plan-mode artifacts are still files under `.dyson/plans/*.md` with **no*
 
 `DysonPlanEntity` is the EF row. Every row written today is `Kind = MetaPlan`. The UI plans column (`MetaPlanList`) lists through `ListAsync` and opens a row via `GetAsync` into `FileViewerOverlay` (`metaplan:{planId}/{slug}.md`). **Build** is a session message; the agent’s `BeginBuildPlan` tool is what sets `Status=Building`. Engine writes: Meta Agent Drone `SubmitMetaPlan`; Meta Agent and Meta Agent Drone `EditMetaPlan`; Meta Agent `SetPlanStatus` / `BeginBuildPlan` / `DeletePlan`. Those mutations publish `DysonPlansChangedEvent` on the work-directory bus scope so an open meta page refreshes without a reload. See [meta-agent.md](../engine/meta-agent.md).
 
-Deleting a work directory cascades these rows, archived or not. That is the only product hard delete. `IDysonWorkDirectoryRepository.DeleteAsync` still refuses a workdir that has sessions; cascade matters once the workdir itself goes away.
+Deleting a work directory cascades these rows, archived or not. That is the only product hard delete. `IDysonWorkDirectoryRepository.DeleteAsync` deletes the workdir's Meta Agent session trees in the same transaction and still refuses a workdir that has any other session; see [work-directories.md](work-directories.md).
 
 ## Archive
 
@@ -104,12 +104,14 @@ Task<VoidResult<string>> DeleteAsync(long planId, Guid workDirectoryId, …);
 
 - **`ListAsync`** — metadata only. The projection omits `Markdown` (always null on listed `DysonPlan`s). Newest `UpdatedUtc` first, then highest `Id`. Archived rows are filtered in SQL (`ArchivedUtc == null`) unless `includeArchived`. The meta page list renders from `includeArchived: true` and splits on `ArchivedUtc`; it does not need the body.
 - **`GetAsync`** — full row including `Markdown`.
-- **`CreateAsync`** — insert; returns the database-assigned `planId` **after** save. See [traps](#traps).
+- **`CreateAsync`** — insert; returns the database-assigned `planId` **after** save. Optional `createdUtc` stamps both `CreatedUtc` and `UpdatedUtc` (UTC); omit for now. See [traps](#traps).
 - **`UpdateAsync`** — patch; bumps `UpdatedUtc`. Re-runs the shape invariant on the resulting row. Refuses an archived row (`Plan '{id}' is archived.`). See [traps](#traps).
 - **`ArchiveAsync`** / **`RestoreAsync`** — set / clear `ArchivedUtc`; see [Archive](#archive). Missing id: `Plan '{id}' not found.`
 - **`DeleteAsync`** — removes the row (body included). Irreversible; no filesystem involvement. No tool calls it; `DeletePlan` archives.
 
 SQLite busy/locked contention is retried by `DysonDbAccessor`; exhausted retries and other failures return error Results, never thrown exceptions.
+
+See also [scratch.md](scratch.md) for work-directory scratch files (a separate table; not plans).
 
 ## Engine tools (contract)
 

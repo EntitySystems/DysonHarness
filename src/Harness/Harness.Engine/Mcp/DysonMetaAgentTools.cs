@@ -12,6 +12,8 @@ public static class DysonMetaAgentTools
 
     public const string PlanIdMustBePositiveMessage = "planId must be a positive integer";
 
+    public const string ScratchFileIdMustBePositiveMessage = "id must be a positive integer";
+
     /// <summary>Most running <c>useWorktree: true</c> Meta Agent Drones one root session may have; the next spawn is refused.</summary>
     public const int MaxRunningWorktreeDrones = 3;
 
@@ -34,12 +36,15 @@ public static class DysonMetaAgentTools
         "BeginBuildPlan",
         "CanCreateNote",
         "CompactConversation",
+        "CreateMetaScratchFile",
         "CreateNote",
         "CreateTodo",
         "DeleteMetaAgent",
+        "DeleteMetaScratchFile",
         "DeleteNote",
         "DeletePlan",
         "EditMetaPlan",
+        "EditMetaScratchFile",
         "GetOpenRulesConfig",
         "ListMetaAgentDrones",
         "ListNotes",
@@ -53,6 +58,7 @@ public static class DysonMetaAgentTools
         "PostUserQuestion",
         "ReadMetaAgentDroneLog",
         "ReadMetaPlan",
+        "ReadMetaScratchFile",
         "ReadTempFile",
         "RemoveTodos",
         "RenderHtmlVisualization",
@@ -186,6 +192,9 @@ public static class DysonMetaAgentTools
 
         foreach (var tool in CreatePlanBodyTools())
             pipeline.Tools[tool.Name] = tool;
+
+        foreach (var tool in CreateScratchTools())
+            pipeline.Tools[tool.Name] = tool;
     }
 
     /// <summary>
@@ -204,6 +213,9 @@ public static class DysonMetaAgentTools
             pipeline.Tools[tool.Name] = tool;
 
         foreach (var tool in CreatePlanBodyTools())
+            pipeline.Tools[tool.Name] = tool;
+
+        foreach (var tool in CreateScratchTools())
             pipeline.Tools[tool.Name] = tool;
     }
 
@@ -426,9 +438,9 @@ public static class DysonMetaAgentTools
                 "Do not use this to ask the user a question. A question goes through PostUserQuestion, with a custom message. " +
                 "Assistant text is not shown; use this for everything the user should see. " +
                 "Optional actions add buttons { name, func } where func is one string. " +
-                "open_plan:{planId}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. " +
+                "open_plan:{planId}, open_scratch:{id}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. " +
                 "Buttons are not run until the user clicks. " +
-                "When the message names a plan, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. " +
+                "When the message names a plan, a scratch file, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. " +
                 "Omit actions or pass [] for a plain markdown bubble. " +
                 "visualizationId is separate from actions. " +
                 "Does not end the turn.",
@@ -440,7 +452,7 @@ public static class DysonMetaAgentTools
                     "actions": {
                       "type": "array",
                       "maxItems": 8,
-                      "description": "Optional buttons. func is one string. open_plan:{planId}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. Not run until the user clicks. When the message names a plan, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. Omit or [] for a plain markdown bubble.",
+                      "description": "Optional buttons. func is one string. open_plan:{planId}, open_scratch:{id}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. Not run until the user clicks. When the message names a plan, a scratch file, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. Omit or [] for a plain markdown bubble.",
                       "items": {
                         "type": "object",
                         "required": ["name", "func"],
@@ -492,7 +504,7 @@ public static class DysonMetaAgentTools
                     "actions": {
                       "type": "array",
                       "maxItems": 8,
-                      "description": "Optional buttons. func is one string. open_plan:{planId}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. Not run until the user clicks. When the message names a plan, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. Omit or [] for no buttons.",
+                      "description": "Optional buttons. func is one string. open_plan:{planId}, open_scratch:{id}, open_file:{path}, and open_url:{url} need no registration; any other key must already be registered. Not run until the user clicks. When the message names a plan, a scratch file, a workspace file, or an http(s) URL the user would open, attach one action per target, up to 8. Omit or [] for no buttons.",
                       "items": {
                         "type": "object",
                         "required": ["name", "func"],
@@ -526,8 +538,9 @@ public static class DysonMetaAgentTools
         {
             Name = "RemoveTodos",
             Description =
-                "Remove todos by taskCode that are no longer going to happen. Meta Agent only. " +
-                "reason is required.",
+                "Remove todos by taskCode that are no longer relevant: completed work already recorded elsewhere, " +
+                "or pending/ongoing work superseded or abandoned. Keep todos the user may still ask about. " +
+                "Meta Agent only. reason is required.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -931,6 +944,123 @@ public static class DysonMetaAgentTools
                     "summary": { "type": "string", "description": "Optional one-line revision note (logged)." }
                   },
                   "required": ["planId"]
+                }
+                """,
+        };
+    }
+
+    /// <summary>
+    /// The four scratch-file tools, on both the root Meta Agent and every Meta Agent Drone.
+    /// Not on the default catalog (Work, Explore, Plan, classic Drone do not get them).
+    /// </summary>
+    internal static IEnumerable<DysonMcpTool> CreateScratchTools()
+    {
+        const string use =
+            "Scratch files are database-backed markdown documents scoped to this work directory and shown to the user in the Meta Agent page's Scratch tab. " +
+            "Use them to store information such as user-requested reports, the general state of tasks, and research data. " +
+            "Each file holds at most 131,072 characters (128K).";
+
+        yield return new DysonMcpTool
+        {
+            Name = "CreateMetaScratchFile",
+            Description =
+                "Create a new scratch file and return its id. " + use +
+                " The content may be empty but must not exceed 131,072 characters; a larger body is rejected and nothing is saved, so split big material across several files. " +
+                "New files appear in the Scratch tab below any files the user has ordered. " +
+                "Link a file in PostConversationMessage or PostUserQuestion with the built-in action key open_scratch:{id}.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "title": { "type": "string", "description": "Short human-readable file name shown in the Scratch tab." },
+                    "content": { "type": "string", "description": "Full markdown body (max 131,072 characters)." }
+                  },
+                  "required": ["title", "content"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ReadMetaScratchFile",
+            Description =
+                "Without id: list this work directory's scratch files in the user's Scratch-tab order as JSON [{id, title, chars, sortIndex, updatedUtc}] (no bodies). " +
+                "With id: return that file's title and full markdown content. " + use +
+                " Read before editing so old_text matches exactly; markdown is exactly the text EditMetaScratchFile matches old_text against.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "integer", "description": "Scratch file id. Omit to list all files." }
+                  }
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "EditMetaScratchFile",
+            Description =
+                "Edit an existing scratch file in place (same id). " + use +
+                " Pass old_text and new_text, or edits (ordered; each applies to the result of the previous one), or content to replace the whole body — exactly one mode per call; title alone renames. " +
+                "old_text must match exactly once unless replace_all; copy it from ReadMetaScratchFile's markdown. " +
+                "The call is atomic: if any edit fails the file is unchanged and the error names the edit index and match count. " +
+                "An edit that would push the file past 131,072 characters is rejected and nothing is saved. " +
+                "Make at most one EditMetaScratchFile call per file per stage (same-stage calls run concurrently); put multiple hunks into edits[]. " +
+                "Optional summary is a revision note.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "integer", "description": "Positive id of the scratch file to edit." },
+                    "old_text": {
+                      "type": "string",
+                      "description": "Text span to replace (single edit). Must be unique unless replace_all. Copy from ReadMetaScratchFile's markdown."
+                    },
+                    "new_text": { "type": "string", "description": "Replacement text for old_text." },
+                    "replace_all": {
+                      "type": "boolean",
+                      "description": "If true, replace every occurrence of old_text (default false). Also applies as default for edits[] items unless overridden."
+                    },
+                    "edits": {
+                      "type": "array",
+                      "description": "Ordered list of targeted replacements when multiple hunks are needed.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "old_text": { "type": "string", "description": "Text span to replace." },
+                          "new_text": { "type": "string" },
+                          "replace_all": { "type": "boolean", "description": "Replace every occurrence for this edit (default: top-level replace_all)." }
+                        },
+                        "required": ["old_text", "new_text"]
+                      }
+                    },
+                    "content": {
+                      "type": "string",
+                      "description": "Replace the whole scratch file body. Only when targeted edits are impractical; prefer old_text/edits."
+                    },
+                    "title": { "type": "string", "description": "Optional new scratch file title." },
+                    "summary": { "type": "string", "description": "Optional one-line revision note (logged)." }
+                  },
+                  "required": ["id"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "DeleteMetaScratchFile",
+            Description =
+                "Permanently delete a scratch file (no archive, no undo). " + use +
+                " Delete only files that are obsolete or that the user asked to remove; reason is logged and must say why.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "integer", "description": "Positive id of the scratch file to delete." },
+                    "reason": { "type": "string", "description": "Why this scratch file is being deleted (required; logged)." }
+                  },
+                  "required": ["id", "reason"]
                 }
                 """,
         };

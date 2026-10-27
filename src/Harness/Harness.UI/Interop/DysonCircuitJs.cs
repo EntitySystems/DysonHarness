@@ -113,7 +113,7 @@ public static class DysonCircuitJs
 
     /// <summary>
     /// Client <c>Blazor.navigateTo</c>. Does not call <c>NavigationManager.NavigateTo</c>,
-    /// whose canceled JS invoke terminates the circuit.
+    /// whose canceled JS invoke terminates the circuit. Never force-loads: that starts a new circuit.
     /// </summary>
     public static ValueTask<Exception?> NavigateAsync(IJSRuntime js, string relativeUri, bool replace = false) =>
         InvokeVoidAsync(js, NavigateFunction, relativeUri, replace);

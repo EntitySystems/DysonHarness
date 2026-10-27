@@ -53,6 +53,11 @@ public abstract class DysonAgentSession
     private Guid _contextLimitTrippedTurnId;
     private Guid _compactionRequestedTurnId;
     private Task _compactionMarkerWrites = Task.CompletedTask;
+    // ponytail: one compaction summary per session behind a coarse lock; upgrade path is a per-session
+    // state machine if more compaction kinds appear.
+    private readonly object _summaryGate = new();
+    private Task<VoidResult<string>>? _inFlightSummary;
+    private bool _inFlightSummaryResume;
     private int _childReportRemindersSent;
     private bool _subagentReportAccepted;
     private string? _systemPromptSuffix;
@@ -471,6 +476,71 @@ public abstract class DysonAgentSession
     {
         get => field;
         set => field = value ?? throw new ArgumentNullException(nameof(value));
+    }
+
+    private readonly object _modelGate = new();
+    private (DysonAgentProvider Provider, int? SlugDefaultMaxTargetContextTokens)? _pendingModel;
+
+    /// <summary>
+    /// The user's current model selection: a switch picked mid-turn that the next provider request has not
+    /// applied yet, else <see cref="Provider"/>. UI pickers read this so a mid-turn pick shows at once.
+    /// </summary>
+    public DysonAgentProvider SelectedProvider
+    {
+        get
+        {
+            lock (_modelGate)
+                return _pendingModel?.Provider ?? Provider;
+        }
+    }
+
+    /// <summary>
+    /// Switches the session model. Safe from any thread. Idle: swaps <see cref="Provider"/> and
+    /// <see cref="SlugDefaultMaxTargetContextTokens"/> now. While a prompt is in flight the running request is
+    /// left alone; the switch lands at the next provider request of the same turn (<see cref="ApplyPendingModel"/>)
+    /// or when the prompt ends, whichever comes first. A later pick replaces an unapplied one.
+    /// </summary>
+    public VoidResult<string> SetModel(DysonAgentProvider provider, int? slugDefaultMaxTargetContextTokens)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        // Same provider kind only (as between turns): the session type owns the wire client.
+        if (provider.GetType() != Provider.GetType())
+            return new VoidResult<string>("Start a new session to switch provider kind");
+
+        lock (_modelGate)
+        {
+            _pendingModel = (provider, slugDefaultMaxTargetContextTokens);
+            if (_inFlightPromptStack.Count == 0)
+                ApplyPendingModelLocked();
+        }
+
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Request boundary: applies a pending <see cref="SetModel"/> pick so the next request resolves model, client,
+    /// endpoint, effort and context limit from one provider. True when the provider changed.
+    /// </summary>
+    protected internal bool ApplyPendingModel()
+    {
+        lock (_modelGate)
+            return ApplyPendingModelLocked();
+    }
+
+    private bool ApplyPendingModelLocked()
+    {
+        if (_pendingModel is not { } pending)
+            return false;
+
+        _pendingModel = null;
+        if (ReferenceEquals(pending.Provider, Provider))
+            return false;
+
+        Provider = pending.Provider;
+        SlugDefaultMaxTargetContextTokens = pending.SlugDefaultMaxTargetContextTokens;
+        if (_inFlightPromptStack.Count > 0)
+            AppendLog($"model: switched mid-turn to {FormatSubagentModelLabel(pending.Provider) ?? pending.Provider.GetType().Name}");
+        return true;
     }
 
     /// <summary>
@@ -1590,6 +1660,72 @@ public abstract class DysonAgentSession
     /// <summary>True when a queued harness turn has <paramref name="kind"/> (e.g. a CompactConversation FullSummarize).</summary>
     internal bool HasPendingTurnOfKind(DysonAgentTurnKind kind) => _pendingTurns.Any(t => t.Kind == kind);
 
+    /// <summary>True when the fresh Continuation a successful summary queues is already queued.</summary>
+    internal bool HasPendingAfterSummaryResume => _pendingTurns.Any(t => t.AfterSummaryResume);
+
+    /// <summary>A compaction summary (<see cref="DysonCompactionFlow.RunAsync"/>) is running on this session.</summary>
+    internal bool IsSummaryInFlight
+    {
+        get
+        {
+            lock (_summaryGate)
+                return _inFlightSummary is not null;
+        }
+    }
+
+    /// <summary>
+    /// Single-flight entry for <see cref="DysonCompactionFlow.RunAsync"/>. Records the pending marker for
+    /// <paramref name="endedTurn"/>, then returns the running summary (and ORs <paramref name="resume"/> into
+    /// it) when one is in flight; otherwise this caller owns the new summary through <paramref name="owner"/>
+    /// and null is returned. Record and attach share the lock with <see cref="EndSummary"/>'s clear, so an
+    /// attached trip never outlives the summary that covered it.
+    /// </summary>
+    internal Task<VoidResult<string>>? BeginOrAttachSummary(
+        DysonAgentTurn? endedTurn,
+        bool resume,
+        out TaskCompletionSource<VoidResult<string>>? owner)
+    {
+        lock (_summaryGate)
+        {
+            if (endedTurn is not null)
+                RecordCompactionPending(endedTurn.Id);
+
+            if (_inFlightSummary is { } running)
+            {
+                _inFlightSummaryResume |= resume;
+                owner = null;
+                return running;
+            }
+
+            owner = new TaskCompletionSource<VoidResult<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _inFlightSummary = owner.Task;
+            _inFlightSummaryResume = resume;
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Owner side: clears the in-flight summary (and, on success, the pending marker) and returns whether
+    /// the owner or any attached caller was paused. A later caller starts a new summary. No-op (false)
+    /// once cleared.
+    /// </summary>
+    internal bool EndSummary(TaskCompletionSource<VoidResult<string>> owner, bool succeeded)
+    {
+        lock (_summaryGate)
+        {
+            if (!ReferenceEquals(_inFlightSummary, owner.Task))
+                return false;
+
+            if (succeeded)
+                ClearCompactionPending();
+
+            var resume = _inFlightSummaryResume;
+            _inFlightSummary = null;
+            _inFlightSummaryResume = false;
+            return resume;
+        }
+    }
+
     /// <summary>Drops all queued harness turns (e.g. on interrupt).</summary>
     public void ClearPendingTurns()
     {
@@ -1633,28 +1769,64 @@ public abstract class DysonAgentSession
     /// </summary>
     public bool IsTurnInFlight(Guid turnId)
     {
-        foreach (var turn in _inFlightPromptStack)
+        // Push/pop run under _modelGate; a host post-prompt check can race a concurrent prompt's push.
+        lock (_modelGate)
         {
-            if (turn.Id == turnId)
-                return true;
+            foreach (var turn in _inFlightPromptStack)
+            {
+                if (turn.Id == turnId)
+                    return true;
+            }
         }
 
         return false;
     }
 
     /// <summary>
+    /// The turn a prompt that started with <paramref name="turnCountBefore"/> turns ran: the newest turn
+    /// appended since then that is not in flight (a concurrent turn still running is skipped). When nothing
+    /// was appended, the newest turn. False when there is no such turn.
+    /// </summary>
+    public bool TryGetTurnRanSince(int turnCountBefore, out DysonAgentTurn turn)
+    {
+        var turns = TurnHistory;
+        var count = turns.Count;
+        if (count > 0 && count <= turnCountBefore)
+        {
+            turn = turns[count - 1];
+            return true;
+        }
+
+        for (var i = count - 1; i >= Math.Max(0, turnCountBefore); i--)
+        {
+            if (IsTurnInFlight(turns[i].Id))
+                continue;
+
+            turn = turns[i];
+            return true;
+        }
+
+        turn = null!;
+        return false;
+    }
+
+    /// <summary>
     /// Marks <paramref name="turn"/> as the in-flight prompt turn until disposed.
     /// Nestable (an inline harness turn inside another prompt). Call after <see cref="AddTurn"/>.
-    /// A Completed/Failed root or child is reopened to <see cref="DysonSessionStatus.Active"/>
-    /// at the start of a new in-flight prompt. Stopped/Interrupted stay locked.
+    /// A Completed/Failed/Interrupted root or child is reopened to <see cref="DysonSessionStatus.Active"/>
+    /// at the start of a new in-flight prompt. Stopped stays locked.
+    /// Also releases a parent inject waiter for <paramref name="turn"/> when the host (not KickOff) starts it.
     /// Pushes first so <c>DysonTaskLifecycleFlow.Evaluate</c> no-ops while this prompt is in flight
     /// (reopening to Active before push would leave a window where last turn is still ReportSummary/BugReview).
     /// </summary>
     public IDisposable BeginInFlightPrompt(DysonAgentTurn turn)
     {
         ArgumentNullException.ThrowIfNull(turn);
-        _inFlightPromptStack.Push(turn);
+        lock (_modelGate)
+            _inFlightPromptStack.Push(turn);
         TryReopenForNewParentTask();
+        if (_injectWaiters.TryRemove(turn.Id, out var injectStarted))
+            injectStarted.TrySetResult();
         return new InFlightPromptScope(this);
     }
 
@@ -1701,7 +1873,13 @@ public abstract class DysonAgentSession
             if (_disposed)
                 return;
             _disposed = true;
-            session._inFlightPromptStack.Pop();
+            // Under the model gate so a SetModel racing the prompt end is either applied here or applied by SetModel.
+            lock (session._modelGate)
+            {
+                session._inFlightPromptStack.Pop();
+                if (session._inFlightPromptStack.Count == 0)
+                    session.ApplyPendingModelLocked();
+            }
         }
     }
 
@@ -2400,7 +2578,8 @@ public abstract class DysonAgentSession
         var action = DysonChildReportWatch.Evaluate(
             isChild: Parent is not null,
             status: Status,
-            hasReported: Status is DysonSessionStatus.Completed or DysonSessionStatus.Failed,
+            hasReported: Status is DysonSessionStatus.Completed or DysonSessionStatus.Failed
+                || _subagentReportAccepted,
             hasPendingWork: HasPendingTurn || InFlightPromptTurn is not null,
             remindersSent: _childReportRemindersSent);
 
@@ -2560,9 +2739,9 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
-    /// Reopens a Completed/Failed session so a new CompleteTask / SubmitSubagentReport cycle can run
+    /// Reopens a Completed/Failed/Interrupted session so a new CompleteTask / SubmitSubagentReport cycle can run
     /// after parent <c>TriggerSubagentEvent</c> or when a new in-flight prompt begins.
-    /// Stopped/Interrupted stay locked.
+    /// Interrupted (application restart) reopens so a resumed drone reads Active; Stopped stays locked.
     /// Sets <see cref="Status"/> to Active in memory; durable Active is written by the parent inject
     /// path or the prompt path (<see cref="PersistReopenAsync"/>).
     /// </summary>
@@ -2574,11 +2753,14 @@ public abstract class DysonAgentSession
         var changed = false;
         lock (_terminalGate)
         {
-            if (Status is not (DysonSessionStatus.Completed or DysonSessionStatus.Failed))
+            if (Status is not (DysonSessionStatus.Completed
+                or DysonSessionStatus.Failed
+                or DysonSessionStatus.Interrupted))
                 return false;
 
             previous = Status;
             Status = DysonSessionStatus.Active;
+            _subagentReportAccepted = false;
             next = Status;
             summary = LastReportSummary;
             _terminalTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -2987,7 +3169,7 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
-    /// Persist Active after a Completed/Failed session was reopened (parent inject or new in-flight prompt).
+    /// Persist Active after a Completed/Failed/Interrupted session was reopened (parent inject or new in-flight prompt).
     /// No-op when <see cref="SessionStore"/> is null or <see cref="PersistenceId"/> is empty.
     /// </summary>
     protected async Task PersistReopenAsync(string reason)
@@ -3152,6 +3334,14 @@ public abstract class DysonAgentSession
         WorktreeEnabled = state.Session.WorktreeEnabled;
         WorktreeAbsolutePath = state.Session.WorktreeAbsolutePath;
         WorktreeBranch = state.Session.WorktreeBranch;
+        if (Status == DysonSessionStatus.Stopped)
+        {
+            // Stop already reported to the parent at stop time. Restore that report so the restore-time
+            // child-report watch does not re-synthesize it as "application restart".
+            _subagentReportAccepted = true;
+            LastReportSummary = LastStoppedReason(state.Logs) ?? LastReportSummary;
+        }
+
         if (IsTerminal)
             _terminalTcs.TrySetResult((Status, LastReportSummary));
 
@@ -3209,6 +3399,24 @@ public abstract class DysonAgentSession
         }
 
         RestoreTodos(state.Todos);
+    }
+
+    /// <summary>Reason of the last persisted SessionStatusChanged(Stopped) log, if any.</summary>
+    private static string? LastStoppedReason(IReadOnlyList<DysonSessionLogEntry> logs)
+    {
+        string? reason = null;
+        foreach (var log in logs.OrderBy(l => l.Sequence))
+        {
+            if (!DysonSessionLogPayload.TryParseKind(log.Kind, out var kind)
+                || kind != DysonSessionLogKind.SessionStatusChanged)
+                continue;
+
+            var payload = DysonSessionLogPayload.Deserialize<DysonSessionLogSessionStatusChanged>(log.PayloadJson);
+            if (payload is { Status: DysonSessionStatus.Stopped } && !string.IsNullOrWhiteSpace(payload.Reason))
+                reason = payload.Reason;
+        }
+
+        return reason;
     }
 
     /// <summary>Replaces the in-memory todo list (e.g. after resume) and raises <see cref="TodosChanged"/>.</summary>
@@ -3276,6 +3484,9 @@ public abstract class DysonAgentSession
         {
             if (_todos.Any(t => string.Equals(t.TaskCode, code, StringComparison.Ordinal)))
                 return Result<DysonSessionTodo, string>.AsError($"Todo TaskCode '{code}' already exists.");
+
+            if (_todos.Count >= DysonSessionTodoLimits.MaxPerSession)
+                return Result<DysonSessionTodo, string>.AsError(DysonSessionTodoLimits.LimitMessage);
         }
 
         var now = DateTime.UtcNow;
@@ -3426,6 +3637,12 @@ public abstract class DysonAgentSession
 
             RestoreTodos(replaced.Value);
             return replaced;
+        }
+
+        if (items.Count > DysonSessionTodoLimits.MaxPerSession)
+        {
+            return Result<IReadOnlyList<DysonSessionTodo>, string>.AsError(
+                DysonSessionTodoLimits.LimitMessage);
         }
 
         var now = DateTime.UtcNow;
@@ -3673,6 +3890,19 @@ public abstract class DysonAgentSession
         };
         if (actions is { Count: > 0 })
             turn.RestoreConversationActions(actions);
+        AddTurn(turn);
+        return turn;
+    }
+
+    /// <summary>
+    /// Completed user+assistant turn, no provider. Demo scripting only.
+    /// Raises <see cref="TurnAdded"/> so host persistence and the chat feed work unchanged.
+    /// </summary>
+    public DysonAgentTurn AppendScriptedExchange(string userInstruction, string assistantText)
+    {
+        var turn = CreateNormalTurn(userInstruction);
+        turn.AssistantText = assistantText?.Trim() ?? "";
+        turn.FinishStreaming();
         AddTurn(turn);
         return turn;
     }

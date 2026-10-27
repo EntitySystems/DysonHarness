@@ -1221,7 +1221,7 @@ public sealed partial class DysonWorkspaceToolExecutor
     }
 
     private sealed record EditMetaPlanArgs(
-        long PlanId,
+        long Id,
         string Mode,
         string? Content,
         IReadOnlyList<DysonTextEditApplier.Edit> Edits,
@@ -1231,19 +1231,26 @@ public sealed partial class DysonWorkspaceToolExecutor
     private static bool HasValue(JsonElement root, string name, out JsonElement value) =>
         root.TryGetProperty(name, out value) && value.ValueKind != JsonValueKind.Null;
 
-    private static Result<EditMetaPlanArgs, string> ParseEditMetaPlanArgs(DysonToolCall call)
+    /// <summary>
+    /// Shared by EditMetaPlan (<c>planId</c>) and EditMetaScratchFile (<c>id</c>). Error text keeps the
+    /// tool name so EditMetaPlan messages stay byte-identical.
+    /// </summary>
+    private static Result<EditMetaPlanArgs, string> ParseEditArgs(DysonToolCall call, string toolName, string idProperty)
     {
         var raw = ArgsOrEmpty(call);
+        var idMessage = idProperty == "planId"
+            ? DysonMetaAgentTools.PlanIdMustBePositiveMessage
+            : DysonMetaAgentTools.ScratchFileIdMustBePositiveMessage;
         try
         {
             using var doc = JsonDocument.Parse(raw);
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
-                return Result<EditMetaPlanArgs, string>.AsError("EditMetaPlan: arguments must be a JSON object.");
+                return Result<EditMetaPlanArgs, string>.AsError($"{toolName}: arguments must be a JSON object.");
 
-            var id = GetInt64(root, "planId");
+            var id = GetInt64(root, idProperty);
             if (id is null || id.Value <= 0)
-                return Result<EditMetaPlanArgs, string>.AsError(DysonMetaAgentTools.PlanIdMustBePositiveMessage);
+                return Result<EditMetaPlanArgs, string>.AsError(idMessage);
 
             var hasContent = HasValue(root, "content", out var contentProp);
             var hasOld = HasValue(root, "old_text", out var oldProp);
@@ -1262,7 +1269,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             if (modes.Count > 1)
             {
                 return Result<EditMetaPlanArgs, string>.AsError(
-                    $"EditMetaPlan: pass exactly one of content, old_text+new_text, or edits[] per call (got {string.Join(" and ", modes)}). " +
+                    $"{toolName}: pass exactly one of content, old_text+new_text, or edits[] per call (got {string.Join(" and ", modes)}). " +
                     "Put several hunks in edits[].");
             }
 
@@ -1270,7 +1277,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             if (hasContent)
             {
                 if (contentProp.ValueKind != JsonValueKind.String)
-                    return Result<EditMetaPlanArgs, string>.AsError("EditMetaPlan: content must be a string.");
+                    return Result<EditMetaPlanArgs, string>.AsError($"{toolName}: content must be a string.");
                 return Result<EditMetaPlanArgs, string>.AsValue(
                     new(id.Value, "content", contentProp.GetString(), [], title, summary));
             }
@@ -1281,7 +1288,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                     || oldProp.ValueKind != JsonValueKind.String || newProp.ValueKind != JsonValueKind.String)
                 {
                     return Result<EditMetaPlanArgs, string>.AsError(
-                        "EditMetaPlan: old_text and new_text must both be strings.");
+                        $"{toolName}: old_text and new_text must both be strings.");
                 }
 
                 return Result<EditMetaPlanArgs, string>.AsValue(new(
@@ -1296,7 +1303,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             if (hasEdits)
             {
                 if (editsProp.ValueKind != JsonValueKind.Array || editsProp.GetArrayLength() == 0)
-                    return Result<EditMetaPlanArgs, string>.AsError("EditMetaPlan: edits must be a non-empty array.");
+                    return Result<EditMetaPlanArgs, string>.AsError($"{toolName}: edits must be a non-empty array.");
 
                 var edits = new List<DysonTextEditApplier.Edit>();
                 var index = 0;
@@ -1307,7 +1314,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                         || !HasValue(item, "new_text", out var n) || n.ValueKind != JsonValueKind.String)
                     {
                         return Result<EditMetaPlanArgs, string>.AsError(
-                            $"EditMetaPlan: edits[{index}] needs string old_text and new_text.");
+                            $"{toolName}: edits[{index}] needs string old_text and new_text.");
                     }
 
                     var itemReplaceAll = item.TryGetProperty("replace_all", out var ra)
@@ -1325,11 +1332,11 @@ public sealed partial class DysonWorkspaceToolExecutor
                 return Result<EditMetaPlanArgs, string>.AsValue(new(id.Value, "title", null, [], title, summary));
 
             return Result<EditMetaPlanArgs, string>.AsError(
-                "EditMetaPlan: provide content, or old_text+new_text, or edits[] (or title to rename only).");
+                $"{toolName}: provide content, or old_text+new_text, or edits[] (or title to rename only).");
         }
         catch (JsonException ex)
         {
-            return Result<EditMetaPlanArgs, string>.AsError(InvalidPlanJsonMessage("EditMetaPlan", ex, raw));
+            return Result<EditMetaPlanArgs, string>.AsError(InvalidPlanJsonMessage(toolName, ex, raw));
         }
     }
 
@@ -1344,7 +1351,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "EditMetaPlan is only available in Meta Agent and Meta Agent Drone modes.");
         }
 
-        var parsed = ParseEditMetaPlanArgs(call);
+        var parsed = ParseEditArgs(call, "EditMetaPlan", "planId");
         if (parsed.IsError)
             return Error(call, parsed.Error);
         var args = parsed.Value;
@@ -1356,11 +1363,11 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Error(call, "Work directory is required to edit a plan.");
 
         // Read-modify-write under a per-plan gate: same-stage calls run concurrently and must compose, not overwrite.
-        var gate = PlanEditGates.GetOrAdd(args.PlanId, static _ => new SemaphoreSlim(1, 1));
+        var gate = PlanEditGates.GetOrAdd(args.Id, static _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var loaded = await _plans.GetAsync(args.PlanId, _workDirectoryId, cancellationToken)
+            var loaded = await _plans.GetAsync(args.Id, _workDirectoryId, cancellationToken)
                 .ConfigureAwait(false);
             if (loaded.IsError)
                 return Error(call, loaded.Error);
@@ -1384,27 +1391,27 @@ public sealed partial class DysonWorkspaceToolExecutor
 
             var bodyChanged = args.Mode != "title";
             var updated = await _plans.UpdateAsync(
-                    args.PlanId,
+                    args.Id,
                     _workDirectoryId,
                     title: args.Title,
                     markdown: bodyChanged ? after : null,
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
             if (updated.IsError)
-                return Error(call, $"EditMetaPlan: {updated.Error} Plan {args.PlanId} is unchanged.");
+                return Error(call, $"EditMetaPlan: {updated.Error} Plan {args.Id} is unchanged.");
 
-            var current = await _plans.GetAsync(args.PlanId, _workDirectoryId, cancellationToken)
+            var current = await _plans.GetAsync(args.Id, _workDirectoryId, cancellationToken)
                 .ConfigureAwait(false);
             var plan = current.IsSuccess ? current.Value : loaded.Value;
             var body = plan.Markdown ?? after;
 
-            PublishPlansChanged(args.PlanId);
-            var log = $"EditMetaPlan #{args.PlanId} ({args.Mode})" + (args.Summary is null ? "" : $": {args.Summary}");
+            PublishPlansChanged(args.Id);
+            var log = $"EditMetaPlan #{args.Id} ({args.Mode})" + (args.Summary is null ? "" : $": {args.Summary}");
             _session.AppendLog(log);
 
             return Ok(call, JsonSerializer.Serialize(new
             {
-                planId = args.PlanId,
+                planId = args.Id,
                 title = plan.Title,
                 status = FormatPlanStatus(plan.Status),
                 updatedUtc = current.IsSuccess ? plan.UpdatedUtc : (DateTime?)null,
@@ -1428,7 +1435,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             ? $" ({failure.Failure.MatchCount} matches)"
             : "";
         return $"EditMetaPlan: {where} failed{matches}: {failure.Failure.Message} " +
-               $"Match against the markdown field ReadMetaPlan returns. Plan {args.PlanId} is unchanged (no edit in this call was applied).";
+               $"Match against the markdown field ReadMetaPlan returns. Plan {args.Id} is unchanged (no edit in this call was applied).";
     }
 
     private void PublishPlansChanged(long planId)

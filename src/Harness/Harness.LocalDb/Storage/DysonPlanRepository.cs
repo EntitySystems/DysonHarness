@@ -48,7 +48,8 @@ public sealed class DysonPlanRepository(
         DysonPlanStatus status = DysonPlanStatus.Draft,
         string? note = null,
         Guid? buildAgentId = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        DateTime? createdUtc = null)
     {
         if (workDirectoryId == Guid.Empty)
             return Task.FromResult(Result<long, string>.AsError("Work directory id is required."));
@@ -80,6 +81,7 @@ public sealed class DysonPlanRepository(
                 status,
                 note,
                 buildAgentId,
+                createdUtc,
                 ct),
             cancellationToken);
     }
@@ -255,6 +257,7 @@ public sealed class DysonPlanRepository(
         DysonPlanStatus status,
         string? note,
         Guid? buildAgentId,
+        DateTime? createdUtc,
         CancellationToken cancellationToken)
     {
         try
@@ -264,7 +267,7 @@ public sealed class DysonPlanRepository(
             if (!owned)
                 return Result<long, string>.AsError($"Work directory '{workDirectoryId}' not found.");
 
-            var now = DateTime.UtcNow;
+            var now = createdUtc is { } stamped ? Utc(stamped) : DateTime.UtcNow;
             var entity = new DysonPlanEntity
             {
                 WorkDirectoryId = workDirectoryId,
@@ -475,6 +478,9 @@ public sealed class DysonPlanRepository(
             .AsNoTracking()
             .AnyAsync(w => w.Id == workDirectoryId && w.SubjectId == subjectId, cancellationToken)
             .ConfigureAwait(false);
+
+    private static DateTime Utc(DateTime value) =>
+        value.Kind == DateTimeKind.Utc ? value : DateTime.SpecifyKind(value, DateTimeKind.Utc);
 
     private static string? NormalizePlanPath(string? path)
     {

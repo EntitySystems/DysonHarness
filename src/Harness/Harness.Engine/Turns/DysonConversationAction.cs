@@ -15,13 +15,15 @@ public sealed record DysonConversationAction(
 public enum DysonBuiltInConversationKind
 {
     OpenPlan,
+    OpenScratch,
     OpenFile,
     OpenUrl,
 }
 
 /// <summary>
 /// One built-in intent. <see cref="PlanId"/> is set for <see cref="DysonBuiltInConversationKind.OpenPlan"/>;
-/// <see cref="PathOrUrl"/> is the work-relative path or the http(s) URL for the other two.
+/// PlanId carries the scratch file id for <see cref="DysonBuiltInConversationKind.OpenScratch"/>.
+/// <see cref="PathOrUrl"/> is the work-relative path or the http(s) URL for OpenFile / OpenUrl.
 /// </summary>
 public sealed record DysonBuiltInConversationIntent(
     DysonBuiltInConversationKind Kind,
@@ -29,12 +31,13 @@ public sealed record DysonBuiltInConversationIntent(
     string? PathOrUrl);
 
 /// <summary>
-/// Parses <c>open_plan:</c>, <c>open_file:</c>, and <c>open_url:</c> before the session delegate map.
+/// Parses <c>open_plan:</c>, <c>open_scratch:</c>, <c>open_file:</c>, and <c>open_url:</c> before the session delegate map.
 /// Prefixes are ordinal and case-sensitive.
 /// </summary>
 public static class DysonBuiltInConversationActions
 {
     private const string OpenPlanPrefix = "open_plan:";
+    public const string OpenScratchPrefix = "open_scratch:";
     private const string OpenFilePrefix = "open_file:";
     private const string OpenUrlPrefix = "open_url:";
 
@@ -43,6 +46,7 @@ public static class DysonBuiltInConversationActions
     {
         var trimmed = key?.Trim() ?? "";
         return trimmed.StartsWith(OpenPlanPrefix, StringComparison.Ordinal)
+            || trimmed.StartsWith(OpenScratchPrefix, StringComparison.Ordinal)
             || trimmed.StartsWith(OpenFilePrefix, StringComparison.Ordinal)
             || trimmed.StartsWith(OpenUrlPrefix, StringComparison.Ordinal);
     }
@@ -60,6 +64,9 @@ public static class DysonBuiltInConversationActions
         var trimmed = key?.Trim() ?? "";
         if (trimmed.StartsWith(OpenPlanPrefix, StringComparison.Ordinal))
             return ResolvePlan(trimmed[OpenPlanPrefix.Length..].Trim());
+
+        if (trimmed.StartsWith(OpenScratchPrefix, StringComparison.Ordinal))
+            return ResolveScratch(trimmed[OpenScratchPrefix.Length..].Trim());
 
         if (trimmed.StartsWith(OpenFilePrefix, StringComparison.Ordinal))
         {
@@ -86,6 +93,21 @@ public static class DysonBuiltInConversationActions
 
         return Result<DysonBuiltInConversationIntent, string>.AsValue(
             new DysonBuiltInConversationIntent(DysonBuiltInConversationKind.OpenPlan, id, null));
+    }
+
+    private static Result<DysonBuiltInConversationIntent, string> ResolveScratch(string payload)
+    {
+        if (payload.Length == 0
+            || !IsDigits(payload)
+            || !long.TryParse(payload, out var id)
+            || id <= 0)
+        {
+            return Result<DysonBuiltInConversationIntent, string>.AsError(
+                "open_scratch: scratch file id must be a positive integer");
+        }
+
+        return Result<DysonBuiltInConversationIntent, string>.AsValue(
+            new DysonBuiltInConversationIntent(DysonBuiltInConversationKind.OpenScratch, id, null));
     }
 
     private static async Task<Result<DysonBuiltInConversationIntent, string>> ResolveFileAsync(

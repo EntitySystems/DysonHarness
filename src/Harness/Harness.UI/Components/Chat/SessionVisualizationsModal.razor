@@ -45,11 +45,9 @@
                     {
                         <section class="session-visualizations-modal__preview" aria-label="Selected visualization: @selected.Visualization.Title">
                             <h4>@selected.Visualization.Title</h4>
-                            <iframe class="session-visualizations-modal__frame"
-                                    title="@selected.Visualization.Title"
-                                    sandbox="allow-scripts"
-                                    referrerpolicy="no-referrer"
-                                    srcdoc="@DysonHtmlVisualizationDocument.Create(selected.Visualization)"></iframe>
+                            <HtmlVisualizationFrame @key="selected.Visualization.Id"
+                                                    Visualization="selected.Visualization"
+                                                    CssClass="session-visualizations-modal__frame" />
                         </section>
                     }
                     else if (_focusMissing)

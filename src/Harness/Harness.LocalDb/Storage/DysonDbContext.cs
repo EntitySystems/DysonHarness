@@ -21,6 +21,7 @@ public sealed class DysonDbContext : DbContext
     public DbSet<DysonWorkDirectoryConfigurationEntity> WorkDirectoryConfigurations =>
         Set<DysonWorkDirectoryConfigurationEntity>();
     public DbSet<DysonPlanEntity> Plans => Set<DysonPlanEntity>();
+    public DbSet<DysonMetaScratchFileEntity> MetaScratchFiles => Set<DysonMetaScratchFileEntity>();
     public DbSet<DysonSessionEntity> Sessions => Set<DysonSessionEntity>();
     public DbSet<DysonTurnEntity> Turns => Set<DysonTurnEntity>();
     public DbSet<DysonSessionLogEntry> SessionLogs => Set<DysonSessionLogEntry>();
@@ -134,6 +135,20 @@ public sealed class DysonDbContext : DbContext
             e.HasIndex(x => new { x.WorkDirectoryId, x.PlanRelativePath })
                 .IsUnique()
                 .HasFilter("\"PlanRelativePath\" IS NOT NULL");
+            e.HasOne(x => x.WorkDirectory)
+                .WithMany()
+                .HasForeignKey(x => x.WorkDirectoryId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DysonMetaScratchFileEntity>(e =>
+        {
+            e.ToTable("meta_scratch_files");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.WorkDirectoryId).IsRequired();
+            e.Property(x => x.Title).IsRequired();
+            e.Property(x => x.Content).IsRequired();
+            e.HasIndex(x => new { x.WorkDirectoryId, x.SortIndex });
             e.HasOne(x => x.WorkDirectory)
                 .WithMany()
                 .HasForeignKey(x => x.WorkDirectoryId)
@@ -382,6 +397,18 @@ public sealed class DysonDbContext : DbContext
             e.Property(x => x.Variant8).IsRequired();
             e.HasIndex(x => x.SubjectId).IsUnique();
         });
+
+        // SQLite materializes DateTime as Unspecified. One converter stamps Kind=Utc on
+        // every DateTime property so JSON keeps the Z. Stored TEXT is unchanged.
+        var utc = new UtcDateTimeValueConverter();
+        var utcNullable = new NullableUtcDateTimeValueConverter();
+        foreach (var property in modelBuilder.Model.GetEntityTypes().SelectMany(t => t.GetProperties()))
+        {
+            if (property.ClrType == typeof(DateTime))
+                property.SetValueConverter(utc);
+            else if (property.ClrType == typeof(DateTime?))
+                property.SetValueConverter(utcNullable);
+        }
     }
 
     /// <summary>Opens a context for <paramref name="databasePath"/> and applies migrations.</summary>

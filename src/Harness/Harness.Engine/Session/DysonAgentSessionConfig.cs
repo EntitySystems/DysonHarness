@@ -199,6 +199,12 @@ public class DysonAgentSessionConfig
     public DysonMessageBus? Bus { get; set; }
 
     /// <summary>
+    /// Optional Meta scratch file repository for the <c>*MetaScratchFile</c> tools.
+    /// Null ⇒ those tools return "not available". Children share this config instance.
+    /// </summary>
+    public IDysonMetaScratchFileRepository? MetaScratchFiles { get; set; }
+
+    /// <summary>
     /// Optional workdir-scoped custom MCP host (<c>.dyson/mcp</c>).
     /// When set and <see cref="DysonCustomMcpHost.McpActive"/>, namespaced tools are merged into the catalog.
     /// </summary>

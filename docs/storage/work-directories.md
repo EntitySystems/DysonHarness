@@ -20,7 +20,7 @@ Contracts: `IDysonWorkDirectoryRepository` in `Harness.Abstractions`. Implementa
 
 ### Sessions link
 
-`sessions.WorkDirectoryId` → `work_directories.Id` (`OnDelete(SetNull)`). Existing rows may be null; **new sessions require** a selected work directory. Both session and workdir must belong to the same subject.
+`sessions.WorkDirectoryId` → `work_directories.Id` (`OnDelete(SetNull)`). Existing rows may be null; **new sessions require** a selected work directory. Both session and workdir must belong to the same subject. The workdir's Meta Agent session tree is owned by the workdir and is deleted with it (see `DeleteAsync` below).
 
 ### `work_directory_configurations`
 
@@ -65,7 +65,8 @@ Result-pattern functional repository (current subject only; cross-subject get-by
 - `GetAsync` / `ListAsync` (ordered by `LastOpenedUtc` desc)
 - `TouchOpenedAsync` — bump `LastOpenedUtc` when switching active. `LastOpenedUtc` is bookkeeping and a failed bump is tolerable.
 - `UpdateGitMetadataAsync(id, gitOrigin, gitProvider)` — persist or clear classified origin (both values may be null). Boot/activation (`RefreshGitOriginAsync`) is a write on the startup path; busy/locked must not throw.
-- `DeleteAsync` — removes registration only (not disk folder); **blocked** if any sessions still reference the id
+- `DeleteAsync` — removes the registration (not the disk folder) in **one** `SaveChanges` transaction: every Meta Agent root on the workdir and its descendants (drones, explores, reviews) deepest-first (turns, session logs, todos cascade), then the workdir row (plans, meta scratch files, `work_directory_configurations`, plugin installations cascade). The Meta Agent and worktree-path guards of session delete do not apply here; drone git worktrees stay on disk. Any **other** session still on the workdir **blocks** the delete with `Cannot remove work directory while {n} session(s) still reference it. Delete those sessions from the sidebar first.` and nothing is deleted. `usage_requests` (no FK) is left as analytics.
+- UI path: `WorkDirectorySwitcher` → `DysonUiHost.DeleteWorkDirectoryAsync` → `DysonSessionRuntime.ReleaseWorkDirectoryMetaTreesAsync` (stops live subagents, cancels prompts, clears queues, waits up to 10 s, flushes persistence, unregisters and disposes leases; on timeout returns `Could not stop the running agents for this work directory; nothing was deleted.`) → host unregisters/clears focus → `DeleteAsync`.
 
 ## Git origin refresh (`DysonWorkDirectoryService`)
 

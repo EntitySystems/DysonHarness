@@ -585,6 +585,103 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
     }
 
     /// <summary>
+    /// Before a work-directory delete: stops the live Meta Agent trees on
+    /// <paramref name="workDirectoryId"/> (subagents stopped, prompts cancelled, queues cleared),
+    /// waits up to <paramref name="stopTimeout"/> (default 10 s) for them to go idle, then flushes
+    /// persistence and unregisters the trees. Fails without unregistering when they will not stop.
+    /// </summary>
+    public async Task<VoidResult<string>> ReleaseWorkDirectoryMetaTreesAsync(
+        Guid workDirectoryId,
+        TimeSpan? stopTimeout = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (_disposed != 0)
+            return VoidResult<string>.AsError("Session runtime has been disposed.");
+
+        var roots = await _sessions.ListSessionsAsync(workDirectoryId, rootsOnly: true, cancellationToken)
+            .ConfigureAwait(false);
+        if (roots.IsError)
+            return VoidResult<string>.AsError(roots.Error);
+
+        var metaRootIds = roots.Value
+            .Where(s => s.ParentSessionId is null && DysonSessionPolicy.IsMetaAgent(s.AgentMode))
+            .Select(s => s.Id)
+            .ToList();
+        if (metaRootIds.Count == 0)
+            return VoidResult<string>.Success;
+
+        const string reason = "Work directory deleted.";
+        var liveTrees = new List<DysonAgentSession>();
+        foreach (var rootId in metaRootIds)
+        {
+            if (TryGetSession(rootId, out var root))
+            {
+                liveTrees.Add(root);
+                root.ClearPendingTurns();
+                await StopLiveChildrenAsync(root, reason, cancellationToken).ConfigureAwait(false);
+            }
+
+            foreach (var id in CollectMappedDescendantIds(rootId))
+            {
+                if (ClearPromptQueue(id))
+                    RaiseChanged(DysonRuntimeChangeKind.Queue, id);
+                CancelPromptTokens(id);
+            }
+        }
+
+        var deadline = DateTime.UtcNow + (stopTimeout ?? TimeSpan.FromSeconds(10));
+        while (metaRootIds.Any(IsTreeRunning) || liveTrees.Any(HasRunningChild))
+        {
+            if (DateTime.UtcNow >= deadline)
+            {
+                return FailVoid(
+                    "Could not stop the running agents for this work directory; nothing was deleted.");
+            }
+
+            await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+        }
+
+        await FlushPersistenceAsync().ConfigureAwait(false);
+        await _graphGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            foreach (var rootId in metaRootIds)
+            {
+                await UnregisterSessionTreeAsync(rootId).ConfigureAwait(false);
+                RaiseChanged(DysonRuntimeChangeKind.SessionGraph, rootId);
+            }
+        }
+        finally
+        {
+            _graphGate.Release();
+        }
+
+        return VoidResult<string>.Success;
+
+        bool IsTreeRunning(Guid rootId) =>
+            CollectMappedDescendantIds(rootId).Any(id => IsBusy(id) || HasLivePrompt(id));
+
+        static bool HasRunningChild(DysonAgentSession session) =>
+            session.SubSessions.Any(c => c.HasActiveBackgroundRun || HasRunningChild(c));
+    }
+
+    private static async Task StopLiveChildrenAsync(
+        DysonAgentSession session,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        foreach (var child in session.SubSessions.ToList())
+        {
+            if (child.Id > 0 && (!child.IsTerminal || child.HasActiveBackgroundRun))
+            {
+                await session.StopSubagentAsync(child.Id, reason, cancellationToken).ConfigureAwait(false);
+            }
+
+            await StopLiveChildrenAsync(child, reason, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
     /// Loaded live mode, else the persisted row. Missing rows are not Meta Agent
     /// (delete then returns not-found).
     /// </summary>
@@ -758,6 +855,7 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
             try
             {
                 VoidResult<string> result;
+                var turnsBefore = session.Turns.Count;
                 try
                 {
                     result = await run(session, token).ConfigureAwait(false);
@@ -770,8 +868,8 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
                 if (result.IsError)
                     return result;
 
-                var last = session.Turns.Count > 0 ? session.Turns[^1] : null;
-                if (last is not null)
+                // The turn this prompt ran, not Turns[^1]: a concurrent child turn may be newer and still running.
+                if (session.TryGetTurnRanSince(turnsBefore, out var last))
                 {
                     if (last.Kind == DysonAgentTurnKind.ShellExited)
                         DysonLongRunningShellExitedFlow.TrimInstructionAfterCompletion(last);
@@ -788,9 +886,10 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
                             DysonCompactionFlow.QueueFreshContinuationIfNeeded(session, resume: false, fifoDropped);
                     }
 
-                    foreach (var turn in session.Turns)
+                    // Skip a turn a concurrent prompt is still running: it persists when it ends.
+                    foreach (var turn in session.Turns.ToArray())
                     {
-                        if (turn.CompletedUtc is not null)
+                        if (turn.CompletedUtc is not null || session.IsTurnInFlight(turn.Id))
                             continue;
 
                         var complete = await PersistTurnCompletedAsync(session, turn, token)

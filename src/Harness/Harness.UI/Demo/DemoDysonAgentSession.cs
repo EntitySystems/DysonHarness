@@ -192,6 +192,18 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         return Result<DemoDysonAgentSession, string>.AsValue(session);
     }
 
+    /// <summary>
+    /// Cancels the fire-and-forget demo echo <see cref="CreateChildAsync"/> starts.
+    /// Does not mark the child terminal. Demo scripting only.
+    /// </summary>
+    public void CancelDemoBackgroundRun() => CancelBackgroundRun();
+
+    /// <summary>
+    /// Demo scripting only: Meta Agent Drone children stay on the registered checkout instead of
+    /// forking a git worktree (the demo sandbox is a plain temp folder, not a repository).
+    /// </summary>
+    public bool SuppressDroneWorktrees { get; set; }
+
     public override async Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
         string agentMode,
         string task,
@@ -236,7 +248,10 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
         if (attached.IsError)
             return Result<DysonStartSubagentResult, string>.AsError(attached.Error);
 
-        var (isolateWorktree, suppressWorktree) = ResolveMetaAgentDroneWorktree(agentMode);
+        var (isolateWorktree, suppressWorktree) = SuppressDroneWorktrees
+            && string.Equals(agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase)
+                ? (false, true)
+                : ResolveMetaAgentDroneWorktree(agentMode);
         var childWorktreeEnabled = suppressWorktree ? false : isolateWorktree || WorktreeEnabled;
         var childWorktreePath = suppressWorktree || isolateWorktree ? null : WorktreeAbsolutePath;
         var childWorktreeBranch = suppressWorktree || isolateWorktree ? null : WorktreeBranch;
@@ -598,6 +613,35 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
     {
         ArgumentNullException.ThrowIfNull(turn);
 
+        // Same as OpenAiCompatibleAgentSession: a host-run child turn gets a linked run CTS so
+        // inject sees it as busy and StopSubagent cancels it.
+        CancellationTokenSource? hostRunCts = null;
+        if (Parent is not null && !HasActiveBackgroundRun)
+        {
+            hostRunCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            AttachBackgroundRun(hostRunCts);
+            cancellationToken = hostRunCts.Token;
+        }
+
+        try
+        {
+            return await PromptWithTurnCoreAsync(turn, promptForReply, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (hostRunCts is not null)
+            {
+                DetachBackgroundRun(hostRunCts);
+                hostRunCts.Dispose();
+            }
+        }
+    }
+
+    private async Task<VoidResult<string>> PromptWithTurnCoreAsync(
+        DysonAgentTurn turn,
+        string promptForReply,
+        CancellationToken cancellationToken)
+    {
         ApplyUiTheme(Config.UiTheme);
 
         await OptimizeContextIfEnabledAsync(cancellationToken).ConfigureAwait(false);

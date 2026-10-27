@@ -1,8 +1,10 @@
 @namespace Harness.UI.Components.Sessions
 @using DysonHarness
+@using Harness.UI.Demo
 @using Microsoft.AspNetCore.Components.Web
 @inject IDysonWorkDirectoryRepository WorkDirs
 @inject DysonWorkDirectoryService WorkDirectoryService
+@inject DysonUiHost Host
 
 <div class="workdir-switcher">
     <div class="sidebar__section-label">Work directory</div>
@@ -336,7 +338,7 @@
     private async Task RemoveAsync(Guid id)
     {
         _error = null;
-        var remove = await WorkDirs.DeleteAsync(id);
+        var remove = await Host.DeleteWorkDirectoryAsync(id);
         if (remove.IsError)
         {
             _error = remove.Error;

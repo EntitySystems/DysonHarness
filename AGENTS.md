@@ -15,7 +15,7 @@ AI model harness.
 
 - Engine: [docs/engine/README.md](docs/engine/README.md) · [api-surface](docs/engine/api-surface.md) · [meta-agent](docs/engine/meta-agent.md)
 - OpenRules: [docs/openrules/README.md](docs/openrules/README.md) (`openrules.json` + Root/AutoInclude system prompt)
-- Storage: [docs/storage/cloud-hosting.md](docs/storage/cloud-hosting.md) · [models](docs/storage/models.md) · [sessions](docs/storage/sessions.md) · [plans](docs/storage/plans.md) · [work-directories](docs/storage/work-directories.md)
+- Storage: [docs/storage/cloud-hosting.md](docs/storage/cloud-hosting.md) · [models](docs/storage/models.md) · [sessions](docs/storage/sessions.md) · [plans](docs/storage/plans.md) · [scratch](docs/storage/scratch.md) · [work-directories](docs/storage/work-directories.md)
 - Inference providers: [docs/inference-providers/README.md](docs/inference-providers/README.md)
 - UI: [docs/ui/README.md](docs/ui/README.md)
 - Packaging: [docs/packaging/releases.md](docs/packaging/releases.md) (continuous downloads: zips + Windows MSI) · [webview.md](docs/packaging/webview.md) (CefSharp WPF host + agent browser)
@@ -31,7 +31,7 @@ AI model harness.
 - UI CSS isolation: [rules/rules_ui_css.md](rules/rules_ui_css.md) (new CSS in `<Component>.razor.css`; tokens/keyframes stay in `app.css`)
 - Blazor circuit: [rules/rules_blazor_circuit.md](rules/rules_blazor_circuit.md) (no sync or blocking work on the circuit without a thread-pool hop)
 - Ponytail (lazy senior, mandatory): [rules/rules_ponytail.md](rules/rules_ponytail.md)
-- Management model (Dyson only): [rules/rules_management_model.md](rules/rules_management_model.md) (every root Meta Agent `StartAsyncMetaAgentDrone` and `BeginBuildPlan` sets `modelSlug` `grok-4.7` and `reasoningEffort` `high` — omit selects the Settings Meta Agent Drone default, not the parent; workers, explores, and reviews inherit the parent model)
+- Management model (Dyson only): [rules/rules_management_model.md](rules/rules_management_model.md) (every root Meta Agent `StartAsyncMetaAgentDrone` and `BeginBuildPlan` sets `modelSlug` `grok-4.7` (management/ops), `claude-opus-5-5` (complex tasks, planning) or `claude-sonnet-5-5` (simple tasks) and `reasoningEffort` `high`; unsure means Opus for authoring, Grok for pure ops — omit selects the Settings Meta Agent Drone default, not the parent; workers, explores, and reviews inherit the parent model)
 - Cursor rules migration: [rules/rules_cursor_rules.md](rules/rules_cursor_rules.md) (aimed at Cursor; `.cursor/` is gitignored, rules live in `rules/`)
 - Model roles: [rules/rules_model_roles.md](rules/rules_model_roles.md) (migrated from `.cursor/rules/model-roles.mdc`)
 
