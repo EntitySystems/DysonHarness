@@ -855,6 +855,7 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
             try
             {
                 VoidResult<string> result;
+                var turnsBefore = session.Turns.Count;
                 try
                 {
                     result = await run(session, token).ConfigureAwait(false);
@@ -867,8 +868,8 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
                 if (result.IsError)
                     return result;
 
-                var last = session.Turns.Count > 0 ? session.Turns[^1] : null;
-                if (last is not null)
+                // The turn this prompt ran, not Turns[^1]: a concurrent child turn may be newer and still running.
+                if (session.TryGetTurnRanSince(turnsBefore, out var last))
                 {
                     if (last.Kind == DysonAgentTurnKind.ShellExited)
                         DysonLongRunningShellExitedFlow.TrimInstructionAfterCompletion(last);
@@ -885,9 +886,10 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
                             DysonCompactionFlow.QueueFreshContinuationIfNeeded(session, resume: false, fifoDropped);
                     }
 
-                    foreach (var turn in session.Turns)
+                    // Skip a turn a concurrent prompt is still running: it persists when it ends.
+                    foreach (var turn in session.Turns.ToArray())
                     {
-                        if (turn.CompletedUtc is not null)
+                        if (turn.CompletedUtc is not null || session.IsTurnInFlight(turn.Id))
                             continue;
 
                         var complete = await PersistTurnCompletedAsync(session, turn, token)

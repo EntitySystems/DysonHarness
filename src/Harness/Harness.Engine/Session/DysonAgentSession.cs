@@ -53,6 +53,11 @@ public abstract class DysonAgentSession
     private Guid _contextLimitTrippedTurnId;
     private Guid _compactionRequestedTurnId;
     private Task _compactionMarkerWrites = Task.CompletedTask;
+    // ponytail: one compaction summary per session behind a coarse lock; upgrade path is a per-session
+    // state machine if more compaction kinds appear.
+    private readonly object _summaryGate = new();
+    private Task<VoidResult<string>>? _inFlightSummary;
+    private bool _inFlightSummaryResume;
     private int _childReportRemindersSent;
     private bool _subagentReportAccepted;
     private string? _systemPromptSuffix;
@@ -1655,6 +1660,72 @@ public abstract class DysonAgentSession
     /// <summary>True when a queued harness turn has <paramref name="kind"/> (e.g. a CompactConversation FullSummarize).</summary>
     internal bool HasPendingTurnOfKind(DysonAgentTurnKind kind) => _pendingTurns.Any(t => t.Kind == kind);
 
+    /// <summary>True when the fresh Continuation a successful summary queues is already queued.</summary>
+    internal bool HasPendingAfterSummaryResume => _pendingTurns.Any(t => t.AfterSummaryResume);
+
+    /// <summary>A compaction summary (<see cref="DysonCompactionFlow.RunAsync"/>) is running on this session.</summary>
+    internal bool IsSummaryInFlight
+    {
+        get
+        {
+            lock (_summaryGate)
+                return _inFlightSummary is not null;
+        }
+    }
+
+    /// <summary>
+    /// Single-flight entry for <see cref="DysonCompactionFlow.RunAsync"/>. Records the pending marker for
+    /// <paramref name="endedTurn"/>, then returns the running summary (and ORs <paramref name="resume"/> into
+    /// it) when one is in flight; otherwise this caller owns the new summary through <paramref name="owner"/>
+    /// and null is returned. Record and attach share the lock with <see cref="EndSummary"/>'s clear, so an
+    /// attached trip never outlives the summary that covered it.
+    /// </summary>
+    internal Task<VoidResult<string>>? BeginOrAttachSummary(
+        DysonAgentTurn? endedTurn,
+        bool resume,
+        out TaskCompletionSource<VoidResult<string>>? owner)
+    {
+        lock (_summaryGate)
+        {
+            if (endedTurn is not null)
+                RecordCompactionPending(endedTurn.Id);
+
+            if (_inFlightSummary is { } running)
+            {
+                _inFlightSummaryResume |= resume;
+                owner = null;
+                return running;
+            }
+
+            owner = new TaskCompletionSource<VoidResult<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _inFlightSummary = owner.Task;
+            _inFlightSummaryResume = resume;
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Owner side: clears the in-flight summary (and, on success, the pending marker) and returns whether
+    /// the owner or any attached caller was paused. A later caller starts a new summary. No-op (false)
+    /// once cleared.
+    /// </summary>
+    internal bool EndSummary(TaskCompletionSource<VoidResult<string>> owner, bool succeeded)
+    {
+        lock (_summaryGate)
+        {
+            if (!ReferenceEquals(_inFlightSummary, owner.Task))
+                return false;
+
+            if (succeeded)
+                ClearCompactionPending();
+
+            var resume = _inFlightSummaryResume;
+            _inFlightSummary = null;
+            _inFlightSummaryResume = false;
+            return resume;
+        }
+    }
+
     /// <summary>Drops all queued harness turns (e.g. on interrupt).</summary>
     public void ClearPendingTurns()
     {
@@ -1698,12 +1769,44 @@ public abstract class DysonAgentSession
     /// </summary>
     public bool IsTurnInFlight(Guid turnId)
     {
-        foreach (var turn in _inFlightPromptStack)
+        // Push/pop run under _modelGate; a host post-prompt check can race a concurrent prompt's push.
+        lock (_modelGate)
         {
-            if (turn.Id == turnId)
-                return true;
+            foreach (var turn in _inFlightPromptStack)
+            {
+                if (turn.Id == turnId)
+                    return true;
+            }
         }
 
+        return false;
+    }
+
+    /// <summary>
+    /// The turn a prompt that started with <paramref name="turnCountBefore"/> turns ran: the newest turn
+    /// appended since then that is not in flight (a concurrent turn still running is skipped). When nothing
+    /// was appended, the newest turn. False when there is no such turn.
+    /// </summary>
+    public bool TryGetTurnRanSince(int turnCountBefore, out DysonAgentTurn turn)
+    {
+        var turns = TurnHistory;
+        var count = turns.Count;
+        if (count > 0 && count <= turnCountBefore)
+        {
+            turn = turns[count - 1];
+            return true;
+        }
+
+        for (var i = count - 1; i >= Math.Max(0, turnCountBefore); i--)
+        {
+            if (IsTurnInFlight(turns[i].Id))
+                continue;
+
+            turn = turns[i];
+            return true;
+        }
+
+        turn = null!;
         return false;
     }
 

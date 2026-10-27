@@ -94,6 +94,10 @@ public static class DysonCompactionFlow
     /// dropped or the turn was paused; parent injections, user prompts, and external events stay. On a failed
     /// summary nothing is excluded or queued, the summary turn is closed out of context, and the marker stays
     /// so the next prompt or activate retries.
+    /// Single-flight per session: a caller that arrives while a summary is running (a concurrent paused or
+    /// over-limit turn, or a pre-prompt trip) attaches to it, logs <c>summary already in flight</c>, and gets
+    /// the owner's result. It creates no summary turn and queues no Continuation; the owner queues one,
+    /// resuming when the owner or any attached caller was paused.
     /// </summary>
     public static async Task<VoidResult<string>> RunAsync(
         DysonAgentSession session,
@@ -105,9 +109,44 @@ public static class DysonCompactionFlow
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(runSummaryTurn);
 
-        if (endedTurn is not null)
-            session.RecordCompactionPending(endedTurn.Id);
+        var running = session.BeginOrAttachSummary(endedTurn, resume, out var owner);
+        if (running is not null)
+        {
+            session.AppendLog(
+                $"compaction: summary already in flight, turn {(endedTurn is null ? "(pre-prompt)" : endedTurn.Id.ToString("N")[..8])} attached");
+            return await running.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
 
+        VoidResult<string>? result = null;
+        try
+        {
+            result = await RunOwnedAsync(session, endedTurn, resume, owner!, runSummaryTurn, cancellationToken)
+                .ConfigureAwait(false);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            // The owner keeps its behaviour (a cancel rethrows); attached callers get a failed result.
+            result = VoidResult<string>.AsError(
+                $"{FailedTitle}: {ex.Message} Compaction stays pending and runs again before the next request.",
+                ex);
+            throw;
+        }
+        finally
+        {
+            session.EndSummary(owner!, succeeded: false);
+            owner!.TrySetResult(result!);
+        }
+    }
+
+    private static async Task<VoidResult<string>> RunOwnedAsync(
+        DysonAgentSession session,
+        DysonAgentTurn? endedTurn,
+        bool resume,
+        TaskCompletionSource<VoidResult<string>> owner,
+        Func<DysonAgentTurn, CancellationToken, Task<VoidResult<string>>> runSummaryTurn,
+        CancellationToken cancellationToken)
+    {
         session.AppendLog(endedTurn is null
             ? "compaction: summarizing a pending trip before this prompt"
             : $"compaction: summarizing after turn {endedTurn.Id.ToString("N")[..8]} {(resume ? "paused" : "ended")}");
@@ -141,7 +180,9 @@ public static class DysonCompactionFlow
             session.RaiseTurnUpdated(summary);
         }
 
-        session.ClearCompactionPending();
+        // Clears the marker, ends single-flight, and reads the merged resume flag: an attached paused turn
+        // resumes through this one continuation. A caller arriving after this starts its own summary.
+        resume = session.EndSummary(owner, succeeded: true) || resume;
         // The fresh continuation is queued here for every session: it is what a paused turn resumes
         // with, and a root host drains it into the FIFO afterwards. The queue clear itself stays on the
         // apply path (children and a pre-prompt summary here; a root after the prompt returns), so a
@@ -165,6 +206,13 @@ public static class DysonCompactionFlow
         var dropped = DysonQueuedTurnAfterSummary.RetainPendingTurns(session) + alsoDropped;
         if (dropped == 0 && !resume)
             return;
+
+        // KeepAfterSummary keeps an AfterSummaryResume turn, so a second summary would stack another.
+        if (session.HasPendingAfterSummaryResume)
+        {
+            session.AppendLog("compaction: continuation already queued");
+            return;
+        }
 
         session.EnqueuePendingTurn(CreateFreshContinuationTurn());
         session.AppendLog("compaction: continuation queued");

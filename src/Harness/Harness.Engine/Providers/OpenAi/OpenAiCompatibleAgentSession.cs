@@ -135,7 +135,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     private readonly IDysonPlanRepository? _plans;
     // ponytail: one hop per prompt; Explore recap shares this so a main-loop hop is not repeated
     private bool _fallbackAppliedThisTurn;
-    private Guid _pausedForCompactionTurnId;
+    // Per turn, not one field: two concurrent turns can both pause before either compacts.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> _pausedForCompactionTurnIds = new();
 
     public OpenAiCompatibleAgentSession(
         string agentMode,
@@ -756,6 +757,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         VoidResult<string> result,
         CancellationToken cancellationToken)
     {
+        var paused = _pausedForCompactionTurnIds.TryRemove(turn.Id, out _);
         if (result.IsError)
             return result;
 
@@ -766,7 +768,6 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             return result;
         }
 
-        var paused = _pausedForCompactionTurnId == turn.Id;
         if (!paused)
         {
             var limit = ResolveEffectiveMaxTargetContextTokens();
@@ -774,7 +775,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             var over = limit > 0 && live > limit;
             if (!DysonCompactionFlow.CanCompact(this, turn)
                 || !(over || IsCompactionPending)
-                || HasPendingTurnOfKind(DysonAgentTurnKind.FullSummarize))
+                || HasPendingTurnOfKind(DysonAgentTurnKind.FullSummarize)
+                || IsSummaryInFlight)
             {
                 return result;
             }
@@ -1192,7 +1194,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         ApplyAssistantText(turn, DysonCompactionFlow.PausedNote);
         turn.FinishStreaming();
         turn.FinishReasoningStreaming();
-        _pausedForCompactionTurnId = turn.Id;
+        _pausedForCompactionTurnIds[turn.Id] = 0;
         return VoidResult<string>.Success;
     }
 
