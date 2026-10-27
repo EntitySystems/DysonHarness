@@ -26,7 +26,11 @@ public class DysonMetaAgentNoFileAccessTests
         Assert.True(pipeline.Tools.ContainsKey("LoadSkill"));
         Assert.True(pipeline.Tools.ContainsKey("GetOpenRulesConfig"));
 
-        foreach (var name in new[] { "ListPlans", "SetPlanStatus", "BeginBuildPlan", "DeletePlan" })
+        foreach (var name in new[]
+        {
+            "ListPlans", "SetPlanStatus", "BeginBuildPlan", "DeletePlan",
+            "CreateMetaScratchFile", "ReadMetaScratchFile", "EditMetaScratchFile", "DeleteMetaScratchFile",
+        })
         {
             Assert.True(pipeline.Tools.ContainsKey(name), $"Meta Agent catalog must contain '{name}'.");
             AssertNoPathArgument(pipeline.Tools[name]);

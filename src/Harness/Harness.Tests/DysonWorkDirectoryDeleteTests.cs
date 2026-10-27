@@ -19,7 +19,7 @@ public class DysonWorkDirectoryDeleteTests
         var deleted = await DysonTempDb.WorkDirectories(accessor).DeleteAsync(seeded.WorkDirectoryId);
 
         Assert.True(deleted.IsSuccess, deleted.IsError ? deleted.Error : null);
-        Assert.Equal((0, 0, 0, 0, 0, 0), await CountAsync(accessor));
+        Assert.Equal((0, 0, 0, 0, 0, 0, 0), await CountAsync(accessor));
     }
 
     [Fact]
@@ -41,7 +41,7 @@ public class DysonWorkDirectoryDeleteTests
 
         Assert.True(deleted.IsError);
         Assert.Contains("1 session(s) still reference it", deleted.Error);
-        Assert.Equal((3, 1, 1, 1, 1, 1), await CountAsync(accessor));
+        Assert.Equal((3, 1, 1, 1, 1, 1, 1), await CountAsync(accessor));
     }
 
     private static async Task<(Guid WorkDirectoryId, Guid MetaId)> SeedAsync(DysonDbAccessor accessor)
@@ -107,6 +107,8 @@ public class DysonWorkDirectoryDeleteTests
         })).IsSuccess);
         Assert.True((await DysonTempDb.Plans(accessor)
             .CreateAsync(wd, DysonPlanKind.MetaPlan, "Plan", "# plan", planRelativePath: null)).IsSuccess);
+        Assert.True((await DysonTempDb.ScratchFiles(accessor)
+            .CreateAsync(wd, "Scratch", "# scratch")).IsSuccess);
 
         return (wd, meta);
     }
@@ -117,7 +119,7 @@ public class DysonWorkDirectoryDeleteTests
         return created.Value;
     }
 
-    private static Task<(int Sessions, int Turns, int Logs, int Todos, int Plans, int WorkDirectories)> CountAsync(
+    private static Task<(int Sessions, int Turns, int Logs, int Todos, int Plans, int ScratchFiles, int WorkDirectories)> CountAsync(
         DysonDbAccessor accessor) =>
         accessor.RunAsync(async (db, ct) => (
             await db.Sessions.CountAsync(ct),
@@ -125,5 +127,6 @@ public class DysonWorkDirectoryDeleteTests
             await db.SessionLogs.CountAsync(ct),
             await db.SessionTodos.CountAsync(ct),
             await db.Plans.CountAsync(ct),
+            await db.MetaScratchFiles.CountAsync(ct),
             await db.WorkDirectories.CountAsync(ct)));
 }

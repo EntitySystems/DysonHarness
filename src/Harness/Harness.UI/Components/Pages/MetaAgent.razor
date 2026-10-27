@@ -73,10 +73,35 @@
             else
             {
                 <div class="meta-stage__body">
-                    <aside class="meta-plans" aria-label="Plans">
-                        <MetaPlanList @ref="_planList"
-                                      WorkDirectoryId="WorkDirectoryId"
-                                      CanBuildPlans="IsMetaFocused" />
+                    <aside class="meta-plans" aria-label="Plans and scratch files">
+                        <div class="rail-tabs">
+                            <div class="rail-tabs__tabs" role="tablist" aria-label="Plans and scratch files">
+                                <button type="button" role="tab"
+                                        class="rail-tabs__tab@(_plansTab == MetaPlansTab.Plans ? " rail-tabs__tab--active" : null)"
+                                        aria-selected="@(_plansTab == MetaPlansTab.Plans)"
+                                        @onclick="() => _plansTab = MetaPlansTab.Plans">
+                                    Plans
+                                </button>
+                                <button type="button" role="tab"
+                                        class="rail-tabs__tab@(_plansTab == MetaPlansTab.Scratch ? " rail-tabs__tab--active" : null)"
+                                        aria-selected="@(_plansTab == MetaPlansTab.Scratch)"
+                                        @onclick="() => _plansTab = MetaPlansTab.Scratch">
+                                    Scratch
+                                </button>
+                            </div>
+                            <div class="rail-tabs__body" role="tabpanel">
+                                @if (_plansTab == MetaPlansTab.Plans)
+                                {
+                                    <MetaPlanList @ref="_planList"
+                                                  WorkDirectoryId="WorkDirectoryId"
+                                                  CanBuildPlans="IsMetaFocused" />
+                                }
+                                else
+                                {
+                                    <MetaScratchList WorkDirectoryId="WorkDirectoryId" />
+                                }
+                            </div>
+                        </div>
                     </aside>
 
                     <div class="meta-main">
@@ -268,6 +293,7 @@
     private IReadOnlyList<DysonSessionSummary> _sessions = [];
     private Guid? _activeWorkDirectoryId;
     private MetaRailTab _metaRailTab = MetaRailTab.Agents;
+    private MetaPlansTab _plansTab = MetaPlansTab.Plans;
     private string? _error;
     private string? _workDirectoryName;
     private bool _unknownWorkDirectory;
@@ -609,8 +635,8 @@
     private void OnHostChanged(DysonHostStateChangedEvent evt) => _ = InvokeAsync(async () =>
     {
         _sessions = OverlayLiveTitle(_sessions);
-        if ((evt.Kind & PlanRefreshMask) != 0 && _planList is not null)
-            await _planList.RefreshAsync();
+        if ((evt.Kind & PlanRefreshMask) != 0)
+            await (_planList?.RefreshAsync() ?? Task.CompletedTask);
         await SyncModelFromHostAsync();
         StateHasChanged();
     });
@@ -844,6 +870,8 @@
             _error = result.Error;
         await RefreshSessionsAsync();
     }
+
+    private enum MetaPlansTab { Plans, Scratch }
 
     private enum MetaRailTab { Agents, Files }
 

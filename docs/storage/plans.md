@@ -111,6 +111,8 @@ Task<VoidResult<string>> DeleteAsync(long planId, Guid workDirectoryId, …);
 
 SQLite busy/locked contention is retried by `DysonDbAccessor`; exhausted retries and other failures return error Results, never thrown exceptions.
 
+See also [scratch.md](scratch.md) for work-directory scratch files (a separate table; not plans).
+
 ## Engine tools (contract)
 
 Every plan tool in `DysonWorkspaceToolExecutor.MetaAgent` is scoped by the session `_workDirectoryId`. Sequential `planId`s are guessable; a `planId` alone must never cross work directories. `planId <= 0` → `"planId must be a positive integer"`.

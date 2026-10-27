@@ -120,6 +120,45 @@ public class DysonConversationActionTests
     }
 
     [Fact]
+    public async Task OpenScratch_ResolvesId()
+    {
+        var twelve = await DysonBuiltInConversationActions.TryResolveAsync(
+            "open_scratch:12", null, CancellationToken.None);
+        Assert.NotNull(twelve);
+        Assert.True(twelve!.IsSuccess, twelve.Error);
+        Assert.Equal(DysonBuiltInConversationKind.OpenScratch, twelve.Value.Kind);
+        Assert.Equal(12, twelve.Value.PlanId);
+        Assert.Null(twelve.Value.PathOrUrl);
+
+        var padded = await DysonBuiltInConversationActions.TryResolveAsync(
+            "open_scratch:01", null, CancellationToken.None);
+        Assert.NotNull(padded);
+        Assert.True(padded!.IsSuccess, padded.Error);
+        Assert.Equal(1, padded.Value.PlanId);
+    }
+
+    [Fact]
+    public async Task OpenScratch_NonNumeric_Errors()
+    {
+        foreach (var key in new[] { "open_scratch:", "open_scratch:0", "open_scratch:-1", "open_scratch:nope", "open_scratch:1.5", "open_scratch:+1" })
+        {
+            var resolved = await DysonBuiltInConversationActions.TryResolveAsync(key, null, CancellationToken.None);
+            Assert.NotNull(resolved);
+            Assert.True(resolved!.IsError);
+            Assert.Equal("open_scratch: scratch file id must be a positive integer", resolved.Error);
+        }
+    }
+
+    [Fact]
+    public void OpenScratch_IsReservedPrefix()
+    {
+        Assert.True(DysonBuiltInConversationActions.IsReservedPrefix("open_scratch:1"));
+        Assert.True(DysonBuiltInConversationActions.IsReservedPrefix("  open_scratch:"));
+        Assert.False(DysonBuiltInConversationActions.IsReservedPrefix("OPEN_SCRATCH:1"));
+        Assert.False(DysonBuiltInConversationActions.IsReservedPrefix("open_scratchpad:1"));
+    }
+
+    [Fact]
     public async Task Open_file_accepts_relative_path()
     {
         var root = CreateTempDir();

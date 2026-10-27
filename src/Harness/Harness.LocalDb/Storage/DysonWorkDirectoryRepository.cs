@@ -300,7 +300,7 @@ public sealed class DysonWorkDirectoryRepository(
             }
 
             // One SaveChanges = one transaction: meta trees deepest-first (turns, logs, todos cascade),
-            // then the workdir (plans, configuration, plugin installations cascade).
+            // then the workdir (plans, meta scratch files, configuration, plugin installations cascade).
             db.WorkDirectories.Remove(entity);
             await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;

@@ -28,6 +28,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly IDysonWorkDirectoryRepository _workDirectories;
     private readonly IDysonWorkDirectoryConfigurationRepository _workDirectoryConfigurations;
     private readonly IDysonPlanRepository _plans;
+    private readonly IDysonMetaScratchFileRepository? _scratchFiles;
     private readonly IDysonSubjectSettingsRepository _appSettings;
     private readonly IDysonConfiguredShellRepository _configuredShells;
     private readonly DysonCliProxyHost _cliProxy;
@@ -146,7 +147,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         IDysonUsageAnalyticsRepository? usageAnalytics = null,
         DysonMessageBus? bus = null,
         DysonSessionEventPublisher? sessionEvents = null,
-        FileStorageConnectService? fileStorageConnect = null)
+        FileStorageConnectService? fileStorageConnect = null,
+        IDysonMetaScratchFileRepository? scratchFiles = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -154,6 +156,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _workDirectoryConfigurations = workDirectoryConfigurations
             ?? throw new ArgumentNullException(nameof(workDirectoryConfigurations));
         _plans = plans ?? throw new ArgumentNullException(nameof(plans));
+        _scratchFiles = scratchFiles;
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         _configuredShells = configuredShells ?? throw new ArgumentNullException(nameof(configuredShells));
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -2255,6 +2258,39 @@ public sealed class DysonUiHost : IAsyncDisposable
         return VoidResult<string>.Success;
     }
 
+    /// <summary>
+    /// Opens a DB-backed meta scratch file in the file viewer (no disk read, no actions).
+    /// Display path is <c>metascratch:{id}/{slug}.md</c>.
+    /// </summary>
+    public async Task<VoidResult<string>> OpenMetaScratchFileAsync(
+        long id,
+        Guid workDirectoryId,
+        CancellationToken cancellationToken = default)
+    {
+        LastError = null;
+        if (_scratchFiles is null)
+        {
+            const string error = "Scratch files are not available in this session (no database).";
+            LastError = error;
+            Notify(DysonHostChangeKind.Error);
+            return VoidResult<string>.AsError(error);
+        }
+
+        var loaded = await _scratchFiles.GetAsync(id, workDirectoryId, cancellationToken).ConfigureAwait(true);
+        if (loaded.IsError)
+        {
+            LastError = loaded.Error;
+            Notify(DysonHostChangeKind.Error);
+            return VoidResult<string>.AsError(loaded.Error);
+        }
+
+        var file = loaded.Value;
+        var path = DysonMetaScratchDisplayPath.Format(file.Id, file.Title);
+        await OpenFileViewerContentAsync(path, file.Content ?? "", actions: null, cancellationToken)
+            .ConfigureAwait(true);
+        return VoidResult<string>.Success;
+    }
+
     private bool HasMetaAgentRuntime =>
         _session is { } session
         && session.PersistenceId != Guid.Empty
@@ -3502,6 +3538,18 @@ public sealed class DysonUiHost : IAsyncDisposable
                     return Result<string, string>.AsError("Work directory id is required.");
 
                 var opened = await OpenMetaPlanAsync(intent.PlanId, workDirectoryId, cancellationToken)
+                    .ConfigureAwait(true);
+                return opened.IsError
+                    ? Result<string, string>.AsError(opened.Error)
+                    : Result<string, string>.AsValue("");
+            }
+            case DysonBuiltInConversationKind.OpenScratch:
+            {
+                var workDirectoryId = SessionWorkDirectoryId(session);
+                if (workDirectoryId == Guid.Empty)
+                    return Result<string, string>.AsError("Work directory id is required.");
+
+                var opened = await OpenMetaScratchFileAsync(intent.PlanId, workDirectoryId, cancellationToken)
                     .ConfigureAwait(true);
                 return opened.IsError
                     ? Result<string, string>.AsError(opened.Error)
@@ -5440,6 +5488,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             BrowserControl = _browserControl,
             Bus = Bus,
+            MetaScratchFiles = _scratchFiles,
             PluginContributions = contributions,
             UiTheme = resolvedUiTheme,
             AppSettings = _appSettings,
