@@ -787,8 +787,9 @@ public class DysonSessionRuntimeTests
         var firstResult = await first.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(firstResult.IsError);
         Assert.Equal(DysonSessionRuntime.PromptSupersededError, firstResult.Error);
+        // The gate-waiter was not cancelled: it takes the released gate and runs.
+        await secondEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(second.IsCompleted);
-        Assert.False(secondEntered.Task.IsCompleted);
 
         var queued = harness.Runtime.GetQueuedPrompts(sessionId);
         Assert.Equal(3, queued.Count);
