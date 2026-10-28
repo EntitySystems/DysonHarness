@@ -4624,7 +4624,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return null;
 
         var latest = session.Turns.Count > 0 ? session.Turns[^1] : null;
-        var modelLabel = DysonSubagentHostLogic.FormatProviderModelLabel(session.Provider);
+        var modelLabel = DysonSubagentHostLogic.FormatProviderModelLabel(session.SelectedProvider);
         if (string.IsNullOrWhiteSpace(modelLabel))
         {
             var parent = session.Parent;
@@ -4635,7 +4635,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 parent = registeredParent;
             }
 
-            modelLabel = DysonSubagentHostLogic.FormatProviderModelLabel(parent?.Provider);
+            modelLabel = DysonSubagentHostLogic.FormatProviderModelLabel(parent?.SelectedProvider);
         }
 
         return new DysonSubagentCardState

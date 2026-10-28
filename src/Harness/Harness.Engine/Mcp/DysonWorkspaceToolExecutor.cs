@@ -124,6 +124,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "WaitForSubagent" => await WaitForSubagentAsync(call, cancellationToken).ConfigureAwait(false),
                 "InspectSubagentLog" => await InspectSubagentLogAsync(call, cancellationToken).ConfigureAwait(false),
                 "StopSubagent" => await StopSubagentAsync(call, cancellationToken).ConfigureAwait(false),
+                "ChangeSubagentAIModel" => await ChangeSubagentAIModelAsync(call, cancellationToken).ConfigureAwait(false),
                 "SubmitSubagentReport" => await SubmitSubagentReportAsync(call, cancellationToken).ConfigureAwait(false),
                 "AskQuestion" => await AskQuestionAsync(call, cancellationToken).ConfigureAwait(false),
                 "AskQuestionFromParent" => await AskQuestionFromParentAsync(call, cancellationToken).ConfigureAwait(false),
@@ -799,6 +800,49 @@ public sealed partial class DysonWorkspaceToolExecutor
             .ConfigureAwait(false);
 
         return Ok(call, stopped.Value);
+    }
+
+    private async Task<DysonToolCallResult> ChangeSubagentAIModelAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        int subagentId;
+        string? modelSlug;
+        string? reasoningEffort;
+        var rootTool = DysonSessionPolicy.IsMetaAgent(_session.Mode);
+        var idName = rootTool ? "agentId" : "subagentId";
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var id = GetInt(doc.RootElement, "agentId") ?? GetInt(doc.RootElement, "subagentId");
+            if (id is null or < 1)
+                return Error(call, $"ChangeSubagentAIModel: {idName} (≥ 1) is required.");
+            subagentId = id.Value;
+            modelSlug = GetOptionalString(doc.RootElement, "modelSlug");
+            reasoningEffort = GetOptionalString(doc.RootElement, "reasoningEffort");
+        }
+        catch (JsonException)
+        {
+            return Error(call, "ChangeSubagentAIModel: invalid JSON arguments.");
+        }
+
+        var changed = await _session.ChangeSubagentModelAsync(
+                subagentId, modelSlug, reasoningEffort, cancellationToken)
+            .ConfigureAwait(false);
+        if (changed.IsError)
+            return Error(call, changed.Error);
+
+        var r = changed.Value;
+        return Ok(call, JsonSerializer.Serialize(new
+        {
+            subagentId = rootTool ? (int?)null : r.SubagentId,
+            agentId = rootTool ? r.SubagentId : (int?)null,
+            persistenceId = r.PersistenceId,
+            modelSlug = r.ModelSlug,
+            reasoningEffort = r.ReasoningEffort,
+            modelLabel = r.ModelLabel,
+            applied = r.Applied,
+        }));
     }
 
     private async Task<DysonToolCallResult> SubmitSubagentReportAsync(

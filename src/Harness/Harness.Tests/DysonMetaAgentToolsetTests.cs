@@ -18,6 +18,21 @@ public class DysonMetaAgentToolsetTests
     }
 
     [Fact]
+    public void ChangeSubagentAIModel_uses_agentId_on_root_and_subagentId_in_default_tools()
+    {
+        var root = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.MetaAgent);
+        Assert.Contains("agentId", root.Tools["ChangeSubagentAIModel"].InputSchemaJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("subagentId", root.Tools["ChangeSubagentAIModel"].InputSchemaJson, StringComparison.Ordinal);
+
+        foreach (var mode in new[] { DysonAgentModes.Work, DysonAgentModes.Drone, DysonAgentModes.MetaAgentDrone })
+        {
+            var pipeline = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), mode);
+            Assert.True(pipeline.Tools.ContainsKey("ChangeSubagentAIModel"), mode);
+            Assert.Contains("subagentId", pipeline.Tools["ChangeSubagentAIModel"].InputSchemaJson, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void Meta_agent_catalog_keeps_browser_tools_when_browser_control_is_set()
     {
         var pipeline = DysonSessionToolsetBuilder.Build(

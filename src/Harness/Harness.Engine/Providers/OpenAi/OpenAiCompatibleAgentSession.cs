@@ -551,9 +551,35 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 OpenAiProvider.WithReasoningEffort(reasoningEffort));
         }
 
+        return await ResolveOpenAiSlugProviderAsync(modelSlug, reasoningEffort, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    internal override Task<Result<OpenAiCompatibleAgentProvider, string>> ResolveSwitchProviderAsync(
+        OpenAiCompatibleAgentProvider current,
+        string? modelSlug,
+        string? reasoningEffort,
+        CancellationToken cancellationToken)
+    {
+        if (modelSlug is not null)
+            return ResolveOpenAiSlugProviderAsync(modelSlug, reasoningEffort, cancellationToken);
+
+        return Task.FromResult(Result<OpenAiCompatibleAgentProvider, string>.AsValue(
+            current.WithReasoningEffort(reasoningEffort)));
+    }
+
+    /// <summary>Slug or display alias to a fresh OpenAI-compatible provider. Null effort = the slug default.</summary>
+    private async Task<Result<OpenAiCompatibleAgentProvider, string>> ResolveOpenAiSlugProviderAsync(
+        string modelSlug,
+        string? reasoningEffort,
+        CancellationToken cancellationToken)
+    {
         if (_models is null)
+        {
             return Result<OpenAiCompatibleAgentProvider, string>.AsError(
                 "Model store is required to resolve modelSlug.");
+        }
 
         var found = await _models.FindSlugByNameAsync(modelSlug.Trim(), cancellationToken)
             .ConfigureAwait(false);
