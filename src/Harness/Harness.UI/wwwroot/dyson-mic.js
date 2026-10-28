@@ -131,6 +131,67 @@ window.dysonMic = (function () {
 
     detachHotkey: function (el) {
       if (el) el._dysonMicRef = null;
+    },
+
+    /**
+     * Voice-mode push to talk: Ctrl+M on the window, capture phase, one active ref.
+     * stopImmediatePropagation so the composer attachHotkey never sees the key.
+     */
+    attachVoiceHotkey: function (dotNetRef) {
+      if (!dotNetRef) return;
+      this.detachVoiceHotkey();
+      var hook = { ref: dotNetRef, held: false };
+      function call(name) {
+        hook.ref.invokeMethodAsync(name).catch(function () {});
+      }
+      function isM(e) {
+        return e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && (e.key === "m" || e.key === "M");
+      }
+      function onKeyDown(e) {
+        if (!isM(e)) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (e.repeat || hook.held) return;
+        hook.held = true;
+        call("PttDown");
+      }
+      function onKeyUp(e) {
+        if (!hook.held) return;
+        if (e.key !== "m" && e.key !== "M" && e.key !== "Control") return;
+        hook.held = false;
+        call("PttUp");
+      }
+      function release() {
+        if (!hook.held) return;
+        hook.held = false;
+        call("PttUp");
+      }
+      function onVisibility() {
+        if (document.visibilityState === "hidden") release();
+      }
+      hook.down = onKeyDown;
+      hook.up = onKeyUp;
+      hook.blur = release;
+      hook.visibility = onVisibility;
+      window.addEventListener("keydown", onKeyDown, true);
+      window.addEventListener("keyup", onKeyUp, true);
+      window.addEventListener("blur", release, true);
+      document.addEventListener("visibilitychange", onVisibility, true);
+      window._dysonVoiceHotkey = hook;
+    },
+
+    detachVoiceHotkey: function () {
+      var hook = window._dysonVoiceHotkey;
+      if (!hook) return;
+      window._dysonVoiceHotkey = null;
+      if (hook.held) {
+        hook.held = false;
+        hook.ref.invokeMethodAsync("PttUp").catch(function () {});
+      }
+      window.removeEventListener("keydown", hook.down, true);
+      window.removeEventListener("keyup", hook.up, true);
+      window.removeEventListener("blur", hook.blur, true);
+      document.removeEventListener("visibilitychange", hook.visibility, true);
     }
   };
 })();

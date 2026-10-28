@@ -345,6 +345,9 @@ public static class DysonAppSettingKeys
 
     public const string SpeechVoiceModeImmediate = "immediate";
 
+    /// <summary>Push to talk. Older builds read this as callsign (lenient parse).</summary>
+    public const string SpeechVoiceModePushToTalk = "ptt";
+
     /// <summary>Callsign pause in milliseconds. Default 3000. Lenient read: see <see cref="ParseSpeechPauseMs"/>.</summary>
     public const string SpeechCallsignPauseMs = "speech_callsign_pause_ms";
 
@@ -353,13 +356,16 @@ public static class DysonAppSettingKeys
 
     /// <summary>
     /// Lenient. Missing, blank, or anything other than <see cref="SpeechVoiceModeImmediate"/>
-    /// returns <see cref="SpeechVoiceModeCallsign"/>. A bad row must never block voice.
+    /// or <see cref="SpeechVoiceModePushToTalk"/> returns <see cref="SpeechVoiceModeCallsign"/>.
+    /// A bad row must never block voice.
     /// </summary>
     public static Result<string, string> ParseSpeechVoiceMode(string? value)
     {
-        var text = value?.Trim() ?? "";
+        var text = value?.Trim().ToLowerInvariant() ?? "";
         return Result<string, string>.AsValue(
-            text == SpeechVoiceModeImmediate ? SpeechVoiceModeImmediate : SpeechVoiceModeCallsign);
+            text is SpeechVoiceModeImmediate or SpeechVoiceModePushToTalk
+                ? text
+                : SpeechVoiceModeCallsign);
     }
 
     /// <summary>
