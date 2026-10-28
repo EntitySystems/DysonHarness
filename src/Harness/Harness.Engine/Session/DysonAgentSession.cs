@@ -3497,6 +3497,7 @@ public abstract class DysonAgentSession
             TurnHistory.Add(turn);
         }
 
+        TrimMetaChatHistory(state.Session);
         BumpTranscriptGeneration();
 
         while (_logLines.TryDequeue(out _))
@@ -3517,6 +3518,47 @@ public abstract class DysonAgentSession
         }
 
         RestoreTodos(state.Todos);
+    }
+
+    /// <summary>Background DB delete started by the last load-time Meta chat trim. Tests await it.</summary>
+    internal Task MetaChatTrimCompletion { get; private set; } = Task.CompletedTask;
+
+    /// <summary>
+    /// Root Meta Agent only: drops turns older than the <see cref="DysonMetaChatWindow"/> that the model
+    /// context no longer needs, and hard-deletes them off the circuit thread. Idempotent across loads.
+    /// </summary>
+    private void TrimMetaChatHistory(DysonSessionEntity session)
+    {
+        if (!DysonMetaChatWindow.Applies(session.ParentSessionId, session.AgentMode))
+            return;
+
+        var ids = DysonMetaChatWindow.SelectTrimmable(TurnHistory);
+        if (ids.Count == 0)
+            return;
+
+        var drop = ids.ToHashSet();
+        TurnHistory.RemoveAll(t => drop.Contains(t.Id));
+
+        var store = SessionStore;
+        var sessionId = session.Id;
+        if (store is null)
+            return;
+
+        MetaChatTrimCompletion = Task.Run(async () =>
+        {
+            try
+            {
+                var deleted = await store.DeleteTurnsAsync(sessionId, ids).ConfigureAwait(false);
+                AppendLog(deleted.IsSuccess
+                    ? $"meta chat: trimmed {ids.Count} turn(s) older than the last {DysonMetaChatWindow.MaxInteractions} interactions"
+                    : $"meta chat: trim failed: {deleted.Error}");
+            }
+            catch (Exception ex)
+            {
+                // Rows stay; the next load retries the same idempotent trim.
+                AppendLog($"meta chat: trim failed: {ex.Message}");
+            }
+        });
     }
 
     /// <summary>Reason of the last persisted SessionStatusChanged(Stopped) log, if any.</summary>

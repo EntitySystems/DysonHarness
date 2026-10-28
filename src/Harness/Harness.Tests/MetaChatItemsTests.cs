@@ -79,6 +79,24 @@ public class MetaChatItemsTests
     }
 
     [Fact]
+    public void Build_caps_at_newest_100_interactions_and_keeps_queued()
+    {
+        var turns = Enumerable.Range(0, 150)
+            .Select(i => new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal, Instruction = $"m{i}" })
+            .ToList();
+        // The window's oldest turn carries a comment too: one bubble over the cap is dropped.
+        Assert.False(turns[50].EnqueueUserComment("extra").IsError);
+
+        var items = MetaChatItems.Build(turns, [new QueuedPrompt(Guid.NewGuid(), "q", "q")]);
+
+        Assert.Equal(DysonMetaChatWindow.MaxInteractions + 1, items.Count);
+        Assert.Equal("extra", items[0].Text);
+        Assert.Equal("m51", items[1].Text);
+        Assert.Equal("m149", items[^2].Text);
+        Assert.True(items[^1].Pending);
+    }
+
+    [Fact]
     public void SelectExisting_picks_newest_root_meta_agent()
     {
         var older = new DysonSessionSummary
