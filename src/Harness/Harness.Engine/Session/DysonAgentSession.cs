@@ -845,51 +845,196 @@ public abstract class DysonAgentSession
         await SessionStore.DeleteSessionAsync(persisted, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// JSON array of direct children for the <c>ListSubagents</c> MCP tool
-    /// (<c>subagentId</c>, <c>persistenceId</c>, <c>agentMode</c>, <c>title</c>, <c>status</c>, optional <c>modelLabel</c>).
-    /// </summary>
-    public string FormatListSubagentsJson() => FormatChildRosterJson(includeReports: false);
+    // ponytail: depth guard so a ParentSessionId cycle in bad data cannot recurse forever; raise if real trees go deeper.
+    private const int RosterMaxDepth = 8;
+
+    // ponytail: descendant lastReport is a one-line preview so the pre-dispatch roster stays cheap; full text is in that agent's log.
+    internal const int RosterDescendantReportChars = 200;
 
     /// <summary>
-    /// Shared child-roster projection. When <paramref name="includeReports"/> is false the shape
-    /// matches <see cref="FormatListSubagentsJson"/>. When true, adds <c>kind</c>,
-    /// <c>worktreeBranch</c>, <c>lastReport</c>, and <c>finishedAt</c> (plain, stable — no notices).
+    /// JSON array of direct children for the <c>ListSubagents</c> MCP tool
+    /// (<c>subagentId</c>, <c>persistenceId</c>, <c>agentMode</c>, <c>title</c>, <c>status</c>, optional <c>modelLabel</c>,
+    /// <c>children</c> — the same shape, recursively, for the whole descendant tree).
     /// </summary>
-    public string FormatChildRosterJson(bool includeReports)
+    public Task<string> FormatListSubagentsJsonAsync(CancellationToken cancellationToken = default) =>
+        FormatChildRosterJsonAsync(includeReports: false, cancellationToken);
+
+    /// <summary>
+    /// Shared child-roster projection. Top level is the live <see cref="SubSessions"/>. Each entry nests its
+    /// descendants under <c>children</c>: loaded agents report live state, unloaded ones (e.g. after restart) their
+    /// persisted row; deleted rows are gone. When <paramref name="includeReports"/> is false the shape matches
+    /// <see cref="FormatListSubagentsJsonAsync"/>. When true, adds <c>kind</c>, <c>worktreeBranch</c>,
+    /// <c>lastReport</c> (descendants: one-line preview), and <c>finishedAt</c> (plain, stable — no notices).
+    /// </summary>
+    public async Task<string> FormatChildRosterJsonAsync(
+        bool includeReports,
+        CancellationToken cancellationToken = default)
     {
-        var items = SubSessions
-            .OrderBy(c => c.Id)
-            .Select(c => includeReports ? ProjectChildRosterWithReports(c) : ProjectChildRoster(c));
+        var items = new List<object>();
+        foreach (var c in SubSessions.OrderBy(c => c.Id))
+            items.Add(await ProjectLiveRosterNodeAsync(c, includeReports, 0, cancellationToken).ConfigureAwait(false));
 
         return JsonSerializer.Serialize(items);
     }
 
-    private static object ProjectChildRoster(DysonAgentSession c) => new
-    {
-        subagentId = c.Id,
-        persistenceId = c.PersistenceId,
-        agentMode = c.Mode,
-        title = c.DisplayTitle,
-        status = c.Status.ToString(),
-        modelLabel = FormatSubagentModelLabel(c.SelectedProvider),
-    };
+    private readonly record struct RosterFields(
+        int SubagentId,
+        Guid PersistenceId,
+        string AgentMode,
+        string? Title,
+        DysonSessionStatus Status,
+        string? ModelLabel,
+        string? WorktreeBranch,
+        string? LastReport,
+        DateTime? FinishedAt);
 
-    private static object ProjectChildRosterWithReports(DysonAgentSession c) => new
+    private async Task<object> ProjectLiveRosterNodeAsync(
+        DysonAgentSession c,
+        bool includeReports,
+        int depth,
+        CancellationToken cancellationToken)
     {
-        subagentId = c.Id,
-        persistenceId = c.PersistenceId,
-        agentMode = c.Mode,
-        title = c.DisplayTitle,
-        status = c.Status.ToString(),
-        modelLabel = FormatSubagentModelLabel(c.SelectedProvider),
-        kind = RosterKind(c.Mode),
-        worktreeBranch = string.Equals(c.Mode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase)
-            ? null
-            : c.WorktreeBranch,
-        lastReport = c.LastReportSummary,
-        finishedAt = c.IsTerminal ? RosterFinishedAt(c) : null,
-    };
+        var children = await ProjectRosterDescendantsAsync(
+                c.SubSessions, c.PersistenceId, includeReports, depth + 1, cancellationToken)
+            .ConfigureAwait(false);
+        return ProjectRosterNode(
+            new RosterFields(
+                c.Id,
+                c.PersistenceId,
+                c.Mode,
+                c.DisplayTitle,
+                c.Status,
+                FormatSubagentModelLabel(c.SelectedProvider),
+                c.WorktreeBranch,
+                c.LastReportSummary,
+                c.IsTerminal ? RosterFinishedAt(c) : null),
+            includeReports,
+            depth,
+            children);
+    }
+
+    private async Task<object> ProjectPersistedRosterNodeAsync(
+        DysonSessionSummary row,
+        bool includeReports,
+        int depth,
+        CancellationToken cancellationToken)
+    {
+        string? branch = null;
+        string? report = null;
+        DateTime? finishedAt = null;
+        if (includeReports && SessionStore is not null)
+        {
+            // ponytail: full aggregate load per unloaded descendant; add a slim repository projection if rosters get slow.
+            var full = await SessionStore.GetFullSessionAsync(row.Id, cancellationToken).ConfigureAwait(false);
+            if (full.IsSuccess)
+            {
+                branch = full.Value.Session.WorktreeBranch;
+                report = LastStatusReason(full.Value.Logs, stoppedOnly: false);
+                if (row.Status is DysonSessionStatus.Completed or DysonSessionStatus.Stopped
+                    or DysonSessionStatus.Failed or DysonSessionStatus.Interrupted)
+                    finishedAt = full.Value.Turns.Max(t => t.CompletedUtc);
+            }
+        }
+
+        var children = await ProjectRosterDescendantsAsync([], row.Id, includeReports, depth + 1, cancellationToken)
+            .ConfigureAwait(false);
+        return ProjectRosterNode(
+            new RosterFields(row.RuntimeId, row.Id, row.AgentMode, row.Title, row.Status, null, branch, report, finishedAt),
+            includeReports,
+            depth,
+            children);
+    }
+
+    /// <summary>
+    /// Children of one roster node: live instances where loaded, persisted rows otherwise, ordered by subagent id.
+    /// </summary>
+    private async Task<List<object>> ProjectRosterDescendantsAsync(
+        IReadOnlyList<DysonAgentSession> live,
+        Guid parentPersistenceId,
+        bool includeReports,
+        int depth,
+        CancellationToken cancellationToken)
+    {
+        if (depth >= RosterMaxDepth)
+            return [];
+
+        IReadOnlyList<DysonSessionSummary>? rows = null;
+        if (SessionStore is not null && parentPersistenceId != Guid.Empty)
+        {
+            var listed = await SessionStore.ListChildSessionsAsync(parentPersistenceId, cancellationToken)
+                .ConfigureAwait(false);
+            if (listed.IsSuccess)
+                rows = listed.Value;
+        }
+
+        var nodes = new List<(int Id, object Node)>();
+        foreach (var c in live)
+        {
+            // A deleted row is gone from the store; a still-spawning child has no row yet.
+            if (rows is null || c.PersistenceId == Guid.Empty || rows.Any(r => r.Id == c.PersistenceId))
+                nodes.Add((c.Id, await ProjectLiveRosterNodeAsync(c, includeReports, depth, cancellationToken).ConfigureAwait(false)));
+        }
+
+        if (rows is not null)
+        {
+            foreach (var row in rows)
+            {
+                if (row.RuntimeId < 1 || live.Any(c => c.PersistenceId == row.Id))
+                    continue;
+
+                nodes.Add((row.RuntimeId, await ProjectPersistedRosterNodeAsync(row, includeReports, depth, cancellationToken).ConfigureAwait(false)));
+            }
+        }
+
+        return nodes.OrderBy(n => n.Id).Select(n => n.Node).ToList();
+    }
+
+    private static object ProjectRosterNode(RosterFields f, bool includeReports, int depth, List<object> children)
+    {
+        var status = f.Status.ToString();
+        if (!includeReports)
+        {
+            return new
+            {
+                subagentId = f.SubagentId,
+                persistenceId = f.PersistenceId,
+                agentMode = f.AgentMode,
+                title = f.Title,
+                status,
+                modelLabel = f.ModelLabel,
+                children,
+            };
+        }
+
+        return new
+        {
+            subagentId = f.SubagentId,
+            persistenceId = f.PersistenceId,
+            agentMode = f.AgentMode,
+            title = f.Title,
+            status,
+            modelLabel = f.ModelLabel,
+            kind = RosterKind(f.AgentMode),
+            worktreeBranch = string.Equals(f.AgentMode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase)
+                ? null
+                : f.WorktreeBranch,
+            lastReport = depth == 0 ? f.LastReport : RosterReportPreview(f.LastReport),
+            finishedAt = f.FinishedAt,
+            children,
+        };
+    }
+
+    /// <summary>Whitespace collapsed to one line, cut at <see cref="RosterDescendantReportChars"/> with an ellipsis.</summary>
+    internal static string? RosterReportPreview(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return text;
+
+        var line = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return line.Length <= RosterDescendantReportChars
+            ? line
+            : line[..RosterDescendantReportChars].TrimEnd() + "…";
+    }
 
     private static string RosterKind(string mode)
     {
@@ -3457,7 +3602,7 @@ public abstract class DysonAgentSession
             // Stop already reported to the parent at stop time. Restore that report so the restore-time
             // child-report watch does not re-synthesize it as "application restart".
             _subagentReportAccepted = true;
-            LastReportSummary = LastStoppedReason(state.Logs) ?? LastReportSummary;
+            LastReportSummary = LastStatusReason(state.Logs, stoppedOnly: true) ?? LastReportSummary;
         }
 
         if (IsTerminal)
@@ -3561,8 +3706,10 @@ public abstract class DysonAgentSession
         });
     }
 
-    /// <summary>Reason of the last persisted SessionStatusChanged(Stopped) log, if any.</summary>
-    private static string? LastStoppedReason(IReadOnlyList<DysonSessionLogEntry> logs)
+    /// <summary>
+    /// Reason of the last persisted SessionStatusChanged log with a reason: Stopped only, or any terminal status.
+    /// </summary>
+    private static string? LastStatusReason(IReadOnlyList<DysonSessionLogEntry> logs, bool stoppedOnly)
     {
         string? reason = null;
         foreach (var log in logs.OrderBy(l => l.Sequence))
@@ -3572,7 +3719,13 @@ public abstract class DysonAgentSession
                 continue;
 
             var payload = DysonSessionLogPayload.Deserialize<DysonSessionLogSessionStatusChanged>(log.PayloadJson);
-            if (payload is { Status: DysonSessionStatus.Stopped } && !string.IsNullOrWhiteSpace(payload.Reason))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.Reason))
+                continue;
+
+            if (stoppedOnly
+                    ? payload.Status == DysonSessionStatus.Stopped
+                    : payload.Status is DysonSessionStatus.Completed or DysonSessionStatus.Stopped
+                        or DysonSessionStatus.Failed or DysonSessionStatus.Interrupted)
                 reason = payload.Reason;
         }
 

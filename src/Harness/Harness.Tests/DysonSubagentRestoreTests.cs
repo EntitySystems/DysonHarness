@@ -10,10 +10,10 @@ namespace Harness.Tests;
 public class DysonSubagentRestoreTests
 {
     [Fact]
-    public void Run()
+    public async Task Run()
     {
         AssertRestoreRegistrationAndIdBump();
-        AssertListSubagentsJsonShape();
+        await AssertListSubagentsJsonShapeAsync();
     }
 
     private static void AssertRestoreRegistrationAndIdBump()
@@ -44,7 +44,7 @@ public class DysonSubagentRestoreTests
             throw new InvalidOperationException($"Expected next allocated id 6 after bump to 5, got {fresh.Id}.");
     }
 
-    private static void AssertListSubagentsJsonShape()
+    private static async Task AssertListSubagentsJsonShapeAsync()
     {
         var parent = new StubSession();
         var child = new StubSession();
@@ -52,7 +52,7 @@ public class DysonSubagentRestoreTests
         child.RestoreForTest(MakePersisted(persistenceId, runtimeId: 1, title: "Child One"));
         parent.RestoreRegisteredSubagent(child);
 
-        using var doc = JsonDocument.Parse(parent.FormatListSubagentsJson());
+        using var doc = JsonDocument.Parse(await parent.FormatListSubagentsJsonAsync());
         if (doc.RootElement.ValueKind != JsonValueKind.Array || doc.RootElement.GetArrayLength() != 1)
             throw new InvalidOperationException("ListSubagents JSON must be a one-element array.");
 

@@ -866,7 +866,7 @@ public sealed class DemoDysonAgentSession : DysonAgentSession
             }
 
             if (string.Equals(call.ToolName, "ListSubagents", StringComparison.OrdinalIgnoreCase))
-                return ToolOk(call, FormatListSubagentsJson());
+                return ToolOk(call, await FormatListSubagentsJsonAsync(cancellationToken).ConfigureAwait(false));
 
             if (string.Equals(call.ToolName, "WaitForSubagent", StringComparison.OrdinalIgnoreCase))
             {

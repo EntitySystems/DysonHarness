@@ -496,13 +496,10 @@ public sealed partial class DysonWorkspaceToolExecutor
         }));
     }
 
-    private Task<DysonToolCallResult> ListSubagentsAsync(
+    private async Task<DysonToolCallResult> ListSubagentsAsync(
         DysonToolCall call,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(Ok(call, _session.FormatListSubagentsJson()));
-    }
+        CancellationToken cancellationToken) =>
+        Ok(call, await _session.FormatListSubagentsJsonAsync(cancellationToken).ConfigureAwait(false));
 
     private async Task<DysonToolCallResult> ListTodosAsync(
         DysonToolCall call,

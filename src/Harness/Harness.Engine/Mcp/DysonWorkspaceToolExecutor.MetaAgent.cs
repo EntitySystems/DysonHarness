@@ -182,13 +182,10 @@ public sealed partial class DysonWorkspaceToolExecutor
         }));
     }
 
-    private Task<DysonToolCallResult> ListMetaAgentDronesAsync(
+    private async Task<DysonToolCallResult> ListMetaAgentDronesAsync(
         DysonToolCall call,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(Ok(call, _session.FormatChildRosterJson(includeReports: true)));
-    }
+        CancellationToken cancellationToken) =>
+        Ok(call, await _session.FormatChildRosterJsonAsync(includeReports: true, cancellationToken).ConfigureAwait(false));
 
     private Task<DysonToolCallResult> ReadMetaAgentDroneLogAsync(
         DysonToolCall call,

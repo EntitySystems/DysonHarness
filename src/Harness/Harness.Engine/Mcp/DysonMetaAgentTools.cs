@@ -317,6 +317,8 @@ public static class DysonMetaAgentTools
             Name = "ListMetaAgentDrones",
             Description =
                 "Roster of this session's drones, explores, or reviews, including last report. " +
+                "Each entry nests its whole descendant tree (workers, their workers, and so on) under children, same fields, with each node's current status; " +
+                "a descendant's lastReport is a one-line preview (~200 chars). " +
                 "Call before dispatching: old turns are deleted permanently, so an id you cannot see may still be a running drone. " +
                 "Plain stable projection — no notices or counts.",
             InputSchemaJson = """
