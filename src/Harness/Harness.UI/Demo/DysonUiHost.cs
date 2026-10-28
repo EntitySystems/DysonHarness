@@ -629,7 +629,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             {
                 posted = new DysonVoiceMessage(
                     DysonVoiceMode.MergeUtterances(first, message.Text),
-                    DysonVoiceInputMode.Immediate);
+                    message.Mode);
             }
         }
 
