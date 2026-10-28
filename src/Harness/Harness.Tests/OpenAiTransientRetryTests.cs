@@ -22,6 +22,8 @@ public class OpenAiTransientRetryTests
         AssertApiHttpErrorBodyClip();
         AssertFallbackHopsAfterEleven503s();
         AssertFallbackHopsOn401WithoutRetries();
+        AssertFallbackHopIsPerTurn();
+        AssertPickDuringFallbackTurnIsNotReverted();
         AssertFallbackSameSlugIdDoesNotHop();
         AssertFallbackAlsoExhausts();
         Assert429ThenSuccess();
@@ -413,6 +415,101 @@ public class OpenAiTransientRetryTests
             {
                 throw new InvalidOperationException(
                     $"Expected session provider slug gpt-fallback; got '{live.Slug}'.");
+            }
+        }
+        finally
+        {
+            RestoreRetryDelays(priorBackoff, prior429Delay);
+            TryDelete(workDir);
+        }
+    }
+
+    private const string ToolUseWithoutResult400 =
+        """{"error":{"message":"tool_use ids were found without tool_result blocks immediately after"}}""";
+
+    /// <summary>The hop lasts one prompt: the next prompt runs on the session's chosen model again.</summary>
+    private static void AssertFallbackHopIsPerTurn()
+    {
+        var (priorBackoff, prior429Delay) = UseZeroRetryDelays();
+        var workDir = Path.Combine(Path.GetTempPath(), "dyson-fallback-turn-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var handler = new SequencingHandler(
+            [
+                () => Status(HttpStatusCode.BadRequest, ToolUseWithoutResult400),
+                CompletionsSseSuccess,
+                CompletionsSseSuccess,
+            ]);
+            using var http = new HttpClient(handler);
+            var primary = CreateOpenAiProvider("gpt-test");
+            var fallback = CreateOpenAiProvider("gpt-fallback");
+            var session = CreateSession(http, workDir, fallback: fallback, provider: primary);
+
+            var first = session.PromptAsync("ping").GetAwaiter().GetResult();
+            if (first.IsError)
+                throw new InvalidOperationException("Expected success after 400 hop: " + first.Error);
+            if (!ReferenceEquals(session.Provider, fallback))
+                throw new InvalidOperationException("Expected the hop turn to report the fallback model.");
+            var logs = string.Join('\n', session.SnapshotLog());
+            if (!logs.Contains("fallback: switched", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected fallback switch log.\n" + logs);
+
+            var second = session.PromptAsync("again").GetAwaiter().GetResult();
+            if (second.IsError)
+                throw new InvalidOperationException("Expected second prompt success: " + second.Error);
+            if (handler.PostCount != 3)
+                throw new InvalidOperationException($"Expected 3 posts, got {handler.PostCount}.");
+            if (!ReferenceEquals(session.Provider, primary))
+            {
+                throw new InvalidOperationException(
+                    $"Expected the next prompt on gpt-test; got '{AssertLiveOpenAi(session).Slug}'.");
+            }
+        }
+        finally
+        {
+            RestoreRetryDelays(priorBackoff, prior429Delay);
+            TryDelete(workDir);
+        }
+    }
+
+    /// <summary>A model picked while the fallback turn runs wins over the revert.</summary>
+    private static void AssertPickDuringFallbackTurnIsNotReverted()
+    {
+        var (priorBackoff, prior429Delay) = UseZeroRetryDelays();
+        var workDir = Path.Combine(Path.GetTempPath(), "dyson-fallback-pick-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var picked = CreateOpenAiProvider("gpt-picked");
+            OpenAiCompatibleAgentSession? session = null;
+            var handler = new SequencingHandler(
+            [
+                () => Status(HttpStatusCode.BadRequest, ToolUseWithoutResult400),
+                () =>
+                {
+                    // Mid-turn pick on the fallback round: pending until the prompt ends.
+                    var set = session!.SetModel(picked, picked.DefaultMaxTargetContextTokens);
+                    if (set.IsError)
+                        throw new InvalidOperationException(set.Error);
+                    return CompletionsSseSuccess();
+                },
+                CompletionsSseSuccess,
+            ]);
+            using var http = new HttpClient(handler);
+            var fallback = CreateOpenAiProvider("gpt-fallback");
+            session = CreateSession(http, workDir, fallback: fallback);
+
+            var first = session.PromptAsync("ping").GetAwaiter().GetResult();
+            if (first.IsError)
+                throw new InvalidOperationException("Expected success after hop: " + first.Error);
+            var second = session.PromptAsync("again").GetAwaiter().GetResult();
+            if (second.IsError)
+                throw new InvalidOperationException("Expected second prompt success: " + second.Error);
+            if (!ReferenceEquals(session.Provider, picked))
+            {
+                throw new InvalidOperationException(
+                    $"Expected the mid-turn pick gpt-picked to stay; got '{AssertLiveOpenAi(session).Slug}'.");
             }
         }
         finally

@@ -232,6 +232,73 @@ public class DysonChangeSubagentModelTests
     }
 
     [Fact]
+    public async Task Chat_fallback_hop_leaves_the_session_row_model_unchanged()
+    {
+        var workDir = CreateWorkDir();
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var connection);
+        using var _ = connection;
+        try
+        {
+            var sessions = DysonTempDb.Sessions(accessor);
+            var models = DysonTempDb.Models(accessor);
+            var providerRow = await models.CreateProviderAsync(new DysonModelProviderEntity
+            {
+                DisplayName = "test",
+                ProviderKind = DysonProviderKinds.OpenAICompatible,
+                BaseUrl = "https://a.example/v1",
+                ApiKey = "sk-test",
+                OpenAiApiMode = DysonOpenAiApiModes.Completions,
+            });
+            var slugA = await models.AddSlugAsync(providerRow.Value, "gpt-a", "gpt-a", defaultReasoningEffort: "high");
+            var slugB = await models.AddSlugAsync(providerRow.Value, "gpt-b", "gpt-b", defaultReasoningEffort: "low");
+
+            var handler = new GatedHandler(
+            [
+                () => new HttpResponseMessage(HttpStatusCode.BadRequest)
+                {
+                    Content = new StringContent(
+                        """{"error":{"message":"tool_use ids were found without tool_result blocks"}}""",
+                        Encoding.UTF8, "application/json"),
+                },
+                () => Sse(
+                    """{"id":"c1","choices":[{"index":0,"delta":{"role":"assistant","content":"# Done\n\nok"}}]}""",
+                    "[DONE]"),
+            ]);
+            handler.ReleaseFirst.SetResult();
+            using var http = new HttpClient(handler);
+            var providerA = Provider("gpt-a", "https://a.example/v1", DysonOpenAiApiModes.Completions, effort: "high", slugId: slugA.Value);
+            var fallback = Provider("gpt-b", "https://a.example/v1", DysonOpenAiApiModes.Completions, effort: "low", slugId: slugB.Value);
+            var session = new OpenAiCompatibleAgentSession(
+                DysonAgentModes.Work, new DysonAgentSessionConfig { FallbackChatProvider = fallback },
+                providerA, http, workDir, sessions, models: models);
+            var created = await sessions.CreateSessionAsync(new DysonSessionCreateRequest
+            {
+                RuntimeId = session.Id,
+                AgentMode = DysonAgentModes.Work,
+                ModelSlugId = slugA.Value,
+                ReasoningEffort = "high",
+                McpAccessMode = DysonMcpAccessMode.FullAccess,
+                Title = "root",
+                SystemPromptSnapshot = "p",
+                Status = DysonSessionStatus.Active,
+            });
+            InvokeSetPersistenceId(session, created.Value);
+
+            var prompt = await session.PromptAsync("ping");
+            Assert.True(prompt.IsSuccess, prompt.IsError ? prompt.Error : "");
+            Assert.Same(fallback, session.Provider);
+
+            var row = await sessions.GetFullSessionAsync(created.Value);
+            Assert.Equal(slugA.Value, row.Value!.Session.ModelSlugId);
+            Assert.Equal("high", row.Value.Session.ReasoningEffort);
+        }
+        finally
+        {
+            TryDelete(workDir);
+        }
+    }
+
+    [Fact]
     public async Task ListSubagents_shows_the_pending_label_while_busy()
     {
         var workDir = CreateWorkDir();

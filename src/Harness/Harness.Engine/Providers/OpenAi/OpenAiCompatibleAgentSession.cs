@@ -135,6 +135,10 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
     private readonly IDysonPlanRepository? _plans;
     // ponytail: one hop per prompt; Explore recap shares this so a main-loop hop is not repeated
     private bool _fallbackAppliedThisTurn;
+    // Per-turn hop: the model the session ran before the fallback, and the fallback instance applied. The next
+    // prompt restores it unless the selection moved off that instance (an explicit pick wins).
+    private OpenAiCompatibleAgentProvider? _providerBeforeFallback;
+    private OpenAiCompatibleAgentProvider? _fallbackApplied;
     // Per turn, not one field: two concurrent turns can both pause before either compacts.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> _pausedForCompactionTurnIds = new();
 
@@ -737,6 +741,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         CancellationToken cancellationToken)
     {
         _fallbackAppliedThisTurn = false;
+        RevertChatFallbackHop();
         ApplyUiTheme(Config.UiTheme);
         var preserveReasoning = await RefreshPreserveReasoningTracesAsync(cancellationToken).ConfigureAwait(false);
 
@@ -989,8 +994,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                 var replyResult = await ConsumeCurrentProviderRoundAsync().ConfigureAwait(false);
                 if (!stoppedForCompaction
                     && replyResult.IsError
-                    && await TryApplyChatFallbackAsync(replyResult.Error, cancellationToken)
-                        .ConfigureAwait(false))
+                    && TryApplyChatFallback(replyResult.Error, cancellationToken))
                 {
                     previousResponseId = null;
                     useResponses = string.Equals(
@@ -1276,7 +1280,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             var replyResult = await ConsumeSummaryAsync().ConfigureAwait(false);
             if (replyResult.IsError
                 && !OpenAiCompatibleHttp.IsContextLengthError(replyResult.Error)
-                && await TryApplyChatFallbackAsync(replyResult.Error, cancellationToken).ConfigureAwait(false))
+                && TryApplyChatFallback(replyResult.Error, cancellationToken))
             {
                 replyResult = await ConsumeSummaryAsync().ConfigureAwait(false);
             }
@@ -1413,8 +1417,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
 
         var replyResult = await ConsumeRecapAsync(useResponses).ConfigureAwait(false);
         if (replyResult.IsError
-            && await TryApplyChatFallbackAsync(replyResult.Error, cancellationToken)
-                .ConfigureAwait(false))
+            && TryApplyChatFallback(replyResult.Error, cancellationToken))
         {
             var recapUseResponses = string.Equals(
                 OpenAiProvider.OpenAiApiMode,
@@ -1835,7 +1838,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         }
     }
 
-    private async Task<bool> TryApplyChatFallbackAsync(
+    private bool TryApplyChatFallback(
         string? error,
         CancellationToken cancellationToken)
     {
@@ -1848,30 +1851,36 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             return false;
         }
 
-        var previousSlug = OpenAiProvider.Slug;
+        var previous = OpenAiProvider;
+        // Not persisted: the hop lasts this prompt only; the session row keeps the chosen model.
+        _providerBeforeFallback = previous;
+        _fallbackApplied = fallback;
         Provider = fallback;
         SlugDefaultMaxTargetContextTokens = fallback.DefaultMaxTargetContextTokens;
         _fallbackAppliedThisTurn = true;
 
-        if (PersistenceId != Guid.Empty && _store is not null)
-        {
-            var persist = await _store.UpdateSessionMetaAsync(
-                new DysonSessionMetaUpdate
-                {
-                    SessionId = PersistenceId,
-                    ModelSlugId = fallback.SlugId,
-                    ClearModelSlug = fallback.SlugId is null,
-                    UpdateReasoningEffort = true,
-                    ReasoningEffort = fallback.ReasoningEffort,
-                },
-                cancellationToken).ConfigureAwait(false);
-            if (persist.IsError)
-                AppendLog($"fallback: persist failed: {persist.Error}");
-        }
-
         AppendLog(
-            $"fallback: switched session model {previousSlug} → {fallback.Slug} after provider error");
+            $"fallback: switched session model {previous.Slug} → {fallback.Slug} after provider error (this turn only)");
         return true;
+    }
+
+    /// <summary>
+    /// Next prompt after a chat-fallback hop: back to the model the session ran before the hop. A pick made since
+    /// (UI, <c>ChangeSubagentAIModel</c>) moved the selection off the fallback instance and wins; no revert.
+    /// </summary>
+    private void RevertChatFallbackHop()
+    {
+        var previous = _providerBeforeFallback;
+        var applied = _fallbackApplied;
+        _providerBeforeFallback = null;
+        _fallbackApplied = null;
+        if (previous is null || applied is null || !ReferenceEquals(SelectedProvider, applied))
+            return;
+
+        var set = SetModel(previous, previous.DefaultMaxTargetContextTokens);
+        AppendLog(set.IsError
+            ? $"fallback: revert to {previous.Slug} failed: {set.Error}"
+            : $"fallback: reverted session model {applied.Slug} → {previous.Slug} for the new turn");
     }
 
     private static bool LooksLikeUserOrStreamCancel(string? error) =>
