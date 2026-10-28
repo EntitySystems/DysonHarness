@@ -98,15 +98,15 @@ public class DysonMetaAgentToolsetTests
     }
 
     [Fact]
-    public void Child_roster_with_reports_is_byte_identical_across_calls()
+    public async Task Child_roster_with_reports_is_byte_identical_across_calls()
     {
         var parent = new StubSession(DysonAgentModes.MetaAgent);
         var drone = new StubSession(DysonAgentModes.MetaAgentDrone);
         drone.WorktreeBranch = "dyson/abcd1234";
         parent.RegisterForTest(drone);
 
-        var first = parent.FormatChildRosterJson(includeReports: true);
-        var second = parent.FormatChildRosterJson(includeReports: true);
+        var first = await parent.FormatChildRosterJsonAsync(includeReports: true);
+        var second = await parent.FormatChildRosterJsonAsync(includeReports: true);
         Assert.Equal(first, second);
 
         using var doc = JsonDocument.Parse(first);
@@ -121,13 +121,13 @@ public class DysonMetaAgentToolsetTests
     }
 
     [Fact]
-    public void List_subagents_json_does_not_grow_report_fields()
+    public async Task List_subagents_json_does_not_grow_report_fields()
     {
         var parent = new StubSession(DysonAgentModes.Work);
         var child = new StubSession(DysonAgentModes.Explore);
         parent.RegisterForTest(child);
 
-        using var doc = JsonDocument.Parse(parent.FormatListSubagentsJson());
+        using var doc = JsonDocument.Parse(await parent.FormatListSubagentsJsonAsync());
         var item = doc.RootElement[0];
         Assert.False(item.TryGetProperty("kind", out _));
         Assert.False(item.TryGetProperty("lastReport", out _));

@@ -107,7 +107,7 @@ public static class DysonAgentSystemPrompts
         - When a harness continuation reports a subagent event, call RespondToSubagentEvent with the eventId so the child unblocks. askQuestion / promptUserDialog events are answered by the Auto UI (you do not Respond for those).
         - Use TriggerSubagentEvent to inject instructions into a child (timeoutSeconds omitted = cancel the child’s in-flight turn / pending parent-event wait and run immediately; timeoutSeconds 1–20 = wait for the child’s next turn boundary, then interrupt; a positive timeout fails while the child awaits a parent-event reply). Follow-up work on a finished child is TriggerSubagentEvent (reuse the same child), not a new StartSubagent.
         - Root clarifying / design questions: AskQuestion (composer UI). Root concrete action choices: PromptUserDialog (modal). Do not use FromParent tools on the root.
-        - Use ListSubagents to rediscover child ids after resume or when StartSubagent results are no longer in recent context; then InspectSubagentLog / StopSubagent / Wait as needed — never busy-wait in a tight loop.
+        - Use ListSubagents to rediscover child ids after resume or when StartSubagent results are no longer in recent context (each entry nests its descendant tree under children, with status); then InspectSubagentLog / StopSubagent / Wait as needed — never busy-wait in a tight loop.
         - If the task names a planId and does not give a plan path, call ReadMetaPlan before any edit. The markdown is the brief. A path does not replace that read when the id is the authority.
         - Keep diffs focused when you do implement; follow project rules (including C# Result pattern and /skills location).
         - When done, summarize what changed and how it was verified.
@@ -292,7 +292,7 @@ public static class DysonAgentSystemPrompts
         - This choice is only about useWorktree true drones. Explores, reviews, and useWorktree false drones are not affected.
 
         Reuse over re-spawn (mandatory):
-        - Call ListMetaAgentDrones before dispatching. It is the only reliable roster: old turns are deleted permanently, so an id you cannot see may still be a running drone.
+        - Call ListMetaAgentDrones before dispatching. It is the only reliable roster: old turns are deleted permanently, so an id you cannot see may still be a running drone. Each entry nests that agent's workers (and theirs) under children, with live status.
         - When a task grows, changes, or gets corrected, send MessageMetaAgentDrone to the drone already doing it. Do not create a second drone for the same work.
         - A failed drone report that says "Merge conflict." is not a dead task and it is not a reason to stop that drone. Follow the steps in that report: StartAsyncMetaAgentDrone a resolver with useWorktree false and existingWorktreePath set to the report's worktreePath; when it reports completed, MessageMetaAgentDrone the conflicted agentId to SubmitSubagentReport completed with no file edits. That report retries the merge. Do not give the resolver its own worktree, do not StopMetaAgentDrone the conflicted drone, do not pass discardWorktree, and do not force-push. Do not edit files yourself.
         - StopMetaAgentDrone when work is abandoned or superseded. A stopped drone's worktree is left for inspection, not merged; pass discardWorktree to throw that work away.

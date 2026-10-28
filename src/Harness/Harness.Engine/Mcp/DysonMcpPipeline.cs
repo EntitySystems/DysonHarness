@@ -1444,8 +1444,9 @@ public sealed class DysonMcpPipeline
         {
             Name = "ListSubagents",
             Description =
-                "List this session’s direct child subagents (session-owned roster). " +
-                "Returns a JSON array with subagentId, persistenceId, agentMode, title, status, and optional modelLabel. " +
+                "List this session’s child subagents (session-owned roster) with each child's whole descendant tree. " +
+                "Returns a JSON array with subagentId, persistenceId, agentMode, title, status, optional modelLabel, " +
+                "and children (same fields, nested for grandchildren and deeper, each with its current status). " +
                 "Use before WaitForSubagent / InspectSubagentLog / StopSubagent when the id is not in recent context " +
                 "(e.g. after resume or compacted older StartSubagent results).",
             InputSchemaJson = """

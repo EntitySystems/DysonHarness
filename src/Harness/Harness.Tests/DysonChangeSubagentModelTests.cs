@@ -323,8 +323,8 @@ public class DysonChangeSubagentModelTests
             var changed = await parent.ChangeSubagentModelAsync(child.Id, "gpt-b", "low");
             Assert.True(changed.IsSuccess, changed.IsError ? changed.Error : "");
 
-            Assert.Contains("gpt-b", parent.FormatListSubagentsJson(), StringComparison.Ordinal);
-            Assert.DoesNotContain("gpt-a", parent.FormatListSubagentsJson(), StringComparison.Ordinal);
+            Assert.Contains("gpt-b", await parent.FormatListSubagentsJsonAsync(), StringComparison.Ordinal);
+            Assert.DoesNotContain("gpt-a", await parent.FormatListSubagentsJsonAsync(), StringComparison.Ordinal);
 
             handler.ReleaseFirst.SetResult();
             await StopAsync(cts, prompt);
