@@ -1536,6 +1536,36 @@ public sealed class DysonMcpPipeline
 
         yield return new DysonMcpTool
         {
+            Name = "ChangeSubagentAIModel",
+            Description =
+                "Switch a direct child's model slug and/or reasoning effort. Idle or terminal child: applied now. " +
+                "Busy child: lands at its next provider request (next tool round, or a compaction summary request); " +
+                "the in-flight request is never cancelled. Stopped children are refused. Direct children only.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "subagentId": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Id of the direct child whose model to switch (≥ 1)."
+                    },
+                    "modelSlug": {
+                      "type": "string",
+                      "description": "Optional model slug or display alias (same provider kind required). Omit to keep the child's current slug."
+                    },
+                    "reasoningEffort": {
+                      "type": "string",
+                      "description": "Optional freeform reasoning effort. Omit with a modelSlug to use that slug's default effort."
+                    }
+                  },
+                  "required": ["subagentId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
             Name = "SubmitSubagentReport",
             Description =
                 "Subagents must call this when finished (or blocked). " +

@@ -13,6 +13,7 @@ Every drone a root Meta Agent starts with `StartAsyncMetaAgentDrone` or `BeginBu
 - Both fields are mandatory on every `StartAsyncMetaAgentDrone` and every root `BeginBuildPlan` spawn.
 - Never omit `modelSlug` or `reasoningEffort`. Omitting `modelSlug` does not inherit the parent. It selects the Settings Meta Agent Drone default, which can be a different model. That is how a drone runs as the wrong model.
 - Never set either field on `StartSubagent`, or on `StartAsyncExploreAgent`, `StartAsyncBugReviewAgent`, or `StartAsyncSecurityReviewAgent`. Those calls omit both fields and inherit the parent model.
+- `ChangeSubagentAIModel` is only for an explicit user request, or for correcting a root drone to the role-table model (Grok / Opus / Sonnet, effort `high`); never use it routinely on workers, explores, or reviews.
 - Slugs are exactly `grok-4.7`, `claude-opus-5-5` and `claude-sonnet-5-5`. Effort is exactly `high`. Do not invent another slug.
 - `agentId` reuse on `BeginBuildPlan` does not take a model. The drone already running keeps its model.
 - An explicit user request for a specific model overrides this rule.

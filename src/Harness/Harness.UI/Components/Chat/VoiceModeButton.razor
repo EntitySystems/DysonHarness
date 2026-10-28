@@ -5,27 +5,63 @@
 @inject DysonUiHost Host
 
 @* Root Meta Agent voice mode. Windows only; a missing service is the off tooltip, not a hidden control. *@
-<button type="button"
-        class="@CssClass"
-        title="@Title"
-        aria-label="@Title"
-        aria-pressed="@_on"
-        aria-disabled="@Blocked"
-        @onclick="ClickAsync"
-        @onfocus="RefreshRequirementsAsync"
-        @onmouseenter="RefreshRequirementsAsync">
-    <span class="voice-mode__icon" aria-hidden="true"></span>
-</button>
+<span class="voice-mode-group @(_expanded ? "is-expanded" : "")" role="group" aria-label="Voice mode">
+    <button type="button"
+            class="@CssClass"
+            title="@Title"
+            aria-label="@Title"
+            aria-pressed="@_on"
+            aria-disabled="@Blocked"
+            @onclick="ClickAsync"
+            @onfocus="RefreshRequirementsAsync"
+            @onmouseenter="RefreshRequirementsAsync">
+        <span class="voice-mode__icon" aria-hidden="true"></span>
+    </button>
+    @if (_voice is not null)
+    {
+        <button type="button"
+                class="voice-mode__chevron"
+                aria-expanded="@_expanded"
+                aria-controls="@_optionsId"
+                title="Choose voice mode"
+                aria-label="Choose voice mode"
+                @ref="_chevron"
+                @onclick="ToggleExpanded"
+                @onkeydown="OnChevronKey">
+            <span class="voice-mode__chevron-icon" aria-hidden="true"></span>
+        </button>
+        <span id="@_optionsId" class="voice-mode__options" hidden="@(!_expanded)">
+            <button type="button"
+                    class="voice-mode__option @(IsMode(DysonVoiceInputMode.CallsignActivated) ? "is-active" : "")"
+                    aria-pressed="@IsMode(DysonVoiceInputMode.CallsignActivated)"
+                    title="@CallsignTitle"
+                    aria-label="@CallsignTitle"
+                    @ref="_callsignOption"
+                    @onclick="() => PickAsync(DysonVoiceInputMode.CallsignActivated)"
+                    @onkeydown="OnOptionKey">
+                <span class="voice-mode__option-icon voice-mode__option-icon--callsign" aria-hidden="true"></span>
+            </button>
+            <button type="button"
+                    class="voice-mode__option @(IsMode(DysonVoiceInputMode.Immediate) ? "is-active" : "")"
+                    aria-pressed="@IsMode(DysonVoiceInputMode.Immediate)"
+                    title="@ImmediateTitle"
+                    aria-label="@ImmediateTitle"
+                    @ref="_immediateOption"
+                    @onclick="() => PickAsync(DysonVoiceInputMode.Immediate)"
+                    @onkeydown="OnOptionKey">
+                <span class="voice-mode__option-icon voice-mode__option-icon--immediate" aria-hidden="true"></span>
+            </button>
+        </span>
+    }
+</span>
 
 @code {
     private static readonly TimeSpan RefreshGap = TimeSpan.FromSeconds(2);
     private const string NotWindowsTitle = "Voice mode needs the Windows app.";
-    private const string OffTitle = "Voice mode: say the agent name, then talk. Click to turn on.";
-    private const string OnTitle = "Voice mode on. Say the agent name, then talk. Click to turn off.";
-    private const string CapturingTitle = "Listening… pause 3 seconds to send.";
     private const string SpeakingTitle = "Speaking. Say the agent name to interrupt.";
-
+    private readonly string _optionsId = "voice-mode-options-" + Guid.NewGuid().ToString("N");
     private DysonVoiceMode? _voice;
+    private DysonVoiceInputMode _mode = DysonVoiceInputMode.CallsignActivated;
     private string? _blockReason;
     private bool _on;
     private bool _busy;
@@ -33,13 +69,31 @@
     private bool _disposed;
     private bool _checking;
     private bool _ready;
+    private bool _expanded;
+    private bool _focusActive;
     private int _checkGeneration;
     private DateTime _checkedUtc = DateTime.MinValue;
+    private ElementReference _chevron;
+    private ElementReference _callsignOption;
+    private ElementReference _immediateOption;
 
     /// <summary>Raised when voice mode turns on or off, so the page can disable push-to-talk.</summary>
     [Parameter] public EventCallback<bool> OnChanged { get; set; }
 
+    /// <summary>Current Immediate utterance, without the prefix. Empty when it posts or drops.</summary>
+    [Parameter] public EventCallback<string> OnDraft { get; set; }
+
     private bool Blocked => _ready && (_voice is null || _blockReason is not null);
+
+    private bool IsMode(DysonVoiceInputMode mode) => _mode == mode;
+
+    private string CallsignTitle => OptionTitle(
+        "Callsign Activated: say the agent name, then talk. Pause {0} s to send.",
+        DysonVoiceInputMode.CallsignActivated);
+
+    private string ImmediateTitle => OptionTitle(
+        "Immediate Mode: just talk. Pause {0} s to send.",
+        DysonVoiceInputMode.Immediate);
 
     private string Title
     {
@@ -61,6 +115,17 @@
         }
     }
 
+    private string OffTitle => _mode == DysonVoiceInputMode.Immediate
+        ? "Voice mode (Immediate): just talk. Click to turn on."
+        : "Voice mode (Callsign Activated): say the agent name, then talk. Click to turn on.";
+
+    private string OnTitle => _mode == DysonVoiceInputMode.Immediate
+        ? "Voice mode on (Immediate). Just talk; a pause sends it. Click to turn off."
+        : "Voice mode on (Callsign Activated). Say the agent name, then talk. Click to turn off.";
+
+    private string CapturingTitle =>
+        $"Listening… pause {PauseSeconds(_mode)} seconds to send.";
+
     private string CssClass
     {
         get
@@ -81,6 +146,8 @@
     {
         _voice = Host.Voice;
         _ready = true;
+        if (_voice is not null)
+            _mode = await _voice.GetModeAsync();
         if (_voice is { IsOn: true })
         {
             Subscribe();
@@ -89,6 +156,22 @@
         }
 
         await RefreshRequirementsAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_focusActive || !_expanded || _disposed)
+            return;
+
+        _focusActive = false;
+        try
+        {
+            var option = _mode == DysonVoiceInputMode.Immediate ? _immediateOption : _callsignOption;
+            await option.FocusAsync();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+        {
+        }
     }
 
     private async Task ClickAsync()
@@ -158,6 +241,93 @@
         }
     }
 
+    private void ToggleExpanded()
+    {
+        if (_voice is null || _disposed)
+            return;
+
+        _expanded = !_expanded;
+        if (_expanded)
+            _focusActive = true;
+    }
+
+    private async Task OnChevronKey(KeyboardEventArgs key)
+    {
+        if (key.Key != "Escape" || !_expanded)
+            return;
+
+        _expanded = false;
+        try
+        {
+            await _chevron.FocusAsync();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+        {
+        }
+    }
+
+    private async Task OnOptionKey(KeyboardEventArgs key)
+    {
+        if (_voice is null || !_expanded)
+            return;
+
+        if (key.Key == "Escape")
+        {
+            _expanded = false;
+            try
+            {
+                await _chevron.FocusAsync();
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+            {
+            }
+
+            return;
+        }
+
+        if (key.Key is not ("ArrowLeft" or "ArrowRight"))
+            return;
+
+        try
+        {
+            var toImmediate = key.Key == "ArrowRight";
+            await (toImmediate ? _immediateOption : _callsignOption).FocusAsync();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+        {
+        }
+    }
+
+    private async Task PickAsync(DysonVoiceInputMode mode)
+    {
+        if (_voice is null || _disposed || _busy)
+            return;
+
+        _busy = true;
+        try
+        {
+            var set = await _voice.SetModeAsync(mode);
+            if (_disposed)
+                return;
+            if (set.IsError)
+            {
+                Host.ReportError(set.Error);
+                return;
+            }
+
+            _mode = mode;
+            if (!_on)
+            {
+                _checkedUtc = DateTime.MinValue;
+                await RefreshRequirementsAsync();
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
     private async Task RefreshRequirementsAsync()
     {
         if (_voice is null || _on || _disposed || _checking)
@@ -181,11 +351,26 @@
         }
     }
 
+    private string OptionTitle(string format, DysonVoiceInputMode mode) =>
+        string.Format(format, PauseSeconds(mode));
+
+    private string PauseSeconds(DysonVoiceInputMode mode)
+    {
+        var seconds = (_voice?.PauseFor(mode) ?? FallbackPause(mode)) / 1000.0;
+        return seconds.ToString("0.#");
+    }
+
+    private static int FallbackPause(DysonVoiceInputMode mode) =>
+        mode == DysonVoiceInputMode.Immediate
+            ? DysonVoiceMode.ImmediatePauseMs
+            : DysonVoiceMode.PauseMs;
+
     private void Subscribe()
     {
         if (_hooked || _voice is null)
             return;
         _voice.StateChanged += OnStateChanged;
+        _voice.DraftChanged += OnDraftChanged;
         _hooked = true;
     }
 
@@ -194,10 +379,13 @@
         if (!_hooked || _voice is null)
             return;
         _voice.StateChanged -= OnStateChanged;
+        _voice.DraftChanged -= OnDraftChanged;
         _hooked = false;
     }
 
     private void OnStateChanged() => PostToCircuit(StateHasChanged);
+
+    private void OnDraftChanged(string text) => PostToCircuit(() => OnDraft.InvokeAsync(text));
 
     private void PostToCircuit(Action action)
     {

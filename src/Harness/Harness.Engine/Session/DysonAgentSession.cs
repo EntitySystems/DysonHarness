@@ -514,8 +514,15 @@ public abstract class DysonAgentSession
                 ApplyPendingModelLocked();
         }
 
+        ModelChanged?.Invoke(this, EventArgs.Empty);
         return VoidResult<string>.Success;
     }
+
+    /// <summary>
+    /// Raised outside the model gate after <see cref="SetModel"/> and after a pending pick is applied, so labels
+    /// that read <see cref="SelectedProvider"/> / <see cref="Provider"/> can refresh.
+    /// </summary>
+    public event EventHandler? ModelChanged;
 
     /// <summary>
     /// Request boundary: applies a pending <see cref="SetModel"/> pick so the next request resolves model, client,
@@ -523,9 +530,116 @@ public abstract class DysonAgentSession
     /// </summary>
     protected internal bool ApplyPendingModel()
     {
+        bool applied;
         lock (_modelGate)
-            return ApplyPendingModelLocked();
+            applied = ApplyPendingModelLocked();
+        if (applied)
+            ModelChanged?.Invoke(this, EventArgs.Empty);
+        return applied;
     }
+
+    /// <summary>
+    /// <c>ChangeSubagentAIModel</c>: switches a direct child's model and/or effort through <see cref="SetModel"/>
+    /// (a fresh provider, so slug and effort land together). Idle or terminal child: applied now. Busy child: lands
+    /// at its next provider request; the in-flight request is never cancelled. Stopped children are refused.
+    /// Persists the child row's slug and effort at once.
+    /// </summary>
+    public async Task<Result<DysonChangeSubagentModelOutcome, string>> ChangeSubagentModelAsync(
+        int subagentId,
+        string? modelSlug,
+        string? reasoningEffort,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetSubagent(subagentId, out var child))
+            return Result<DysonChangeSubagentModelOutcome, string>.AsError($"Unknown subagentId {subagentId}.");
+
+        if (child.Status == DysonSessionStatus.Stopped)
+        {
+            return Result<DysonChangeSubagentModelOutcome, string>.AsError(
+                $"Subagent #{subagentId} is stopped; model change has no effect.");
+        }
+
+        var slug = string.IsNullOrWhiteSpace(modelSlug) ? null : modelSlug.Trim();
+        var effort = OpenAiCompatibleAgentProvider.NormalizeReasoningEffort(reasoningEffort);
+        if (slug is null && effort is null)
+        {
+            return Result<DysonChangeSubagentModelOutcome, string>.AsError(
+                "ChangeSubagentAIModel: modelSlug or reasoningEffort is required.");
+        }
+
+        if (child.SelectedProvider is not OpenAiCompatibleAgentProvider current)
+        {
+            return Result<DysonChangeSubagentModelOutcome, string>.AsError(
+                "ChangeSubagentAIModel is not supported for this provider kind.");
+        }
+
+        var resolved = await ResolveSwitchProviderAsync(current, slug, effort, cancellationToken)
+            .ConfigureAwait(false);
+        if (resolved.IsError)
+            return Result<DysonChangeSubagentModelOutcome, string>.AsError(resolved.Error);
+
+        var next = resolved.Value;
+        if (next.SlugId == current.SlugId
+            && string.Equals(next.Slug, current.Slug, StringComparison.Ordinal)
+            && string.Equals(next.ReasoningEffort, current.ReasoningEffort, StringComparison.Ordinal))
+        {
+            return Result<DysonChangeSubagentModelOutcome, string>.AsValue(ChangeOutcome(child, current, "unchanged"));
+        }
+
+        var set = child.SetModel(next, next.DefaultMaxTargetContextTokens);
+        if (set.IsError)
+            return Result<DysonChangeSubagentModelOutcome, string>.AsError(set.Error);
+
+        var applied = ReferenceEquals(child.Provider, next) ? "now" : "nextToolRound";
+        // ponytail: the persist is a separate await from SetModel; a racing UI pick can leave the row one pick
+        // behind memory until the next pick or reload. Upgrade path: one per-session async gate around both.
+        if ((child.SessionStore ?? SessionStore) is { } store && child.PersistenceId != Guid.Empty)
+        {
+            var persist = await store.UpdateSessionMetaAsync(
+                    new DysonSessionMetaUpdate
+                    {
+                        SessionId = child.PersistenceId,
+                        ModelSlugId = next.SlugId,
+                        ClearModelSlug = next.SlugId is null,
+                        UpdateReasoningEffort = true,
+                        ReasoningEffort = next.ReasoningEffort,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (persist.IsError)
+                return Result<DysonChangeSubagentModelOutcome, string>.AsError(persist.Error);
+        }
+
+        AppendLog($"changed subagent {child.Id} model to {FormatSubagentModelLabel(next)} (effort {next.ReasoningEffort ?? "default"}, {applied})");
+        return Result<DysonChangeSubagentModelOutcome, string>.AsValue(ChangeOutcome(child, next, applied));
+    }
+
+    private static DysonChangeSubagentModelOutcome ChangeOutcome(
+        DysonAgentSession child,
+        OpenAiCompatibleAgentProvider provider,
+        string applied) =>
+        new(
+            child.Id,
+            child.PersistenceId,
+            provider.Slug,
+            provider.ReasoningEffort,
+            FormatSubagentModelLabel(provider),
+            applied);
+
+    /// <summary>
+    /// Fresh provider for <see cref="ChangeSubagentModelAsync"/>: a non-null <paramref name="modelSlug"/> resolves
+    /// that slug (null effort = slug default); else <paramref name="current"/> copied with the new effort.
+    /// The base supports no provider kind; OpenAI-compatible sessions override.
+    /// </summary>
+    internal virtual Task<Result<OpenAiCompatibleAgentProvider, string>> ResolveSwitchProviderAsync(
+        OpenAiCompatibleAgentProvider current,
+        string? modelSlug,
+        string? reasoningEffort,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(modelSlug is null
+            ? Result<OpenAiCompatibleAgentProvider, string>.AsValue(current.WithReasoningEffort(reasoningEffort))
+            : Result<OpenAiCompatibleAgentProvider, string>.AsError(
+                "ChangeSubagentAIModel is not supported for this provider kind."));
 
     private bool ApplyPendingModelLocked()
     {
@@ -758,7 +872,7 @@ public abstract class DysonAgentSession
         agentMode = c.Mode,
         title = c.DisplayTitle,
         status = c.Status.ToString(),
-        modelLabel = FormatSubagentModelLabel(c.Provider),
+        modelLabel = FormatSubagentModelLabel(c.SelectedProvider),
     };
 
     private static object ProjectChildRosterWithReports(DysonAgentSession c) => new
@@ -768,7 +882,7 @@ public abstract class DysonAgentSession
         agentMode = c.Mode,
         title = c.DisplayTitle,
         status = c.Status.ToString(),
-        modelLabel = FormatSubagentModelLabel(c.Provider),
+        modelLabel = FormatSubagentModelLabel(c.SelectedProvider),
         kind = RosterKind(c.Mode),
         worktreeBranch = string.Equals(c.Mode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase)
             ? null
@@ -1874,12 +1988,16 @@ public abstract class DysonAgentSession
                 return;
             _disposed = true;
             // Under the model gate so a SetModel racing the prompt end is either applied here or applied by SetModel.
+            var applied = false;
             lock (session._modelGate)
             {
                 session._inFlightPromptStack.Pop();
                 if (session._inFlightPromptStack.Count == 0)
-                    session.ApplyPendingModelLocked();
+                    applied = session.ApplyPendingModelLocked();
             }
+
+            if (applied)
+                session.ModelChanged?.Invoke(session, EventArgs.Empty);
         }
     }
 
@@ -3379,6 +3497,7 @@ public abstract class DysonAgentSession
             TurnHistory.Add(turn);
         }
 
+        TrimMetaChatHistory(state.Session);
         BumpTranscriptGeneration();
 
         while (_logLines.TryDequeue(out _))
@@ -3399,6 +3518,47 @@ public abstract class DysonAgentSession
         }
 
         RestoreTodos(state.Todos);
+    }
+
+    /// <summary>Background DB delete started by the last load-time Meta chat trim. Tests await it.</summary>
+    internal Task MetaChatTrimCompletion { get; private set; } = Task.CompletedTask;
+
+    /// <summary>
+    /// Root Meta Agent only: drops turns older than the <see cref="DysonMetaChatWindow"/> that the model
+    /// context no longer needs, and hard-deletes them off the circuit thread. Idempotent across loads.
+    /// </summary>
+    private void TrimMetaChatHistory(DysonSessionEntity session)
+    {
+        if (!DysonMetaChatWindow.Applies(session.ParentSessionId, session.AgentMode))
+            return;
+
+        var ids = DysonMetaChatWindow.SelectTrimmable(TurnHistory);
+        if (ids.Count == 0)
+            return;
+
+        var drop = ids.ToHashSet();
+        TurnHistory.RemoveAll(t => drop.Contains(t.Id));
+
+        var store = SessionStore;
+        var sessionId = session.Id;
+        if (store is null)
+            return;
+
+        MetaChatTrimCompletion = Task.Run(async () =>
+        {
+            try
+            {
+                var deleted = await store.DeleteTurnsAsync(sessionId, ids).ConfigureAwait(false);
+                AppendLog(deleted.IsSuccess
+                    ? $"meta chat: trimmed {ids.Count} turn(s) older than the last {DysonMetaChatWindow.MaxInteractions} interactions"
+                    : $"meta chat: trim failed: {deleted.Error}");
+            }
+            catch (Exception ex)
+            {
+                // Rows stay; the next load retries the same idempotent trim.
+                AppendLog($"meta chat: trim failed: {ex.Message}");
+            }
+        });
     }
 
     /// <summary>Reason of the last persisted SessionStatusChanged(Stopped) log, if any.</summary>

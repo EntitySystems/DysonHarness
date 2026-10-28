@@ -32,6 +32,15 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
     private readonly Dictionary<Guid, Queue<DysonQueuedPrompt>> _promptQueues = new();
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _promptGates = new();
     private readonly ConcurrentDictionary<CancellationTokenSource, Guid> _livePromptCts = new();
+    // Gate holders only. Gate-waiters stay in _livePromptCts and are not cancelled by InterruptWithPrompt.
+    private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _runningPromptCts = new();
+    private readonly ConcurrentDictionary<CancellationTokenSource, byte> _supersededPromptCts = new();
+
+    /// <summary>
+    /// Returned when a running prompt is cancelled by <see cref="InterruptWithPrompt"/>.
+    /// A plain <see cref="CancelPrompt"/> still returns the run's own cancel result.
+    /// </summary>
+    public const string PromptSupersededError = "Prompt was interrupted by a newer voice message.";
     private readonly ConcurrentDictionary<int, Task> _persistTasks = new();
     private readonly ConcurrentDictionary<int, Task> _executionTasks = new();
     private readonly SemaphoreSlim _graphGate = new(1, 1);
@@ -390,6 +399,108 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
 
         CancelPromptTokens(sessionId);
         return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Inserts <paramref name="turn"/> at the head of the session queue (existing order kept)
+    /// and cancels only the prompt that holds the gate, unless a summary is in flight.
+    /// Gate-waiters are not cancelled. No grace wait.
+    /// </summary>
+    public Result<DysonQueuedPrompt, string> InterruptWithPrompt(Guid sessionId, DysonAgentTurn turn)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+
+        if (_disposed != 0)
+            return Result<DysonQueuedPrompt, string>.AsError("Session runtime has been disposed.");
+
+        if (sessionId == Guid.Empty)
+            return Result<DysonQueuedPrompt, string>.AsError("Session id is required.");
+
+        if (!_sessionsById.TryGetValue(sessionId, out var session) || session.PersistenceId == Guid.Empty)
+            return Result<DysonQueuedPrompt, string>.AsError("Session is not registered with this runtime.");
+
+        if (!turn.AllowEnqueue)
+            return Result<DysonQueuedPrompt, string>.AsError("TaskEndReflect cannot be enqueued.");
+
+        var entry = new DysonQueuedPrompt
+        {
+            SessionId = sessionId,
+            Turn = turn,
+        };
+
+        lock (_promptQueueGate)
+        {
+            if (_disposed != 0)
+                return Result<DysonQueuedPrompt, string>.AsError("Session runtime has been disposed.");
+
+            if (!_sessionsById.TryGetValue(sessionId, out session))
+                return Result<DysonQueuedPrompt, string>.AsError("Session is not registered with this runtime.");
+
+            var rebuilt = new Queue<DysonQueuedPrompt>();
+            rebuilt.Enqueue(entry);
+            if (_promptQueues.TryGetValue(sessionId, out var existing))
+            {
+                while (existing.TryDequeue(out var queued))
+                    rebuilt.Enqueue(queued);
+            }
+
+            _promptQueues[sessionId] = rebuilt;
+        }
+
+        RaiseChanged(DysonRuntimeChangeKind.Queue, sessionId);
+
+        if (!session.HasAnySummarizingTurn && !session.IsSummaryInFlight
+            && _runningPromptCts.TryGetValue(sessionId, out var running))
+        {
+            _supersededPromptCts.TryAdd(running, 0);
+            try
+            {
+                running.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
+        return Result<DysonQueuedPrompt, string>.AsValue(entry);
+    }
+
+    /// <summary>
+    /// Removes one queued entry by id under the queue gate. False when it is already gone.
+    /// </summary>
+    public bool TryRemovePrompt(Guid sessionId, Guid queuedId)
+    {
+        if (_disposed != 0 || sessionId == Guid.Empty || queuedId == Guid.Empty)
+            return false;
+
+        var removed = false;
+        lock (_promptQueueGate)
+        {
+            if (!_promptQueues.TryGetValue(sessionId, out var queue))
+                return false;
+
+            var kept = new Queue<DysonQueuedPrompt>();
+            while (queue.TryDequeue(out var entry))
+            {
+                if (!removed && entry.Id == queuedId)
+                {
+                    removed = true;
+                    continue;
+                }
+
+                kept.Enqueue(entry);
+            }
+
+            if (kept.Count == 0)
+                _promptQueues.Remove(sessionId);
+            else
+                _promptQueues[sessionId] = kept;
+        }
+
+        if (removed)
+            RaiseChanged(DysonRuntimeChangeKind.Queue, sessionId);
+
+        return removed;
     }
 
     public async Task<Result<DysonAgentSession, string>> CreateRootAsync(
@@ -760,6 +871,8 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
             foreach (var cts in _livePromptCts.Keys)
                 cts.Dispose();
 
+            _runningPromptCts.Clear();
+            _supersededPromptCts.Clear();
             _sessionsById.Clear();
             _parentSessionIdByChild.Clear();
             _hookedSessions.Clear();
@@ -850,6 +963,7 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
                 return VoidResult<string>.AsError("Session runtime has been disposed.");
 
             _busySessions[sessionId] = 0;
+            _runningPromptCts[sessionId] = linked;
             RaiseChanged(DysonRuntimeChangeKind.Busy, sessionId);
 
             try
@@ -862,11 +976,13 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
                 }
                 catch (OperationCanceledException)
                 {
-                    return VoidResult<string>.AsError("Prompt was cancelled.");
+                    return SupersededOrCancelled(linked);
                 }
 
                 if (result.IsError)
-                    return result;
+                    return _supersededPromptCts.ContainsKey(linked)
+                        ? VoidResult<string>.AsError(PromptSupersededError)
+                        : result;
 
                 // The turn this prompt ran, not Turns[^1]: a concurrent child turn may be newer and still running.
                 if (session.TryGetTurnRanSince(turnsBefore, out var last))
@@ -913,6 +1029,9 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
             finally
             {
                 _busySessions.TryRemove(sessionId, out _);
+                if (_runningPromptCts.TryGetValue(sessionId, out var running) && ReferenceEquals(running, linked))
+                    _runningPromptCts.TryRemove(sessionId, out _);
+                _supersededPromptCts.TryRemove(linked, out _);
                 RaiseChanged(DysonRuntimeChangeKind.Busy, sessionId);
             }
         }
@@ -990,6 +1109,11 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
 
         return VoidResult<string>.Success;
     }
+
+    private VoidResult<string> SupersededOrCancelled(CancellationTokenSource linked) =>
+        _supersededPromptCts.ContainsKey(linked)
+            ? VoidResult<string>.AsError(PromptSupersededError)
+            : VoidResult<string>.AsError("Prompt was cancelled.");
 
     private void CancelPromptTokens(Guid sessionId)
     {

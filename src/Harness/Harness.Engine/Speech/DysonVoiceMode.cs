@@ -13,8 +13,27 @@ public enum DysonVoiceStopReason
     Settings,
 }
 
+/// <summary>How spoken words become a user message. Callsign is today's wake-name mode.</summary>
+public enum DysonVoiceInputMode
+{
+    CallsignActivated,
+    Immediate,
+}
+
+/// <summary>One accepted utterance. <see cref="Text"/> still carries <see cref="DysonVoiceMode.InputPrefix"/>.</summary>
+public readonly record struct DysonVoiceMessage(string Text, DysonVoiceInputMode Mode);
+
+/// <summary>Where a posted voice message goes. The host switches on <see cref="DysonVoiceMode.RouteFor"/>.</summary>
+public enum DysonVoiceRoute
+{
+    Prompt,
+    Inject,
+    Queue,
+    Interrupt,
+}
+
 /// <summary>
-/// Root Meta Agent voice mode: one listen loop over the growing transcript, a 3 s pause to submit,
+/// Root Meta Agent voice mode: one listen loop over the growing transcript, a pause to submit,
 /// barge-in on a stored wake name while speech is playing, and a queue the SpeakToUser tool fills.
 /// Windows only, same shape as <see cref="DysonSpeechTryout"/>. No interface: one implementation.
 /// </summary>
@@ -28,12 +47,29 @@ public sealed class DysonVoiceMode(
 {
     public const string InputPrefix = "[voice input] ";
     public const int PauseMs = 3000;
+    public const int ImmediatePauseMs = 2000;
+    public const int MinPauseMs = 1000;
+    public const int MaxPauseMs = 10000;
     public const int PostWakeIgnoreMs = 1000;
+    public const int PostSpeechIgnoreMs = 1000;
     public static readonly TimeSpan FadeOut = TimeSpan.FromMilliseconds(150);
     public const int MaxSpeakChars = 600;
 
+    /// <summary>Error when Immediate is asked for without Nemotron live speech-to-text.</summary>
+    public const string ImmediateNeedsNemotron =
+        "Immediate mode needs Nemotron 3.5 live speech-to-text. Pick it in Settings → Voice.";
+
+    /// <summary>Error when a pause setter is given a value outside 1..10 seconds.</summary>
+    public const string PauseRangeError = "Pause must be between 1 and 10 seconds.";
+
+    /// <summary>Built-in chime (null clip) has no PCM. Mute covers the beep plus the tail.</summary>
+    private const int ChimeMuteMs = 400;
+
+    /// <summary>Immediate echo of the last spoken line is ignored for this long after speech ends.</summary>
+    private const int EchoWindowMs = 3000;
+
     /// <summary>One queued utterance. <see cref="SpokenLine.WorkDirectoryName"/> is the enqueue snapshot.</summary>
-    internal readonly record struct SpokenLine(string Text, Guid WorkDirectoryId, string WorkDirectoryName);
+    internal readonly record struct SpokenLine(string Text, Guid WorkDirectoryId, string WorkDirectoryName, int Epoch);
 
     /// <summary>Idle transcript longer than this restarts the live stream.</summary>
     private const int RestartChars = 400;
@@ -58,8 +94,16 @@ public sealed class DysonVoiceMode(
     private int _speakEpoch;
     private CancellationTokenSource? _currentSynth;
     private CancellationTokenSource? _prefetchSynth;
+    private Listener? _listener;
+    private bool _modeLoaded;
+    private int _callsignPauseMs = PauseMs;
+    private int _immediatePauseMs = ImmediatePauseMs;
+    private string _lastDraft = "";
 
     public bool IsOn { get; private set; }
+
+    /// <summary>In-memory mode. Loaded from settings by <see cref="StartAsync"/> and the first <see cref="GetModeAsync"/>.</summary>
+    public DysonVoiceInputMode Mode { get; private set; } = DysonVoiceInputMode.CallsignActivated;
 
     /// <summary>Work directory on screen. Playback reads <see cref="DysonWorkDirectoryFocus.ActiveId"/> from here.</summary>
     public DysonWorkDirectoryFocus Focus => _focus;
@@ -67,8 +111,36 @@ public sealed class DysonVoiceMode(
     public bool IsSpeaking { get; private set; }
 
     public event Action? StateChanged;
-    public event Func<string, Task>? MessageReady;
+    public event Func<DysonVoiceMessage, Task>? MessageReady;
+
+    /// <summary>Current Immediate utterance, without the prefix. Empty when it posts, drops, or the mode leaves Immediate.</summary>
+    public event Action<string>? DraftChanged;
+
     public event Action<string>? Failed;
+
+    /// <summary>Cached pause for <paramref name="mode"/>, in milliseconds. Used by UI titles.</summary>
+    public int PauseFor(DysonVoiceInputMode mode) =>
+        mode == DysonVoiceInputMode.Immediate ? _immediatePauseMs : _callsignPauseMs;
+
+    /// <summary>Hops once, then reads the mode and both pauses and caches them.</summary>
+    public Task<DysonVoiceInputMode> GetModeAsync(CancellationToken cancellationToken = default) =>
+        Task.Run(async () =>
+        {
+            await LoadModeAsync(cancellationToken).ConfigureAwait(false);
+            return Mode;
+        }, CancellationToken.None);
+
+    /// <summary>
+    /// Switches mode live. Immediate while voice is on re-checks requirements; a failure leaves the mode unchanged.
+    /// A persist failure keeps the live switch and returns the error.
+    /// </summary>
+    public Task<VoidResult<string>> SetModeAsync(DysonVoiceInputMode mode, CancellationToken cancellationToken = default) =>
+        Task.Run(() => SetModeCoreAsync(mode, cancellationToken), CancellationToken.None);
+
+    /// <summary>Validates, persists the matching pause key, and updates the live listener when that mode is active.</summary>
+    public Task<VoidResult<string>> SetPauseAsync(
+        DysonVoiceInputMode mode, int pauseMs, CancellationToken cancellationToken = default) =>
+        Task.Run(() => SetPauseCoreAsync(mode, pauseMs, cancellationToken), CancellationToken.None);
 
     /// <summary>
     /// First failure wins. Each message points at Settings → Voice.
@@ -79,16 +151,25 @@ public sealed class DysonVoiceMode(
         Result<string, string> tts,
         IReadOnlyList<string> wakeNames,
         int activeTtsVoiceCount,
-        string? whisperRuntime = null)
+        string? whisperRuntime = null,
+        DysonVoiceInputMode mode = DysonVoiceInputMode.CallsignActivated)
     {
         if (stt.IsError)
             return new VoidResult<string>(stt.Error);
         if (tts.IsError)
             return new VoidResult<string>(tts.Error);
 
-        wakeNames ??= [];
-        if (wakeNames.Count != 8 || wakeNames.Any(string.IsNullOrWhiteSpace))
-            return new VoidResult<string>("Train the agent name: save 8 name variants in Settings → Voice.");
+        if (mode == DysonVoiceInputMode.Immediate)
+        {
+            if (stt.Value != DysonGgufSpeechModels.NemotronId)
+                return new VoidResult<string>(ImmediateNeedsNemotron);
+        }
+        else
+        {
+            wakeNames ??= [];
+            if (wakeNames.Count != 8 || wakeNames.Any(string.IsNullOrWhiteSpace))
+                return new VoidResult<string>("Train the agent name: save 8 name variants in Settings → Voice.");
+        }
 
         if ((tts.Value == DysonQwenSpeech.Id || DysonGgufSpeechModels.IsQwenGguf(tts.Value))
             && activeTtsVoiceCount <= 0)
@@ -126,9 +207,78 @@ public sealed class DysonVoiceMode(
     public Task<VoidResult<string>> CheckRequirementsAsync(CancellationToken cancellationToken = default) =>
         Task.Run(() => LoadRequirementsAsync(cancellationToken), CancellationToken.None);
 
+    /// <summary>
+    /// Where a posted voice message goes. Immediate interrupts whenever the session is not idle.
+    /// Callsign keeps today's inject / queue behaviour.
+    /// </summary>
+    internal static DysonVoiceRoute RouteFor(
+        DysonVoiceInputMode mode, bool inFlight, bool busy, bool summarizing)
+    {
+        if (mode == DysonVoiceInputMode.Immediate)
+            return inFlight || busy || summarizing ? DysonVoiceRoute.Interrupt : DysonVoiceRoute.Prompt;
+
+        if (inFlight)
+            return DysonVoiceRoute.Inject;
+        if (busy || summarizing)
+            return DysonVoiceRoute.Queue;
+        return DysonVoiceRoute.Prompt;
+    }
+
+    /// <summary>One prefix, then the first text, one space, and the second text with its prefix stripped.</summary>
+    internal static string MergeUtterances(string first, string second)
+    {
+        var a = StripPrefix(first);
+        var b = StripPrefix(second);
+        if (a.Length == 0)
+            return InputPrefix + b;
+        if (b.Length == 0)
+            return InputPrefix + a;
+        return InputPrefix + a + " " + b;
+    }
+
+    /// <summary>
+    /// Normal turn for a posted voice message. Immediate sets
+    /// <see cref="DysonAgentSystemPrompts.MetaAgentImmediateVoiceTurnInstruction"/>; Callsign does not.
+    /// </summary>
+    public static DysonAgentTurn CreateTurn(DysonVoiceMessage message)
+    {
+        var turn = DysonAgentSession.CreateNormalTurn(message.Text);
+        if (message.Mode == DysonVoiceInputMode.Immediate)
+            turn.HiddenInstruction = DysonAgentSystemPrompts.MetaAgentImmediateVoiceTurnInstruction;
+        return turn;
+    }
+
+    /// <summary>
+    /// Flushes speech the interrupted turn had queued. No listen cue.
+    /// ponytail: the flush is global, so queued lines from another work directory's Meta Agent are dropped too.
+    /// Upgrade: a per-work-directory epoch.
+    /// </summary>
+    public void DropPendingSpeech()
+    {
+        Interlocked.Increment(ref _speakEpoch);
+        CancelSynths();
+        _tryout.StopPlayback(FadeOut);
+        // The line currently playing was already read out of the channel, so the epoch
+        // bump cannot reach it. Drop it here too.
+        var changed = false;
+        lock (_state)
+        {
+            _speakingText = null;
+            changed = IsSpeaking;
+            IsSpeaking = false;
+        }
+
+        if (changed)
+            RaiseState();
+        // Lines still in the channel carry the old SpokenLine.Epoch; SpeakLoop (the single reader)
+        // drops them on read and never synthesizes them. A line already prefetched was cancelled
+        // above and is dropped by the post-play epoch check, so it never plays.
+    }
+
     /// <summary>Checks requirements, then runs the listen, tick, and speak loops off the caller.</summary>
     public async Task<VoidResult<string>> StartAsync(CancellationToken cancellationToken = default)
     {
+        await LoadModeAsync(cancellationToken).ConfigureAwait(false);
         var ready = await CheckRequirementsAsync(cancellationToken).ConfigureAwait(false);
         if (ready.IsError)
             return ready;
@@ -165,6 +315,8 @@ public sealed class DysonVoiceMode(
             SingleWriter = false,
         });
         var listener = new Listener();
+        lock (_listenerGate)
+            listener.SetMode(Mode, PauseFor(Mode), Environment.TickCount64);
         lock (_state)
         {
             if (IsOn)
@@ -176,6 +328,8 @@ public sealed class DysonVoiceMode(
             _runCts = run;
             _speak = channel;
             _speakEpoch = 0;
+            _listener = listener;
+            _lastDraft = "";
             _loops = Task.Run(() => RunAsync(listener, device.Value, run.Token), CancellationToken.None);
             IsOn = true;
         }
@@ -259,9 +413,11 @@ public sealed class DysonVoiceMode(
             return new VoidResult<string>("Text is over 600 characters. Split it into several SpeakToUser calls.");
 
         Channel<SpokenLine>? channel;
+        var epoch = Volatile.Read(ref _speakEpoch);
         lock (_state)
             channel = _speak;
-        if (channel is null || !channel.Writer.TryWrite(new SpokenLine(trimmed, workDirectoryId, workDirectoryName ?? "")))
+        if (channel is null
+            || !channel.Writer.TryWrite(new SpokenLine(trimmed, workDirectoryId, workDirectoryName ?? "", epoch)))
             return new VoidResult<string>("Voice mode is off.");
 
         return VoidResult<string>.Success;
@@ -330,7 +486,112 @@ public sealed class DysonVoiceMode(
         return hits * 10 >= heardWords.Count * 6;
     }
 
+    private async Task LoadModeAsync(CancellationToken cancellationToken)
+    {
+        var modeRow = await _settings.GetSettingAsync(DysonAppSettingKeys.SpeechVoiceMode, cancellationToken)
+            .ConfigureAwait(false);
+        var callsignRow = await _settings.GetSettingAsync(DysonAppSettingKeys.SpeechCallsignPauseMs, cancellationToken)
+            .ConfigureAwait(false);
+        var immediateRow = await _settings.GetSettingAsync(DysonAppSettingKeys.SpeechImmediatePauseMs, cancellationToken)
+            .ConfigureAwait(false);
+
+        var modeText = modeRow.IsSuccess
+            ? DysonAppSettingKeys.ParseSpeechVoiceMode(modeRow.Value).Value
+            : DysonAppSettingKeys.SpeechVoiceModeCallsign;
+        var callsign = callsignRow.IsSuccess
+            ? DysonAppSettingKeys.ParseSpeechPauseMs(callsignRow.Value, PauseMs).Value
+            : PauseMs;
+        var immediate = immediateRow.IsSuccess
+            ? DysonAppSettingKeys.ParseSpeechPauseMs(immediateRow.Value, ImmediatePauseMs).Value
+            : ImmediatePauseMs;
+
+        var mode = modeText == DysonAppSettingKeys.SpeechVoiceModeImmediate
+            ? DysonVoiceInputMode.Immediate
+            : DysonVoiceInputMode.CallsignActivated;
+        lock (_state)
+        {
+            Mode = mode;
+            _callsignPauseMs = callsign;
+            _immediatePauseMs = immediate;
+            _modeLoaded = true;
+        }
+    }
+
+    private async Task<VoidResult<string>> SetModeCoreAsync(DysonVoiceInputMode mode, CancellationToken cancellationToken)
+    {
+        if (!_modeLoaded)
+            await LoadModeAsync(cancellationToken).ConfigureAwait(false);
+
+        if (IsOn && mode == DysonVoiceInputMode.Immediate && Mode != DysonVoiceInputMode.Immediate)
+        {
+            var ready = await LoadRequirementsForAsync(mode, cancellationToken).ConfigureAwait(false);
+            if (ready.IsError)
+                return ready;
+        }
+
+        var now = Environment.TickCount64;
+        var pause = PauseFor(mode);
+        var leftImmediate = false;
+        lock (_state)
+            leftImmediate = Mode == DysonVoiceInputMode.Immediate && mode != DysonVoiceInputMode.Immediate;
+
+        lock (_listenerGate)
+            _listener?.SetMode(mode, pause, now);
+
+        lock (_state)
+            Mode = mode;
+
+        if (leftImmediate)
+            RaiseDraft("");
+
+        var stored = await _settings.SetSettingAsync(
+            DysonAppSettingKeys.SpeechVoiceMode,
+            mode == DysonVoiceInputMode.Immediate
+                ? DysonAppSettingKeys.SpeechVoiceModeImmediate
+                : DysonAppSettingKeys.SpeechVoiceModeCallsign,
+            cancellationToken).ConfigureAwait(false);
+        RaiseState();
+        return stored.IsError ? stored : VoidResult<string>.Success;
+    }
+
+    private async Task<VoidResult<string>> SetPauseCoreAsync(
+        DysonVoiceInputMode mode, int pauseMs, CancellationToken cancellationToken)
+    {
+        if (pauseMs < MinPauseMs || pauseMs > MaxPauseMs)
+            return new VoidResult<string>(PauseRangeError);
+
+        if (!_modeLoaded)
+            await LoadModeAsync(cancellationToken).ConfigureAwait(false);
+
+        lock (_state)
+        {
+            if (mode == DysonVoiceInputMode.Immediate)
+                _immediatePauseMs = pauseMs;
+            else
+                _callsignPauseMs = pauseMs;
+        }
+
+        if (Mode == mode)
+        {
+            lock (_listenerGate)
+                _listener?.SetMode(mode, pauseMs, Environment.TickCount64);
+        }
+
+        var key = mode == DysonVoiceInputMode.Immediate
+            ? DysonAppSettingKeys.SpeechImmediatePauseMs
+            : DysonAppSettingKeys.SpeechCallsignPauseMs;
+        return await _settings.SetSettingAsync(key, pauseMs.ToString(), cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task<VoidResult<string>> LoadRequirementsAsync(CancellationToken cancellationToken)
+    {
+        if (!_modeLoaded)
+            await LoadModeAsync(cancellationToken).ConfigureAwait(false);
+        return await LoadRequirementsForAsync(Mode, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<VoidResult<string>> LoadRequirementsForAsync(
+        DysonVoiceInputMode mode, CancellationToken cancellationToken)
     {
         var stt = await _speechToText.ResolveActiveAsync(cancellationToken).ConfigureAwait(false);
         var tts = await _textToSpeech.ResolveActiveAsync(cancellationToken).ConfigureAwait(false);
@@ -357,7 +618,7 @@ public sealed class DysonVoiceMode(
             whisperRuntime = whisper.Value;
         }
 
-        return Requirements(stt, tts, names.Value, voiceCount, whisperRuntime);
+        return Requirements(stt, tts, names.Value, voiceCount, whisperRuntime, mode);
     }
 
     private async Task RunAsync(Listener listener, string? deviceId, CancellationToken runToken)
@@ -365,7 +626,7 @@ public sealed class DysonVoiceMode(
         var run = _runCts;
         try
         {
-            var speak = SpeakLoop(runToken);
+            var speak = SpeakLoop(listener, runToken);
             var tick = TickLoop(listener, runToken);
             try
             {
@@ -396,6 +657,7 @@ public sealed class DysonVoiceMode(
                 {
                     _runCts = null;
                     _loops = null;
+                    _listener = null;
                     IsOn = false;
                     IsCapturing = false;
                     IsSpeaking = false;
@@ -447,19 +709,25 @@ public sealed class DysonVoiceMode(
                     ListenAction action;
                     bool wasCapturing;
                     bool capturing;
+                    DysonVoiceInputMode mode;
+                    string draft;
                     lock (_listenerGate)
                     {
                         wasCapturing = listener.Capturing;
                         action = listener.OnText(item.Value, Environment.TickCount64, speaking, variants);
                         capturing = listener.Capturing;
+                        mode = listener.Mode;
+                        draft = listener.Draft;
                     }
 
                     SetCapturing(capturing);
+                    if (mode == DysonVoiceInputMode.Immediate)
+                        RaiseDraft(draft);
                     if (action == ListenAction.BargeIn)
                         BargeIn();
                     else if (action == ListenAction.Restart)
                         break;
-                    else if (!wasCapturing && capturing)
+                    else if (!wasCapturing && capturing && mode == DysonVoiceInputMode.CallsignActivated)
                         PlayListen();
                 }
             }
@@ -500,10 +768,12 @@ public sealed class DysonVoiceMode(
             {
                 string? message;
                 bool capturing;
+                DysonVoiceInputMode mode;
                 lock (_listenerGate)
                 {
                     message = listener.OnTick(Environment.TickCount64);
                     capturing = listener.Capturing;
+                    mode = listener.Mode;
                 }
 
                 SetCapturing(capturing);
@@ -525,10 +795,17 @@ public sealed class DysonVoiceMode(
                         .ConfigureAwait(false);
                 }
 
+                if (mode == DysonVoiceInputMode.Immediate)
+                    RaiseDraft("");
+                MuteFor(clip);
+
                 // Cue is not awaited. Submit still runs if playback throws or is already speaking.
                 await AcceptTurnAsync(
-                    message, speaking, () => _tryout.PlayAcceptCue(clip), MessageReady, Failed)
-                    .ConfigureAwait(false);
+                    new DysonVoiceMessage(message, mode),
+                    speaking,
+                    () => _tryout.PlayAcceptCue(clip),
+                    MessageReady,
+                    Failed).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
@@ -541,10 +818,10 @@ public sealed class DysonVoiceMode(
     /// playing, does not skip the submit.
     /// </summary>
     internal static async Task AcceptTurnAsync(
-        string message,
+        DysonVoiceMessage message,
         bool speaking,
         Action chime,
-        Func<string, Task>? ready,
+        Func<DysonVoiceMessage, Task>? ready,
         Action<string>? failed)
     {
         if (!speaking)
@@ -571,7 +848,7 @@ public sealed class DysonVoiceMode(
         }
     }
 
-    private async Task SpeakLoop(CancellationToken runToken)
+    private async Task SpeakLoop(Listener listener, CancellationToken runToken)
     {
         var reader = _speak?.Reader;
         if (reader is null)
@@ -583,7 +860,7 @@ public sealed class DysonVoiceMode(
         {
             while (!runToken.IsCancellationRequested)
             {
-                // ponytail: 50 ms poll. Ceiling is one extra beat after the 3 s pause before the first resumed line.
+                // ponytail: 50 ms poll. Ceiling is one extra beat after the pause before the first resumed line.
                 // Upgrade: pulse from SetCapturing when it goes false.
                 while (CaptureHold())
                     await Task.Delay(50, runToken).ConfigureAwait(false);
@@ -619,11 +896,14 @@ public sealed class DysonVoiceMode(
                             continue;
                         if (!reader.TryRead(out line))
                             continue;
-                        if (CaptureHold())
-                        {
-                            pending = line;
-                            continue;
-                        }
+                    }
+
+                    if (line.Epoch != Volatile.Read(ref _speakEpoch))
+                        continue;
+                    if (CaptureHold())
+                    {
+                        pending = line;
+                        continue;
                     }
 
                     current = await BeginLineAsync(line, prefetch: false, runToken).ConfigureAwait(false);
@@ -658,12 +938,19 @@ public sealed class DysonVoiceMode(
                 // None, not the run token: a fade must not cancel the device. The pump token is separate.
                 var play = _tryout.PlayPreparedAsync(playing.Channel.Reader.ReadAllAsync(), CancellationToken.None);
                 if (!CaptureHold()
-                    && reader.TryRead(out var nextLine)
+                    && reader.TryPeek(out var nextLine)
+                    && nextLine.Epoch == epoch
                     && Volatile.Read(ref _speakEpoch) == epoch
                     && !runToken.IsCancellationRequested)
                 {
-                    ahead = await BeginLineAsync(nextLine, prefetch: true, runToken).ConfigureAwait(false);
+                    reader.TryRead(out _);
+                    var next = await BeginLineAsync(nextLine, prefetch: true, runToken).ConfigureAwait(false);
+                    if (next is not null && next.Epoch == epoch && Volatile.Read(ref _speakEpoch) == epoch)
+                        ahead = next;
+                    else
+                        EndSynth(next);
                 }
+
 
                 VoidResult<string> played;
                 try
@@ -697,8 +984,17 @@ public sealed class DysonVoiceMode(
                 EndSynth(playing);
                 if (Volatile.Read(ref _speakEpoch) != epoch || runToken.IsCancellationRequested)
                 {
+                    // The prefetched line was read out of the channel, so the read-time epoch check
+                    // cannot reach it. Lines still queued carry the old epoch and are dropped on read;
+                    // do not drain here, or a line spoken right after the flush is lost too.
                     EndSynth(ahead);
                     ahead = null;
+                    pending = null;
+                }
+                else
+                {
+                    lock (_listenerGate)
+                        listener.NoteSpoken(playing.Playback, Environment.TickCount64 + PostSpeechIgnoreMs);
                 }
 
                 if (played.IsError && !IsIntentionalSpeechCancel(played.Error))
@@ -718,7 +1014,7 @@ public sealed class DysonVoiceMode(
     private async Task<Pumped?> BeginLineAsync(SpokenLine line, bool prefetch, CancellationToken runToken)
     {
         var epoch = Volatile.Read(ref _speakEpoch);
-        if (runToken.IsCancellationRequested)
+        if (line.Epoch != epoch || runToken.IsCancellationRequested)
             return null;
 
         var activeId = _focus.ActiveId;
@@ -752,6 +1048,12 @@ public sealed class DysonVoiceMode(
                 _prefetchSynth = synth;
             else
                 _currentSynth = synth;
+        }
+
+        if (Volatile.Read(ref _speakEpoch) != epoch || runToken.IsCancellationRequested)
+        {
+            EndSource(synth);
+            return null;
         }
 
         _ = PumpAsync(playback, synth, channel);
@@ -868,6 +1170,7 @@ public sealed class DysonVoiceMode(
         var clip = await DysonListenSentence
             .TryLoadAsync(_settings, _textToSpeech.InstallRoot, CancellationToken.None)
             .ConfigureAwait(false);
+        MuteFor(clip);
         _tryout.PlayListenCue(clip);
     }
 
@@ -891,12 +1194,23 @@ public sealed class DysonVoiceMode(
                 .ConfigureAwait(false);
             if (clip is null || !IsOn || run.IsCancellationRequested)
                 return;
+            MuteFor(clip);
             _tryout.PlayListenCue(clip);
         }
         catch (Exception)
         {
             // Fail soft: the cue is optional and voice mode stays on.
         }
+    }
+
+    /// <summary>Mute for the clip length (s16le mono) plus <see cref="PostSpeechIgnoreMs"/>. A null clip is the built-in chime (~400 ms).</summary>
+    private void MuteFor(DysonSpeechAudioChunk? clip)
+    {
+        var ms = clip is null || clip.SampleRate <= 0
+            ? ChimeMuteMs
+            : clip.Pcm.Length / 2 * 1000 / clip.SampleRate;
+        lock (_listenerGate)
+            _listener?.MuteUntil(Environment.TickCount64 + ms + PostSpeechIgnoreMs);
     }
 
     /// <summary>Fade, CrispASR cancel, or a mic fell-behind fault is not a failure the user should see.</summary>
@@ -964,6 +1278,22 @@ public sealed class DysonVoiceMode(
     }
 
     private void RaiseState() => StateChanged?.Invoke();
+
+    private void RaiseDraft(string draft)
+    {
+        if (string.Equals(_lastDraft, draft, StringComparison.Ordinal))
+            return;
+        _lastDraft = draft;
+        DraftChanged?.Invoke(draft);
+    }
+
+    private static string StripPrefix(string? text)
+    {
+        var trimmed = text?.Trim() ?? "";
+        return trimmed.StartsWith(InputPrefix, StringComparison.Ordinal)
+            ? trimmed[InputPrefix.Length..].Trim()
+            : trimmed;
+    }
 
     private static string ModelName(string runtimeId) => runtimeId switch
     {
@@ -1103,9 +1433,21 @@ public sealed class DysonVoiceMode(
         private int _speakMark;
         private int _previousLength;
         private bool _speakingArmed;
+        private int _pauseMs = PauseMs;
+        private long _muteUntilMs;
+        private string _lastSpoken = "";
+        private long _echoUntilMs;
+
+        internal DysonVoiceInputMode Mode { get; private set; } = DysonVoiceInputMode.CallsignActivated;
 
         internal bool Capturing { get; private set; }
 
+        /// <summary>Current utterance without the prefix. Empty when not capturing.</summary>
+        internal string Draft => Capturing && _messageStart >= 0 && _messageStart <= _text.Length
+            ? _text[_messageStart..].Trim()
+            : "";
+
+        /// <summary>Does not clear <see cref="Mode"/>, the pause, or the mute. Those survive a segment restart.</summary>
         internal void Reset()
         {
             Capturing = false;
@@ -1117,6 +1459,41 @@ public sealed class DysonVoiceMode(
             _speakMark = 0;
             _previousLength = 0;
             _speakingArmed = false;
+        }
+
+        /// <summary>
+        /// Live mode switch. A capture in progress keeps its text; the new pause applies from the last change.
+        /// Idle chatter heard before the switch never starts or joins an utterance.
+        /// </summary>
+        internal void SetMode(DysonVoiceInputMode mode, int pauseMs, long nowMs)
+        {
+            _ = nowMs;
+            var was = Mode;
+            Mode = mode;
+            _pauseMs = pauseMs;
+            if (Capturing)
+            {
+                if (was == DysonVoiceInputMode.CallsignActivated && mode == DysonVoiceInputMode.Immediate)
+                    _ignoreUntilMs = 0;
+                return;
+            }
+
+            _idleMark = _text.Length;
+        }
+
+        /// <summary>Idle text before <paramref name="untilMs"/> never starts a capture. Survives <see cref="Reset"/>.</summary>
+        internal void MuteUntil(long untilMs)
+        {
+            if (untilMs > _muteUntilMs)
+                _muteUntilMs = untilMs;
+        }
+
+        /// <summary>Records the line just spoken and mutes until <paramref name="muteUntilMs"/>.</summary>
+        internal void NoteSpoken(string spoken, long muteUntilMs)
+        {
+            _lastSpoken = spoken ?? "";
+            _echoUntilMs = muteUntilMs - PostSpeechIgnoreMs + EchoWindowMs;
+            MuteUntil(muteUntilMs);
         }
 
         internal ListenAction OnText(string transcript, long nowMs, string? speaking, IReadOnlyList<string> variants)
@@ -1152,11 +1529,65 @@ public sealed class DysonVoiceMode(
             {
                 _speakingArmed = false;
                 _speakMark = 0;
+                if (_muteUntilMs != 0 && nowMs < _muteUntilMs)
+                {
+                    _text = transcript;
+                    _previousLength = transcript.Length;
+                    _idleMark = transcript.Length;
+                    return ListenAction.None;
+                }
+
+                if (Mode == DysonVoiceInputMode.Immediate)
+                {
+                    // A replacement transcript (STT rewrote the line) is not a suffix of the
+                    // last one. Judging only the tail would slice mid-word and miss the echo.
+                    var continues = _text.Length > 0 && transcript.StartsWith(_text, StringComparison.Ordinal);
+                    var idleFrom = continues && _idleMark <= transcript.Length ? _idleMark : 0;
+                    var start = FirstWordStart(transcript, idleFrom);
+                    if (start >= 0)
+                    {
+                        // A growing transcript still holds the sentence just spoken. Judge the
+                        // words that arrived since the last update, not that whole line.
+                        var sliceFrom = continues
+                            ? Math.Max(Math.Max(start, idleFrom), _previousLength)
+                            : start;
+                        var heard = sliceFrom < transcript.Length ? transcript[sliceFrom..] : "";
+                        // ponytail: text heuristic, not acoustic echo cancellation.
+                        // Upgrade: Windows voice-capture DSP (AEC) in DysonWindowsAudioCapture.
+                        if (_lastSpoken.Length > 0 && nowMs < _echoUntilMs && IsEcho(heard, _lastSpoken))
+                        {
+                            _text = transcript;
+                            _previousLength = transcript.Length;
+                            _idleMark = transcript.Length;
+                            return ListenAction.None;
+                        }
+
+                        BeginCapture(transcript, nowMs, start, ignore: false);
+                        return ListenAction.None;
+                    }
+
+                    _text = transcript;
+                    _previousLength = transcript.Length;
+                    if (transcript.Length > RestartChars)
+                    {
+                        // ponytail: a word spoken during the restart gap is lost.
+                        // Upgrade: overlap the next RecordAsync before this segment is dropped.
+                        var mode = Mode;
+                        var pause = _pauseMs;
+                        Reset();
+                        Mode = mode;
+                        _pauseMs = pause;
+                        return ListenAction.Restart;
+                    }
+
+                    return ListenAction.None;
+                }
+
                 var mark = _idleMark > transcript.Length ? 0 : _idleMark;
                 var end = MatchEnd(transcript[mark..], variants);
                 if (end >= 0)
                 {
-                    BeginCapture(transcript, nowMs);
+                    BeginCapture(transcript, nowMs, transcript.Length, ignore: true);
                     return ListenAction.None;
                 }
 
@@ -1169,7 +1600,11 @@ public sealed class DysonVoiceMode(
                 {
                     // ponytail: a wake spoken during the restart gap is lost.
                     // Upgrade: overlap the next RecordAsync before this segment is dropped.
+                    var mode = Mode;
+                    var pause = _pauseMs;
                     Reset();
+                    Mode = mode;
+                    _pauseMs = pause;
                     return ListenAction.Restart;
                 }
 
@@ -1183,25 +1618,26 @@ public sealed class DysonVoiceMode(
             }
 
             var slice = _speakMark > transcript.Length ? transcript.Length : _speakMark;
-            var heard = transcript[slice..];
+            var bargeHeard = transcript[slice..];
             _text = transcript;
             _previousLength = transcript.Length;
             // Ordinary speech and echo do not stop playback. Only a stored wake name does.
-            if (IsEcho(heard, speaking))
+            if (IsEcho(bargeHeard, speaking))
                 return ListenAction.None;
 
-            var wakeEnd = MatchEnd(heard, variants);
+            var wakeEnd = MatchEnd(bargeHeard, variants);
             if (wakeEnd < 0)
                 return ListenAction.None;
 
-            BeginCapture(transcript, nowMs);
+            // Immediate has no post-wake window. Callsign keeps its 1 s ignore.
+            BeginCapture(transcript, nowMs, transcript.Length, ignore: Mode != DysonVoiceInputMode.Immediate);
             return ListenAction.BargeIn;
         }
 
-        private void BeginCapture(string transcript, long nowMs)
+        private void BeginCapture(string transcript, long nowMs, int messageStart, bool ignore)
         {
-            _ignoreUntilMs = nowMs + PostWakeIgnoreMs;
-            _messageStart = transcript.Length;
+            _ignoreUntilMs = ignore ? nowMs + PostWakeIgnoreMs : 0;
+            _messageStart = messageStart;
             _lastChangeMs = nowMs;
             _text = transcript;
             _previousLength = transcript.Length;
@@ -1220,18 +1656,88 @@ public sealed class DysonVoiceMode(
                 _ignoreUntilMs = 0;
             }
 
-            if (nowMs - _lastChangeMs <= PauseMs)
+            if (nowMs - _lastChangeMs <= _pauseMs)
                 return null;
 
             var msg = _messageStart >= 0 && _messageStart <= _text.Length
                 ? _text[_messageStart..].Trim()
                 : "";
             var consumed = _text.Length;
+            var mode = Mode;
+            var pause = _pauseMs;
             Reset();
+            Mode = mode;
+            _pauseMs = pause;
             // Same segment can still deliver this transcript until it restarts. Do not match it from 0.
             _previousLength = consumed;
             _idleMark = consumed;
             return msg.Length == 0 ? null : InputPrefix + msg;
+        }
+
+        /// <summary>
+        /// First token after <paramref name="mark"/> that still has a letter or digit once
+        /// <c>&lt;...&gt;</c> and <c>[...]</c> tags are stripped. -1 when there is none.
+        /// </summary>
+        private static int FirstWordStart(string transcript, int mark)
+        {
+            if (mark < 0)
+                mark = 0;
+            if (mark > transcript.Length)
+                return -1;
+
+            var slice = StripTags(transcript[mark..]);
+            var i = 0;
+            while (i < slice.Length)
+            {
+                while (i < slice.Length && char.IsWhiteSpace(slice[i]))
+                    i++;
+                if (i >= slice.Length)
+                    break;
+
+                var start = i;
+                while (i < slice.Length && !char.IsWhiteSpace(slice[i]))
+                    i++;
+
+                for (var k = start; k < i; k++)
+                {
+                    if (char.IsLetterOrDigit(slice[k]))
+                        return mark + start;
+                }
+            }
+
+            return -1;
+        }
+
+        /// <summary>Drops <c>&lt;...&gt;</c> and <c>[...]</c> runs (Nemotron noise tags such as <c>&lt;unk&gt;</c>).</summary>
+        private static string StripTags(string text)
+        {
+            if (text.IndexOf('<') < 0 && text.IndexOf('[') < 0)
+                return text;
+
+            var buffer = new char[text.Length];
+            var n = 0;
+            var i = 0;
+            while (i < text.Length)
+            {
+                var c = text[i];
+                if (c is '<' or '[')
+                {
+                    var close = c == '<' ? '>' : ']';
+                    var end = text.IndexOf(close, i + 1);
+                    if (end >= 0)
+                    {
+                        if (n > 0 && !char.IsWhiteSpace(buffer[n - 1]))
+                            buffer[n++] = ' ';
+                        i = end + 1;
+                        continue;
+                    }
+                }
+
+                buffer[n++] = c;
+                i++;
+            }
+
+            return new string(buffer, 0, n);
         }
     }
 

@@ -22,6 +22,9 @@ public sealed record DysonSubagentActivityChangedEvent(
     string? LatestTurnStepTitle,
     bool IsRunning) : IDysonMessageBusEvent;
 
+/// <summary>Child SelectedProvider changed (immediate or pending pick applied). Not deduped.</summary>
+public sealed record DysonSubagentModelChangedEvent(Guid PersistenceId, int RuntimeId) : IDysonMessageBusEvent;
+
 public sealed record DysonSessionTurnAddedEvent(
     Guid PersistenceId,
     Guid TurnId,

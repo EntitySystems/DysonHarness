@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Harness.Tests" />
+    <InternalsVisibleTo Include="Harness.UI" />
   </ItemGroup>
 
   <ItemGroup>
