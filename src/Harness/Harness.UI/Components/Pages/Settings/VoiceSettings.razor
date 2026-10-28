@@ -206,6 +206,31 @@
         <p class="settings-page__copy voice__note">Low latency speaks one job per sentence. Reliable speaks the whole text as one job. Every speech model follows this.</p>
     </div>
 
+    @if (_tryout is not null)
+    {
+        <div class="settings-page__panel panel voice-active">
+            <div class="tool-panel__title">Voice mode pauses</div>
+            <label class="voice-active__option">
+                <span>Callsign Activated pause</span>
+                <input type="number" min="1" max="10" step="0.5"
+                       value="@PauseSeconds(_callsignPauseMs)"
+                       disabled="@_busy"
+                       @onchange="e => SetPauseAsync(DysonVoiceInputMode.CallsignActivated, e)" />
+            </label>
+            <label class="voice-active__option">
+                <span>Immediate pause</span>
+                <input type="number" min="1" max="10" step="0.5"
+                       value="@PauseSeconds(_immediatePauseMs)"
+                       disabled="@_busy"
+                       @onchange="e => SetPauseAsync(DysonVoiceInputMode.Immediate, e)" />
+            </label>
+            @if (_pauseError is not null)
+            {
+                <p class="settings-page__copy voice__note">@_pauseError</p>
+            }
+        </div>
+    }
+
     @if (InstalledStt.Count > 0 || _inputError is not null)
     {
         <div class="settings-page__panel panel voice-active">
@@ -401,6 +426,9 @@
     private string _whisperRuntime = "";
     private string _nemotronDevice = "";
     private bool _lowLatency;
+    private int _callsignPauseMs = DysonVoiceMode.PauseMs;
+    private int _immediatePauseMs = DysonVoiceMode.ImmediatePauseMs;
+    private string? _pauseError;
     private bool _training;
     private bool _disposed;
     private string? _error;
@@ -496,6 +524,18 @@
         _nemotronDevice = nemotronParsed.IsSuccess ? nemotronParsed.Value : "";
         var responseMode = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechResponseMode);
         _lowLatency = responseMode.IsSuccess && string.Equals(responseMode.Value?.Trim(), "low-latency", StringComparison.OrdinalIgnoreCase);
+        var callsignPause = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechCallsignPauseMs);
+        _callsignPauseMs = DysonAppSettingKeys.ParseSpeechPauseMs(
+            callsignPause.IsSuccess ? callsignPause.Value : null, DysonVoiceMode.PauseMs).Value;
+        var immediatePause = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechImmediatePauseMs);
+        _immediatePauseMs = DysonAppSettingKeys.ParseSpeechPauseMs(
+            immediatePause.IsSuccess ? immediatePause.Value : null, DysonVoiceMode.ImmediatePauseMs).Value;
+        if (Host.Voice is { } voice)
+        {
+            _ = await voice.GetModeAsync();
+            _callsignPauseMs = voice.PauseFor(DysonVoiceInputMode.CallsignActivated);
+            _immediatePauseMs = voice.PauseFor(DysonVoiceInputMode.Immediate);
+        }
 
         var inputSetting = await Settings.GetSettingAsync(DysonAppSettingKeys.SpeechInputModelId);
         _inputSetting = inputSetting.IsSuccess ? inputSetting.Value : null;
@@ -565,6 +605,60 @@
 
     private async Task SetResponseModeAsync(bool lowLatency) =>
         await RunAsync(() => Settings.SetSettingAsync(DysonAppSettingKeys.SpeechResponseMode, lowLatency ? "low-latency" : "reliable"));
+
+    private static string PauseSeconds(int pauseMs) =>
+        (pauseMs / 1000.0).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+
+    private async Task SetPauseAsync(DysonVoiceInputMode mode, ChangeEventArgs e)
+    {
+        if (!double.TryParse(
+                e.Value?.ToString(),
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var seconds))
+        {
+            _pauseError = DysonVoiceMode.PauseRangeError;
+            return;
+        }
+
+        var pauseMs = (int)(seconds * 1000);
+        var parsed = DysonAppSettingKeys.ParseSpeechPauseMs(pauseMs.ToString(), -1);
+        if (parsed.Value < 0)
+        {
+            _pauseError = DysonVoiceMode.PauseRangeError;
+            return;
+        }
+
+        _pauseError = null;
+        if (Host.Voice is { } voice)
+        {
+            var set = await voice.SetPauseAsync(mode, pauseMs);
+            if (set.IsError)
+                _pauseError = set.Error;
+            else if (mode == DysonVoiceInputMode.Immediate)
+                _immediatePauseMs = pauseMs;
+            else
+                _callsignPauseMs = pauseMs;
+            return;
+        }
+
+        var key = mode == DysonVoiceInputMode.Immediate
+            ? DysonAppSettingKeys.SpeechImmediatePauseMs
+            : DysonAppSettingKeys.SpeechCallsignPauseMs;
+        await RunAsync(async () =>
+        {
+            var saved = await Settings.SetSettingAsync(key, pauseMs.ToString());
+            if (saved.IsSuccess)
+            {
+                if (mode == DysonVoiceInputMode.Immediate)
+                    _immediatePauseMs = pauseMs;
+                else
+                    _callsignPauseMs = pauseMs;
+            }
+
+            return saved;
+        });
+    }
 
     private async Task StreamStepsAsync(Func<CancellationToken, IAsyncEnumerable<DysonSpeechInstallStep>> run)
     {

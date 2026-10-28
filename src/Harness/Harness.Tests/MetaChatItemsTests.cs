@@ -154,6 +154,24 @@ public class MetaChatItemsTests
     }
 
     [Fact]
+    public void Build_immediate_voice_instruction_renders_instruction_only()
+    {
+        var turn = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "[voice input] open the plan",
+            HiddenInstruction = DysonAgentSystemPrompts.MetaAgentImmediateVoiceTurnInstruction,
+        };
+
+        var item = Assert.Single(MetaChatItems.Build([turn], []));
+        Assert.Equal(MetaChatRole.User, item.Role);
+        Assert.Equal("[voice input] open the plan", item.Text);
+        Assert.DoesNotContain("Immediate voice mode", item.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("SpeakToUser", item.Text, StringComparison.Ordinal);
+        Assert.Empty(item.FileNames);
+    }
+
+    [Fact]
     public void Build_image_only_and_file_only_turns_each_yield_one_user_item()
     {
         var imageOnly = new DysonAgentTurn

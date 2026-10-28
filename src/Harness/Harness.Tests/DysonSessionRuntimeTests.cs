@@ -745,6 +745,162 @@ public class DysonSessionRuntimeTests
     }
 
     [Fact]
+    public async Task InterruptWithPrompt_puts_turn_first_and_cancels_running_prompt_only()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var created = await harness.Runtime.CreateRootAsync(RootRequest());
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+        var session = created.Value;
+        var sessionId = session.PersistenceId;
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task<VoidResult<string>> Run(DysonAgentSession _, CancellationToken cancellationToken)
+        {
+            firstEntered.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+            return VoidResult<string>.Success;
+        }
+
+        var earlier = harness.Runtime.EnqueuePrompt(sessionId, DysonAgentSession.CreateNormalTurn("earlier"));
+        var later = harness.Runtime.EnqueuePrompt(sessionId, DysonAgentSession.CreateNormalTurn("later"));
+        Assert.True(earlier.IsSuccess, earlier.IsError ? earlier.Error : null);
+        Assert.True(later.IsSuccess, later.IsError ? later.Error : null);
+
+        var first = harness.Runtime.ExecutePromptAsync(session, Run);
+        await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(harness.Runtime.IsBusy(sessionId));
+
+        var secondEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = harness.Runtime.ExecutePromptAsync(
+            session,
+            async (_, cancellationToken) =>
+            {
+                secondEntered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+                return VoidResult<string>.Success;
+            });
+        Assert.False(second.IsCompleted);
+
+        var voice = harness.Runtime.InterruptWithPrompt(sessionId, DysonAgentSession.CreateNormalTurn("voice"));
+        Assert.True(voice.IsSuccess, voice.IsError ? voice.Error : null);
+
+        var firstResult = await first.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(firstResult.IsError);
+        Assert.Equal(DysonSessionRuntime.PromptSupersededError, firstResult.Error);
+        Assert.False(second.IsCompleted);
+        Assert.False(secondEntered.Task.IsCompleted);
+
+        var queued = harness.Runtime.GetQueuedPrompts(sessionId);
+        Assert.Equal(3, queued.Count);
+        Assert.Same(voice.Value, queued[0]);
+        Assert.Same(earlier.Value, queued[1]);
+        Assert.Same(later.Value, queued[2]);
+
+        var cancelled = harness.Runtime.CancelPrompt(sessionId);
+        Assert.True(cancelled.IsSuccess, cancelled.IsError ? cancelled.Error : null);
+        var secondResult = await second.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(secondResult.IsError);
+        Assert.Contains("cancelled", secondResult.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.NotEqual(DysonSessionRuntime.PromptSupersededError, secondResult.Error);
+    }
+
+    [Fact]
+    public async Task InterruptWithPrompt_while_summarizing_does_not_cancel()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var created = await harness.Runtime.CreateRootAsync(RootRequest());
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+        var session = created.Value;
+        var sessionId = session.PersistenceId;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var execution = harness.Runtime.ExecutePromptAsync(
+            session,
+            async (_, cancellationToken) =>
+            {
+                entered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+                return VoidResult<string>.Success;
+            });
+
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var summarizeId = Guid.NewGuid();
+        Assert.True(session.TryBeginSummarizeTurn(summarizeId));
+
+        var voice = harness.Runtime.InterruptWithPrompt(sessionId, DysonAgentSession.CreateNormalTurn("voice"));
+        Assert.True(voice.IsSuccess, voice.IsError ? voice.Error : null);
+        await Task.Delay(100);
+        Assert.False(execution.IsCompleted);
+
+        var queued = harness.Runtime.GetQueuedPrompts(sessionId);
+        var head = Assert.Single(queued);
+        Assert.Same(voice.Value, head);
+
+        session.EndSummarizeTurn(summarizeId);
+
+        var cancelled = harness.Runtime.CancelPrompt(sessionId);
+        Assert.True(cancelled.IsSuccess, cancelled.IsError ? cancelled.Error : null);
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(result.IsError);
+        Assert.Contains("cancelled", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.NotEqual(DysonSessionRuntime.PromptSupersededError, result.Error);
+    }
+
+    [Fact]
+    public async Task TryRemovePrompt_removes_only_matching_id()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var created = await harness.Runtime.CreateRootAsync(RootRequest());
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+        var sessionId = created.Value.PersistenceId;
+        var first = harness.Runtime.EnqueuePrompt(sessionId, DysonAgentSession.CreateNormalTurn("first"));
+        var second = harness.Runtime.EnqueuePrompt(sessionId, DysonAgentSession.CreateNormalTurn("second"));
+        var third = harness.Runtime.EnqueuePrompt(sessionId, DysonAgentSession.CreateNormalTurn("third"));
+        Assert.True(first.IsSuccess && second.IsSuccess && third.IsSuccess);
+
+        Assert.True(harness.Runtime.TryRemovePrompt(sessionId, second.Value.Id));
+        var queued = harness.Runtime.GetQueuedPrompts(sessionId);
+        Assert.Equal(2, queued.Count);
+        Assert.Same(first.Value, queued[0]);
+        Assert.Same(third.Value, queued[1]);
+        Assert.False(harness.Runtime.TryRemovePrompt(sessionId, second.Value.Id));
+
+        Assert.True(harness.Runtime.TryDequeuePrompt(sessionId, out var dequeued));
+        Assert.Same(first.Value, dequeued);
+        Assert.False(harness.Runtime.TryRemovePrompt(sessionId, first.Value.Id));
+        Assert.True(harness.Runtime.TryRemovePrompt(sessionId, third.Value.Id));
+        Assert.Equal(0, harness.Runtime.GetQueuedPromptCount(sessionId));
+    }
+
+    [Fact]
+    public async Task CancelPrompt_still_returns_cancelled_not_superseded()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var created = await harness.Runtime.CreateRootAsync(RootRequest());
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+        var session = created.Value;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var execution = harness.Runtime.ExecutePromptAsync(
+            session,
+            async (_, cancellationToken) =>
+            {
+                entered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+                return VoidResult<string>.Success;
+            });
+
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var cancelled = harness.Runtime.CancelPrompt(session.PersistenceId);
+        Assert.True(cancelled.IsSuccess, cancelled.IsError ? cancelled.Error : null);
+
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(result.IsError);
+        Assert.Contains("cancelled", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.NotEqual(DysonSessionRuntime.PromptSupersededError, result.Error);
+    }
+
+    [Fact]
     public async Task Factory_error_is_returned_as_result()
     {
         await using var harness = await Harness.CreateAsync();

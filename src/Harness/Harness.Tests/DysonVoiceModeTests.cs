@@ -260,16 +260,17 @@ public class DysonVoiceModeTests
     {
         var submitted = new List<string>();
         string? failed = null;
-        Task Ready(string text)
+        Task Ready(DysonVoiceMessage message)
         {
-            submitted.Add(text);
+            submitted.Add(message.Text);
             return Task.CompletedTask;
         }
 
         var throwing = new ProbePlayback { Throw = true };
         var tryout = new DysonSpeechTryout(new IdleCapture(), new IdleStt(), new IdleTts(), throwing);
         await DysonVoiceMode.AcceptTurnAsync(
-            "[voice input] open the plan", false, tryout.PlayAcceptChime, Ready, error => failed = error);
+            new DysonVoiceMessage("[voice input] open the plan", DysonVoiceInputMode.CallsignActivated),
+            false, tryout.PlayAcceptChime, Ready, error => failed = error);
         await throwing.Finished;
         Assert.Null(failed);
         Assert.Equal(1, throwing.Plays);
@@ -281,7 +282,8 @@ public class DysonVoiceModeTests
         var busy = new ProbePlayback { Busy = true };
         tryout = new DysonSpeechTryout(new IdleCapture(), new IdleStt(), new IdleTts(), busy);
         await DysonVoiceMode.AcceptTurnAsync(
-            "[voice input] again", false, tryout.PlayAcceptChime, Ready, error => failed = error);
+            new DysonVoiceMessage("[voice input] again", DysonVoiceInputMode.CallsignActivated),
+            false, tryout.PlayAcceptChime, Ready, error => failed = error);
         await busy.Finished;
         Assert.Null(failed);
         Assert.Equal(1, busy.Plays);
@@ -292,7 +294,8 @@ public class DysonVoiceModeTests
         var speaking = new ProbePlayback();
         tryout = new DysonSpeechTryout(new IdleCapture(), new IdleStt(), new IdleTts(), speaking);
         await DysonVoiceMode.AcceptTurnAsync(
-            "[voice input] while speaking", true, tryout.PlayAcceptChime, Ready, error => failed = error);
+            new DysonVoiceMessage("[voice input] while speaking", DysonVoiceInputMode.CallsignActivated),
+            true, tryout.PlayAcceptChime, Ready, error => failed = error);
         Assert.Null(failed);
         Assert.Equal(0, speaking.Plays);
         Assert.Equal(["[voice input] while speaking"], submitted);
@@ -620,6 +623,301 @@ public class DysonVoiceModeTests
     }
 
     [Fact]
+    public void Immediate_first_word_starts_capture_without_callsign()
+    {
+        var listener = new DysonVoiceMode.Listener();
+        listener.SetMode(DysonVoiceInputMode.Immediate, DysonVoiceMode.ImmediatePauseMs, 0);
+        Assert.Equal(DysonVoiceMode.ListenAction.None, listener.OnText("open the plan", 100, null, []));
+        Assert.True(listener.Capturing);
+        Assert.Equal("open the plan", listener.Draft);
+    }
+
+    [Fact]
+    public void Immediate_posts_after_pause_not_before()
+    {
+        var listener = new DysonVoiceMode.Listener();
+        listener.SetMode(DysonVoiceInputMode.Immediate, DysonVoiceMode.ImmediatePauseMs, 0);
+        listener.OnText("open the plan", 100, null, []);
+        Assert.Null(listener.OnTick(100 + 2000));
+        Assert.Equal("[voice input] open the plan", listener.OnTick(100 + 2001));
+    }
+
+    [Fact]
+    public void Callsign_uses_configured_pause()
+    {
+        var names = Eight();
+        var slow = new DysonVoiceMode.Listener();
+        slow.SetMode(DysonVoiceInputMode.CallsignActivated, 4000, 0);
+        slow.OnText("hey dyson", 0, null, names);
+        slow.OnText("hey dyson open the plan", 1000, null, names);
+        Assert.Null(slow.OnTick(5000));
+        Assert.Equal("[voice input] open the plan", slow.OnTick(5001));
+
+        var defaults = new DysonVoiceMode.Listener();
+        defaults.OnText("hey dyson", 0, null, names);
+        defaults.OnText("hey dyson open the plan", 1000, null, names);
+        Assert.Null(defaults.OnTick(1000 + DysonVoiceMode.PauseMs));
+        Assert.Equal("[voice input] open the plan", defaults.OnTick(1000 + DysonVoiceMode.PauseMs + 1));
+    }
+
+    [Fact]
+    public void Partial_revision_resets_timer()
+    {
+        var listener = new DysonVoiceMode.Listener();
+        listener.SetMode(DysonVoiceInputMode.Immediate, DysonVoiceMode.ImmediatePauseMs, 0);
+        listener.OnText("open the", 100, null, []);
+        listener.OnText("open the plan", 1500, null, []);
+        Assert.Null(listener.OnTick(3400));
+        Assert.Equal("[voice input] open the plan", listener.OnTick(3501));
+    }
+
+    [Fact]
+    public void Switch_mid_utterance_carries_text()
+    {
+        var names = Eight();
+        var toImmediate = new DysonVoiceMode.Listener();
+        toImmediate.OnText("hey dyson", 0, null, names);
+        toImmediate.OnText("hey dyson open the plan", 1000, null, names);
+        toImmediate.SetMode(DysonVoiceInputMode.Immediate, DysonVoiceMode.ImmediatePauseMs, 1000);
+        Assert.Equal("open the plan", toImmediate.Draft);
+        Assert.Null(toImmediate.OnTick(1000 + 2000));
+        Assert.Equal("[voice input] open the plan", toImmediate.OnTick(1000 + 2001));
+
+        var toCallsign = new DysonVoiceMode.Listener();
+        toCallsign.SetMode(DysonVoiceInputMode.Immediate, DysonVoiceMode.ImmediatePauseMs, 0);
+        toCallsign.OnText("open the plan", 100, null, names);
+        toCallsign.SetMode(DysonVoiceInputMode.CallsignActivated, DysonVoiceMode.PauseMs, 100);
+        Assert.Null(toCallsign.OnTick(100 + DysonVoiceMode.PauseMs));
+        Assert.Equal("[voice input] open the plan", toCallsign.OnTick(100 + DysonVoiceMode.PauseMs + 1));
+    }
+
+    [Fact]
+    public void Idle_switch_ignores_prior_chatter()
+    {
+        var listener = new DysonVoiceMode.Listener();
+        listener.OnText("hello there", 0, null, Eight());
+        Assert.False(listener.Capturing);
+        listener.SetMode(DysonVoiceInputMode.Immediate, DysonVoiceMode.ImmediatePauseMs, 50);
+        Assert.Equal(DysonVoiceMode.ListenAction.None, listener.OnText("hello there", 60, null, []));
+        Assert.False(listener.Capturing);
+        listener.OnText("hello there open the plan", 80, null, []);
+        Assert.True(listener.Capturing);
+        Assert.Equal("open the plan", listener.Draft);
+    }
+
+    [Fact]
+    public void Noise_only_never_posts()
+    {
+        var listener = new DysonVoiceMode.Listener();
+        listener.SetMode(DysonVoiceInputMode.Immediate, DysonVoiceMode.ImmediatePauseMs, 0);
+        Assert.Equal(DysonVoiceMode.ListenAction.None, listener.OnText(" . , ", 100, null, []));
+        Assert.False(listener.Capturing);
+        Assert.Equal(DysonVoiceMode.ListenAction.None, listener.OnText("<unk> [noise]", 200, null, []));
+        Assert.False(listener.Capturing);
+        Assert.Null(listener.OnTick(100_000));
+    }
+
+    [Fact]
+    public void Mute_after_speech_drops_tail_and_echo()
+    {
+        var listener = new DysonVoiceMode.Listener();
+        listener.SetMode(DysonVoiceInputMode.Immediate, DysonVoiceMode.ImmediatePauseMs, 0);
+        const long t = 10_000;
+        listener.NoteSpoken("Processing request.", t + DysonVoiceMode.PostSpeechIgnoreMs);
+        Assert.Equal(DysonVoiceMode.ListenAction.None, listener.OnText("open the plan", t + 500, null, []));
+        Assert.False(listener.Capturing);
+        Assert.Equal(
+            DysonVoiceMode.ListenAction.None,
+            listener.OnText("processing request now", t + 1500, null, []));
+        Assert.False(listener.Capturing);
+        Assert.Equal(DysonVoiceMode.ListenAction.None, listener.OnText("open the plan", t + 1500, null, []));
+        Assert.True(listener.Capturing);
+        Assert.Equal("open the plan", listener.Draft);
+    }
+
+    [Fact]
+    public void Immediate_wake_name_barges_in_while_speaking()
+    {
+        var listener = new DysonVoiceMode.Listener();
+        listener.SetMode(DysonVoiceInputMode.Immediate, DysonVoiceMode.ImmediatePauseMs, 0);
+        Assert.Equal(
+            DysonVoiceMode.ListenAction.None,
+            listener.OnText("stop that now", 100, "Processing request.", Eight()));
+        Assert.False(listener.Capturing);
+        Assert.Equal(
+            DysonVoiceMode.ListenAction.BargeIn,
+            listener.OnText("stop that now hey dyson", 200, "Processing request.", Eight()));
+        Assert.True(listener.Capturing);
+        Assert.Equal(
+            DysonVoiceMode.ListenAction.None,
+            listener.OnText("stop that now hey dyson stop please", 200, "Processing request.", Eight()));
+        Assert.Equal("stop please", listener.Draft);
+        Assert.Null(listener.OnTick(200 + DysonVoiceMode.ImmediatePauseMs));
+        Assert.Equal("[voice input] stop please", listener.OnTick(200 + DysonVoiceMode.ImmediatePauseMs + 1));
+    }
+
+    [Fact]
+    public void Requirements_immediate_needs_live_stt_not_names()
+    {
+        var phonon = DysonVoiceMode.Requirements(
+            Ok(DysonPhononSpeech.Id),
+            Ok(DysonPocketSpeech.Id),
+            [],
+            0,
+            mode: DysonVoiceInputMode.Immediate);
+        Assert.True(phonon.IsError);
+        Assert.Equal(DysonVoiceMode.ImmediateNeedsNemotron, phonon.Error);
+
+        var live = DysonVoiceMode.Requirements(
+            Ok(DysonGgufSpeechModels.NemotronId),
+            Ok(DysonPocketSpeech.Id),
+            [],
+            0,
+            mode: DysonVoiceInputMode.Immediate);
+        Assert.True(live.IsSuccess);
+
+        var callsign = DysonVoiceMode.Requirements(
+            Ok(DysonGgufSpeechModels.NemotronId),
+            Ok(DysonPocketSpeech.Id),
+            [],
+            0);
+        Assert.True(callsign.IsError);
+        Assert.Equal("Train the agent name: save 8 name variants in Settings → Voice.", callsign.Error);
+    }
+
+    [Fact]
+    public void ParseSpeechVoiceMode_defaults_to_callsign()
+    {
+        Assert.Equal(DysonAppSettingKeys.SpeechVoiceModeCallsign, DysonAppSettingKeys.ParseSpeechVoiceMode(null).Value);
+        Assert.Equal(DysonAppSettingKeys.SpeechVoiceModeCallsign, DysonAppSettingKeys.ParseSpeechVoiceMode("  ").Value);
+        Assert.Equal(DysonAppSettingKeys.SpeechVoiceModeCallsign, DysonAppSettingKeys.ParseSpeechVoiceMode("nope").Value);
+        Assert.Equal(
+            DysonAppSettingKeys.SpeechVoiceModeImmediate,
+            DysonAppSettingKeys.ParseSpeechVoiceMode(" immediate ").Value);
+    }
+
+    [Fact]
+    public void ParseSpeechPauseMs_defaults_and_range()
+    {
+        Assert.Equal(3000, DysonAppSettingKeys.ParseSpeechPauseMs(null, 3000).Value);
+        Assert.Equal(3000, DysonAppSettingKeys.ParseSpeechPauseMs("  ", 3000).Value);
+        Assert.Equal(3000, DysonAppSettingKeys.ParseSpeechPauseMs("junk", 3000).Value);
+        Assert.Equal(2000, DysonAppSettingKeys.ParseSpeechPauseMs("0", 2000).Value);
+        Assert.Equal(2000, DysonAppSettingKeys.ParseSpeechPauseMs("999999", 2000).Value);
+        Assert.Equal(2500, DysonAppSettingKeys.ParseSpeechPauseMs("2500", 3000).Value);
+    }
+
+    [Fact]
+    public async Task SetModeAsync_persists_and_reloads()
+    {
+        var settings = new FakeSettings();
+        var first = VoiceRig.Create(settings);
+        var set = await first.SetModeAsync(DysonVoiceInputMode.Immediate);
+        Assert.True(set.IsSuccess, set.IsError ? set.Error : null);
+        Assert.Equal(DysonVoiceInputMode.Immediate, first.Mode);
+        var stored = await settings.GetSettingAsync(DysonAppSettingKeys.SpeechVoiceMode);
+        Assert.Equal(DysonAppSettingKeys.SpeechVoiceModeImmediate, stored.Value);
+
+        var second = VoiceRig.Create(settings);
+        Assert.Equal(DysonVoiceInputMode.Immediate, await second.GetModeAsync());
+
+        var bad = await first.SetPauseAsync(DysonVoiceInputMode.Immediate, 500);
+        Assert.True(bad.IsError);
+        Assert.Equal(DysonVoiceMode.PauseRangeError, bad.Error);
+    }
+
+    [Fact]
+    public void CreateTurn_hidden_instruction_only_for_immediate()
+    {
+        var immediate = DysonVoiceMode.CreateTurn(
+            new DysonVoiceMessage("[voice input] open the plan", DysonVoiceInputMode.Immediate));
+        Assert.Equal("[voice input] open the plan", immediate.Instruction);
+        Assert.Equal(DysonAgentSystemPrompts.MetaAgentImmediateVoiceTurnInstruction, immediate.HiddenInstruction);
+
+        var callsign = DysonVoiceMode.CreateTurn(
+            new DysonVoiceMessage("[voice input] open the plan", DysonVoiceInputMode.CallsignActivated));
+        Assert.Equal("[voice input] open the plan", callsign.Instruction);
+        Assert.Null(callsign.HiddenInstruction);
+    }
+
+    [Fact]
+    public void RouteFor_covers_table()
+    {
+        Assert.Equal(
+            DysonVoiceRoute.Interrupt,
+            DysonVoiceMode.RouteFor(DysonVoiceInputMode.Immediate, inFlight: true, busy: false, summarizing: false));
+        Assert.Equal(
+            DysonVoiceRoute.Interrupt,
+            DysonVoiceMode.RouteFor(DysonVoiceInputMode.Immediate, inFlight: false, busy: true, summarizing: false));
+        Assert.Equal(
+            DysonVoiceRoute.Interrupt,
+            DysonVoiceMode.RouteFor(DysonVoiceInputMode.Immediate, inFlight: false, busy: false, summarizing: true));
+        Assert.Equal(
+            DysonVoiceRoute.Prompt,
+            DysonVoiceMode.RouteFor(DysonVoiceInputMode.Immediate, inFlight: false, busy: false, summarizing: false));
+
+        Assert.Equal(
+            DysonVoiceRoute.Inject,
+            DysonVoiceMode.RouteFor(DysonVoiceInputMode.CallsignActivated, inFlight: true, busy: false, summarizing: false));
+        Assert.Equal(
+            DysonVoiceRoute.Queue,
+            DysonVoiceMode.RouteFor(DysonVoiceInputMode.CallsignActivated, inFlight: false, busy: true, summarizing: false));
+        Assert.Equal(
+            DysonVoiceRoute.Queue,
+            DysonVoiceMode.RouteFor(DysonVoiceInputMode.CallsignActivated, inFlight: false, busy: false, summarizing: true));
+        Assert.Equal(
+            DysonVoiceRoute.Prompt,
+            DysonVoiceMode.RouteFor(DysonVoiceInputMode.CallsignActivated, inFlight: false, busy: false, summarizing: false));
+    }
+
+    [Fact]
+    public void MergeUtterances_single_prefix()
+    {
+        Assert.Equal(
+            "[voice input] open the plan and the tests",
+            DysonVoiceMode.MergeUtterances("[voice input] open the plan", "[voice input] and the tests"));
+    }
+
+    [Fact]
+    public void ImmediateInstruction_quotes_stub_text()
+    {
+        Assert.Contains(
+            OpenAiCacheFriendlyTranscriptBuilder.IncompleteToolResultContent,
+            DysonAgentSystemPrompts.MetaAgentImmediateVoiceTurnInstruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "SpeakToUser",
+            DysonAgentSystemPrompts.MetaAgentImmediateVoiceTurnInstruction,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DropPendingSpeech_drops_stale_queued_line()
+    {
+        await using var rig = await VoiceRig.StartAsync();
+        rig.Playback.HoldSpeech();
+        var id = Guid.NewGuid();
+        rig.Focus.SetActive(id);
+        Assert.True(rig.Voice.Speak("One", id, "A").IsSuccess);
+        Assert.True(rig.Voice.Speak("Two", id, "A").IsSuccess);
+        Assert.True(rig.Voice.Speak("Three", id, "A").IsSuccess);
+        // "Two" is prefetched while "One" plays; "Three" is still in the channel.
+        await WaitForAsync(() => rig.Tts.Texts.Count >= 2 && rig.Playback.SpeechPlays >= 1);
+
+        rig.Voice.DropPendingSpeech();
+        Assert.False(rig.Voice.IsSpeaking);
+        // Queued while "One" is still fading out: the new turn's reply must survive the flush.
+        Assert.True(rig.Voice.Speak("Four", id, "A").IsSuccess);
+        await WaitForAsync(() => rig.Playback.SpeechPlays >= 2);
+        await Task.Delay(150);
+
+        // The prefetched line is cancelled and never plays; the queued stale line is never synthesized.
+        Assert.Equal(["One", "Two", "Four"], rig.Tts.Texts);
+        Assert.Equal(2, rig.Playback.SpeechPlays);
+        Assert.True(rig.Tts.Cancelled >= 1);
+    }
+
+    [Fact]
     public async Task Stop_only_for_user_off_or_app_exit()
     {
         Assert.True(DysonVoiceMode.Stops(DysonVoiceStopReason.UserOff));
@@ -890,6 +1188,20 @@ public class DysonVoiceModeTests
         public FakeSpeechModels Models { get; } = models;
         public DysonVoiceMode Voice { get; } = voice;
         public List<string> Failed { get; } = [];
+
+        public static DysonVoiceMode Create(FakeSettings settings)
+        {
+            var models = new FakeSpeechModels(Eight());
+            var root = Path.GetTempPath();
+            var tryout = new DysonSpeechTryout(new IdleCapture(), new IdleStt(), new IdleTts(), new ChimePlayback());
+            return new DysonVoiceMode(
+                tryout,
+                new DysonActiveSpeechToText(models, settings, root),
+                new DysonActiveTextToSpeech(models, settings, root),
+                models,
+                settings,
+                new DysonWorkDirectoryFocus(new FakeWorkDirectories()));
+        }
 
         public static async Task<VoiceRig> StartAsync()
         {

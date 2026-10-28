@@ -194,7 +194,7 @@
                                                       Textarea="_prompt"
                                                       @bind-Text="_draft"
                                                       OnError="Host.ReportError" />
-                                    <VoiceModeButton OnChanged="OnVoiceModeChanged" />
+                                    <VoiceModeButton OnChanged="OnVoiceModeChanged" OnDraft="OnVoiceDraft" />
                                     <ModelSlugPicker @ref="_modelPicker"
                                                      SelectedSlugId="_selectedSlugId"
                                                      SelectedSlugIdChanged="OnSelectedSlugIdChangedAsync" />
@@ -213,7 +213,7 @@
                                 </button>
                             </div>
                         </div>
-                        <span class="list-item__meta meta-composer__hint">Ctrl+Enter to send · paste/drop files or images · hold Ctrl+M to talk · voice mode: say the agent name</span>
+                        <span class="list-item__meta meta-composer__hint">Ctrl+Enter to send · paste/drop files or images · hold Ctrl+M to talk · voice mode: pick Callsign or Immediate</span>
                     </div>
 
                     <section class="meta-agents" aria-label="Agents and files">
@@ -301,6 +301,7 @@
     private Guid? _metaSessionId;
     private bool _sessionReady;
     private string _draft = "";
+    private string? _draftBeforeVoice;
     private Guid? _selectedSlugId;
     private string? _reasoningEffort;
     private ModelSlugPicker? _modelPicker;
@@ -905,6 +906,29 @@
         DysonCircuitJs.InvokeVoidAsync(Js, "dysonWorkdir.set", id?.ToString()).AsTask();
 
     private void OnVoiceModeChanged(bool on) => _voiceOn = on;
+
+    private void OnVoiceDraft(string text)
+    {
+        if (!string.IsNullOrEmpty(text))
+        {
+            _draftBeforeVoice ??= _draft;
+            _draft = JoinVoiceDraft(_draftBeforeVoice, text);
+            return;
+        }
+
+        if (_draftBeforeVoice is not null)
+            _draft = _draftBeforeVoice;
+        _draftBeforeVoice = null;
+    }
+
+    private static string JoinVoiceDraft(string typed, string spoken)
+    {
+        if (typed.Length == 0)
+            return spoken;
+        if (char.IsWhiteSpace(typed[^1]))
+            return typed + spoken;
+        return typed + " " + spoken;
+    }
 
     private async Task LeaveMetaAsync() =>
         await DysonCircuitJs.NavigateAsync(Js, "/");

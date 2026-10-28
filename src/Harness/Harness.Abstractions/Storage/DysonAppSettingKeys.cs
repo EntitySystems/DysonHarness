@@ -337,4 +337,40 @@ public static class DysonAppSettingKeys
         return Result<string, string>.AsError(
             "Nemotron 3.5 device must be cpu or vulkan. Choose it in Settings → Voice.");
     }
+
+    /// <summary>Voice input mode. Missing or unknown ⇒ <see cref="SpeechVoiceModeCallsign"/>.</summary>
+    public const string SpeechVoiceMode = "speech_voice_mode";
+
+    public const string SpeechVoiceModeCallsign = "callsign";
+
+    public const string SpeechVoiceModeImmediate = "immediate";
+
+    /// <summary>Callsign pause in milliseconds. Default 3000. Lenient read: see <see cref="ParseSpeechPauseMs"/>.</summary>
+    public const string SpeechCallsignPauseMs = "speech_callsign_pause_ms";
+
+    /// <summary>Immediate pause in milliseconds. Default 2000. Lenient read: see <see cref="ParseSpeechPauseMs"/>.</summary>
+    public const string SpeechImmediatePauseMs = "speech_immediate_pause_ms";
+
+    /// <summary>
+    /// Lenient. Missing, blank, or anything other than <see cref="SpeechVoiceModeImmediate"/>
+    /// returns <see cref="SpeechVoiceModeCallsign"/>. A bad row must never block voice.
+    /// </summary>
+    public static Result<string, string> ParseSpeechVoiceMode(string? value)
+    {
+        var text = value?.Trim() ?? "";
+        return Result<string, string>.AsValue(
+            text == SpeechVoiceModeImmediate ? SpeechVoiceModeImmediate : SpeechVoiceModeCallsign);
+    }
+
+    /// <summary>
+    /// Lenient. A trimmed integer in 1000..10000 is returned. Missing, blank, non-numeric, or
+    /// out of range returns <paramref name="fallback"/>. A bad row must never block voice.
+    /// </summary>
+    public static Result<int, string> ParseSpeechPauseMs(string? value, int fallback)
+    {
+        var text = value?.Trim() ?? "";
+        if (int.TryParse(text, out var ms) && ms is >= 1000 and <= 10000)
+            return Result<int, string>.AsValue(ms);
+        return Result<int, string>.AsValue(fallback);
+    }
 }

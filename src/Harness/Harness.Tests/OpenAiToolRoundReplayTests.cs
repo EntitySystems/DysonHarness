@@ -109,6 +109,74 @@ public class OpenAiToolRoundReplayTests
     }
 
     [Fact]
+    public void Cancel_mid_round_pairs_every_tool_call()
+    {
+        var turn = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "do both",
+            StartedUtc = DateTime.UtcNow,
+        };
+        var done = Call("done-1", "ReadFile");
+        var working = Call("work-1", "Grep");
+        turn.ToolCalls.Add(done);
+        turn.ToolCalls.Add(working);
+        turn.ToolRoundCallCounts.Add(2);
+        turn.PrepareTrackedCalls();
+        turn.ResponseLog.Enqueue(Result("done-1", "ReadFile", "file contents"));
+        foreach (var tracked in turn.TrackedToolCalls)
+        {
+            if (tracked.Call.CallId == "done-1")
+                tracked.SetCompleted(Result("done-1", "ReadFile", "file contents"));
+            else
+                tracked.SetWorking();
+        }
+
+        turn.FinalizeIncompleteTools(OpenAiCacheFriendlyTranscriptBuilder.IncompleteToolResultContent);
+
+        turn.AssistantText = "# Done\n\nfinished";
+        turn.CompletedUtc = DateTime.UtcNow;
+        var session = new StubSession();
+        session.AddTurnForTest(turn);
+        var messages = OpenAiCacheFriendlyTranscriptBuilder.BuildCompletions(
+            session, currentUserPrompt: null, currentFilePaths: null).Messages;
+
+        int? assistantAt = null;
+        var toolAt = new List<(int Index, string CallId, string Content)>();
+        for (var i = 0; i < messages.Count; i++)
+        {
+            if (messages[i] is not JsonObject obj)
+                continue;
+
+            var role = obj["role"]?.GetValue<string>();
+            if (string.Equals(role, "assistant", StringComparison.Ordinal) && obj["tool_calls"] is not null)
+                assistantAt = i;
+            else if (string.Equals(role, "tool", StringComparison.Ordinal))
+            {
+                toolAt.Add((
+                    i,
+                    obj["tool_call_id"]?.GetValue<string>() ?? "",
+                    obj["content"]?.GetValue<string>() ?? ""));
+            }
+        }
+
+        Assert.NotNull(assistantAt);
+        Assert.Equal(2, toolAt.Count);
+        Assert.Equal(assistantAt.Value + 1, toolAt[0].Index);
+        Assert.Equal(assistantAt.Value + 2, toolAt[1].Index);
+        Assert.Equal(["done-1", "work-1"], toolAt.Select(t => t.CallId).ToArray());
+        Assert.Equal(
+            "[error] " + OpenAiCacheFriendlyTranscriptBuilder.IncompleteToolResultContent,
+            toolAt[1].Content);
+
+        for (var i = assistantAt.Value + 1; i <= toolAt[^1].Index; i++)
+        {
+            var role = messages[i]?["role"]?.GetValue<string>();
+            Assert.Equal("tool", role);
+        }
+    }
+
+    [Fact]
     public async Task PreserveSettingIsReadPerTurnAndMetaAgentIsAlwaysOn()
     {
         var off = new FakeSettings { Values = { [DysonAppSettingKeys.PreserveReasoningTraces] = "false" } };
