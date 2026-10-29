@@ -61,7 +61,7 @@ public sealed class DysonVoiceMode(
 
     /// <summary>Error when Immediate is asked for without Nemotron live speech-to-text.</summary>
     public const string ImmediateNeedsNemotron =
-        "Immediate mode needs Nemotron 3.5 live speech-to-text. Pick it in Settings â†’ Voice.";
+        "Immediate mode needs Nemotron 3.5 live speech-to-text. Pick it in Settings → Voice.";
 
     /// <summary>Error when a pause setter is given a value outside 1..10 seconds.</summary>
     public const string PauseRangeError = "Pause must be between 1 and 10 seconds.";
@@ -167,7 +167,7 @@ public sealed class DysonVoiceMode(
         Task.Run(() => SetPauseCoreAsync(mode, pauseMs, cancellationToken), CancellationToken.None);
 
     /// <summary>
-    /// First failure wins. Each message points at Settings â†’ Voice.
+    /// First failure wins. Each message points at Settings → Voice.
     /// <paramref name="activeTtsVoiceCount"/> is <c>ListVoicesAsync</c> for the active TTS model.
     /// </summary>
     internal static VoidResult<string> Requirements(
@@ -198,7 +198,7 @@ public sealed class DysonVoiceMode(
             && activeTtsVoiceCount <= 0)
         {
             return new VoidResult<string>(
-                $"{ModelName(tts.Value)} needs a trained voice to speak. Train one in Settings â†’ Voice.");
+                $"{ModelName(tts.Value)} needs a trained voice to speak. Train one in Settings → Voice.");
         }
 
         if (DysonGgufSpeechModels.IsWhisper(stt.Value))
@@ -224,7 +224,7 @@ public sealed class DysonVoiceMode(
 
     private static string SharedRuntime(string sttName, string ttsName) =>
         $"{sttName} and {ttsName} share the one GGUF runtime, so they cannot stay loaded together. " +
-        "In Settings â†’ Voice pick a speech-to-text model that is not on that runtime (Nemotron, Phonon 2 Python, or Whisper on Intel NPU), or a Python text-to-speech model.";
+        "In Settings → Voice pick a speech-to-text model that is not on that runtime (Nemotron, Phonon 2 Python, or Whisper on Intel NPU), or a Python text-to-speech model.";
 
     /// <summary>Hops once, then reads the active models, the 8 wake names, and the active TTS voice count.</summary>
     public Task<VoidResult<string>> CheckRequirementsAsync(CancellationToken cancellationToken = default) =>
