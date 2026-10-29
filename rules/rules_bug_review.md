@@ -1,6 +1,6 @@
 # Meta Agent drones: Dyson Bug Review before merge
 
-Every Meta Agent Drone started with `useWorktree` true, including `BeginBuildPlan` coordinators, whose worktree has commits runs a Dyson Bug Review of its diff before it merges. Always: no exception for small changes.
+Every Meta Agent Drone started with `useWorktree` true, including `BeginBuildPlan` coordinators, whose worktree has commits runs a Dyson Bug Review of its diff before it merges. Always: no exception for small changes. A purpose=plan drone is read-only and never commits, so it skips the review even if started with `useWorktree` true.
 
 ## When
 
@@ -11,7 +11,7 @@ After the final build, tests and commit, and **before** the final `SubmitSubagen
 - The drone itself calls `StartAsyncBugReviewAgent` (the Dyson Bug Review agent). Not a classic `StartSubagent` Drone or Explore, and not the root Meta Agent.
 - The brief gives the commit range (`base SHA..HEAD`), the goal or `planId`, the changed files and the acceptance criteria.
 - Omit `modelSlug` and `reasoningEffort`. The review inherits the parent model (see [rules_management_model.md](rules_management_model.md)).
-- Then `WaitForSubagent` until the review finishes. Do not keep editing while it runs.
+- Then `WaitForSubagent` on that `agentId`. If the wait times out (default 5 minutes), wait again until the review report arrives. Do not keep editing, and never submit your report, while the review runs. Fix from the findings only after the report.
 
 ## Act on findings
 
