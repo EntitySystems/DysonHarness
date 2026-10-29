@@ -1038,6 +1038,30 @@ public class DysonSessionRuntimeTests
     }
 
     [Fact]
+    public async Task Voice_sidecar_drain_requeues_a_deferred_turn_at_the_head()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var created = await harness.Runtime.CreateRootAsync(RootRequest());
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+        var session = Assert.IsType<StubSession>(created.Value);
+        var first = DysonAgentSession.CreateNormalTurn("first");
+        var second = DysonAgentSession.CreateNormalTurn("second");
+        Assert.True(harness.Runtime.EnqueuePrompt(session.PersistenceId, first).IsSuccess);
+        Assert.True(harness.Runtime.EnqueuePrompt(session.PersistenceId, second).IsSuccess);
+
+        using var runCts = new CancellationTokenSource();
+        session.AttachRunForTest(runCts);
+        var drained = await harness.Runtime.DrainVoiceSidecarPromptsAsync(session, CancellationToken.None);
+
+        Assert.True(drained.IsSuccess, drained.IsError ? drained.Error : null);
+        var queued = harness.Runtime.GetQueuedPrompts(session.PersistenceId);
+        Assert.Equal([first.Id, second.Id], queued.Select(q => q.Turn.Id));
+
+        Assert.True(harness.Runtime.DiscardQueuedPrompts(session.PersistenceId).IsSuccess);
+        session.DetachRunForTest(runCts);
+    }
+
+    [Fact]
     public async Task EnqueuePrompt_at_head_goes_first_and_keeps_the_rest_in_order()
     {
         await using var harness = await Harness.CreateAsync();

@@ -15,6 +15,9 @@ public sealed partial class DysonSessionRuntime
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _voiceSidecarDrainGates = new();
     private readonly ConcurrentDictionary<Guid, Channel<DysonVoiceSidecarMessageEvent>> _voiceSidecarInboxes = new();
 
+    // Per-utterance results keyed by turn id, so a caller that joins another drain gets its own turn's outcome.
+    private readonly ConcurrentDictionary<Guid, TaskCompletionSource<VoidResult<string>>> _voiceTurnResults = new();
+
     // ponytail: subscriptions live for the process. Upgrade = dispose them from DisposeAsync / UnregisterSessionAsync.
     private readonly ConcurrentDictionary<Guid, List<IDisposable>> _voiceSidecarSubscriptions = new();
 
@@ -118,6 +121,28 @@ public sealed partial class DysonSessionRuntime
         var sidecar = ensured.Value;
         meta.AppendDisplayInfoTurn(message.Text);
         var turn = DysonVoiceMode.CreateTurn(message);
+        var own = new TaskCompletionSource<VoidResult<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _voiceTurnResults[turn.Id] = own;
+        try
+        {
+            var routed = await RouteVoiceTurnAsync(sidecar, message, turn, ct).ConfigureAwait(false);
+            if (routed.IsError && !IsPromptControl(routed))
+                return routed;
+            // Not completed = still queued behind a background run; the redrain owns it now.
+            return own.Task.IsCompleted ? await own.Task.ConfigureAwait(false) : VoidResult<string>.Success;
+        }
+        finally
+        {
+            _voiceTurnResults.TryRemove(turn.Id, out _);
+        }
+    }
+
+    private async Task<VoidResult<string>> RouteVoiceTurnAsync(
+        DysonAgentSession sidecar,
+        DysonVoiceMessage message,
+        DysonAgentTurn turn,
+        CancellationToken ct)
+    {
         var route = DysonVoiceMode.RouteFor(
             message.Mode,
             sidecar.InFlightPromptTurn is not null,
@@ -133,6 +158,8 @@ public sealed partial class DysonSessionRuntime
                 var injected = inFlight is null
                     ? VoidResult<string>.AsError("Turn is not currently running.")
                     : sidecar.InjectTurnComment(inFlight.Id, message.Text);
+                if (injected.IsSuccess)
+                    CompleteVoiceTurn(turn.Id, VoidResult<string>.Success);
                 routed = injected.IsSuccess
                     ? VoidResult<string>.Success
                     : await EnqueueAndDrainAsync(sidecar, turn, ct).ConfigureAwait(false);
@@ -150,7 +177,7 @@ public sealed partial class DysonSessionRuntime
                 break;
         }
 
-        return IsPromptControl(routed) ? VoidResult<string>.Success : routed;
+        return routed;
     }
 
     /// <summary>
@@ -387,11 +414,12 @@ public sealed partial class DysonSessionRuntime
     }
 
     /// <summary>
-    /// Single-flight drain of the runtime prompt queue. A second caller joins the in-flight drain
-    /// and cannot tell which utterance a provider error belongs to.
-    /// ponytail: one shared result for every waiter. Upgrade = a per-enqueue completion.
+    /// Single-flight drain of the runtime prompt queue. Each turn's outcome goes to its own
+    /// <see cref="_voiceTurnResults"/> entry (or <see cref="ReportError"/> when nobody waits on it).
+    /// A deferred turn (background run active) goes back to the head of the queue and is redrained
+    /// once the background run is idle, the same way the host's RequeueUntilBackgroundRunIdle does.
     /// </summary>
-    private async Task<VoidResult<string>> DrainVoiceSidecarPromptsAsync(
+    internal async Task<VoidResult<string>> DrainVoiceSidecarPromptsAsync(
         DysonAgentSession session,
         CancellationToken ct)
     {
@@ -405,9 +433,24 @@ public sealed partial class DysonSessionRuntime
                     session,
                     (s, token) => s.PromptHarnessTurnAsync(entry.Turn, token),
                     ct).ConfigureAwait(false);
-                // PromptSuperseded / PromptDeferred are not swallowed: the caller decides fallback.
-                if (ran.IsError)
-                    return ran;
+                if (ran.IsError && ran.Error == PromptDeferredError)
+                {
+                    var requeued = EnqueuePrompt(session.PersistenceId, entry.Turn, entry.FilePaths, atHead: true);
+                    if (requeued.IsError)
+                    {
+                        CompleteVoiceTurn(entry.Turn.Id, VoidResult<string>.AsError(requeued.Error));
+                        continue;
+                    }
+
+                    _ = session.WaitForBackgroundRunIdleAsync(CancellationToken.None).ContinueWith(
+                        _ => DrainRoutedAsync(session, session.IsVoiceSidecar, CancellationToken.None),
+                        CancellationToken.None,
+                        TaskContinuationOptions.None,
+                        TaskScheduler.Default).Unwrap();
+                    return VoidResult<string>.Success;
+                }
+
+                CompleteVoiceTurn(entry.Turn.Id, IsPromptControl(ran) ? VoidResult<string>.Success : ran);
             }
 
             return VoidResult<string>.Success;
@@ -416,6 +459,14 @@ public sealed partial class DysonSessionRuntime
         {
             gate.Release();
         }
+    }
+
+    private void CompleteVoiceTurn(Guid turnId, VoidResult<string> result)
+    {
+        if (_voiceTurnResults.TryGetValue(turnId, out var waiter))
+            waiter.TrySetResult(result);
+        else if (result.IsError)
+            ReportError(result.Error);
     }
 
     private static bool IsPromptControl(VoidResult<string> result) =>
