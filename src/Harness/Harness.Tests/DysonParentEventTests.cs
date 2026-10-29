@@ -60,6 +60,57 @@ public class DysonParentEventTests
     }
 
     [Fact]
+    public void Lost_dequeue_race_detaches_the_run()
+    {
+        var parent = new StubSession();
+        var child = new HangingChildSession();
+        parent.RegisterForTest(child);
+
+        // Nothing pending: the inject drain lost the dequeue to a concurrent run.
+        DysonAgentSession.StartNextPendingTurn(child);
+
+        Assert.False(child.HasActiveBackgroundRun);
+        Assert.Equal(0, child.PromptCount);
+    }
+
+    [Fact]
+    public async Task Second_interrupt_during_gate_wait_still_delivers_the_first_interrupt()
+    {
+        var parent = new StubSession();
+        var child = new StubbornChildSession();
+        parent.RegisterForTest(child);
+        try
+        {
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "first")).IsSuccess);
+            await child.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            // B cancels run A, which keeps unwinding; B's KickOff waits for the session gate.
+            var b = await parent.TriggerSubagentEventAsync(child.Id, "message B");
+            Assert.Contains("\"status\":\"interrupted\"", b.Value, StringComparison.Ordinal);
+            // C cancels B while B still waits for the gate.
+            var c = await parent.TriggerSubagentEventAsync(child.Id, "message C");
+            Assert.Contains("\"status\":\"interrupted\"", c.Value, StringComparison.Ordinal);
+
+            child.ReleaseFirst.TrySetResult();
+
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (DateTime.UtcNow < deadline
+                   && !child.Instructions.Any(i => i.EndsWith("message B", StringComparison.Ordinal)))
+            {
+                await Task.Delay(10);
+            }
+
+            Assert.Contains(child.Instructions, i => i.EndsWith("message C", StringComparison.Ordinal));
+            Assert.Contains(child.Instructions, i => i.EndsWith("message B", StringComparison.Ordinal));
+        }
+        finally
+        {
+            child.ReleaseFirst.TrySetResult();
+            child.CancelBackgroundRunForTest();
+        }
+    }
+
+    [Fact]
     public async Task Idle_inject_with_timeout_omitted_is_delivered_without_waiting()
     {
         var parent = new StubSession();
@@ -843,6 +894,36 @@ public class DysonParentEventTests
         public override Task<Result<DysonAgentSessionEvent, string>> WaitForNotifyAsync(
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// The first turn ignores cancellation until <see cref="ReleaseFirst"/>, so it still holds the prompt
+    /// gate after an interrupt cancels it. Later turns return at once. Records every instruction it runs.
+    /// </summary>
+    private sealed class StubbornChildSession() : StubSession
+    {
+        public readonly System.Collections.Concurrent.ConcurrentQueue<string> Instructions = new();
+        public readonly TaskCompletionSource FirstStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource ReleaseFirst =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _calls;
+
+        public void CancelBackgroundRunForTest() => CancelBackgroundRun();
+
+        public override async Task<VoidResult<string>> PromptHarnessTurnAsync(
+            DysonAgentTurn turn,
+            CancellationToken cancellationToken = default)
+        {
+            Instructions.Enqueue(turn.Instruction ?? "");
+            if (Interlocked.Increment(ref _calls) == 1)
+            {
+                FirstStarted.TrySetResult();
+                await ReleaseFirst.Task.ConfigureAwait(false);
+            }
+
+            return VoidResult<string>.Success;
+        }
     }
 
     /// <summary>

@@ -87,7 +87,18 @@ public sealed partial class DysonWorkspaceToolExecutor
     /// </summary>
     private string? CatalogMissHint(string toolName)
     {
-        foreach (var key in _session.McpPipeline.Tools.Keys)
+        // Tools is a plain Dictionary that custom/plugin MCP refresh mutates: snapshot, and skip the hint on a race.
+        string[] keys;
+        try
+        {
+            keys = [.. _session.McpPipeline.Tools.Keys];
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+
+        foreach (var key in keys)
         {
             if (string.Equals(key, toolName, StringComparison.OrdinalIgnoreCase))
                 return $" Did you mean '{key}'?";
@@ -101,7 +112,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             return null;
 
         var suffix = toolName[suffixStart..];
-        foreach (var key in _session.McpPipeline.Tools.Keys)
+        foreach (var key in keys)
         {
             if (string.Equals(key, suffix, StringComparison.OrdinalIgnoreCase))
                 return $" Did you mean '{key}'?";

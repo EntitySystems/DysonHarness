@@ -1010,6 +1010,51 @@ public class DysonSessionRuntimeTests
         Assert.Equal(1, runs);
     }
 
+    [Fact]
+    public async Task ExecutePrompt_defers_when_a_run_attaches_while_it_waits_for_the_gate()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var created = await harness.Runtime.CreateRootAsync(RootRequest());
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+        var session = Assert.IsType<StubSession>(created.Value);
+        var runs = 0;
+
+        await session.EnterPromptGateAsync(CancellationToken.None);
+        var pending = harness.Runtime.ExecutePromptAsync(session, (_, _) =>
+        {
+            runs++;
+            return Task.FromResult(VoidResult<string>.Success);
+        });
+        Assert.False(pending.IsCompleted);
+
+        using var runCts = new CancellationTokenSource();
+        session.AttachRunForTest(runCts);
+        session.ExitPromptGate();
+
+        var deferred = await pending.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(DysonSessionRuntime.PromptDeferredError, deferred.Error);
+        Assert.Equal(0, runs);
+        session.DetachRunForTest(runCts);
+    }
+
+    [Fact]
+    public async Task EnqueuePrompt_at_head_goes_first_and_keeps_the_rest_in_order()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var created = await harness.Runtime.CreateRootAsync(RootRequest());
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+        var sessionId = created.Value.PersistenceId;
+
+        Assert.True(harness.Runtime.EnqueuePrompt(sessionId, DysonAgentSession.CreateNormalTurn("a")).IsSuccess);
+        Assert.True(harness.Runtime.EnqueuePrompt(sessionId, DysonAgentSession.CreateNormalTurn("b")).IsSuccess);
+        Assert.True(harness.Runtime.EnqueuePrompt(
+            sessionId, DysonAgentSession.CreateNormalTurn("deferred"), atHead: true).IsSuccess);
+
+        Assert.Equal(
+            ["deferred", "a", "b"],
+            harness.Runtime.GetQueuedPrompts(sessionId).Select(p => p.Turn.Instruction));
+    }
+
     private static DysonAgentSessionRuntimeCreateRequest RootRequest() =>
         new()
         {
