@@ -43,6 +43,14 @@ public class DysonFullSummarizeTests
             throw new InvalidOperationException(
                 "Instruction must give the 35K-token guideline, no tools, and drop-after.");
         }
+
+        var sidecar = DysonFullSummarizeFlow.SidecarInstruction;
+        if (!sidecar.Contains("5,000", StringComparison.Ordinal)
+            || sidecar.Contains("6,000", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "SidecarInstruction must target 5,000 tokens and must not mention 6,000.");
+        }
     }
 
     private static void AssertCreateTurn()

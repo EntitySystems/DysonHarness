@@ -64,9 +64,9 @@ public class DysonMetaAgentDirectiveTests
             DysonAgentSystemPrompts.MetaAgentDirective,
             DysonAgentModes.MetaAgent,
             true);
-        Assert.Contains("SpeakToUser", on, StringComparison.Ordinal);
-        Assert.Contains("[voice input]", on, StringComparison.Ordinal);
+        Assert.Contains("MessageVoiceModeSidecar", on, StringComparison.Ordinal);
         Assert.Contains("Voice mode (on):", on, StringComparison.Ordinal);
+        Assert.Contains("You have no SpeakToUser tool.", on, StringComparison.Ordinal);
 
         var off = DysonAgentSystemPrompts.WithVoice(
             DysonAgentSystemPrompts.MetaAgentDirective,

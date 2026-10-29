@@ -45,6 +45,14 @@ public class DysonMetaAgentContextCapTests
 
         drone.MaxTargetContextTokens = 0;
         Assert.Equal(0, drone.ResolveEffectiveMaxTargetContextTokens());
+
+        var sidecar = new StubSession(DysonAgentModes.VoiceSidecar)
+        {
+            MaxTargetContextTokens = 400_000,
+            SlugDefaultMaxTargetContextTokens = 250_000,
+        };
+        Assert.Equal(120_000, sidecar.ResolveEffectiveMaxTargetContextTokens());
+        Assert.Equal(DysonMaxTargetContextTokens.VoiceSidecarFixed, sidecar.ResolveEffectiveMaxTargetContextTokens());
     }
 
     private sealed class StubProvider : DysonAgentProvider;
