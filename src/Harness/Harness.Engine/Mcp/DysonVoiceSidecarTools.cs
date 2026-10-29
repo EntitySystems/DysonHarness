@@ -1,7 +1,7 @@
 namespace DysonHarness;
 
 /// <summary>
-/// Voice Mode Meta Sidecar catalog: exactly five tools, voice on or off.
+/// Voice Mode Meta Sidecar catalog: exactly eight tools, voice on or off.
 /// <see cref="MessageVoiceModeSidecar"/> is the Meta Agent's replacement for SpeakToUser and is not
 /// in <see cref="AllowedToolNames"/>.
 /// </summary>
@@ -15,6 +15,9 @@ public static class DysonVoiceSidecarTools
         "ReadMetaAgentLog",
         "ReadMemory",
         "EditMemory",
+        "ListWorkdirs",
+        "OpenWorkdirsPanel",
+        "SwitchWorkdir",
     ];
 
     private static readonly HashSet<string> AllowedToolNameSet = new(AllowedToolNames, StringComparer.Ordinal);
@@ -144,7 +147,7 @@ public static class DysonVoiceSidecarTools
     };
 
     /// <summary>
-    /// Strips the pipeline to exactly <see cref="AllowedToolNames"/> and restores those five definitions.
+    /// Strips the pipeline to exactly <see cref="AllowedToolNames"/> and restores those eight definitions.
     /// Authoritative for the sidecar mode.
     /// </summary>
     public static void ApplyAllowlist(DysonMcpPipeline pipeline)
@@ -162,5 +165,7 @@ public static class DysonVoiceSidecarTools
         pipeline.Tools[ReadMetaAgentLog.Name] = ReadMetaAgentLog;
         pipeline.Tools[ReadMemory.Name] = ReadMemory;
         pipeline.Tools[EditMemory.Name] = EditMemory;
+        foreach (var tool in DysonMetaAgentTools.CreateWorkdirTools())
+            pipeline.Tools[tool.Name] = tool;
     }
 }

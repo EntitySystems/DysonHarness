@@ -72,6 +72,7 @@ public class DysonWorkDirectoryFocusTests
         focus.SwitchTo = id =>
         {
             hooked = id;
+            focus.SetActive(id); // what the page's switcher callback does once the screen moves
             return Task.CompletedTask;
         };
 
@@ -87,7 +88,30 @@ public class DysonWorkDirectoryFocusTests
         Assert.Equal(active, quiet.ActiveId);
     }
 
-    private sealed class FakeWorkDirectories : IDysonWorkDirectoryRepository
+    [Fact]
+    public async Task Switch_whose_hook_did_not_move_the_screen_fails_and_keeps_active()
+    {
+        var work = new FakeWorkDirectories();
+        var active = Guid.NewGuid();
+        var target = Guid.NewGuid();
+        work.Add(new DysonWorkDirectoryEntity { Id = target, Name = "RealStrategy", AbsolutePath = "E:\\RS" });
+
+        var focus = new DysonWorkDirectoryFocus(work);
+        focus.SetActive(active);
+        var hooked = 0;
+        focus.SwitchTo = _ =>
+        {
+            hooked++; // switcher locked or navigation failed: ActiveId is never moved
+            return Task.CompletedTask;
+        };
+
+        var switched = await focus.SwitchAsync(active, target);
+        Assert.Equal(DysonWorkDirectoryFocus.SwitchNotAppliedMessage, switched.Error);
+        Assert.Equal(1, hooked);
+        Assert.Equal(active, focus.ActiveId);
+    }
+
+    internal sealed class FakeWorkDirectories : IDysonWorkDirectoryRepository
     {
         public Dictionary<Guid, DysonWorkDirectoryEntity> Items { get; } = [];
         public int Gets;

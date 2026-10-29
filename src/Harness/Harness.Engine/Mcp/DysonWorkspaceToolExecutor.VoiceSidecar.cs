@@ -138,7 +138,9 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         var inFlight = owner.InFlightPromptTurn;
         var posts = owner.Turns
-            .Where(static turn => turn.Kind == DysonAgentTurnKind.DisplayInfo)
+            .Where(static turn =>
+                turn.Kind == DysonAgentTurnKind.DisplayInfo
+                && !DysonVoiceMode.IsVoiceInputDisplay(turn))
             .TakeLast(ReadMetaAgentLogPostCount)
             .Select(static turn => Cut(turn.AssistantText, ReadMetaAgentLogPostChars))
             .ToArray();

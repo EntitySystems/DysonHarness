@@ -420,6 +420,11 @@
     protected override async Task OnParametersSetAsync()
     {
         _activeWorkDirectoryId = WorkDirectoryId;
+        // Prerender is a separate instance on every full load (F5, reconnect reload, second window).
+        // It must not re-assert this route's work directory over a switch made since, nor start
+        // session work with no browser; the interactive instance does both.
+        if (!RendererInfo.IsInteractive)
+            return;
         if (_loadedWorkDirectoryId == WorkDirectoryId)
             return;
 
@@ -441,6 +446,8 @@
             return;
         }
 
+        // Keep the stored workdir in step with the screen so a later visit to "/" does not hydrate an old one.
+        await PersistWorkDirectoryAsync(WorkDirectoryId);
         Host.SetComposerWorkDirectoryId(WorkDirectoryId);
         await RefreshSessionsAsync();
         await EnsureMetaSessionAsync();
@@ -899,7 +906,14 @@
         }
 
         _activeWorkDirectoryId = next;
-        await DysonCircuitJs.NavigateAsync(Js, $"/meta/{next}");
+        if (await DysonCircuitJs.NavigateAsync(Js, $"/meta/{next}") is null)
+            return;
+
+        // Navigation failed: the screen still shows this route. Put focus and storage back so the
+        // switcher and DysonWorkDirectoryFocus.SwitchAsync both report the failure.
+        Host.Focus?.SetActive(WorkDirectoryId);
+        _activeWorkDirectoryId = WorkDirectoryId;
+        await PersistWorkDirectoryAsync(WorkDirectoryId);
     }
 
     private Task PersistWorkDirectoryAsync(Guid? id) =>

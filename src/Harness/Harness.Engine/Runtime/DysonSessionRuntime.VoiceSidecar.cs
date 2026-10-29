@@ -18,8 +18,11 @@ public sealed partial class DysonSessionRuntime
     // Per-utterance results keyed by turn id, so a caller that joins another drain gets its own turn's outcome.
     private readonly ConcurrentDictionary<Guid, TaskCompletionSource<VoidResult<string>>> _voiceTurnResults = new();
 
-    // ponytail: subscriptions live for the process. Upgrade = dispose them from DisposeAsync / UnregisterSessionAsync.
-    private readonly ConcurrentDictionary<Guid, List<IDisposable>> _voiceSidecarSubscriptions = new();
+    // Meta subscription stays for the Meta id. The sidecar subscription is replaced when that sidecar's id changes.
+    private readonly ConcurrentDictionary<Guid, (Guid SidecarId, List<IDisposable> Tokens)> _voiceSidecarSubscriptions = new();
+
+    // Bumped on voice-off so an inbox reader that already dequeued a message does not deliver it.
+    private int _voiceDeliveryGeneration;
 
     /// <summary>
     /// Returns the live sidecar for a root Meta session, loading the oldest persisted one or creating it.
@@ -119,17 +122,32 @@ public sealed partial class DysonSessionRuntime
             return VoidResult<string>.AsError(ensured.Error);
 
         var sidecar = ensured.Value;
-        meta.AppendDisplayInfoTurn(message.Text);
         var turn = DysonVoiceMode.CreateTurn(message);
         var own = new TaskCompletionSource<VoidResult<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
         _voiceTurnResults[turn.Id] = own;
+        // The bubble posts once the sidecar holds the turn (injected, interrupted or queued) and before the
+        // drain runs it, so it lands above the sidecar's [spoken] lines. A route that fails before that
+        // posts nothing and the host fallback shows the utterance once, as Meta's prompt.
+        // ponytail: a sidecar provider error after acceptance still falls back, so that rare path shows the
+        // utterance twice (bubble + Meta prompt); removing a posted display turn would need a new session API.
+        var posted = 0;
+        void PostBubble()
+        {
+            if (Interlocked.Exchange(ref posted, 1) == 0)
+                meta.AppendDisplayInfoTurn(message.Text);
+        }
+
         try
         {
-            var routed = await RouteVoiceTurnAsync(sidecar, message, turn, ct).ConfigureAwait(false);
+            var routed = await RouteVoiceTurnAsync(sidecar, message, turn, PostBubble, ct).ConfigureAwait(false);
             if (routed.IsError && !IsPromptControl(routed))
                 return routed;
             // Not completed = still queued behind a background run; the redrain owns it now.
-            return own.Task.IsCompleted ? await own.Task.ConfigureAwait(false) : VoidResult<string>.Success;
+            var accepted = own.Task.IsCompleted ? await own.Task.ConfigureAwait(false) : VoidResult<string>.Success;
+            if (accepted.IsError && !IsPromptControl(accepted))
+                return accepted;
+            PostBubble();
+            return accepted;
         }
         finally
         {
@@ -141,6 +159,7 @@ public sealed partial class DysonSessionRuntime
         DysonAgentSession sidecar,
         DysonVoiceMessage message,
         DysonAgentTurn turn,
+        Action accepted,
         CancellationToken ct)
     {
         var route = DysonVoiceMode.RouteFor(
@@ -159,21 +178,30 @@ public sealed partial class DysonSessionRuntime
                     ? VoidResult<string>.AsError("Turn is not currently running.")
                     : sidecar.InjectTurnComment(inFlight.Id, message.Text);
                 if (injected.IsSuccess)
+                {
+                    accepted();
                     CompleteVoiceTurn(turn.Id, VoidResult<string>.Success);
+                }
+
                 routed = injected.IsSuccess
                     ? VoidResult<string>.Success
-                    : await EnqueueAndDrainAsync(sidecar, turn, ct).ConfigureAwait(false);
+                    : await EnqueueAndDrainAsync(sidecar, turn, accepted, ct).ConfigureAwait(false);
                 break;
             }
             case DysonVoiceRoute.Interrupt:
                 Voice?.DropPendingSpeech();
                 var interrupted = InterruptWithPrompt(sidecar.PersistenceId, turn);
-                routed = interrupted.IsError
-                    ? VoidResult<string>.AsError(interrupted.Error)
-                    : await DrainVoiceSidecarPromptsAsync(sidecar, ct).ConfigureAwait(false);
+                if (interrupted.IsError)
+                {
+                    routed = VoidResult<string>.AsError(interrupted.Error);
+                    break;
+                }
+
+                accepted();
+                routed = await DrainVoiceSidecarPromptsAsync(sidecar, ct).ConfigureAwait(false);
                 break;
             default:
-                routed = await EnqueueAndDrainAsync(sidecar, turn, ct).ConfigureAwait(false);
+                routed = await EnqueueAndDrainAsync(sidecar, turn, accepted, ct).ConfigureAwait(false);
                 break;
         }
 
@@ -182,12 +210,14 @@ public sealed partial class DysonSessionRuntime
 
     /// <summary>
     /// Applies the Agent Behavior Meta Sidecar model to every live sidecar. An empty setting is a no-op.
+    /// One sidecar failing does not stop the rest; every failure is one line of the returned error.
     /// </summary>
     public async Task<VoidResult<string>> ApplyVoiceSidecarModelAsync(CancellationToken ct = default)
     {
         if (_disposed != 0)
             return VoidResult<string>.AsError("Session runtime has been disposed.");
 
+        var failures = new List<string>();
         foreach (var meta in SnapshotLiveSessions())
         {
             if (meta.Parent is not null || !DysonSessionPolicy.IsMetaAgent(meta.Mode))
@@ -197,11 +227,84 @@ public sealed partial class DysonSessionRuntime
 
             var applied = await ApplyVoiceSidecarDefaultAsync(sidecar, ct).ConfigureAwait(false);
             if (applied.IsError)
-                return applied;
+                failures.Add(applied.Error);
         }
+
+        return failures.Count == 0
+            ? VoidResult<string>.Success
+            : VoidResult<string>.AsError(string.Join("\n", failures));
+    }
+
+    /// <summary>
+    /// Voice turned off. Drops sidecar↔Meta turns already queued (both directions), voice turns queued on
+    /// each sidecar, and anything still in the pair's inboxes. A typed prompt on Meta stays queued.
+    /// Also makes an inbox delivery already in flight a no-op.
+    /// </summary>
+    public VoidResult<string> DropVoiceTurnsOnVoiceOff()
+    {
+        if (_disposed != 0)
+            return VoidResult<string>.AsError("Session runtime has been disposed.");
+
+        Interlocked.Increment(ref _voiceDeliveryGeneration);
+        var changed = new HashSet<Guid>();
+        lock (_promptQueueGate)
+        {
+            foreach (var sessionId in _promptQueues.Keys.ToArray())
+            {
+                if (!_sessionsById.TryGetValue(sessionId, out var session))
+                    continue;
+
+                var meta = session.Parent is null && DysonSessionPolicy.IsMetaAgent(session.Mode);
+                var sidecar = session.IsVoiceSidecar;
+                if (!meta && !sidecar)
+                    continue;
+                if (!_promptQueues.TryGetValue(sessionId, out var queue))
+                    continue;
+
+                var kept = new Queue<DysonQueuedPrompt>();
+                var dropped = false;
+                while (queue.TryDequeue(out var entry))
+                {
+                    if (IsVoiceOffDrop(entry.Turn, sidecar))
+                    {
+                        dropped = true;
+                        CompleteVoiceTurn(entry.Turn.Id, VoidResult<string>.Success);
+                        continue;
+                    }
+
+                    kept.Enqueue(entry);
+                }
+
+                if (kept.Count == 0)
+                    _promptQueues.Remove(sessionId);
+                else
+                    _promptQueues[sessionId] = kept;
+                if (dropped)
+                    changed.Add(sessionId);
+            }
+        }
+
+        foreach (var channel in _voiceSidecarInboxes.Values)
+        {
+            while (channel.Reader.TryRead(out _))
+            {
+            }
+        }
+
+        foreach (var sessionId in changed)
+            RaiseChanged(DysonRuntimeChangeKind.Queue, sessionId);
 
         return VoidResult<string>.Success;
     }
+
+    /// <summary>A sidecar queue is entirely voice traffic. On Meta only the framed sidecar messages go.</summary>
+    private static bool IsVoiceOffDrop(DysonAgentTurn turn, bool sidecarQueue) =>
+        sidecarQueue || IsSidecarToMetaTurn(turn);
+
+    private static bool IsSidecarToMetaTurn(DysonAgentTurn turn) =>
+        turn.Instruction.StartsWith(
+            DysonInjectedUserComments.SidecarMarker + "\n\n",
+            StringComparison.Ordinal);
 
     /// <summary>
     /// Pushes the Agent Behavior Meta Sidecar setting onto one sidecar. Unset setting = keep the
@@ -294,26 +397,68 @@ public sealed partial class DysonSessionRuntime
             : Result<string, string>.AsValue(loaded.Value.Content);
     }
 
+    /// <summary>The sidecar id <see cref="SubscribePair"/> last stored for <paramref name="metaId"/>. Tests only.</summary>
+    internal Guid? VoiceSidecarSubscribedIdForTest(Guid metaId) =>
+        _voiceSidecarSubscriptions.TryGetValue(metaId, out var pair) ? pair.SidecarId : null;
+
     private void SubscribePair(DysonAgentSession meta, DysonAgentSession sidecar)
     {
         var bus = meta.Config.Bus;
         if (bus is null)
             return;
-        if (!_voiceSidecarSubscriptions.TryAdd(meta.PersistenceId, []))
-            return;
 
+        var metaId = meta.PersistenceId;
+        var sidecarId = sidecar.PersistenceId;
+        if (_voiceSidecarSubscriptions.TryGetValue(metaId, out var existing))
+        {
+            if (existing.SidecarId == sidecarId)
+                return;
+
+            // The Meta subscription is first and stays. Everything after it was the old sidecar.
+            for (var i = 1; i < existing.Tokens.Count; i++)
+                existing.Tokens[i].Dispose();
+            if (existing.Tokens.Count > 1)
+                existing.Tokens.RemoveRange(1, existing.Tokens.Count - 1);
+
+            var replaced = bus.Subscribe<DysonVoiceSidecarMessageEvent>(
+                DysonBusScopes.Session(sidecarId),
+                message => OfferVoiceSidecarMessage(message));
+            if (replaced.IsSuccess)
+                existing.Tokens.Add(replaced.Value);
+            _voiceSidecarSubscriptions[metaId] = (sidecarId, existing.Tokens);
+            return;
+        }
+
+        var tokens = new List<IDisposable>();
         var metaSub = bus.Subscribe<DysonVoiceSidecarMessageEvent>(
-            DysonBusScopes.Session(meta.PersistenceId),
+            DysonBusScopes.Session(metaId),
             message => OfferVoiceSidecarMessage(message));
         var sidecarSub = bus.Subscribe<DysonVoiceSidecarMessageEvent>(
-            DysonBusScopes.Session(sidecar.PersistenceId),
+            DysonBusScopes.Session(sidecarId),
             message => OfferVoiceSidecarMessage(message));
-
-        var tokens = _voiceSidecarSubscriptions[meta.PersistenceId];
         if (metaSub.IsSuccess)
             tokens.Add(metaSub.Value);
         if (sidecarSub.IsSuccess)
             tokens.Add(sidecarSub.Value);
+        if (!_voiceSidecarSubscriptions.TryAdd(metaId, (sidecarId, tokens)))
+        {
+            foreach (var token in tokens)
+                token.Dispose();
+            SubscribePair(meta, sidecar);
+        }
+    }
+
+    /// <summary>Disposes every voice-sidecar bus subscription. Called from runtime dispose.</summary>
+    private void DisposeVoiceSidecarSubscriptions()
+    {
+        foreach (var pair in _voiceSidecarSubscriptions)
+        {
+            if (_voiceSidecarSubscriptions.TryRemove(pair.Key, out var removed))
+            {
+                foreach (var token in removed.Tokens)
+                    token.Dispose();
+            }
+        }
     }
 
     private void OfferVoiceSidecarMessage(DysonVoiceSidecarMessageEvent message)
@@ -344,7 +489,8 @@ public sealed partial class DysonSessionRuntime
 
             try
             {
-                var delivered = await DeliverVoiceSidecarMessageAsync(message, CancellationToken.None)
+                var generation = Volatile.Read(ref _voiceDeliveryGeneration);
+                var delivered = await DeliverVoiceSidecarMessageAsync(message, generation, CancellationToken.None)
                     .ConfigureAwait(false);
                 if (delivered.IsError && !IsPromptControl(delivered))
                     ReportError(delivered.Error);
@@ -358,8 +504,11 @@ public sealed partial class DysonSessionRuntime
 
     private async Task<VoidResult<string>> DeliverVoiceSidecarMessageAsync(
         DysonVoiceSidecarMessageEvent message,
+        int generation,
         CancellationToken ct)
     {
+        if (generation != Volatile.Read(ref _voiceDeliveryGeneration))
+            return VoidResult<string>.Success;
         if (!_sessionsById.TryGetValue(message.ToSessionId, out var target))
             return VoidResult<string>.Success;
 
@@ -376,6 +525,9 @@ public sealed partial class DysonSessionRuntime
             target.HasActiveBackgroundRun,
             target.IsSummaryInFlight || target.HasAnySummarizingTurn);
 
+        if (generation != Volatile.Read(ref _voiceDeliveryGeneration))
+            return VoidResult<string>.Success;
+
         if (route == DysonVoiceRoute.Inject && target.InFlightPromptTurn is { } inFlight)
         {
             var injected = target.InjectTurnComment(inFlight.Id, message.Text, marker);
@@ -387,6 +539,12 @@ public sealed partial class DysonSessionRuntime
         var queued = EnqueuePrompt(target.PersistenceId, turn);
         if (queued.IsError)
             return VoidResult<string>.AsError(queued.Error);
+        if (generation != Volatile.Read(ref _voiceDeliveryGeneration))
+        {
+            // Voice went off between the check and the enqueue. Drop what we just queued.
+            TryRemovePrompt(target.PersistenceId, queued.Value.Id);
+            return VoidResult<string>.Success;
+        }
 
         return await DrainRoutedAsync(target, toSidecar, ct).ConfigureAwait(false);
     }
@@ -394,12 +552,14 @@ public sealed partial class DysonSessionRuntime
     private async Task<VoidResult<string>> EnqueueAndDrainAsync(
         DysonAgentSession sidecar,
         DysonAgentTurn turn,
+        Action accepted,
         CancellationToken ct)
     {
         var queued = EnqueuePrompt(sidecar.PersistenceId, turn);
-        return queued.IsError
-            ? VoidResult<string>.AsError(queued.Error)
-            : await DrainVoiceSidecarPromptsAsync(sidecar, ct).ConfigureAwait(false);
+        if (queued.IsError)
+            return VoidResult<string>.AsError(queued.Error);
+        accepted();
+        return await DrainVoiceSidecarPromptsAsync(sidecar, ct).ConfigureAwait(false);
     }
 
     private Task<VoidResult<string>> DrainRoutedAsync(

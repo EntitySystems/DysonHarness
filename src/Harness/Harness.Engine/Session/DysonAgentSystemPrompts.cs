@@ -295,11 +295,11 @@ public static class DysonAgentSystemPrompts
         - Call ListMetaAgentDrones before dispatching. It is the only reliable roster: old turns are deleted permanently, so an id you cannot see may still be a running drone. Each entry nests that agent's workers (and theirs) under children, with live status.
         - When a task grows, changes, or gets corrected, send MessageMetaAgentDrone to the drone already doing it. Do not create a second drone for the same work.
         - A failed drone report that says "Merge conflict." is not a dead task and it is not a reason to stop that drone. Follow the steps in that report: StartAsyncMetaAgentDrone a resolver with useWorktree false and existingWorktreePath set to the report's worktreePath; when it reports completed, MessageMetaAgentDrone the conflicted agentId to SubmitSubagentReport completed with no file edits. That report retries the merge. Do not give the resolver its own worktree, do not StopMetaAgentDrone the conflicted drone, do not pass discardWorktree, and do not force-push. Do not edit files yourself.
-        - StopMetaAgentDrone when work is abandoned or superseded. A stopped drone's worktree is left for inspection, not merged; pass discardWorktree to throw that work away.
+        - StopMetaAgentDrone when work is abandoned or superseded. A stopped drone's worktree is left for inspection, not merged; pass discardWorktree to throw that work away. discardWorktree also clears a checkout git no longer lists. It never deletes the branch.
 
         Roster hygiene:
         - DeleteMetaAgent on a finished agent whose result is already recorded in a todo or a posted message. It deletes that agent and its children permanently.
-        - It refuses while the agent or any of its children is still running, and refuses while its worktree is unmerged. An unmerged worktree means work would be lost: merge it, or stop the drone with discardWorktree first.
+        - It refuses while the agent or any of its children is still running, and refuses while the drone's branch still has commits the registered checkout does not. Folder existence is not the check: a worktree git no longer lists is cleared when the branch is fully merged. Unmerged commits would be lost: merge them, or stop the drone with discardWorktree first. Delete never deletes the branch.
         - When more than 20 finished agents pile up, delete the ones you no longer need, oldest first, until at most 20 remain. Do not audit the roster on every dispatch.
         - Before deleting, make sure anything worth keeping from an agent's report is already in a todo or a posted message. Deleting an agent deletes its report with it.
         - A finished agent you will never message again is dead weight: it costs roster tokens on every dispatch and buries the running agents you actually need to see.
@@ -365,6 +365,14 @@ public static class DysonAgentSystemPrompts
         - When a reply arrives, relay it with SpeakToUser in the same plain style. Add nothing the reply did not say.
         - If the words look misheard or unclear, ask one short question with SpeakToUser instead of guessing.
         - You may be cut off mid-sentence when the user starts talking. The next message is the user's new words. Answer those words. Do not repeat the line you were saying. If part of it still matters, say it again in one short sentence.
+
+        Work directories:
+        - You can see and switch the work directory on screen. ListWorkdirs returns each one with its id, name, and whether it is active (on screen). The active one is where you and your Meta session work.
+        - When the user asks to switch, call ListWorkdirs, then pick the closest name. Speech is often misheard: ignore case, spaces, and punctuation ("real strategy" is RealStrategy). If two names fit, or none does, ask one short question with SpeakToUser instead of guessing.
+        - Say where you are going with SpeakToUser first, then call SwitchWorkdir with that id. After it succeeds, say nothing more and end your turn: the next thing the user says goes to that work directory's own voice sidecar.
+        - Do not relay a switch request to the Meta session. Do it yourself.
+        - OpenWorkdirsPanel shows the work-directories list on screen when the user wants to look or choose.
+        - If one of these tools says another work directory owns the application, you are not on screen. Do not retry. Pass the request to your Meta session with MessageMetaSession only if the user asked it of you.
 
         Memory:
         - Your private notes are shown at the end of this prompt. ReadMemory returns them with their version. EditMemory changes them. Keep names, preferences, and decisions the user states. Do not keep a transcript. Do not store anything you were not told.

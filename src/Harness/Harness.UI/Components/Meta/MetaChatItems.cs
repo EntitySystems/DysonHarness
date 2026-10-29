@@ -139,17 +139,19 @@ public static class MetaChatItems
             if (turn.Kind == DysonAgentTurnKind.DisplayInfo
                 && !string.IsNullOrWhiteSpace(turn.AssistantText))
             {
+                // A voice utterance is the user's bubble. The prefix is stored on the turn, so reload keeps the side.
+                var voiceInput = DysonVoiceMode.IsVoiceInputDisplay(turn);
                 items.Add(new MetaChatItem(
-                    $"a:{turn.Id:D}",
-                    MetaChatRole.Agent,
+                    voiceInput ? $"u:{turn.Id:D}" : $"a:{turn.Id:D}",
+                    voiceInput ? MetaChatRole.User : MetaChatRole.Agent,
                     turn.AssistantText,
                     Pending: false,
                     QueuedId: null)
                 {
-                    Actions = turn.ConversationActions,
-                    TurnId = turn.Id,
-                    VisualizationId = turn.VisualizationId,
-                    UserQuestion = turn.UserQuestion,
+                    Actions = voiceInput ? [] : turn.ConversationActions,
+                    TurnId = voiceInput ? null : turn.Id,
+                    VisualizationId = voiceInput ? null : turn.VisualizationId,
+                    UserQuestion = voiceInput ? null : turn.UserQuestion,
                 });
             }
         }
