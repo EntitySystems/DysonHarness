@@ -48,6 +48,12 @@
       "Providers": ["dyson"]
     },
     {
+      "Path": "rules/rules_bug_review.md",
+      "Mode": "AutoInclude",
+      "Description": "Meta Agent Drones run a Dyson Bug Review (StartAsyncBugReviewAgent) on their worktree diff before the final report that merges",
+      "Providers": ["dyson"]
+    },
+    {
       "Path": "rules/rules_cursor_rules.md",
       "Mode": "AgentOptional",
       "Description": "Cursor rules lifecycle — .cursor/ is gitignored; author rules in rules/ per openrules spec",

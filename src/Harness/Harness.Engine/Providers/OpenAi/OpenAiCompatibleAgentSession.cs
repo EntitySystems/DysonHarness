@@ -45,7 +45,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             session.Mode,
             DysonAgentModes.Explore,
             StringComparison.OrdinalIgnoreCase);
-        var isMetaAgent = DysonSessionPolicy.IsMetaAgent(session.Mode);
+        // The voice sidecar pauses like Meta: no rethink turn.
+        var isMetaAgent = DysonSessionPolicy.IsMetaAgent(session.Mode) || DysonSessionPolicy.IsVoiceSidecar(session.Mode);
 
         string text;
         if (isRethink)
@@ -573,6 +574,10 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             current.WithReasoningEffort(reasoningEffort)));
     }
 
+    /// <inheritdoc />
+    internal override Task<DysonAgentProvider?> ResolveOwnModeDefaultProviderAsync(CancellationToken cancellationToken) =>
+        Config.TryGetSubagentDefaultWhenSlugOmittedAsync(null, Mode, _models, cancellationToken);
+
     /// <summary>Slug or display alias to a fresh OpenAI-compatible provider. Null effort = the slug default.</summary>
     private async Task<Result<OpenAiCompatibleAgentProvider, string>> ResolveOpenAiSlugProviderAsync(
         string modelSlug,
@@ -1044,7 +1049,11 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     turn.ClearStreamingPreview();
                     turn.ClearReasoningPreview();
 
-                    foreach (var call in reply.ToolCalls)
+                    // Record the catalog name (submit_X -> X) so replayed history teaches the bare name.
+                    var calls = reply.ToolCalls
+                        .Select(c => DysonWorkspaceToolExecutor.TryResolvePrefixedToolName(c, McpPipeline.Tools) ?? c)
+                        .ToList();
+                    foreach (var call in calls)
                         turn.ToolCalls.Add(call);
 
                     var staged = await DysonToolCallScheduler.RunStagedAsync(
@@ -1060,8 +1069,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                         return staged;
                     }
 
-                    var roundResults = new List<DysonToolCallResult>(reply.ToolCalls.Count);
-                    foreach (var call in reply.ToolCalls)
+                    var roundResults = new List<DysonToolCallResult>(calls.Count);
+                    foreach (var call in calls)
                     {
                         var match = turn.ResponseLog.LastOrDefault(r =>
                             string.Equals(r.CallId, call.CallId, StringComparison.Ordinal));
@@ -1083,7 +1092,7 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
                     }
 
                     inFlight.Add(new OpenAiCacheFriendlyTranscriptBuilder.InFlightToolRound(
-                        reply.ToolCalls.ToList(),
+                        calls,
                         roundResults,
                         reply.ReasoningOutputItems.Count > 0 ? reply.ReasoningOutputItems : null));
                     turn.ToolRoundCallCounts.Add(reply.ToolCalls.Count);
@@ -1348,7 +1357,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             OpenAiProvider,
             _http,
             history,
-            DysonCompactionFlow.FallbackSummaryReason,
+            DysonSessionPolicy.IsVoiceSidecar(Mode)
+                ? DysonCompactionFlow.SidecarFallbackSummaryReason
+                : DysonCompactionFlow.FallbackSummaryReason,
             TokenCounter,
             cancellationToken,
             (usage, token) => AppendUsageAsync(OpenAiProvider, usage, token));

@@ -413,40 +413,6 @@ public sealed partial class DysonWorkspaceToolExecutor
         return Ok(call, """{"ok":true}""");
     }
 
-    private async Task<DysonToolCallResult> SpeakToUser(DysonToolCall call, CancellationToken cancellationToken)
-    {
-        var denied = RejectUnlessMetaAgent(call, "SpeakToUser");
-        if (denied is not null)
-            return denied;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
-            var text = RequireString(doc.RootElement, "text");
-            if (text.IsError)
-                return Error(call, text.Error);
-
-            var voice = _session.Config.Voice;
-            if (voice is null)
-                return Error(call, "SpeakToUser: voice mode is off.");
-
-            var focus = _session.Config.Focus;
-            var name = focus is null
-                ? ""
-                : await focus.GetDisplayNameAsync(_workDirectoryId, cancellationToken).ConfigureAwait(false);
-
-            var spoken = voice.Speak(text.Value, _workDirectoryId, name);
-            if (spoken.IsError)
-                return Error(call, "SpeakToUser: " + spoken.Error);
-
-            return Ok(call, """{"ok":true}""");
-        }
-        catch (JsonException)
-        {
-            return Error(call, "SpeakToUser: invalid JSON arguments.");
-        }
-    }
-
     private async Task<DysonToolCallResult> ListWorkdirsAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)

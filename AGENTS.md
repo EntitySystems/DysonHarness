@@ -32,6 +32,7 @@ AI model harness.
 - Blazor circuit: [rules/rules_blazor_circuit.md](rules/rules_blazor_circuit.md) (no sync or blocking work on the circuit without a thread-pool hop)
 - Ponytail (lazy senior, mandatory): [rules/rules_ponytail.md](rules/rules_ponytail.md)
 - Management model (Dyson only): [rules/rules_management_model.md](rules/rules_management_model.md) (every root Meta Agent `StartAsyncMetaAgentDrone` and `BeginBuildPlan` sets `modelSlug` `grok-4.7` (management/ops), `claude-opus-5-5` (complex tasks, planning) or `claude-sonnet-5-5` (simple tasks) and `reasoningEffort` `high`; unsure means Opus for authoring, Grok for pure ops — omit selects the Settings Meta Agent Drone default, not the parent; workers, explores, and reviews inherit the parent model)
+- Bug review (Dyson only): [rules/rules_bug_review.md](rules/rules_bug_review.md) (every Meta Agent Drone with `useWorktree` true and commits calls `StartAsyncBugReviewAgent` on its diff after the final commit and before the completed report that merges; fix findings, add a "Bug review" section to the report)
 - Cursor rules migration: [rules/rules_cursor_rules.md](rules/rules_cursor_rules.md) (aimed at Cursor; `.cursor/` is gitignored, rules live in `rules/`)
 - Model roles: [rules/rules_model_roles.md](rules/rules_model_roles.md) (migrated from `.cursor/rules/model-roles.mdc`)
 

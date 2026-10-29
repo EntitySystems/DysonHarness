@@ -528,7 +528,7 @@ public sealed class DysonAgentTurn
     /// Validates, queues, and records a mid-turn user comment. Does not mutate
     /// <see cref="Instruction"/> or <see cref="ReasoningText"/>.
     /// </summary>
-    public VoidResult<string> EnqueueUserComment(string comment)
+    public VoidResult<string> EnqueueUserComment(string comment, string? marker = null)
     {
         if (string.IsNullOrWhiteSpace(comment))
             return VoidResult<string>.AsError("Comment cannot be empty.");
@@ -536,6 +536,8 @@ public sealed class DysonAgentTurn
         var trimmed = comment.Trim();
         if (trimmed.Length > MaxUserCommentLength)
             return VoidResult<string>.AsError($"Comment exceeds the {MaxUserCommentLength} character limit.");
+
+        var storedMarker = string.IsNullOrWhiteSpace(marker) ? null : marker.Trim();
 
         // Queue + segment under one gate so a concurrent drain always finds the segment to stamp.
         lock (_reasoningLogGate)
@@ -549,7 +551,8 @@ public sealed class DysonAgentTurn
             _reasoningLog.Add(new DysonReasoningSegment(
                 DysonReasoningSegmentKind.UserComment,
                 trimmed,
-                roundIndex));
+                roundIndex,
+                Marker: storedMarker));
         }
 
         FlushAssistantTextChanged();

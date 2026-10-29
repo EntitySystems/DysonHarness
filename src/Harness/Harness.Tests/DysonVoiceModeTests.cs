@@ -73,21 +73,22 @@ public class DysonVoiceModeTests
     }
 
     [Fact]
-    public void Listener_OrdinarySpeechDuringPlayback_DoesNotCancel()
+    public void Listener_OrdinarySpeechDuringPlayback_BargesIn()
     {
         var listener = new DysonVoiceMode.Listener();
         Assert.Equal(
-            DysonVoiceMode.ListenAction.None,
+            DysonVoiceMode.ListenAction.BargeIn,
             listener.OnText("stop that now", 100, "Processing request.", Eight()));
-        Assert.False(listener.Capturing);
-        Assert.Null(listener.OnTick(100 + DysonVoiceMode.PauseMs + 1));
+        Assert.True(listener.Capturing);
+        Assert.False(listener.LastBargeChime);
+        Assert.Equal("Processing request.", listener.LastCutOff);
+        Assert.Equal("[voice input] stop that now", listener.OnTick(100 + DysonVoiceMode.PauseMs + 1));
     }
 
     [Fact]
     public void Listener_WakeDuringPlayback_CancelsAndSubmitsWordsAfterTheName()
     {
         var listener = new DysonVoiceMode.Listener();
-        Assert.Equal(DysonVoiceMode.ListenAction.None, listener.OnText("not the name", 0, "Processing request.", Eight()));
         Assert.Equal(
             DysonVoiceMode.ListenAction.BargeIn,
             listener.OnText("not the name hey dyson", 100, "Processing request.", Eight()));
@@ -741,10 +742,6 @@ public class DysonVoiceModeTests
         var listener = new DysonVoiceMode.Listener();
         listener.SetMode(DysonVoiceInputMode.Immediate, DysonVoiceMode.ImmediatePauseMs, 0);
         Assert.Equal(
-            DysonVoiceMode.ListenAction.None,
-            listener.OnText("stop that now", 100, "Processing request.", Eight()));
-        Assert.False(listener.Capturing);
-        Assert.Equal(
             DysonVoiceMode.ListenAction.BargeIn,
             listener.OnText("stop that now hey dyson", 200, "Processing request.", Eight()));
         Assert.True(listener.Capturing);
@@ -909,12 +906,12 @@ public class DysonVoiceModeTests
     }
 
     [Fact]
-    public void CreateTurn_hidden_instruction_only_for_immediate()
+    public void CreateTurn_hidden_instruction_for_immediate_and_push_to_talk()
     {
         var immediate = DysonVoiceMode.CreateTurn(
             new DysonVoiceMessage("[voice input] open the plan", DysonVoiceInputMode.Immediate));
         Assert.Equal("[voice input] open the plan", immediate.Instruction);
-        Assert.Equal(DysonAgentSystemPrompts.MetaAgentImmediateVoiceTurnInstruction, immediate.HiddenInstruction);
+        Assert.Equal(DysonAgentSystemPrompts.VoiceSidecarTurnInstruction, immediate.HiddenInstruction);
 
         var callsign = DysonVoiceMode.CreateTurn(
             new DysonVoiceMessage("[voice input] open the plan", DysonVoiceInputMode.CallsignActivated));
@@ -924,7 +921,37 @@ public class DysonVoiceModeTests
         var ptt = DysonVoiceMode.CreateTurn(
             new DysonVoiceMessage("[voice input] open the plan", DysonVoiceInputMode.PushToTalk));
         Assert.Equal("[voice input] open the plan", ptt.Instruction);
-        Assert.Equal(DysonAgentSystemPrompts.MetaAgentImmediateVoiceTurnInstruction, ptt.HiddenInstruction);
+        Assert.Equal(DysonAgentSystemPrompts.VoiceSidecarTurnInstruction, ptt.HiddenInstruction);
+    }
+
+    [Fact]
+    public void CreateTurn_adds_cut_off_line()
+    {
+        const string cutOff = "Processing request.";
+        var line = DysonAgentSystemPrompts.VoiceSidecarCutOffLine(cutOff);
+
+        var immediate = DysonVoiceMode.CreateTurn(
+            new DysonVoiceMessage("[voice input] stop", DysonVoiceInputMode.Immediate, cutOff));
+        Assert.Equal(
+            DysonAgentSystemPrompts.VoiceSidecarTurnInstruction + "\n" + line,
+            immediate.HiddenInstruction);
+
+        var ptt = DysonVoiceMode.CreateTurn(
+            new DysonVoiceMessage("[voice input] stop", DysonVoiceInputMode.PushToTalk, cutOff));
+        Assert.Equal(
+            DysonAgentSystemPrompts.VoiceSidecarTurnInstruction + "\n" + line,
+            ptt.HiddenInstruction);
+
+        var callsign = DysonVoiceMode.CreateTurn(
+            new DysonVoiceMessage("[voice input] stop", DysonVoiceInputMode.CallsignActivated, cutOff));
+        Assert.Equal(
+            DysonAgentSystemPrompts.VoiceSidecarCallsignCutOffInstruction(cutOff),
+            callsign.HiddenInstruction);
+        Assert.EndsWith(line, callsign.HiddenInstruction, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            DysonAgentSystemPrompts.VoiceSidecarTurnInstruction,
+            callsign.HiddenInstruction,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -979,15 +1006,19 @@ public class DysonVoiceModeTests
     }
 
     [Fact]
-    public void ImmediateInstruction_quotes_stub_text()
+    public void VoiceSidecarTurnInstruction_tells_sidecar_to_speak_first()
     {
         Assert.Contains(
-            OpenAiCacheFriendlyTranscriptBuilder.IncompleteToolResultContent,
-            DysonAgentSystemPrompts.MetaAgentImmediateVoiceTurnInstruction,
+            "SpeakToUser",
+            DysonAgentSystemPrompts.VoiceSidecarTurnInstruction,
             StringComparison.Ordinal);
         Assert.Contains(
-            "SpeakToUser",
-            DysonAgentSystemPrompts.MetaAgentImmediateVoiceTurnInstruction,
+            "[Voice sidecar]",
+            DysonAgentSystemPrompts.VoiceSidecarTurnInstruction,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            OpenAiCacheFriendlyTranscriptBuilder.IncompleteToolResultContent,
+            DysonAgentSystemPrompts.VoiceSidecarTurnInstruction,
             StringComparison.Ordinal);
     }
 
@@ -1071,19 +1102,121 @@ public class DysonVoiceModeTests
     {
         await using (var ordinary = await VoiceRig.StartAsync())
         {
+            // Speech barge-in fades the line and skips the listen chime. The wake-name barge-in still chimes.
             await HearWhileSpeakingAsync(ordinary, "Processing request.", "stop that now");
+            await WaitForAsync(() => ordinary.Playback.FadeStops >= 1);
             Assert.Equal(0, ordinary.Playback.ListenCount);
-            Assert.Equal(0, ordinary.Playback.FadeStops);
+            Assert.Equal(1, ordinary.Playback.FadeStops);
             Assert.Empty(ordinary.Failed);
         }
 
         await using (var echo = await VoiceRig.StartAsync())
         {
             await HearWhileSpeakingAsync(echo, "Processing request.", "processing request");
+            await Task.Delay(150);
             Assert.Equal(0, echo.Playback.ListenCount);
             Assert.Equal(0, echo.Playback.FadeStops);
             Assert.Empty(echo.Failed);
         }
+    }
+
+    [Fact]
+    public void Listener_speech_during_playback_barges_in_and_keeps_first_partial()
+    {
+        foreach (var mode in new[] { DysonVoiceInputMode.CallsignActivated, DysonVoiceInputMode.Immediate })
+        {
+            var listener = new DysonVoiceMode.Listener();
+            listener.SetMode(mode, DysonVoiceMode.PauseMs, 0);
+            Assert.Equal(
+                DysonVoiceMode.ListenAction.BargeIn,
+                listener.OnText("stop that now", 100, "Processing request.", Eight()));
+            Assert.True(listener.Capturing);
+            Assert.False(listener.LastBargeChime);
+            Assert.Equal("Processing request.", listener.LastCutOff);
+            listener.PendingCutOff = listener.LastCutOff;
+            Assert.Equal(
+                DysonVoiceMode.ListenAction.None,
+                listener.OnText("stop that now please", 200, "Processing request.", Eight()));
+            var posted = listener.OnTick(200 + DysonVoiceMode.PauseMs + 1);
+            Assert.Equal("[voice input] stop that now please", posted);
+            Assert.Contains("stop that now", posted, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Listener_echo_of_playing_line_does_not_barge_in()
+    {
+        var listener = new DysonVoiceMode.Listener();
+        Assert.Equal(
+            DysonVoiceMode.ListenAction.None,
+            listener.OnText("processing request", 50, "Processing request.", Eight()));
+        Assert.False(listener.Capturing);
+        Assert.Null(listener.LastCutOff);
+        Assert.Null(listener.OnTick(50 + DysonVoiceMode.PauseMs + 1));
+    }
+
+    [Fact]
+    public void Listener_echo_of_workdir_prefix_does_not_barge_in()
+    {
+        const string playing = "Message from workdir Alpha: the build finished";
+        var listener = new DysonVoiceMode.Listener();
+        Assert.Equal(
+            DysonVoiceMode.ListenAction.None,
+            listener.OnText("message from workdir alpha the build finished", 50, playing, Eight()));
+        Assert.False(listener.Capturing);
+        Assert.Null(listener.LastCutOff);
+    }
+
+    [Fact]
+    public void Listener_filler_noise_does_not_barge_in_until_300ms()
+    {
+        var listener = new DysonVoiceMode.Listener();
+        Assert.Equal(
+            DysonVoiceMode.ListenAction.None,
+            listener.OnText("um uh", 100, "Processing request.", Eight()));
+        Assert.False(listener.Capturing);
+        Assert.Equal(
+            DysonVoiceMode.ListenAction.None,
+            listener.OnText("um uh hm", 399, "Processing request.", Eight()));
+        Assert.False(listener.Capturing);
+        Assert.Equal(
+            DysonVoiceMode.ListenAction.BargeIn,
+            listener.OnText("um uh hm", 400, "Processing request.", Eight()));
+        Assert.True(listener.Capturing);
+        Assert.False(listener.LastBargeChime);
+        Assert.Equal("Processing request.", listener.LastCutOff);
+    }
+
+    [Fact]
+    public async Task Speech_barge_in_skips_listen_chime()
+    {
+        await using var rig = await VoiceRig.StartAsync();
+        rig.Playback.HoldSpeech();
+        var id = Guid.NewGuid();
+        rig.Focus.SetActive(id);
+        Assert.True(rig.Voice.Speak("Processing request.", id, "A").IsSuccess);
+        await rig.Playback.SpeechStarted.WaitAsync(TimeSpan.FromSeconds(5));
+
+        DysonVoiceMessage posted = default;
+        var ready = new TaskCompletionSource<DysonVoiceMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Voice.MessageReady += message =>
+        {
+            posted = message;
+            ready.TrySetResult(message);
+            return Task.CompletedTask;
+        };
+
+        rig.Capture.PushText("stop that now");
+        Assert.True(await rig.Stt.NextAsync());
+        await WaitForAsync(() => rig.Playback.FadeStops >= 1 && !rig.Voice.IsSpeaking);
+        Assert.Equal(0, rig.Playback.ListenCount);
+        Assert.Equal(1, rig.Playback.FadeStops);
+
+        var message = await ready.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal("[voice input] stop that now", message.Text);
+        Assert.Equal("Processing request.", message.CutOff);
+        Assert.Equal(posted, message);
+        Assert.Empty(rig.Failed);
     }
 
     [Fact]

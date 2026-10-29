@@ -72,7 +72,8 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
     DysonWorkDirectoryFocus? focus = null,
     DysonVoiceMode? voice = null,
     IDysonBrowserControl? browserControl = null,
-    IDysonMetaScratchFileRepository? scratchFiles = null)
+    IDysonMetaScratchFileRepository? scratchFiles = null,
+    IDysonVoiceSidecarMemoryRepository? voiceSidecarMemory = null)
 {
     private readonly IDysonWorkDirectoryRepository _workDirectories =
         workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
@@ -94,6 +95,7 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
         pluginMcpResolver ?? throw new ArgumentNullException(nameof(pluginMcpResolver));
     private readonly DysonMessageBus? _bus = bus;
     private readonly IDysonMetaScratchFileRepository? _scratchFiles = scratchFiles;
+    private readonly IDysonVoiceSidecarMemoryRepository? _voiceSidecarMemory = voiceSidecarMemory;
 
     public async Task<Result<DysonUiAgentSessionRuntimeConfigLease, string>> BuildAsync(
         DysonUiAgentSessionRuntimeConfigRequest request,
@@ -127,10 +129,13 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
             UiTheme = request.Theme,
             Bus = _bus,
             MetaScratchFiles = _scratchFiles,
+            VoiceSidecarMemory = _voiceSidecarMemory,
             Focus = focus,
             AppSettings = _appSettings,
         };
-        if (voice is { IsOn: true } && DysonSessionPolicy.IsMetaAgent(request.AgentMode))
+        if (voice is { IsOn: true }
+            && (DysonSessionPolicy.IsMetaAgent(request.AgentMode)
+                || DysonSessionPolicy.IsVoiceSidecar(request.AgentMode)))
             config.Voice = voice;
         MergePluginCustomAgents(config, contributions);
         if (request.McpAccessMode is { } mode)
@@ -258,6 +263,12 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
                     DysonAppSettingKeys.MetaAgentDroneModelSlugId,
                     DysonAppSettingKeys.MetaAgentDroneReasoningEffort,
                     p => config.MetaAgentDroneDefaultProvider = p,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            await TryHydrateOpenAiProviderSettingAsync(
+                    DysonAppSettingKeys.MetaSidecarModelSlugId,
+                    DysonAppSettingKeys.MetaSidecarReasoningEffort,
+                    p => config.VoiceSidecarDefaultProvider = p,
                     cancellationToken)
                 .ConfigureAwait(false);
 

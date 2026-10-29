@@ -278,7 +278,7 @@ public class DysonContextCompactionSmokeTests
 
         Assert.True(DysonCompactionFlow.CanCompact(work, normal));
         Assert.False(DysonCompactionFlow.CanCompact(explore, normal));
-        Assert.False(DysonCompactionFlow.CanCompact(work, DysonCompactionFlow.CreateSummaryTurn()));
+        Assert.False(DysonCompactionFlow.CanCompact(work, DysonCompactionFlow.CreateSummaryTurn(DysonAgentModes.Work)));
         Assert.False(DysonCompactionFlow.CanCompact(work, continuation));
         continuation.ToolRoundCallCounts.Add(1);
         Assert.True(DysonCompactionFlow.CanCompact(work, continuation));

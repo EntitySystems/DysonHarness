@@ -178,7 +178,7 @@ public class MetaChatItemsTests
         {
             Kind = DysonAgentTurnKind.Normal,
             Instruction = "[voice input] open the plan",
-            HiddenInstruction = DysonAgentSystemPrompts.MetaAgentImmediateVoiceTurnInstruction,
+            HiddenInstruction = DysonAgentSystemPrompts.VoiceSidecarTurnInstruction,
         };
 
         var item = Assert.Single(MetaChatItems.Build([turn], []));

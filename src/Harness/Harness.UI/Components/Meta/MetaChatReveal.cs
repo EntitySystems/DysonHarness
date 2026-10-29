@@ -23,6 +23,20 @@ public static class MetaChatReveal
     public const double CharStaggerMs = 1000d / (TokensPerSecond * CharsPerToken);
 
     /// <summary>
+    /// True when <paramref name="next"/> is the same conversation as <paramref name="previous"/>
+    /// (at least one id kept, so a live append or a trim). An empty previous list (first load, history
+    /// arriving late, session switch via an empty frame) or a disjoint one (session switch) is a
+    /// reload: every id in it is history, not live.
+    /// </summary>
+    public static bool Continues(IEnumerable<string> previous, IEnumerable<string> next)
+    {
+        ArgumentNullException.ThrowIfNull(previous);
+        ArgumentNullException.ThrowIfNull(next);
+
+        return new HashSet<string>(next, StringComparer.Ordinal).Overlaps(previous);
+    }
+
+    /// <summary>
     /// Ids already on screen are history. Anything new after <paramref name="primed"/> is live.
     /// The first call only fills <paramref name="seen"/> and returns nothing.
     /// </summary>

@@ -21,8 +21,11 @@ public enum DysonVoiceInputMode
     PushToTalk,
 }
 
-/// <summary>One accepted utterance. <see cref="Text"/> still carries <see cref="DysonVoiceMode.InputPrefix"/>.</summary>
-public readonly record struct DysonVoiceMessage(string Text, DysonVoiceInputMode Mode);
+/// <summary>
+/// One accepted utterance. <see cref="Text"/> still carries <see cref="DysonVoiceMode.InputPrefix"/>.
+/// <see cref="CutOff"/> is the first 200 characters of the line a speech barge-in cut, or null.
+/// </summary>
+public readonly record struct DysonVoiceMessage(string Text, DysonVoiceInputMode Mode, string? CutOff = null);
 
 /// <summary>Where a posted voice message goes. The host switches on <see cref="DysonVoiceMode.RouteFor"/>.</summary>
 public enum DysonVoiceRoute
@@ -68,6 +71,12 @@ public sealed class DysonVoiceMode(
 
     /// <summary>Immediate echo of the last spoken line is ignored for this long after speech ends.</summary>
     private const int EchoWindowMs = 3000;
+
+    /// <summary>Non-empty partials this long, with no real word yet, still barge in while speech plays.</summary>
+    private const int SpeechBargeInMs = 300;
+
+    /// <summary>A speech barge-in keeps at most this much of the line it cut.</summary>
+    private const int CutOffChars = 200;
 
     /// <summary>A held push-to-talk key is released after this long. Stuck-key backstop.</summary>
     public const int MaxHoldMs = 120_000;
@@ -256,13 +265,26 @@ public sealed class DysonVoiceMode(
 
     /// <summary>
     /// Normal turn for a posted voice message. Immediate and push to talk set
-    /// <see cref="DysonAgentSystemPrompts.MetaAgentImmediateVoiceTurnInstruction"/>; Callsign does not.
+    /// <see cref="DysonAgentSystemPrompts.VoiceSidecarTurnInstruction"/>; Callsign does not.
+    /// A barge-in (<see cref="DysonVoiceMessage.CutOff"/> set) appends the cut-off line, and a Callsign
+    /// barge-in gets only <see cref="DysonAgentSystemPrompts.VoiceSidecarCallsignCutOffInstruction"/>.
     /// </summary>
     public static DysonAgentTurn CreateTurn(DysonVoiceMessage message)
     {
         var turn = DysonAgentSession.CreateNormalTurn(message.Text);
+        var cutOff = string.IsNullOrEmpty(message.CutOff) ? null : message.CutOff;
         if (InterruptsWhenBusy(message.Mode))
-            turn.HiddenInstruction = DysonAgentSystemPrompts.MetaAgentImmediateVoiceTurnInstruction;
+        {
+            turn.HiddenInstruction = cutOff is null
+                ? DysonAgentSystemPrompts.VoiceSidecarTurnInstruction
+                : DysonAgentSystemPrompts.VoiceSidecarTurnInstruction
+                    + "\n" + DysonAgentSystemPrompts.VoiceSidecarCutOffLine(cutOff);
+        }
+        else if (cutOff is not null)
+        {
+            turn.HiddenInstruction = DysonAgentSystemPrompts.VoiceSidecarCallsignCutOffInstruction(cutOff);
+        }
+
         return turn;
     }
 
@@ -442,6 +464,14 @@ public sealed class DysonVoiceMode(
         return VoidResult<string>.Success;
     }
 
+    /// <summary>The first <see cref="CutOffChars"/> characters of the line a speech barge-in cut.</summary>
+    private static string ClipCutOff(string? playing)
+    {
+        if (string.IsNullOrEmpty(playing))
+            return "";
+        return playing.Length <= CutOffChars ? playing : playing[..CutOffChars];
+    }
+
     /// <summary>
     /// Text actually spoken. The active work directory is not prefixed. Any other line is
     /// <c>Message from workdir {name}: {text}</c>. <paramref name="liveName"/> wins when non-blank,
@@ -573,8 +603,8 @@ public sealed class DysonVoiceMode(
             Mode = mode;
         }
 
-        if (held is not null)
-            await PostAsync(held, DysonVoiceInputMode.PushToTalk, cancellationToken).ConfigureAwait(false);
+        if (held is not null && _listener is not null)
+            await PostAsync(_listener, held, DysonVoiceInputMode.PushToTalk, cancellationToken).ConfigureAwait(false);
 
         lock (_listenerGate)
             _listener?.SetMode(mode, pause, now);
@@ -795,6 +825,8 @@ public sealed class DysonVoiceMode(
                     bool capturing;
                     DysonVoiceInputMode mode;
                     string draft;
+                    bool bargeChime;
+                    string? cutOff;
                     lock (_listenerGate)
                     {
                         wasCapturing = listener.Capturing;
@@ -802,13 +834,19 @@ public sealed class DysonVoiceMode(
                         capturing = listener.Capturing;
                         mode = listener.Mode;
                         draft = listener.Draft;
+                        bargeChime = listener.LastBargeChime;
+                        cutOff = listener.LastCutOff;
                     }
 
                     SetCapturing(capturing);
                     if (mode is DysonVoiceInputMode.Immediate or DysonVoiceInputMode.PushToTalk)
                         RaiseDraft(draft);
                     if (action == ListenAction.BargeIn)
-                        BargeIn();
+                    {
+                        if (cutOff is not null)
+                            listener.PendingCutOff = cutOff;
+                        BargeIn(bargeChime);
+                    }
                     else if (action == ListenAction.Restart)
                         break;
                     else if (!wasCapturing && capturing && mode == DysonVoiceInputMode.CallsignActivated)
@@ -855,8 +893,8 @@ public sealed class DysonVoiceMode(
                     _held = false;
                 SetCapturing(false);
                 RaiseDraft("");
-                if (msg is not null)
-                    await PostAsync(msg, DysonVoiceInputMode.PushToTalk, runToken).ConfigureAwait(false);
+            if (msg is not null)
+                await PostAsync(listener, msg, DysonVoiceInputMode.PushToTalk, runToken).ConfigureAwait(false);
             }
         }
     }
@@ -888,7 +926,7 @@ public sealed class DysonVoiceMode(
                 if (message is null)
                     continue;
 
-                await PostAsync(message, mode, runToken).ConfigureAwait(false);
+                await PostAsync(listener, message, mode, runToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
@@ -900,7 +938,7 @@ public sealed class DysonVoiceMode(
     /// Posts an accepted utterance: ends the segment, plays the accept cue, and forwards it.
     /// Push to talk skips the post-speech mute; the echo check at post is the guard instead.
     /// </summary>
-    private async Task PostAsync(string message, DysonVoiceInputMode mode, CancellationToken ct)
+    private async Task PostAsync(Listener listener, string message, DysonVoiceInputMode mode, CancellationToken ct)
     {
         // Before the turn speaks. Otherwise this segment keeps the old transcript and the
         // next OnText, with the speak mark reset, hears it again from offset 0 and barges in.
@@ -924,8 +962,10 @@ public sealed class DysonVoiceMode(
             MuteFor(clip);
 
         // Cue is not awaited. Submit still runs if playback throws or is already speaking.
+        var cutOff = listener.PendingCutOff;
+        listener.PendingCutOff = null;
         await AcceptTurnAsync(
-            new DysonVoiceMessage(message, mode),
+            new DysonVoiceMessage(message, mode, cutOff),
             speaking,
             () => _tryout.PlayAcceptCue(clip),
             MessageReady,
@@ -1390,13 +1430,26 @@ public sealed class DysonVoiceMode(
         }
     }
 
-    private void BargeIn()
+    private void BargeIn(bool chime = true)
     {
         // ponytail: a line the speak loop already dequeued can still start; upgrade is a generation check inside PlayAsync.
         Interlocked.Increment(ref _speakEpoch);
         CancelSynths();
         _tryout.StopPlayback(FadeOut);
-        PlayListen();
+        // Same clear as DropPendingSpeech. The epoch bump cannot reach a line already dequeued,
+        // and leaving _speakingText set keeps the listener in the speaking branch afterwards.
+        var changed = false;
+        lock (_state)
+        {
+            _speakingText = null;
+            changed = IsSpeaking;
+            IsSpeaking = false;
+        }
+
+        if (changed)
+            RaiseState();
+        if (chime)
+            PlayListen();
     }
 
     /// <summary>
@@ -1676,8 +1729,18 @@ public sealed class DysonVoiceMode(
         private long _muteUntilMs;
         private string _lastSpoken = "";
         private long _echoUntilMs;
+        private long _speechPartialSinceMs;
 
         internal DysonVoiceInputMode Mode { get; private set; } = DysonVoiceInputMode.CallsignActivated;
+
+        /// <summary>Chime flag of the barge-in <see cref="OnText"/> just returned. A wake-name barge-in chimes; speech does not.</summary>
+        internal bool LastBargeChime { get; private set; } = true;
+
+        /// <summary>First 200 characters of the line a speech barge-in cut. Null after a wake-name barge-in.</summary>
+        internal string? LastCutOff { get; private set; }
+
+        /// <summary>Cut-off waiting for the next posted utterance. The loop sets it; <c>PostAsync</c> consumes it.</summary>
+        internal string? PendingCutOff { get; set; }
 
         internal bool Capturing { get; private set; }
 
@@ -1702,6 +1765,9 @@ public sealed class DysonVoiceMode(
             _speakMark = 0;
             _previousLength = 0;
             _speakingArmed = false;
+            _speechPartialSinceMs = 0;
+            LastBargeChime = true;
+            LastCutOff = null;
         }
 
         /// <summary>
@@ -1915,18 +1981,69 @@ public sealed class DysonVoiceMode(
             var bargeHeard = transcript[slice..];
             _text = transcript;
             _previousLength = transcript.Length;
-            // Ordinary speech and echo do not stop playback. Only a stored wake name does.
+            // Echo of the line actually playing never stops it. A stored wake name is checked first.
             if (IsEcho(bargeHeard, speaking))
+            {
+                _speechPartialSinceMs = 0;
                 return ListenAction.None;
+            }
 
             var wakeEnd = MatchEnd(bargeHeard, variants);
-            if (wakeEnd < 0)
+            if (wakeEnd >= 0)
+            {
+                // Immediate has no post-wake window. Callsign keeps its 1 s ignore.
+                // The words after the name are kept; the wake word itself is dropped by the ignore.
+                _speechPartialSinceMs = 0;
+                LastCutOff = null;
+                LastBargeChime = true;
+                BeginCapture(transcript, nowMs, transcript.Length, ignore: Mode != DysonVoiceInputMode.Immediate);
+                return ListenAction.BargeIn;
+            }
+
+            // Speech barge-in. Push to talk reaches here only while the key is held (BeginHold is already capturing).
+            // ponytail: filler words plus a 300 ms partial timer, no acoustic echo cancellation.
+            // A misheard echo of the playing line can still trigger. Upgrade: raise SpeechBargeInMs or require two words (plan Q11).
+            if (!SpeechBargeIn(bargeHeard, nowMs))
                 return ListenAction.None;
 
-            // Immediate has no post-wake window. Callsign keeps its 1 s ignore.
-            BeginCapture(transcript, nowMs, transcript.Length, ignore: Mode != DysonVoiceInputMode.Immediate);
+            var word = FirstWordStart(transcript, slice);
+            if (word < 0)
+                word = slice;
+            LastCutOff = ClipCutOff(speaking);
+            LastBargeChime = false;
+            _speechPartialSinceMs = 0;
+            // Keep the triggering words. Callsign accepts them without the wake name.
+            BeginCapture(transcript, nowMs, word, ignore: false);
             return ListenAction.BargeIn;
         }
+
+        /// <summary>
+        /// A non-empty partial barges in once it has a word outside <c>um uh hm mm ah oh</c>,
+        /// or once non-empty partials have kept arriving for <see cref="SpeechBargeInMs"/>.
+        /// </summary>
+        private bool SpeechBargeIn(string heard, long nowMs)
+        {
+            var words = NormalizeWords(StripTags(heard));
+            if (words.Count == 0)
+            {
+                _speechPartialSinceMs = 0;
+                return false;
+            }
+
+            if (_speechPartialSinceMs == 0)
+                _speechPartialSinceMs = nowMs;
+
+            foreach (var word in words)
+            {
+                if (!IsFiller(word))
+                    return true;
+            }
+
+            return nowMs - _speechPartialSinceMs >= SpeechBargeInMs;
+        }
+
+        private static bool IsFiller(string word) =>
+            word is "um" or "uh" or "hm" or "mm" or "ah" or "oh";
 
         private void BeginCapture(string transcript, long nowMs, int messageStart, bool ignore)
         {

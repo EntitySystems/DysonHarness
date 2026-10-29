@@ -12,6 +12,11 @@ public static class DysonMaxTargetContextTokens
     /// </summary>
     public const int MetaAgentFixed = 180_000;
 
+    /// <summary>
+    /// Voice Mode Meta Sidecar pin. Ignores session and slug overrides.
+    /// </summary>
+    public const int VoiceSidecarFixed = 120_000;
+
     /// <summary>Composer ± stepper increment.</summary>
     public const int Step = 10_000;
 

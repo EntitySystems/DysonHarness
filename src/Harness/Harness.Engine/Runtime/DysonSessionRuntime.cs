@@ -13,7 +13,7 @@ namespace DysonHarness;
 /// is not drained or executed here. Auto-turns and task-lifecycle evaluation stay
 /// on the host.
 /// </summary>
-public sealed class DysonSessionRuntime : IAsyncDisposable
+public sealed partial class DysonSessionRuntime : IAsyncDisposable
 {
     private readonly IDysonSessionRepository _sessions;
     private readonly IDysonAgentSessionRuntimeFactory _sessionFactory;
@@ -41,6 +41,13 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
     /// A plain <see cref="CancelPrompt"/> still returns the run's own cancel result.
     /// </summary>
     public const string PromptSupersededError = "Prompt was interrupted by a newer voice message.";
+
+    /// <summary>
+    /// Returned when <see cref="ExecutePromptAsync"/> refuses to start because the session already
+    /// has a background run (child <c>KickOffChildPrompt</c> / parent inject). The caller requeues
+    /// the turn; it is not a failure to surface.
+    /// </summary>
+    public const string PromptDeferredError = "Prompt deferred: a background run is active on this session.";
     private readonly ConcurrentDictionary<int, Task> _persistTasks = new();
     private readonly ConcurrentDictionary<int, Task> _executionTasks = new();
     private readonly SemaphoreSlim _graphGate = new(1, 1);
@@ -235,11 +242,13 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
     /// <summary>
     /// Enqueues an already-built turn for a registered, persisted session. Copies
     /// <paramref name="filePaths"/> into an immutable snapshot. Does not execute the prompt.
+    /// <paramref name="atHead"/> puts it first (a deferred turn going back where it was), order of the rest kept.
     /// </summary>
     public Result<DysonQueuedPrompt, string> EnqueuePrompt(
         Guid sessionId,
         DysonAgentTurn turn,
-        IReadOnlyList<string>? filePaths = null)
+        IReadOnlyList<string>? filePaths = null,
+        bool atHead = false)
     {
         ArgumentNullException.ThrowIfNull(turn);
 
@@ -276,7 +285,18 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
                 _promptQueues[sessionId] = queue;
             }
 
-            queue.Enqueue(entry);
+            if (atHead)
+            {
+                var rebuilt = new Queue<DysonQueuedPrompt>();
+                rebuilt.Enqueue(entry);
+                while (queue.TryDequeue(out var queued))
+                    rebuilt.Enqueue(queued);
+                _promptQueues[sessionId] = rebuilt;
+            }
+            else
+            {
+                queue.Enqueue(entry);
+            }
         }
 
         RaiseChanged(DysonRuntimeChangeKind.Queue, sessionId);
@@ -893,17 +913,36 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
     }
 
     /// <summary>
-    /// While voice is on, a root meta session loaded or created later gets the shared service.
-    /// Same instance is a no-op inside <see cref="DysonAgentSession.SetVoiceMode"/>.
+    /// While voice is on, a root Meta session or its voice sidecar loaded or created later
+    /// gets the shared service. Same instance is a no-op inside <see cref="DysonAgentSession.SetVoiceMode"/>.
+    /// A root Meta session also kicks sidecar ensure off this call.
     /// </summary>
     private void AttachSharedVoice(DysonAgentSession session)
     {
         if (_voice is not { IsOn: true })
             return;
-        if (session.Parent is not null || !DysonSessionPolicy.IsMetaAgent(session.Mode))
+
+        var rootMeta = session.Parent is null && DysonSessionPolicy.IsMetaAgent(session.Mode);
+        if (!rootMeta && !session.IsVoiceSidecar)
             return;
 
         session.SetVoiceMode(_voice);
+        if (!rootMeta)
+            return;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var ensured = await EnsureVoiceSidecarAsync(session).ConfigureAwait(false);
+                if (ensured.IsError)
+                    ReportError(ensured.Error);
+            }
+            catch (Exception ex)
+            {
+                ReportError(ex.Message);
+            }
+        });
     }
 
     internal IDysonSessionRepository Sessions => _sessions;
@@ -943,16 +982,26 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         var token = linked.Token;
         var promptGate = _promptGates.GetOrAdd(sessionId, static _ => new SemaphoreSlim(1, 1));
         var gateHeld = false;
+        var sessionGateHeld = false;
 
         try
         {
             if (_disposed != 0)
                 return VoidResult<string>.AsError("Session runtime has been disposed.");
 
+            // A KickOff / inject background run on this session is not on the gate. Starting a second
+            // provider loop now emits the first loop's tool rounds twice (Claude 400). Hand the turn
+            // back so the host drain retries once that run detaches.
+            if (session.HasActiveBackgroundRun)
+                return VoidResult<string>.AsError(PromptDeferredError);
+
             try
             {
                 await promptGate.WaitAsync(token).ConfigureAwait(false);
                 gateHeld = true;
+                // Same per-session gate KickOff takes: an inject that cancels this run waits for it to unwind.
+                await session.EnterPromptGateAsync(token).ConfigureAwait(false);
+                sessionGateHeld = true;
             }
             catch (OperationCanceledException)
             {
@@ -961,6 +1010,10 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
 
             if (_disposed != 0)
                 return VoidResult<string>.AsError("Session runtime has been disposed.");
+
+            // A KickOff attached while this prompt waited for the gates (it now waits on the session gate).
+            if (session.HasActiveBackgroundRun)
+                return VoidResult<string>.AsError(PromptDeferredError);
 
             _busySessions[sessionId] = 0;
             _runningPromptCts[sessionId] = linked;
@@ -1037,6 +1090,9 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         }
         finally
         {
+            if (sessionGateHeld)
+                session.ExitPromptGate();
+
             if (gateHeld)
                 promptGate.Release();
 

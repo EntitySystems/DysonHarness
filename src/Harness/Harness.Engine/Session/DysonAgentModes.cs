@@ -11,6 +11,8 @@ public static class DysonAgentModes
     public const string BugReview = "Bug Review";
     public const string MetaAgent = DysonSessionPolicy.MetaAgentMode;
     public const string MetaAgentDrone = "Meta Agent Drone";
+    /// <summary>Harness-created only. Not in <see cref="BuiltIns"/> or <see cref="ComposerSelectable"/>.</summary>
+    public const string VoiceSidecar = DysonSessionPolicy.VoiceSidecarMode;
     /// <summary>Category label; lookup uses Config.CustomAgents keys, not this literal.</summary>
     public const string Custom = "Custom";
 
