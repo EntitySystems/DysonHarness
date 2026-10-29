@@ -393,11 +393,11 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
         bool claudeCache)
     {
         var turns = session.Turns;
-        var incompleteIndex = FindIncompleteCurrentIndex(session);
+        var incomplete = FindIncompleteCurrentTurns(session);
         var count = turns.Count;
         for (var i = 0; i < count; i++)
         {
-            if (excludeLastIfCurrent && i == incompleteIndex)
+            if (excludeLastIfCurrent && incomplete.Contains(i))
                 break;
 
             var turn = turns[i];
@@ -406,7 +406,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
             if (turn.IsExcludedFromContext)
             {
-                AppendExcludedTurn(messages, turn, i == incompleteIndex);
+                AppendExcludedTurn(messages, turn, incomplete.Contains(i));
                 continue;
             }
 
@@ -433,7 +433,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
             // User content keeps rename / Plan mandates on the turn that earned them.
             // In-progress tool rounds come from inFlightRounds. PlanResult may append after the live turn.
-            var incompleteCurrent = i == incompleteIndex;
+            var incompleteCurrent = incomplete.Contains(i);
             if (HasTurnUserContent(turn))
             {
                 messages.Add(new JsonObject
@@ -495,7 +495,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     {
         var currentSource = (session.Provider as OpenAiCompatibleAgentProvider)?.ReasoningSourceTag;
         var turns = session.Turns;
-        var incompleteIndex = FindIncompleteCurrentIndex(session);
+        var incomplete = FindIncompleteCurrentTurns(session);
         for (var i = 0; i < turns.Count; i++)
         {
             var turn = turns[i];
@@ -504,7 +504,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
             if (turn.IsExcludedFromContext)
             {
-                AppendExcludedTurn(input, turn, i == incompleteIndex);
+                AppendExcludedTurn(input, turn, incomplete.Contains(i));
                 continue;
             }
 
@@ -528,7 +528,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
                 continue;
             }
 
-            var incompleteCurrent = i == incompleteIndex;
+            var incompleteCurrent = incomplete.Contains(i);
             if (HasTurnUserContent(turn))
             {
                 input.Add(new JsonObject
@@ -627,10 +627,12 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     private static List<DysonReasoningSegment> LiveAnchoredComments(DysonAgentSession session)
     {
         var turns = session.Turns;
-        var index = FindIncompleteCurrentIndex(session);
-        if (index < 0)
+        var incomplete = FindIncompleteCurrentTurns(session);
+        if (incomplete.Count == 0)
             return [];
 
+        // Newest in-flight turn only: an older overlapping loop's comments stay with its own rebuild.
+        var index = incomplete.Max();
         return DysonInjectedUserComments.From(turns[index].ReasoningLog)
             .Where(c => c.DeliveredAfterToolCalls is > 0)
             .OrderBy(c => c.DeliveredAfterToolCalls)
@@ -1126,33 +1128,42 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
     }
 
     /// <summary>
-    /// Index of the in-flight prompt turn (may not be last when a PlanResult was appended mid-turn).
+    /// Indexes of every in-flight prompt turn (a nested loop, or two loops that overlapped).
+    /// Each is incomplete so its recorded tool rounds are not emitted beside that loop's own
+    /// in-flight rounds. Falls back to the newest assistant-less non-chrome turn when the
+    /// stack is empty (may not be last when a PlanResult was appended mid-turn).
     /// </summary>
-    private static int FindIncompleteCurrentIndex(DysonAgentSession session)
+    private static HashSet<int> FindIncompleteCurrentTurns(DysonAgentSession session)
     {
         var turns = session.Turns;
+        var found = new HashSet<int>();
         // AssistantText may already hold a DropTurnContext resume while tools are still in flight.
-        // Keep that turn incomplete so history does not also emit the in-flight tool rounds.
-        var inFlight = session.InFlightPromptTurn;
-        if (inFlight is not null)
+        // Keep every stacked turn incomplete so history does not also emit its in-flight rounds.
+        foreach (var inFlight in session.InFlightPromptTurns)
         {
             for (var i = turns.Count - 1; i >= 0; i--)
             {
                 if (ReferenceEquals(turns[i], inFlight) || turns[i].Id == inFlight.Id)
-                    return i;
+                {
+                    found.Add(i);
+                    break;
+                }
             }
         }
+
+        if (found.Count > 0)
+            return found;
 
         for (var i = turns.Count - 1; i >= 0; i--)
         {
             if (IsTranscriptChromeKind(turns[i].Kind))
                 continue;
             if (string.IsNullOrEmpty(turns[i].AssistantText))
-                return i;
+                found.Add(i);
             break;
         }
 
-        return -1;
+        return found;
     }
 
     /// <summary>
@@ -1260,7 +1271,7 @@ public static class OpenAiCacheFriendlyTranscriptBuilder
 
     /// <summary>
     /// DisplayInfo / WorktreeCreating / ModeSwitch / PlanResult occupy list slots but are not eligible
-    /// prompt turns (same set as <see cref="FindIncompleteCurrentIndex"/>).
+    /// prompt turns (same set as <see cref="FindIncompleteCurrentTurns"/>).
     /// </summary>
     private static bool IsTranscriptChromeKind(DysonAgentTurnKind kind) =>
         kind is DysonAgentTurnKind.DisplayInfo

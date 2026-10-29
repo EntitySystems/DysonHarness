@@ -221,6 +221,8 @@ Security persistence and services are foundations, not an active hook runtime:
 
 `DysonMcpPipeline` holds the per-session tool catalog and optional auto-review proxy. OpenAI-compatible sessions expose those tools only as native function schemas (with required `stage`), not as a second copy in system/instructions text.
 
+Prefixed tool names (`submit_SubmitMetaPlan`, `mcp__server__word_ReadFile`) resolve to the bare catalog name when the exact name is not a catalog key; the turn records the bare name so history replays it. A miss appends `Did you mean 'X'?`. Turns on one session are serialised (see [meta-agent](meta-agent.md) Stop semantics).
+
 **Custom MCP (live):** workdir-scoped clients under `{workRoot}/.dyson/mcp/{serverId}.json` (stdio + HTTP SSE / streamable / auto-detect). Master switch `mcpActive` lives in `work_directory_configurations` (default on). `DysonCustomMcpHost` + `DysonCustomMcpPromptUpdater` (FileSystemWatcher + ~300ms debounce) connect servers, merge namespaced tools `{serverId}__{toolName}` into the catalog, and bump `SystemPromptGeneration`. `DysonWorkspaceToolExecutor` dispatches those names via `CallToolAsync` before the built-in switch. See [work-directories](../storage/work-directories.md).
 
 Workspace file tools, `ShellExecute`, web search/fetch, and browser tools still run locally via `DysonWorkspaceToolExecutor`.

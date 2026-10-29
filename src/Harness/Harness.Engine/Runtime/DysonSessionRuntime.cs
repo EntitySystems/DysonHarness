@@ -41,6 +41,13 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
     /// A plain <see cref="CancelPrompt"/> still returns the run's own cancel result.
     /// </summary>
     public const string PromptSupersededError = "Prompt was interrupted by a newer voice message.";
+
+    /// <summary>
+    /// Returned when <see cref="ExecutePromptAsync"/> refuses to start because the session already
+    /// has a background run (child <c>KickOffChildPrompt</c> / parent inject). The caller requeues
+    /// the turn; it is not a failure to surface.
+    /// </summary>
+    public const string PromptDeferredError = "Prompt deferred: a background run is active on this session.";
     private readonly ConcurrentDictionary<int, Task> _persistTasks = new();
     private readonly ConcurrentDictionary<int, Task> _executionTasks = new();
     private readonly SemaphoreSlim _graphGate = new(1, 1);
@@ -943,16 +950,26 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         var token = linked.Token;
         var promptGate = _promptGates.GetOrAdd(sessionId, static _ => new SemaphoreSlim(1, 1));
         var gateHeld = false;
+        var sessionGateHeld = false;
 
         try
         {
             if (_disposed != 0)
                 return VoidResult<string>.AsError("Session runtime has been disposed.");
 
+            // A KickOff / inject background run on this session is not on the gate. Starting a second
+            // provider loop now emits the first loop's tool rounds twice (Claude 400). Hand the turn
+            // back so the host drain retries once that run detaches.
+            if (session.HasActiveBackgroundRun)
+                return VoidResult<string>.AsError(PromptDeferredError);
+
             try
             {
                 await promptGate.WaitAsync(token).ConfigureAwait(false);
                 gateHeld = true;
+                // Same per-session gate KickOff takes: an inject that cancels this run waits for it to unwind.
+                await session.EnterPromptGateAsync(token).ConfigureAwait(false);
+                sessionGateHeld = true;
             }
             catch (OperationCanceledException)
             {
@@ -1037,6 +1054,9 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
         }
         finally
         {
+            if (sessionGateHeld)
+                session.ExitPromptGate();
+
             if (gateHeld)
                 promptGate.Release();
 

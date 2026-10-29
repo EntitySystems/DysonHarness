@@ -38,6 +38,11 @@ public abstract class DysonAgentSession
     // ponytail: one lock serializes the inject interrupt tail (cancel + requeue + kick); the wait is not locked.
     private readonly object _injectInterruptGate = new();
     private readonly Stack<DysonAgentTurn> _inFlightPromptStack = new();
+    // One provider loop per session. KickOff and host/runtime prompt entry both take it.
+    // ponytail: one semaphore per session; upgrade to a per-turn queue if prompt entry becomes hot.
+    private readonly SemaphoreSlim _promptGate = new(1, 1);
+    // Completed when the current background run detaches; host drains retry a deferred turn then.
+    private readonly ConcurrentQueue<TaskCompletionSource> _backgroundIdleWaiters = new();
     private TaskCompletionSource<Result<string, string>>? _parentEventWaitTcs;
     private TaskCompletionSource<Result<string, string>>? _askQuestionTcs;
     private TaskCompletionSource<Result<string, string>>? _promptUserDialogTcs;
@@ -2002,6 +2007,19 @@ public abstract class DysonAgentSession
         _inFlightPromptStack.Count > 0 ? _inFlightPromptStack.Peek() : null;
 
     /// <summary>
+    /// Snapshot of every turn on the in-flight prompt stack, newest first. Transcript building
+    /// treats each as incomplete so an older loop's tool rounds are not emitted twice.
+    /// </summary>
+    public IReadOnlyList<DysonAgentTurn> InFlightPromptTurns
+    {
+        get
+        {
+            lock (_modelGate)
+                return _inFlightPromptStack.ToArray();
+        }
+    }
+
+    /// <summary>
     /// Queues a mid-turn user comment on an in-flight prompt (any nested stack entry,
     /// not only <see cref="InFlightPromptTurn"/>). Does not mutate <see cref="DysonAgentTurn.Instruction"/>.
     /// </summary>
@@ -3150,11 +3168,40 @@ public abstract class DysonAgentSession
         return true;
     }
 
+    /// <summary>
+    /// Takes this session's prompt gate so a KickOff / inject loop and a host report turn cannot
+    /// both reach the provider. Callers that are about to cancel the run holding the gate must not
+    /// wait here: cancel first, then enter (an interrupt waiting on the turn it cancels deadlocks).
+    /// </summary>
+    protected internal Task EnterPromptGateAsync(CancellationToken cancellationToken) =>
+        _promptGate.WaitAsync(cancellationToken);
+
+    /// <summary>Releases the gate taken by <see cref="EnterPromptGateAsync"/>.</summary>
+    protected internal void ExitPromptGate() => _promptGate.Release();
+
     /// <summary>Stores the CTS used to cancel the background <see cref="PromptAsync"/> for StopSubagent.</summary>
     protected void AttachBackgroundRun(CancellationTokenSource runCts)
     {
         ArgumentNullException.ThrowIfNull(runCts);
         _runCts = runCts;
+    }
+
+    /// <summary>
+    /// Completes when <see cref="HasActiveBackgroundRun"/> is false: immediately when already idle,
+    /// else when the current run detaches. A caller retrying a deferred prompt may be deferred again
+    /// if a newer run attached meanwhile; it then waits again.
+    /// </summary>
+    public Task WaitForBackgroundRunIdleAsync(CancellationToken cancellationToken)
+    {
+        var idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _backgroundIdleWaiters.Enqueue(idle);
+        if (!HasActiveBackgroundRun)
+            idle.TrySetResult();
+
+        if (!cancellationToken.CanBeCanceled)
+            return idle.Task;
+
+        return idle.Task.WaitAsync(cancellationToken);
     }
 
     protected void CancelBackgroundRun()
@@ -3176,8 +3223,18 @@ public abstract class DysonAgentSession
     protected void DetachBackgroundRun(CancellationTokenSource runCts)
     {
         ArgumentNullException.ThrowIfNull(runCts);
-        if (ReferenceEquals(_runCts, runCts))
-            _runCts = null;
+        if (!ReferenceEquals(_runCts, runCts))
+            return;
+
+        _runCts = null;
+        ReleaseBackgroundIdleWaiters();
+    }
+
+    /// <summary>Completes every idle waiter (the current run just detached).</summary>
+    private void ReleaseBackgroundIdleWaiters()
+    {
+        while (_backgroundIdleWaiters.TryDequeue(out var waiter))
+            waiter.TrySetResult();
     }
 
     /// <summary>
@@ -3310,8 +3367,16 @@ public abstract class DysonAgentSession
 
         _ = Task.Run(async () =>
         {
+            var gateHeld = false;
             try
             {
+                // One provider loop per session: an interrupt cancels the old run first, so this waits
+                // only for that run to unwind (never on a caller thread or under _injectInterruptGate).
+                await child.EnterPromptGateAsync(runCts.Token).ConfigureAwait(false);
+                gateHeld = true;
+                if (runCts.IsCancellationRequested)
+                    return;
+
                 var result = await child.PromptHarnessTurnAsync(turn, runCts.Token).ConfigureAwait(false);
                 if (runCts.IsCancellationRequested)
                 {
@@ -3362,6 +3427,9 @@ public abstract class DysonAgentSession
             }
             finally
             {
+                if (gateHeld)
+                    child.ExitPromptGate();
+
                 child.DetachBackgroundRun(runCts);
                 runCts.Dispose();
             }

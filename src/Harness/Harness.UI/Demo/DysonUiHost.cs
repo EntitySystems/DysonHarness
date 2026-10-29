@@ -7329,6 +7329,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
 
         var deferredCompletions = new List<DysonAgentInterrupt>();
+        DysonAgentSession? deferredBehindRun = null;
         try
         {
             while (true)
@@ -7389,13 +7390,19 @@ public sealed class DysonUiHost : IAsyncDisposable
                             (session, token) => session.PromptHarnessTurnAsync(turn, token),
                             CancellationToken.None)
                         .ConfigureAwait(false);
+                    if (eventResult.Error == DysonSessionRuntime.PromptDeferredError)
+                    {
+                        queue.Enqueue(interrupt);
+                        deferredBehindRun = parent;
+                        break;
+                    }
+
                     if (FollowUpMetaParentEvent(parent, interrupt, turn.StartedUtc)
                         == MetaParentEventAfterTurn.Retry)
                     {
                         queue.Enqueue(interrupt);
                     }
-
-                    if (eventResult.IsError)
+                    else if (eventResult.IsError)
                     {
                         LastError = eventResult.Error;
                         Notify(DysonHostChangeKind.Error);
@@ -7412,6 +7419,13 @@ public sealed class DysonUiHost : IAsyncDisposable
                             (session, token) => session.PromptShellExitedAsync(interrupt, token),
                             CancellationToken.None)
                         .ConfigureAwait(false);
+                    if (shellResult.Error == DysonSessionRuntime.PromptDeferredError)
+                    {
+                        queue.Enqueue(interrupt);
+                        deferredBehindRun = parent;
+                        break;
+                    }
+
                     if (shellResult.IsError)
                     {
                         LastError = shellResult.Error;
@@ -7429,6 +7443,13 @@ public sealed class DysonUiHost : IAsyncDisposable
                             interrupt, title, token),
                         CancellationToken.None)
                     .ConfigureAwait(false);
+                if (result.Error == DysonSessionRuntime.PromptDeferredError)
+                {
+                    queue.Enqueue(interrupt);
+                    deferredBehindRun = parent;
+                    break;
+                }
+
                 if (result.IsError)
                 {
                     LastError = result.Error;
@@ -7453,6 +7474,14 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (IsUserStopped(parentPersistenceId))
         {
             DiscardPendingReports(parentPersistenceId);
+            return;
+        }
+
+        // A KickOff / inject loop owns the session: retry once it detaches, not in a spin.
+        if (deferredBehindRun is not null)
+        {
+            _ = deferredBehindRun.WaitForBackgroundRunIdleAsync(CancellationToken.None)
+                .ContinueWith(_ => DrainAutoTurnsAsync(parentPersistenceId), TaskScheduler.Default);
             return;
         }
 
