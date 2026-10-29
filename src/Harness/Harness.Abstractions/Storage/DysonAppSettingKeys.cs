@@ -102,6 +102,18 @@ public static class DysonAppSettingKeys
     public const string MetaAgentDroneReasoningEffort = "meta_agent_drone_reasoning_effort";
 
     /// <summary>
+    /// Guid string of the model slug for the voice sidecar. Empty / missing ⇒ unset; the sidecar keeps
+    /// the Meta session's model.
+    /// </summary>
+    public const string MetaSidecarModelSlugId = "meta_sidecar_model_slug_id";
+
+    /// <summary>
+    /// Reasoning-effort override for the voice sidecar slug. Empty / missing ⇒ unset; the sidecar keeps
+    /// the Meta session's model.
+    /// </summary>
+    public const string MetaSidecarReasoningEffort = "meta_sidecar_reasoning_effort";
+
+    /// <summary>
     /// Guid string of the dedicated direct-OpenAI model slug used by <c>GenerateImage</c>.
     /// Empty, invalid, or unsupported ⇒ image generation is disabled; it never falls back to the chat model.
     /// </summary>

@@ -11,4 +11,9 @@ public static class DysonSessionPolicy
 
     public static bool IsMetaAgent(string? agentMode) =>
         string.Equals(agentMode, MetaAgentMode, StringComparison.OrdinalIgnoreCase);
+
+    public const string VoiceSidecarMode = "Voice Mode Meta Sidecar";
+
+    public static bool IsVoiceSidecar(string? agentMode) =>
+        string.Equals(agentMode, VoiceSidecarMode, StringComparison.OrdinalIgnoreCase);
 }

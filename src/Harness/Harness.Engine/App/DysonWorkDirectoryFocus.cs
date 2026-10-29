@@ -11,7 +11,7 @@ namespace DysonHarness;
 public sealed class DysonWorkDirectoryFocus(IDysonWorkDirectoryRepository workDirectories)
 {
     public const string NotOwnerMessage =
-        "Other work directory owns the application, you can ask the user in voice mode to change directories via the SpeakToUser tool.";
+        "Other work directory owns the application, you can ask the user in voice mode to change directories via MessageVoiceModeSidecar.";
 
     public const string PanelNotShownMessage = "The work directories panel is not on screen.";
 

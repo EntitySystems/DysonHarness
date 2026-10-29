@@ -30,7 +30,8 @@ public sealed record DysonReasoningSegment(
     DysonReasoningSegmentKind Kind,
     string Text,
     int RoundIndex,
-    int? DeliveredAfterToolCalls = null);
+    int? DeliveredAfterToolCalls = null,
+    string? Marker = null);
 
 /// <summary>
 /// JSON serialize/restore helpers for <see cref="DysonAgentTurn.ReasoningLog"/>.

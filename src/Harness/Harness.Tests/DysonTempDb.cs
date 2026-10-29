@@ -96,6 +96,11 @@ internal static class DysonTempDb
         IDysonSubjectContext? subject = null) =>
         new(accessor, subject ?? DysonFixedLocalSubjectContext.Instance);
 
+    public static DysonVoiceSidecarMemoryRepository VoiceSidecarMemories(
+        DysonDbAccessor accessor,
+        IDysonSubjectContext? subject = null) =>
+        new(accessor, subject ?? DysonFixedLocalSubjectContext.Instance);
+
     public static DysonWorkDirectoryConfigurationRepository WorkDirectoryConfigurations(
         DysonDbAccessor accessor,
         IDysonSubjectContext? subject = null) =>

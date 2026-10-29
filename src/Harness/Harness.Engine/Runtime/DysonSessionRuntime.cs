@@ -13,7 +13,7 @@ namespace DysonHarness;
 /// is not drained or executed here. Auto-turns and task-lifecycle evaluation stay
 /// on the host.
 /// </summary>
-public sealed class DysonSessionRuntime : IAsyncDisposable
+public sealed partial class DysonSessionRuntime : IAsyncDisposable
 {
     private readonly IDysonSessionRepository _sessions;
     private readonly IDysonAgentSessionRuntimeFactory _sessionFactory;
@@ -900,17 +900,36 @@ public sealed class DysonSessionRuntime : IAsyncDisposable
     }
 
     /// <summary>
-    /// While voice is on, a root meta session loaded or created later gets the shared service.
-    /// Same instance is a no-op inside <see cref="DysonAgentSession.SetVoiceMode"/>.
+    /// While voice is on, a root Meta session or its voice sidecar loaded or created later
+    /// gets the shared service. Same instance is a no-op inside <see cref="DysonAgentSession.SetVoiceMode"/>.
+    /// A root Meta session also kicks sidecar ensure off this call.
     /// </summary>
     private void AttachSharedVoice(DysonAgentSession session)
     {
         if (_voice is not { IsOn: true })
             return;
-        if (session.Parent is not null || !DysonSessionPolicy.IsMetaAgent(session.Mode))
+
+        var rootMeta = session.Parent is null && DysonSessionPolicy.IsMetaAgent(session.Mode);
+        if (!rootMeta && !session.IsVoiceSidecar)
             return;
 
         session.SetVoiceMode(_voice);
+        if (!rootMeta)
+            return;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var ensured = await EnsureVoiceSidecarAsync(session).ConfigureAwait(false);
+                if (ensured.IsError)
+                    ReportError(ensured.Error);
+            }
+            catch (Exception ex)
+            {
+                ReportError(ex.Message);
+            }
+        });
     }
 
     internal IDysonSessionRepository Sessions => _sessions;

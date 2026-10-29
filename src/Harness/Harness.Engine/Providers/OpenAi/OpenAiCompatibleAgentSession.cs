@@ -45,7 +45,8 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             session.Mode,
             DysonAgentModes.Explore,
             StringComparison.OrdinalIgnoreCase);
-        var isMetaAgent = DysonSessionPolicy.IsMetaAgent(session.Mode);
+        // The voice sidecar pauses like Meta: no rethink turn.
+        var isMetaAgent = DysonSessionPolicy.IsMetaAgent(session.Mode) || DysonSessionPolicy.IsVoiceSidecar(session.Mode);
 
         string text;
         if (isRethink)
@@ -572,6 +573,10 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
         return Task.FromResult(Result<OpenAiCompatibleAgentProvider, string>.AsValue(
             current.WithReasoningEffort(reasoningEffort)));
     }
+
+    /// <inheritdoc />
+    internal override Task<DysonAgentProvider?> ResolveOwnModeDefaultProviderAsync(CancellationToken cancellationToken) =>
+        Config.TryGetSubagentDefaultWhenSlugOmittedAsync(null, Mode, _models, cancellationToken);
 
     /// <summary>Slug or display alias to a fresh OpenAI-compatible provider. Null effort = the slug default.</summary>
     private async Task<Result<OpenAiCompatibleAgentProvider, string>> ResolveOpenAiSlugProviderAsync(
@@ -1352,7 +1357,9 @@ public sealed class OpenAiCompatibleAgentSession : DysonAgentSession
             OpenAiProvider,
             _http,
             history,
-            DysonCompactionFlow.FallbackSummaryReason,
+            DysonSessionPolicy.IsVoiceSidecar(Mode)
+                ? DysonCompactionFlow.SidecarFallbackSummaryReason
+                : DysonCompactionFlow.FallbackSummaryReason,
             TokenCounter,
             cancellationToken,
             (usage, token) => AppendUsageAsync(OpenAiProvider, usage, token));

@@ -90,6 +90,12 @@ public class DysonAgentSessionConfig
     public DysonAgentProvider? MetaAgentDroneDefaultProvider { get; set; }
 
     /// <summary>
+    /// Optional default provider for the Voice Mode Meta Sidecar (Agent Behavior "Meta Sidecar").
+    /// Null ⇒ the sidecar keeps the Meta session's provider.
+    /// </summary>
+    public DysonAgentProvider? VoiceSidecarDefaultProvider { get; set; }
+
+    /// <summary>
     /// Host-owned settings port. When set, Agent Behavior subagent defaults are read live from the
     /// database on each child start (<see cref="TryGetSubagentDefaultWhenSlugOmittedAsync"/>) instead of
     /// the <c>*DefaultProvider</c> snapshot. Children share this config instance.
@@ -129,6 +135,8 @@ public class DysonAgentSessionConfig
             return BugReviewDefaultProvider;
         if (string.Equals(agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
             return MetaAgentDroneDefaultProvider;
+        if (DysonSessionPolicy.IsVoiceSidecar(agentMode))
+            return VoiceSidecarDefaultProvider;
 
         return null;
     }
@@ -181,6 +189,8 @@ public class DysonAgentSessionConfig
             return (DysonAppSettingKeys.BugReviewModelSlugId, DysonAppSettingKeys.BugReviewReasoningEffort);
         if (string.Equals(agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
             return (DysonAppSettingKeys.MetaAgentDroneModelSlugId, DysonAppSettingKeys.MetaAgentDroneReasoningEffort);
+        if (DysonSessionPolicy.IsVoiceSidecar(agentMode))
+            return (DysonAppSettingKeys.MetaSidecarModelSlugId, DysonAppSettingKeys.MetaSidecarReasoningEffort);
 
         return null;
     }
@@ -203,6 +213,12 @@ public class DysonAgentSessionConfig
     /// Null ⇒ those tools return "not available". Children share this config instance.
     /// </summary>
     public IDysonMetaScratchFileRepository? MetaScratchFiles { get; set; }
+
+    /// <summary>
+    /// Optional voice sidecar memory repository for ReadMemory / EditMemory.
+    /// Null ⇒ those tools return "not available". Children share this config instance.
+    /// </summary>
+    public IDysonVoiceSidecarMemoryRepository? VoiceSidecarMemory { get; set; }
 
     /// <summary>
     /// Optional workdir-scoped custom MCP host (<c>.dyson/mcp</c>).

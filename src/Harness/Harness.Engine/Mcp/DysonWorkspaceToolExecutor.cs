@@ -167,6 +167,11 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "DeleteMetaAgent" => await DeleteMetaAgentAsync(call, cancellationToken).ConfigureAwait(false),
                 "PostConversationMessage" => PostConversationMessage(call),
                 "SpeakToUser" => await SpeakToUser(call, cancellationToken).ConfigureAwait(false),
+                "MessageMetaSession" => await MessageMetaSession(call).ConfigureAwait(false),
+                "MessageVoiceModeSidecar" => await MessageVoiceModeSidecar(call).ConfigureAwait(false),
+                "ReadMetaAgentLog" => await ReadMetaAgentLog(call).ConfigureAwait(false),
+                "ReadMemory" => await ReadMemory(call, cancellationToken).ConfigureAwait(false),
+                "EditMemory" => await EditMemory(call, cancellationToken).ConfigureAwait(false),
                 "ListWorkdirs" => await ListWorkdirsAsync(call, cancellationToken).ConfigureAwait(false),
                 "OpenWorkdirsPanel" => await OpenWorkdirsPanelAsync(call).ConfigureAwait(false),
                 "SwitchWorkdir" => await SwitchWorkdirAsync(call, cancellationToken).ConfigureAwait(false),
@@ -792,7 +797,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
             var id = GetInt(doc.RootElement, "subagentId");
             if (id is null or < 1)
-                return Error(call, "WaitForSubagent: subagentId (≥ 1) is required.");
+                return Error(call, "WaitForSubagent: subagentId (â‰¥ 1) is required.");
             subagentId = id.Value;
             timeoutMs = GetInt(doc.RootElement, "timeoutMs");
         }
@@ -819,7 +824,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
             var id = GetInt(doc.RootElement, "subagentId");
             if (id is null or < 1)
-                return Task.FromResult(Error(call, "InspectSubagentLog: subagentId (≥ 1) is required."));
+                return Task.FromResult(Error(call, "InspectSubagentLog: subagentId (â‰¥ 1) is required."));
             subagentId = id.Value;
             maxLines = GetInt(doc.RootElement, "maxLines");
         }
@@ -844,7 +849,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
             var id = GetInt(doc.RootElement, "subagentId");
             if (id is null or < 1)
-                return Error(call, "StopSubagent: subagentId (≥ 1) is required.");
+                return Error(call, "StopSubagent: subagentId (â‰¥ 1) is required.");
             subagentId = id.Value;
             reason = GetOptionalString(doc.RootElement, "reason");
         }
@@ -881,7 +886,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
             var id = GetInt(doc.RootElement, "agentId") ?? GetInt(doc.RootElement, "subagentId");
             if (id is null or < 1)
-                return Error(call, $"ChangeSubagentAIModel: {idName} (≥ 1) is required.");
+                return Error(call, $"ChangeSubagentAIModel: {idName} (â‰¥ 1) is required.");
             subagentId = id.Value;
             modelSlug = GetOptionalString(doc.RootElement, "modelSlug");
             reasoningEffort = GetOptionalString(doc.RootElement, "reasoningEffort");
@@ -1068,7 +1073,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
             var id = GetInt(doc.RootElement, "subagentId");
             if (id is null or < 1)
-                return Error(call, "RespondToSubagentEvent: subagentId (≥ 1) is required.");
+                return Error(call, "RespondToSubagentEvent: subagentId (â‰¥ 1) is required.");
             subagentId = id.Value;
 
             var eventIdResult = RequireString(doc.RootElement, "eventId");
@@ -1106,7 +1111,7 @@ public sealed partial class DysonWorkspaceToolExecutor
 
             var id = GetInt(doc.RootElement, "subagentId");
             if (id is null or < 1)
-                return Error(call, "TriggerSubagentEvent: subagentId (≥ 1) is required.");
+                return Error(call, "TriggerSubagentEvent: subagentId (â‰¥ 1) is required.");
             subagentId = id.Value;
 
             var payloadResult = RequireString(doc.RootElement, "payload");
@@ -2432,9 +2437,9 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         var text = sb.ToString().TrimEnd();
         if (matches >= maxMatches)
-            text += $"\n… capped at {maxMatches} matches";
+            text += $"\nâ€¦ capped at {maxMatches} matches";
         else if (cappedByChars)
-            text += $"\n… capped at {GrepMaxResultChars} chars";
+            text += $"\nâ€¦ capped at {GrepMaxResultChars} chars";
 
         return Ok(call, text);
     }
@@ -2712,7 +2717,7 @@ public sealed partial class DysonWorkspaceToolExecutor
     /// Non-image attachments (dll etc.) pass through. Images require
     /// <see cref="DysonAgentSessionConfig.FileStorage"/> and a successful
     /// <see cref="DysonS3FileStorage.EnsureRemoteUrlAsync"/> before the
-    /// BinaryAttachment is returned — no data-URL fallback.
+    /// BinaryAttachment is returned â€” no data-URL fallback.
     /// </summary>
     private async Task<DysonToolCallResult> AttachVisionOrRequireStorageAsync(
         DysonToolCall call,
@@ -2759,7 +2764,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         if (quality is < 1 or > 100)
         {
             return Error(call,
-                $"ConvertImage: quality must be 1–100 (got {quality}).");
+                $"ConvertImage: quality must be 1â€“100 (got {quality}).");
         }
 
         var overwrite = GetBool(doc.RootElement, "overwrite");
@@ -2916,7 +2921,7 @@ public sealed partial class DysonWorkspaceToolExecutor
     {
         if (line.Length <= maxChars)
             return line;
-        return line[..maxChars] + "…";
+        return line[..maxChars] + "â€¦";
     }
 
     private async Task<DysonToolCallResult> ListDirectoryAsync(
@@ -3080,9 +3085,9 @@ public sealed partial class DysonWorkspaceToolExecutor
         }
 
         if (r.StdoutTruncated)
-            sb.AppendLine($"… truncated (stdout captured {DysonToolResultLimits.MaxShellStreamBytes} bytes)");
+            sb.AppendLine($"â€¦ truncated (stdout captured {DysonToolResultLimits.MaxShellStreamBytes} bytes)");
         if (r.StderrTruncated)
-            sb.AppendLine($"… truncated (stderr captured {DysonToolResultLimits.MaxShellStreamBytes} bytes)");
+            sb.AppendLine($"â€¦ truncated (stderr captured {DysonToolResultLimits.MaxShellStreamBytes} bytes)");
 
         var content = sb.ToString().TrimEnd();
         if (string.IsNullOrEmpty(content))
@@ -3191,7 +3196,7 @@ public sealed partial class DysonWorkspaceToolExecutor
             if (i > 0)
                 sb.Append(',');
             var s = list[i];
-            var cmd = s.Command.Length > 80 ? s.Command[..80] + "…" : s.Command;
+            var cmd = s.Command.Length > 80 ? s.Command[..80] + "â€¦" : s.Command;
             sb.Append('{');
             sb.Append("\"id\":").Append(s.Id);
             sb.Append(",\"status\":\"").Append(s.Status).Append('"');
@@ -3516,7 +3521,7 @@ public sealed partial class DysonWorkspaceToolExecutor
 
     /// <summary>
     /// Returns summary-only MCP Content when policy says summarize; otherwise raw
-    /// (already ≤1500 tokens). Parent never sees raw when summarization runs.
+    /// (already â‰¤1500 tokens). Parent never sees raw when summarization runs.
     /// </summary>
     private async Task<DysonToolCallResult> SummarizeWebOkAsync(
         DysonToolCall call,
@@ -3711,7 +3716,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         return null;
     }
 
-    /// <summary>Optional non-negative integer <c>timeoutSeconds</c> for parent → child inject (null when omitted).</summary>
+    /// <summary>Optional non-negative integer <c>timeoutSeconds</c> for parent â†’ child inject (null when omitted).</summary>
     private static Result<int?, string> GetInjectTimeoutSeconds(JsonElement root)
     {
         if (!root.TryGetProperty("timeoutSeconds", out var prop) || prop.ValueKind == JsonValueKind.Null)
@@ -3766,7 +3771,7 @@ public sealed partial class DysonWorkspaceToolExecutor
     }
 
     /// <summary>
-    /// Parses optional <paramref name="name"/> string array. Missing or null → null (omit).
+    /// Parses optional <paramref name="name"/> string array. Missing or null â†’ null (omit).
     /// </summary>
     public static Result<IReadOnlyList<string>?, string> TryParseOptionalStringArray(
         JsonElement root,

@@ -22,6 +22,7 @@ public sealed class DysonDbContext : DbContext
         Set<DysonWorkDirectoryConfigurationEntity>();
     public DbSet<DysonPlanEntity> Plans => Set<DysonPlanEntity>();
     public DbSet<DysonMetaScratchFileEntity> MetaScratchFiles => Set<DysonMetaScratchFileEntity>();
+    public DbSet<DysonVoiceSidecarMemoryEntity> VoiceSidecarMemories => Set<DysonVoiceSidecarMemoryEntity>();
     public DbSet<DysonSessionEntity> Sessions => Set<DysonSessionEntity>();
     public DbSet<DysonTurnEntity> Turns => Set<DysonTurnEntity>();
     public DbSet<DysonSessionLogEntry> SessionLogs => Set<DysonSessionLogEntry>();
@@ -152,6 +153,19 @@ public sealed class DysonDbContext : DbContext
             e.HasOne(x => x.WorkDirectory)
                 .WithMany()
                 .HasForeignKey(x => x.WorkDirectoryId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DysonVoiceSidecarMemoryEntity>(e =>
+        {
+            e.ToTable("voice_sidecar_memory");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.SubjectId).IsRequired();
+            e.Property(x => x.Content).IsRequired();
+            e.HasIndex(x => new { x.SubjectId, x.SessionId }).IsUnique();
+            e.HasOne(x => x.Session)
+                .WithMany()
+                .HasForeignKey(x => x.SessionId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

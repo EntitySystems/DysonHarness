@@ -77,26 +77,6 @@ public static class DysonMetaAgentTools
     ];
 
     /// <summary>
-    /// Root Meta Agent only, and only while <see cref="DysonAgentSessionConfig.Voice"/> is set.
-    /// Not in <see cref="AllowedToolNames"/>: voice off keeps the exact allowlist.
-    /// </summary>
-    public static readonly DysonMcpTool SpeakToUser = new()
-    {
-        Name = "SpeakToUser",
-        Description =
-            "Voice mode only. Speak text aloud to the user with text-to-speech. Queues the speech and returns at once; calls play in order. Use short sentences, plain English words, and few acronyms. Call it before PostConversationMessage; the posted message carries the technical detail. Speech stops when the user starts talking.",
-        InputSchemaJson = """
-            {
-              "type": "object",
-              "properties": {
-                "text": { "type": "string", "description": "What to say aloud. Short plain-English sentences. At most 600 characters." }
-              },
-              "required": ["text"]
-            }
-            """,
-    };
-
-    /// <summary>
     /// Names that must never appear in the Meta Agent catalog.
     /// The no-filesystem / never-block invariant of this mode.
     /// </summary>

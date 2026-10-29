@@ -66,6 +66,7 @@ public abstract class DysonAgentSession
     private int _childReportRemindersSent;
     private bool _subagentReportAccepted;
     private string? _systemPromptSuffix;
+    private string _voiceSidecarMemory = "";
 
     protected DysonAgentSession(
         string agentMode,
@@ -193,6 +194,15 @@ public abstract class DysonAgentSession
 
     /// <summary>Live parent when this session was spawned via <see cref="RegisterSubagent"/>.</summary>
     public DysonAgentSession? Parent { get; private set; }
+
+    /// <summary>Harness-created voice sidecar of a root Meta session. Not a registered child.</summary>
+    public DysonAgentSession? VoiceSidecar { get; internal set; }
+
+    /// <summary>Root Meta session that owns this voice sidecar. Null on every other mode.</summary>
+    public DysonAgentSession? VoiceSidecarOwner { get; internal set; }
+
+    /// <summary>True when <see cref="Mode"/> is the voice sidecar mode.</summary>
+    public bool IsVoiceSidecar => DysonSessionPolicy.IsVoiceSidecar(Mode);
 
     /// <summary>
     /// Mirrored from persisted session status (Active until report/stop/fail/interrupt).
@@ -417,17 +427,23 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
-    /// Root Meta Agent only. Non-null turns voice mode on (SpeakToUser and the voice prompt block).
+    /// Root Meta Agent or its voice sidecar. Non-null turns voice mode on.
     /// Rebuilds the prompt and replaces the tool catalog. No-op when <paramref name="voice"/> is already set.
+    /// On a Meta session, also calls <see cref="VoiceSidecar"/>.<see cref="SetVoiceMode"/>.
     /// Not persisted.
     /// </summary>
     public VoidResult<string> SetVoiceMode(DysonVoiceMode? voice)
     {
-        if (Parent is not null || !DysonSessionPolicy.IsMetaAgent(Mode))
+        var sidecar = DysonSessionPolicy.IsVoiceSidecar(Mode);
+        if (!sidecar && (Parent is not null || !DysonSessionPolicy.IsMetaAgent(Mode)))
             return new VoidResult<string>("Voice mode is only for the root Meta Agent session.");
 
         if (ReferenceEquals(Config.Voice, voice))
+        {
+            if (!sidecar)
+                VoiceSidecar?.SetVoiceMode(voice);
             return VoidResult<string>.Success;
+        }
 
         var prompt = DysonAgentSystemPrompts.ForMode(Mode, Config.CustomAgents);
         if (prompt.IsError)
@@ -443,17 +459,39 @@ public abstract class DysonAgentSession
         SystemPrompt = ComposeSystemPrompt(prompt.Value);
         SystemPromptGeneration++;
         AppendLog(voice is null ? "voice mode off" : "voice mode on");
+        if (!sidecar)
+            VoiceSidecar?.SetVoiceMode(voice);
         return VoidResult<string>.Success;
     }
 
+    /// <summary>Cached sidecar memory text (empty when none). Injected by <see cref="ComposeSystemPrompt"/>.</summary>
+    public string VoiceSidecarMemory => _voiceSidecarMemory;
+
+    /// <summary>
+    /// Stores sidecar memory and rebuilds the system prompt the same way <see cref="SetVoiceMode"/> does.
+    /// </summary>
+    public void SetVoiceSidecarMemory(string? content)
+    {
+        _voiceSidecarMemory = content ?? "";
+        var prompt = DysonAgentSystemPrompts.ForMode(Mode, Config.CustomAgents);
+        if (prompt.IsError)
+            return;
+
+        SystemPrompt = ComposeSystemPrompt(prompt.Value);
+        SystemPromptGeneration++;
+    }
+
     private string ComposeSystemPrompt(string directive) =>
-        DysonAgentSystemPrompts.JoinSystemPromptSuffix(
-            DysonAgentSystemPrompts.WithBrowser(
-                DysonAgentSystemPrompts.WithVoice(directive, Mode, Config.Voice is not null),
-                Mode,
-                CatalogHasBrowserTool()),
-            _systemPromptSuffix,
-            DysonAgentSystemPrompts.BuildPluginInstructionBlock(Config))!;
+        DysonAgentSystemPrompts.WithVoiceSidecarMemory(
+            DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+                DysonAgentSystemPrompts.WithBrowser(
+                    DysonAgentSystemPrompts.WithVoice(directive, Mode, Config.Voice is not null),
+                    Mode,
+                    CatalogHasBrowserTool()),
+                _systemPromptSuffix,
+                DysonAgentSystemPrompts.BuildPluginInstructionBlock(Config))!,
+            Mode,
+            _voiceSidecarMemory);
 
     private bool CatalogHasBrowserTool()
     {
@@ -591,32 +629,48 @@ public abstract class DysonAgentSession
             return Result<DysonChangeSubagentModelOutcome, string>.AsValue(ChangeOutcome(child, current, "unchanged"));
         }
 
-        var set = child.SetModel(next, next.DefaultMaxTargetContextTokens);
-        if (set.IsError)
-            return Result<DysonChangeSubagentModelOutcome, string>.AsError(set.Error);
+        var appliedResult = await child.ApplyProviderAsync(next, cancellationToken).ConfigureAwait(false);
+        if (appliedResult.IsError)
+            return Result<DysonChangeSubagentModelOutcome, string>.AsError(appliedResult.Error);
 
         var applied = ReferenceEquals(child.Provider, next) ? "now" : "nextToolRound";
+        AppendLog($"changed subagent {child.Id} model to {FormatSubagentModelLabel(next)} (effort {next.ReasoningEffort ?? "default"}, {applied})");
+        return Result<DysonChangeSubagentModelOutcome, string>.AsValue(ChangeOutcome(child, next, applied));
+    }
+
+    /// <summary>
+    /// <see cref="SetModel"/> plus persist slug/effort. Extracted from <see cref="ChangeSubagentModelAsync"/>.
+    /// </summary>
+    internal async Task<VoidResult<string>> ApplyProviderAsync(DysonAgentProvider provider, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        var set = SetModel(provider, provider is OpenAiCompatibleAgentProvider oai
+            ? oai.DefaultMaxTargetContextTokens
+            : SlugDefaultMaxTargetContextTokens);
+        if (set.IsError)
+            return set;
+
         // ponytail: the persist is a separate await from SetModel; a racing UI pick can leave the row one pick
         // behind memory until the next pick or reload. Upgrade path: one per-session async gate around both.
-        if ((child.SessionStore ?? SessionStore) is { } store && child.PersistenceId != Guid.Empty)
+        if ((SessionStore ?? Parent?.SessionStore) is { } store && PersistenceId != Guid.Empty
+            && provider is OpenAiCompatibleAgentProvider next)
         {
             var persist = await store.UpdateSessionMetaAsync(
                     new DysonSessionMetaUpdate
                     {
-                        SessionId = child.PersistenceId,
+                        SessionId = PersistenceId,
                         ModelSlugId = next.SlugId,
                         ClearModelSlug = next.SlugId is null,
                         UpdateReasoningEffort = true,
                         ReasoningEffort = next.ReasoningEffort,
                     },
-                    cancellationToken)
+                    ct)
                 .ConfigureAwait(false);
             if (persist.IsError)
-                return Result<DysonChangeSubagentModelOutcome, string>.AsError(persist.Error);
+                return persist;
         }
 
-        AppendLog($"changed subagent {child.Id} model to {FormatSubagentModelLabel(next)} (effort {next.ReasoningEffort ?? "default"}, {applied})");
-        return Result<DysonChangeSubagentModelOutcome, string>.AsValue(ChangeOutcome(child, next, applied));
+        return VoidResult<string>.Success;
     }
 
     private static DysonChangeSubagentModelOutcome ChangeOutcome(
@@ -645,6 +699,13 @@ public abstract class DysonAgentSession
             ? Result<OpenAiCompatibleAgentProvider, string>.AsValue(current.WithReasoningEffort(reasoningEffort))
             : Result<OpenAiCompatibleAgentProvider, string>.AsError(
                 "ChangeSubagentAIModel is not supported for this provider kind."));
+
+    /// <summary>
+    /// Agent Behavior default provider for this session's own mode, read live from settings when the
+    /// session has a model store (null = unset or unsupported). Used to push the Meta Sidecar setting onto live sidecars.
+    /// </summary>
+    internal virtual Task<DysonAgentProvider?> ResolveOwnModeDefaultProviderAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(Config.TryGetSubagentDefaultProvider(Mode));
 
     private bool ApplyPendingModelLocked()
     {
@@ -716,6 +777,9 @@ public abstract class DysonAgentSession
     public void RestoreRegisteredSubagent(DysonAgentSession child)
     {
         ArgumentNullException.ThrowIfNull(child);
+
+        if (child.IsVoiceSidecar)
+            return;
 
         if (child.Id < 1)
             throw new InvalidOperationException("Restored subagent must already have RuntimeId ≥ 1.");
@@ -975,6 +1039,9 @@ public abstract class DysonAgentSession
         var nodes = new List<(int Id, object Node)>();
         foreach (var c in live)
         {
+            if (c.IsVoiceSidecar)
+                continue;
+
             // A deleted row is gone from the store; a still-spawning child has no row yet.
             if (rows is null || c.PersistenceId == Guid.Empty || rows.Any(r => r.Id == c.PersistenceId))
                 nodes.Add((c.Id, await ProjectLiveRosterNodeAsync(c, includeReports, depth, cancellationToken).ConfigureAwait(false)));
@@ -984,7 +1051,9 @@ public abstract class DysonAgentSession
         {
             foreach (var row in rows)
             {
-                if (row.RuntimeId < 1 || live.Any(c => c.PersistenceId == row.Id))
+                if (row.RuntimeId < 1
+                    || DysonSessionPolicy.IsVoiceSidecar(row.AgentMode)
+                    || live.Any(c => c.PersistenceId == row.Id))
                     continue;
 
                 nodes.Add((row.RuntimeId, await ProjectPersistedRosterNodeAsync(row, includeReports, depth, cancellationToken).ConfigureAwait(false)));
@@ -1180,6 +1249,9 @@ public abstract class DysonAgentSession
 
         if (string.Equals(childMode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
             return new VoidResult<string>("Meta Agent cannot be used as a subagent mode (page-launched only).");
+
+        if (DysonSessionPolicy.IsVoiceSidecar(childMode))
+            return new VoidResult<string>("Voice Mode Meta Sidecar is harness-created only.");
 
         if (string.Equals(parentMode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
         {
@@ -2023,14 +2095,14 @@ public abstract class DysonAgentSession
     /// Queues a mid-turn user comment on an in-flight prompt (any nested stack entry,
     /// not only <see cref="InFlightPromptTurn"/>). Does not mutate <see cref="DysonAgentTurn.Instruction"/>.
     /// </summary>
-    public VoidResult<string> InjectTurnComment(Guid turnId, string comment)
+    public VoidResult<string> InjectTurnComment(Guid turnId, string comment, string? marker = null)
     {
         foreach (var turn in _inFlightPromptStack)
         {
             if (turn.Id != turnId)
                 continue;
 
-            var queued = turn.EnqueueUserComment(comment);
+            var queued = turn.EnqueueUserComment(comment, marker);
             // Full text, never truncated (the prompt: line is): rail Session log + InspectSubagentLog.
             if (queued.IsSuccess)
                 AppendLog($"USER COMMENT (injected mid-turn, turn {turn.Id.ToString("N")[..8]}): {comment.Trim()}");
@@ -2181,13 +2253,16 @@ public abstract class DysonAgentSession
     /// <summary>
     /// Cascade: session override if set → slug default if set → harness 200K.
     /// 0 means Off / unlimited (no compaction). Meta Agent is pinned to
-    /// <see cref="DysonMaxTargetContextTokens.MetaAgentFixed"/> and ignores the
-    /// session/slug values (composer stepper cannot move it).
+    /// <see cref="DysonMaxTargetContextTokens.MetaAgentFixed"/> and the voice sidecar to
+    /// <see cref="DysonMaxTargetContextTokens.VoiceSidecarFixed"/>; both ignore the
+    /// session/slug values (composer stepper cannot move them).
     /// </summary>
     public int ResolveEffectiveMaxTargetContextTokens() =>
         string.Equals(Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase)
             ? DysonMaxTargetContextTokens.MetaAgentFixed
-            : DysonMaxTargetContextTokens.Resolve(MaxTargetContextTokens, SlugDefaultMaxTargetContextTokens);
+            : DysonSessionPolicy.IsVoiceSidecar(Mode)
+                ? DysonMaxTargetContextTokens.VoiceSidecarFixed
+                : DysonMaxTargetContextTokens.Resolve(MaxTargetContextTokens, SlugDefaultMaxTargetContextTokens);
 
     /// <summary>
     /// Estimated tokens for the outbound Completions/Responses payload (idle: no in-flight rounds).

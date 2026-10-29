@@ -16,7 +16,8 @@ public static class DysonCompactionFlow
         Context passed the session limit mid-task. The harness is summarizing the session and will resume this task in a new turn.
         """;
 
-    public const string SummaryInstruction = """
+    /// <summary>The paused-task prefix shared by both summary instructions. Ends with a blank line.</summary>
+    private const string SummaryInstructionPrefix = """
         Context compaction: the session passed its context limit, so the harness paused the previous turn mid-work. That task is unfinished. Your summary is the only context the resumed task will have.
 
         Also capture, under ## Status and ## Next:
@@ -25,14 +26,22 @@ public static class DysonCompactionFlow
         - Files touched (created, edited, deleted) and their current state.
         - The exact next steps to resume.
 
-        """ + DysonFullSummarizeFlow.Instruction;
+        """;
 
+    public const string SummaryInstruction = SummaryInstructionPrefix + DysonFullSummarizeFlow.Instruction;
     public const string ContinuationInstruction =
         "Resume the interrupted task from the summary above. Re-read any file you need before editing it.";
 
     /// <summary>Summarizer reason when the inline summary request is rejected for context length.</summary>
     public const string FallbackSummaryReason =
         "Context compaction. The session passed its context limit mid-task and this summary replaces the whole history. Capture the goal, progress, open tool state, files touched, and next steps.";
+
+    /// <summary>
+    /// Sidecar variant of <see cref="FallbackSummaryReason"/>. Names the 5,000-token target from
+    /// <see cref="DysonFullSummarizeFlow.SidecarInstruction"/>.
+    /// </summary>
+    public const string SidecarFallbackSummaryReason =
+        "Context compaction. The voice sidecar passed its context limit and this summary replaces the whole history. Keep it under 5,000 tokens. Capture the user's name and preferences, the open requests, and the last answer relayed.";
 
     /// <summary>
     /// Whether <paramref name="turn"/> may trip compaction: never for Explore or a FullSummarize turn.
@@ -45,7 +54,9 @@ public static class DysonCompactionFlow
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(turn);
 
-        return !string.Equals(session.Mode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase)
+        // The sidecar mode is named so a later edit cannot silently exclude it.
+        var sidecar = DysonSessionPolicy.IsVoiceSidecar(session.Mode);
+        return (sidecar || !string.Equals(session.Mode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase))
                && turn.Kind != DysonAgentTurnKind.FullSummarize
                && (!IsCompactionContinuation(turn) || turn.ToolRoundCallCounts.Count > 0);
     }
@@ -54,11 +65,18 @@ public static class DysonCompactionFlow
         turn.Kind == DysonAgentTurnKind.Continuation
         && string.Equals(turn.Instruction, ContinuationInstruction, StringComparison.Ordinal);
 
-    public static DysonAgentTurn CreateSummaryTurn() =>
+    /// <summary>
+    /// The summary turn. The sidecar mode uses <see cref="DysonFullSummarizeFlow.SidecarInstruction"/>
+    /// (5,000-token target) prefixed by the same paused-task line as <see cref="SummaryInstruction"/>.
+    /// </summary>
+    public static DysonAgentTurn CreateSummaryTurn(string agentMode) =>
         new()
         {
             Kind = DysonAgentTurnKind.FullSummarize,
-            Instruction = SummaryInstruction,
+            Instruction = SummaryInstructionPrefix
+                + (DysonSessionPolicy.IsVoiceSidecar(agentMode)
+                    ? DysonFullSummarizeFlow.SidecarInstruction
+                    : DysonFullSummarizeFlow.Instruction),
             StartedUtc = DateTime.UtcNow,
         };
 
@@ -150,7 +168,7 @@ public static class DysonCompactionFlow
         session.AppendLog(endedTurn is null
             ? "compaction: summarizing a pending trip before this prompt"
             : $"compaction: summarizing after turn {endedTurn.Id.ToString("N")[..8]} {(resume ? "paused" : "ended")}");
-        var summary = CreateSummaryTurn();
+        var summary = CreateSummaryTurn(session.Mode);
         VoidResult<string> ran;
         try
         {

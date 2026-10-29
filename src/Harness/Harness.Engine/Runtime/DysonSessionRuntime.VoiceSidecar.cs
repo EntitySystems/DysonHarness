@@ -1,0 +1,424 @@
+using System.Collections.Concurrent;
+using System.Threading.Channels;
+
+namespace DysonHarness;
+
+public sealed partial class DysonSessionRuntime
+{
+    /// <summary>
+    /// Host drain for a Meta session. Return true when the host accepted the drain.
+    /// False (or null) falls through to the engine drain.
+    /// </summary>
+    public Func<Guid, bool>? MetaPromptDrainHook { get; set; }
+
+    private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _voiceSidecarEnsureGates = new();
+    private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _voiceSidecarDrainGates = new();
+    private readonly ConcurrentDictionary<Guid, Channel<DysonVoiceSidecarMessageEvent>> _voiceSidecarInboxes = new();
+
+    // ponytail: subscriptions live for the process. Upgrade = dispose them from DisposeAsync / UnregisterSessionAsync.
+    private readonly ConcurrentDictionary<Guid, List<IDisposable>> _voiceSidecarSubscriptions = new();
+
+    /// <summary>
+    /// Returns the live sidecar for a root Meta session, loading the oldest persisted one or creating it.
+    /// Single-flight per Meta persistence id.
+    /// </summary>
+    public async Task<Result<DysonAgentSession, string>> EnsureVoiceSidecarAsync(
+        DysonAgentSession meta,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(meta);
+        if (_disposed != 0)
+            return Result<DysonAgentSession, string>.AsError("Session runtime has been disposed.");
+        if (meta.PersistenceId == Guid.Empty)
+            return Result<DysonAgentSession, string>.AsError("Session is not persisted.");
+        if (meta.Parent is not null || !DysonSessionPolicy.IsMetaAgent(meta.Mode))
+            return Result<DysonAgentSession, string>.AsError("Voice sidecar is only for a root Meta session.");
+
+        var gate = _voiceSidecarEnsureGates.GetOrAdd(meta.PersistenceId, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_disposed != 0)
+                return Result<DysonAgentSession, string>.AsError("Session runtime has been disposed.");
+
+            if (meta.VoiceSidecar is { PersistenceId: var liveId } live
+                && liveId != Guid.Empty
+                && _sessionsById.ContainsKey(liveId))
+            {
+                return Result<DysonAgentSession, string>.AsValue(live);
+            }
+
+            var listed = await Sessions.ListChildSessionsAsync(meta.PersistenceId, ct).ConfigureAwait(false);
+            if (listed.IsError)
+                return Result<DysonAgentSession, string>.AsError(listed.Error);
+
+            var sidecars = listed.Value
+                .Where(s => DysonSessionPolicy.IsVoiceSidecar(s.AgentMode))
+                .OrderBy(s => s.CreatedUtc)
+                .ToArray();
+
+            DysonAgentSession sidecar;
+            if (sidecars.Length > 0)
+            {
+                if (sidecars.Length > 1)
+                {
+                    meta.AppendLog(
+                        "voice sidecar: keeping oldest, extra ids "
+                        + string.Join(", ", sidecars.Skip(1).Select(s => s.Id)));
+                }
+
+                var loaded = await LoadSessionAsync(sidecars[0].Id, ct).ConfigureAwait(false);
+                if (loaded.IsError)
+                    return loaded;
+                sidecar = loaded.Value;
+                var model = await ApplyVoiceSidecarDefaultAsync(sidecar, ct).ConfigureAwait(false);
+                if (model.IsError)
+                    meta.AppendLog("voice sidecar model: " + model.Error);
+            }
+            else
+            {
+                var created = await CreateVoiceSidecarAsync(meta, ct).ConfigureAwait(false);
+                if (created.IsError)
+                    return created;
+                sidecar = created.Value;
+            }
+
+            var memory = await LoadVoiceSidecarMemoryAsync(sidecar, ct).ConfigureAwait(false);
+            if (memory.IsError)
+                meta.AppendLog("voice sidecar memory: " + memory.Error);
+            else
+                sidecar.SetVoiceSidecarMemory(memory.Value);
+
+            meta.VoiceSidecar = sidecar;
+            sidecar.VoiceSidecarOwner = meta;
+            SubscribePair(meta, sidecar);
+            return Result<DysonAgentSession, string>.AsValue(sidecar);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Posts one accepted utterance onto the Meta session's sidecar and drains that sidecar.
+    /// A provider error other than prompt-superseded / prompt-deferred is returned so the host
+    /// can fall back to Meta.
+    /// </summary>
+    public async Task<VoidResult<string>> RouteVoiceToSidecarAsync(
+        DysonAgentSession meta,
+        DysonVoiceMessage message,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(meta);
+        var ensured = await EnsureVoiceSidecarAsync(meta, ct).ConfigureAwait(false);
+        if (ensured.IsError)
+            return VoidResult<string>.AsError(ensured.Error);
+
+        var sidecar = ensured.Value;
+        meta.AppendDisplayInfoTurn(message.Text);
+        var turn = DysonVoiceMode.CreateTurn(message);
+        var route = DysonVoiceMode.RouteFor(
+            message.Mode,
+            sidecar.InFlightPromptTurn is not null,
+            sidecar.HasActiveBackgroundRun,
+            sidecar.IsSummaryInFlight || sidecar.HasAnySummarizingTurn);
+
+        VoidResult<string> routed;
+        switch (route)
+        {
+            case DysonVoiceRoute.Inject:
+            {
+                var inFlight = sidecar.InFlightPromptTurn;
+                var injected = inFlight is null
+                    ? VoidResult<string>.AsError("Turn is not currently running.")
+                    : sidecar.InjectTurnComment(inFlight.Id, message.Text);
+                routed = injected.IsSuccess
+                    ? VoidResult<string>.Success
+                    : await EnqueueAndDrainAsync(sidecar, turn, ct).ConfigureAwait(false);
+                break;
+            }
+            case DysonVoiceRoute.Interrupt:
+                Voice?.DropPendingSpeech();
+                var interrupted = InterruptWithPrompt(sidecar.PersistenceId, turn);
+                routed = interrupted.IsError
+                    ? VoidResult<string>.AsError(interrupted.Error)
+                    : await DrainVoiceSidecarPromptsAsync(sidecar, ct).ConfigureAwait(false);
+                break;
+            default:
+                routed = await EnqueueAndDrainAsync(sidecar, turn, ct).ConfigureAwait(false);
+                break;
+        }
+
+        return IsPromptControl(routed) ? VoidResult<string>.Success : routed;
+    }
+
+    /// <summary>
+    /// Applies the Agent Behavior Meta Sidecar model to every live sidecar. An empty setting is a no-op.
+    /// </summary>
+    public async Task<VoidResult<string>> ApplyVoiceSidecarModelAsync(CancellationToken ct = default)
+    {
+        if (_disposed != 0)
+            return VoidResult<string>.AsError("Session runtime has been disposed.");
+
+        foreach (var meta in SnapshotLiveSessions())
+        {
+            if (meta.Parent is not null || !DysonSessionPolicy.IsMetaAgent(meta.Mode))
+                continue;
+            if (meta.VoiceSidecar is not { } sidecar)
+                continue;
+
+            var applied = await ApplyVoiceSidecarDefaultAsync(sidecar, ct).ConfigureAwait(false);
+            if (applied.IsError)
+                return applied;
+        }
+
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Pushes the Agent Behavior Meta Sidecar setting onto one sidecar. Unset setting = keep the
+    /// current model. Also run on load, so a sidecar that was not live when the setting changed picks it up.
+    /// </summary>
+    private static async Task<VoidResult<string>> ApplyVoiceSidecarDefaultAsync(
+        DysonAgentSession sidecar,
+        CancellationToken ct)
+    {
+        var provider = await sidecar.ResolveOwnModeDefaultProviderAsync(ct).ConfigureAwait(false);
+        if (provider is null)
+            return VoidResult<string>.Success;
+        if (sidecar.SelectedProvider is OpenAiCompatibleAgentProvider current
+            && provider is OpenAiCompatibleAgentProvider next
+            && next.SlugId == current.SlugId
+            && string.Equals(next.ReasoningEffort, current.ReasoningEffort, StringComparison.Ordinal))
+        {
+            return VoidResult<string>.Success;
+        }
+
+        return await sidecar.ApplyProviderAsync(provider, ct).ConfigureAwait(false);
+    }
+
+    private async Task<Result<DysonAgentSession, string>> CreateVoiceSidecarAsync(
+        DysonAgentSession meta,
+        CancellationToken ct)
+    {
+        var full = await Sessions.GetFullSessionAsync(meta.PersistenceId, ct).ConfigureAwait(false);
+        if (full.IsError)
+            return Result<DysonAgentSession, string>.AsError(full.Error);
+
+        Guid? modelSlugId = full.Value.Session.ModelSlugId;
+        string? effort = null;
+        if (meta.Config.AppSettings is { } settings)
+        {
+            var slug = await settings
+                .GetSettingAsync(DysonAppSettingKeys.MetaSidecarModelSlugId, ct)
+                .ConfigureAwait(false);
+            if (slug.IsSuccess && Guid.TryParse(slug.Value, out var parsed) && parsed != Guid.Empty)
+            {
+                modelSlugId = parsed;
+                var effortSetting = await settings
+                    .GetSettingAsync(DysonAppSettingKeys.MetaSidecarReasoningEffort, ct)
+                    .ConfigureAwait(false);
+                effort = effortSetting.IsSuccess ? effortSetting.Value : null;
+            }
+            else if (meta.Provider is OpenAiCompatibleAgentProvider parent)
+            {
+                modelSlugId = parent.SlugId ?? modelSlugId;
+                effort = parent.ReasoningEffort;
+            }
+        }
+        else if (meta.Provider is OpenAiCompatibleAgentProvider parent)
+        {
+            modelSlugId = parent.SlugId ?? modelSlugId;
+            effort = parent.ReasoningEffort;
+        }
+
+        var created = await Sessions.CreateSessionAsync(
+            new DysonSessionCreateRequest
+            {
+                RuntimeId = 0,
+                ParentSessionId = meta.PersistenceId,
+                AgentMode = DysonAgentModes.VoiceSidecar,
+                ModelSlugId = modelSlugId,
+                WorkDirectoryId = full.Value.Session.WorkDirectoryId,
+                ReasoningEffort = effort,
+                MaxTargetContextTokens = DysonMaxTargetContextTokens.VoiceSidecarFixed,
+                SystemPromptSnapshot = DysonAgentSystemPrompts.VoiceModeMetaSidecarDirective,
+                Title = "Voice sidecar",
+            },
+            ct).ConfigureAwait(false);
+        if (created.IsError)
+            return Result<DysonAgentSession, string>.AsError(created.Error);
+
+        return await LoadSessionAsync(created.Value, ct).ConfigureAwait(false);
+    }
+
+    private static async Task<Result<string, string>> LoadVoiceSidecarMemoryAsync(
+        DysonAgentSession sidecar,
+        CancellationToken ct)
+    {
+        var repo = sidecar.Config.VoiceSidecarMemory;
+        if (repo is null)
+            return Result<string, string>.AsError("repository not available");
+
+        var loaded = await repo.GetAsync(sidecar.PersistenceId, ct).ConfigureAwait(false);
+        return loaded.IsError
+            ? Result<string, string>.AsError(loaded.Error)
+            : Result<string, string>.AsValue(loaded.Value.Content);
+    }
+
+    private void SubscribePair(DysonAgentSession meta, DysonAgentSession sidecar)
+    {
+        var bus = meta.Config.Bus;
+        if (bus is null)
+            return;
+        if (!_voiceSidecarSubscriptions.TryAdd(meta.PersistenceId, []))
+            return;
+
+        var metaSub = bus.Subscribe<DysonVoiceSidecarMessageEvent>(
+            DysonBusScopes.Session(meta.PersistenceId),
+            message => OfferVoiceSidecarMessage(message));
+        var sidecarSub = bus.Subscribe<DysonVoiceSidecarMessageEvent>(
+            DysonBusScopes.Session(sidecar.PersistenceId),
+            message => OfferVoiceSidecarMessage(message));
+
+        var tokens = _voiceSidecarSubscriptions[meta.PersistenceId];
+        if (metaSub.IsSuccess)
+            tokens.Add(metaSub.Value);
+        if (sidecarSub.IsSuccess)
+            tokens.Add(sidecarSub.Value);
+    }
+
+    private void OfferVoiceSidecarMessage(DysonVoiceSidecarMessageEvent message)
+    {
+        if (message.ToSessionId == Guid.Empty)
+            return;
+
+        var channel = _voiceSidecarInboxes.GetOrAdd(
+            message.ToSessionId,
+            id =>
+            {
+                var created = Channel.CreateUnbounded<DysonVoiceSidecarMessageEvent>(
+                    new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+                _ = Task.Run(() => ReadVoiceSidecarInboxAsync(id, created.Reader));
+                return created;
+            });
+        channel.Writer.TryWrite(message);
+    }
+
+    private async Task ReadVoiceSidecarInboxAsync(
+        Guid sessionId,
+        ChannelReader<DysonVoiceSidecarMessageEvent> reader)
+    {
+        await foreach (var message in reader.ReadAllAsync().ConfigureAwait(false))
+        {
+            if (message.ToSessionId != sessionId)
+                continue;
+
+            try
+            {
+                var delivered = await DeliverVoiceSidecarMessageAsync(message, CancellationToken.None)
+                    .ConfigureAwait(false);
+                if (delivered.IsError && !IsPromptControl(delivered))
+                    ReportError(delivered.Error);
+            }
+            catch (Exception ex)
+            {
+                ReportError(ex.Message);
+            }
+        }
+    }
+
+    private async Task<VoidResult<string>> DeliverVoiceSidecarMessageAsync(
+        DysonVoiceSidecarMessageEvent message,
+        CancellationToken ct)
+    {
+        if (!_sessionsById.TryGetValue(message.ToSessionId, out var target))
+            return VoidResult<string>.Success;
+
+        var toSidecar = message.Direction == DysonVoiceSidecarDirection.ToSidecar;
+        var marker = toSidecar
+            ? DysonInjectedUserComments.MetaMarker
+            : DysonInjectedUserComments.SidecarMarker;
+        var framed = toSidecar
+            ? DysonInjectedUserComments.FormatMetaMessage(message.Text)
+            : DysonInjectedUserComments.FormatSidecarMessage(message.Text);
+        var route = DysonVoiceMode.RouteFor(
+            DysonVoiceInputMode.CallsignActivated,
+            target.InFlightPromptTurn is not null,
+            target.HasActiveBackgroundRun,
+            target.IsSummaryInFlight || target.HasAnySummarizingTurn);
+
+        if (route == DysonVoiceRoute.Inject && target.InFlightPromptTurn is { } inFlight)
+        {
+            var injected = target.InjectTurnComment(inFlight.Id, message.Text, marker);
+            if (injected.IsSuccess)
+                return VoidResult<string>.Success;
+        }
+
+        var turn = DysonAgentSession.CreateNormalTurn(framed);
+        var queued = EnqueuePrompt(target.PersistenceId, turn);
+        if (queued.IsError)
+            return VoidResult<string>.AsError(queued.Error);
+
+        return await DrainRoutedAsync(target, toSidecar, ct).ConfigureAwait(false);
+    }
+
+    private async Task<VoidResult<string>> EnqueueAndDrainAsync(
+        DysonAgentSession sidecar,
+        DysonAgentTurn turn,
+        CancellationToken ct)
+    {
+        var queued = EnqueuePrompt(sidecar.PersistenceId, turn);
+        return queued.IsError
+            ? VoidResult<string>.AsError(queued.Error)
+            : await DrainVoiceSidecarPromptsAsync(sidecar, ct).ConfigureAwait(false);
+    }
+
+    private Task<VoidResult<string>> DrainRoutedAsync(
+        DysonAgentSession target,
+        bool toSidecar,
+        CancellationToken ct)
+    {
+        if (!toSidecar && MetaPromptDrainHook?.Invoke(target.PersistenceId) == true)
+            return Task.FromResult(VoidResult<string>.Success);
+
+        return DrainVoiceSidecarPromptsAsync(target, ct);
+    }
+
+    /// <summary>
+    /// Single-flight drain of the runtime prompt queue. A second caller joins the in-flight drain
+    /// and cannot tell which utterance a provider error belongs to.
+    /// ponytail: one shared result for every waiter. Upgrade = a per-enqueue completion.
+    /// </summary>
+    private async Task<VoidResult<string>> DrainVoiceSidecarPromptsAsync(
+        DysonAgentSession session,
+        CancellationToken ct)
+    {
+        var gate = _voiceSidecarDrainGates.GetOrAdd(session.PersistenceId, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            while (TryDequeuePrompt(session.PersistenceId, out var entry))
+            {
+                var ran = await ExecutePromptAsync(
+                    session,
+                    (s, token) => s.PromptHarnessTurnAsync(entry.Turn, token),
+                    ct).ConfigureAwait(false);
+                // PromptSuperseded / PromptDeferred are not swallowed: the caller decides fallback.
+                if (ran.IsError)
+                    return ran;
+            }
+
+            return VoidResult<string>.Success;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private static bool IsPromptControl(VoidResult<string> result) =>
+        result.IsError
+        && (result.Error == PromptSupersededError || result.Error == PromptDeferredError);
+}

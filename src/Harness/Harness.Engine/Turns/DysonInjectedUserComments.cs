@@ -14,6 +14,12 @@ public static class DysonInjectedUserComments
     /// <summary>Tag naming who (the user) and when (during a running turn).</summary>
     public const string Marker = "[User comment during turn]";
 
+    /// <summary>Tag for a voice-sidecar message delivered into a Meta turn.</summary>
+    public const string SidecarMarker = "[Message from voice sidecar]";
+
+    /// <summary>Tag for a Meta message delivered into a voice-sidecar turn.</summary>
+    public const string MetaMarker = "[Message from Meta session]";
+
     /// <summary>Non-empty UserComment segments in log order.</summary>
     public static List<DysonReasoningSegment> From(IEnumerable<DysonReasoningSegment> log)
     {
@@ -24,7 +30,17 @@ public static class DysonInjectedUserComments
     }
 
     /// <summary>One comment as message text: marker line, blank line, verbatim text.</summary>
-    public static string FormatMessage(string text) => Marker + "\n\n" + text;
+    public static string FormatMessage(string text) => FormatWithMarker(Marker, text);
+
+    /// <summary>Sidecar → Meta framing: <see cref="SidecarMarker"/>, blank line, text.</summary>
+    public static string FormatSidecarMessage(string text) => FormatWithMarker(SidecarMarker, text);
+
+    /// <summary>Meta → sidecar framing: <see cref="MetaMarker"/>, blank line, text.</summary>
+    public static string FormatMetaMessage(string text) => FormatWithMarker(MetaMarker, text);
+
+    /// <summary>Marker line, blank line, verbatim text. A null marker falls back to <see cref="Marker"/>.</summary>
+    public static string FormatWithMarker(string? marker, string text) =>
+        (string.IsNullOrWhiteSpace(marker) ? Marker : marker) + "\n\n" + text;
 
     /// <summary>Appends one <c>role: user</c> message per comment.</summary>
     public static void AppendMessages(JsonArray target, IEnumerable<DysonReasoningSegment> comments)
@@ -36,7 +52,7 @@ public static class DysonInjectedUserComments
             target.Add(new JsonObject
             {
                 ["role"] = "user",
-                ["content"] = FormatMessage(comment.Text),
+                ["content"] = FormatWithMarker(comment.Marker, comment.Text),
             });
         }
     }
@@ -52,7 +68,7 @@ public static class DysonInjectedUserComments
         {
             if (sb.Length > 0)
                 sb.Append("\n\n");
-            sb.Append(FormatMessage(comment.Text));
+            sb.Append(FormatWithMarker(comment.Marker, comment.Text));
         }
 
         return sb.ToString();
