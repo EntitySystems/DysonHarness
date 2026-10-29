@@ -7318,6 +7318,10 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private async Task DrainAutoTurnsAsync(Guid parentPersistenceId)
     {
+        // A defer retry scheduled before dispose lands here afterwards.
+        if (_disposed)
+            return;
+
         if (IsUserStopped(parentPersistenceId))
         {
             DiscardPendingReports(parentPersistenceId);
@@ -7392,7 +7396,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                         .ConfigureAwait(false);
                     if (eventResult.Error == DysonSessionRuntime.PromptDeferredError)
                     {
-                        queue.Enqueue(interrupt);
+                        RequeueAtHead(queue, interrupt);
                         deferredBehindRun = parent;
                         break;
                     }
@@ -7421,7 +7425,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                         .ConfigureAwait(false);
                     if (shellResult.Error == DysonSessionRuntime.PromptDeferredError)
                     {
-                        queue.Enqueue(interrupt);
+                        RequeueAtHead(queue, interrupt);
                         deferredBehindRun = parent;
                         break;
                     }
@@ -7445,7 +7449,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                     .ConfigureAwait(false);
                 if (result.Error == DysonSessionRuntime.PromptDeferredError)
                 {
-                    queue.Enqueue(interrupt);
+                    RequeueAtHead(queue, interrupt);
                     deferredBehindRun = parent;
                     break;
                 }
@@ -7518,6 +7522,21 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private const string UnansweredParentEventNotice =
         "A child was waiting on a reply that never arrived. The wait was closed so it can continue.";
+
+    /// <summary>
+    /// Puts a deferred interrupt back first so the FIFO keeps its order.
+    /// ponytail: rebuild like TakeBufferedCompletionReportBlocks; an enqueue racing the rebuild may land ahead.
+    /// </summary>
+    private static void RequeueAtHead(ConcurrentQueue<DysonAgentInterrupt> queue, DysonAgentInterrupt head)
+    {
+        var rest = new List<DysonAgentInterrupt>();
+        while (queue.TryDequeue(out var item))
+            rest.Add(item);
+
+        queue.Enqueue(head);
+        foreach (var item in rest)
+            queue.Enqueue(item);
+    }
 
     private MetaParentEventAfterTurn FollowUpMetaParentEvent(
         DysonAgentSession parent,
@@ -7712,6 +7731,11 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (IsRuntimeOwned(session) && TryGetAttachedRuntime(out var runtime))
             return await ExecuteRuntimePromptOnSessionAsync(runtime, session, run).ConfigureAwait(false);
 
+        // Same rule as the runtime path: a KickOff / inject loop owns this session, so a second
+        // provider loop now would interleave tool rounds. Callers requeue and retry once it detaches.
+        if (session.HasActiveBackgroundRun)
+            return new VoidResult<string>(DysonSessionRuntime.PromptDeferredError);
+
         var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _promptCtsBySession[sessionId] = linked;
         var token = linked.Token;
@@ -7726,6 +7750,24 @@ public sealed class DysonUiHost : IAsyncDisposable
             catch (OperationCanceledException)
             {
                 return new VoidResult<string>("Prompt was cancelled.");
+            }
+
+            // The per-session gate KickOff takes. Not inside PromptWithTurnAsync: KickOff already holds it there.
+            try
+            {
+                await session.EnterPromptGateAsync(token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                promptGate.Release();
+                return new VoidResult<string>("Prompt was cancelled.");
+            }
+
+            if (session.HasActiveBackgroundRun)
+            {
+                session.ExitPromptGate();
+                promptGate.Release();
+                return new VoidResult<string>(DysonSessionRuntime.PromptDeferredError);
             }
 
             _busySessions[sessionId] = 0;
@@ -7788,6 +7830,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             finally
             {
                 _busySessions.TryRemove(sessionId, out _);
+                session.ExitPromptGate();
                 promptGate.Release();
                 if (!_disposed)
                     EvaluateTaskLifecycle(session);
@@ -8002,7 +8045,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     private VoidResult<string> EnqueuePrompt(
         Guid sessionId,
         DysonAgentTurn turn,
-        IReadOnlyList<string>? filePaths = null)
+        IReadOnlyList<string>? filePaths = null,
+        bool atHead = false)
     {
         ArgumentNullException.ThrowIfNull(turn);
 
@@ -8019,7 +8063,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return VoidResult<string>.AsError(error);
             }
 
-            var enqueued = runtime.EnqueuePrompt(sessionId, turn, filePaths);
+            var enqueued = runtime.EnqueuePrompt(sessionId, turn, filePaths, atHead);
             if (enqueued.IsError)
             {
                 LastError = enqueued.Error;
@@ -8027,7 +8071,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             }
 
             // Display projection for this circuit only; drain/remove always use the runtime FIFO.
-            AddHostQueuedPrompt(sessionId, ToHostQueuedEntry(enqueued.Value));
+            AddHostQueuedPrompt(sessionId, ToHostQueuedEntry(enqueued.Value), atHead);
             return VoidResult<string>.Success;
         }
 
@@ -8038,7 +8082,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 Guid.NewGuid(),
                 turn,
                 DysonSubagentHostLogic.PromptFirstLine(instruction),
-                filePaths is { Count: > 0 } ? [.. filePaths] : []));
+                filePaths is { Count: > 0 } ? [.. filePaths] : []),
+            atHead);
         return VoidResult<string>.Success;
     }
 
@@ -8083,7 +8128,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             prompt.FilePaths);
     }
 
-    private void AddHostQueuedPrompt(Guid sessionId, QueuedPromptEntry entry)
+    private void AddHostQueuedPrompt(Guid sessionId, QueuedPromptEntry entry, bool atHead = false)
     {
         lock (_promptQueueGate)
         {
@@ -8093,7 +8138,10 @@ public sealed class DysonUiHost : IAsyncDisposable
                 _promptQueues[sessionId] = list;
             }
 
-            list.Add(entry);
+            if (atHead)
+                list.Insert(0, entry);
+            else
+                list.Add(entry);
         }
     }
 
@@ -8221,10 +8269,35 @@ public sealed class DysonUiHost : IAsyncDisposable
                 cancellationToken)
             .ConfigureAwait(false);
 
+        // Every turn caller funnels here (queue drain, composer, question answer, summarize, voice).
+        // TaskEndReflect cannot queue and is root-only, where no background run attaches: it keeps the error.
+        if (result.Error == DysonSessionRuntime.PromptDeferredError && turn.AllowEnqueue)
+            return RequeueUntilBackgroundRunIdle(session, turn, filePaths);
+
         if (turn.Kind == DysonAgentTurnKind.Normal)
             FollowUpParkedMetaEventsAfterUserTurn(session, turn.StartedUtc);
 
         return result;
+    }
+
+    /// <summary>
+    /// A KickOff / inject loop owns the session. The turn goes back to the head of the host queue and
+    /// drains once that run detaches, so it is neither lost nor reported as an error.
+    /// </summary>
+    private VoidResult<string> RequeueUntilBackgroundRunIdle(
+        DysonAgentSession session,
+        DysonAgentTurn turn,
+        IReadOnlyList<string> filePaths)
+    {
+        var sessionId = session.PersistenceId;
+        var queued = EnqueuePrompt(sessionId, turn, filePaths, atHead: true);
+        if (queued.IsError)
+            return queued;
+
+        _ = session.WaitForBackgroundRunIdleAsync(CancellationToken.None)
+            .ContinueWith(_ => DrainQueuedPromptsAsync(sessionId), TaskScheduler.Default);
+        Notify(DysonHostChangeKind.Busy);
+        return VoidResult<string>.Success;
     }
 
     private async Task PersistStoppedSessionAsync(DysonAgentSession session)

@@ -242,11 +242,13 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
     /// <summary>
     /// Enqueues an already-built turn for a registered, persisted session. Copies
     /// <paramref name="filePaths"/> into an immutable snapshot. Does not execute the prompt.
+    /// <paramref name="atHead"/> puts it first (a deferred turn going back where it was), order of the rest kept.
     /// </summary>
     public Result<DysonQueuedPrompt, string> EnqueuePrompt(
         Guid sessionId,
         DysonAgentTurn turn,
-        IReadOnlyList<string>? filePaths = null)
+        IReadOnlyList<string>? filePaths = null,
+        bool atHead = false)
     {
         ArgumentNullException.ThrowIfNull(turn);
 
@@ -283,7 +285,18 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
                 _promptQueues[sessionId] = queue;
             }
 
-            queue.Enqueue(entry);
+            if (atHead)
+            {
+                var rebuilt = new Queue<DysonQueuedPrompt>();
+                rebuilt.Enqueue(entry);
+                while (queue.TryDequeue(out var queued))
+                    rebuilt.Enqueue(queued);
+                _promptQueues[sessionId] = rebuilt;
+            }
+            else
+            {
+                queue.Enqueue(entry);
+            }
         }
 
         RaiseChanged(DysonRuntimeChangeKind.Queue, sessionId);
@@ -997,6 +1010,10 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
 
             if (_disposed != 0)
                 return VoidResult<string>.AsError("Session runtime has been disposed.");
+
+            // A KickOff attached while this prompt waited for the gates (it now waits on the session gate).
+            if (session.HasActiveBackgroundRun)
+                return VoidResult<string>.AsError(PromptDeferredError);
 
             _busySessions[sessionId] = 0;
             _runningPromptCts[sessionId] = linked;

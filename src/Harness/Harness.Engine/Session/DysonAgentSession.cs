@@ -1680,14 +1680,7 @@ public abstract class DysonAgentSession
 
         child.EnqueuePendingTurn(turn);
         if (!child.HasActiveBackgroundRun)
-        {
-            var runCts = new CancellationTokenSource();
-            child.AttachBackgroundRun(runCts);
-            if (child.TryDequeuePendingTurn(out var next))
-                KickOffChildPrompt(child, next, runCts);
-            else
-                runCts.Dispose();
-        }
+            StartNextPendingTurn(child);
 
         if (started is null)
             return Result<string, string>.AsValue(Json(queueOnly ? "queued" : "delivered", 0));
@@ -1731,6 +1724,24 @@ public abstract class DysonAgentSession
             child._injectWaiters.TryRemove(turn.Id, out _);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Attaches a run and kicks the next pending turn. When a concurrent drain already took it, detach
+    /// again: a disposed CTS reports not-cancelled, so leaving it attached keeps HasActiveBackgroundRun true forever.
+    /// </summary>
+    internal static void StartNextPendingTurn(DysonAgentSession child)
+    {
+        var runCts = new CancellationTokenSource();
+        child.AttachBackgroundRun(runCts);
+        if (child.TryDequeuePendingTurn(out var next))
+        {
+            KickOffChildPrompt(child, next, runCts);
+            return;
+        }
+
+        child.DetachBackgroundRun(runCts);
+        runCts.Dispose();
     }
 
     /// <summary>
@@ -3443,6 +3454,7 @@ public abstract class DysonAgentSession
         _ = Task.Run(async () =>
         {
             var gateHeld = false;
+            var promptStarted = false;
             try
             {
                 // One provider loop per session: an interrupt cancels the old run first, so this waits
@@ -3450,8 +3462,12 @@ public abstract class DysonAgentSession
                 await child.EnterPromptGateAsync(runCts.Token).ConfigureAwait(false);
                 gateHeld = true;
                 if (runCts.IsCancellationRequested)
+                {
+                    RequeueUnstartedParentMessage(child, turn);
                     return;
+                }
 
+                promptStarted = true;
                 var result = await child.PromptHarnessTurnAsync(turn, runCts.Token).ConfigureAwait(false);
                 if (runCts.IsCancellationRequested)
                 {
@@ -3492,6 +3508,8 @@ public abstract class DysonAgentSession
             catch (OperationCanceledException) when (runCts.IsCancellationRequested)
             {
                 // Stop/interrupt owns follow-up; do not start a pending turn on a new CTS.
+                if (!promptStarted)
+                    RequeueUnstartedParentMessage(child, turn);
             }
             catch (Exception ex)
             {
@@ -3509,6 +3527,36 @@ public abstract class DysonAgentSession
                 runCts.Dispose();
             }
         });
+    }
+
+    /// <summary>
+    /// A newer interrupt cancelled this KickOff before its turn started (gate wait). The parent was already
+    /// told "delivered", so a parent message goes back to the head of the queue for the next run. Stop
+    /// (terminal) drops it.
+    /// </summary>
+    private static void RequeueUnstartedParentMessage(DysonAgentSession child, DysonAgentTurn turn)
+    {
+        if (child.IsTerminal
+            || turn.Instruction?.StartsWith(
+                DysonQueuedTurnAfterSummary.InjectedSubagentPromptPrefix,
+                StringComparison.Ordinal) != true)
+        {
+            return;
+        }
+
+        lock (child._injectInterruptGate)
+        {
+            var rest = new List<DysonAgentTurn>();
+            while (child._pendingTurns.TryDequeue(out var queued))
+                rest.Add(queued);
+
+            child._pendingTurns.Enqueue(turn);
+            foreach (var queued in rest)
+                child._pendingTurns.Enqueue(queued);
+        }
+
+        // No drain here: the only non-terminal canceller is InterruptChildWith, whose new run drains
+        // (or a later interrupt keeps it, as it keeps every queued parent message).
     }
 
     /// <summary>Starts the next queued pending turn when the child is still Active.</summary>
