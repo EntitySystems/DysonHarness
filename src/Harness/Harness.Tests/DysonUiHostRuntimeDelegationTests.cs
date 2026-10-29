@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text.Json;
 using DysonHarness;
@@ -759,6 +760,155 @@ public class DysonUiHostRuntimeDelegationTests
         await dialogTask.WaitAsync(TimeSpan.FromSeconds(2));
     }
 
+    [Fact]
+    public async Task Host_owned_prompt_defers_while_a_background_run_owns_the_session()
+    {
+        await using var harness = await HostHarness.CreateAsync();
+        await using var host = harness.CreateHost(attachRuntime: false);
+
+        var started = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(started.IsSuccess, started.IsError ? started.Error : null);
+        var session = host.Session ?? throw new InvalidOperationException("Expected focused session.");
+        Assert.False(harness.Runtime.TryGetSession(session.PersistenceId, out _));
+
+        var runs = 0;
+        Func<DysonAgentSession, CancellationToken, Task<VoidResult<string>>> run = (_, _) =>
+        {
+            Interlocked.Increment(ref runs);
+            return Task.FromResult(VoidResult<string>.Success);
+        };
+
+        // A run already attached: deferred before any gate is taken.
+        using var firstRun = new CancellationTokenSource();
+        InvokeSessionRunMethod(session, "AttachBackgroundRun", firstRun);
+        var deferred = await InvokeExecutePromptOnSessionAsync(host, session, run);
+        Assert.Equal(DysonSessionRuntime.PromptDeferredError, deferred.Error);
+        InvokeSessionRunMethod(session, "DetachBackgroundRun", firstRun);
+
+        // A run attaches while the prompt waits on the session gate: the re-check defers it.
+        await session.EnterPromptGateAsync(CancellationToken.None);
+        var waiting = InvokeExecutePromptOnSessionAsync(host, session, run);
+        using var secondRun = new CancellationTokenSource();
+        InvokeSessionRunMethod(session, "AttachBackgroundRun", secondRun);
+        session.ExitPromptGate();
+        var deferredAfterGate = await waiting.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(DysonSessionRuntime.PromptDeferredError, deferredAfterGate.Error);
+        Assert.Equal(0, Volatile.Read(ref runs));
+
+        // The deferred return released the session gate exactly once: one holder fits, a second waits.
+        await session.EnterPromptGateAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        using (var shortWait = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => session.EnterPromptGateAsync(shortWait.Token));
+        }
+
+        session.ExitPromptGate();
+
+        InvokeSessionRunMethod(session, "DetachBackgroundRun", secondRun);
+        var ran = await InvokeExecutePromptOnSessionAsync(host, session, run).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(ran.IsSuccess, ran.IsError ? ran.Error : null);
+        Assert.Equal(1, Volatile.Read(ref runs));
+    }
+
+    [Fact]
+    public async Task Deferred_turn_goes_to_the_queue_head_and_runs_once_the_run_detaches()
+    {
+        await using var harness = await HostHarness.CreateAsync(waiting: true);
+        await using var host = harness.CreateHost();
+        harness.WaitingFactory!.Release.TrySetResult();
+
+        var started = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(started.IsSuccess, started.IsError ? started.Error : null);
+        var session = (WaitingSession)(host.Session ?? throw new InvalidOperationException("Expected focused session."));
+        var sessionId = session.PersistenceId;
+
+        using var runCts = new CancellationTokenSource();
+        session.AttachRunForTest(runCts);
+        var later = harness.Runtime.EnqueuePrompt(sessionId, DysonAgentSession.CreateNormalTurn("later"));
+        Assert.True(later.IsSuccess, later.IsError ? later.Error : null);
+
+        var method = typeof(DysonUiHost).GetMethod(
+            "PromptHarnessTurnOnSessionAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        var result = await (Task<VoidResult<string>>)method.Invoke(
+            host,
+            [session, DysonAgentSession.CreateNormalTurn("deferred"), Array.Empty<string>(), CancellationToken.None])!;
+
+        Assert.True(result.IsSuccess, result.IsError ? result.Error : null);
+        Assert.Equal(2, harness.Runtime.GetQueuedPromptCount(sessionId));
+        Assert.True(harness.Runtime.TryPeekPrompt(sessionId, out var head));
+        Assert.Equal("deferred", head.Turn.Instruction);
+        Assert.DoesNotContain(session.Turns, t => t.Instruction == "deferred");
+
+        session.DetachRunForTest(runCts);
+        await WaitUntilAsync(
+            () => session.Turns.Count(t => t.Instruction is "deferred" or "later") == 2,
+            TimeSpan.FromSeconds(5));
+
+        Assert.Equal(
+            new[] { "deferred", "later" },
+            session.Turns.Where(t => t.Instruction is "deferred" or "later").Select(t => t.Instruction).ToArray());
+    }
+
+    [Fact]
+    public async Task Deferred_auto_turn_keeps_report_order_and_retries_after_the_run_detaches()
+    {
+        await using var harness = await HostHarness.CreateAsync(waiting: true);
+        await using var host = harness.CreateHost();
+        harness.WaitingFactory!.Release.TrySetResult();
+
+        var started = await host.StartNewSessionAsync(
+            DysonAgentModes.Work, harness.SlugId, harness.WorkDirectoryId);
+        Assert.True(started.IsSuccess, started.IsError ? started.Error : null);
+        var session = (WaitingSession)(host.Session ?? throw new InvalidOperationException("Expected focused session."));
+
+        using var runCts = new CancellationTokenSource();
+        session.AttachRunForTest(runCts);
+
+        var reports = (ConcurrentDictionary<Guid, ConcurrentQueue<DysonAgentInterrupt>>)typeof(DysonUiHost)
+            .GetField("_pendingReportsByParent", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(host)!;
+        var queue = reports.GetOrAdd(session.PersistenceId, _ => new ConcurrentQueue<DysonAgentInterrupt>());
+        queue.Enqueue(new DysonAgentInterrupt { Kind = DysonAgentInterruptKind.SubagentCompleted, SubagentId = 101 });
+        queue.Enqueue(new DysonAgentInterrupt { Kind = DysonAgentInterruptKind.SubagentCompleted, SubagentId = 102 });
+
+        var drain = typeof(DysonUiHost).GetMethod(
+            "DrainAutoTurnsAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(drain);
+        await (Task)drain.Invoke(host, [session.PersistenceId])!;
+
+        Assert.Equal(new[] { 101, 102 }, queue.Select(i => i.SubagentId).ToArray());
+        Assert.Empty(harness.WaitingFactory.ReportOrder);
+
+        session.DetachRunForTest(runCts);
+        await WaitUntilAsync(() => harness.WaitingFactory.ReportOrder.Count == 2, TimeSpan.FromSeconds(5));
+        Assert.Equal(new[] { 101, 102 }, harness.WaitingFactory.ReportOrder.ToArray());
+    }
+
+    private static Task<VoidResult<string>> InvokeExecutePromptOnSessionAsync(
+        DysonUiHost host,
+        DysonAgentSession session,
+        Func<DysonAgentSession, CancellationToken, Task<VoidResult<string>>> run)
+    {
+        var method = typeof(DysonUiHost).GetMethod(
+            "ExecutePromptOnSessionAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        return (Task<VoidResult<string>>)method.Invoke(host, [session, run, CancellationToken.None])!;
+    }
+
+    private static void InvokeSessionRunMethod(DysonAgentSession session, string name, CancellationTokenSource runCts)
+    {
+        var method = typeof(DysonAgentSession).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        method.Invoke(session, [runCts]);
+    }
+
     private static void CancelBackgroundRunForTests(DysonAgentSession session)
     {
         var method = typeof(DysonAgentSession).GetMethod(
@@ -1110,6 +1260,7 @@ public class DysonUiHostRuntimeDelegationTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int CancelObserved;
         public int ReportProcessingCalls;
+        public readonly ConcurrentQueue<int> ReportOrder = new();
         public bool EnqueueFollowUp;
         public IDysonSessionRepository Sessions => sessions;
         public Guid WorkDirectoryId { get; private set; }
@@ -1166,6 +1317,10 @@ public class DysonUiHostRuntimeDelegationTests
         }
 
         public void SetPersistenceIdForTest(Guid persistenceId) => SetPersistenceId(persistenceId);
+
+        public void AttachRunForTest(CancellationTokenSource runCts) => AttachBackgroundRun(runCts);
+
+        public void DetachRunForTest(CancellationTokenSource runCts) => DetachBackgroundRun(runCts);
 
         public override async Task<Result<DysonStartSubagentResult, string>> CreateChildAsync(
             string agentMode,
@@ -1289,9 +1444,9 @@ public class DysonUiHostRuntimeDelegationTests
             string? title = null,
             CancellationToken cancellationToken = default)
         {
-            _ = interrupt;
             _ = title;
             _ = cancellationToken;
+            _factory.ReportOrder.Enqueue(interrupt.SubagentId);
             Interlocked.Increment(ref _factory.ReportProcessingCalls);
             return Task.FromResult(VoidResult<string>.Success);
         }

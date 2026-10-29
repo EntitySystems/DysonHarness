@@ -159,9 +159,10 @@ public static class DysonSessionToolsetBuilder
     /// <summary>
     /// Meta Agent: strip to the allowlist (no project file/shell/wait/completion; temp-scoped WriteTempFile and ReadTempFile stay).
     /// Browser tools already on the pipeline stay. Meta Agent never completes.
-    /// SpeakToUser is added only when <see cref="DysonAgentSessionConfig.Voice"/> is set.
+    /// MessageVoiceModeSidecar is added only when <see cref="DysonAgentSessionConfig.Voice"/> is set.
     /// Meta Agent Drone: drop AskQuestionFromParent and PromptUserDialogFromParent
     /// (TriggerParentEvent stays) and add ReadMetaPlan / EditMetaPlan / SubmitMetaPlan.
+    /// Voice sidecar: exactly the five sidecar tools, voice on or off.
     /// </summary>
     private static void ApplyModeCatalog(
         DysonMcpPipeline pipeline,
@@ -173,12 +174,20 @@ public static class DysonSessionToolsetBuilder
             OmitRootTaskCompletionTools(pipeline);
             DysonMetaAgentTools.ApplyAllowlist(pipeline);
             if (config.Voice is not null)
-                pipeline.Tools[DysonMetaAgentTools.SpeakToUser.Name] = DysonMetaAgentTools.SpeakToUser;
+                pipeline.Tools[DysonVoiceSidecarTools.MessageVoiceModeSidecar.Name] =
+                    DysonVoiceSidecarTools.MessageVoiceModeSidecar;
             return;
         }
 
         if (string.Equals(agentMode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
             DysonMetaAgentTools.ApplyDroneAllowlist(pipeline);
+
+        if (DysonSessionPolicy.IsVoiceSidecar(agentMode))
+        {
+            OmitRootTaskCompletionTools(pipeline);
+            OmitSubmitSubagentReport(pipeline);
+            DysonVoiceSidecarTools.ApplyAllowlist(pipeline);
+        }
     }
 
     public static void OmitRootTaskCompletionTools(DysonMcpPipeline pipeline)

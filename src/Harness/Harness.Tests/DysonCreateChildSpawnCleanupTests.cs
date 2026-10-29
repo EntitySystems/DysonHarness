@@ -40,7 +40,7 @@ public class DysonCreateChildSpawnCleanupTests
             Assert.Contains("not found", spawned.Error, StringComparison.OrdinalIgnoreCase);
             Assert.Empty(parent.SubSessions);
             Assert.False(parent.TryGetSubagent(1, out _));
-            Assert.Equal("[]", parent.FormatListSubagentsJson());
+            Assert.Equal("[]", await parent.FormatListSubagentsJsonAsync());
         }
         finally
         {

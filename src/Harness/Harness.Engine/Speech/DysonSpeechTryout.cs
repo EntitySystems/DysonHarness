@@ -135,9 +135,14 @@ public sealed class DysonSpeechTryout(
     /// Plays <paramref name="chunks"/> that were already synthesized. Does not cancel the clip in flight and does not
     /// call <see cref="IDysonAudioPlayback.Stop"/>. Settings tryout still uses <see cref="PlayAsync"/>, which preempts.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="beforePlay"/> runs after the play gate is held and before the device starts.
+    /// Voice mode uses it to drop a line whose speak epoch moved during the hop onto this method.
+    /// </remarks>
     public async Task<VoidResult<string>> PlayPreparedAsync(
         IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> chunks,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<bool>? beforePlay = null)
     {
         ArgumentNullException.ThrowIfNull(chunks);
         await Task.Run(() => 0, CancellationToken.None).ConfigureAwait(false);
@@ -148,7 +153,7 @@ public sealed class DysonSpeechTryout(
         await _playGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
-            if (cts.IsCancellationRequested)
+            if (cts.IsCancellationRequested || beforePlay?.Invoke() == true)
                 return VoidResult<string>.Success;
             Interlocked.Increment(ref _playbackEpoch);
             return await _playback.PlayAsync(chunks, cts.Token).ConfigureAwait(false);
@@ -287,11 +292,14 @@ public sealed class DysonSpeechTryout(
     /// <summary>
     /// Captures until <see cref="StopRecording"/> or <paramref name="cancellationToken"/> and yields the growing transcript.
     /// <paramref name="inputInstalled"/> false does not open the microphone.
+    /// <paramref name="captureToken"/> cancels only the microphone: the engine then flushes its final text and this
+    /// method completes normally. <paramref name="cancellationToken"/> still cancels transcription too.
     /// </summary>
     public async IAsyncEnumerable<Result<string, string>> RecordAsync(
         string? deviceId,
         bool inputInstalled,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+        [EnumeratorCancellation] CancellationToken cancellationToken,
+        CancellationToken captureToken = default)
     {
         await Task.Run(() => 0, CancellationToken.None).ConfigureAwait(false);
         if (!inputInstalled)
@@ -343,14 +351,17 @@ public sealed class DysonSpeechTryout(
 
                 if (uses.Value)
                 {
-                    await foreach (var spoken in RecordLiveAsync(live, deviceId, cts).ConfigureAwait(false))
+                    await foreach (var spoken in RecordLiveAsync(live, deviceId, cts, captureToken)
+                                       .ConfigureAwait(false))
                         yield return spoken;
                     yield break;
                 }
             }
 
+            using var captureCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, captureToken);
             var text = new StringBuilder();
-            windows = _capture.CaptureWindowsAsync(deviceId, cts.Token).GetAsyncEnumerator(cts.Token);
+            windows = _capture.CaptureWindowsAsync(deviceId, captureCts.Token)
+                .GetAsyncEnumerator(captureCts.Token);
             while (true)
             {
                 bool more;
@@ -449,11 +460,13 @@ public sealed class DysonSpeechTryout(
     private async IAsyncEnumerable<Result<string, string>> RecordLiveAsync(
         IDysonLiveSpeechToText live,
         string? deviceId,
-        CancellationTokenSource cts)
+        CancellationTokenSource cts,
+        CancellationToken captureToken)
     {
+        using var captureCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, captureToken);
         var committed = new StringBuilder();
         var chunks = live.TranscribeLiveAsync(
-                _capture.CapturePcmAsync(deviceId, cts.Token, dropOldest: true), cts.Token)
+                _capture.CapturePcmAsync(deviceId, captureCts.Token, dropOldest: true), cts.Token)
             .GetAsyncEnumerator(cts.Token);
         try
         {

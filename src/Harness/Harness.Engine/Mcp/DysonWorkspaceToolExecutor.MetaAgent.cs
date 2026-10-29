@@ -182,13 +182,10 @@ public sealed partial class DysonWorkspaceToolExecutor
         }));
     }
 
-    private Task<DysonToolCallResult> ListMetaAgentDronesAsync(
+    private async Task<DysonToolCallResult> ListMetaAgentDronesAsync(
         DysonToolCall call,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(Ok(call, _session.FormatChildRosterJson(includeReports: true)));
-    }
+        CancellationToken cancellationToken) =>
+        Ok(call, await _session.FormatChildRosterJsonAsync(includeReports: true, cancellationToken).ConfigureAwait(false));
 
     private Task<DysonToolCallResult> ReadMetaAgentDroneLogAsync(
         DysonToolCall call,
@@ -252,30 +249,15 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         if (discardWorktree && !string.IsNullOrWhiteSpace(child.WorktreeAbsolutePath))
         {
+            // Discard is explicit: the checkout goes even when git no longer lists it.
+            // The branch itself is never deleted.
             var removed = await DysonSessionWorktree.RemoveAsync(
                     WorkRoot, child.WorktreeAbsolutePath, force: true, cancellationToken)
                 .ConfigureAwait(false);
             if (removed.IsError)
                 return Error(call, removed.Error);
 
-            child.WorktreeAbsolutePath = null;
-            child.WorktreeBranch = null;
-            child.WorktreeEnabled = false;
-
-            if (_store is not null && child.PersistenceId != Guid.Empty)
-            {
-                await _store.UpdateSessionMetaAsync(
-                    new DysonSessionMetaUpdate
-                    {
-                        SessionId = child.PersistenceId,
-                        UpdateWorktreeEnabled = true,
-                        WorktreeEnabled = false,
-                        UpdateWorktreeLocation = true,
-                        WorktreeAbsolutePath = null,
-                        WorktreeBranch = null,
-                    },
-                    cancellationToken).ConfigureAwait(false);
-            }
+            await ClearChildWorktreeColumnsAsync(child, cancellationToken).ConfigureAwait(false);
         }
 
         return Ok(call, stopped.Value);
@@ -357,6 +339,14 @@ public sealed partial class DysonWorkspaceToolExecutor
         var worktreeBranch = target.WorktreeBranch;
         var deletedIds = tree.Select(n => n.Id).ToArray();
 
+        if (!string.IsNullOrWhiteSpace(target.WorktreeAbsolutePath)
+            || !string.IsNullOrWhiteSpace(worktreeBranch))
+        {
+            var cleared = await TryClearDeletableWorktreeAsync(target, cancellationToken).ConfigureAwait(false);
+            if (cleared.IsError)
+                return Error(call, cleared.Error);
+        }
+
         if (_store is not null && target.PersistenceId != Guid.Empty)
         {
             var deleted = await _store.DeleteSessionAsync(target.PersistenceId, cancellationToken)
@@ -374,6 +364,69 @@ public sealed partial class DysonWorkspaceToolExecutor
             deleted = deletedIds,
             worktreeBranch,
         }));
+    }
+
+    /// <summary>
+    /// Refuses while <paramref name="target"/>'s branch still has commits the registered checkout lacks.
+    /// A stale or unknown worktree whose branch is fully merged (or already gone) is pruned, its folder
+    /// deleted, and its worktree columns cleared so session delete can proceed. Never deletes the branch.
+    /// A registered checkout is removed without force, so uncommitted edits (a drone that never committed
+    /// sits at the fork point and counts as merged) are refused by git instead of being deleted.
+    /// </summary>
+    private async Task<VoidResult<string>> TryClearDeletableWorktreeAsync(
+        DysonAgentSession target,
+        CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(target.WorktreeBranch))
+        {
+            var merged = await DysonSessionWorktree.TryIsBranchMergedAsync(
+                    WorkRoot, target.WorktreeBranch, cancellationToken)
+                .ConfigureAwait(false);
+            if (merged.IsError)
+                return VoidResult<string>.AsError(merged.Error);
+            if (!merged.Value)
+            {
+                return VoidResult<string>.AsError(
+                    "DeleteMetaAgent: this agent's branch has commits that are not in the registered checkout. " +
+                    "Merge it, or stop the drone with discardWorktree first.");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(target.WorktreeAbsolutePath))
+        {
+            var removed = await DysonSessionWorktree.RemoveAsync(
+                    WorkRoot, target.WorktreeAbsolutePath, force: false, cancellationToken)
+                .ConfigureAwait(false);
+            if (removed.IsError)
+                return VoidResult<string>.AsError(removed.Error);
+        }
+
+        await ClearChildWorktreeColumnsAsync(target, cancellationToken).ConfigureAwait(false);
+        return VoidResult<string>.Success;
+    }
+
+    private async Task ClearChildWorktreeColumnsAsync(
+        DysonAgentSession child,
+        CancellationToken cancellationToken)
+    {
+        child.WorktreeAbsolutePath = null;
+        child.WorktreeBranch = null;
+        child.WorktreeEnabled = false;
+
+        if (_store is null || child.PersistenceId == Guid.Empty)
+            return;
+
+        await _store.UpdateSessionMetaAsync(
+            new DysonSessionMetaUpdate
+            {
+                SessionId = child.PersistenceId,
+                UpdateWorktreeEnabled = true,
+                WorktreeEnabled = false,
+                UpdateWorktreeLocation = true,
+                WorktreeAbsolutePath = null,
+                WorktreeBranch = null,
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static void CollectDescendantsThenSelf(DysonAgentSession node, List<DysonAgentSession> acc)
@@ -416,45 +469,11 @@ public sealed partial class DysonWorkspaceToolExecutor
         return Ok(call, """{"ok":true}""");
     }
 
-    private async Task<DysonToolCallResult> SpeakToUser(DysonToolCall call, CancellationToken cancellationToken)
-    {
-        var denied = RejectUnlessMetaAgent(call, "SpeakToUser");
-        if (denied is not null)
-            return denied;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
-            var text = RequireString(doc.RootElement, "text");
-            if (text.IsError)
-                return Error(call, text.Error);
-
-            var voice = _session.Config.Voice;
-            if (voice is null)
-                return Error(call, "SpeakToUser: voice mode is off.");
-
-            var focus = _session.Config.Focus;
-            var name = focus is null
-                ? ""
-                : await focus.GetDisplayNameAsync(_workDirectoryId, cancellationToken).ConfigureAwait(false);
-
-            var spoken = voice.Speak(text.Value, _workDirectoryId, name);
-            if (spoken.IsError)
-                return Error(call, "SpeakToUser: " + spoken.Error);
-
-            return Ok(call, """{"ok":true}""");
-        }
-        catch (JsonException)
-        {
-            return Error(call, "SpeakToUser: invalid JSON arguments.");
-        }
-    }
-
     private async Task<DysonToolCallResult> ListWorkdirsAsync(
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
-        var denied = RejectUnlessMetaAgent(call, "ListWorkdirs");
+        var denied = RejectUnlessWorkdirCaller(call, "ListWorkdirs");
         if (denied is not null)
             return denied;
 
@@ -468,7 +487,7 @@ public sealed partial class DysonWorkspaceToolExecutor
 
     private async Task<DysonToolCallResult> OpenWorkdirsPanelAsync(DysonToolCall call)
     {
-        var denied = RejectUnlessMetaAgent(call, "OpenWorkdirsPanel");
+        var denied = RejectUnlessWorkdirCaller(call, "OpenWorkdirsPanel");
         if (denied is not null)
             return denied;
 
@@ -484,7 +503,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
-        var denied = RejectUnlessMetaAgent(call, "SwitchWorkdir");
+        var denied = RejectUnlessWorkdirCaller(call, "SwitchWorkdir");
         if (denied is not null)
             return denied;
 
@@ -508,7 +527,17 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Error(call, DysonWorkDirectoryFocus.NotOwnerMessage);
 
         var switched = await focus.SwitchAsync(_workDirectoryId, id, cancellationToken).ConfigureAwait(false);
-        return switched.IsError ? Error(call, switched.Error) : Ok(call, """{"ok":true}""");
+        if (switched.IsError)
+            return Error(call, switched.Error);
+
+        // A sidecar switch: one UI-only line on its Meta's chat so the record shows why the screen moved.
+        if (_session.VoiceSidecarOwner is { } owner)
+        {
+            var name = await focus.GetDisplayNameAsync(id, cancellationToken).ConfigureAwait(false);
+            owner.AppendDisplayInfoTurn("[voice] switched the screen to " + (name.Length > 0 ? name : id.ToString()));
+        }
+
+        return Ok(call, """{"ok":true}""");
     }
 
     private const int MaxConversationActions = 8;
@@ -1606,6 +1635,16 @@ public sealed partial class DysonWorkspaceToolExecutor
             return null;
 
         return Error(call, $"{tool} is only available in Meta Agent mode.");
+    }
+
+    /// <summary>Mode check for the work-directory tools; ownership stays in <see cref="DysonWorkDirectoryFocus"/>.</summary>
+    private DysonToolCallResult? RejectUnlessWorkdirCaller(DysonToolCall call, string tool)
+    {
+        if (string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase)
+            || DysonSessionPolicy.IsVoiceSidecar(_session.Mode))
+            return null;
+
+        return Error(call, $"{tool} is only available to the Meta Agent or its voice sidecar.");
     }
 
     // ponytail: per-note WriteFile gate does not serialize the 20-note cap across different names; upgrade = one gate for the scratch directory.

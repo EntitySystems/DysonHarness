@@ -183,6 +183,44 @@ public class DysonSpeechTryoutTests
     }
 
     [Fact]
+    public async Task Record_capture_token_ends_capture_and_still_yields_the_final()
+    {
+        var capture = new FakeCapture { Hold = true };
+        capture.Pcm.Add(Result<byte[], string>.AsValue([1, 0]));
+        var stt = new FakeLiveStt();
+        var tryout = new DysonSpeechTryout(capture, stt, new FakeTts(), new FakePlayback());
+        using var captureCts = new CancellationTokenSource();
+        var errors = new List<string>();
+        var finals = new List<string>();
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var recording = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var item in tryout.RecordAsync("9", true, CancellationToken.None, captureCts.Token))
+                {
+                    if (item.IsError)
+                        errors.Add(item.Error);
+                    else
+                        finals.Add(item.Value);
+                }
+            }
+            finally
+            {
+                done.TrySetResult();
+            }
+        });
+
+        await capture.Holding.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        captureCts.Cancel();
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await recording;
+        Assert.Empty(errors);
+        Assert.Contains("a!", finals);
+        Assert.Equal(1, capture.PcmCaptures);
+    }
+
+    [Fact]
     public async Task Recorded_enroll_does_not_open_the_mic_when_no_speech_to_text_is_installed()
     {
         var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);

@@ -47,11 +47,89 @@ public sealed partial class DysonWorkspaceToolExecutor
 
     private string WorkRoot => _fs.NativeRootPath;
 
+    // Models sometimes prefix a catalog name (submit_SubmitMetaPlan, option_ReadFile,
+    // mcp__black_scissors__submit_SubmitMetaPlan). Exact keys (custom server__tool) win first.
+    [GeneratedRegex(@"^(?:mcp__.+?__)?[a-z]+_(?<n>[A-Z]\w*)$", RegexOptions.CultureInvariant)]
+    private static partial Regex PrefixedCatalogToolName();
+
+    /// <summary>
+    /// Exact catalog key, else the captured suffix when that suffix is a catalog key.
+    /// Null when the name should stay as given (no prefix shape, or suffix not in the catalog).
+    /// The provider loop also records the resolved call so history replays the bare name.
+    /// </summary>
+    internal static DysonToolCall? TryResolvePrefixedToolName(
+        DysonToolCall call,
+        IReadOnlyDictionary<string, DysonMcpTool> tools)
+    {
+        if (tools.ContainsKey(call.ToolName))
+            return null;
+
+        var match = PrefixedCatalogToolName().Match(call.ToolName);
+        if (!match.Success)
+            return null;
+
+        var bare = match.Groups["n"].Value;
+        if (!tools.ContainsKey(bare))
+            return null;
+
+        return new DysonToolCall
+        {
+            CallId = call.CallId,
+            ToolName = bare,
+            Stage = call.Stage,
+            ArgumentsJson = call.ArgumentsJson,
+            ArgumentsError = call.ArgumentsError,
+        };
+    }
+
+    /// <summary>
+    /// Catalog-miss hint: a key equal ignoring case, or equal ignoring case to the suffix after the last '_' or '__'.
+    /// </summary>
+    private string? CatalogMissHint(string toolName)
+    {
+        // Tools is a plain Dictionary that custom/plugin MCP refresh mutates: snapshot, and skip the hint on a race.
+        string[] keys;
+        try
+        {
+            keys = [.. _session.McpPipeline.Tools.Keys];
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+
+        foreach (var key in keys)
+        {
+            if (string.Equals(key, toolName, StringComparison.OrdinalIgnoreCase))
+                return $" Did you mean '{key}'?";
+        }
+
+        var separator = toolName.LastIndexOf("__", StringComparison.Ordinal);
+        var suffixStart = separator >= 0
+            ? separator + 2
+            : toolName.LastIndexOf('_') + 1;
+        if (suffixStart <= 0 || suffixStart >= toolName.Length)
+            return null;
+
+        var suffix = toolName[suffixStart..];
+        foreach (var key in keys)
+        {
+            if (string.Equals(key, suffix, StringComparison.OrdinalIgnoreCase))
+                return $" Did you mean '{key}'?";
+        }
+
+        return null;
+    }
+
     public async Task<DysonToolCallResult> ExecuteAsync(
         DysonToolCall call,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(call);
+
+        var resolved = TryResolvePrefixedToolName(call, _session.McpPipeline.Tools);
+        if (resolved is not null)
+            call = resolved;
 
         // These names are absent from every catalog except Meta Agent, so the catalog
         // gate below would hide the mode error the caller is required to see.
@@ -66,7 +144,8 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Error(
                 call,
                 $"Tool '{call.ToolName}' is not available in this session's catalog " +
-                "(disabled by agent-mode policy or structural gate).");
+                "(disabled by agent-mode policy or structural gate)." +
+                CatalogMissHint(call.ToolName));
         }
 
         try
@@ -99,6 +178,11 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "DeleteMetaAgent" => await DeleteMetaAgentAsync(call, cancellationToken).ConfigureAwait(false),
                 "PostConversationMessage" => PostConversationMessage(call),
                 "SpeakToUser" => await SpeakToUser(call, cancellationToken).ConfigureAwait(false),
+                "MessageMetaSession" => await MessageMetaSession(call).ConfigureAwait(false),
+                "MessageVoiceModeSidecar" => await MessageVoiceModeSidecar(call).ConfigureAwait(false),
+                "ReadMetaAgentLog" => await ReadMetaAgentLog(call).ConfigureAwait(false),
+                "ReadMemory" => await ReadMemory(call, cancellationToken).ConfigureAwait(false),
+                "EditMemory" => await EditMemory(call, cancellationToken).ConfigureAwait(false),
                 "ListWorkdirs" => await ListWorkdirsAsync(call, cancellationToken).ConfigureAwait(false),
                 "OpenWorkdirsPanel" => await OpenWorkdirsPanelAsync(call).ConfigureAwait(false),
                 "SwitchWorkdir" => await SwitchWorkdirAsync(call, cancellationToken).ConfigureAwait(false),
@@ -124,6 +208,7 @@ public sealed partial class DysonWorkspaceToolExecutor
                 "WaitForSubagent" => await WaitForSubagentAsync(call, cancellationToken).ConfigureAwait(false),
                 "InspectSubagentLog" => await InspectSubagentLogAsync(call, cancellationToken).ConfigureAwait(false),
                 "StopSubagent" => await StopSubagentAsync(call, cancellationToken).ConfigureAwait(false),
+                "ChangeSubagentAIModel" => await ChangeSubagentAIModelAsync(call, cancellationToken).ConfigureAwait(false),
                 "SubmitSubagentReport" => await SubmitSubagentReportAsync(call, cancellationToken).ConfigureAwait(false),
                 "AskQuestion" => await AskQuestionAsync(call, cancellationToken).ConfigureAwait(false),
                 "AskQuestionFromParent" => await AskQuestionFromParentAsync(call, cancellationToken).ConfigureAwait(false),
@@ -495,13 +580,10 @@ public sealed partial class DysonWorkspaceToolExecutor
         }));
     }
 
-    private Task<DysonToolCallResult> ListSubagentsAsync(
+    private async Task<DysonToolCallResult> ListSubagentsAsync(
         DysonToolCall call,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(Ok(call, _session.FormatListSubagentsJson()));
-    }
+        CancellationToken cancellationToken) =>
+        Ok(call, await _session.FormatListSubagentsJsonAsync(cancellationToken).ConfigureAwait(false));
 
     private async Task<DysonToolCallResult> ListTodosAsync(
         DysonToolCall call,
@@ -799,6 +881,49 @@ public sealed partial class DysonWorkspaceToolExecutor
             .ConfigureAwait(false);
 
         return Ok(call, stopped.Value);
+    }
+
+    private async Task<DysonToolCallResult> ChangeSubagentAIModelAsync(
+        DysonToolCall call,
+        CancellationToken cancellationToken)
+    {
+        int subagentId;
+        string? modelSlug;
+        string? reasoningEffort;
+        var rootTool = DysonSessionPolicy.IsMetaAgent(_session.Mode);
+        var idName = rootTool ? "agentId" : "subagentId";
+        try
+        {
+            using var doc = JsonDocument.Parse(ArgsOrEmpty(call));
+            var id = GetInt(doc.RootElement, "agentId") ?? GetInt(doc.RootElement, "subagentId");
+            if (id is null or < 1)
+                return Error(call, $"ChangeSubagentAIModel: {idName} (≥ 1) is required.");
+            subagentId = id.Value;
+            modelSlug = GetOptionalString(doc.RootElement, "modelSlug");
+            reasoningEffort = GetOptionalString(doc.RootElement, "reasoningEffort");
+        }
+        catch (JsonException)
+        {
+            return Error(call, "ChangeSubagentAIModel: invalid JSON arguments.");
+        }
+
+        var changed = await _session.ChangeSubagentModelAsync(
+                subagentId, modelSlug, reasoningEffort, cancellationToken)
+            .ConfigureAwait(false);
+        if (changed.IsError)
+            return Error(call, changed.Error);
+
+        var r = changed.Value;
+        return Ok(call, JsonSerializer.Serialize(new
+        {
+            subagentId = rootTool ? (int?)null : r.SubagentId,
+            agentId = rootTool ? r.SubagentId : (int?)null,
+            persistenceId = r.PersistenceId,
+            modelSlug = r.ModelSlug,
+            reasoningEffort = r.ReasoningEffort,
+            modelLabel = r.ModelLabel,
+            applied = r.Applied,
+        }));
     }
 
     private async Task<DysonToolCallResult> SubmitSubagentReportAsync(

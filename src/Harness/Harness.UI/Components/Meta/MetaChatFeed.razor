@@ -17,7 +17,7 @@
             @foreach (var item in _items)
             {
                 <div @key="item.Key"
-                     class="meta-chat__msg @(item.Role == MetaChatRole.User ? "meta-chat__msg--user" : "meta-chat__msg--agent") @(item.Pending ? "meta-chat__msg--pending" : null) @(_reveal.Contains(item.Key) ? "meta-chat__msg--reveal" : null)">
+                     class="meta-chat__msg @(item.Role == MetaChatRole.User ? "meta-chat__msg--user" : "meta-chat__msg--agent") @(item.Pending ? "meta-chat__msg--pending" : null) @(_live.Contains(item.Key) ? "meta-chat__msg--live" : null) @(_reveal.Contains(item.Key) ? "meta-chat__msg--reveal" : null)">
                     <div class="meta-chat__msg-bar">
                         <span class="meta-chat__avatar" aria-hidden="true"></span>
                         <span class="meta-chat__msg-role">@(item.Role == MetaChatRole.User ? "You" : "Meta agent")</span>
@@ -159,11 +159,11 @@
     private bool _attached;
     private bool _entryScroll = true;
     private string _entryAnchor = "";
-    private bool _revealPrimed;
     private int _renderVersion;
     private int _lastScrolledRenderVersion = -1;
     private IReadOnlyList<MetaChatItem> _items = [];
     private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _live = new(StringComparer.Ordinal);
     private readonly HashSet<string> _reveal = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ElementReference> _bodies = new(StringComparer.Ordinal);
     private readonly HashSet<string> _actionBusy = new(StringComparer.Ordinal);
@@ -343,13 +343,25 @@
 
     protected override void OnParametersSet()
     {
+        var previous = _items.Select(i => i.Key);
         _items = MetaChatItems.Build(Turns, Queued);
         var keys = new string[_items.Count];
         for (var i = 0; i < _items.Count; i++)
             keys[i] = _items[i].Key;
 
-        foreach (var key in MetaChatReveal.LiveKeys(keys, _seen, _revealPrimed))
+        // Only ids appended to a conversation already on screen are live. A load, a late history
+        // arrival or a session switch is a reload: reset, so existing messages stay static.
+        var primed = MetaChatReveal.Continues(previous, keys);
+        if (!primed)
         {
+            _seen.Clear();
+            _live.Clear();
+            _reveal.Clear();
+        }
+
+        foreach (var key in MetaChatReveal.LiveKeys(keys, _seen, primed))
+        {
+            _live.Add(key);
             if (key.StartsWith("a:", StringComparison.Ordinal))
                 _reveal.Add(key);
         }
@@ -362,7 +374,6 @@
             _entryScroll = true;
         if (anchor.Length > 0)
             _entryAnchor = anchor;
-        _revealPrimed = true;
         _renderVersion++;
     }
 

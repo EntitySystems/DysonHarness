@@ -18,6 +18,21 @@ public class DysonMetaAgentToolsetTests
     }
 
     [Fact]
+    public void ChangeSubagentAIModel_uses_agentId_on_root_and_subagentId_in_default_tools()
+    {
+        var root = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.MetaAgent);
+        Assert.Contains("agentId", root.Tools["ChangeSubagentAIModel"].InputSchemaJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("subagentId", root.Tools["ChangeSubagentAIModel"].InputSchemaJson, StringComparison.Ordinal);
+
+        foreach (var mode in new[] { DysonAgentModes.Work, DysonAgentModes.Drone, DysonAgentModes.MetaAgentDrone })
+        {
+            var pipeline = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), mode);
+            Assert.True(pipeline.Tools.ContainsKey("ChangeSubagentAIModel"), mode);
+            Assert.Contains("subagentId", pipeline.Tools["ChangeSubagentAIModel"].InputSchemaJson, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void Meta_agent_catalog_keeps_browser_tools_when_browser_control_is_set()
     {
         var pipeline = DysonSessionToolsetBuilder.Build(
@@ -83,15 +98,15 @@ public class DysonMetaAgentToolsetTests
     }
 
     [Fact]
-    public void Child_roster_with_reports_is_byte_identical_across_calls()
+    public async Task Child_roster_with_reports_is_byte_identical_across_calls()
     {
         var parent = new StubSession(DysonAgentModes.MetaAgent);
         var drone = new StubSession(DysonAgentModes.MetaAgentDrone);
         drone.WorktreeBranch = "dyson/abcd1234";
         parent.RegisterForTest(drone);
 
-        var first = parent.FormatChildRosterJson(includeReports: true);
-        var second = parent.FormatChildRosterJson(includeReports: true);
+        var first = await parent.FormatChildRosterJsonAsync(includeReports: true);
+        var second = await parent.FormatChildRosterJsonAsync(includeReports: true);
         Assert.Equal(first, second);
 
         using var doc = JsonDocument.Parse(first);
@@ -106,13 +121,13 @@ public class DysonMetaAgentToolsetTests
     }
 
     [Fact]
-    public void List_subagents_json_does_not_grow_report_fields()
+    public async Task List_subagents_json_does_not_grow_report_fields()
     {
         var parent = new StubSession(DysonAgentModes.Work);
         var child = new StubSession(DysonAgentModes.Explore);
         parent.RegisterForTest(child);
 
-        using var doc = JsonDocument.Parse(parent.FormatListSubagentsJson());
+        using var doc = JsonDocument.Parse(await parent.FormatListSubagentsJsonAsync());
         var item = doc.RootElement[0];
         Assert.False(item.TryGetProperty("kind", out _));
         Assert.False(item.TryGetProperty("lastReport", out _));
@@ -152,17 +167,19 @@ public class DysonMetaAgentToolsetTests
     }
 
     [Fact]
-    public void SpeakToUser_OnlyOnRootMetaAgent_WhenVoiceOn()
+    public void MessageVoiceModeSidecar_OnlyOnRootMetaAgent_WhenVoiceOn()
     {
         var voice = (DysonVoiceMode)RuntimeHelpers.GetUninitializedObject(typeof(DysonVoiceMode));
         var voiced = new DysonAgentSessionConfig { Voice = voice };
 
         var on = DysonSessionToolsetBuilder.Build(voiced, DysonAgentModes.MetaAgent);
-        Assert.True(on.Tools.ContainsKey("SpeakToUser"));
+        Assert.True(on.Tools.ContainsKey("MessageVoiceModeSidecar"));
+        Assert.False(on.Tools.ContainsKey("SpeakToUser"));
         foreach (var name in DysonMetaAgentTools.AllowedToolNames)
             Assert.Contains(name, on.Tools.Keys);
 
         var off = DysonSessionToolsetBuilder.Build(new DysonAgentSessionConfig(), DysonAgentModes.MetaAgent);
+        Assert.False(off.Tools.ContainsKey("MessageVoiceModeSidecar"));
         Assert.False(off.Tools.ContainsKey("SpeakToUser"));
 
         foreach (var mode in new[]
@@ -179,6 +196,29 @@ public class DysonMetaAgentToolsetTests
         {
             var pipeline = DysonSessionToolsetBuilder.Build(voiced, mode);
             Assert.False(pipeline.Tools.ContainsKey("SpeakToUser"), mode);
+            Assert.False(pipeline.Tools.ContainsKey("MessageVoiceModeSidecar"), mode);
+        }
+    }
+
+    [Fact]
+    public void Sidecar_catalog_is_exactly_five_tools_voice_on_or_off()
+    {
+        var voice = (DysonVoiceMode)RuntimeHelpers.GetUninitializedObject(typeof(DysonVoiceMode));
+        var expected = DysonVoiceSidecarTools.AllowedToolNames.OrderBy(n => n, StringComparer.Ordinal).ToArray();
+        Assert.Equal(
+            new[]
+            {
+                "EditMemory", "ListWorkdirs", "MessageMetaSession", "OpenWorkdirsPanel", "ReadMemory",
+                "ReadMetaAgentLog", "SpeakToUser", "SwitchWorkdir",
+            },
+            expected);
+
+        foreach (var config in new DysonAgentSessionConfig[] { new(), new() { Voice = voice } })
+        {
+            var pipeline = DysonSessionToolsetBuilder.Build(config, DysonAgentModes.VoiceSidecar);
+            var names = pipeline.Tools.Keys.OrderBy(n => n, StringComparer.Ordinal).ToArray();
+            Assert.Equal(expected, names);
+            Assert.False(pipeline.Tools.ContainsKey("MessageVoiceModeSidecar"));
         }
     }
 
@@ -189,10 +229,11 @@ public class DysonMetaAgentToolsetTests
         var session = new StubSession(DysonAgentModes.MetaAgent, "models-block");
         var turnedOn = session.SetVoiceMode(voice);
         Assert.True(turnedOn.IsSuccess);
-        Assert.Contains("SpeakToUser", session.SystemPrompt, StringComparison.Ordinal);
-        Assert.Contains("[voice input]", session.SystemPrompt, StringComparison.Ordinal);
+        Assert.Contains("MessageVoiceModeSidecar", session.SystemPrompt, StringComparison.Ordinal);
+        Assert.Contains("You have no SpeakToUser tool.", session.SystemPrompt, StringComparison.Ordinal);
         Assert.Contains("models-block", session.SystemPrompt, StringComparison.Ordinal);
-        Assert.True(session.McpPipeline.Tools.ContainsKey("SpeakToUser"));
+        Assert.True(session.McpPipeline.Tools.ContainsKey("MessageVoiceModeSidecar"));
+        Assert.False(session.McpPipeline.Tools.ContainsKey("SpeakToUser"));
         Assert.Equal(1, session.SystemPromptGeneration);
 
         var same = session.SetVoiceMode(voice);
@@ -201,6 +242,7 @@ public class DysonMetaAgentToolsetTests
 
         var turnedOff = session.SetVoiceMode(null);
         Assert.True(turnedOff.IsSuccess);
+        Assert.False(session.McpPipeline.Tools.ContainsKey("MessageVoiceModeSidecar"));
         Assert.False(session.McpPipeline.Tools.ContainsKey("SpeakToUser"));
         Assert.DoesNotContain("Voice mode (on):", session.SystemPrompt, StringComparison.Ordinal);
         Assert.Contains("models-block", session.SystemPrompt, StringComparison.Ordinal);

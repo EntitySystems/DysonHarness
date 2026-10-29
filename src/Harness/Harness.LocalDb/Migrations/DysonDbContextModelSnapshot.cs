@@ -1056,6 +1056,42 @@ namespace Harness.LocalDb.Migrations
                     b.ToTable("usage_requests", (string)null);
                 });
 
+            modelBuilder.Entity("DysonHarness.DysonVoiceSidecarMemoryEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SubjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SessionId");
+
+                    b.HasIndex("SubjectId", "SessionId")
+                        .IsUnique();
+
+                    b.ToTable("voice_sidecar_memory", (string)null);
+                });
+
             modelBuilder.Entity("DysonHarness.DysonWorkDirectoryConfigurationEntity", b =>
                 {
                     b.Property<Guid>("WorkDirectoryId")
@@ -1269,6 +1305,17 @@ namespace Harness.LocalDb.Migrations
                 {
                     b.HasOne("DysonHarness.DysonSessionEntity", "Session")
                         .WithMany("Turns")
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Session");
+                });
+
+            modelBuilder.Entity("DysonHarness.DysonVoiceSidecarMemoryEntity", b =>
+                {
+                    b.HasOne("DysonHarness.DysonSessionEntity", "Session")
+                        .WithMany()
                         .HasForeignKey("SessionId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

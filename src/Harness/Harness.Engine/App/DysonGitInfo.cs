@@ -364,6 +364,9 @@ public static class DysonGitInfo
 
     /// <summary>
     /// Runs <c>git worktree remove</c> (with <c>--force</c> when <paramref name="force"/> is true).
+    /// A path git does not list (or answers with "is not a working tree") is pruned and the leftover
+    /// folder deleted. A folder git still lists is never deleted by hand. Processes whose executable
+    /// path is under the worktree are killed, then the remove is retried.
     /// </summary>
     public static async Task<VoidResult<string>> TryRemoveWorktreeAsync(
         string repoRoot,
@@ -388,23 +391,335 @@ public static class DysonGitInfo
             return VoidResult<string>.AsError($"Invalid path: {ex.Message}");
         }
 
+        var listed = await TryListWorktreesAsync(root.Value, cancellationToken).ConfigureAwait(false);
+        if (listed.IsError)
+            return VoidResult<string>.AsError(listed.Error);
+
+        if (!WorktreeListContains(listed.Value, fullWorktree))
+            return await ForgetUnknownWorktreeAsync(root.Value, fullWorktree, cancellationToken).ConfigureAwait(false);
+
         string[] args = force
             ? ["worktree", "remove", "--force", fullWorktree]
             : ["worktree", "remove", fullWorktree];
 
-        var run = await RunGitAsync(root.Value, args, WorktreeCommandTimeout, cancellationToken)
+        for (var attempt = 0; attempt < RemoveRetryDelays.Length; attempt++)
+        {
+            var run = await RunGitAsync(root.Value, args, WorktreeCommandTimeout, cancellationToken)
+                .ConfigureAwait(false);
+            if (run.IsError)
+                return VoidResult<string>.AsError(run.Error);
+
+            var (exitCode, _, stderr) = run.Value;
+            if (exitCode == 0)
+                return VoidResult<string>.Success;
+
+            var message = string.IsNullOrWhiteSpace(stderr) ? "git worktree remove failed." : stderr.Trim();
+            if (IsUnknownWorktreeMessage(message))
+                return await ForgetUnknownWorktreeAsync(root.Value, fullWorktree, cancellationToken)
+                    .ConfigureAwait(false);
+
+            // Dirty without --force is a real refusal; killing a holder will not make git accept it.
+            if (!force && !LooksLikeFolderInUse(message))
+                return VoidResult<string>.AsError(AnnotateGitLockFailure(message));
+
+            if (attempt == RemoveRetryDelays.Length - 1)
+                return VoidResult<string>.AsError(AnnotateGitLockFailure(message));
+
+            KillProcessesUnder(fullWorktree, root.Value);
+            var waited = await DelayRemoveRetryAsync(attempt, cancellationToken).ConfigureAwait(false);
+            if (waited.IsError)
+                return waited;
+        }
+
+        return VoidResult<string>.AsError("git worktree remove failed.");
+    }
+
+    /// <summary>
+    /// True when <c>git merge-base --is-ancestor {branch} HEAD</c> succeeds in <paramref name="repoRoot"/>.
+    /// A missing branch counts as merged (nothing left to lose).
+    /// </summary>
+    public static async Task<Result<bool, string>> TryIsBranchAncestorOfHeadAsync(
+        string repoRoot,
+        string branchName,
+        CancellationToken cancellationToken = default)
+    {
+        var root = TryResolveExistingDirectory(repoRoot);
+        if (root.IsError)
+            return Result<bool, string>.AsError(root.Error);
+
+        if (string.IsNullOrWhiteSpace(branchName))
+            return Result<bool, string>.AsError("Branch name is empty.");
+
+        var run = await RunGitAsync(
+                root.Value,
+                ["merge-base", "--is-ancestor", branchName.Trim(), "HEAD"],
+                WorktreeCommandTimeout,
+                cancellationToken)
             .ConfigureAwait(false);
         if (run.IsError)
-            return VoidResult<string>.AsError(run.Error);
+            return Result<bool, string>.AsError(run.Error);
 
         var (exitCode, _, stderr) = run.Value;
+        if (exitCode == 0)
+            return Result<bool, string>.AsValue(true);
+        if (exitCode == 1)
+            return Result<bool, string>.AsValue(false);
+
+        var message = string.IsNullOrWhiteSpace(stderr) ? "git merge-base failed." : stderr.Trim();
+        if (message.Contains("Not a valid object name", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("no such ref", StringComparison.OrdinalIgnoreCase))
+        {
+            return Result<bool, string>.AsValue(true);
+        }
+
+        return Result<bool, string>.AsError(message);
+    }
+
+    /// <summary>
+    /// True when <paramref name="candidate"/> is <paramref name="root"/> or a descendant of it.
+    /// Sibling prefixes do not match (<c>wt</c> is not under <c>wt2</c>). Empty, root-only, and
+    /// unresolvable paths are false.
+    /// </summary>
+    public static bool IsPathUnder(string? candidate, string? root)
+    {
+        if (string.IsNullOrWhiteSpace(candidate) || string.IsNullOrWhiteSpace(root))
+            return false;
+
+        string fullCandidate;
+        string fullRoot;
+        try
+        {
+            fullCandidate = Path.GetFullPath(candidate.Trim());
+            fullRoot = Path.GetFullPath(root.Trim());
+        }
+        catch
+        {
+            return false;
+        }
+
+        fullCandidate = fullCandidate.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        fullRoot = fullRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (fullCandidate.Length == 0 || fullRoot.Length == 0)
+            return false;
+
+        if (IsFilesystemRoot(fullRoot) || IsFilesystemRoot(fullCandidate))
+            return false;
+
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (string.Equals(fullCandidate, fullRoot, comparison))
+            return true;
+
+        var prefix = fullRoot + Path.DirectorySeparatorChar;
+        return fullCandidate.StartsWith(prefix, comparison);
+    }
+
+    private static readonly TimeSpan[] RemoveRetryDelays =
+    [
+        TimeSpan.FromMilliseconds(250),
+        TimeSpan.FromMilliseconds(500),
+        TimeSpan.FromMilliseconds(1000),
+    ];
+
+    private static bool WorktreeListContains(IReadOnlyList<DysonGitWorktreeEntry> entries, string fullPath)
+    {
+        foreach (var entry in entries)
+        {
+            if (SameFullPath(entry.Path, fullPath))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool SameFullPath(string a, string b)
+    {
+        try
+        {
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), comparison);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal static bool IsUnknownWorktreeMessage(string message) =>
+        message.Contains("is not a working tree", StringComparison.OrdinalIgnoreCase);
+
+    private static bool LooksLikeFolderInUse(string message) =>
+        message.Contains("Invalid argument", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("Permission denied", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("Access is denied", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("being used by another process", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("Directory not empty", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsFilesystemRoot(string fullPath)
+    {
+        var root = Path.GetPathRoot(fullPath);
+        if (string.IsNullOrEmpty(root))
+            return true;
+
+        return string.Equals(
+            fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Test seam: runs before each stale-folder delete attempt (after process kill).
+    /// Production leaves this null.
+    /// </summary>
+    internal static Action? BeforeStaleFolderDelete;
+
+    /// <summary>
+    /// <c>git worktree prune</c>, then delete a leftover folder git no longer lists.
+    /// Kills holders under the folder first. Does not delete the branch.
+    /// </summary>
+    private static async Task<VoidResult<string>> ForgetUnknownWorktreeAsync(
+        string repoRoot,
+        string fullWorktree,
+        CancellationToken cancellationToken)
+    {
+        var prune = await RunGitAsync(
+                repoRoot, ["worktree", "prune"], WorktreeCommandTimeout, cancellationToken)
+            .ConfigureAwait(false);
+        if (prune.IsError)
+            return VoidResult<string>.AsError(prune.Error);
+
+        var (exitCode, _, stderr) = prune.Value;
         if (exitCode != 0)
         {
             return VoidResult<string>.AsError(
-                string.IsNullOrWhiteSpace(stderr) ? "git worktree remove failed." : AnnotateGitLockFailure(stderr));
+                string.IsNullOrWhiteSpace(stderr) ? "git worktree prune failed." : stderr.Trim());
         }
 
-        return VoidResult<string>.Success;
+        if (!Directory.Exists(fullWorktree))
+            return VoidResult<string>.Success;
+
+        // Never hand-delete a checkout git still tracks.
+        var listed = await TryListWorktreesAsync(repoRoot, cancellationToken).ConfigureAwait(false);
+        if (listed.IsError)
+            return VoidResult<string>.AsError(listed.Error);
+        if (WorktreeListContains(listed.Value, fullWorktree))
+            return VoidResult<string>.AsError("git worktree remove failed: path is still a registered worktree.");
+
+        return await DeleteDirectoryWithRetryAsync(fullWorktree, repoRoot, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<VoidResult<string>> DeleteDirectoryWithRetryAsync(
+        string fullWorktree,
+        string repoRoot,
+        CancellationToken cancellationToken)
+    {
+        Exception? last = null;
+        for (var attempt = 0; attempt < RemoveRetryDelays.Length; attempt++)
+        {
+            KillProcessesUnder(fullWorktree, repoRoot);
+            try
+            {
+                BeforeStaleFolderDelete?.Invoke();
+            }
+            catch
+            {
+                // The seam is for tests. A throw must not replace the delete result.
+            }
+
+            try
+            {
+                if (Directory.Exists(fullWorktree))
+                    Directory.Delete(fullWorktree, recursive: true);
+                return VoidResult<string>.Success;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                last = ex;
+                if (attempt == RemoveRetryDelays.Length - 1)
+                    break;
+
+                var waited = await DelayRemoveRetryAsync(attempt, cancellationToken).ConfigureAwait(false);
+                if (waited.IsError)
+                    return waited;
+            }
+        }
+
+        return VoidResult<string>.AsError(
+            last is null ? "Failed to delete worktree folder." : $"Failed to delete worktree folder: {last.Message}");
+    }
+
+    private static async Task<VoidResult<string>> DelayRemoveRetryAsync(
+        int attempt,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(RemoveRetryDelays[attempt], cancellationToken).ConfigureAwait(false);
+            return VoidResult<string>.Success;
+        }
+        catch (OperationCanceledException)
+        {
+            return VoidResult<string>.AsError("git cancelled.");
+        }
+    }
+
+    /// <summary>
+    /// Kills processes whose executable path is under <paramref name="worktreePath"/> and not under
+    /// <paramref name="protectedRoot"/> (the registered checkout). Never the current process.
+    /// Access-denied on the process module is skipped. No-op when process modules are unavailable.
+    /// </summary>
+    internal static void KillProcessesUnder(string worktreePath, string? protectedRoot)
+    {
+        if (!IsPathUnder(worktreePath, worktreePath)
+            || IsPathUnder(worktreePath, protectedRoot)
+            || IsPathUnder(protectedRoot, worktreePath))
+            return;
+
+        Process[] processes;
+        try
+        {
+            processes = Process.GetProcesses();
+        }
+        catch
+        {
+            return;
+        }
+
+        var self = Environment.ProcessId;
+        foreach (var process in processes)
+        {
+            try
+            {
+                if (process.Id == self)
+                    continue;
+
+                string? executable;
+                try
+                {
+                    executable = process.MainModule?.FileName;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (!IsPathUnder(executable, worktreePath))
+                    continue;
+
+                process.Kill(entireProcessTree: true);
+            }
+            catch
+            {
+                // Access denied, already exited, or not killable. Next retry reports the folder if it stays.
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        }
     }
 
     /// <summary>

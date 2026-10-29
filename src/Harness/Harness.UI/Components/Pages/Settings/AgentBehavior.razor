@@ -2,8 +2,10 @@
 @layout SettingsLayout
 @using DysonHarness
 @using Harness.UI.Components.Models
+@using Harness.UI.Demo
 @inject IDysonSubjectSettingsRepository AppSettings
 @inject IDysonModelRepository Models
+@inject DysonUiHost Host
 
 <PageTitle>Agent behavior — Settings</PageTitle>
 
@@ -293,6 +295,29 @@
                 Leave as “Use session model” to inherit the parent chat model.
             </p>
         </div>
+
+        <div class="settings-page__picker-group">
+            <div class="settings-page__picker-row">
+                <label>Meta Sidecar</label>
+                <label>Effort</label>
+                <ModelSlugPicker SelectedSlugId="_metaSidecarSlugId"
+                             SelectedSlugIdChanged="OnMetaSidecarSlugChangedAsync"
+                             AllowEmpty="true"
+                             EmptyLabel="Same as the Meta Agent session" />
+                <ComposerEffortPicker Options="EffortModesFor(_metaSidecarSlugId)"
+                                  Value="@_metaSidecarEffort"
+                                  Disabled="@(_metaSidecarSlugId is null)"
+                                  EmptyLabel="Default"
+                                  SectionLabel="Meta Sidecar reasoning effort"
+                                  Title="Meta Sidecar reasoning effort (Default uses the slug default)"
+                                  ShowTriggerLabel="false"
+                                  OpenUp="false"
+                                  OnPick="OnMetaSidecarEffortPickedAsync" />
+                </div>
+            <p class="settings-page__copy">
+                Model for the voice sidecar. The voice sidecar speaks for you while voice mode is on. Changing this updates every existing sidecar.
+            </p>
+        </div>
         </div>
 
         @if (_saved)
@@ -317,6 +342,7 @@
     private Guid? _securityReviewSlugId;
     private Guid? _bugReviewSlugId;
     private Guid? _metaAgentDroneSlugId;
+    private Guid? _metaSidecarSlugId;
     private string _fallbackChatEffort = "";
     private string _turnSummarizerEffort = "";
     private string _webSearchSummarizerEffort = "";
@@ -325,6 +351,7 @@
     private string _securityReviewEffort = "";
     private string _bugReviewEffort = "";
     private string _metaAgentDroneEffort = "";
+    private string _metaSidecarEffort = "";
     private string? _error;
     private bool _saved;
 
@@ -384,6 +411,8 @@
             return;
         if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.MetaAgentDroneModelSlugId, v => _metaAgentDroneSlugId = v))
             return;
+        if (!await TryLoadSlugSettingAsync(DysonAppSettingKeys.MetaSidecarModelSlugId, v => _metaSidecarSlugId = v))
+            return;
 
         if (!await TryLoadSlugModesAsync())
             return;
@@ -403,6 +432,8 @@
         if (!await TryLoadEffortSettingAsync(_bugReviewSlugId, DysonAppSettingKeys.BugReviewReasoningEffort, v => _bugReviewEffort = v))
             return;
         if (!await TryLoadEffortSettingAsync(_metaAgentDroneSlugId, DysonAppSettingKeys.MetaAgentDroneReasoningEffort, v => _metaAgentDroneEffort = v))
+            return;
+        if (!await TryLoadEffortSettingAsync(_metaSidecarSlugId, DysonAppSettingKeys.MetaSidecarReasoningEffort, v => _metaSidecarEffort = v))
             return;
     }
 
@@ -667,6 +698,23 @@
             DysonAppSettingKeys.MetaAgentDroneModelSlugId,
             DysonAppSettingKeys.MetaAgentDroneReasoningEffort);
 
+    private Task OnMetaSidecarSlugChangedAsync(Guid? id) =>
+        SaveSlugSettingAsync(
+            id,
+            _metaSidecarSlugId,
+            v => _metaSidecarSlugId = v,
+            v => _metaSidecarEffort = v,
+            DysonAppSettingKeys.MetaSidecarModelSlugId,
+            DysonAppSettingKeys.MetaSidecarReasoningEffort,
+            ApplyVoiceSidecarModelAsync);
+
+    private Task OnMetaSidecarEffortPickedAsync(string? effort) =>
+        SaveEffortSettingAsync(
+            effort,
+            v => _metaSidecarEffort = v,
+            DysonAppSettingKeys.MetaSidecarReasoningEffort,
+            ApplyVoiceSidecarModelAsync);
+
     private Task OnFallbackChatEffortPickedAsync(string? effort) =>
         SaveEffortSettingAsync(effort, v => _fallbackChatEffort = v, DysonAppSettingKeys.FallbackChatReasoningEffort);
 
@@ -691,13 +739,17 @@
     private Task OnMetaAgentDroneEffortPickedAsync(string? effort) =>
         SaveEffortSettingAsync(effort, v => _metaAgentDroneEffort = v, DysonAppSettingKeys.MetaAgentDroneReasoningEffort);
 
+    private Task ApplyVoiceSidecarModelAsync() =>
+        Host is null ? Task.CompletedTask : Host.ApplyVoiceSidecarModelAsync();
+
     private async Task SaveSlugSettingAsync(
         Guid? id,
         Guid? currentId,
         Action<Guid?> assignSlug,
         Action<string> assignEffort,
         string slugKey,
-        string effortKey)
+        string effortKey,
+        Func<Task>? afterSave = null)
     {
         if (id == currentId)
             return;
@@ -723,9 +775,15 @@
         }
 
         _saved = true;
+        if (afterSave is not null)
+            await afterSave().ConfigureAwait(true);
     }
 
-    private async Task SaveEffortSettingAsync(string? effort, Action<string> assign, string effortKey)
+    private async Task SaveEffortSettingAsync(
+        string? effort,
+        Action<string> assign,
+        string effortKey,
+        Func<Task>? afterSave = null)
     {
         _error = null;
         _saved = false;
@@ -741,5 +799,7 @@
         }
 
         _saved = true;
+        if (afterSave is not null)
+            await afterSave().ConfigureAwait(true);
     }
 }

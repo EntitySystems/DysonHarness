@@ -81,6 +81,7 @@ public sealed class DysonSessionEventPublisher(DysonMessageBus bus) : IDisposabl
                 if (session.Parent is not null && session.PersistenceId != Guid.Empty)
                     PublishSpawn(session);
             },
+            ModelHandler = (_, _) => OnModelChanged(session),
         };
         state.Coalescer = new DysonNotifyCoalescer(_ => PublishActivity(session));
         session.StatusChanged += state.StatusHandler;
@@ -88,6 +89,7 @@ public sealed class DysonSessionEventPublisher(DysonMessageBus bus) : IDisposabl
         session.TurnAdded += state.TurnAddedHandler;
         session.ParentEventsChanged += state.ParentEventsHandler;
         session.PersistenceIdAssigned += state.PersistenceHandler;
+        session.ModelChanged += state.ModelHandler;
         return state;
     }
 
@@ -142,6 +144,30 @@ public sealed class DysonSessionEventPublisher(DysonMessageBus bus) : IDisposabl
             e.Status == DysonSessionStatus.Active,
             e.Summary ?? session.LastReportSummary);
 
+        _bus.Publish(DysonBusScopes.Session(persistenceId), evt);
+        if (parentPersistenceId is { } parentId && parentId != Guid.Empty)
+            _bus.Publish(DysonBusScopes.Session(parentId), evt);
+    }
+
+    private void OnModelChanged(DysonAgentSession session)
+    {
+        Guid persistenceId;
+        Guid? parentPersistenceId;
+        int runtimeId;
+        lock (_gate)
+        {
+            if (_disposed || !_hooks.ContainsKey(session))
+                return;
+
+            persistenceId = session.PersistenceId;
+            parentPersistenceId = session.Parent is null ? null : session.Parent.PersistenceId;
+            runtimeId = session.Id;
+        }
+
+        if (persistenceId == Guid.Empty)
+            return;
+
+        var evt = new DysonSubagentModelChangedEvent(persistenceId, runtimeId);
         _bus.Publish(DysonBusScopes.Session(persistenceId), evt);
         if (parentPersistenceId is { } parentId && parentId != Guid.Empty)
             _bus.Publish(DysonBusScopes.Session(parentId), evt);
@@ -297,6 +323,7 @@ public sealed class DysonSessionEventPublisher(DysonMessageBus bus) : IDisposabl
         session.TurnAdded -= state.TurnAddedHandler;
         session.ParentEventsChanged -= state.ParentEventsHandler;
         session.PersistenceIdAssigned -= state.PersistenceHandler;
+        session.ModelChanged -= state.ModelHandler;
         foreach (var (turn, handler) in state.TurnTextHandlers)
             turn.AssistantTextChanged -= handler;
 
@@ -312,6 +339,7 @@ public sealed class DysonSessionEventPublisher(DysonMessageBus bus) : IDisposabl
         public required EventHandler<DysonAgentTurn> TurnAddedHandler;
         public required EventHandler ParentEventsHandler;
         public required EventHandler PersistenceHandler;
+        public required EventHandler ModelHandler;
         public DysonNotifyCoalescer Coalescer = null!;
         public readonly Dictionary<DysonAgentTurn, EventHandler> TurnTextHandlers = new();
         public (string Title, string? LatestTurnStepTitle, bool IsRunning)? LastActivity;

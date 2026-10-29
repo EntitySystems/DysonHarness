@@ -101,6 +101,7 @@
         var scope = DysonBusScopes.Session(PersistenceId);
         IDisposable? activity = null;
         IDisposable? status = null;
+        IDisposable? model = null;
 
         var activitySub = Bus.Subscribe<DysonSubagentActivityChangedEvent>(scope, OnActivity);
         if (activitySub.IsSuccess)
@@ -110,10 +111,14 @@
         if (statusSub.IsSuccess)
             status = statusSub.Value;
 
-        if (activity is null && status is null)
+        var modelSub = Bus.Subscribe<DysonSubagentModelChangedEvent>(scope, OnModel);
+        if (modelSub.IsSuccess)
+            model = modelSub.Value;
+
+        if (activity is null && status is null && model is null)
             return;
 
-        _sub = new CompositeDisposable(activity, status);
+        _sub = new CompositeDisposable(activity, status, model);
     }
 
     private void OnActivity(DysonSubagentActivityChangedEvent evt) => _ = InvokeAsync(() =>
@@ -131,7 +136,7 @@
             RuntimeId = evt.RuntimeId,
             Title = evt.Title,
             LatestTurnStepTitle = evt.LatestTurnStepTitle,
-            ModelLabel = _state.ModelLabel,
+            ModelLabel = Host.GetSubagentCardState(PersistenceId)?.ModelLabel ?? _state.ModelLabel,
             AgentMode = _state.AgentMode,
             IsRunning = evt.IsRunning,
             Status = _state.Status,
@@ -154,11 +159,19 @@
             RuntimeId = evt.RuntimeId,
             Title = _state.Title,
             LatestTurnStepTitle = _state.LatestTurnStepTitle,
-            ModelLabel = _state.ModelLabel,
+            ModelLabel = Host.GetSubagentCardState(PersistenceId)?.ModelLabel ?? _state.ModelLabel,
             AgentMode = _state.AgentMode,
             IsRunning = evt.IsRunning,
             Status = evt.Status,
         };
+        StateHasChanged();
+    });
+
+    private void OnModel(DysonSubagentModelChangedEvent evt) => _ = InvokeAsync(() =>
+    {
+        if (evt.PersistenceId != PersistenceId)
+            return;
+        RefreshState();
         StateHasChanged();
     });
 
@@ -179,21 +192,12 @@
 
     public void Dispose() => DisposeSubscriptions();
 
-    private sealed class CompositeDisposable : IDisposable
+    private sealed class CompositeDisposable(params IDisposable?[] items) : IDisposable
     {
-        private readonly IDisposable? _first;
-        private readonly IDisposable? _second;
-
-        public CompositeDisposable(IDisposable? first, IDisposable? second)
-        {
-            _first = first;
-            _second = second;
-        }
-
         public void Dispose()
         {
-            _first?.Dispose();
-            _second?.Dispose();
+            foreach (var item in items)
+                item?.Dispose();
         }
     }
 }

@@ -29,6 +29,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly IDysonWorkDirectoryConfigurationRepository _workDirectoryConfigurations;
     private readonly IDysonPlanRepository _plans;
     private readonly IDysonMetaScratchFileRepository? _scratchFiles;
+    private readonly IDysonVoiceSidecarMemoryRepository? _voiceSidecarMemory;
     private readonly IDysonSubjectSettingsRepository _appSettings;
     private readonly IDysonConfiguredShellRepository _configuredShells;
     private readonly DysonCliProxyHost _cliProxy;
@@ -148,7 +149,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonMessageBus? bus = null,
         DysonSessionEventPublisher? sessionEvents = null,
         FileStorageConnectService? fileStorageConnect = null,
-        IDysonMetaScratchFileRepository? scratchFiles = null)
+        IDysonMetaScratchFileRepository? scratchFiles = null,
+        IDysonVoiceSidecarMemoryRepository? voiceSidecarMemory = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -157,6 +159,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             ?? throw new ArgumentNullException(nameof(workDirectoryConfigurations));
         _plans = plans ?? throw new ArgumentNullException(nameof(plans));
         _scratchFiles = scratchFiles;
+        _voiceSidecarMemory = voiceSidecarMemory;
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         _configuredShells = configuredShells ?? throw new ArgumentNullException(nameof(configuredShells));
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -185,7 +188,11 @@ public sealed class DysonUiHost : IAsyncDisposable
         _runtimeAttachment = runtimeAttachment;
         _usageAnalytics = usageAnalytics;
         if (_runtimeAttachment is not null)
+        {
             _runtimeAttachment.Changed += OnRuntimeChanged;
+            if (_runtimeAttachment.TryGetRuntime(out var alreadyAttached))
+                WireMetaPromptDrainHook(alreadyAttached);
+        }
         _pluginLifecycle.Changed += OnPluginCatalogChanged;
         _pluginMcpGrants.Changed += OnPluginMcpGrantChanged;
         _browserControl = browserControl;
@@ -356,6 +363,12 @@ public sealed class DysonUiHost : IAsyncDisposable
     private DysonVoiceMode? _voiceInput;
 
     /// <summary>
+    /// Queued Immediate voice turn that has not started yet. A second utterance merges into it
+    /// while <see cref="DysonSessionRuntime.TryRemovePrompt"/> still finds the id.
+    /// </summary>
+    private readonly ConcurrentDictionary<Guid, Guid> _pendingVoicePromptBySession = new();
+
+    /// <summary>
     /// Root Meta Agent voice mode. Non-null attaches that service to every live root meta session
     /// and subscribes <see cref="DysonVoiceMode.MessageReady"/> / <see cref="DysonVoiceMode.Failed"/>.
     /// Null clears those sessions, unsubscribes, then stops with <see cref="DysonVoiceStopReason.UserOff"/>.
@@ -385,11 +398,16 @@ public sealed class DysonUiHost : IAsyncDisposable
                 }).ConfigureAwait(false);
             if (persist.IsError)
                 firstError ??= persist;
+
+            if (voice is not null)
+                await EnsureVoiceSidecarAsync(session).ConfigureAwait(false);
         }
 
         if (voice is null)
         {
             UnsubscribeVoiceInput();
+            var runtime = await TryAttachRuntimeForDemoAsync(CancellationToken.None).ConfigureAwait(false);
+            runtime?.DropVoiceTurnsOnVoiceOff();
             if (shared is not null)
                 await shared.StopAsync(DysonVoiceStopReason.UserOff).ConfigureAwait(false);
         }
@@ -447,16 +465,16 @@ public sealed class DysonUiHost : IAsyncDisposable
         ReportError(message);
     }
 
-    private Task OnVoiceMessageReady(string text) =>
-        Task.Run(() => PromptVoiceInputAsync(text));
+    private Task OnVoiceMessageReady(DysonVoiceMessage message) =>
+        Task.Run(() => PromptVoiceInputAsync(message));
 
     /// <summary>
     /// Voice input goes to the active work directory's root meta session: the same
     /// in-memory instance the page is showing when that id is focused. Adopts that
-    /// instance and does not load another while one is live. Queue when busy; inject
-    /// when a turn is already running.
+    /// instance and does not load another while one is live. Routing is
+    /// <see cref="DysonVoiceMode.RouteFor"/>: Callsign injects or queues; Immediate interrupts.
     /// </summary>
-    private async Task PromptVoiceInputAsync(string text)
+    private async Task PromptVoiceInputAsync(DysonVoiceMessage message)
     {
         if (_disposed)
             return;
@@ -528,19 +546,6 @@ public sealed class DysonUiHost : IAsyncDisposable
             if (session.Config.Focus is null)
                 session.Config.Focus = runtime.Focus;
 
-            if (session.InFlightPromptTurn is { } inFlight)
-            {
-                AppendAwaitingUserAnswerReminders(inFlight, session);
-                var injected = session.InjectTurnComment(inFlight.Id, text);
-                if (injected.IsSuccess)
-                {
-                    Notify(DysonHostChangeKind.Transcript);
-                    return;
-                }
-            }
-
-            var turn = DysonAgentSession.CreateNormalTurn(text);
-            AppendAwaitingUserAnswerReminders(turn, session);
             var sessionId = session.PersistenceId;
             if (sessionId == Guid.Empty)
             {
@@ -549,27 +554,185 @@ public sealed class DysonUiHost : IAsyncDisposable
             }
 
             ClearUserStop(sessionId);
-            if (IsSessionBusy(sessionId) || session.HasAnySummarizingTurn)
+            var sidecar = await runtime.RouteVoiceToSidecarAsync(session, message, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (sidecar.IsSuccess)
             {
-                var queued = EnqueuePrompt(sessionId, turn);
-                if (queued.IsError)
-                    ReportError(queued.Error);
-                else
-                    Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript);
+                Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript);
                 return;
             }
 
-            var result = await PromptHarnessTurnOnSessionAsync(session, turn, [], CancellationToken.None)
-                .ConfigureAwait(false);
-            if (result.IsError)
-                ReportError(result.Error);
-            else
-                Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript);
+            session.AppendDisplayInfoTurn(
+                "[voice] the voice sidecar could not answer; this message went straight to the session");
+            switch (DysonVoiceMode.RouteFor(
+                message.Mode,
+                inFlight: session.InFlightPromptTurn is not null,
+                busy: IsSessionBusy(sessionId),
+                summarizing: session.HasAnySummarizingTurn))
+            {
+                case DysonVoiceRoute.Inject:
+                    if (session.InFlightPromptTurn is { } inFlight)
+                    {
+                        AppendAwaitingUserAnswerReminders(inFlight, session);
+                        var injected = session.InjectTurnComment(inFlight.Id, message.Text);
+                        if (injected.IsSuccess)
+                        {
+                            Notify(DysonHostChangeKind.Transcript);
+                            return;
+                        }
+                    }
+
+                    goto case DysonVoiceRoute.Queue;
+                case DysonVoiceRoute.Queue:
+                    var queuedTurn = DysonVoiceMode.CreateTurn(message);
+                    AppendAwaitingUserAnswerReminders(queuedTurn, session);
+                    var queued = EnqueuePrompt(sessionId, queuedTurn);
+                    if (queued.IsError)
+                        ReportError(queued.Error);
+                    else
+                        Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript);
+                    return;
+                case DysonVoiceRoute.Interrupt:
+                {
+                    var interrupted = InterruptVoicePrompt(sessionId, message, session);
+                    if (interrupted.IsError)
+                        ReportError(interrupted.Error);
+                    else
+                        Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript);
+                    return;
+                }
+                default:
+                {
+                    var turn = DysonVoiceMode.CreateTurn(message);
+                    AppendAwaitingUserAnswerReminders(turn, session);
+                    var result = await PromptHarnessTurnOnSessionAsync(session, turn, [], CancellationToken.None)
+                        .ConfigureAwait(false);
+                    if (result.IsError)
+                        ReportError(result.Error);
+                    else
+                        Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript);
+                    return;
+                }
+            }
         }
         catch (Exception ex)
         {
             ReportError(ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Immediate while the session is not idle: flush queued speech, merge a voice turn that
+    /// has not started, then insert the turn at the head of the runtime queue.
+    /// </summary>
+    private VoidResult<string> InterruptVoicePrompt(
+        Guid sessionId, DysonVoiceMessage message, DysonAgentSession session)
+    {
+        if (!TryGetAttachedRuntime(out var runtime))
+            return VoidResult<string>.AsError("Session runtime is not attached.");
+
+        var voice = Voice ?? _voiceInput;
+        voice?.DropPendingSpeech();
+
+        var posted = message;
+        if (_pendingVoicePromptBySession.TryGetValue(sessionId, out var pendingId))
+        {
+            string? first = null;
+            foreach (var queued in runtime.GetQueuedPrompts(sessionId))
+            {
+                if (queued.Id == pendingId)
+                {
+                    first = queued.Turn.Instruction;
+                    break;
+                }
+            }
+
+            if (first is not null && runtime.TryRemovePrompt(sessionId, pendingId))
+            {
+                posted = new DysonVoiceMessage(
+                    DysonVoiceMode.MergeUtterances(first, message.Text),
+                    message.Mode);
+            }
+        }
+
+        var turn = DysonVoiceMode.CreateTurn(posted);
+        AppendAwaitingUserAnswerReminders(turn, session);
+        var interrupted = runtime.InterruptWithPrompt(sessionId, turn);
+        if (interrupted.IsError)
+            return VoidResult<string>.AsError(interrupted.Error);
+
+        var entry = ToHostQueuedEntry(interrupted.Value);
+        lock (_promptQueueGate)
+        {
+            if (!_promptQueues.TryGetValue(sessionId, out var list))
+                list = [];
+            list.RemoveAll(e => e.Id == entry.Id);
+            list.Insert(0, entry);
+            _promptQueues[sessionId] = list;
+        }
+
+        _pendingVoicePromptBySession[sessionId] = entry.Id;
+        return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Voice-on creates the sidecar off the circuit. A failure is logged; voice stays on and
+    /// utterances fall back to Meta until the next successful load.
+    /// </summary>
+    private async Task EnsureVoiceSidecarAsync(DysonAgentSession meta)
+    {
+        try
+        {
+            await Task.Run(async () =>
+            {
+                var runtime = await TryAttachRuntimeForDemoAsync(CancellationToken.None).ConfigureAwait(false);
+                if (runtime is null)
+                    return;
+
+                var ensured = await runtime.EnsureVoiceSidecarAsync(meta, CancellationToken.None)
+                    .ConfigureAwait(false);
+                if (ensured.IsError)
+                    meta.AppendLog("voice sidecar: " + ensured.Error);
+            }).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            meta.AppendLog("voice sidecar: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Applies the saved Meta Sidecar model to every live sidecar. Called after Agent Behavior saves.
+    /// </summary>
+    public Task ApplyVoiceSidecarModelAsync(CancellationToken cancellationToken = default) =>
+        Task.Run(async () =>
+        {
+            var runtime = await TryAttachRuntimeForDemoAsync(cancellationToken).ConfigureAwait(false);
+            if (runtime is null)
+                return;
+
+            var applied = await runtime.ApplyVoiceSidecarModelAsync(cancellationToken).ConfigureAwait(false);
+            if (applied.IsError)
+                ReportError(applied.Error);
+        }, cancellationToken);
+
+    private VoidResult<string> RefuseUnavailableSession()
+    {
+        LastError = "Session is not available.";
+        Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
+        return VoidResult<string>.AsError(LastError);
+    }
+
+    private async Task<bool> IsVoiceSidecarSessionAsync(Guid sessionId, CancellationToken cancellationToken)
+    {
+        if (sessionId == Guid.Empty)
+            return false;
+
+        if (TryResolveLiveSession(sessionId, out var live))
+            return live.IsVoiceSidecar;
+
+        var full = await _sessions.GetFullSessionAsync(sessionId, cancellationToken).ConfigureAwait(false);
+        return full.IsSuccess && DysonSessionPolicy.IsVoiceSidecar(full.Value.Session.AgentMode);
     }
 
     private List<DysonAgentSession> LiveRootMetaSessions()
@@ -695,6 +858,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         if (_runtimeAttachment is not null && _runtimeAttachment.TryGetRuntime(out var attached))
         {
+            WireMetaPromptDrainHook(attached);
             runtime = attached;
             return true;
         }
@@ -732,7 +896,27 @@ public sealed class DysonUiHost : IAsyncDisposable
             return existing;
 
         var attached = await _runtimeAttachment.AttachAsync(cancellationToken).ConfigureAwait(false);
-        return attached.IsSuccess ? attached.Value : null;
+        if (attached.IsError)
+            return null;
+
+        WireMetaPromptDrainHook(attached.Value);
+        return attached.Value;
+    }
+
+    /// <summary>
+    /// A Meta-bound queued prompt is drained by this host's existing queue path.
+    /// False when the id is not on this host (the engine drains it).
+    /// </summary>
+    private void WireMetaPromptDrainHook(DysonSessionRuntime runtime) =>
+        runtime.MetaPromptDrainHook ??= TryDrainMetaPrompt;
+
+    private bool TryDrainMetaPrompt(Guid metaId)
+    {
+        if (metaId == Guid.Empty || !_sessionsById.ContainsKey(metaId))
+            return false;
+
+        _ = DrainQueuedPromptsAsync(metaId);
+        return true;
     }
 
     private bool IsRuntimeOwned(Guid sessionId) =>
@@ -4205,6 +4389,9 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         LastError = null;
 
+        if (await IsVoiceSidecarSessionAsync(sessionId, cancellationToken).ConfigureAwait(false))
+            return RefuseUnavailableSession();
+
         var runtime = await TryAttachRuntimeForDemoAsync(cancellationToken).ConfigureAwait(false);
         if (runtime is not null && runtime.TryGetSession(sessionId, out var retained))
         {
@@ -4624,7 +4811,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return null;
 
         var latest = session.Turns.Count > 0 ? session.Turns[^1] : null;
-        var modelLabel = DysonSubagentHostLogic.FormatProviderModelLabel(session.Provider);
+        var modelLabel = DysonSubagentHostLogic.FormatProviderModelLabel(session.SelectedProvider);
         if (string.IsNullOrWhiteSpace(modelLabel))
         {
             var parent = session.Parent;
@@ -4635,7 +4822,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 parent = registeredParent;
             }
 
-            modelLabel = DysonSubagentHostLogic.FormatProviderModelLabel(parent?.Provider);
+            modelLabel = DysonSubagentHostLogic.FormatProviderModelLabel(parent?.SelectedProvider);
         }
 
         return new DysonSubagentCardState
@@ -5068,6 +5255,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         Guid sessionId,
         CancellationToken cancellationToken)
     {
+        if (await IsVoiceSidecarSessionAsync(sessionId, cancellationToken).ConfigureAwait(false))
+            return Result<DysonAgentSession, string>.AsError("Session is not available.");
+
         if (_sessionsById.TryGetValue(sessionId, out var live))
         {
             if (live.Parent is not null
@@ -5489,6 +5679,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             BrowserControl = _browserControl,
             Bus = Bus,
             MetaScratchFiles = _scratchFiles,
+            VoiceSidecarMemory = _voiceSidecarMemory,
             PluginContributions = contributions,
             UiTheme = resolvedUiTheme,
             AppSettings = _appSettings,
@@ -5497,7 +5688,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             config.Focus = runtimeFocus.Focus;
             if (runtimeFocus.Voice is { IsOn: true } voiceOn
-                && DysonSessionPolicy.IsMetaAgent(agentMode))
+                && (DysonSessionPolicy.IsMetaAgent(agentMode)
+                    || DysonSessionPolicy.IsVoiceSidecar(agentMode)))
                 config.Voice = voiceOn;
         }
 
@@ -5620,6 +5812,12 @@ public sealed class DysonUiHost : IAsyncDisposable
                 DysonAppSettingKeys.MetaAgentDroneModelSlugId,
                 DysonAppSettingKeys.MetaAgentDroneReasoningEffort,
                 p => config.MetaAgentDroneDefaultProvider = p,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await TryHydrateOpenAiProviderSettingAsync(
+                DysonAppSettingKeys.MetaSidecarModelSlugId,
+                DysonAppSettingKeys.MetaSidecarReasoningEffort,
+                p => config.VoiceSidecarDefaultProvider = p,
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -6392,6 +6590,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             CancelTaskLifecycleEvaluate(sessionId);
         lock (_promptQueueGate)
             _promptQueues.Clear();
+        _pendingVoicePromptBySession.Clear();
         lock (_subagentEventUiGate)
             _subagentEventUi.Clear();
         _pendingAskUi = null;
@@ -7236,6 +7435,10 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private async Task DrainAutoTurnsAsync(Guid parentPersistenceId)
     {
+        // A defer retry scheduled before dispose lands here afterwards.
+        if (_disposed)
+            return;
+
         if (IsUserStopped(parentPersistenceId))
         {
             DiscardPendingReports(parentPersistenceId);
@@ -7247,6 +7450,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return;
 
         var deferredCompletions = new List<DysonAgentInterrupt>();
+        DysonAgentSession? deferredBehindRun = null;
         try
         {
             while (true)
@@ -7307,13 +7511,19 @@ public sealed class DysonUiHost : IAsyncDisposable
                             (session, token) => session.PromptHarnessTurnAsync(turn, token),
                             CancellationToken.None)
                         .ConfigureAwait(false);
+                    if (eventResult.Error == DysonSessionRuntime.PromptDeferredError)
+                    {
+                        RequeueAtHead(queue, interrupt);
+                        deferredBehindRun = parent;
+                        break;
+                    }
+
                     if (FollowUpMetaParentEvent(parent, interrupt, turn.StartedUtc)
                         == MetaParentEventAfterTurn.Retry)
                     {
                         queue.Enqueue(interrupt);
                     }
-
-                    if (eventResult.IsError)
+                    else if (eventResult.IsError)
                     {
                         LastError = eventResult.Error;
                         Notify(DysonHostChangeKind.Error);
@@ -7330,6 +7540,13 @@ public sealed class DysonUiHost : IAsyncDisposable
                             (session, token) => session.PromptShellExitedAsync(interrupt, token),
                             CancellationToken.None)
                         .ConfigureAwait(false);
+                    if (shellResult.Error == DysonSessionRuntime.PromptDeferredError)
+                    {
+                        RequeueAtHead(queue, interrupt);
+                        deferredBehindRun = parent;
+                        break;
+                    }
+
                     if (shellResult.IsError)
                     {
                         LastError = shellResult.Error;
@@ -7347,6 +7564,13 @@ public sealed class DysonUiHost : IAsyncDisposable
                             interrupt, title, token),
                         CancellationToken.None)
                     .ConfigureAwait(false);
+                if (result.Error == DysonSessionRuntime.PromptDeferredError)
+                {
+                    RequeueAtHead(queue, interrupt);
+                    deferredBehindRun = parent;
+                    break;
+                }
+
                 if (result.IsError)
                 {
                     LastError = result.Error;
@@ -7371,6 +7595,14 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (IsUserStopped(parentPersistenceId))
         {
             DiscardPendingReports(parentPersistenceId);
+            return;
+        }
+
+        // A KickOff / inject loop owns the session: retry once it detaches, not in a spin.
+        if (deferredBehindRun is not null)
+        {
+            _ = deferredBehindRun.WaitForBackgroundRunIdleAsync(CancellationToken.None)
+                .ContinueWith(_ => DrainAutoTurnsAsync(parentPersistenceId), TaskScheduler.Default);
             return;
         }
 
@@ -7407,6 +7639,21 @@ public sealed class DysonUiHost : IAsyncDisposable
 
     private const string UnansweredParentEventNotice =
         "A child was waiting on a reply that never arrived. The wait was closed so it can continue.";
+
+    /// <summary>
+    /// Puts a deferred interrupt back first so the FIFO keeps its order.
+    /// ponytail: rebuild like TakeBufferedCompletionReportBlocks; an enqueue racing the rebuild may land ahead.
+    /// </summary>
+    private static void RequeueAtHead(ConcurrentQueue<DysonAgentInterrupt> queue, DysonAgentInterrupt head)
+    {
+        var rest = new List<DysonAgentInterrupt>();
+        while (queue.TryDequeue(out var item))
+            rest.Add(item);
+
+        queue.Enqueue(head);
+        foreach (var item in rest)
+            queue.Enqueue(item);
+    }
 
     private MetaParentEventAfterTurn FollowUpMetaParentEvent(
         DysonAgentSession parent,
@@ -7601,6 +7848,11 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (IsRuntimeOwned(session) && TryGetAttachedRuntime(out var runtime))
             return await ExecuteRuntimePromptOnSessionAsync(runtime, session, run).ConfigureAwait(false);
 
+        // Same rule as the runtime path: a KickOff / inject loop owns this session, so a second
+        // provider loop now would interleave tool rounds. Callers requeue and retry once it detaches.
+        if (session.HasActiveBackgroundRun)
+            return new VoidResult<string>(DysonSessionRuntime.PromptDeferredError);
+
         var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _promptCtsBySession[sessionId] = linked;
         var token = linked.Token;
@@ -7615,6 +7867,24 @@ public sealed class DysonUiHost : IAsyncDisposable
             catch (OperationCanceledException)
             {
                 return new VoidResult<string>("Prompt was cancelled.");
+            }
+
+            // The per-session gate KickOff takes. Not inside PromptWithTurnAsync: KickOff already holds it there.
+            try
+            {
+                await session.EnterPromptGateAsync(token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                promptGate.Release();
+                return new VoidResult<string>("Prompt was cancelled.");
+            }
+
+            if (session.HasActiveBackgroundRun)
+            {
+                session.ExitPromptGate();
+                promptGate.Release();
+                return new VoidResult<string>(DysonSessionRuntime.PromptDeferredError);
             }
 
             _busySessions[sessionId] = 0;
@@ -7677,6 +7947,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             finally
             {
                 _busySessions.TryRemove(sessionId, out _);
+                session.ExitPromptGate();
                 promptGate.Release();
                 if (!_disposed)
                     EvaluateTaskLifecycle(session);
@@ -7705,6 +7976,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             return new VoidResult<string>("Prompt was cancelled.");
 
         Notify(DysonHostChangeKind.Busy);
+        var superseded = false;
         try
         {
             var turnsBefore = session.Turns.Count;
@@ -7712,7 +7984,16 @@ public sealed class DysonUiHost : IAsyncDisposable
             var result = await runtime.ExecutePromptAsync(session, run, CancellationToken.None)
                 .ConfigureAwait(false);
             if (result.IsError)
+            {
+                // A newer voice message already owns the queue. Callers must not report it.
+                if (result.Error == DysonSessionRuntime.PromptSupersededError)
+                {
+                    superseded = true;
+                    return VoidResult<string>.Success;
+                }
+
                 return result;
+            }
 
             if (session.TryGetTurnRanSince(turnsBefore, out var last))
             {
@@ -7729,8 +8010,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             if (!_disposed)
             {
+                // The voice turn is already at the head. Take the gate before a pending report turn.
+                if (superseded)
+                    _ = DrainQueuedPromptsAsync(sessionId);
                 _ = DrainAutoTurnsAsync(sessionId);
-                _ = DrainQueuedPromptsAsync(sessionId);
+                if (!superseded)
+                    _ = DrainQueuedPromptsAsync(sessionId);
             }
 
             if (!_disposed)
@@ -7877,7 +8162,8 @@ public sealed class DysonUiHost : IAsyncDisposable
     private VoidResult<string> EnqueuePrompt(
         Guid sessionId,
         DysonAgentTurn turn,
-        IReadOnlyList<string>? filePaths = null)
+        IReadOnlyList<string>? filePaths = null,
+        bool atHead = false)
     {
         ArgumentNullException.ThrowIfNull(turn);
 
@@ -7894,7 +8180,7 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return VoidResult<string>.AsError(error);
             }
 
-            var enqueued = runtime.EnqueuePrompt(sessionId, turn, filePaths);
+            var enqueued = runtime.EnqueuePrompt(sessionId, turn, filePaths, atHead);
             if (enqueued.IsError)
             {
                 LastError = enqueued.Error;
@@ -7902,7 +8188,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             }
 
             // Display projection for this circuit only; drain/remove always use the runtime FIFO.
-            AddHostQueuedPrompt(sessionId, ToHostQueuedEntry(enqueued.Value));
+            AddHostQueuedPrompt(sessionId, ToHostQueuedEntry(enqueued.Value), atHead);
             return VoidResult<string>.Success;
         }
 
@@ -7913,7 +8199,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 Guid.NewGuid(),
                 turn,
                 DysonSubagentHostLogic.PromptFirstLine(instruction),
-                filePaths is { Count: > 0 } ? [.. filePaths] : []));
+                filePaths is { Count: > 0 } ? [.. filePaths] : []),
+            atHead);
         return VoidResult<string>.Success;
     }
 
@@ -7958,7 +8245,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             prompt.FilePaths);
     }
 
-    private void AddHostQueuedPrompt(Guid sessionId, QueuedPromptEntry entry)
+    private void AddHostQueuedPrompt(Guid sessionId, QueuedPromptEntry entry, bool atHead = false)
     {
         lock (_promptQueueGate)
         {
@@ -7968,7 +8255,10 @@ public sealed class DysonUiHost : IAsyncDisposable
                 _promptQueues[sessionId] = list;
             }
 
-            list.Add(entry);
+            if (atHead)
+                list.Insert(0, entry);
+            else
+                list.Add(entry);
         }
     }
 
@@ -8096,10 +8386,35 @@ public sealed class DysonUiHost : IAsyncDisposable
                 cancellationToken)
             .ConfigureAwait(false);
 
+        // Every turn caller funnels here (queue drain, composer, question answer, summarize, voice).
+        // TaskEndReflect cannot queue and is root-only, where no background run attaches: it keeps the error.
+        if (result.Error == DysonSessionRuntime.PromptDeferredError && turn.AllowEnqueue)
+            return RequeueUntilBackgroundRunIdle(session, turn, filePaths);
+
         if (turn.Kind == DysonAgentTurnKind.Normal)
             FollowUpParkedMetaEventsAfterUserTurn(session, turn.StartedUtc);
 
         return result;
+    }
+
+    /// <summary>
+    /// A KickOff / inject loop owns the session. The turn goes back to the head of the host queue and
+    /// drains once that run detaches, so it is neither lost nor reported as an error.
+    /// </summary>
+    private VoidResult<string> RequeueUntilBackgroundRunIdle(
+        DysonAgentSession session,
+        DysonAgentTurn turn,
+        IReadOnlyList<string> filePaths)
+    {
+        var sessionId = session.PersistenceId;
+        var queued = EnqueuePrompt(sessionId, turn, filePaths, atHead: true);
+        if (queued.IsError)
+            return queued;
+
+        _ = session.WaitForBackgroundRunIdleAsync(CancellationToken.None)
+            .ContinueWith(_ => DrainQueuedPromptsAsync(sessionId), TaskScheduler.Default);
+        Notify(DysonHostChangeKind.Busy);
+        return VoidResult<string>.Success;
     }
 
     private async Task PersistStoppedSessionAsync(DysonAgentSession session)
@@ -8535,6 +8850,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         // Circuit-local shadow/legacy queues only. Runtime FIFO stays with the retained runtime.
         lock (_promptQueueGate)
             _promptQueues.Clear();
+        _pendingVoicePromptBySession.Clear();
         _persistGate.Dispose();
     }
 }

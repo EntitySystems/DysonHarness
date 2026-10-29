@@ -27,7 +27,7 @@ public class DysonResumedDroneStatusTests
         Assert.Equal(DysonSessionStatus.Active, child.Status);
         Assert.True(child.HasActiveBackgroundRun);
 
-        using (var roster = JsonDocument.Parse(parent.FormatChildRosterJson(includeReports: true)))
+        using (var roster = JsonDocument.Parse(await parent.FormatChildRosterJsonAsync(includeReports: true)))
         {
             var item = Assert.Single(roster.RootElement.EnumerateArray());
             Assert.Equal(nameof(DysonSessionStatus.Active), item.GetProperty("status").GetString());

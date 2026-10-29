@@ -22,6 +22,9 @@ public sealed record DysonSubagentActivityChangedEvent(
     string? LatestTurnStepTitle,
     bool IsRunning) : IDysonMessageBusEvent;
 
+/// <summary>Child SelectedProvider changed (immediate or pending pick applied). Not deduped.</summary>
+public sealed record DysonSubagentModelChangedEvent(Guid PersistenceId, int RuntimeId) : IDysonMessageBusEvent;
+
 public sealed record DysonSessionTurnAddedEvent(
     Guid PersistenceId,
     Guid TurnId,
@@ -58,3 +61,20 @@ public sealed record DysonPlansChangedEvent(Guid WorkDirectoryId, long PlanId)
 /// <summary>A Meta scratch file was created, edited, deleted, or moved. Carries no body.</summary>
 public sealed record DysonMetaScratchFilesChangedEvent(Guid WorkDirectoryId, long ScratchFileId)
     : IDysonMessageBusEvent;
+
+/// <summary>Which end of a voice-sidecar pair a bus message is addressed to.</summary>
+public enum DysonVoiceSidecarDirection
+{
+    ToSidecar,
+    ToMeta,
+}
+
+/// <summary>
+/// One text message between a root Meta session and its voice sidecar.
+/// The handler only writes the event onto a per-target channel; delivery is ordered by the reader.
+/// </summary>
+public sealed record DysonVoiceSidecarMessageEvent(
+    Guid FromSessionId,
+    Guid ToSessionId,
+    DysonVoiceSidecarDirection Direction,
+    string Text) : IDysonMessageBusEvent;

@@ -79,6 +79,24 @@ public class MetaChatItemsTests
     }
 
     [Fact]
+    public void Build_caps_at_newest_100_interactions_and_keeps_queued()
+    {
+        var turns = Enumerable.Range(0, 150)
+            .Select(i => new DysonAgentTurn { Kind = DysonAgentTurnKind.Normal, Instruction = $"m{i}" })
+            .ToList();
+        // The window's oldest turn carries a comment too: one bubble over the cap is dropped.
+        Assert.False(turns[50].EnqueueUserComment("extra").IsError);
+
+        var items = MetaChatItems.Build(turns, [new QueuedPrompt(Guid.NewGuid(), "q", "q")]);
+
+        Assert.Equal(DysonMetaChatWindow.MaxInteractions + 1, items.Count);
+        Assert.Equal("extra", items[0].Text);
+        Assert.Equal("m51", items[1].Text);
+        Assert.Equal("m149", items[^2].Text);
+        Assert.True(items[^1].Pending);
+    }
+
+    [Fact]
     public void SelectExisting_picks_newest_root_meta_agent()
     {
         var older = new DysonSessionSummary
@@ -151,6 +169,24 @@ public class MetaChatItemsTests
         Assert.Equal("https://bucket.example/shot.jpg", thumb.Src);
         Assert.Equal("shot.jpg", thumb.Alt);
         Assert.Equal("notes.txt", Assert.Single(item.FileNames));
+    }
+
+    [Fact]
+    public void Build_immediate_voice_instruction_renders_instruction_only()
+    {
+        var turn = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.Normal,
+            Instruction = "[voice input] open the plan",
+            HiddenInstruction = DysonAgentSystemPrompts.VoiceSidecarTurnInstruction,
+        };
+
+        var item = Assert.Single(MetaChatItems.Build([turn], []));
+        Assert.Equal(MetaChatRole.User, item.Role);
+        Assert.Equal("[voice input] open the plan", item.Text);
+        Assert.DoesNotContain("Immediate voice mode", item.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("SpeakToUser", item.Text, StringComparison.Ordinal);
+        Assert.Empty(item.FileNames);
     }
 
     [Fact]
@@ -293,5 +329,48 @@ public class MetaChatItemsTests
         Assert.Null(items[1].UserQuestion);
         Assert.DoesNotContain(items, item => item.Text.Contains("questionId", StringComparison.Ordinal));
         Assert.DoesNotContain(items, item => item.Text.Contains(questionId.ToString("D"), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Build_voice_input_display_is_the_user_and_a_plain_display_is_the_agent()
+    {
+        var voice = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.DisplayInfo,
+            AssistantText = DysonVoiceMode.InputPrefix + "open the plan",
+            UserQuestion = new DysonUserQuestion(
+                Guid.NewGuid(),
+                "Which?",
+                ["A"],
+                MultiSelect: false,
+                AllowCustomAnswer: false,
+                Answer: null),
+        };
+        voice.RestoreConversationActions([new DysonConversationAction("run", "Run")]);
+        var post = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.DisplayInfo,
+            AssistantText = "Dispatched a drone.",
+        };
+        var spoken = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.DisplayInfo,
+            AssistantText = "[spoken] hello",
+        };
+
+        Assert.True(DysonVoiceMode.IsVoiceInputDisplay(voice));
+        Assert.False(DysonVoiceMode.IsVoiceInputDisplay(post));
+        Assert.False(DysonVoiceMode.IsVoiceInputDisplay(spoken));
+
+        var items = MetaChatItems.Build([voice, post, spoken], []);
+
+        Assert.Equal(3, items.Count);
+        Assert.Equal(MetaChatRole.User, items[0].Role);
+        Assert.Equal(DysonVoiceMode.InputPrefix + "open the plan", items[0].Text);
+        Assert.Null(items[0].TurnId);
+        Assert.Empty(items[0].Actions);
+        Assert.Null(items[0].UserQuestion);
+        Assert.Equal(MetaChatRole.Agent, items[1].Role);
+        Assert.Equal(MetaChatRole.Agent, items[2].Role);
     }
 }

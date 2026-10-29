@@ -132,6 +132,25 @@ public static class DysonSessionWorktree
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// True when every commit on <paramref name="branchName"/> is already in the registered checkout.
+    /// A missing branch counts as merged (nothing left to lose). Folder existence is not consulted.
+    /// </summary>
+    public static async Task<Result<bool, string>> TryIsBranchMergedAsync(
+        string registeredWorkDirectoryAbsolutePath,
+        string branchName,
+        CancellationToken cancellationToken = default)
+    {
+        var repo = await DysonGitInfo.TryFindRootMostRepoAsync(
+                registeredWorkDirectoryAbsolutePath, cancellationToken)
+            .ConfigureAwait(false);
+        if (repo.IsError)
+            return Result<bool, string>.AsError(repo.Error);
+
+        return await DysonGitInfo.TryIsBranchAncestorOfHeadAsync(repo.Value, branchName, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     // ponytail: one lock per repo anchor serializes concurrent drone merges; fine for tens of drones.
     // Upgrade to a per-branch queue if hundreds of drones finish together and wait on each other.
     internal static readonly ConcurrentDictionary<string, SemaphoreSlim> MergeGates =

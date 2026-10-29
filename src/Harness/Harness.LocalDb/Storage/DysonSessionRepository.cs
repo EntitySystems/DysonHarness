@@ -767,6 +767,12 @@ public sealed class DysonSessionRepository(
             if (matches.Count == 0)
                 return VoidResult<string>.Success;
 
+            // session_logs.TurnId is an index, not an FK: drop the deleted turns' log rows with them.
+            var logs = await db.SessionLogs
+                .Where(l => l.SessionId == sessionId && l.TurnId != null && turnIds.Contains(l.TurnId.Value))
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            db.SessionLogs.RemoveRange(logs);
             db.Turns.RemoveRange(matches);
             await DysonDbAccessor.SaveChangesAsync(db, cancellationToken).ConfigureAwait(false);
             return VoidResult<string>.Success;

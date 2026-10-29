@@ -37,7 +37,15 @@ public abstract class DysonAgentSession
     private readonly ConcurrentDictionary<Guid, TaskCompletionSource> _injectWaiters = new();
     // ponytail: one lock serializes the inject interrupt tail (cancel + requeue + kick); the wait is not locked.
     private readonly object _injectInterruptGate = new();
+    // KickOff turns not yet inside PromptHarnessTurnAsync. An interrupt claims them here so a late
+    // gate-wait cancellation cannot requeue a message the next run already drained past.
+    private readonly HashSet<DysonAgentTurn> _unstartedKickOffTurns = [];
     private readonly Stack<DysonAgentTurn> _inFlightPromptStack = new();
+    // One provider loop per session. KickOff and host/runtime prompt entry both take it.
+    // ponytail: one semaphore per session; upgrade to a per-turn queue if prompt entry becomes hot.
+    private readonly SemaphoreSlim _promptGate = new(1, 1);
+    // Completed when the current background run detaches; host drains retry a deferred turn then.
+    private readonly ConcurrentQueue<TaskCompletionSource> _backgroundIdleWaiters = new();
     private TaskCompletionSource<Result<string, string>>? _parentEventWaitTcs;
     private TaskCompletionSource<Result<string, string>>? _askQuestionTcs;
     private TaskCompletionSource<Result<string, string>>? _promptUserDialogTcs;
@@ -61,6 +69,7 @@ public abstract class DysonAgentSession
     private int _childReportRemindersSent;
     private bool _subagentReportAccepted;
     private string? _systemPromptSuffix;
+    private string _voiceSidecarMemory = "";
 
     protected DysonAgentSession(
         string agentMode,
@@ -188,6 +197,15 @@ public abstract class DysonAgentSession
 
     /// <summary>Live parent when this session was spawned via <see cref="RegisterSubagent"/>.</summary>
     public DysonAgentSession? Parent { get; private set; }
+
+    /// <summary>Harness-created voice sidecar of a root Meta session. Not a registered child.</summary>
+    public DysonAgentSession? VoiceSidecar { get; internal set; }
+
+    /// <summary>Root Meta session that owns this voice sidecar. Null on every other mode.</summary>
+    public DysonAgentSession? VoiceSidecarOwner { get; internal set; }
+
+    /// <summary>True when <see cref="Mode"/> is the voice sidecar mode.</summary>
+    public bool IsVoiceSidecar => DysonSessionPolicy.IsVoiceSidecar(Mode);
 
     /// <summary>
     /// Mirrored from persisted session status (Active until report/stop/fail/interrupt).
@@ -412,17 +430,23 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
-    /// Root Meta Agent only. Non-null turns voice mode on (SpeakToUser and the voice prompt block).
+    /// Root Meta Agent or its voice sidecar. Non-null turns voice mode on.
     /// Rebuilds the prompt and replaces the tool catalog. No-op when <paramref name="voice"/> is already set.
+    /// On a Meta session, also calls <see cref="VoiceSidecar"/>.<see cref="SetVoiceMode"/>.
     /// Not persisted.
     /// </summary>
     public VoidResult<string> SetVoiceMode(DysonVoiceMode? voice)
     {
-        if (Parent is not null || !DysonSessionPolicy.IsMetaAgent(Mode))
+        var sidecar = DysonSessionPolicy.IsVoiceSidecar(Mode);
+        if (!sidecar && (Parent is not null || !DysonSessionPolicy.IsMetaAgent(Mode)))
             return new VoidResult<string>("Voice mode is only for the root Meta Agent session.");
 
         if (ReferenceEquals(Config.Voice, voice))
+        {
+            if (!sidecar)
+                VoiceSidecar?.SetVoiceMode(voice);
             return VoidResult<string>.Success;
+        }
 
         var prompt = DysonAgentSystemPrompts.ForMode(Mode, Config.CustomAgents);
         if (prompt.IsError)
@@ -438,17 +462,39 @@ public abstract class DysonAgentSession
         SystemPrompt = ComposeSystemPrompt(prompt.Value);
         SystemPromptGeneration++;
         AppendLog(voice is null ? "voice mode off" : "voice mode on");
+        if (!sidecar)
+            VoiceSidecar?.SetVoiceMode(voice);
         return VoidResult<string>.Success;
     }
 
+    /// <summary>Cached sidecar memory text (empty when none). Injected by <see cref="ComposeSystemPrompt"/>.</summary>
+    public string VoiceSidecarMemory => _voiceSidecarMemory;
+
+    /// <summary>
+    /// Stores sidecar memory and rebuilds the system prompt the same way <see cref="SetVoiceMode"/> does.
+    /// </summary>
+    public void SetVoiceSidecarMemory(string? content)
+    {
+        _voiceSidecarMemory = content ?? "";
+        var prompt = DysonAgentSystemPrompts.ForMode(Mode, Config.CustomAgents);
+        if (prompt.IsError)
+            return;
+
+        SystemPrompt = ComposeSystemPrompt(prompt.Value);
+        SystemPromptGeneration++;
+    }
+
     private string ComposeSystemPrompt(string directive) =>
-        DysonAgentSystemPrompts.JoinSystemPromptSuffix(
-            DysonAgentSystemPrompts.WithBrowser(
-                DysonAgentSystemPrompts.WithVoice(directive, Mode, Config.Voice is not null),
-                Mode,
-                CatalogHasBrowserTool()),
-            _systemPromptSuffix,
-            DysonAgentSystemPrompts.BuildPluginInstructionBlock(Config))!;
+        DysonAgentSystemPrompts.WithVoiceSidecarMemory(
+            DysonAgentSystemPrompts.JoinSystemPromptSuffix(
+                DysonAgentSystemPrompts.WithBrowser(
+                    DysonAgentSystemPrompts.WithVoice(directive, Mode, Config.Voice is not null),
+                    Mode,
+                    CatalogHasBrowserTool()),
+                _systemPromptSuffix,
+                DysonAgentSystemPrompts.BuildPluginInstructionBlock(Config))!,
+            Mode,
+            _voiceSidecarMemory);
 
     private bool CatalogHasBrowserTool()
     {
@@ -514,8 +560,15 @@ public abstract class DysonAgentSession
                 ApplyPendingModelLocked();
         }
 
+        ModelChanged?.Invoke(this, EventArgs.Empty);
         return VoidResult<string>.Success;
     }
+
+    /// <summary>
+    /// Raised outside the model gate after <see cref="SetModel"/> and after a pending pick is applied, so labels
+    /// that read <see cref="SelectedProvider"/> / <see cref="Provider"/> can refresh.
+    /// </summary>
+    public event EventHandler? ModelChanged;
 
     /// <summary>
     /// Request boundary: applies a pending <see cref="SetModel"/> pick so the next request resolves model, client,
@@ -523,9 +576,139 @@ public abstract class DysonAgentSession
     /// </summary>
     protected internal bool ApplyPendingModel()
     {
+        bool applied;
         lock (_modelGate)
-            return ApplyPendingModelLocked();
+            applied = ApplyPendingModelLocked();
+        if (applied)
+            ModelChanged?.Invoke(this, EventArgs.Empty);
+        return applied;
     }
+
+    /// <summary>
+    /// <c>ChangeSubagentAIModel</c>: switches a direct child's model and/or effort through <see cref="SetModel"/>
+    /// (a fresh provider, so slug and effort land together). Idle or terminal child: applied now. Busy child: lands
+    /// at its next provider request; the in-flight request is never cancelled. Stopped children are refused.
+    /// Persists the child row's slug and effort at once.
+    /// </summary>
+    public async Task<Result<DysonChangeSubagentModelOutcome, string>> ChangeSubagentModelAsync(
+        int subagentId,
+        string? modelSlug,
+        string? reasoningEffort,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetSubagent(subagentId, out var child))
+            return Result<DysonChangeSubagentModelOutcome, string>.AsError($"Unknown subagentId {subagentId}.");
+
+        if (child.Status == DysonSessionStatus.Stopped)
+        {
+            return Result<DysonChangeSubagentModelOutcome, string>.AsError(
+                $"Subagent #{subagentId} is stopped; model change has no effect.");
+        }
+
+        var slug = string.IsNullOrWhiteSpace(modelSlug) ? null : modelSlug.Trim();
+        var effort = OpenAiCompatibleAgentProvider.NormalizeReasoningEffort(reasoningEffort);
+        if (slug is null && effort is null)
+        {
+            return Result<DysonChangeSubagentModelOutcome, string>.AsError(
+                "ChangeSubagentAIModel: modelSlug or reasoningEffort is required.");
+        }
+
+        if (child.SelectedProvider is not OpenAiCompatibleAgentProvider current)
+        {
+            return Result<DysonChangeSubagentModelOutcome, string>.AsError(
+                "ChangeSubagentAIModel is not supported for this provider kind.");
+        }
+
+        var resolved = await ResolveSwitchProviderAsync(current, slug, effort, cancellationToken)
+            .ConfigureAwait(false);
+        if (resolved.IsError)
+            return Result<DysonChangeSubagentModelOutcome, string>.AsError(resolved.Error);
+
+        var next = resolved.Value;
+        if (next.SlugId == current.SlugId
+            && string.Equals(next.Slug, current.Slug, StringComparison.Ordinal)
+            && string.Equals(next.ReasoningEffort, current.ReasoningEffort, StringComparison.Ordinal))
+        {
+            return Result<DysonChangeSubagentModelOutcome, string>.AsValue(ChangeOutcome(child, current, "unchanged"));
+        }
+
+        var appliedResult = await child.ApplyProviderAsync(next, cancellationToken).ConfigureAwait(false);
+        if (appliedResult.IsError)
+            return Result<DysonChangeSubagentModelOutcome, string>.AsError(appliedResult.Error);
+
+        var applied = ReferenceEquals(child.Provider, next) ? "now" : "nextToolRound";
+        AppendLog($"changed subagent {child.Id} model to {FormatSubagentModelLabel(next)} (effort {next.ReasoningEffort ?? "default"}, {applied})");
+        return Result<DysonChangeSubagentModelOutcome, string>.AsValue(ChangeOutcome(child, next, applied));
+    }
+
+    /// <summary>
+    /// <see cref="SetModel"/> plus persist slug/effort. Extracted from <see cref="ChangeSubagentModelAsync"/>.
+    /// </summary>
+    internal async Task<VoidResult<string>> ApplyProviderAsync(DysonAgentProvider provider, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        var set = SetModel(provider, provider is OpenAiCompatibleAgentProvider oai
+            ? oai.DefaultMaxTargetContextTokens
+            : SlugDefaultMaxTargetContextTokens);
+        if (set.IsError)
+            return set;
+
+        // ponytail: the persist is a separate await from SetModel; a racing UI pick can leave the row one pick
+        // behind memory until the next pick or reload. Upgrade path: one per-session async gate around both.
+        if ((SessionStore ?? Parent?.SessionStore) is { } store && PersistenceId != Guid.Empty
+            && provider is OpenAiCompatibleAgentProvider next)
+        {
+            var persist = await store.UpdateSessionMetaAsync(
+                    new DysonSessionMetaUpdate
+                    {
+                        SessionId = PersistenceId,
+                        ModelSlugId = next.SlugId,
+                        ClearModelSlug = next.SlugId is null,
+                        UpdateReasoningEffort = true,
+                        ReasoningEffort = next.ReasoningEffort,
+                    },
+                    ct)
+                .ConfigureAwait(false);
+            if (persist.IsError)
+                return persist;
+        }
+
+        return VoidResult<string>.Success;
+    }
+
+    private static DysonChangeSubagentModelOutcome ChangeOutcome(
+        DysonAgentSession child,
+        OpenAiCompatibleAgentProvider provider,
+        string applied) =>
+        new(
+            child.Id,
+            child.PersistenceId,
+            provider.Slug,
+            provider.ReasoningEffort,
+            FormatSubagentModelLabel(provider),
+            applied);
+
+    /// <summary>
+    /// Fresh provider for <see cref="ChangeSubagentModelAsync"/>: a non-null <paramref name="modelSlug"/> resolves
+    /// that slug (null effort = slug default); else <paramref name="current"/> copied with the new effort.
+    /// The base supports no provider kind; OpenAI-compatible sessions override.
+    /// </summary>
+    internal virtual Task<Result<OpenAiCompatibleAgentProvider, string>> ResolveSwitchProviderAsync(
+        OpenAiCompatibleAgentProvider current,
+        string? modelSlug,
+        string? reasoningEffort,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(modelSlug is null
+            ? Result<OpenAiCompatibleAgentProvider, string>.AsValue(current.WithReasoningEffort(reasoningEffort))
+            : Result<OpenAiCompatibleAgentProvider, string>.AsError(
+                "ChangeSubagentAIModel is not supported for this provider kind."));
+
+    /// <summary>
+    /// Agent Behavior default provider for this session's own mode, read live from settings when the
+    /// session has a model store (null = unset or unsupported). Used to push the Meta Sidecar setting onto live sidecars.
+    /// </summary>
+    internal virtual Task<DysonAgentProvider?> ResolveOwnModeDefaultProviderAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(Config.TryGetSubagentDefaultProvider(Mode));
 
     private bool ApplyPendingModelLocked()
     {
@@ -597,6 +780,9 @@ public abstract class DysonAgentSession
     public void RestoreRegisteredSubagent(DysonAgentSession child)
     {
         ArgumentNullException.ThrowIfNull(child);
+
+        if (child.IsVoiceSidecar)
+            return;
 
         if (child.Id < 1)
             throw new InvalidOperationException("Restored subagent must already have RuntimeId ≥ 1.");
@@ -731,51 +917,201 @@ public abstract class DysonAgentSession
         await SessionStore.DeleteSessionAsync(persisted, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// JSON array of direct children for the <c>ListSubagents</c> MCP tool
-    /// (<c>subagentId</c>, <c>persistenceId</c>, <c>agentMode</c>, <c>title</c>, <c>status</c>, optional <c>modelLabel</c>).
-    /// </summary>
-    public string FormatListSubagentsJson() => FormatChildRosterJson(includeReports: false);
+    // ponytail: depth guard so a ParentSessionId cycle in bad data cannot recurse forever; raise if real trees go deeper.
+    private const int RosterMaxDepth = 8;
+
+    // ponytail: descendant lastReport is a one-line preview so the pre-dispatch roster stays cheap; full text is in that agent's log.
+    internal const int RosterDescendantReportChars = 200;
 
     /// <summary>
-    /// Shared child-roster projection. When <paramref name="includeReports"/> is false the shape
-    /// matches <see cref="FormatListSubagentsJson"/>. When true, adds <c>kind</c>,
-    /// <c>worktreeBranch</c>, <c>lastReport</c>, and <c>finishedAt</c> (plain, stable — no notices).
+    /// JSON array of direct children for the <c>ListSubagents</c> MCP tool
+    /// (<c>subagentId</c>, <c>persistenceId</c>, <c>agentMode</c>, <c>title</c>, <c>status</c>, optional <c>modelLabel</c>,
+    /// <c>children</c> — the same shape, recursively, for the whole descendant tree).
     /// </summary>
-    public string FormatChildRosterJson(bool includeReports)
+    public Task<string> FormatListSubagentsJsonAsync(CancellationToken cancellationToken = default) =>
+        FormatChildRosterJsonAsync(includeReports: false, cancellationToken);
+
+    /// <summary>
+    /// Shared child-roster projection. Top level is the live <see cref="SubSessions"/>. Each entry nests its
+    /// descendants under <c>children</c>: loaded agents report live state, unloaded ones (e.g. after restart) their
+    /// persisted row; deleted rows are gone. When <paramref name="includeReports"/> is false the shape matches
+    /// <see cref="FormatListSubagentsJsonAsync"/>. When true, adds <c>kind</c>, <c>worktreeBranch</c>,
+    /// <c>lastReport</c> (descendants: one-line preview), and <c>finishedAt</c> (plain, stable — no notices).
+    /// </summary>
+    public async Task<string> FormatChildRosterJsonAsync(
+        bool includeReports,
+        CancellationToken cancellationToken = default)
     {
-        var items = SubSessions
-            .OrderBy(c => c.Id)
-            .Select(c => includeReports ? ProjectChildRosterWithReports(c) : ProjectChildRoster(c));
+        var items = new List<object>();
+        foreach (var c in SubSessions.OrderBy(c => c.Id))
+            items.Add(await ProjectLiveRosterNodeAsync(c, includeReports, 0, cancellationToken).ConfigureAwait(false));
 
         return JsonSerializer.Serialize(items);
     }
 
-    private static object ProjectChildRoster(DysonAgentSession c) => new
-    {
-        subagentId = c.Id,
-        persistenceId = c.PersistenceId,
-        agentMode = c.Mode,
-        title = c.DisplayTitle,
-        status = c.Status.ToString(),
-        modelLabel = FormatSubagentModelLabel(c.Provider),
-    };
+    private readonly record struct RosterFields(
+        int SubagentId,
+        Guid PersistenceId,
+        string AgentMode,
+        string? Title,
+        DysonSessionStatus Status,
+        string? ModelLabel,
+        string? WorktreeBranch,
+        string? LastReport,
+        DateTime? FinishedAt);
 
-    private static object ProjectChildRosterWithReports(DysonAgentSession c) => new
+    private async Task<object> ProjectLiveRosterNodeAsync(
+        DysonAgentSession c,
+        bool includeReports,
+        int depth,
+        CancellationToken cancellationToken)
     {
-        subagentId = c.Id,
-        persistenceId = c.PersistenceId,
-        agentMode = c.Mode,
-        title = c.DisplayTitle,
-        status = c.Status.ToString(),
-        modelLabel = FormatSubagentModelLabel(c.Provider),
-        kind = RosterKind(c.Mode),
-        worktreeBranch = string.Equals(c.Mode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase)
-            ? null
-            : c.WorktreeBranch,
-        lastReport = c.LastReportSummary,
-        finishedAt = c.IsTerminal ? RosterFinishedAt(c) : null,
-    };
+        var children = await ProjectRosterDescendantsAsync(
+                c.SubSessions, c.PersistenceId, includeReports, depth + 1, cancellationToken)
+            .ConfigureAwait(false);
+        return ProjectRosterNode(
+            new RosterFields(
+                c.Id,
+                c.PersistenceId,
+                c.Mode,
+                c.DisplayTitle,
+                c.Status,
+                FormatSubagentModelLabel(c.SelectedProvider),
+                c.WorktreeBranch,
+                c.LastReportSummary,
+                c.IsTerminal ? RosterFinishedAt(c) : null),
+            includeReports,
+            depth,
+            children);
+    }
+
+    private async Task<object> ProjectPersistedRosterNodeAsync(
+        DysonSessionSummary row,
+        bool includeReports,
+        int depth,
+        CancellationToken cancellationToken)
+    {
+        string? branch = null;
+        string? report = null;
+        DateTime? finishedAt = null;
+        if (includeReports && SessionStore is not null)
+        {
+            // ponytail: full aggregate load per unloaded descendant; add a slim repository projection if rosters get slow.
+            var full = await SessionStore.GetFullSessionAsync(row.Id, cancellationToken).ConfigureAwait(false);
+            if (full.IsSuccess)
+            {
+                branch = full.Value.Session.WorktreeBranch;
+                report = LastStatusReason(full.Value.Logs, stoppedOnly: false);
+                if (row.Status is DysonSessionStatus.Completed or DysonSessionStatus.Stopped
+                    or DysonSessionStatus.Failed or DysonSessionStatus.Interrupted)
+                    finishedAt = full.Value.Turns.Max(t => t.CompletedUtc);
+            }
+        }
+
+        var children = await ProjectRosterDescendantsAsync([], row.Id, includeReports, depth + 1, cancellationToken)
+            .ConfigureAwait(false);
+        return ProjectRosterNode(
+            new RosterFields(row.RuntimeId, row.Id, row.AgentMode, row.Title, row.Status, null, branch, report, finishedAt),
+            includeReports,
+            depth,
+            children);
+    }
+
+    /// <summary>
+    /// Children of one roster node: live instances where loaded, persisted rows otherwise, ordered by subagent id.
+    /// </summary>
+    private async Task<List<object>> ProjectRosterDescendantsAsync(
+        IReadOnlyList<DysonAgentSession> live,
+        Guid parentPersistenceId,
+        bool includeReports,
+        int depth,
+        CancellationToken cancellationToken)
+    {
+        if (depth >= RosterMaxDepth)
+            return [];
+
+        IReadOnlyList<DysonSessionSummary>? rows = null;
+        if (SessionStore is not null && parentPersistenceId != Guid.Empty)
+        {
+            var listed = await SessionStore.ListChildSessionsAsync(parentPersistenceId, cancellationToken)
+                .ConfigureAwait(false);
+            if (listed.IsSuccess)
+                rows = listed.Value;
+        }
+
+        var nodes = new List<(int Id, object Node)>();
+        foreach (var c in live)
+        {
+            if (c.IsVoiceSidecar)
+                continue;
+
+            // A deleted row is gone from the store; a still-spawning child has no row yet.
+            if (rows is null || c.PersistenceId == Guid.Empty || rows.Any(r => r.Id == c.PersistenceId))
+                nodes.Add((c.Id, await ProjectLiveRosterNodeAsync(c, includeReports, depth, cancellationToken).ConfigureAwait(false)));
+        }
+
+        if (rows is not null)
+        {
+            foreach (var row in rows)
+            {
+                if (row.RuntimeId < 1
+                    || DysonSessionPolicy.IsVoiceSidecar(row.AgentMode)
+                    || live.Any(c => c.PersistenceId == row.Id))
+                    continue;
+
+                nodes.Add((row.RuntimeId, await ProjectPersistedRosterNodeAsync(row, includeReports, depth, cancellationToken).ConfigureAwait(false)));
+            }
+        }
+
+        return nodes.OrderBy(n => n.Id).Select(n => n.Node).ToList();
+    }
+
+    private static object ProjectRosterNode(RosterFields f, bool includeReports, int depth, List<object> children)
+    {
+        var status = f.Status.ToString();
+        if (!includeReports)
+        {
+            return new
+            {
+                subagentId = f.SubagentId,
+                persistenceId = f.PersistenceId,
+                agentMode = f.AgentMode,
+                title = f.Title,
+                status,
+                modelLabel = f.ModelLabel,
+                children,
+            };
+        }
+
+        return new
+        {
+            subagentId = f.SubagentId,
+            persistenceId = f.PersistenceId,
+            agentMode = f.AgentMode,
+            title = f.Title,
+            status,
+            modelLabel = f.ModelLabel,
+            kind = RosterKind(f.AgentMode),
+            worktreeBranch = string.Equals(f.AgentMode, DysonAgentModes.Explore, StringComparison.OrdinalIgnoreCase)
+                ? null
+                : f.WorktreeBranch,
+            lastReport = depth == 0 ? f.LastReport : RosterReportPreview(f.LastReport),
+            finishedAt = f.FinishedAt,
+            children,
+        };
+    }
+
+    /// <summary>Whitespace collapsed to one line, cut at <see cref="RosterDescendantReportChars"/> with an ellipsis.</summary>
+    internal static string? RosterReportPreview(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return text;
+
+        var line = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return line.Length <= RosterDescendantReportChars
+            ? line
+            : line[..RosterDescendantReportChars].TrimEnd() + "…";
+    }
 
     private static string RosterKind(string mode)
     {
@@ -916,6 +1252,9 @@ public abstract class DysonAgentSession
 
         if (string.Equals(childMode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
             return new VoidResult<string>("Meta Agent cannot be used as a subagent mode (page-launched only).");
+
+        if (DysonSessionPolicy.IsVoiceSidecar(childMode))
+            return new VoidResult<string>("Voice Mode Meta Sidecar is harness-created only.");
 
         if (string.Equals(parentMode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase))
         {
@@ -1344,14 +1683,7 @@ public abstract class DysonAgentSession
 
         child.EnqueuePendingTurn(turn);
         if (!child.HasActiveBackgroundRun)
-        {
-            var runCts = new CancellationTokenSource();
-            child.AttachBackgroundRun(runCts);
-            if (child.TryDequeuePendingTurn(out var next))
-                KickOffChildPrompt(child, next, runCts);
-            else
-                runCts.Dispose();
-        }
+            StartNextPendingTurn(child);
 
         if (started is null)
             return Result<string, string>.AsValue(Json(queueOnly ? "queued" : "delivered", 0));
@@ -1398,8 +1730,27 @@ public abstract class DysonAgentSession
     }
 
     /// <summary>
+    /// Attaches a run and kicks the next pending turn. When a concurrent drain already took it, detach
+    /// again: a disposed CTS reports not-cancelled, so leaving it attached keeps HasActiveBackgroundRun true forever.
+    /// </summary>
+    internal static void StartNextPendingTurn(DysonAgentSession child)
+    {
+        var runCts = new CancellationTokenSource();
+        child.AttachBackgroundRun(runCts);
+        if (child.TryDequeuePendingTurn(out var next))
+        {
+            KickOffChildPrompt(child, next, runCts);
+            return;
+        }
+
+        child.DetachBackgroundRun(runCts);
+        runCts.Dispose();
+    }
+
+    /// <summary>
     /// Cancel the child's in-flight turn and parent-event wait, drop queued harness follow-ups while keeping
-    /// earlier parent messages FIFO, then start <paramref name="turn"/> now.
+    /// earlier parent messages FIFO, then start <paramref name="turn"/> now. A KickOff that has not entered
+    /// its prompt yet is claimed here (not left for its cancelled task to requeue after this run drains).
     /// </summary>
     private static void InterruptChildWith(DysonAgentSession child, DysonAgentTurn turn)
     {
@@ -1408,12 +1759,16 @@ public abstract class DysonAgentSession
             child.CancelPendingParentEventWait("cancelled by parent TriggerSubagentEvent");
             child.CancelBackgroundRun();
             var queuedParentMessages = new List<DysonAgentTurn>();
+            foreach (var unstarted in child._unstartedKickOffTurns)
+            {
+                if (!ReferenceEquals(unstarted, turn) && IsParentMessageTurn(unstarted))
+                    queuedParentMessages.Add(unstarted);
+            }
+
+            child._unstartedKickOffTurns.Clear();
             while (child.TryDequeuePendingTurn(out var queued))
             {
-                if (!ReferenceEquals(queued, turn)
-                    && queued.Instruction?.StartsWith(
-                        DysonQueuedTurnAfterSummary.InjectedSubagentPromptPrefix,
-                        StringComparison.Ordinal) == true)
+                if (!ReferenceEquals(queued, turn) && IsParentMessageTurn(queued))
                     queuedParentMessages.Add(queued);
             }
 
@@ -1424,6 +1779,11 @@ public abstract class DysonAgentSession
             KickOffChildPrompt(child, turn, runCts);
         }
     }
+
+    private static bool IsParentMessageTurn(DysonAgentTurn turn) =>
+        turn.Instruction?.StartsWith(
+            DysonQueuedTurnAfterSummary.InjectedSubagentPromptPrefix,
+            StringComparison.Ordinal) == true;
 
     /// <summary>Removes <paramref name="turn"/> from the pending queue, keeping the order of the rest.</summary>
     private bool TryRemovePendingTurn(DysonAgentTurn turn)
@@ -1743,17 +2103,30 @@ public abstract class DysonAgentSession
         _inFlightPromptStack.Count > 0 ? _inFlightPromptStack.Peek() : null;
 
     /// <summary>
+    /// Snapshot of every turn on the in-flight prompt stack, newest first. Transcript building
+    /// treats each as incomplete so an older loop's tool rounds are not emitted twice.
+    /// </summary>
+    public IReadOnlyList<DysonAgentTurn> InFlightPromptTurns
+    {
+        get
+        {
+            lock (_modelGate)
+                return _inFlightPromptStack.ToArray();
+        }
+    }
+
+    /// <summary>
     /// Queues a mid-turn user comment on an in-flight prompt (any nested stack entry,
     /// not only <see cref="InFlightPromptTurn"/>). Does not mutate <see cref="DysonAgentTurn.Instruction"/>.
     /// </summary>
-    public VoidResult<string> InjectTurnComment(Guid turnId, string comment)
+    public VoidResult<string> InjectTurnComment(Guid turnId, string comment, string? marker = null)
     {
         foreach (var turn in _inFlightPromptStack)
         {
             if (turn.Id != turnId)
                 continue;
 
-            var queued = turn.EnqueueUserComment(comment);
+            var queued = turn.EnqueueUserComment(comment, marker);
             // Full text, never truncated (the prompt: line is): rail Session log + InspectSubagentLog.
             if (queued.IsSuccess)
                 AppendLog($"USER COMMENT (injected mid-turn, turn {turn.Id.ToString("N")[..8]}): {comment.Trim()}");
@@ -1874,12 +2247,16 @@ public abstract class DysonAgentSession
                 return;
             _disposed = true;
             // Under the model gate so a SetModel racing the prompt end is either applied here or applied by SetModel.
+            var applied = false;
             lock (session._modelGate)
             {
                 session._inFlightPromptStack.Pop();
                 if (session._inFlightPromptStack.Count == 0)
-                    session.ApplyPendingModelLocked();
+                    applied = session.ApplyPendingModelLocked();
             }
+
+            if (applied)
+                session.ModelChanged?.Invoke(session, EventArgs.Empty);
         }
     }
 
@@ -1900,13 +2277,16 @@ public abstract class DysonAgentSession
     /// <summary>
     /// Cascade: session override if set → slug default if set → harness 200K.
     /// 0 means Off / unlimited (no compaction). Meta Agent is pinned to
-    /// <see cref="DysonMaxTargetContextTokens.MetaAgentFixed"/> and ignores the
-    /// session/slug values (composer stepper cannot move it).
+    /// <see cref="DysonMaxTargetContextTokens.MetaAgentFixed"/> and the voice sidecar to
+    /// <see cref="DysonMaxTargetContextTokens.VoiceSidecarFixed"/>; both ignore the
+    /// session/slug values (composer stepper cannot move them).
     /// </summary>
     public int ResolveEffectiveMaxTargetContextTokens() =>
         string.Equals(Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase)
             ? DysonMaxTargetContextTokens.MetaAgentFixed
-            : DysonMaxTargetContextTokens.Resolve(MaxTargetContextTokens, SlugDefaultMaxTargetContextTokens);
+            : DysonSessionPolicy.IsVoiceSidecar(Mode)
+                ? DysonMaxTargetContextTokens.VoiceSidecarFixed
+                : DysonMaxTargetContextTokens.Resolve(MaxTargetContextTokens, SlugDefaultMaxTargetContextTokens);
 
     /// <summary>
     /// Estimated tokens for the outbound Completions/Responses payload (idle: no in-flight rounds).
@@ -2887,11 +3267,46 @@ public abstract class DysonAgentSession
         return true;
     }
 
+    /// <summary>
+    /// Takes this session's prompt gate so a KickOff / inject loop and a host report turn cannot
+    /// both reach the provider. Callers that are about to cancel the run holding the gate must not
+    /// wait here: cancel first, then enter (an interrupt waiting on the turn it cancels deadlocks).
+    /// </summary>
+    protected internal Task EnterPromptGateAsync(CancellationToken cancellationToken) =>
+        _promptGate.WaitAsync(cancellationToken);
+
+    /// <summary>Releases the gate taken by <see cref="EnterPromptGateAsync"/>.</summary>
+    protected internal void ExitPromptGate() => _promptGate.Release();
+
+    /// <summary>
+    /// Test seam: every KickOff awaits this before the prompt gate. Lets a test hold one cancelled
+    /// gate-wait past the canceller's detach.
+    /// </summary>
+    internal Func<DysonAgentTurn, Task>? BeforeKickOffGateForTest { get; set; }
+
     /// <summary>Stores the CTS used to cancel the background <see cref="PromptAsync"/> for StopSubagent.</summary>
     protected void AttachBackgroundRun(CancellationTokenSource runCts)
     {
         ArgumentNullException.ThrowIfNull(runCts);
         _runCts = runCts;
+    }
+
+    /// <summary>
+    /// Completes when <see cref="HasActiveBackgroundRun"/> is false: immediately when already idle,
+    /// else when the current run detaches. A caller retrying a deferred prompt may be deferred again
+    /// if a newer run attached meanwhile; it then waits again.
+    /// </summary>
+    public Task WaitForBackgroundRunIdleAsync(CancellationToken cancellationToken)
+    {
+        var idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _backgroundIdleWaiters.Enqueue(idle);
+        if (!HasActiveBackgroundRun)
+            idle.TrySetResult();
+
+        if (!cancellationToken.CanBeCanceled)
+            return idle.Task;
+
+        return idle.Task.WaitAsync(cancellationToken);
     }
 
     protected void CancelBackgroundRun()
@@ -2913,8 +3328,18 @@ public abstract class DysonAgentSession
     protected void DetachBackgroundRun(CancellationTokenSource runCts)
     {
         ArgumentNullException.ThrowIfNull(runCts);
-        if (ReferenceEquals(_runCts, runCts))
-            _runCts = null;
+        if (!ReferenceEquals(_runCts, runCts))
+            return;
+
+        _runCts = null;
+        ReleaseBackgroundIdleWaiters();
+    }
+
+    /// <summary>Completes every idle waiter (the current run just detached).</summary>
+    private void ReleaseBackgroundIdleWaiters()
+    {
+        while (_backgroundIdleWaiters.TryDequeue(out var waiter))
+            waiter.TrySetResult();
     }
 
     /// <summary>
@@ -3045,10 +3470,41 @@ public abstract class DysonAgentSession
         if (child._injectWaiters.TryRemove(turn.Id, out var injectStarted))
             injectStarted.TrySetResult();
 
+        lock (child._injectInterruptGate)
+            child._unstartedKickOffTurns.Add(turn);
+
         _ = Task.Run(async () =>
         {
+            var gateHeld = false;
+            var promptStarted = false;
+            var requeuedHere = false;
             try
             {
+                // One provider loop per session: an interrupt cancels the old run first, so this waits
+                // only for that run to unwind (never on a caller thread or under _injectInterruptGate).
+                var beforeGate = child.BeforeKickOffGateForTest;
+                if (beforeGate is not null)
+                    await beforeGate(turn).ConfigureAwait(false);
+
+                await child.EnterPromptGateAsync(runCts.Token).ConfigureAwait(false);
+                gateHeld = true;
+                lock (child._injectInterruptGate)
+                {
+                    if (!child._unstartedKickOffTurns.Remove(turn))
+                    {
+                        // An interrupt already claimed this turn into the kept parent-message queue.
+                        return;
+                    }
+
+                    if (runCts.IsCancellationRequested)
+                    {
+                        RequeueUnstartedParentMessage(child, turn);
+                        requeuedHere = true;
+                        return;
+                    }
+                }
+
+                promptStarted = true;
                 var result = await child.PromptHarnessTurnAsync(turn, runCts.Token).ConfigureAwait(false);
                 if (runCts.IsCancellationRequested)
                 {
@@ -3089,6 +3545,18 @@ public abstract class DysonAgentSession
             catch (OperationCanceledException) when (runCts.IsCancellationRequested)
             {
                 // Stop/interrupt owns follow-up; do not start a pending turn on a new CTS.
+                // Claim under the same lock as InterruptChildWith so exactly one side requeues.
+                if (!promptStarted)
+                {
+                    lock (child._injectInterruptGate)
+                    {
+                        if (child._unstartedKickOffTurns.Remove(turn))
+                        {
+                            RequeueUnstartedParentMessage(child, turn);
+                            requeuedHere = true;
+                        }
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -3099,10 +3567,48 @@ public abstract class DysonAgentSession
             }
             finally
             {
-                child.DetachBackgroundRun(runCts);
+                if (gateHeld)
+                    child.ExitPromptGate();
+
+                // Same lock as the late requeue's empty-run check: a message this task requeued while its
+                // own run was still attached is started here instead of sitting on an idle session.
+                // Any other cancel leaves the queue alone (Stop/interrupt owns follow-up).
+                lock (child._injectInterruptGate)
+                {
+                    child.DetachBackgroundRun(runCts);
+                    if (requeuedHere && !child.HasActiveBackgroundRun && child.HasPendingTurn && !child.IsTerminal)
+                        StartNextPendingTurn(child);
+                }
+
                 runCts.Dispose();
             }
         });
+    }
+
+    /// <summary>
+    /// A newer interrupt cancelled this KickOff before its turn started (gate wait). The parent was already
+    /// told "delivered", so a parent message goes back to the head of the queue. Caller holds
+    /// <see cref="_injectInterruptGate"/> and has already claimed the turn out of
+    /// <see cref="_unstartedKickOffTurns"/>, so exactly one side owns it. Stop (terminal) drops it.
+    /// When the cancelling run already finished (late requeue), start the queue if nothing is running.
+    /// </summary>
+    private static void RequeueUnstartedParentMessage(DysonAgentSession child, DysonAgentTurn turn)
+    {
+        if (child.IsTerminal || !IsParentMessageTurn(turn))
+            return;
+
+        var rest = new List<DysonAgentTurn>();
+        while (child._pendingTurns.TryDequeue(out var queued))
+            rest.Add(queued);
+
+        child._pendingTurns.Enqueue(turn);
+        foreach (var queued in rest)
+            child._pendingTurns.Enqueue(queued);
+
+        // The canceller usually drains. A gate-wait cancellation that lands after that run has
+        // detached would otherwise leave this message queued with nobody to start it.
+        if (!child.HasActiveBackgroundRun)
+            StartNextPendingTurn(child);
     }
 
     /// <summary>Starts the next queued pending turn when the child is still Active.</summary>
@@ -3339,7 +3845,7 @@ public abstract class DysonAgentSession
             // Stop already reported to the parent at stop time. Restore that report so the restore-time
             // child-report watch does not re-synthesize it as "application restart".
             _subagentReportAccepted = true;
-            LastReportSummary = LastStoppedReason(state.Logs) ?? LastReportSummary;
+            LastReportSummary = LastStatusReason(state.Logs, stoppedOnly: true) ?? LastReportSummary;
         }
 
         if (IsTerminal)
@@ -3379,6 +3885,7 @@ public abstract class DysonAgentSession
             TurnHistory.Add(turn);
         }
 
+        TrimMetaChatHistory(state.Session);
         BumpTranscriptGeneration();
 
         while (_logLines.TryDequeue(out _))
@@ -3401,8 +3908,51 @@ public abstract class DysonAgentSession
         RestoreTodos(state.Todos);
     }
 
-    /// <summary>Reason of the last persisted SessionStatusChanged(Stopped) log, if any.</summary>
-    private static string? LastStoppedReason(IReadOnlyList<DysonSessionLogEntry> logs)
+    /// <summary>Background DB delete started by the last load-time Meta chat trim. Tests await it.</summary>
+    internal Task MetaChatTrimCompletion { get; private set; } = Task.CompletedTask;
+
+    /// <summary>
+    /// Root Meta Agent only: drops turns older than the <see cref="DysonMetaChatWindow"/> that the model
+    /// context no longer needs, and hard-deletes them off the circuit thread. Idempotent across loads.
+    /// </summary>
+    private void TrimMetaChatHistory(DysonSessionEntity session)
+    {
+        if (!DysonMetaChatWindow.Applies(session.ParentSessionId, session.AgentMode))
+            return;
+
+        var ids = DysonMetaChatWindow.SelectTrimmable(TurnHistory);
+        if (ids.Count == 0)
+            return;
+
+        var drop = ids.ToHashSet();
+        TurnHistory.RemoveAll(t => drop.Contains(t.Id));
+
+        var store = SessionStore;
+        var sessionId = session.Id;
+        if (store is null)
+            return;
+
+        MetaChatTrimCompletion = Task.Run(async () =>
+        {
+            try
+            {
+                var deleted = await store.DeleteTurnsAsync(sessionId, ids).ConfigureAwait(false);
+                AppendLog(deleted.IsSuccess
+                    ? $"meta chat: trimmed {ids.Count} turn(s) older than the last {DysonMetaChatWindow.MaxInteractions} interactions"
+                    : $"meta chat: trim failed: {deleted.Error}");
+            }
+            catch (Exception ex)
+            {
+                // Rows stay; the next load retries the same idempotent trim.
+                AppendLog($"meta chat: trim failed: {ex.Message}");
+            }
+        });
+    }
+
+    /// <summary>
+    /// Reason of the last persisted SessionStatusChanged log with a reason: Stopped only, or any terminal status.
+    /// </summary>
+    private static string? LastStatusReason(IReadOnlyList<DysonSessionLogEntry> logs, bool stoppedOnly)
     {
         string? reason = null;
         foreach (var log in logs.OrderBy(l => l.Sequence))
@@ -3412,7 +3962,13 @@ public abstract class DysonAgentSession
                 continue;
 
             var payload = DysonSessionLogPayload.Deserialize<DysonSessionLogSessionStatusChanged>(log.PayloadJson);
-            if (payload is { Status: DysonSessionStatus.Stopped } && !string.IsNullOrWhiteSpace(payload.Reason))
+            if (payload is null || string.IsNullOrWhiteSpace(payload.Reason))
+                continue;
+
+            if (stoppedOnly
+                    ? payload.Status == DysonSessionStatus.Stopped
+                    : payload.Status is DysonSessionStatus.Completed or DysonSessionStatus.Stopped
+                        or DysonSessionStatus.Failed or DysonSessionStatus.Interrupted)
                 reason = payload.Reason;
         }
 

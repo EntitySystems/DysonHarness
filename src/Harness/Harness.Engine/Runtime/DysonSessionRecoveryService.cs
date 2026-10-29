@@ -46,6 +46,9 @@ public sealed class DysonSessionRecoveryService
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            if (DysonSessionPolicy.IsVoiceSidecar(summary.AgentMode))
+                continue;
+
             var recovered = await RecoverSessionTurnsAsync(summary, cancellationToken).ConfigureAwait(false);
             if (recovered.IsError)
                 return Result<DysonSessionRecoveryReport, string>.AsError(recovered.Error);
@@ -63,6 +66,9 @@ public sealed class DysonSessionRecoveryService
         foreach (var descendant in descendantsListed.Value)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (DysonSessionPolicy.IsVoiceSidecar(descendant.AgentMode))
+                continue;
 
             var interrupted = await InterruptActiveDescendantAsync(descendant.Id, cancellationToken)
                 .ConfigureAwait(false);
@@ -139,7 +145,8 @@ public sealed class DysonSessionRecoveryService
             return Result<bool, string>.AsError(loaded.Error);
 
         var state = loaded.Value;
-        if (state.Session.ParentSessionId is null
+        if (DysonSessionPolicy.IsVoiceSidecar(state.Session.AgentMode)
+            || state.Session.ParentSessionId is null
             || state.Session.Status != DysonSessionStatus.Active)
         {
             return Result<bool, string>.AsValue(false);

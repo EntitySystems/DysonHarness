@@ -11,9 +11,11 @@ namespace DysonHarness;
 public sealed class DysonWorkDirectoryFocus(IDysonWorkDirectoryRepository workDirectories)
 {
     public const string NotOwnerMessage =
-        "Other work directory owns the application, you can ask the user in voice mode to change directories via the SpeakToUser tool.";
+        "Other work directory owns the application, you can ask the user in voice mode to change directories via MessageVoiceModeSidecar.";
 
     public const string PanelNotShownMessage = "The work directories panel is not on screen.";
+
+    public const string SwitchNotAppliedMessage = "The switch did not take effect.";
 
     private readonly IDysonWorkDirectoryRepository _workDirectories =
         workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
@@ -128,7 +130,10 @@ public sealed class DysonWorkDirectoryFocus(IDysonWorkDirectoryRepository workDi
         return VoidResult<string>.Success;
     }
 
-    /// <summary>Gate, target must exist, hook must be bound, then <see cref="SetActive"/> and <see cref="SwitchTo"/>.</summary>
+    /// <summary>
+    /// Gate, target must exist, hook must be bound, then <see cref="SwitchTo"/>. Success only when the
+    /// hook's UI path moved <see cref="ActiveId"/> to the target: a no-op or failed navigation is an error.
+    /// </summary>
     public async Task<VoidResult<string>> SwitchAsync(
         Guid callerWorkDirectoryId,
         Guid targetId,
@@ -147,7 +152,8 @@ public sealed class DysonWorkDirectoryFocus(IDysonWorkDirectoryRepository workDi
 
         lock (_gate)
             _names[targetId] = get.Value.Name;
-        SetActive(targetId);
+        // No SetActive here: the UI hook sets it once the screen moves, so a hook that did
+        // nothing (switcher locked, navigation failed) cannot report ok while the screen stays put.
         try
         {
             await hook(targetId).ConfigureAwait(false);
@@ -158,6 +164,8 @@ public sealed class DysonWorkDirectoryFocus(IDysonWorkDirectoryRepository workDi
             return VoidResult<string>.AsError(PanelNotShownMessage, ex);
         }
 
-        return VoidResult<string>.Success;
+        return ActiveId == targetId
+            ? VoidResult<string>.Success
+            : VoidResult<string>.AsError(SwitchNotAppliedMessage);
     }
 }

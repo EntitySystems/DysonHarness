@@ -102,6 +102,18 @@ public static class DysonAppSettingKeys
     public const string MetaAgentDroneReasoningEffort = "meta_agent_drone_reasoning_effort";
 
     /// <summary>
+    /// Guid string of the model slug for the voice sidecar. Empty / missing ⇒ unset; the sidecar keeps
+    /// the Meta session's model.
+    /// </summary>
+    public const string MetaSidecarModelSlugId = "meta_sidecar_model_slug_id";
+
+    /// <summary>
+    /// Reasoning-effort override for the voice sidecar slug. Empty / missing ⇒ unset; the sidecar keeps
+    /// the Meta session's model.
+    /// </summary>
+    public const string MetaSidecarReasoningEffort = "meta_sidecar_reasoning_effort";
+
+    /// <summary>
     /// Guid string of the dedicated direct-OpenAI model slug used by <c>GenerateImage</c>.
     /// Empty, invalid, or unsupported ⇒ image generation is disabled; it never falls back to the chat model.
     /// </summary>
@@ -336,5 +348,47 @@ public static class DysonAppSettingKeys
             return Result<string, string>.AsValue(text);
         return Result<string, string>.AsError(
             "Nemotron 3.5 device must be cpu or vulkan. Choose it in Settings → Voice.");
+    }
+
+    /// <summary>Voice input mode. Missing or unknown ⇒ <see cref="SpeechVoiceModeCallsign"/>.</summary>
+    public const string SpeechVoiceMode = "speech_voice_mode";
+
+    public const string SpeechVoiceModeCallsign = "callsign";
+
+    public const string SpeechVoiceModeImmediate = "immediate";
+
+    /// <summary>Push to talk. Older builds read this as callsign (lenient parse).</summary>
+    public const string SpeechVoiceModePushToTalk = "ptt";
+
+    /// <summary>Callsign pause in milliseconds. Default 3000. Lenient read: see <see cref="ParseSpeechPauseMs"/>.</summary>
+    public const string SpeechCallsignPauseMs = "speech_callsign_pause_ms";
+
+    /// <summary>Immediate pause in milliseconds. Default 2000. Lenient read: see <see cref="ParseSpeechPauseMs"/>.</summary>
+    public const string SpeechImmediatePauseMs = "speech_immediate_pause_ms";
+
+    /// <summary>
+    /// Lenient. Missing, blank, or anything other than <see cref="SpeechVoiceModeImmediate"/>
+    /// or <see cref="SpeechVoiceModePushToTalk"/> returns <see cref="SpeechVoiceModeCallsign"/>.
+    /// A bad row must never block voice.
+    /// </summary>
+    public static Result<string, string> ParseSpeechVoiceMode(string? value)
+    {
+        var text = value?.Trim().ToLowerInvariant() ?? "";
+        return Result<string, string>.AsValue(
+            text is SpeechVoiceModeImmediate or SpeechVoiceModePushToTalk
+                ? text
+                : SpeechVoiceModeCallsign);
+    }
+
+    /// <summary>
+    /// Lenient. A trimmed integer in 1000..10000 is returned. Missing, blank, non-numeric, or
+    /// out of range returns <paramref name="fallback"/>. A bad row must never block voice.
+    /// </summary>
+    public static Result<int, string> ParseSpeechPauseMs(string? value, int fallback)
+    {
+        var text = value?.Trim() ?? "";
+        if (int.TryParse(text, out var ms) && ms is >= 1000 and <= 10000)
+            return Result<int, string>.AsValue(ms);
+        return Result<int, string>.AsValue(fallback);
     }
 }

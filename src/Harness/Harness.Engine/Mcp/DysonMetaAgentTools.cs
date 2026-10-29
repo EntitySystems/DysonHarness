@@ -69,31 +69,12 @@ public static class DysonMetaAgentTools
         "StartAsyncMetaAgentDrone",
         "StartAsyncSecurityReviewAgent",
         "StopMetaAgentDrone",
+        "ChangeSubagentAIModel",
         "SwitchWorkdir",
         "UpdateNote",
         "UpdateTodo",
         "WriteTempFile",
     ];
-
-    /// <summary>
-    /// Root Meta Agent only, and only while <see cref="DysonAgentSessionConfig.Voice"/> is set.
-    /// Not in <see cref="AllowedToolNames"/>: voice off keeps the exact allowlist.
-    /// </summary>
-    public static readonly DysonMcpTool SpeakToUser = new()
-    {
-        Name = "SpeakToUser",
-        Description =
-            "Voice mode only. Speak text aloud to the user with text-to-speech. Queues the speech and returns at once; calls play in order. Use short sentences, plain English words, and few acronyms. Call it before PostConversationMessage; the posted message carries the technical detail. Speech stops when the user starts talking.",
-        InputSchemaJson = """
-            {
-              "type": "object",
-              "properties": {
-                "text": { "type": "string", "description": "What to say aloud. Short plain-English sentences. At most 600 characters." }
-              },
-              "required": ["text"]
-            }
-            """,
-    };
 
     /// <summary>
     /// Names that must never appear in the Meta Agent catalog.
@@ -200,7 +181,7 @@ public static class DysonMetaAgentTools
     /// <summary>
     /// Meta Agent Drone: keep the Work catalog (including <c>TriggerParentEvent</c>),
     /// drop Ask/dialog FromParent tools, add the two review tools, <c>ReadMetaPlan</c>, <c>EditMetaPlan</c>, and a <c>SubmitMetaPlan</c> seam.
-    /// Does not copy <see cref="AllowedToolNames"/>. ListWorkdirs, OpenWorkdirsPanel, and SwitchWorkdir stay on the root catalog only.
+    /// Does not copy <see cref="AllowedToolNames"/>. ListWorkdirs, OpenWorkdirsPanel, and SwitchWorkdir stay on the root catalog and the voice sidecar only.
     /// </summary>
     public static void ApplyDroneAllowlist(DysonMcpPipeline pipeline)
     {
@@ -316,6 +297,8 @@ public static class DysonMetaAgentTools
             Name = "ListMetaAgentDrones",
             Description =
                 "Roster of this session's drones, explores, or reviews, including last report. " +
+                "Each entry nests its whole descendant tree (workers, their workers, and so on) under children, same fields, with each node's current status; " +
+                "a descendant's lastReport is a one-line preview (~200 chars). " +
                 "Call before dispatching: old turns are deleted permanently, so an id you cannot see may still be a running drone. " +
                 "Plain stable projection — no notices or counts.",
             InputSchemaJson = """
@@ -369,7 +352,7 @@ public static class DysonMetaAgentTools
                     "reason": { "type": "string", "description": "Optional reason recorded on the stopped session." },
                     "discardWorktree": {
                       "type": "boolean",
-                      "description": "When true, remove the worktree checkout and clear worktree columns (default false)."
+                      "description": "When true, remove the worktree checkout (including one git no longer lists) and clear worktree columns. Does not delete the branch (default false)."
                     }
                   },
                   "required": ["agentId"]
@@ -412,7 +395,8 @@ public static class DysonMetaAgentTools
             Name = "DeleteMetaAgent",
             Description =
                 "Permanently delete a finished drone, explore, or review and its children. " +
-                "Refuses while the agent or any descendant is still running, and refuses while its worktree is unmerged. " +
+                "Refuses while the agent or any descendant is still running, and refuses while its branch still has commits the registered checkout does not. " +
+                "A worktree git no longer lists is cleared when that branch is fully merged. Never deletes the branch. " +
                 "Before deleting, keep anything worth keeping in a todo or a posted message.",
             InputSchemaJson = """
                 {
@@ -795,13 +779,54 @@ public static class DysonMetaAgentTools
         };
 
         // Root Meta Agent only. Not voice-gated. Not yielded from the drone tools.
+        // Root Meta Agent variant: agentId instead of the default catalog's subagentId.
+        yield return new DysonMcpTool
+        {
+            Name = "ChangeSubagentAIModel",
+            Description =
+                "Switch a direct child's model slug and/or reasoning effort. Idle or terminal child: applied now. " +
+                "Busy child: lands at its next provider request (next tool round, or a compaction summary request); " +
+                "the in-flight request is never cancelled. Stopped children are refused. Direct children only.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "agentId": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Id of the direct child whose model to switch (≥ 1)."
+                    },
+                    "modelSlug": {
+                      "type": "string",
+                      "description": "Optional model slug or display alias (same provider kind required). Omit to keep the child's current slug."
+                    },
+                    "reasoningEffort": {
+                      "type": "string",
+                      "description": "Optional freeform reasoning effort. Omit with a modelSlug to use that slug's default effort."
+                    }
+                  },
+                  "required": ["agentId"]
+                }
+                """,
+        };
+
+        foreach (var tool in CreateWorkdirTools())
+            yield return tool;
+    }
+
+    /// <summary>
+    /// ListWorkdirs, OpenWorkdirsPanel, SwitchWorkdir. Shared by the root Meta Agent catalog and the voice sidecar
+    /// (<see cref="DysonVoiceSidecarTools.ApplyAllowlist"/>); <see cref="DysonWorkDirectoryFocus"/> owns the owner gate.
+    /// </summary>
+    public static IEnumerable<DysonMcpTool> CreateWorkdirTools()
+    {
         yield return new DysonMcpTool
         {
             Name = "ListWorkdirs",
             Description =
                 "List this subject's work directories. " +
                 "Returns a JSON array of { id, name, path, active }. path is the absolute path. " +
-                "Only the meta agent of the work directory on screen may call this.",
+                "Only the Meta Agent or the voice sidecar of the work directory on screen may call this.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -815,7 +840,7 @@ public static class DysonMetaAgentTools
             Name = "OpenWorkdirsPanel",
             Description =
                 "Open the existing work-directories panel. No parameters. " +
-                "Only the meta agent of the work directory on screen may call this. " +
+                "Only the Meta Agent or the voice sidecar of the work directory on screen may call this. " +
                 "Does nothing when that panel is not on screen.",
             InputSchemaJson = """
                 {
@@ -830,8 +855,8 @@ public static class DysonMetaAgentTools
             Name = "SwitchWorkdir",
             Description =
                 "Switch the work directory on screen. id is that work directory's Guid. " +
-                "Only the meta agent of the work directory currently on screen may call this. " +
-                "Does not turn voice mode off.",
+                "Only the Meta Agent or the voice sidecar of the work directory currently on screen may call this. " +
+                "Does not turn voice mode off. Voice input follows the screen.",
             InputSchemaJson = """
                 {
                   "type": "object",

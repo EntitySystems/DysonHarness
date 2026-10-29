@@ -80,7 +80,8 @@ public static class MetaAgentSessionLocator
 
 /// <summary>
 /// Plain-text Meta Agent transcript: user instructions, injected comments, and DisplayInfo posts.
-/// Tool calls, reasoning, and harness turns stay out.
+/// Tool calls, reasoning, and harness turns stay out. Root Meta history shows the newest
+/// <see cref="DysonMetaChatWindow.MaxInteractions"/> bubbles; queued prompts follow outside the cap.
 /// </summary>
 public static class MetaChatItems
 {
@@ -91,9 +92,11 @@ public static class MetaChatItems
         ArgumentNullException.ThrowIfNull(turns);
         ArgumentNullException.ThrowIfNull(queued);
 
-        var items = new List<MetaChatItem>(turns.Count + queued.Count);
-        foreach (var turn in turns)
+        var start = DysonMetaChatWindow.DisplayStart(turns);
+        var items = new List<MetaChatItem>(turns.Count - start + queued.Count);
+        for (var t = start; t < turns.Count; t++)
         {
+            var turn = turns[t];
             if (turn.Kind == DysonAgentTurnKind.Normal)
             {
                 var text = turn.Instruction ?? "";
@@ -136,20 +139,26 @@ public static class MetaChatItems
             if (turn.Kind == DysonAgentTurnKind.DisplayInfo
                 && !string.IsNullOrWhiteSpace(turn.AssistantText))
             {
+                // A voice utterance is the user's bubble. The prefix is stored on the turn, so reload keeps the side.
+                var voiceInput = DysonVoiceMode.IsVoiceInputDisplay(turn);
                 items.Add(new MetaChatItem(
-                    $"a:{turn.Id:D}",
-                    MetaChatRole.Agent,
+                    voiceInput ? $"u:{turn.Id:D}" : $"a:{turn.Id:D}",
+                    voiceInput ? MetaChatRole.User : MetaChatRole.Agent,
                     turn.AssistantText,
                     Pending: false,
                     QueuedId: null)
                 {
-                    Actions = turn.ConversationActions,
-                    TurnId = turn.Id,
-                    VisualizationId = turn.VisualizationId,
-                    UserQuestion = turn.UserQuestion,
+                    Actions = voiceInput ? [] : turn.ConversationActions,
+                    TurnId = voiceInput ? null : turn.Id,
+                    VisualizationId = voiceInput ? null : turn.VisualizationId,
+                    UserQuestion = voiceInput ? null : turn.UserQuestion,
                 });
             }
         }
+
+        // The window's oldest turn can carry several bubbles; drop its extras past the cap.
+        if (items.Count > DysonMetaChatWindow.MaxInteractions)
+            items.RemoveRange(0, items.Count - DysonMetaChatWindow.MaxInteractions);
 
         foreach (var queuedPrompt in queued)
         {

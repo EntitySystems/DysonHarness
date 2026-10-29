@@ -1444,8 +1444,9 @@ public sealed class DysonMcpPipeline
         {
             Name = "ListSubagents",
             Description =
-                "List this session’s direct child subagents (session-owned roster). " +
-                "Returns a JSON array with subagentId, persistenceId, agentMode, title, status, and optional modelLabel. " +
+                "List this session’s child subagents (session-owned roster) with each child's whole descendant tree. " +
+                "Returns a JSON array with subagentId, persistenceId, agentMode, title, status, optional modelLabel, " +
+                "and children (same fields, nested for grandchildren and deeper, each with its current status). " +
                 "Use before WaitForSubagent / InspectSubagentLog / StopSubagent when the id is not in recent context " +
                 "(e.g. after resume or compacted older StartSubagent results).",
             InputSchemaJson = """
@@ -1527,6 +1528,36 @@ public sealed class DysonMcpPipeline
                     "reason": {
                       "type": "string",
                       "description": "Optional reason for the stop request."
+                    }
+                  },
+                  "required": ["subagentId"]
+                }
+                """,
+        };
+
+        yield return new DysonMcpTool
+        {
+            Name = "ChangeSubagentAIModel",
+            Description =
+                "Switch a direct child's model slug and/or reasoning effort. Idle or terminal child: applied now. " +
+                "Busy child: lands at its next provider request (next tool round, or a compaction summary request); " +
+                "the in-flight request is never cancelled. Stopped children are refused. Direct children only.",
+            InputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "subagentId": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Id of the direct child whose model to switch (≥ 1)."
+                    },
+                    "modelSlug": {
+                      "type": "string",
+                      "description": "Optional model slug or display alias (same provider kind required). Omit to keep the child's current slug."
+                    },
+                    "reasoningEffort": {
+                      "type": "string",
+                      "description": "Optional freeform reasoning effort. Omit with a modelSlug to use that slug's default effort."
                     }
                   },
                   "required": ["subagentId"]

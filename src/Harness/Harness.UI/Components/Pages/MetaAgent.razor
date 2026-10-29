@@ -194,7 +194,7 @@
                                                       Textarea="_prompt"
                                                       @bind-Text="_draft"
                                                       OnError="Host.ReportError" />
-                                    <VoiceModeButton OnChanged="OnVoiceModeChanged" />
+                                    <VoiceModeButton OnChanged="OnVoiceModeChanged" OnDraft="OnVoiceDraft" />
                                     <ModelSlugPicker @ref="_modelPicker"
                                                      SelectedSlugId="_selectedSlugId"
                                                      SelectedSlugIdChanged="OnSelectedSlugIdChangedAsync" />
@@ -213,7 +213,7 @@
                                 </button>
                             </div>
                         </div>
-                        <span class="list-item__meta meta-composer__hint">Ctrl+Enter to send · paste/drop files or images · hold Ctrl+M to talk · voice mode: say the agent name</span>
+                        <span class="list-item__meta meta-composer__hint">Ctrl+Enter to send · paste/drop files or images · hold Ctrl+M to talk · voice mode: pick Callsign, Immediate, or Push to talk</span>
                     </div>
 
                     <section class="meta-agents" aria-label="Agents and files">
@@ -301,6 +301,7 @@
     private Guid? _metaSessionId;
     private bool _sessionReady;
     private string _draft = "";
+    private string? _draftBeforeVoice;
     private Guid? _selectedSlugId;
     private string? _reasoningEffort;
     private ModelSlugPicker? _modelPicker;
@@ -419,6 +420,11 @@
     protected override async Task OnParametersSetAsync()
     {
         _activeWorkDirectoryId = WorkDirectoryId;
+        // Prerender is a separate instance on every full load (F5, reconnect reload, second window).
+        // It must not re-assert this route's work directory over a switch made since, nor start
+        // session work with no browser; the interactive instance does both.
+        if (!RendererInfo.IsInteractive)
+            return;
         if (_loadedWorkDirectoryId == WorkDirectoryId)
             return;
 
@@ -440,6 +446,8 @@
             return;
         }
 
+        // Keep the stored workdir in step with the screen so a later visit to "/" does not hydrate an old one.
+        await PersistWorkDirectoryAsync(WorkDirectoryId);
         Host.SetComposerWorkDirectoryId(WorkDirectoryId);
         await RefreshSessionsAsync();
         await EnsureMetaSessionAsync();
@@ -898,13 +906,43 @@
         }
 
         _activeWorkDirectoryId = next;
-        await DysonCircuitJs.NavigateAsync(Js, $"/meta/{next}");
+        if (await DysonCircuitJs.NavigateAsync(Js, $"/meta/{next}") is null)
+            return;
+
+        // Navigation failed: the screen still shows this route. Put focus and storage back so the
+        // switcher and DysonWorkDirectoryFocus.SwitchAsync both report the failure.
+        Host.Focus?.SetActive(WorkDirectoryId);
+        _activeWorkDirectoryId = WorkDirectoryId;
+        await PersistWorkDirectoryAsync(WorkDirectoryId);
     }
 
     private Task PersistWorkDirectoryAsync(Guid? id) =>
         DysonCircuitJs.InvokeVoidAsync(Js, "dysonWorkdir.set", id?.ToString()).AsTask();
 
     private void OnVoiceModeChanged(bool on) => _voiceOn = on;
+
+    private void OnVoiceDraft(string text)
+    {
+        if (!string.IsNullOrEmpty(text))
+        {
+            _draftBeforeVoice ??= _draft;
+            _draft = JoinVoiceDraft(_draftBeforeVoice, text);
+            return;
+        }
+
+        if (_draftBeforeVoice is not null)
+            _draft = _draftBeforeVoice;
+        _draftBeforeVoice = null;
+    }
+
+    private static string JoinVoiceDraft(string typed, string spoken)
+    {
+        if (typed.Length == 0)
+            return spoken;
+        if (char.IsWhiteSpace(typed[^1]))
+            return typed + spoken;
+        return typed + " " + spoken;
+    }
 
     private async Task LeaveMetaAsync() =>
         await DysonCircuitJs.NavigateAsync(Js, "/");

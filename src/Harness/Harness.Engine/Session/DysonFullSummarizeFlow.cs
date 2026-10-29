@@ -41,6 +41,16 @@ public static class DysonFullSummarizeFlow
         """;
 
     /// <summary>
+    /// Same shape as <see cref="Instruction"/>, sized for the voice sidecar's 120K context.
+    /// The 5,000-token line is a target; the harness does not trim.
+    /// </summary>
+    public const string SidecarInstruction = """
+        Summarize this conversation so a fresh turn can continue it. Keep the summary under 5,000 tokens (roughly 20,000 characters). The harness does not trim it.
+        Keep: the user's name and stated preferences, every request still open, and the last answer relayed to the user.
+        Drop: tool output, log lines, anything already resolved.
+        """;
+
+    /// <summary>
     /// Creates a turn with <see cref="DysonAgentTurnKind.FullSummarize"/> and the standard instruction.
     /// Does not append to session history.
     /// </summary>
