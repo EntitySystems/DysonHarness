@@ -33,9 +33,10 @@
   min-width: 0;
 }
 
-/* A1: only the newest few items animate, so a history load does not cascade.
-   A live reveal owns its own word fade, so that row does not also rise. */
-.meta-chat-feed__list > .meta-chat__msg:nth-last-child(-n+3):not(.meta-chat__msg--reveal) {
+/* Only a message appended while the feed is on screen (--live) rises; history never does. The
+   class is a stable per-element marker, so a re-render does not replay it. A live agent reveal
+   owns its own word fade, so that row does not also rise. */
+.meta-chat__msg--live:not(.meta-chat__msg--reveal) {
   animation: dyson-msg-in var(--motion-base) var(--ease) both;
 }
 

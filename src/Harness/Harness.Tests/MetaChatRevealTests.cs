@@ -35,6 +35,16 @@ public class MetaChatRevealTests
     }
 
     [Fact]
+    public void Continues_only_when_an_id_is_kept()
+    {
+        Assert.True(MetaChatReveal.Continues(["u:1", "a:1"], ["u:1", "a:1", "a:2"]));
+        Assert.True(MetaChatReveal.Continues(["u:1", "a:1"], ["a:1", "a:2"]));
+        Assert.False(MetaChatReveal.Continues([], ["u:1", "a:1"]));
+        Assert.False(MetaChatReveal.Continues(["u:1", "a:1"], ["u:2", "a:2"]));
+        Assert.False(MetaChatReveal.Continues(["u:1"], []));
+    }
+
+    [Fact]
     public void LiveKeys_does_not_repeat_a_key_already_live()
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
