@@ -855,6 +855,7 @@ public sealed partial class DysonSessionRuntime : IAsyncDisposable
                 return;
 
             CancelAllPromptTokens();
+            DisposeVoiceSidecarSubscriptions();
         }
         finally
         {

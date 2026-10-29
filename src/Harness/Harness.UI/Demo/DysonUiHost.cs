@@ -406,6 +406,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         if (voice is null)
         {
             UnsubscribeVoiceInput();
+            var runtime = await TryAttachRuntimeForDemoAsync(CancellationToken.None).ConfigureAwait(false);
+            runtime?.DropVoiceTurnsOnVoiceOff();
             if (shared is not null)
                 await shared.StopAsync(DysonVoiceStopReason.UserOff).ConfigureAwait(false);
         }

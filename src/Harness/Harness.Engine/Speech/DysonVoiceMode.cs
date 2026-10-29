@@ -50,6 +50,15 @@ public sealed class DysonVoiceMode(
     DysonWorkDirectoryFocus focus) : IAsyncDisposable
 {
     public const string InputPrefix = "[voice input] ";
+
+    /// <summary>
+    /// True when <paramref name="turn"/> is the Meta chat's copy of a voice utterance.
+    /// The prefix lives on <see cref="DysonAgentTurn.AssistantText"/>, so a reload still knows it is the user's.
+    /// </summary>
+    public static bool IsVoiceInputDisplay(DysonAgentTurn turn) =>
+        turn.Kind == DysonAgentTurnKind.DisplayInfo
+        && turn.AssistantText is { } text
+        && text.StartsWith(InputPrefix, StringComparison.Ordinal);
     public const int PauseMs = 3000;
     public const int ImmediatePauseMs = 2000;
     public const int MinPauseMs = 1000;
@@ -98,6 +107,8 @@ public sealed class DysonVoiceMode(
 
     private readonly DysonSpeechTryout _tryout = tryout ?? throw new ArgumentNullException(nameof(tryout));
     private readonly DysonActiveSpeechToText _speechToText = speechToText ?? throw new ArgumentNullException(nameof(speechToText));
+    /// <summary>Test seam. Runs after a line is dequeued and before <see cref="DysonSpeechTryout.PlayPreparedAsync"/>.</summary>
+    internal Action? BeforePlay;
     private readonly DysonActiveTextToSpeech _textToSpeech = textToSpeech ?? throw new ArgumentNullException(nameof(textToSpeech));
     private readonly IDysonSpeechModelRepository _models = models ?? throw new ArgumentNullException(nameof(models));
     private readonly IDysonSubjectSettingsRepository _settings = settings ?? throw new ArgumentNullException(nameof(settings));
@@ -1214,8 +1225,22 @@ public sealed class DysonVoiceMode(
 
                 RaiseState();
                 var playing = current;
+                BeforePlay?.Invoke();
                 // None, not the run token: a fade must not cancel the device. The pump token is separate.
-                var play = _tryout.PlayPreparedAsync(playing.Channel.Reader.ReadAllAsync(), CancellationToken.None);
+                // Re-checked here and again inside PlayPreparedAsync, after its thread hop, so a barge-in
+                // that landed in between never starts this line.
+                if (Volatile.Read(ref _speakEpoch) != epoch || runToken.IsCancellationRequested)
+                {
+                    EndSynth(playing);
+                    continue;
+                }
+
+                var play = _tryout.PlayPreparedAsync(
+                    playing.Channel.Reader.ReadAllAsync(),
+                    CancellationToken.None,
+                    () => Volatile.Read(ref _speakEpoch) != epoch || runToken.IsCancellationRequested);
+                if (Volatile.Read(ref _speakEpoch) != epoch || runToken.IsCancellationRequested)
+                    _tryout.StopPlayback(FadeOut);
                 if (!CaptureHold()
                     && reader.TryPeek(out var nextLine)
                     && nextLine.Epoch == epoch
@@ -1432,7 +1457,6 @@ public sealed class DysonVoiceMode(
 
     private void BargeIn(bool chime = true)
     {
-        // ponytail: a line the speak loop already dequeued can still start; upgrade is a generation check inside PlayAsync.
         Interlocked.Increment(ref _speakEpoch);
         CancelSynths();
         _tryout.StopPlayback(FadeOut);

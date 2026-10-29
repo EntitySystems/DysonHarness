@@ -37,6 +37,9 @@ public abstract class DysonAgentSession
     private readonly ConcurrentDictionary<Guid, TaskCompletionSource> _injectWaiters = new();
     // ponytail: one lock serializes the inject interrupt tail (cancel + requeue + kick); the wait is not locked.
     private readonly object _injectInterruptGate = new();
+    // KickOff turns not yet inside PromptHarnessTurnAsync. An interrupt claims them here so a late
+    // gate-wait cancellation cannot requeue a message the next run already drained past.
+    private readonly HashSet<DysonAgentTurn> _unstartedKickOffTurns = [];
     private readonly Stack<DysonAgentTurn> _inFlightPromptStack = new();
     // One provider loop per session. KickOff and host/runtime prompt entry both take it.
     // ponytail: one semaphore per session; upgrade to a per-turn queue if prompt entry becomes hot.
@@ -1746,7 +1749,8 @@ public abstract class DysonAgentSession
 
     /// <summary>
     /// Cancel the child's in-flight turn and parent-event wait, drop queued harness follow-ups while keeping
-    /// earlier parent messages FIFO, then start <paramref name="turn"/> now.
+    /// earlier parent messages FIFO, then start <paramref name="turn"/> now. A KickOff that has not entered
+    /// its prompt yet is claimed here (not left for its cancelled task to requeue after this run drains).
     /// </summary>
     private static void InterruptChildWith(DysonAgentSession child, DysonAgentTurn turn)
     {
@@ -1755,12 +1759,16 @@ public abstract class DysonAgentSession
             child.CancelPendingParentEventWait("cancelled by parent TriggerSubagentEvent");
             child.CancelBackgroundRun();
             var queuedParentMessages = new List<DysonAgentTurn>();
+            foreach (var unstarted in child._unstartedKickOffTurns)
+            {
+                if (!ReferenceEquals(unstarted, turn) && IsParentMessageTurn(unstarted))
+                    queuedParentMessages.Add(unstarted);
+            }
+
+            child._unstartedKickOffTurns.Clear();
             while (child.TryDequeuePendingTurn(out var queued))
             {
-                if (!ReferenceEquals(queued, turn)
-                    && queued.Instruction?.StartsWith(
-                        DysonQueuedTurnAfterSummary.InjectedSubagentPromptPrefix,
-                        StringComparison.Ordinal) == true)
+                if (!ReferenceEquals(queued, turn) && IsParentMessageTurn(queued))
                     queuedParentMessages.Add(queued);
             }
 
@@ -1771,6 +1779,11 @@ public abstract class DysonAgentSession
             KickOffChildPrompt(child, turn, runCts);
         }
     }
+
+    private static bool IsParentMessageTurn(DysonAgentTurn turn) =>
+        turn.Instruction?.StartsWith(
+            DysonQueuedTurnAfterSummary.InjectedSubagentPromptPrefix,
+            StringComparison.Ordinal) == true;
 
     /// <summary>Removes <paramref name="turn"/> from the pending queue, keeping the order of the rest.</summary>
     private bool TryRemovePendingTurn(DysonAgentTurn turn)
@@ -3265,6 +3278,12 @@ public abstract class DysonAgentSession
     /// <summary>Releases the gate taken by <see cref="EnterPromptGateAsync"/>.</summary>
     protected internal void ExitPromptGate() => _promptGate.Release();
 
+    /// <summary>
+    /// Test seam: every KickOff awaits this before the prompt gate. Lets a test hold one cancelled
+    /// gate-wait past the canceller's detach.
+    /// </summary>
+    internal Func<DysonAgentTurn, Task>? BeforeKickOffGateForTest { get; set; }
+
     /// <summary>Stores the CTS used to cancel the background <see cref="PromptAsync"/> for StopSubagent.</summary>
     protected void AttachBackgroundRun(CancellationTokenSource runCts)
     {
@@ -3451,20 +3470,38 @@ public abstract class DysonAgentSession
         if (child._injectWaiters.TryRemove(turn.Id, out var injectStarted))
             injectStarted.TrySetResult();
 
+        lock (child._injectInterruptGate)
+            child._unstartedKickOffTurns.Add(turn);
+
         _ = Task.Run(async () =>
         {
             var gateHeld = false;
             var promptStarted = false;
+            var requeuedHere = false;
             try
             {
                 // One provider loop per session: an interrupt cancels the old run first, so this waits
                 // only for that run to unwind (never on a caller thread or under _injectInterruptGate).
+                var beforeGate = child.BeforeKickOffGateForTest;
+                if (beforeGate is not null)
+                    await beforeGate(turn).ConfigureAwait(false);
+
                 await child.EnterPromptGateAsync(runCts.Token).ConfigureAwait(false);
                 gateHeld = true;
-                if (runCts.IsCancellationRequested)
+                lock (child._injectInterruptGate)
                 {
-                    RequeueUnstartedParentMessage(child, turn);
-                    return;
+                    if (!child._unstartedKickOffTurns.Remove(turn))
+                    {
+                        // An interrupt already claimed this turn into the kept parent-message queue.
+                        return;
+                    }
+
+                    if (runCts.IsCancellationRequested)
+                    {
+                        RequeueUnstartedParentMessage(child, turn);
+                        requeuedHere = true;
+                        return;
+                    }
                 }
 
                 promptStarted = true;
@@ -3508,8 +3545,18 @@ public abstract class DysonAgentSession
             catch (OperationCanceledException) when (runCts.IsCancellationRequested)
             {
                 // Stop/interrupt owns follow-up; do not start a pending turn on a new CTS.
+                // Claim under the same lock as InterruptChildWith so exactly one side requeues.
                 if (!promptStarted)
-                    RequeueUnstartedParentMessage(child, turn);
+                {
+                    lock (child._injectInterruptGate)
+                    {
+                        if (child._unstartedKickOffTurns.Remove(turn))
+                        {
+                            RequeueUnstartedParentMessage(child, turn);
+                            requeuedHere = true;
+                        }
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -3523,7 +3570,16 @@ public abstract class DysonAgentSession
                 if (gateHeld)
                     child.ExitPromptGate();
 
-                child.DetachBackgroundRun(runCts);
+                // Same lock as the late requeue's empty-run check: a message this task requeued while its
+                // own run was still attached is started here instead of sitting on an idle session.
+                // Any other cancel leaves the queue alone (Stop/interrupt owns follow-up).
+                lock (child._injectInterruptGate)
+                {
+                    child.DetachBackgroundRun(runCts);
+                    if (requeuedHere && !child.HasActiveBackgroundRun && child.HasPendingTurn && !child.IsTerminal)
+                        StartNextPendingTurn(child);
+                }
+
                 runCts.Dispose();
             }
         });
@@ -3531,32 +3587,28 @@ public abstract class DysonAgentSession
 
     /// <summary>
     /// A newer interrupt cancelled this KickOff before its turn started (gate wait). The parent was already
-    /// told "delivered", so a parent message goes back to the head of the queue for the next run. Stop
-    /// (terminal) drops it.
+    /// told "delivered", so a parent message goes back to the head of the queue. Caller holds
+    /// <see cref="_injectInterruptGate"/> and has already claimed the turn out of
+    /// <see cref="_unstartedKickOffTurns"/>, so exactly one side owns it. Stop (terminal) drops it.
+    /// When the cancelling run already finished (late requeue), start the queue if nothing is running.
     /// </summary>
     private static void RequeueUnstartedParentMessage(DysonAgentSession child, DysonAgentTurn turn)
     {
-        if (child.IsTerminal
-            || turn.Instruction?.StartsWith(
-                DysonQueuedTurnAfterSummary.InjectedSubagentPromptPrefix,
-                StringComparison.Ordinal) != true)
-        {
+        if (child.IsTerminal || !IsParentMessageTurn(turn))
             return;
-        }
 
-        lock (child._injectInterruptGate)
-        {
-            var rest = new List<DysonAgentTurn>();
-            while (child._pendingTurns.TryDequeue(out var queued))
-                rest.Add(queued);
+        var rest = new List<DysonAgentTurn>();
+        while (child._pendingTurns.TryDequeue(out var queued))
+            rest.Add(queued);
 
-            child._pendingTurns.Enqueue(turn);
-            foreach (var queued in rest)
-                child._pendingTurns.Enqueue(queued);
-        }
+        child._pendingTurns.Enqueue(turn);
+        foreach (var queued in rest)
+            child._pendingTurns.Enqueue(queued);
 
-        // No drain here: the only non-terminal canceller is InterruptChildWith, whose new run drains
-        // (or a later interrupt keeps it, as it keeps every queued parent message).
+        // The canceller usually drains. A gate-wait cancellation that lands after that run has
+        // detached would otherwise leave this message queued with nobody to start it.
+        if (!child.HasActiveBackgroundRun)
+            StartNextPendingTurn(child);
     }
 
     /// <summary>Starts the next queued pending turn when the child is still Active.</summary>

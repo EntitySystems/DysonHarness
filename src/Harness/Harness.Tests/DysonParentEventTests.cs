@@ -82,7 +82,7 @@ public class DysonParentEventTests
         try
         {
             Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "first")).IsSuccess);
-            await child.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await child.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
             // B cancels run A, which keeps unwinding; B's KickOff waits for the session gate.
             var b = await parent.TriggerSubagentEventAsync(child.Id, "message B");
@@ -90,21 +90,54 @@ public class DysonParentEventTests
             // C cancels B while B still waits for the gate.
             var c = await parent.TriggerSubagentEventAsync(child.Id, "message C");
             Assert.Contains("\"status\":\"interrupted\"", c.Value, StringComparison.Ordinal);
-
             child.ReleaseFirst.TrySetResult();
 
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-            while (DateTime.UtcNow < deadline
-                   && !child.Instructions.Any(i => i.EndsWith("message B", StringComparison.Ordinal)))
-            {
-                await Task.Delay(10);
-            }
-
-            Assert.Contains(child.Instructions, i => i.EndsWith("message C", StringComparison.Ordinal));
-            Assert.Contains(child.Instructions, i => i.EndsWith("message B", StringComparison.Ordinal));
+            await child.Seen("message B").WaitAsync(TimeSpan.FromSeconds(30));
+            await child.Seen("message C").WaitAsync(TimeSpan.FromSeconds(30));
         }
         finally
         {
+            child.ReleaseFirst.TrySetResult();
+            child.CancelBackgroundRunForTest();
+        }
+    }
+
+    /// <summary>
+    /// B's gate-wait cancellation is held until C has entered the gate, finished, and detached.
+    /// The old requeue then parked B on a queue nobody drained.
+    /// </summary>
+    [Fact]
+    public async Task Late_requeue_after_the_canceller_detached_still_delivers()
+    {
+        var parent = new StubSession();
+        var child = new StubbornChildSession();
+        parent.RegisterForTest(child);
+        var releaseClaim = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            Assert.True((await parent.TriggerSubagentEventAsync(child.Id, "first")).IsSuccess);
+            await child.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+            child.BeforeKickOffGateForTest = turn =>
+                turn.Instruction?.EndsWith("message B", StringComparison.Ordinal) == true
+                    ? releaseClaim.Task
+                    : Task.CompletedTask;
+            var b = await parent.TriggerSubagentEventAsync(child.Id, "message B");
+            Assert.Contains("\"status\":\"interrupted\"", b.Value, StringComparison.Ordinal);
+
+            var c = await parent.TriggerSubagentEventAsync(child.Id, "message C");
+            Assert.Contains("\"status\":\"interrupted\"", c.Value, StringComparison.Ordinal);
+
+            child.ReleaseFirst.TrySetResult();
+            await child.Seen("message C").WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.DoesNotContain(child.Instructions, i => i.EndsWith("message B", StringComparison.Ordinal));
+
+            releaseClaim.TrySetResult();
+            await child.Seen("message B").WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        finally
+        {
+            releaseClaim.TrySetResult();
             child.ReleaseFirst.TrySetResult();
             child.CancelBackgroundRunForTest();
         }
@@ -903,11 +936,21 @@ public class DysonParentEventTests
     private sealed class StubbornChildSession() : StubSession
     {
         public readonly System.Collections.Concurrent.ConcurrentQueue<string> Instructions = new();
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource> _seen = new();
         public readonly TaskCompletionSource FirstStarted =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public readonly TaskCompletionSource ReleaseFirst =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _calls;
+
+        public Task Seen(string ending)
+        {
+            var signal = _seen.GetOrAdd(
+                ending, _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            if (Instructions.Any(i => i.EndsWith(ending, StringComparison.Ordinal)))
+                signal.TrySetResult();
+            return signal.Task;
+        }
 
         public void CancelBackgroundRunForTest() => CancelBackgroundRun();
 
@@ -915,13 +958,19 @@ public class DysonParentEventTests
             DysonAgentTurn turn,
             CancellationToken cancellationToken = default)
         {
-            Instructions.Enqueue(turn.Instruction ?? "");
-            if (Interlocked.Increment(ref _calls) == 1)
+            var instruction = turn.Instruction ?? "";
+            Instructions.Enqueue(instruction);
+            foreach (var pair in _seen)
             {
-                FirstStarted.TrySetResult();
-                await ReleaseFirst.Task.ConfigureAwait(false);
+                if (instruction.EndsWith(pair.Key, StringComparison.Ordinal))
+                    pair.Value.TrySetResult();
             }
 
+            if (Interlocked.Increment(ref _calls) != 1)
+                return VoidResult<string>.Success;
+
+            FirstStarted.TrySetResult();
+            await ReleaseFirst.Task.ConfigureAwait(false);
             return VoidResult<string>.Success;
         }
     }

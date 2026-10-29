@@ -325,15 +325,22 @@ public sealed class DysonLongRunningShell : IDisposable
         while (DateTime.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Process? process;
             lock (_gate)
             {
                 if (Status is not (DysonLongRunningShellStatus.Running or DysonLongRunningShellStatus.CancelRequested))
                     return VoidResult<string>.Success;
-                if (_process is { HasExited: true })
-                {
-                    MarkExitedIfNeeded(aborted: Status == DysonLongRunningShellStatus.Aborted);
-                    return VoidResult<string>.Success;
-                }
+                process = _process;
+            }
+
+            // HasExited can raise Exited (Process lock); never call it under _gate (ABBA with OnProcessExited).
+            if (ProcessHasExited(process))
+            {
+                bool aborted;
+                lock (_gate)
+                    aborted = Status == DysonLongRunningShellStatus.Aborted;
+                MarkExitedIfNeeded(aborted);
+                return VoidResult<string>.Success;
             }
 
             await Task.Delay(50, cancellationToken).ConfigureAwait(false);
@@ -351,10 +358,38 @@ public sealed class DysonLongRunningShell : IDisposable
     private void OnProcessExited(object? sender, EventArgs e) =>
         MarkExitedIfNeeded(aborted: false);
 
+    private static bool ProcessHasExited(Process? process)
+    {
+        try
+        {
+            return process is { HasExited: true };
+        }
+        catch
+        {
+            return false; // disposed or never started
+        }
+    }
+
     private void MarkExitedIfNeeded(bool aborted)
     {
         bool becameTerminal;
         bool wasCancelRequested;
+        // Read the exit code before taking _gate: Process.HasExited can run RaiseOnExited under the
+        // Process lock, while the Exited callback holds that lock and waits for _gate (ABBA deadlock).
+        Process? process;
+        lock (_gate)
+            process = _process;
+        int? code = null;
+        try
+        {
+            if (ProcessHasExited(process))
+                code = process!.ExitCode;
+        }
+        catch
+        {
+            // ExitCode may throw if not exited or disposed.
+        }
+
         lock (_gate)
         {
             if (Status is DysonLongRunningShellStatus.Exited
@@ -367,17 +402,6 @@ public sealed class DysonLongRunningShell : IDisposable
             wasCancelRequested = Status == DysonLongRunningShellStatus.CancelRequested;
             if (wasCancelRequested)
                 _wasCancelRequested = true;
-
-            int? code = null;
-            try
-            {
-                if (_process is { HasExited: true })
-                    code = _process.ExitCode;
-            }
-            catch
-            {
-                // ExitCode may throw if not exited.
-            }
 
             ExitCode = code;
             if (Status != DysonLongRunningShellStatus.Aborted)

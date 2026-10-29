@@ -1049,6 +1049,20 @@ public class DysonVoiceModeTests
     }
 
     [Fact]
+    public async Task BargeIn_after_dequeue_never_starts_the_line()
+    {
+        await using var rig = await VoiceRig.StartAsync();
+        var id = Guid.NewGuid();
+        rig.Focus.SetActive(id);
+        rig.Voice.BeforePlay = () => rig.Voice.DropPendingSpeech();
+        Assert.True(rig.Voice.Speak("One", id, "A").IsSuccess);
+        await Task.Delay(300);
+
+        Assert.Equal(0, rig.Playback.SpeechPlays);
+        Assert.False(rig.Voice.IsSpeaking);
+    }
+
+    [Fact]
     public async Task Stop_only_for_user_off_or_app_exit()
     {
         Assert.True(DysonVoiceMode.Stops(DysonVoiceStopReason.UserOff));
