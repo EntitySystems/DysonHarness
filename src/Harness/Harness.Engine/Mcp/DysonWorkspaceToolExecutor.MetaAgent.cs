@@ -249,30 +249,15 @@ public sealed partial class DysonWorkspaceToolExecutor
 
         if (discardWorktree && !string.IsNullOrWhiteSpace(child.WorktreeAbsolutePath))
         {
+            // Discard is explicit: the checkout goes even when git no longer lists it.
+            // The branch itself is never deleted.
             var removed = await DysonSessionWorktree.RemoveAsync(
                     WorkRoot, child.WorktreeAbsolutePath, force: true, cancellationToken)
                 .ConfigureAwait(false);
             if (removed.IsError)
                 return Error(call, removed.Error);
 
-            child.WorktreeAbsolutePath = null;
-            child.WorktreeBranch = null;
-            child.WorktreeEnabled = false;
-
-            if (_store is not null && child.PersistenceId != Guid.Empty)
-            {
-                await _store.UpdateSessionMetaAsync(
-                    new DysonSessionMetaUpdate
-                    {
-                        SessionId = child.PersistenceId,
-                        UpdateWorktreeEnabled = true,
-                        WorktreeEnabled = false,
-                        UpdateWorktreeLocation = true,
-                        WorktreeAbsolutePath = null,
-                        WorktreeBranch = null,
-                    },
-                    cancellationToken).ConfigureAwait(false);
-            }
+            await ClearChildWorktreeColumnsAsync(child, cancellationToken).ConfigureAwait(false);
         }
 
         return Ok(call, stopped.Value);
@@ -354,6 +339,14 @@ public sealed partial class DysonWorkspaceToolExecutor
         var worktreeBranch = target.WorktreeBranch;
         var deletedIds = tree.Select(n => n.Id).ToArray();
 
+        if (!string.IsNullOrWhiteSpace(target.WorktreeAbsolutePath)
+            || !string.IsNullOrWhiteSpace(worktreeBranch))
+        {
+            var cleared = await TryClearDeletableWorktreeAsync(target, cancellationToken).ConfigureAwait(false);
+            if (cleared.IsError)
+                return Error(call, cleared.Error);
+        }
+
         if (_store is not null && target.PersistenceId != Guid.Empty)
         {
             var deleted = await _store.DeleteSessionAsync(target.PersistenceId, cancellationToken)
@@ -371,6 +364,69 @@ public sealed partial class DysonWorkspaceToolExecutor
             deleted = deletedIds,
             worktreeBranch,
         }));
+    }
+
+    /// <summary>
+    /// Refuses while <paramref name="target"/>'s branch still has commits the registered checkout lacks.
+    /// A stale or unknown worktree whose branch is fully merged (or already gone) is pruned, its folder
+    /// deleted, and its worktree columns cleared so session delete can proceed. Never deletes the branch.
+    /// A registered checkout is removed without force, so uncommitted edits (a drone that never committed
+    /// sits at the fork point and counts as merged) are refused by git instead of being deleted.
+    /// </summary>
+    private async Task<VoidResult<string>> TryClearDeletableWorktreeAsync(
+        DysonAgentSession target,
+        CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(target.WorktreeBranch))
+        {
+            var merged = await DysonSessionWorktree.TryIsBranchMergedAsync(
+                    WorkRoot, target.WorktreeBranch, cancellationToken)
+                .ConfigureAwait(false);
+            if (merged.IsError)
+                return VoidResult<string>.AsError(merged.Error);
+            if (!merged.Value)
+            {
+                return VoidResult<string>.AsError(
+                    "DeleteMetaAgent: this agent's branch has commits that are not in the registered checkout. " +
+                    "Merge it, or stop the drone with discardWorktree first.");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(target.WorktreeAbsolutePath))
+        {
+            var removed = await DysonSessionWorktree.RemoveAsync(
+                    WorkRoot, target.WorktreeAbsolutePath, force: false, cancellationToken)
+                .ConfigureAwait(false);
+            if (removed.IsError)
+                return VoidResult<string>.AsError(removed.Error);
+        }
+
+        await ClearChildWorktreeColumnsAsync(target, cancellationToken).ConfigureAwait(false);
+        return VoidResult<string>.Success;
+    }
+
+    private async Task ClearChildWorktreeColumnsAsync(
+        DysonAgentSession child,
+        CancellationToken cancellationToken)
+    {
+        child.WorktreeAbsolutePath = null;
+        child.WorktreeBranch = null;
+        child.WorktreeEnabled = false;
+
+        if (_store is null || child.PersistenceId == Guid.Empty)
+            return;
+
+        await _store.UpdateSessionMetaAsync(
+            new DysonSessionMetaUpdate
+            {
+                SessionId = child.PersistenceId,
+                UpdateWorktreeEnabled = true,
+                WorktreeEnabled = false,
+                UpdateWorktreeLocation = true,
+                WorktreeAbsolutePath = null,
+                WorktreeBranch = null,
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static void CollectDescendantsThenSelf(DysonAgentSession node, List<DysonAgentSession> acc)

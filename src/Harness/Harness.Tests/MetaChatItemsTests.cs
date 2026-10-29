@@ -330,4 +330,47 @@ public class MetaChatItemsTests
         Assert.DoesNotContain(items, item => item.Text.Contains("questionId", StringComparison.Ordinal));
         Assert.DoesNotContain(items, item => item.Text.Contains(questionId.ToString("D"), StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void Build_voice_input_display_is_the_user_and_a_plain_display_is_the_agent()
+    {
+        var voice = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.DisplayInfo,
+            AssistantText = DysonVoiceMode.InputPrefix + "open the plan",
+            UserQuestion = new DysonUserQuestion(
+                Guid.NewGuid(),
+                "Which?",
+                ["A"],
+                MultiSelect: false,
+                AllowCustomAnswer: false,
+                Answer: null),
+        };
+        voice.RestoreConversationActions([new DysonConversationAction("run", "Run")]);
+        var post = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.DisplayInfo,
+            AssistantText = "Dispatched a drone.",
+        };
+        var spoken = new DysonAgentTurn
+        {
+            Kind = DysonAgentTurnKind.DisplayInfo,
+            AssistantText = "[spoken] hello",
+        };
+
+        Assert.True(DysonVoiceMode.IsVoiceInputDisplay(voice));
+        Assert.False(DysonVoiceMode.IsVoiceInputDisplay(post));
+        Assert.False(DysonVoiceMode.IsVoiceInputDisplay(spoken));
+
+        var items = MetaChatItems.Build([voice, post, spoken], []);
+
+        Assert.Equal(3, items.Count);
+        Assert.Equal(MetaChatRole.User, items[0].Role);
+        Assert.Equal(DysonVoiceMode.InputPrefix + "open the plan", items[0].Text);
+        Assert.Null(items[0].TurnId);
+        Assert.Empty(items[0].Actions);
+        Assert.Null(items[0].UserQuestion);
+        Assert.Equal(MetaChatRole.Agent, items[1].Role);
+        Assert.Equal(MetaChatRole.Agent, items[2].Role);
+    }
 }

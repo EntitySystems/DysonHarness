@@ -352,7 +352,7 @@ public static class DysonMetaAgentTools
                     "reason": { "type": "string", "description": "Optional reason recorded on the stopped session." },
                     "discardWorktree": {
                       "type": "boolean",
-                      "description": "When true, remove the worktree checkout and clear worktree columns (default false)."
+                      "description": "When true, remove the worktree checkout (including one git no longer lists) and clear worktree columns. Does not delete the branch (default false)."
                     }
                   },
                   "required": ["agentId"]
@@ -395,7 +395,8 @@ public static class DysonMetaAgentTools
             Name = "DeleteMetaAgent",
             Description =
                 "Permanently delete a finished drone, explore, or review and its children. " +
-                "Refuses while the agent or any descendant is still running, and refuses while its worktree is unmerged. " +
+                "Refuses while the agent or any descendant is still running, and refuses while its branch still has commits the registered checkout does not. " +
+                "A worktree git no longer lists is cleared when that branch is fully merged. Never deletes the branch. " +
                 "Before deleting, keep anything worth keeping in a todo or a posted message.",
             InputSchemaJson = """
                 {

@@ -135,9 +135,14 @@ public sealed class DysonSpeechTryout(
     /// Plays <paramref name="chunks"/> that were already synthesized. Does not cancel the clip in flight and does not
     /// call <see cref="IDysonAudioPlayback.Stop"/>. Settings tryout still uses <see cref="PlayAsync"/>, which preempts.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="beforePlay"/> runs after the play gate is held and before the device starts.
+    /// Voice mode uses it to drop a line whose speak epoch moved during the hop onto this method.
+    /// </remarks>
     public async Task<VoidResult<string>> PlayPreparedAsync(
         IAsyncEnumerable<Result<DysonSpeechAudioChunk, string>> chunks,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<bool>? beforePlay = null)
     {
         ArgumentNullException.ThrowIfNull(chunks);
         await Task.Run(() => 0, CancellationToken.None).ConfigureAwait(false);
@@ -148,7 +153,7 @@ public sealed class DysonSpeechTryout(
         await _playGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
-            if (cts.IsCancellationRequested)
+            if (cts.IsCancellationRequested || beforePlay?.Invoke() == true)
                 return VoidResult<string>.Success;
             Interlocked.Increment(ref _playbackEpoch);
             return await _playback.PlayAsync(chunks, cts.Token).ConfigureAwait(false);
