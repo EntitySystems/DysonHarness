@@ -9,7 +9,7 @@
         <div class="error-banner" style="margin:0 0 8px;">@_error</div>
     }
 
-    @if (_options.Count == 0)
+    @if (_loader.Options.Count == 0)
     {
         <div class="empty-state" style="padding:8px 0;">
             @NoEligibleOptionsLabel
@@ -76,7 +76,7 @@
                     @foreach (var option in FilteredOptions)
                     {
                         var selected = SelectedSlugId == option.Id;
-                        <div class="model-slug-modal__row @(selected ? "is-selected" : null)" role="option" aria-selected="@selected">
+                        <div @key="option.Id" class="model-slug-modal__row @(selected ? "is-selected" : null)" role="option" aria-selected="@selected">
                             <button type="button"
                                     class="model-slug-modal__option"
                                     disabled="@(!option.IsEligible)"
@@ -108,8 +108,7 @@
 </DysonTransition>
 
 @code {
-    private readonly List<SlugOption> _options = [];
-    private HashSet<Guid> _favoriteIds = [];
+    private readonly ModelSlugOptionsLoader _loader = null!;
     private string? _error;
     private bool _modalOpen;
     private string _search = "";
@@ -129,16 +128,23 @@
     /// <summary>Suffix and badge for a retained selection that is no longer eligible.</summary>
     [Parameter] public string IneligibleLabel { get; set; } = "Unavailable for this setting";
 
+    public ModelSlugPicker()
+    {
+        _loader = new ModelSlugOptionsLoader(
+            () => ModelStore.ListProvidersAsync(),
+            () => ModelStore.ListFavoriteSlugIdsAsync());
+    }
+
     private string CurrentLabel
     {
         get
         {
             if (SelectedSlugId is not Guid id)
-                return AllowEmpty ? EmptyLabel : "Select model…";
+                return AllowEmpty ? EmptyLabel : "Select model\u2026";
 
-            var option = _options.FirstOrDefault(o => o.Id == id);
+            var option = _loader.Options.FirstOrDefault(o => o.Id == id);
             if (option is null)
-                return "Select model…";
+                return "Select model\u2026";
 
             return option.IsEligible ? option.Label : $"{option.Label} ({IneligibleLabel})";
         }
@@ -148,7 +154,7 @@
     {
         get
         {
-            IEnumerable<SlugOption> query = _options;
+            IEnumerable<SlugOption> query = _loader.Options;
             if (!string.IsNullOrWhiteSpace(_search))
             {
                 var term = _search.Trim();
@@ -177,46 +183,14 @@
     public async Task RefreshAsync()
     {
         _error = null;
-        _options.Clear();
-
-        var result = await ModelStore.ListProvidersAsync();
+        var result = await _loader.RefreshAsync(SelectedSlugId, IsEligible);
         if (result.IsError)
         {
             _error = result.Error;
             return;
         }
 
-        var favorites = await ModelStore.ListFavoriteSlugIdsAsync();
-        if (favorites.IsError)
-        {
-            _error = favorites.Error;
-            return;
-        }
-
-        _favoriteIds = favorites.Value.ToHashSet();
-
-        foreach (var provider in result.Value)
-        {
-            foreach (var slug in provider.Slugs)
-            {
-                // Keep current selection visible even if disabled or ineligible so it can be cleared.
-                var isEligible = slug.IsEnabled && (IsEligible?.Invoke(slug, provider) ?? true);
-                if (!isEligible && SelectedSlugId != slug.Id)
-                    continue;
-
-                _options.Add(new SlugOption(
-                    slug.Id,
-                    slug.DisplayAlias,
-                    provider.DisplayName,
-                    slug.Slug,
-                    $"{slug.DisplayAlias} · {provider.DisplayName} / {slug.Slug}",
-                    slug.IsDefault,
-                    _favoriteIds.Contains(slug.Id),
-                    isEligible));
-            }
-        }
-
-        var selectedIsListed = SelectedSlugId is Guid selected && _options.Any(o => o.Id == selected);
+        var selectedIsListed = SelectedSlugId is Guid selected && _loader.Options.Any(o => o.Id == selected);
         if (ModelSlugPickerSelection.TryGetAutoWrite(SelectedSlugId, AllowEmpty, selectedIsListed, out var write))
             await SelectedSlugIdChanged.InvokeAsync(write);
     }
@@ -272,26 +246,6 @@
             return;
         }
 
-        if (option.IsFavorite)
-            _favoriteIds.Remove(option.Id);
-        else
-            _favoriteIds.Add(option.Id);
-
-        var index = _options.FindIndex(o => o.Id == option.Id);
-        if (index >= 0)
-        {
-            var current = _options[index];
-            _options[index] = current with { IsFavorite = !current.IsFavorite };
-        }
+        _loader.Replace(option.Id, current => current with { IsFavorite = !option.IsFavorite });
     }
-
-    private sealed record SlugOption(
-        Guid Id,
-        string DisplayAlias,
-        string ProviderName,
-        string Slug,
-        string Label,
-        bool IsDefault,
-        bool IsFavorite,
-        bool IsEligible);
 }
