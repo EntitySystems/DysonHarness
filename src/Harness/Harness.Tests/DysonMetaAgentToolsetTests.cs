@@ -206,7 +206,11 @@ public class DysonMetaAgentToolsetTests
         var voice = (DysonVoiceMode)RuntimeHelpers.GetUninitializedObject(typeof(DysonVoiceMode));
         var expected = DysonVoiceSidecarTools.AllowedToolNames.OrderBy(n => n, StringComparer.Ordinal).ToArray();
         Assert.Equal(
-            new[] { "EditMemory", "MessageMetaSession", "ReadMemory", "ReadMetaAgentLog", "SpeakToUser" },
+            new[]
+            {
+                "EditMemory", "ListWorkdirs", "MessageMetaSession", "OpenWorkdirsPanel", "ReadMemory",
+                "ReadMetaAgentLog", "SpeakToUser", "SwitchWorkdir",
+            },
             expected);
 
         foreach (var config in new DysonAgentSessionConfig[] { new(), new() { Voice = voice } })

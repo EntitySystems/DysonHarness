@@ -181,7 +181,7 @@ public static class DysonMetaAgentTools
     /// <summary>
     /// Meta Agent Drone: keep the Work catalog (including <c>TriggerParentEvent</c>),
     /// drop Ask/dialog FromParent tools, add the two review tools, <c>ReadMetaPlan</c>, <c>EditMetaPlan</c>, and a <c>SubmitMetaPlan</c> seam.
-    /// Does not copy <see cref="AllowedToolNames"/>. ListWorkdirs, OpenWorkdirsPanel, and SwitchWorkdir stay on the root catalog only.
+    /// Does not copy <see cref="AllowedToolNames"/>. ListWorkdirs, OpenWorkdirsPanel, and SwitchWorkdir stay on the root catalog and the voice sidecar only.
     /// </summary>
     public static void ApplyDroneAllowlist(DysonMcpPipeline pipeline)
     {
@@ -809,13 +809,23 @@ public static class DysonMetaAgentTools
                 """,
         };
 
+        foreach (var tool in CreateWorkdirTools())
+            yield return tool;
+    }
+
+    /// <summary>
+    /// ListWorkdirs, OpenWorkdirsPanel, SwitchWorkdir. Shared by the root Meta Agent catalog and the voice sidecar
+    /// (<see cref="DysonVoiceSidecarTools.ApplyAllowlist"/>); <see cref="DysonWorkDirectoryFocus"/> owns the owner gate.
+    /// </summary>
+    public static IEnumerable<DysonMcpTool> CreateWorkdirTools()
+    {
         yield return new DysonMcpTool
         {
             Name = "ListWorkdirs",
             Description =
                 "List this subject's work directories. " +
                 "Returns a JSON array of { id, name, path, active }. path is the absolute path. " +
-                "Only the meta agent of the work directory on screen may call this.",
+                "Only the Meta Agent or the voice sidecar of the work directory on screen may call this.",
             InputSchemaJson = """
                 {
                   "type": "object",
@@ -829,7 +839,7 @@ public static class DysonMetaAgentTools
             Name = "OpenWorkdirsPanel",
             Description =
                 "Open the existing work-directories panel. No parameters. " +
-                "Only the meta agent of the work directory on screen may call this. " +
+                "Only the Meta Agent or the voice sidecar of the work directory on screen may call this. " +
                 "Does nothing when that panel is not on screen.",
             InputSchemaJson = """
                 {
@@ -844,8 +854,8 @@ public static class DysonMetaAgentTools
             Name = "SwitchWorkdir",
             Description =
                 "Switch the work directory on screen. id is that work directory's Guid. " +
-                "Only the meta agent of the work directory currently on screen may call this. " +
-                "Does not turn voice mode off.",
+                "Only the Meta Agent or the voice sidecar of the work directory currently on screen may call this. " +
+                "Does not turn voice mode off. Voice input follows the screen.",
             InputSchemaJson = """
                 {
                   "type": "object",

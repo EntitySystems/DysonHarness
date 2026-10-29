@@ -417,7 +417,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
-        var denied = RejectUnlessMetaAgent(call, "ListWorkdirs");
+        var denied = RejectUnlessWorkdirCaller(call, "ListWorkdirs");
         if (denied is not null)
             return denied;
 
@@ -431,7 +431,7 @@ public sealed partial class DysonWorkspaceToolExecutor
 
     private async Task<DysonToolCallResult> OpenWorkdirsPanelAsync(DysonToolCall call)
     {
-        var denied = RejectUnlessMetaAgent(call, "OpenWorkdirsPanel");
+        var denied = RejectUnlessWorkdirCaller(call, "OpenWorkdirsPanel");
         if (denied is not null)
             return denied;
 
@@ -447,7 +447,7 @@ public sealed partial class DysonWorkspaceToolExecutor
         DysonToolCall call,
         CancellationToken cancellationToken)
     {
-        var denied = RejectUnlessMetaAgent(call, "SwitchWorkdir");
+        var denied = RejectUnlessWorkdirCaller(call, "SwitchWorkdir");
         if (denied is not null)
             return denied;
 
@@ -471,7 +471,17 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Error(call, DysonWorkDirectoryFocus.NotOwnerMessage);
 
         var switched = await focus.SwitchAsync(_workDirectoryId, id, cancellationToken).ConfigureAwait(false);
-        return switched.IsError ? Error(call, switched.Error) : Ok(call, """{"ok":true}""");
+        if (switched.IsError)
+            return Error(call, switched.Error);
+
+        // A sidecar switch: one UI-only line on its Meta's chat so the record shows why the screen moved.
+        if (_session.VoiceSidecarOwner is { } owner)
+        {
+            var name = await focus.GetDisplayNameAsync(id, cancellationToken).ConfigureAwait(false);
+            owner.AppendDisplayInfoTurn("[voice] switched the screen to " + (name.Length > 0 ? name : id.ToString()));
+        }
+
+        return Ok(call, """{"ok":true}""");
     }
 
     private const int MaxConversationActions = 8;
@@ -1569,6 +1579,16 @@ public sealed partial class DysonWorkspaceToolExecutor
             return null;
 
         return Error(call, $"{tool} is only available in Meta Agent mode.");
+    }
+
+    /// <summary>Mode check for the work-directory tools; ownership stays in <see cref="DysonWorkDirectoryFocus"/>.</summary>
+    private DysonToolCallResult? RejectUnlessWorkdirCaller(DysonToolCall call, string tool)
+    {
+        if (string.Equals(_session.Mode, DysonAgentModes.MetaAgent, StringComparison.OrdinalIgnoreCase)
+            || DysonSessionPolicy.IsVoiceSidecar(_session.Mode))
+            return null;
+
+        return Error(call, $"{tool} is only available to the Meta Agent or its voice sidecar.");
     }
 
     // ponytail: per-note WriteFile gate does not serialize the 20-note cap across different names; upgrade = one gate for the scratch directory.

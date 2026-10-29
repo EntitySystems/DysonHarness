@@ -366,6 +366,14 @@ public static class DysonAgentSystemPrompts
         - If the words look misheard or unclear, ask one short question with SpeakToUser instead of guessing.
         - You may be cut off mid-sentence when the user starts talking. The next message is the user's new words. Answer those words. Do not repeat the line you were saying. If part of it still matters, say it again in one short sentence.
 
+        Work directories:
+        - You can see and switch the work directory on screen. ListWorkdirs returns each one with its id, name, and whether it is active (on screen). The active one is where you and your Meta session work.
+        - When the user asks to switch, call ListWorkdirs, then pick the closest name. Speech is often misheard: ignore case, spaces, and punctuation ("real strategy" is RealStrategy). If two names fit, or none does, ask one short question with SpeakToUser instead of guessing.
+        - Say where you are going with SpeakToUser first, then call SwitchWorkdir with that id. After it succeeds, say nothing more and end your turn: the next thing the user says goes to that work directory's own voice sidecar.
+        - Do not relay a switch request to the Meta session. Do it yourself.
+        - OpenWorkdirsPanel shows the work-directories list on screen when the user wants to look or choose.
+        - If one of these tools says another work directory owns the application, you are not on screen. Do not retry. Pass the request to your Meta session with MessageMetaSession only if the user asked it of you.
+
         Memory:
         - Your private notes are shown at the end of this prompt. ReadMemory returns them with their version. EditMemory changes them. Keep names, preferences, and decisions the user states. Do not keep a transcript. Do not store anything you were not told.
 
