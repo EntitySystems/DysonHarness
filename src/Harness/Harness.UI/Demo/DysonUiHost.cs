@@ -29,6 +29,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly IDysonWorkDirectoryConfigurationRepository _workDirectoryConfigurations;
     private readonly IDysonPlanRepository _plans;
     private readonly IDysonMetaScratchFileRepository? _scratchFiles;
+    private readonly IDysonVoiceSidecarMemoryRepository? _voiceSidecarMemory;
     private readonly IDysonSubjectSettingsRepository _appSettings;
     private readonly IDysonConfiguredShellRepository _configuredShells;
     private readonly DysonCliProxyHost _cliProxy;
@@ -148,7 +149,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonMessageBus? bus = null,
         DysonSessionEventPublisher? sessionEvents = null,
         FileStorageConnectService? fileStorageConnect = null,
-        IDysonMetaScratchFileRepository? scratchFiles = null)
+        IDysonMetaScratchFileRepository? scratchFiles = null,
+        IDysonVoiceSidecarMemoryRepository? voiceSidecarMemory = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -157,6 +159,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             ?? throw new ArgumentNullException(nameof(workDirectoryConfigurations));
         _plans = plans ?? throw new ArgumentNullException(nameof(plans));
         _scratchFiles = scratchFiles;
+        _voiceSidecarMemory = voiceSidecarMemory;
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         _configuredShells = configuredShells ?? throw new ArgumentNullException(nameof(configuredShells));
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -185,7 +188,11 @@ public sealed class DysonUiHost : IAsyncDisposable
         _runtimeAttachment = runtimeAttachment;
         _usageAnalytics = usageAnalytics;
         if (_runtimeAttachment is not null)
+        {
             _runtimeAttachment.Changed += OnRuntimeChanged;
+            if (_runtimeAttachment.TryGetRuntime(out var alreadyAttached))
+                WireMetaPromptDrainHook(alreadyAttached);
+        }
         _pluginLifecycle.Changed += OnPluginCatalogChanged;
         _pluginMcpGrants.Changed += OnPluginMcpGrantChanged;
         _browserControl = browserControl;
@@ -391,6 +398,9 @@ public sealed class DysonUiHost : IAsyncDisposable
                 }).ConfigureAwait(false);
             if (persist.IsError)
                 firstError ??= persist;
+
+            if (voice is not null)
+                await EnsureVoiceSidecarAsync(session).ConfigureAwait(false);
         }
 
         if (voice is null)
@@ -542,6 +552,16 @@ public sealed class DysonUiHost : IAsyncDisposable
             }
 
             ClearUserStop(sessionId);
+            var sidecar = await runtime.RouteVoiceToSidecarAsync(session, message, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (sidecar.IsSuccess)
+            {
+                Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript);
+                return;
+            }
+
+            session.AppendDisplayInfoTurn(
+                "[voice] the voice sidecar could not answer; this message went straight to the session");
             switch (DysonVoiceMode.RouteFor(
                 message.Mode,
                 inFlight: session.InFlightPromptTurn is not null,
@@ -651,6 +671,66 @@ public sealed class DysonUiHost : IAsyncDisposable
 
         _pendingVoicePromptBySession[sessionId] = entry.Id;
         return VoidResult<string>.Success;
+    }
+
+    /// <summary>
+    /// Voice-on creates the sidecar off the circuit. A failure is logged; voice stays on and
+    /// utterances fall back to Meta until the next successful load.
+    /// </summary>
+    private async Task EnsureVoiceSidecarAsync(DysonAgentSession meta)
+    {
+        try
+        {
+            await Task.Run(async () =>
+            {
+                var runtime = await TryAttachRuntimeForDemoAsync(CancellationToken.None).ConfigureAwait(false);
+                if (runtime is null)
+                    return;
+
+                var ensured = await runtime.EnsureVoiceSidecarAsync(meta, CancellationToken.None)
+                    .ConfigureAwait(false);
+                if (ensured.IsError)
+                    meta.AppendLog("voice sidecar: " + ensured.Error);
+            }).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            meta.AppendLog("voice sidecar: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Applies the saved Meta Sidecar model to every live sidecar. Called after Agent Behavior saves.
+    /// </summary>
+    public Task ApplyVoiceSidecarModelAsync(CancellationToken cancellationToken = default) =>
+        Task.Run(async () =>
+        {
+            var runtime = await TryAttachRuntimeForDemoAsync(cancellationToken).ConfigureAwait(false);
+            if (runtime is null)
+                return;
+
+            var applied = await runtime.ApplyVoiceSidecarModelAsync(cancellationToken).ConfigureAwait(false);
+            if (applied.IsError)
+                ReportError(applied.Error);
+        }, cancellationToken);
+
+    private VoidResult<string> RefuseUnavailableSession()
+    {
+        LastError = "Session is not available.";
+        Notify(DysonHostChangeKind.SessionGraph | DysonHostChangeKind.Error);
+        return VoidResult<string>.AsError(LastError);
+    }
+
+    private async Task<bool> IsVoiceSidecarSessionAsync(Guid sessionId, CancellationToken cancellationToken)
+    {
+        if (sessionId == Guid.Empty)
+            return false;
+
+        if (TryResolveLiveSession(sessionId, out var live))
+            return live.IsVoiceSidecar;
+
+        var full = await _sessions.GetFullSessionAsync(sessionId, cancellationToken).ConfigureAwait(false);
+        return full.IsSuccess && DysonSessionPolicy.IsVoiceSidecar(full.Value.Session.AgentMode);
     }
 
     private List<DysonAgentSession> LiveRootMetaSessions()
@@ -776,6 +856,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         if (_runtimeAttachment is not null && _runtimeAttachment.TryGetRuntime(out var attached))
         {
+            WireMetaPromptDrainHook(attached);
             runtime = attached;
             return true;
         }
@@ -813,7 +894,27 @@ public sealed class DysonUiHost : IAsyncDisposable
             return existing;
 
         var attached = await _runtimeAttachment.AttachAsync(cancellationToken).ConfigureAwait(false);
-        return attached.IsSuccess ? attached.Value : null;
+        if (attached.IsError)
+            return null;
+
+        WireMetaPromptDrainHook(attached.Value);
+        return attached.Value;
+    }
+
+    /// <summary>
+    /// A Meta-bound queued prompt is drained by this host's existing queue path.
+    /// False when the id is not on this host (the engine drains it).
+    /// </summary>
+    private void WireMetaPromptDrainHook(DysonSessionRuntime runtime) =>
+        runtime.MetaPromptDrainHook ??= TryDrainMetaPrompt;
+
+    private bool TryDrainMetaPrompt(Guid metaId)
+    {
+        if (metaId == Guid.Empty || !_sessionsById.ContainsKey(metaId))
+            return false;
+
+        _ = DrainQueuedPromptsAsync(metaId);
+        return true;
     }
 
     private bool IsRuntimeOwned(Guid sessionId) =>
@@ -4286,6 +4387,9 @@ public sealed class DysonUiHost : IAsyncDisposable
     {
         LastError = null;
 
+        if (await IsVoiceSidecarSessionAsync(sessionId, cancellationToken).ConfigureAwait(false))
+            return RefuseUnavailableSession();
+
         var runtime = await TryAttachRuntimeForDemoAsync(cancellationToken).ConfigureAwait(false);
         if (runtime is not null && runtime.TryGetSession(sessionId, out var retained))
         {
@@ -5149,6 +5253,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         Guid sessionId,
         CancellationToken cancellationToken)
     {
+        if (await IsVoiceSidecarSessionAsync(sessionId, cancellationToken).ConfigureAwait(false))
+            return Result<DysonAgentSession, string>.AsError("Session is not available.");
+
         if (_sessionsById.TryGetValue(sessionId, out var live))
         {
             if (live.Parent is not null
@@ -5570,6 +5677,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             BrowserControl = _browserControl,
             Bus = Bus,
             MetaScratchFiles = _scratchFiles,
+            VoiceSidecarMemory = _voiceSidecarMemory,
             PluginContributions = contributions,
             UiTheme = resolvedUiTheme,
             AppSettings = _appSettings,
@@ -5578,7 +5686,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             config.Focus = runtimeFocus.Focus;
             if (runtimeFocus.Voice is { IsOn: true } voiceOn
-                && DysonSessionPolicy.IsMetaAgent(agentMode))
+                && (DysonSessionPolicy.IsMetaAgent(agentMode)
+                    || DysonSessionPolicy.IsVoiceSidecar(agentMode)))
                 config.Voice = voiceOn;
         }
 
@@ -5701,6 +5810,12 @@ public sealed class DysonUiHost : IAsyncDisposable
                 DysonAppSettingKeys.MetaAgentDroneModelSlugId,
                 DysonAppSettingKeys.MetaAgentDroneReasoningEffort,
                 p => config.MetaAgentDroneDefaultProvider = p,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await TryHydrateOpenAiProviderSettingAsync(
+                DysonAppSettingKeys.MetaSidecarModelSlugId,
+                DysonAppSettingKeys.MetaSidecarReasoningEffort,
+                p => config.VoiceSidecarDefaultProvider = p,
                 cancellationToken)
             .ConfigureAwait(false);
 
