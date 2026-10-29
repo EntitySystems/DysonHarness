@@ -145,6 +145,9 @@ public class DysonStaleWorktreeTests
     [Fact]
     public async Task Stale_folder_delete_retries_until_the_lock_is_released()
     {
+        if (!OperatingSystem.IsWindows())
+            return; // an open file only blocks directory delete on Windows
+
         var parent = CreateTempDir();
         var repo = Path.Combine(parent, "repo");
         var worktree = Path.Combine(parent, "wt");
