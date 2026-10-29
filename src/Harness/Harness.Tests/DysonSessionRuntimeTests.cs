@@ -978,6 +978,38 @@ public class DysonSessionRuntimeTests
         Assert.Null(twin.InFlightPromptTurn);
     }
 
+    [Fact]
+    public async Task ExecutePrompt_defers_while_background_run_active_then_runs_after_detach()
+    {
+        await using var harness = await Harness.CreateAsync();
+        var created = await harness.Runtime.CreateRootAsync(RootRequest());
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+        var session = Assert.IsType<StubSession>(created.Value);
+        var runs = 0;
+        Task<VoidResult<string>> Run(DysonAgentSession _, CancellationToken __)
+        {
+            runs++;
+            return Task.FromResult(VoidResult<string>.Success);
+        }
+
+        using var runCts = new CancellationTokenSource();
+        session.AttachRunForTest(runCts);
+        var idle = session.WaitForBackgroundRunIdleAsync(CancellationToken.None);
+
+        var deferred = await harness.Runtime.ExecutePromptAsync(session, Run);
+        Assert.True(deferred.IsError);
+        Assert.Equal(DysonSessionRuntime.PromptDeferredError, deferred.Error);
+        Assert.Equal(0, runs);
+        Assert.False(idle.IsCompleted);
+
+        session.DetachRunForTest(runCts);
+        await idle.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var ran = await harness.Runtime.ExecutePromptAsync(session, Run);
+        Assert.True(ran.IsSuccess, ran.IsError ? ran.Error : null);
+        Assert.Equal(1, runs);
+    }
+
     private static DysonAgentSessionRuntimeCreateRequest RootRequest() =>
         new()
         {
@@ -1108,6 +1140,10 @@ public class DysonSessionRuntimeTests
         public void RestoreForTest(DysonPersistedSession state) => RestoreFromPersisted(state);
 
         public void AddTurnForTest(DysonAgentTurn turn) => AddTurn(turn);
+
+        public void AttachRunForTest(CancellationTokenSource runCts) => AttachBackgroundRun(runCts);
+
+        public void DetachRunForTest(CancellationTokenSource runCts) => DetachBackgroundRun(runCts);
 
         public StubSession SpawnChildForTest(Guid persistenceId)
         {

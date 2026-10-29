@@ -47,11 +47,78 @@ public sealed partial class DysonWorkspaceToolExecutor
 
     private string WorkRoot => _fs.NativeRootPath;
 
+    // Models sometimes prefix a catalog name (submit_SubmitMetaPlan, option_ReadFile,
+    // mcp__black_scissors__submit_SubmitMetaPlan). Exact keys (custom server__tool) win first.
+    [GeneratedRegex(@"^(?:mcp__.+?__)?[a-z]+_(?<n>[A-Z]\w*)$", RegexOptions.CultureInvariant)]
+    private static partial Regex PrefixedCatalogToolName();
+
+    /// <summary>
+    /// Exact catalog key, else the captured suffix when that suffix is a catalog key.
+    /// Null when the name should stay as given (no prefix shape, or suffix not in the catalog).
+    /// The provider loop also records the resolved call so history replays the bare name.
+    /// </summary>
+    internal static DysonToolCall? TryResolvePrefixedToolName(
+        DysonToolCall call,
+        IReadOnlyDictionary<string, DysonMcpTool> tools)
+    {
+        if (tools.ContainsKey(call.ToolName))
+            return null;
+
+        var match = PrefixedCatalogToolName().Match(call.ToolName);
+        if (!match.Success)
+            return null;
+
+        var bare = match.Groups["n"].Value;
+        if (!tools.ContainsKey(bare))
+            return null;
+
+        return new DysonToolCall
+        {
+            CallId = call.CallId,
+            ToolName = bare,
+            Stage = call.Stage,
+            ArgumentsJson = call.ArgumentsJson,
+            ArgumentsError = call.ArgumentsError,
+        };
+    }
+
+    /// <summary>
+    /// Catalog-miss hint: a key equal ignoring case, or equal ignoring case to the suffix after the last '_' or '__'.
+    /// </summary>
+    private string? CatalogMissHint(string toolName)
+    {
+        foreach (var key in _session.McpPipeline.Tools.Keys)
+        {
+            if (string.Equals(key, toolName, StringComparison.OrdinalIgnoreCase))
+                return $" Did you mean '{key}'?";
+        }
+
+        var separator = toolName.LastIndexOf("__", StringComparison.Ordinal);
+        var suffixStart = separator >= 0
+            ? separator + 2
+            : toolName.LastIndexOf('_') + 1;
+        if (suffixStart <= 0 || suffixStart >= toolName.Length)
+            return null;
+
+        var suffix = toolName[suffixStart..];
+        foreach (var key in _session.McpPipeline.Tools.Keys)
+        {
+            if (string.Equals(key, suffix, StringComparison.OrdinalIgnoreCase))
+                return $" Did you mean '{key}'?";
+        }
+
+        return null;
+    }
+
     public async Task<DysonToolCallResult> ExecuteAsync(
         DysonToolCall call,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(call);
+
+        var resolved = TryResolvePrefixedToolName(call, _session.McpPipeline.Tools);
+        if (resolved is not null)
+            call = resolved;
 
         // These names are absent from every catalog except Meta Agent, so the catalog
         // gate below would hide the mode error the caller is required to see.
@@ -66,7 +133,8 @@ public sealed partial class DysonWorkspaceToolExecutor
             return Error(
                 call,
                 $"Tool '{call.ToolName}' is not available in this session's catalog " +
-                "(disabled by agent-mode policy or structural gate).");
+                "(disabled by agent-mode policy or structural gate)." +
+                CatalogMissHint(call.ToolName));
         }
 
         try
