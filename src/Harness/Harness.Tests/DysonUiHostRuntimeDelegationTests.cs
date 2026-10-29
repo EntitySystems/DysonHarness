@@ -796,6 +796,16 @@ public class DysonUiHostRuntimeDelegationTests
         Assert.Equal(DysonSessionRuntime.PromptDeferredError, deferredAfterGate.Error);
         Assert.Equal(0, Volatile.Read(ref runs));
 
+        // The deferred return released the session gate exactly once: one holder fits, a second waits.
+        await session.EnterPromptGateAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        using (var shortWait = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => session.EnterPromptGateAsync(shortWait.Token));
+        }
+
+        session.ExitPromptGate();
+
         InvokeSessionRunMethod(session, "DetachBackgroundRun", secondRun);
         var ran = await InvokeExecutePromptOnSessionAsync(host, session, run).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(ran.IsSuccess, ran.IsError ? ran.Error : null);
