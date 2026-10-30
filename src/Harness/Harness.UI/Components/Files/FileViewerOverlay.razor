@@ -29,7 +29,7 @@
                         <button type="button"
                                 class="btn btn-ghost file-viewer-modal__open-editor"
                                 title="Open in default editor"
-                                @onclick="() => { if (!ctx.IsExiting) OpenInDefaultEditor(); }">
+                                @onclick="() => ctx.IsExiting ? Task.CompletedTask : OpenInDefaultEditorAsync()">
                             Open in default editor
                         </button>
                     }
@@ -325,12 +325,14 @@ else
         }
     }
 
-    private void OpenInDefaultEditor()
+    private async Task OpenInDefaultEditorAsync()
     {
         if (Host.FileViewer is not { CanOpenInDefaultEditor: true, AbsolutePath: { } path })
             return;
 
-        Host.OpenFileInDefaultEditor(path);
+        var opened = await DysonOsLauncher.OpenFileAsync(path);
+        if (opened.IsError)
+            Host.ReportError(opened.Error);
     }
 
     private void SelectBlock(int index)

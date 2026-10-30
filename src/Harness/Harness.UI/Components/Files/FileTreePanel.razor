@@ -80,7 +80,7 @@
         <button type="button"
                 class="file-tree__context-menu-item"
                 role="menuitem"
-                @onclick="OpenInFileManager">
+                @onclick="OpenInFileManagerAsync">
             @OpenInFileManagerLabel
         </button>
         @if (IsComposerUploadsContextTarget)
@@ -266,7 +266,7 @@
         }
     }
 
-    private void OpenInFileManager()
+    private async Task OpenInFileManagerAsync()
     {
         var node = _contextMenuNode;
         CloseContextMenu();
@@ -281,7 +281,7 @@
             return;
         }
 
-        var opened = Host.OpenFolderInFileManager(absolute);
+        var opened = await DysonOsLauncher.OpenFolderAsync(absolute);
         if (opened.IsError)
         {
             _status = opened.Error;

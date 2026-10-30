@@ -7,7 +7,8 @@ public sealed record DysonSessionWorktreeLocation(string AbsolutePath, string Br
 
 /// <summary>
 /// Forks, copies untracked harness files, merges, and removes a session worktree.
-/// Persistence and host rebind are the caller's job.
+/// Persistence and host rebind are the caller's job, except
+/// <see cref="ResolvePersistedPathAsync"/>, which clears a persisted path whose folder is gone.
 /// </summary>
 public static class DysonSessionWorktree
 {
@@ -110,6 +111,43 @@ public static class DysonSessionWorktree
 
         CopyUntrackedHarnessFiles(registeredWorkDirectoryAbsolutePath, worktreePath);
         return Result<DysonSessionWorktreeLocation, string>.AsValue(location);
+    }
+
+    /// <summary>
+    /// Returns the persisted worktree path when its folder still exists. When it is gone,
+    /// clears WorktreeAbsolutePath/WorktreeBranch in the store and on <paramref name="session"/>
+    /// and returns null. Null/blank path returns null without I/O. The folder probe runs off the caller.
+    /// </summary>
+    public static async Task<Result<string?, string>> ResolvePersistedPathAsync(
+        IDysonSessionRepository sessions,
+        DysonSessionEntity session,
+        CancellationToken cancellationToken = default)
+    {
+        var path = session.WorktreeAbsolutePath;
+        if (string.IsNullOrWhiteSpace(path))
+            return Result<string?, string>.AsValue(null);
+
+        // ponytail: Directory.Exists has no TAP, so this hops once (same ceiling as TryFindRootMostRepoAsync).
+        var exists = await Task.Run(() => Directory.Exists(path)).ConfigureAwait(false);
+        if (exists)
+            return Result<string?, string>.AsValue(path);
+
+        var clear = await sessions.UpdateSessionMetaAsync(
+                new DysonSessionMetaUpdate
+                {
+                    SessionId = session.Id,
+                    UpdateWorktreeLocation = true,
+                    WorktreeAbsolutePath = null,
+                    WorktreeBranch = null,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (clear.IsError)
+            return Result<string?, string>.AsError(clear.Error);
+
+        session.WorktreeAbsolutePath = null;
+        session.WorktreeBranch = null;
+        return Result<string?, string>.AsValue(null);
     }
 
     /// <summary>

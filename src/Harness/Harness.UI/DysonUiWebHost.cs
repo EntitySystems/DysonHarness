@@ -255,6 +255,9 @@ public static class DysonUiWebHost
             db.EnsureMigrated();
         }
 
+        // Read version.json before any circuit exists (rules_blazor_circuit).
+        _ = DysonAppVersionInfo.Local;
+
         app.Lifetime.ApplicationStopping.Register(() =>
         {
             try

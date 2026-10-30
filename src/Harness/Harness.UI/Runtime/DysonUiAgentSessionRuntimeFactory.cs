@@ -212,28 +212,13 @@ internal sealed class DysonUiAgentSessionRuntimeFactory(
             registeredPath = workDirectory.Value.AbsolutePath;
             workPath = registeredPath;
             workDirectoryName = workDirectory.Value.Name;
-            if (!string.IsNullOrWhiteSpace(persisted.WorktreeAbsolutePath))
-            {
-                if (Directory.Exists(persisted.WorktreeAbsolutePath))
-                {
-                    workPath = persisted.WorktreeAbsolutePath;
-                }
-                else
-                {
-                    var clear = await _sessions.UpdateSessionMetaAsync(
-                            new DysonSessionMetaUpdate
-                            {
-                                SessionId = sessionId,
-                                UpdateWorktreeLocation = true,
-                                WorktreeAbsolutePath = null,
-                                WorktreeBranch = null,
-                            },
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    if (clear.IsError)
-                        return Result<DysonAgentSessionRuntimeLease, string>.AsError(clear.Error);
-                }
-            }
+            var worktree = await DysonSessionWorktree.ResolvePersistedPathAsync(
+                    _sessions, persisted, cancellationToken)
+                .ConfigureAwait(false);
+            if (worktree.IsError)
+                return Result<DysonAgentSessionRuntimeLease, string>.AsError(worktree.Error);
+            if (worktree.Value is { } wt)
+                workPath = wt;
         }
 
         if (provider.Value.OpenAi is not null && string.IsNullOrWhiteSpace(workPath))
