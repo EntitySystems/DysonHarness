@@ -218,6 +218,7 @@ public static class DysonSessionWorktree
     /// before releasing the gate and returns <see cref="MergeConflictAbortedPrefix"/> plus those paths.
     /// Waiting on <see cref="MergeGates"/> is bounded by <paramref name="gateWaitTimeout"/>
     /// (null means <see cref="MergeGateWaitTimeout"/>; <see cref="Timeout.InfiniteTimeSpan"/> waits until free).
+    /// <paramref name="gateWaitCancellation"/> cancels only that wait (returns "Worktree merge cancelled.").
     /// </summary>
     public static async Task<VoidResult<string>> MergeAsync(
         string registeredWorkDirectoryAbsolutePath,
@@ -226,7 +227,8 @@ public static class DysonSessionWorktree
         bool forceRemoveIfDirty = false,
         bool abortConflict = false,
         CancellationToken cancellationToken = default,
-        TimeSpan? gateWaitTimeout = null)
+        TimeSpan? gateWaitTimeout = null,
+        CancellationToken gateWaitCancellation = default)
     {
         var repo = await DysonGitInfo.TryFindRootMostRepoAsync(
                 registeredWorkDirectoryAbsolutePath, cancellationToken)
@@ -238,7 +240,12 @@ public static class DysonSessionWorktree
         var entered = false;
         try
         {
-            entered = await gate.WaitAsync(gateWaitTimeout ?? MergeGateWaitTimeout, cancellationToken).ConfigureAwait(false);
+            // gateWaitCancellation stops only the wait: once inside, the merge is not torn mid-git.
+            using var linked = gateWaitCancellation.CanBeCanceled
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, gateWaitCancellation)
+                : null;
+            entered = await gate.WaitAsync(gateWaitTimeout ?? MergeGateWaitTimeout, linked?.Token ?? cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -247,6 +254,12 @@ public static class DysonSessionWorktree
 
         if (!entered)
             return VoidResult<string>.AsError("Worktree merge timed out waiting for another merge.");
+
+        if (gateWaitCancellation.IsCancellationRequested)
+        {
+            gate.Release();
+            return VoidResult<string>.AsError("Worktree merge cancelled.");
+        }
 
         try
         {

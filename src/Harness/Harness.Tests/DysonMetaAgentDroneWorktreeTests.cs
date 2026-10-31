@@ -554,8 +554,10 @@ public class DysonMetaAgentDroneWorktreeTests
         }
     }
 
-    [Fact]
-    public async Task Busy_gate_records_completed_report_and_retries_merge()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Busy_gate_records_completed_report_and_retries_merge(bool reopenBeforeRelease)
     {
         var parent = CreateTempDir();
         var repo = Path.Combine(parent, "repo");
@@ -605,6 +607,21 @@ public class DysonMetaAgentDroneWorktreeTests
             // Longer than the drone-report wait: the retry must wait on the gate, not give up.
             await Task.Delay(1000);
             Assert.Equal("base\n", File.ReadAllText(Path.Combine(repo, "file.txt")));
+
+            if (reopenBeforeRelease)
+            {
+                // A reopened drone is working again: the stale retry must not merge or flip it.
+                Assert.True(drone.TryReopenForNewParentTask());
+                gate.Release();
+                held = false;
+                await Task.Delay(1000);
+                Assert.Equal(DysonSessionStatus.Active, drone.Status);
+                Assert.Equal(wt, drone.WorktreeAbsolutePath);
+                Assert.Equal("base\n", File.ReadAllText(Path.Combine(repo, "file.txt")));
+                Assert.False(parentSession.TryDequeueInterrupt(out _));
+                return;
+            }
+
             gate.Release();
             held = false;
 
