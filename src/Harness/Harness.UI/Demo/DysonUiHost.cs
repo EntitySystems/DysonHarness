@@ -8156,7 +8156,9 @@ public sealed class DysonUiHost : IAsyncDisposable
                 CancellationToken.None)
             .ConfigureAwait(false);
 
-        if (result.IsError && ActiveSessionId == sessionId)
+        if (result.IsError
+            && ActiveSessionId == sessionId
+            && !DysonChildReportWatch.IsHarnessNoReportError(result.Error))
             LastError = result.Error;
 
         Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Error);

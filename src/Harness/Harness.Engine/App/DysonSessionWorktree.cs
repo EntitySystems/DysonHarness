@@ -201,6 +201,13 @@ public static class DysonSessionWorktree
     /// </summary>
     internal static readonly TimeSpan MergeGateWaitTimeout = TimeSpan.FromSeconds(90);
 
+    /// <summary>
+    /// Gate wait for the merge a completed drone report starts. Short so a busy gate never
+    /// holds the submit: the report is recorded as merge pending and retried without a timeout.
+    /// Settable for tests.
+    /// </summary>
+    internal static TimeSpan DroneReportMergeGateWait = TimeSpan.FromSeconds(2);
+
     /// <summary>Prefix on a content-conflict error after <c>git merge --abort</c>.</summary>
     public const string MergeConflictAbortedPrefix = "Merge conflict aborted:";
 
@@ -209,7 +216,8 @@ public static class DysonSessionWorktree
     /// Merge conflicts leave the worktree in place. <paramref name="abortConflict"/> defaults false
     /// (UI merge keeps conflict markers). When true and unmerged paths exist, aborts that merge
     /// before releasing the gate and returns <see cref="MergeConflictAbortedPrefix"/> plus those paths.
-    /// Waiting on <see cref="MergeGates"/> is bounded by <see cref="MergeGateWaitTimeout"/>.
+    /// Waiting on <see cref="MergeGates"/> is bounded by <paramref name="gateWaitTimeout"/>
+    /// (null means <see cref="MergeGateWaitTimeout"/>; <see cref="Timeout.InfiniteTimeSpan"/> waits until free).
     /// </summary>
     public static async Task<VoidResult<string>> MergeAsync(
         string registeredWorkDirectoryAbsolutePath,
@@ -217,7 +225,8 @@ public static class DysonSessionWorktree
         string branchName,
         bool forceRemoveIfDirty = false,
         bool abortConflict = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        TimeSpan? gateWaitTimeout = null)
     {
         var repo = await DysonGitInfo.TryFindRootMostRepoAsync(
                 registeredWorkDirectoryAbsolutePath, cancellationToken)
@@ -229,7 +238,7 @@ public static class DysonSessionWorktree
         var entered = false;
         try
         {
-            entered = await gate.WaitAsync(MergeGateWaitTimeout, cancellationToken).ConfigureAwait(false);
+            entered = await gate.WaitAsync(gateWaitTimeout ?? MergeGateWaitTimeout, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
