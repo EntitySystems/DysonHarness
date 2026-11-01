@@ -46,6 +46,16 @@ public static class DysonHtmlVisualizationDocument
         document.AppendLine("document.body.append(script);");
         document.AppendLine("})();");
         document.AppendLine("</script>");
+        // Reports the document height to the parent so a transcript frame can grow to its content.
+        // The modal viewer ignores it and sizes the iframe with CSS. No origin is readable here
+        // (sandbox without allow-same-origin), so the message goes to "*".
+        document.Append("<script nonce=\"").Append(nonce).AppendLine("\">");
+        document.AppendLine("(() => {");
+        document.AppendLine("const report = () => parent.postMessage({ type: 'dyson-viz-height', height: document.documentElement.scrollHeight }, '*');");
+        document.AppendLine("addEventListener('load', report);");
+        document.AppendLine("new ResizeObserver(report).observe(document.documentElement);");
+        document.AppendLine("})();");
+        document.AppendLine("</script>");
         document.AppendLine("</body>");
         document.AppendLine("</html>");
         return document.ToString();
