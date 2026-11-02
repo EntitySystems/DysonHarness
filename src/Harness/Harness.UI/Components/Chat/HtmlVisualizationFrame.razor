@@ -1,25 +1,82 @@
 @namespace Harness.UI.Components.Chat
 @using DysonHarness
 @using Harness.UI.Demo
+@using Microsoft.JSInterop
+@inject IJSRuntime Js
+@implements IAsyncDisposable
 
 <iframe class="@CssClass"
-        title="@Visualization.Title"
+        aria-label="@Visualization.Title"
         sandbox="allow-scripts"
         referrerpolicy="no-referrer"
-        srcdoc="@_cache.Document"></iframe>
+        srcdoc="@_cache.Document"
+        @ref="_frame"></iframe>
 
 @code {
     // One cache per frame instance: parent renders never rebuild srcdoc, so the iframe document
     // (sliders, running simulations) survives until this visualization's id or content changes.
     private readonly DysonHtmlVisualizationSrcdocCache _cache = new();
     private bool _render = true;
+    private ElementReference _frame;
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<HtmlVisualizationFrame>? _self;
 
     [Parameter, EditorRequired] public DysonHtmlVisualization Visualization { get; set; } = default!;
     [Parameter] public string? CssClass { get; set; }
+
+    /// <summary>When true, the frame grows to the sandboxed document's height (chat transcript).</summary>
+    [Parameter] public bool AutoHeight { get; set; }
 
     protected override void OnParametersSet() => _render = _cache.TryUpdate(Visualization);
 
     protected override bool ShouldRender() => _render;
 
     protected override void OnAfterRender(bool firstRender) => _render = false;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || !AutoHeight)
+            return;
+
+        try
+        {
+            _module = await Js.InvokeAsync<IJSObjectReference>("import", "./html-visualization.js");
+            _self = DotNetObjectReference.Create(this);
+            await _module.InvokeVoidAsync("watch", _frame, _self);
+        }
+        catch (JSException)
+        {
+            // The frame keeps its CSS min-height when the module cannot load.
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    [JSInvokable]
+    public void SetHeight(int height)
+    {
+        // The module writes the height onto the iframe directly; this exists so the
+        // circuit stays the owner of the subscription (dispose tears it down).
+        _ = height;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_module is not null)
+                await _module.InvokeVoidAsync("unwatch", _frame);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (JSException)
+        {
+        }
+
+        _self?.Dispose();
+        if (_module is not null)
+            await _module.DisposeAsync();
+    }
 }

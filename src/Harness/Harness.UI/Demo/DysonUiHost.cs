@@ -2625,177 +2625,9 @@ public sealed class DysonUiHost : IAsyncDisposable
         path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
         || path.EndsWith(".markdown", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Opens an absolute file path with the OS default application.</summary>
-    public VoidResult<string> OpenFileInDefaultEditor(string absolutePath)
-    {
-        if (string.IsNullOrWhiteSpace(absolutePath))
-            return VoidResult<string>.AsError("Path is empty.");
-
-        string fullPath;
-        try
-        {
-            fullPath = Path.GetFullPath(absolutePath.Trim());
-        }
-        catch (Exception ex)
-        {
-            return VoidResult<string>.AsError($"Invalid path: {ex.Message}");
-        }
-
-        if (!File.Exists(fullPath))
-            return VoidResult<string>.AsError("File does not exist.");
-
-        try
-        {
-            if (OperatingSystem.IsWindows())
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = fullPath,
-                    UseShellExecute = true,
-                });
-            }
-            else if (OperatingSystem.IsMacOS())
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "open",
-                    ArgumentList = { fullPath },
-                    UseShellExecute = false,
-                });
-            }
-            else
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "xdg-open",
-                    ArgumentList = { fullPath },
-                    UseShellExecute = false,
-                });
-            }
-
-            return VoidResult<string>.Success;
-        }
-        catch (Exception ex)
-        {
-            return VoidResult<string>.AsError($"Failed to open file: {ex.Message}");
-        }
-    }
-
-    /// <summary>Opens an absolute folder path in the OS file manager (Explorer / Finder / xdg-open).</summary>
-    public VoidResult<string> OpenFolderInFileManager(string absolutePath)
-    {
-        if (string.IsNullOrWhiteSpace(absolutePath))
-            return VoidResult<string>.AsError("Path is empty.");
-
-        string fullPath;
-        try
-        {
-            fullPath = Path.GetFullPath(absolutePath.Trim());
-        }
-        catch (Exception ex)
-        {
-            return VoidResult<string>.AsError($"Invalid path: {ex.Message}");
-        }
-
-        if (!Directory.Exists(fullPath))
-            return VoidResult<string>.AsError("Directory does not exist.");
-
-        try
-        {
-            if (OperatingSystem.IsWindows())
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "explorer.exe",
-                    ArgumentList = { fullPath },
-                    UseShellExecute = true,
-                });
-            }
-            else if (OperatingSystem.IsMacOS())
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "open",
-                    ArgumentList = { fullPath },
-                    UseShellExecute = false,
-                });
-            }
-            else
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "xdg-open",
-                    ArgumentList = { fullPath },
-                    UseShellExecute = false,
-                });
-            }
-
-            return VoidResult<string>.Success;
-        }
-        catch (Exception ex)
-        {
-            return VoidResult<string>.AsError($"Failed to open folder: {ex.Message}");
-        }
-    }
-
-    /// <summary>Opens an http(s) URL in the OS default browser (not the in-app WebView).</summary>
-    public VoidResult<string> OpenUrlInDefaultBrowser(string url)
-    {
-        if (string.IsNullOrWhiteSpace(url))
-            return VoidResult<string>.AsError("URL is empty.");
-
-        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri)
-            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-        {
-            return VoidResult<string>.AsError("Only http/https URLs are allowed.");
-        }
-
-        var absolute = uri.AbsoluteUri;
-
-        try
-        {
-            if (OperatingSystem.IsWindows())
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = absolute,
-                    UseShellExecute = true,
-                });
-            }
-            else if (OperatingSystem.IsMacOS())
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "open",
-                    ArgumentList = { absolute },
-                    UseShellExecute = false,
-                });
-            }
-            else
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "xdg-open",
-                    ArgumentList = { absolute },
-                    UseShellExecute = false,
-                });
-            }
-
-            return VoidResult<string>.Success;
-        }
-        catch (Exception ex)
-        {
-            return VoidResult<string>.AsError($"Failed to open URL: {ex.Message}");
-        }
-    }
-
     /// <summary>JS bridge for chat/markdown http(s) link clicks.</summary>
     [JSInvokable]
-    public Task OpenExternalChatUrlAsync(string url)
-    {
-        OpenUrlInDefaultBrowser(url);
-        return Task.CompletedTask;
-    }
+    public Task OpenExternalChatUrlAsync(string url) => DysonOsLauncher.OpenUrlAsync(url);
 
     public void CloseFileViewer()
     {
@@ -3744,7 +3576,8 @@ public sealed class DysonUiHost : IAsyncDisposable
                 return Result<string, string>.AsValue("");
             case DysonBuiltInConversationKind.OpenUrl:
             {
-                var opened = OpenUrlInDefaultBrowser(intent.PathOrUrl ?? "");
+                var opened = await DysonOsLauncher.OpenUrlAsync(intent.PathOrUrl ?? "")
+                    .ConfigureAwait(true);
                 return opened.IsError
                     ? Result<string, string>.AsError(opened.Error)
                     : Result<string, string>.AsValue("");
@@ -5338,31 +5171,13 @@ public sealed class DysonUiHost : IAsyncDisposable
             registeredPath = wd.Value.AbsolutePath;
             workPath = registeredPath;
             workDirectoryName = wd.Value.Name;
-            if (!string.IsNullOrWhiteSpace(full.Value.Session.WorktreeAbsolutePath))
-            {
-                if (Directory.Exists(full.Value.Session.WorktreeAbsolutePath))
-                {
-                    workPath = full.Value.Session.WorktreeAbsolutePath;
-                }
-                else
-                {
-                    var clear = await _sessions.UpdateSessionMetaAsync(
-                            new DysonSessionMetaUpdate
-                            {
-                                SessionId = sessionId,
-                                UpdateWorktreeLocation = true,
-                                WorktreeAbsolutePath = null,
-                                WorktreeBranch = null,
-                            },
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    if (clear.IsError)
-                        return Result<LoadedSession, string>.AsError(clear.Error);
-
-                    full.Value.Session.WorktreeAbsolutePath = null;
-                    full.Value.Session.WorktreeBranch = null;
-                }
-            }
+            var worktree = await DysonSessionWorktree.ResolvePersistedPathAsync(
+                    _sessions, full.Value.Session, cancellationToken)
+                .ConfigureAwait(false);
+            if (worktree.IsError)
+                return Result<LoadedSession, string>.AsError(worktree.Error);
+            if (worktree.Value is { } wt)
+                workPath = wt;
         }
 
         DysonUiThemeSnapshot? inheritedUiTheme = null;
@@ -8341,7 +8156,9 @@ public sealed class DysonUiHost : IAsyncDisposable
                 CancellationToken.None)
             .ConfigureAwait(false);
 
-        if (result.IsError && ActiveSessionId == sessionId)
+        if (result.IsError
+            && ActiveSessionId == sessionId
+            && !DysonChildReportWatch.IsHarnessNoReportError(result.Error))
             LastError = result.Error;
 
         Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Error);

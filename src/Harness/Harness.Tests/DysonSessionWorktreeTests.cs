@@ -312,6 +312,109 @@ public class DysonSessionWorktreeTests
         Assert.Contains("Registered project root", bound, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ResolvePersistedPathAsync_returns_existing_folder_and_keeps_columns()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var sessions = DysonTempDb.Sessions(accessor);
+        var folder = Path.Combine(Path.GetTempPath(), "dyson-wt-keep-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var session = await CreateWorktreeSessionAsync(sessions, folder, "dyson/keep0001");
+            var resolved = await DysonSessionWorktree.ResolvePersistedPathAsync(sessions, session);
+            Assert.True(resolved.IsSuccess, resolved.IsError ? resolved.Error : null);
+            Assert.Equal(folder, resolved.Value);
+            Assert.Equal(folder, session.WorktreeAbsolutePath);
+            Assert.Equal("dyson/keep0001", session.WorktreeBranch);
+
+            var stored = await sessions.GetFullSessionAsync(session.Id);
+            Assert.True(stored.IsSuccess, stored.IsError ? stored.Error : null);
+            Assert.Equal(folder, stored.Value.Session.WorktreeAbsolutePath);
+            Assert.Equal("dyson/keep0001", stored.Value.Session.WorktreeBranch);
+        }
+        finally
+        {
+            DeleteQuiet(folder);
+        }
+    }
+
+    [Fact]
+    public async Task ResolvePersistedPathAsync_missing_folder_clears_columns_and_entity()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var sessions = DysonTempDb.Sessions(accessor);
+        var folder = Path.Combine(Path.GetTempPath(), "dyson-wt-gone-" + Guid.NewGuid().ToString("N"));
+
+        var session = await CreateWorktreeSessionAsync(sessions, folder, "dyson/gone0001");
+        var resolved = await DysonSessionWorktree.ResolvePersistedPathAsync(sessions, session);
+        Assert.True(resolved.IsSuccess, resolved.IsError ? resolved.Error : null);
+        Assert.Null(resolved.Value);
+        Assert.Null(session.WorktreeAbsolutePath);
+        Assert.Null(session.WorktreeBranch);
+
+        var stored = await sessions.GetFullSessionAsync(session.Id);
+        Assert.True(stored.IsSuccess, stored.IsError ? stored.Error : null);
+        Assert.Null(stored.Value.Session.WorktreeAbsolutePath);
+        Assert.Null(stored.Value.Session.WorktreeBranch);
+    }
+
+    [Fact]
+    public async Task ResolvePersistedPathAsync_blank_path_returns_null_without_update()
+    {
+        var accessor = DysonTempDb.OpenMemoryAccessor(out var conn);
+        using var _keepAlive = conn;
+        var sessions = DysonTempDb.Sessions(accessor);
+
+        var created = await sessions.CreateSessionAsync(new DysonSessionCreateRequest
+        {
+            RuntimeId = 1,
+            AgentMode = DysonAgentModes.Work,
+            SystemPromptSnapshot = "wt-blank",
+        });
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+
+        var full = await sessions.GetFullSessionAsync(created.Value);
+        Assert.True(full.IsSuccess, full.IsError ? full.Error : null);
+        var session = full.Value.Session;
+
+        var resolved = await DysonSessionWorktree.ResolvePersistedPathAsync(sessions, session);
+        Assert.True(resolved.IsSuccess, resolved.IsError ? resolved.Error : null);
+        Assert.Null(resolved.Value);
+        Assert.Null(session.WorktreeAbsolutePath);
+        Assert.Null(session.WorktreeBranch);
+    }
+
+    private static async Task<DysonSessionEntity> CreateWorktreeSessionAsync(
+        DysonSessionRepository sessions,
+        string path,
+        string branch)
+    {
+        var created = await sessions.CreateSessionAsync(new DysonSessionCreateRequest
+        {
+            RuntimeId = 1,
+            AgentMode = DysonAgentModes.Work,
+            SystemPromptSnapshot = "wt-resolve",
+            WorktreeEnabled = true,
+        });
+        Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+
+        var set = await sessions.UpdateSessionMetaAsync(new DysonSessionMetaUpdate
+        {
+            SessionId = created.Value,
+            UpdateWorktreeLocation = true,
+            WorktreeAbsolutePath = path,
+            WorktreeBranch = branch,
+        });
+        Assert.True(set.IsSuccess, set.IsError ? set.Error : null);
+
+        var full = await sessions.GetFullSessionAsync(created.Value);
+        Assert.True(full.IsSuccess, full.IsError ? full.Error : null);
+        return full.Value.Session;
+    }
+
     private static bool SamePath(string a, string b)
     {
         var comparison = OperatingSystem.IsWindows()

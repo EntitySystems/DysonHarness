@@ -2652,14 +2652,20 @@ public abstract class DysonAgentSession
 
         var trimmed = summary.Trim();
         var failedReport = failed;
+        var deferMerge = false;
         if (!failedReport)
         {
-            var mergeOutcome = await TryMergeMetaAgentDroneWorktreeAsync(cancellationToken)
+            // None + short gate wait: a cancelled tool call or a busy MergeGates must not
+            // lose this report. A busy gate records it Completed with the merge pending.
+            var mergeOutcome = await TryMergeMetaAgentDroneWorktreeAsync(
+                    DysonSessionWorktree.DroneReportMergeGateWait)
                 .ConfigureAwait(false);
             if (mergeOutcome is not null)
             {
                 trimmed = trimmed + "\n\n" + mergeOutcome.Value.Note;
-                if (!mergeOutcome.Value.Succeeded)
+                if (mergeOutcome.Value.Note.StartsWith(MergePendingNotePrefix, StringComparison.Ordinal))
+                    deferMerge = true;
+                else if (!mergeOutcome.Value.Succeeded)
                     failedReport = true;
             }
         }
@@ -2698,6 +2704,14 @@ public abstract class DysonAgentSession
                 Parent.NotifySubagentCompleted(Id, trimmed, PersistenceId == Guid.Empty ? null : PersistenceId);
         }
 
+        if (deferMerge)
+        {
+            var retryCts = new CancellationTokenSource();
+            lock (_terminalGate)
+                _deferredMergeCts = retryCts;
+            _ = Task.Run(() => RetryDeferredWorktreeMergeAsync(retryCts));
+        }
+
         var acceptedJson = JsonSerializer.Serialize(new
         {
             subagentId = Id,
@@ -2714,8 +2728,11 @@ public abstract class DysonAgentSession
     /// (failed/Stopped reports never merge). Success clears columns; conflict leaves the worktree.
     /// </summary>
     private async Task<(bool Succeeded, string Note)?> TryMergeMetaAgentDroneWorktreeAsync(
-        CancellationToken cancellationToken)
+        TimeSpan gateWait,
+        CancellationToken gateWaitCancellation = default)
     {
+        // None: the report is (or is about to be) accepted; a run cancel must not abandon the merge.
+        var cancellationToken = CancellationToken.None;
         if (!string.Equals(Mode, DysonAgentModes.MetaAgentDrone, StringComparison.OrdinalIgnoreCase))
             return null;
 
@@ -2732,10 +2749,16 @@ public abstract class DysonAgentSession
         }
 
         var merge = await DysonSessionWorktree.MergeAsync(
-                anchor, path, branch, forceRemoveIfDirty: false, abortConflict: true, cancellationToken)
+                anchor, path, branch, forceRemoveIfDirty: false, abortConflict: true, cancellationToken, gateWait,
+                gateWaitCancellation)
             .ConfigureAwait(false);
         if (merge.IsError)
         {
+            if (merge.Error is "Worktree merge timed out waiting for another merge.")
+            {
+                return (true, MergePendingNote);
+            }
+
             if (merge.Error.StartsWith(DysonSessionWorktree.MergeConflictAbortedPrefix, StringComparison.Ordinal))
             {
                 return (false, await BuildMergeConflictAbortedNoteAsync(
@@ -2748,6 +2771,118 @@ public abstract class DysonAgentSession
 
         await ClearWorktreeColumnsOnSelfAndDescendantsAsync(cancellationToken).ConfigureAwait(false);
         return (true, $"Worktree {branch} merged.");
+    }
+
+    private const string MergePendingNotePrefix = "Worktree merge pending";
+
+    private const string MergePendingNote =
+        MergePendingNotePrefix + ": another merge holds the gate. The report is recorded; the merge retries when the gate frees.";
+
+    /// <summary>
+    /// Second attempt after a gate-busy merge. The report is already accepted, so this never
+    /// calls <see cref="SubmitSubagentReportAsync"/>. A real failure flips the accepted
+    /// Completed to Failed and tells the parent; success replaces the pending note.
+    /// </summary>
+    private async Task RetryDeferredWorktreeMergeAsync(CancellationTokenSource retryCts)
+    {
+        (bool Succeeded, string Note)? outcome;
+        try
+        {
+            // No timeout: merge as soon as the holder releases the gate. A reopen cancels only
+            // the wait; the worktree stays bound so the next completed report merges it.
+            outcome = await TryMergeMetaAgentDroneWorktreeAsync(Timeout.InfiniteTimeSpan, retryCts.Token)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            outcome = (false, $"Worktree merge failed for {WorktreeBranch} at {WorktreeAbsolutePath}:\n{ex.GetType().Name}: {ex.Message}");
+        }
+
+        try
+        {
+            if (outcome is null || retryCts.IsCancellationRequested)
+                return;
+
+            if (!outcome.Value.Succeeded)
+            {
+                if (TrySupersedeAcceptedReportWithMergeFailure(outcome.Value.Note, retryCts))
+                {
+                    Parent?.NotifySubagentFailed(
+                        Id, outcome.Value.Note, PersistenceId == Guid.Empty ? null : PersistenceId);
+                    await PersistTerminalChildStatusAsync(this, DysonSessionStatus.Failed, outcome.Value.Note)
+                        .ConfigureAwait(false);
+                }
+
+                return;
+            }
+
+            string? updated = null;
+            lock (_terminalGate)
+            {
+                if (IsCurrentDeferredMerge(retryCts)
+                    && LastReportSummary is { } current
+                    && current.Contains(MergePendingNote, StringComparison.Ordinal))
+                {
+                    updated = LastReportSummary = current.Replace(
+                        MergePendingNote, outcome.Value.Note, StringComparison.Ordinal);
+                }
+            }
+
+            if (updated is not null && SessionStore is { } store && PersistenceId != Guid.Empty)
+            {
+                await store.AppendLogAsync(DysonSessionLogPayload.CreateEntry(
+                        PersistenceId,
+                        DysonSessionLogKind.SessionStatusChanged,
+                        new DysonSessionLogSessionStatusChanged(DysonSessionStatus.Completed, updated)))
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Merge outcome already applied in memory; only persistence failed.
+            AppendLog($"deferred worktree merge: persist failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Set when a busy-gate merge is retried; reopen cancels it. Guarded by <see cref="_terminalGate"/>.</summary>
+    private CancellationTokenSource? _deferredMergeCts;
+
+    /// <summary>Caller holds <see cref="_terminalGate"/>. True while the report that deferred this merge still stands.</summary>
+    private bool IsCurrentDeferredMerge(CancellationTokenSource retryCts) =>
+        Status == DysonSessionStatus.Completed
+        && ReferenceEquals(_deferredMergeCts, retryCts)
+        && !retryCts.IsCancellationRequested;
+
+    /// <summary>
+    /// One-way Completed to Failed after a merge that was deferred past accept.
+    /// Anything other than an accepted Completed report is left alone.
+    /// </summary>
+    private bool TrySupersedeAcceptedReportWithMergeFailure(string note, CancellationTokenSource retryCts)
+    {
+        DysonSessionStatus previous = default;
+        var changed = false;
+        lock (_terminalGate)
+        {
+            if (!IsCurrentDeferredMerge(retryCts))
+                return false;
+
+            previous = Status;
+            Status = DysonSessionStatus.Failed;
+            LastReportSummary = note;
+            changed = true;
+        }
+
+        if (changed)
+        {
+            StatusChanged?.Invoke(this, new DysonSessionStatusChangedEventArgs
+            {
+                PreviousStatus = previous,
+                Status = DysonSessionStatus.Failed,
+                Summary = note,
+            });
+        }
+
+        return changed;
     }
 
     private async Task<string> BuildMergeConflictAbortedNoteAsync(
@@ -3131,6 +3266,7 @@ public abstract class DysonAgentSession
         DysonSessionStatus next = default;
         string? summary = null;
         var changed = false;
+        CancellationTokenSource? deferredMerge = null;
         lock (_terminalGate)
         {
             if (Status is not (DysonSessionStatus.Completed
@@ -3141,12 +3277,16 @@ public abstract class DysonAgentSession
             previous = Status;
             Status = DysonSessionStatus.Active;
             _subagentReportAccepted = false;
+            deferredMerge = _deferredMergeCts;
+            _deferredMergeCts = null;
             next = Status;
             summary = LastReportSummary;
             _terminalTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
             changed = true;
         }
 
+        // Outside the lock: cancel continuations may run inline. ponytail: the CTS is never disposed (no timer, GC frees it).
+        deferredMerge?.Cancel();
         Parent?.ClearWaitConsumedCompletion(Id);
         if (changed)
         {

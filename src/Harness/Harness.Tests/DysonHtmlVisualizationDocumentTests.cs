@@ -50,6 +50,8 @@ public class DysonHtmlVisualizationDocumentTests
         Assert.Contains($"style-src 'nonce-{nonce}'", document, StringComparison.Ordinal);
         Assert.Contains($"<script nonce=\"{nonce}\">", document, StringComparison.Ordinal);
         Assert.Contains($"style.nonce = '{nonce}';", document, StringComparison.Ordinal);
+        Assert.Contains("dyson-viz-height", document, StringComparison.Ordinal);
+        Assert.Contains("new ResizeObserver(report)", document, StringComparison.Ordinal);
         Assert.All(Regex.Matches(document, "[0-9a-f]{32}").Select(match => match.Value), value => Assert.Equal(nonce, value));
     }
 }

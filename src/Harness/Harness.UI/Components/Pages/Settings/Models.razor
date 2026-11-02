@@ -35,7 +35,7 @@
     private async Task OpenEasyCliProxyAsync()
     {
         _error = null;
-        var opened = await Task.Run(() => Host.OpenUrlInDefaultBrowser(EasyCliProxyUrl)).ConfigureAwait(true);
+        var opened = await DysonOsLauncher.OpenUrlAsync(EasyCliProxyUrl);
         if (opened.IsError)
             _error = opened.Error;
     }
