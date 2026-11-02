@@ -92,6 +92,25 @@ One private memory document per voice sidecar session. Migration `20261029031944
 
 Deleting the sidecar session cascades this row. Deleting the root Meta session deletes the sidecar (see below), so the memory goes with it.
 
+### `pending_user_questions`
+
+Unanswered Meta `PostUserQuestion` cards, one row per card. Migration `20261102015422_AddPendingUserQuestions`. Entity `DysonPendingUserQuestionEntity`; runtime mirror `DysonPendingUserQuestion`. Repository `IDysonPendingUserQuestionRepository` (`CreateAsync`, `ListAsync` oldest first, `CountAsync`, `DeleteAsync`, `DeleteByQuestionGuidAsync`; both deletes treat a missing row as success). The live card stays on `turns.UserQuestionJson`; this table is the pending index the Meta header **Questions** pill and modal read. Answering or dismissing deletes the row; there are no answer columns. No backfill for cards posted before the table existed.
+
+| Column | Notes |
+| ------ | ----- |
+| `Id` | `ulong` on the entity, stored as signed `INTEGER` autoincrement through an `unchecked` long↔ulong converter (EF's negative temporary key round-trips through it before insert, so `checked` would overflow). Insert leaves 0; SQLite assigns 1, 2, 3… Never ordered in SQL |
+| `SubjectId` | string — owning subject; every query filters it |
+| `SessionId` | Guid FK → `sessions`, cascade on delete. Index (`SubjectId`, `SessionId`) |
+| `TurnId` | Guid — the `DisplayInfo` turn. No FK (turns are rewritten) |
+| `QuestionGuid` | Guid — the card id (`DysonUserQuestion.Id`) |
+| `Message`, `Question` | TEXT — bubble body and card title |
+| `ChoicesJson` | JSON `string[]` via `StringListJsonValueConverter` |
+| `MultiSelect`, `AllowCustomAnswer` | bool |
+| `SubagentId`, `EventId` | nullable — snapshot of the newest parked (`AwaitingUserAnswer`) parent event at insert time. Audit only; the answer turn still attaches every parked event through the reminder |
+| `CreatedUtc` | `DateTime` UTC |
+
+The row is written off the circuit from the turn-added hooks (`DysonSessionRuntime.OnTurnAdded` for runtime-owned sessions, `DysonUiHost.OnTurnAdded` otherwise) through `DysonPendingUserQuestionHooks.InsertAsync`. A failed insert is logged and the card still shows; that question just does not appear in the modal. Insert and delete publish `DysonPendingUserQuestionsChangedEvent` on the session bus key.
+
 ### `session_logs` (discriminated JSON)
 
 Append-only. Filter by `Kind`; payload fields live in `PayloadJson`. `session_logs` remains the structured DB/UI timeline; `dyson.log` is the host/framework exception file next to `dyson.db` (see [models.md](models.md#platform-paths-dysonapppaths)).

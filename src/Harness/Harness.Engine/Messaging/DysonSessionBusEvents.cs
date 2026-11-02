@@ -62,6 +62,12 @@ public sealed record DysonPlansChangedEvent(Guid WorkDirectoryId, long PlanId)
 public sealed record DysonMetaScratchFilesChangedEvent(Guid WorkDirectoryId, long ScratchFileId)
     : IDysonMessageBusEvent;
 
+/// <summary>
+/// A <c>pending_user_questions</c> row was inserted or deleted for <paramref name="SessionId"/>.
+/// Published on <see cref="DysonBusScopes.Session"/>. Carries no row; subscribers re-count.
+/// </summary>
+public sealed record DysonPendingUserQuestionsChangedEvent(Guid SessionId) : IDysonMessageBusEvent;
+
 /// <summary>Which end of a voice-sidecar pair a bus message is addressed to.</summary>
 public enum DysonVoiceSidecarDirection
 {

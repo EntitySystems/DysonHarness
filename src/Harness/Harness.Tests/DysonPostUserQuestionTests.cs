@@ -256,6 +256,107 @@ public class DysonPostUserQuestionTests
         Assert.NotEqual(recorded.Value.AnsweredUtc, posted.UserQuestion.Answer.AnsweredUtc);
     }
 
+    [Fact]
+    public void FormatAnswerPrompt_includes_question_text_and_id()
+    {
+        var id = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var answered = DateTime.SpecifyKind(new DateTime(2026, 1, 2), DateTimeKind.Utc);
+        var choices = new DysonUserQuestion(
+            id, "Pick one", ["A", "B"], false, true,
+            new DysonUserQuestionAnswer(["A", "B"], null, answered));
+        Assert.Equal(
+            "Answer to question #7 \"Pick one\": A, B",
+            DysonUserQuestion.FormatAnswerPrompt(choices, 7));
+        Assert.Equal("Answer: A, B", DysonUserQuestion.FormatVisibleInstruction(choices));
+
+        var custom = choices with
+        {
+            Answer = new DysonUserQuestionAnswer([], "my text", answered),
+        };
+        Assert.Equal(
+            "Answer to question #7 \"Pick one\": my text",
+            DysonUserQuestion.FormatAnswerPrompt(custom, 7));
+        Assert.Equal("Answer: my text", DysonUserQuestion.FormatVisibleInstruction(custom));
+
+        var both = choices with
+        {
+            Answer = new DysonUserQuestionAnswer(["A"], "note", answered),
+        };
+        Assert.Equal(
+            "Answer to question #7 \"Pick one\": A; Other: note",
+            DysonUserQuestion.FormatAnswerPrompt(both, 7));
+        Assert.Equal("Answer: A; Other: note", DysonUserQuestion.FormatVisibleInstruction(both));
+
+        var fallback = DysonUserQuestion.FormatAnswerPrompt(choices, null);
+        Assert.Contains($"#{id:D}", fallback, StringComparison.Ordinal);
+        Assert.StartsWith($"Answer to question #{id:D} \"Pick one\": A, B", fallback, StringComparison.Ordinal);
+
+        var messy = choices with { Question = "Say \"hi\"\r\nnow" };
+        Assert.Equal(
+            "Answer to question #7 \"Say hi now\": A, B",
+            DysonUserQuestion.FormatAnswerPrompt(messy, 7));
+    }
+
+    [Fact]
+    public async Task Submit_from_modal_and_inline_cannot_both_record()
+    {
+        var session = new StubSession(DysonAgentModes.MetaAgent);
+        var posted = session.AppendDisplayInfoTurn("body", userQuestion: Sample(multi: false, allowCustom: true));
+        var id = posted.UserQuestion!.Id;
+        var first = session.TryRecordUserQuestionAnswer(id, ["A"], null);
+        Assert.False(first.IsError, first.Error);
+        var second = session.TryRecordUserQuestionAnswer(id, ["B"], null);
+        Assert.True(second.IsError);
+        Assert.Equal("PostUserQuestion: already answered.", second.Error);
+
+        var (accessor, path) = DysonTempDb.OpenFileAccessor();
+        try
+        {
+            var created = await DysonTempDb.Sessions(accessor).CreateSessionAsync(new DysonSessionCreateRequest
+            {
+                AgentMode = DysonAgentModes.MetaAgent,
+                SystemPromptSnapshot = "root",
+                Title = "pending",
+            });
+            Assert.True(created.IsSuccess, created.IsError ? created.Error : null);
+
+            var questions = DysonTempDb.PendingUserQuestions(accessor);
+            var inserted = await questions.CreateAsync(new DysonPendingUserQuestion(
+                0,
+                created.Value,
+                posted.Id,
+                id,
+                "body",
+                "Pick",
+                ["A", "B"],
+                false,
+                true,
+                null,
+                null,
+                DateTime.UtcNow));
+            Assert.True(inserted.IsSuccess, inserted.IsError ? inserted.Error : null);
+
+            var deleted = await questions.DeleteByQuestionGuidAsync(id, created.Value);
+            Assert.False(deleted.IsError, deleted.Error);
+            var again = await questions.DeleteByQuestionGuidAsync(id, created.Value);
+            Assert.False(again.IsError, again.Error);
+            var count = await questions.CountAsync(created.Value);
+            Assert.True(count.IsSuccess, count.IsError ? count.Error : null);
+            Assert.Equal(0, count.Value);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
     private static DysonUserQuestion Sample(bool multi, bool allowCustom) =>
         new(Guid.NewGuid(), "Pick", ["A", "B"], multi, allowCustom, null);
 

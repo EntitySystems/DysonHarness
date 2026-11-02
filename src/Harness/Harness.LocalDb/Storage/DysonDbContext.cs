@@ -23,6 +23,7 @@ public sealed class DysonDbContext : DbContext
     public DbSet<DysonPlanEntity> Plans => Set<DysonPlanEntity>();
     public DbSet<DysonMetaScratchFileEntity> MetaScratchFiles => Set<DysonMetaScratchFileEntity>();
     public DbSet<DysonVoiceSidecarMemoryEntity> VoiceSidecarMemories => Set<DysonVoiceSidecarMemoryEntity>();
+    public DbSet<DysonPendingUserQuestionEntity> PendingUserQuestions => Set<DysonPendingUserQuestionEntity>();
     public DbSet<DysonSessionEntity> Sessions => Set<DysonSessionEntity>();
     public DbSet<DysonTurnEntity> Turns => Set<DysonTurnEntity>();
     public DbSet<DysonSessionLogEntry> SessionLogs => Set<DysonSessionLogEntry>();
@@ -163,6 +164,32 @@ public sealed class DysonDbContext : DbContext
             e.Property(x => x.SubjectId).IsRequired();
             e.Property(x => x.Content).IsRequired();
             e.HasIndex(x => new { x.SubjectId, x.SessionId }).IsUnique();
+            e.HasOne(x => x.Session)
+                .WithMany()
+                .HasForeignKey(x => x.SessionId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DysonPendingUserQuestionEntity>(e =>
+        {
+            e.ToTable("pending_user_questions");
+            e.HasKey(x => x.Id);
+            // SQLite INTEGER PRIMARY KEY is signed int64. Both casts are unchecked on purpose: EF's pre-insert
+            // temporary key round-trips through this converter as a negative long / huge ulong and must not
+            // throw. Stored ids are SQLite rowids 1, 2, 3… so the cast is lossless for every real row.
+            e.Property(x => x.Id)
+                .HasConversion(v => unchecked((long)v), v => unchecked((ulong)v))
+                .ValueGeneratedOnAdd()
+                .HasAnnotation("Sqlite:Autoincrement", true);
+            e.Property(x => x.SubjectId).IsRequired();
+            e.Property(x => x.Message).IsRequired();
+            e.Property(x => x.Question).IsRequired();
+            e.Property(x => x.Choices)
+                .HasColumnName("ChoicesJson")
+                .HasConversion(new StringListJsonValueConverter(), StringListJsonValueConverter.Comparer)
+                .HasColumnType("TEXT")
+                .IsRequired();
+            e.HasIndex(x => new { x.SubjectId, x.SessionId });
             e.HasOne(x => x.Session)
                 .WithMany()
                 .HasForeignKey(x => x.SessionId)

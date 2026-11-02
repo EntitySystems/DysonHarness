@@ -30,6 +30,7 @@ public sealed class DysonUiHost : IAsyncDisposable
     private readonly IDysonPlanRepository _plans;
     private readonly IDysonMetaScratchFileRepository? _scratchFiles;
     private readonly IDysonVoiceSidecarMemoryRepository? _voiceSidecarMemory;
+    private readonly IDysonPendingUserQuestionRepository? _pendingUserQuestions;
     private readonly IDysonSubjectSettingsRepository _appSettings;
     private readonly IDysonConfiguredShellRepository _configuredShells;
     private readonly DysonCliProxyHost _cliProxy;
@@ -150,7 +151,8 @@ public sealed class DysonUiHost : IAsyncDisposable
         DysonSessionEventPublisher? sessionEvents = null,
         FileStorageConnectService? fileStorageConnect = null,
         IDysonMetaScratchFileRepository? scratchFiles = null,
-        IDysonVoiceSidecarMemoryRepository? voiceSidecarMemory = null)
+        IDysonVoiceSidecarMemoryRepository? voiceSidecarMemory = null,
+        IDysonPendingUserQuestionRepository? pendingUserQuestions = null)
     {
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _models = models ?? throw new ArgumentNullException(nameof(models));
@@ -160,6 +162,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         _plans = plans ?? throw new ArgumentNullException(nameof(plans));
         _scratchFiles = scratchFiles;
         _voiceSidecarMemory = voiceSidecarMemory;
+        _pendingUserQuestions = pendingUserQuestions;
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         _configuredShells = configuredShells ?? throw new ArgumentNullException(nameof(configuredShells));
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -3624,7 +3627,9 @@ public sealed class DysonUiHost : IAsyncDisposable
             return VoidResult<string>.AsError("PostUserQuestion: not found.");
         }
 
-        var turn = DysonAgentSession.CreateNormalTurn(DysonUserQuestion.FormatVisibleInstruction(question));
+        var pendingId = await DysonPendingUserQuestionHooks.FindPendingIdAsync(session, questionId, cancellationToken)
+            .ConfigureAwait(true);
+        var turn = DysonAgentSession.CreateNormalTurn(DysonUserQuestion.FormatAnswerPrompt(question, pendingId));
         turn.HiddenInstruction = DysonUserQuestion.FormatHiddenInstruction(question);
         AppendAwaitingUserAnswerReminders(turn, session);
 
@@ -3649,6 +3654,11 @@ public sealed class DysonUiHost : IAsyncDisposable
             Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
             return started;
         }
+
+        var deleted = await DysonPendingUserQuestionHooks.DeleteAnsweredAsync(session, questionId, CancellationToken.None)
+            .ConfigureAwait(true);
+        if (deleted.IsError)
+            session.AppendLog($"Pending question row not deleted: {deleted.Error}");
 
         LastError = null;
         Notify(DysonHostChangeKind.Busy | DysonHostChangeKind.Transcript | DysonHostChangeKind.Error);
@@ -5495,6 +5505,7 @@ public sealed class DysonUiHost : IAsyncDisposable
             Bus = Bus,
             MetaScratchFiles = _scratchFiles,
             VoiceSidecarMemory = _voiceSidecarMemory,
+            PendingUserQuestions = _pendingUserQuestions,
             PluginContributions = contributions,
             UiTheme = resolvedUiTheme,
             AppSettings = _appSettings,
@@ -8342,6 +8353,16 @@ public sealed class DysonUiHost : IAsyncDisposable
         await PersistTurnCompletedAsync(session, turn, CancellationToken.None).ConfigureAwait(false);
     }
 
+    private async Task InsertPendingQuestionAsync(DysonAgentSession session, DysonAgentTurn turn)
+    {
+        if (session.Config.PendingUserQuestions is null || session.PersistenceId == Guid.Empty)
+            return;
+
+        var inserted = await DysonPendingUserQuestionHooks.InsertAsync(session, turn).ConfigureAwait(false);
+        if (inserted.IsError)
+            session.AppendLog($"Pending question row not saved: {inserted.Error}");
+    }
+
     private void OnTurnAdded(object? sender, DysonAgentTurn turn)
     {
         if (sender is not DysonAgentSession session)
@@ -8350,7 +8371,12 @@ public sealed class DysonUiHost : IAsyncDisposable
         RefreshRegistryKey(session);
         HookTurn(turn);
         if (!IsRuntimeOwned(session))
+        {
             _ = PersistTurnStartedAsync(session, turn);
+            if (DysonPendingUserQuestionHooks.IsPendingQuestionTurn(turn))
+                _ = InsertPendingQuestionAsync(session, turn);
+        }
+
         Notify(DysonHostChangeKind.Transcript);
     }
 
