@@ -8374,7 +8374,7 @@ public sealed class DysonUiHost : IAsyncDisposable
         {
             _ = PersistTurnStartedAsync(session, turn);
             if (DysonPendingUserQuestionHooks.IsPendingQuestionTurn(turn))
-                _ = InsertPendingQuestionAsync(session, turn);
+                _ = Task.Run(() => InsertPendingQuestionAsync(session, turn));
         }
 
         Notify(DysonHostChangeKind.Transcript);
