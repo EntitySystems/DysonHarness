@@ -103,6 +103,24 @@
 }
 
 .meta-stage__icon--tasks { --meta-icon: url("icons/tasks.svg"); }
+.meta-stage__icon--questions { --meta-icon: url("icons/questions.svg"); }
+
+/* Pending-question count. Hidden by the page when zero. */
+.meta-stage__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
 .meta-stage__icon--viz { --meta-icon: url("icons/visualization.svg"); }
 .meta-stage__icon--open { --meta-icon: url("icons/open-external.svg"); }
 .meta-stage__icon--back { --meta-icon: url("icons/arrow-left.svg"); }

@@ -84,16 +84,23 @@ public sealed record DysonUserQuestion(
     public static string FormatVisibleInstruction(DysonUserQuestion question)
     {
         ArgumentNullException.ThrowIfNull(question);
-        var answer = question.Answer;
-        if (answer is null)
-            return "Answer:";
+        var tail = FormatAnswerTail(question.Answer);
+        return tail is null ? "Answer:" : $"Answer: {tail}";
+    }
 
-        var choices = string.Join(", ", answer.SelectedChoices);
-        if (choices.Length == 0)
-            return $"Answer: {answer.CustomText}";
-        if (string.IsNullOrEmpty(answer.CustomText))
-            return $"Answer: {choices}";
-        return $"Answer: {choices}; Other: {answer.CustomText}";
+    /// <summary>
+    /// Injected Normal-turn instruction. <paramref name="pendingId"/> is the pending-row
+    /// <c>ulong</c> when the row exists; otherwise the card Guid is used.
+    /// </summary>
+    public static string FormatAnswerPrompt(DysonUserQuestion question, ulong? pendingId)
+    {
+        ArgumentNullException.ThrowIfNull(question);
+        var id = pendingId?.ToString(CultureInfo.InvariantCulture) ?? question.Id.ToString("D");
+        var title = CollapsePromptText(question.Question);
+        var tail = FormatAnswerTail(question.Answer);
+        return tail is null
+            ? $"Answer to question #{id} \"{title}\":"
+            : $"Answer to question #{id} \"{title}\": {tail}";
     }
 
     /// <summary>
@@ -114,6 +121,33 @@ public sealed record DysonUserQuestion(
             + $"- question: {question.Question}\n"
             + selectedLine + "\n"
             + customLine;
+    }
+
+    /// <summary>Choices / custom tail shared by the bubble and the injected prompt. Null when unanswered.</summary>
+    private static string? FormatAnswerTail(DysonUserQuestionAnswer? answer)
+    {
+        if (answer is null)
+            return null;
+
+        var choices = string.Join(", ", answer.SelectedChoices);
+        if (choices.Length == 0)
+            return answer.CustomText ?? "";
+        if (string.IsNullOrEmpty(answer.CustomText))
+            return choices;
+        return $"{choices}; Other: {answer.CustomText}";
+    }
+
+    private static string CollapsePromptText(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return "";
+
+        var collapsed = text.Replace("\"", " ", StringComparison.Ordinal)
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal);
+        while (collapsed.Contains("  ", StringComparison.Ordinal))
+            collapsed = collapsed.Replace("  ", " ", StringComparison.Ordinal);
+        return collapsed.Trim();
     }
 
     private static bool ContainsChoice(IReadOnlyList<string> choices, string trimmed)

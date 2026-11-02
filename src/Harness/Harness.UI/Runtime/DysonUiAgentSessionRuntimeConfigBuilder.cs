@@ -73,7 +73,8 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
     DysonVoiceMode? voice = null,
     IDysonBrowserControl? browserControl = null,
     IDysonMetaScratchFileRepository? scratchFiles = null,
-    IDysonVoiceSidecarMemoryRepository? voiceSidecarMemory = null)
+    IDysonVoiceSidecarMemoryRepository? voiceSidecarMemory = null,
+    IDysonPendingUserQuestionRepository? pendingUserQuestions = null)
 {
     private readonly IDysonWorkDirectoryRepository _workDirectories =
         workDirectories ?? throw new ArgumentNullException(nameof(workDirectories));
@@ -96,6 +97,7 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
     private readonly DysonMessageBus? _bus = bus;
     private readonly IDysonMetaScratchFileRepository? _scratchFiles = scratchFiles;
     private readonly IDysonVoiceSidecarMemoryRepository? _voiceSidecarMemory = voiceSidecarMemory;
+    private readonly IDysonPendingUserQuestionRepository? _pendingUserQuestions = pendingUserQuestions;
 
     public async Task<Result<DysonUiAgentSessionRuntimeConfigLease, string>> BuildAsync(
         DysonUiAgentSessionRuntimeConfigRequest request,
@@ -130,6 +132,7 @@ internal sealed class DysonUiAgentSessionRuntimeConfigBuilder(
             Bus = _bus,
             MetaScratchFiles = _scratchFiles,
             VoiceSidecarMemory = _voiceSidecarMemory,
+            PendingUserQuestions = _pendingUserQuestions,
             Focus = focus,
             AppSettings = _appSettings,
         };

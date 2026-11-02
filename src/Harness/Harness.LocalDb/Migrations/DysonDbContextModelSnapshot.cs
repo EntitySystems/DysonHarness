@@ -237,6 +237,63 @@ namespace Harness.LocalDb.Migrations
                     b.ToTable("model_slugs", (string)null);
                 });
 
+            modelBuilder.Entity("DysonHarness.DysonPendingUserQuestionEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasAnnotation("Sqlite:Autoincrement", true);
+
+                    b.Property<bool>("AllowCustomAnswer")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Choices")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("ChoicesJson");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("EventId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("MultiSelect")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Question")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("QuestionGuid")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("SubagentId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("SubjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("TurnId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SessionId");
+
+                    b.HasIndex("SubjectId", "SessionId");
+
+                    b.ToTable("pending_user_questions", (string)null);
+                });
+
             modelBuilder.Entity("DysonHarness.DysonPlanEntity", b =>
                 {
                     b.Property<long>("Id")
@@ -1188,6 +1245,17 @@ namespace Harness.LocalDb.Migrations
                         .IsRequired();
 
                     b.Navigation("Provider");
+                });
+
+            modelBuilder.Entity("DysonHarness.DysonPendingUserQuestionEntity", b =>
+                {
+                    b.HasOne("DysonHarness.DysonSessionEntity", "Session")
+                        .WithMany()
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Session");
                 });
 
             modelBuilder.Entity("DysonHarness.DysonPlanEntity", b =>

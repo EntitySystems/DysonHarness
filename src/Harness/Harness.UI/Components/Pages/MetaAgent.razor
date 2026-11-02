@@ -10,6 +10,7 @@
 @inject IDysonModelRepository ModelStore
 @inject IJSRuntime Js
 @inject Harness.UI.Services.ConfirmDialogService ConfirmDialog
+@inject IDysonPendingUserQuestionRepository PendingQuestions
 
 <PageTitle>Meta agent — @(_workDirectoryName ?? "DysonHarness")</PageTitle>
 
@@ -48,6 +49,19 @@
                             @onclick="ToggleTasks">
                         <span class="meta-stage__icon meta-stage__icon--tasks" aria-hidden="true"></span>
                         <span class="meta-stage__label">Tasks</span>
+                    </button>
+                    <button type="button"
+                            class="btn"
+                            disabled="@(!IsMetaFocused)"
+                            title="@(_pendingQuestionCount > 0 ? $"{_pendingQuestionCount} pending questions" : null)"
+                            aria-label="@(_pendingQuestionCount > 0 ? $"Questions, {_pendingQuestionCount} pending" : "Questions")"
+                            @onclick="ToggleQuestions">
+                        <span class="meta-stage__icon meta-stage__icon--questions" aria-hidden="true"></span>
+                        <span class="meta-stage__label">Questions</span>
+                        @if (_pendingQuestionCount > 0)
+                        {
+                            <span class="meta-stage__count">@_pendingQuestionCount</span>
+                        }
                     </button>
                     <button type="button" class="btn" disabled="@(!IsMetaFocused)" @onclick="OpenVisualizations">
                         <span class="meta-stage__icon meta-stage__icon--viz" aria-hidden="true"></span>
@@ -282,6 +296,10 @@
                    CompleteCount="MetaTodoCompleteCount"
                    OnClose="CloseTasks" />
 
+<PendingUserQuestionsModal IsOpen="_questionsOpen"
+                            SessionId="_metaSessionId"
+                            OnClose="CloseQuestions" />
+
 <SessionVisualizationsModal IsOpen="_vizOpen"
                              Session="@(IsMetaFocused ? Host.Session : null)"
                              FocusId="_vizFocusId"
@@ -318,6 +336,10 @@
     private readonly HashSet<Guid> _expandedChildRows = [];
     private DotNetObjectReference<DysonUiHost>? _chatLinksRef;
     private bool _tasksOpen;
+    private bool _questionsOpen;
+    private int _pendingQuestionCount;
+    private Guid? _questionsBoundId;
+    private IDisposable? _questionsSub;
     private bool _vizOpen;
     private Guid? _vizFocusId;
     private ElementReference _shell;
@@ -431,6 +453,7 @@
         Host.Focus?.SetActive(WorkDirectoryId);
         _loadedWorkDirectoryId = WorkDirectoryId;
         _tasksOpen = false;
+        _questionsOpen = false;
         _vizOpen = false;
 
         var get = await WorkDirs.GetAsync(WorkDirectoryId);
@@ -443,6 +466,7 @@
             _sessionReady = false;
             _metaSessionId = null;
             BindAgentsListSubscriptions();
+            BindQuestionsSubscription();
             return;
         }
 
@@ -530,7 +554,9 @@
         {
             _metaSessionId = live.PersistenceId;
             BindAgentsListSubscriptions();
+            BindQuestionsSubscription();
             _sessionReady = true;
+            await RefreshQuestionCountAsync();
             return;
         }
 
@@ -550,6 +576,7 @@
             {
                 _metaSessionId = existing.Id;
                 BindAgentsListSubscriptions();
+                BindQuestionsSubscription();
             }
             else
             {
@@ -562,6 +589,7 @@
 
                 _metaSessionId = existing.Id;
                 BindAgentsListSubscriptions();
+                BindQuestionsSubscription();
             }
         }
         else
@@ -578,6 +606,7 @@
 
             _metaSessionId = Host.ActiveSessionId;
             BindAgentsListSubscriptions();
+            BindQuestionsSubscription();
         }
 
         if (_metaSessionId is not Guid metaId
@@ -590,6 +619,7 @@
         }
 
         _sessionReady = true;
+        await RefreshQuestionCountAsync();
         await RefreshSessionsAsync();
     }
 
@@ -691,6 +721,53 @@
         _agentsSpawnedSub = null;
         _agentsStatusSub?.Dispose();
         _agentsStatusSub = null;
+    }
+
+    private void BindQuestionsSubscription()
+    {
+        if (_metaSessionId == _questionsBoundId)
+            return;
+
+        DisposeQuestionsSubscription();
+        _questionsBoundId = _metaSessionId;
+        _pendingQuestionCount = 0;
+        if (_metaSessionId is not Guid id || id == Guid.Empty)
+            return;
+
+        var sub = Bus.Subscribe<DysonPendingUserQuestionsChangedEvent>(
+            DysonBusScopes.Session(id),
+            OnPendingQuestionsChanged);
+        if (sub.IsSuccess)
+            _questionsSub = sub.Value;
+    }
+
+    private void OnPendingQuestionsChanged(DysonPendingUserQuestionsChangedEvent evt) =>
+        _ = InvokeAsync(async () =>
+        {
+            if (_metaSessionId is not Guid id || evt.SessionId != id)
+                return;
+
+            await RefreshQuestionCountAsync();
+            StateHasChanged();
+        });
+
+    private async Task RefreshQuestionCountAsync()
+    {
+        if (_metaSessionId is not Guid id || id == Guid.Empty)
+        {
+            _pendingQuestionCount = 0;
+            return;
+        }
+
+        var count = await PendingQuestions.CountAsync(id);
+        if (count.IsSuccess)
+            _pendingQuestionCount = count.Value;
+    }
+
+    private void DisposeQuestionsSubscription()
+    {
+        _questionsSub?.Dispose();
+        _questionsSub = null;
     }
 
     private async Task SendAsync()
@@ -802,6 +879,10 @@
     private void ToggleTasks() => _tasksOpen = !_tasksOpen;
 
     private void CloseTasks() => _tasksOpen = false;
+
+    private void ToggleQuestions() => _questionsOpen = !_questionsOpen;
+
+    private void CloseQuestions() => _questionsOpen = false;
 
     private void OpenVisualizations()
     {
@@ -981,6 +1062,8 @@
         _hostSub = null;
         DisposeAgentsListSubscriptions();
         _agentsListBoundId = null;
+        DisposeQuestionsSubscription();
+        _questionsBoundId = null;
         if (_imageCaptureBound)
             await DysonCircuitJs.InvokeVoidAsync(Js, "dysonComposer.detachImageCapture", _shell);
 
