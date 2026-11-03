@@ -155,8 +155,23 @@ public static class DysonUiWebHost
         });
         builder.Services.AddSingleton<XaiGrokAuthService>();
         builder.Services.AddTransient<XaiGrokRequestHandler>();
+        // Native ChatGPT Codex: User-Agent override (config Dyson:OpenAiCodex), a plain "openai-codex-oauth"
+        // client for the token endpoint, and OpenAiCodexRequestHandler on the DEFAULT client
+        // (acts only on dyson-openai-codex:<guid> bearers).
+        builder.Services.AddSingleton(
+            builder.Configuration.GetSection(OpenAiCodexClientOptions.SectionName).Get<OpenAiCodexClientOptions>()
+            ?? new OpenAiCodexClientOptions());
+        builder.Services.AddHttpClient("openai-codex-oauth");
+        builder.Services.AddSingleton(sp =>
+        {
+            var factory = sp.GetRequiredService<IHttpClientFactory>();
+            return new OpenAiCodexOAuthClient(() => factory.CreateClient("openai-codex-oauth"));
+        });
+        builder.Services.AddSingleton<OpenAiCodexAuthService>();
+        builder.Services.AddTransient<OpenAiCodexRequestHandler>();
         builder.Services.AddHttpClient(Microsoft.Extensions.Options.Options.DefaultName)
-            .AddHttpMessageHandler<XaiGrokRequestHandler>();
+            .AddHttpMessageHandler<XaiGrokRequestHandler>()
+            .AddHttpMessageHandler<OpenAiCodexRequestHandler>();
         builder.Services.AddScoped<ManagedInferenceProviderCatalog>();
 #if WINDOWS
         builder.Services.AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>();

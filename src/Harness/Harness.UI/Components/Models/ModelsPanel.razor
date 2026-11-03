@@ -45,7 +45,7 @@
     <details class="models-panel__imports">
         <summary>Third-party managed providers</summary>
         <div class="list-item__meta" style="margin:4px 0 8px;">
-            Grok Build (xAI) signs in natively (device code, no CLIProxy). ChatGPT Codex, Antigravity, Kimi, Claude Code, Meta Muse and the legacy Grok Build (CLIProxy) row use local CLIProxyAPI (OAuth). Rows are view-only; use Connect / Verify to sync models.
+            Grok Build (xAI) and ChatGPT Codex sign in natively (no CLIProxy). Antigravity, Kimi, Claude Code, Meta Muse and the legacy CLIProxy rows use local CLIProxyAPI (OAuth). Rows are view-only; use Connect / Verify to sync models.
         </div>
 
         @if (!_cliProxyInstalled)
@@ -137,6 +137,7 @@
                               PendingUserCode="PendingAuth(p)?.UserCode"
                               PendingAuthUrl="PendingAuth(p)?.AuthUrl"
                               XaiSummary="_xaiSummary"
+                              CodexSummary="_codexSummary"
                               Accounts="@(string.Equals(p.ManagedSource, DysonManagedSources.CliProxyClaude, StringComparison.Ordinal) ? _claudeAccounts : null)"
                               AccountsBusy="_accountsBusy"
                               OnSelectAccount="SelectClaudeAccountAsync"
@@ -149,6 +150,7 @@
                               OnDisconnect="() => DisconnectManagedAsync(p)"
                               OnCancelConnect="CancelNativeConnect"
                               OnSwitchToNative="SwitchToNativeAsync"
+                              OnSwitchToNativeCodex="SwitchToNativeCodexAsync"
                               OnDelete="() => ConfirmDeleteProviderAsync(p)"
                               OnBrowseModels="() => OpenDirectBrowse(p)"
                               OnUpdateApiKey="() => OpenDirectUpdateKey(p)"
@@ -199,9 +201,11 @@
     private CliProxyDownloadProgress? _downloadProgress;
     private readonly Dictionary<string, ManagedConnectionBegin> _pendingAuth = new(StringComparer.Ordinal);
     private XaiGrokAccountSummary? _xaiSummary;
+    private OpenAiCodexAccountSummary? _codexSummary;
     private IReadOnlyList<ClaudeAccount>? _claudeAccounts;
     private bool _accountsBusy;
     private CancellationTokenSource? _pollCts;
+    private CancellationTokenSource? _codexCts;
 
     // Per-source busy tracking so Connect/Verify spinners don't freeze the whole panel.
     private string? _connectingSource;
@@ -256,6 +260,14 @@
                 _xaiSummary = summary.Value;
         }
 
+        _codexSummary = null;
+        if (_providers.Any(p => DysonManagedSources.IsOpenAiCodex(p.ManagedSource)))
+        {
+            var codex = await ManagedCatalog.OpenAiCodex.GetAccountSummaryAsync();
+            if (codex.IsSuccess)
+                _codexSummary = codex.Value;
+        }
+
         await LoadClaudeAccountsAsync();
     }
 
@@ -264,6 +276,8 @@
         // Stops the native device-code poll loop when the panel goes away.
         _pollCts?.Cancel();
         _pollCts?.Dispose();
+        _codexCts?.Cancel();
+        _codexCts?.Dispose();
     }
 
     private void ClearStatus() => _status = null;
@@ -415,8 +429,11 @@
             return;
         }
 
-        var native = DysonManagedSources.IsXaiGrok(managed.ManagedSource);
-        if (native && !await EnsureXaiConsentAsync())
+        var nativeXai = DysonManagedSources.IsXaiGrok(managed.ManagedSource);
+        var nativeCodex = DysonManagedSources.IsOpenAiCodex(managed.ManagedSource);
+        if (nativeXai && !await EnsureXaiConsentAsync())
+            return;
+        if (nativeCodex && !await EnsureCodexConsentAsync())
             return;
 
         _error = null;
@@ -426,7 +443,7 @@
         try
         {
             // Native: the engine never opens a browser; the card renders the verification link.
-            var begin = await managed.BeginConnectionAsync(openBrowser: !native, CreateDownloadProgress());
+            var begin = await managed.BeginConnectionAsync(openBrowser: !nativeXai && !nativeCodex, CreateDownloadProgress());
             if (begin.IsError)
             {
                 _error = begin.Error;
@@ -435,11 +452,20 @@
             }
 
             _pendingAuth[managed.ManagedSource] = begin.Value;
-            if (native)
+            if (nativeXai)
             {
                 // Cancel button takes over from the busy spinner while the user approves in the browser.
                 _connectingSource = null;
                 await PollNativeAsync(managed, begin.Value);
+                return;
+            }
+
+            if (nativeCodex)
+            {
+                // The listener is already running in the engine. Awaiting Complete waits on that callback,
+                // not on the circuit, and does not poll.
+                _connectingSource = null;
+                await CompleteCodexAsync(managed, begin.Value);
                 return;
             }
 
@@ -571,10 +597,13 @@
         if (!string.IsNullOrWhiteSpace(provider.ManagedSource))
             _pendingAuth.Remove(provider.ManagedSource);
 
-        if (DysonManagedSources.IsXaiGrok(provider.ManagedSource))
+        if (DysonManagedSources.IsXaiGrok(provider.ManagedSource)
+            || DysonManagedSources.IsOpenAiCodex(provider.ManagedSource))
         {
             _pollCts?.Cancel();
-            var signOut = await ManagedCatalog.XaiGrok.DisconnectAsync();
+            var signOut = DysonManagedSources.IsOpenAiCodex(provider.ManagedSource)
+                ? await ManagedCatalog.OpenAiCodex.DisconnectAsync()
+                : await ManagedCatalog.XaiGrok.DisconnectAsync();
             if (signOut.IsError)
             {
                 _error = signOut.Error;
@@ -695,7 +724,11 @@
         }
     }
 
-    private void CancelNativeConnect() => _pollCts?.Cancel();
+    private void CancelNativeConnect()
+    {
+        _pollCts?.Cancel();
+        _codexCts?.Cancel();
+    }
 
     private async Task SwitchToNativeAsync()
     {
@@ -767,6 +800,134 @@
         }
 
         return true;
+    }
+
+    private async Task<bool> EnsureCodexConsentAsync()
+    {
+        if (await ManagedCatalog.OpenAiCodex.HasConsentAsync())
+            return true;
+
+        var confirmed = await ConfirmDialog.ConfirmAsync(
+            title: "Sign in to ChatGPT Codex (unofficial)",
+            message: "Dyson will use the public Codex CLI client id and present Codex CLI headers to chatgpt.com. "
+                + "This is unofficial and may violate OpenAI's terms or be blocked. "
+                + "Your sign-in tokens are stored unencrypted in Dyson's local database on this machine (like other provider API keys).",
+            confirmLabel: "I understand",
+            cancelLabel: "Cancel",
+            danger: false);
+        if (!confirmed)
+            return false;
+
+        var saved = await ManagedCatalog.OpenAiCodex.AcceptConsentAsync();
+        if (saved.IsError)
+        {
+            _error = saved.Error;
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Wait for the loopback callback Begin already started. The wait is inside the engine method;
+    /// this method only awaits it, so the circuit is not blocked on the socket.
+    /// </summary>
+    private async Task CompleteCodexAsync(IManagedConnectionProvider managed, ManagedConnectionBegin begin)
+    {
+        _codexCts?.Cancel();
+        _codexCts?.Dispose();
+        var cts = _codexCts = new CancellationTokenSource();
+        var ct = cts.Token;
+        var completed = false;
+        _status = "Finish sign-in in the browser…";
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var complete = await managed.CompleteConnectionAsync(begin.State, ct);
+            if (complete.IsError)
+            {
+                _error = complete.Error;
+                return;
+            }
+
+            completed = true;
+            _pendingAuth.Remove(managed.ManagedSource);
+            _status = $"{managed.DisplayName} connected. Refreshing models…";
+            await InvokeAsync(StateHasChanged);
+            var verify = await managed.VerifyConnectionAsync(cancellationToken: ct);
+            if (verify.IsError)
+            {
+                _error = verify.Error;
+                return;
+            }
+
+            _status = VerifyStatus(managed, verify.Value);
+            await RefreshAsync();
+            await OnChanged.InvokeAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            _status = "ChatGPT sign-in cancelled.";
+        }
+        finally
+        {
+            if (!completed)
+            {
+                _pendingAuth.Remove(managed.ManagedSource);
+                await ManagedCatalog.OpenAiCodex.CancelConnectionAsync();
+            }
+
+            if (ReferenceEquals(_codexCts, cts))
+                _codexCts = null;
+            cts.Dispose();
+        }
+    }
+
+    private async Task SwitchToNativeCodexAsync()
+    {
+        if (!await EnsureCodexConsentAsync())
+            return;
+
+        var confirmed = await ConfirmDialog.ConfirmAsync(
+            title: "Switch to native ChatGPT Codex",
+            message: "Convert the legacy ChatGPT Codex (CLIProxy) provider to the native provider. Slugs, favorites and session links are kept. "
+                + "Dyson will try to reuse the CLIProxy Codex login. A successful refresh can rotate the token and break CLIProxy's copy. "
+                + "The CLIProxy auth file is not deleted.",
+            confirmLabel: "Switch",
+            cancelLabel: "Cancel",
+            danger: false);
+        if (!confirmed)
+            return;
+
+        _error = null;
+        _status = null;
+        _busy = true;
+        try
+        {
+            var switched = await ManagedCatalog.OpenAiCodex.SwitchFromCliProxyAsync();
+            if (switched.IsError)
+            {
+                _error = switched.Error;
+                return;
+            }
+
+            _status = $"Switched to native ChatGPT Codex. {switched.Value.Note}";
+            if (switched.Value.LoginImported)
+            {
+                var verify = await ManagedCatalog.OpenAiCodex.VerifyConnectionAsync();
+                _status = verify.IsError
+                    ? $"Switched to native ChatGPT Codex. {switched.Value.Note} Verify failed: {verify.Error}"
+                    : $"Switched to native ChatGPT Codex. {VerifyStatus(ManagedCatalog.OpenAiCodex, verify.Value)}";
+            }
+
+            await RefreshAsync();
+            await OnChanged.InvokeAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
     /// <summary>Async device-code poll at xAI's interval; Task.Delay only, never blocks the circuit.</summary>
@@ -1066,6 +1227,7 @@
     private async Task ConfirmDeleteProviderAsync(DysonModelProviderEntity provider)
     {
         var nativeXai = DysonManagedSources.IsXaiGrok(provider.ManagedSource);
+        var nativeCodex = DysonManagedSources.IsOpenAiCodex(provider.ManagedSource);
         var confirmed = await ConfirmDialog.ConfirmAsync(
             title: "Delete provider",
             message: $"Delete provider '{provider.DisplayName}' and all its slugs? This cannot be undone.",
@@ -1079,10 +1241,14 @@
         try
         {
             // Native xAI: also drop the stored sign-in so no orphaned token row is left behind.
-            if (nativeXai)
+            if (nativeXai || nativeCodex)
             {
                 _pollCts?.Cancel();
-                await ManagedCatalog.XaiGrok.DisconnectAsync();
+                _codexCts?.Cancel();
+                if (nativeCodex)
+                    await ManagedCatalog.OpenAiCodex.DisconnectAsync();
+                else
+                    await ManagedCatalog.XaiGrok.DisconnectAsync();
             }
 
             await DeleteProviderAsync(provider.Id);

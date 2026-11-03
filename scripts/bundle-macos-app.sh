@@ -7,6 +7,7 @@
 #   CODESIGN_KEYCHAIN      optional keychain path
 #   CODESIGN_ENTITLEMENTS  defaults to packaging/macos/entitlements.plist
 #   VERSION                CalVer stamped into Info.plist when set
+#   CHANNEL                preview stamps the app name "Dyson Harness (Preview)"
 set -euo pipefail
 
 PUBLISH="${1:?publish directory}"
@@ -27,6 +28,10 @@ cp "$PLIST" "$APP/Contents/Info.plist"
 if [[ -n "${VERSION:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "$APP/Contents/Info.plist"
   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION}" "$APP/Contents/Info.plist"
+fi
+if [[ "${CHANNEL:-}" == "preview" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleName Dyson Harness (Preview)" "$APP/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Dyson Harness (Preview)" "$APP/Contents/Info.plist"
 fi
 
 LOGO="$ROOT/src/Harness/DysonHarness.UI.Windows/Assets/dyson.ico"

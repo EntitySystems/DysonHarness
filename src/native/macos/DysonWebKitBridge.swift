@@ -10,6 +10,17 @@ import WebKit
 // Geolocation grant exists only on macOS 27+; older systems keep WebKit's default prompt.
 // Do not add private WebKit SPI.
 
+func dysonProductName() -> String {
+    let bundle = Bundle.main
+    if let display = bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, !display.isEmpty {
+        return display
+    }
+    if let name = bundle.object(forInfoDictionaryKey: "CFBundleName") as? String, !name.isEmpty {
+        return name
+    }
+    return "Dyson Harness"
+}
+
 private let agentStoreId = UUID(uuidString: "8F3C2A1E-6B47-4D19-9C55-2E7A4B0D6F31")!
 
 private final class Box<T> {
@@ -483,7 +494,7 @@ public func dyson_webkit_alert(_ message: UnsafePointer<CChar>?) {
     let text = message.map { String(cString: $0) } ?? "Failed to start."
     let present = {
         let alert = NSAlert()
-        alert.messageText = "Dyson Harness"
+        alert.messageText = dysonProductName()
         alert.informativeText = text
         alert.runModal()
     }

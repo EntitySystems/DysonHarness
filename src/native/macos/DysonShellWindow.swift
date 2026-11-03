@@ -24,7 +24,7 @@ final class DysonShellWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, 
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false)
-        window.title = "Dyson Harness"
+        window.title = dysonProductName()
         window.contentView = view
         window.isReleasedWhenClosed = false
         window.center()

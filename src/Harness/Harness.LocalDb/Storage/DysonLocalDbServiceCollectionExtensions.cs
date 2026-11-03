@@ -26,6 +26,7 @@ public static class DysonLocalDbServiceCollectionExtensions
 
         // Singleton: used from IHttpClientFactory handlers, which have no circuit/subject scope.
         services.AddSingleton<IDysonXaiCredentialStore, DysonXaiCredentialStore>();
+        services.AddSingleton<IDysonOpenAiCodexCredentialStore, DysonOpenAiCodexCredentialStore>();
 
         services.AddScoped<IDysonSessionRepository, DysonSessionRepository>();
         services.AddScoped<IDysonWorkDirectoryRepository, DysonWorkDirectoryRepository>();

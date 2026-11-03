@@ -32,7 +32,7 @@ The channels are retained independently. For each older selected release, cleanu
 
 - Releases: https://github.com/EntitySystems/DysonHarness/releases
 - Prefer the latest **stable** (non-prerelease) MSI for production installs; preview builds are marked as GitHub pre-releases
-- Every publish output (so every zip, the MSI, and the macOS pkg) also contains `LICENSE` and `THIRD-PARTY-NOTICES.md` (MIT attribution for the CLIProxyAPI-derived native xAI provider).
+- Every publish output (so every zip, the MSI, and the macOS pkg) also contains `LICENSE` and `THIRD-PARTY-NOTICES.md` (MIT attribution for the CLIProxyAPI-derived native xAI and ChatGPT Codex providers).
 - Asset names: `DysonHarness-{version}-{rid}.zip` (all RIDs); `DysonHarness-{version}-win-x64.msi` (Windows installer); `DysonHarness-{version}-osx-arm64.pkg` and `DysonHarness-{version}-osx-x64.pkg` (macOS installers)
 
 | RID | Runner / OS | Notes |
@@ -125,7 +125,7 @@ Desktop / CefSharp packaging details: [webview.md](webview.md). MSI authoring li
 
 ## macOS notes
 
-- Prefer the `.pkg`. It installs `DysonHarness.app` into `/Applications` and asks for an administrator password.
+- Prefer the `.pkg`. It installs `DysonHarness.app` into `/Applications` and asks for an administrator password. A preview build is named **Dyson Harness (Preview)** in Finder, the Dock, and the window title. A stable build stays **Dyson Harness**. Both use the same path, `/Applications/DysonHarness.app`.
 - The zip is the same notarized app, for a copy that does not use the installer.
 - Continuous release signs the app with **Developer ID Application** (hardened runtime, `packaging/macos/entitlements.plist`), builds the pkg with **Developer ID Installer**, then notarizes and staples both. The credentials are repository secrets, not files in this repo: `APPLE_TEAM_ID`, `APPLE_CERTIFICATE_P12_BASE64`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, `APPLE_API_PRIVATE_KEY`.
 - Pull-request CI and a local `scripts/bundle-macos-app.sh` stay ad-hoc signed. Gatekeeper still asks for a right-click Open on those builds. The macOS publish job fails if any of the secrets above is empty, and that failure blocks the whole continuous release.

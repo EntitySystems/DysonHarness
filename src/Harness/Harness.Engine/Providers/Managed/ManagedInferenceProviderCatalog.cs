@@ -9,13 +9,16 @@ public sealed class ManagedInferenceProviderCatalog
         IDysonModelRepository models,
         IDysonSubjectSettingsRepository subjectSettings,
         XaiGrokAuthService xaiAuth,
+        OpenAiCodexAuthService openAiCodexAuth,
         IDysonSubjectContext subject,
         XaiGrokClientOptions? xaiOptions = null)
     {
         XaiGrok = new XaiGrokManagedInferenceProvider(xaiAuth, http, models, subject, subjectSettings, xaiOptions);
+        OpenAiCodex = new OpenAiCodexManagedInferenceProvider(openAiCodexAuth, http, models, subject, subjectSettings);
         All =
         [
             new ManagedCodexInferenceProvider(host, http, models, subjectSettings),
+            OpenAiCodex,
             XaiGrok,
             new ManagedGrokInferenceProvider(host, http, models, subjectSettings),
             new ManagedAntigravityInferenceProvider(host, http, models, subjectSettings),
@@ -32,6 +35,9 @@ public sealed class ManagedInferenceProviderCatalog
 
     /// <summary>Native xAI/Grok provider (also listed in <see cref="All"/>).</summary>
     public XaiGrokManagedInferenceProvider XaiGrok { get; }
+
+    /// <summary>Native ChatGPT Codex provider (also listed in <see cref="All"/>).</summary>
+    public OpenAiCodexManagedInferenceProvider OpenAiCodex { get; }
 
     public IReadOnlyList<IManagedConnectionProvider> All { get; }
 
