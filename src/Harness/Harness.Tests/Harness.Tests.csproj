@@ -31,6 +31,7 @@
     <ProjectReference Include="..\Harness.Engine\Harness.Engine.csproj" />
     <ProjectReference Include="..\Harness.LocalDb\Harness.LocalDb.csproj" />
     <ProjectReference Include="..\Harness.UI\Harness.UI.csproj" />
+    <ProjectReference Include="..\Harness.MacBrowser\Harness.MacBrowser.csproj" />
   </ItemGroup>
 
   <ItemGroup>

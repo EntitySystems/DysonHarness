@@ -14,19 +14,27 @@ dotnet run --project src/Harness/DysonHarness.UI.Windows
 
 If the circuit dies, F5 or right-click “Reload page” reloads the loopback page in-process (new circuit, same runtime).
 
+**macOS desktop shell (WKWebView):**
+
+```bash
+dotnet run --project src/Harness/DysonHarness.UI.macOS
+```
+
+The shell loads Blazor from an ephemeral `127.0.0.1` port. **Open Browser** opens the agent WKWebView window. See [packaging/webview](../packaging/webview.md).
+
 **Browser-based Blazor (all platforms):**
 
 ```bash
 dotnet run --project src/Harness/Harness.UI --launch-profile http
 ```
 
-Debug/Development binds **http://localhost:5181** (`Properties/launchSettings.json` `http` / `https` profiles; VS F5 and `dotnet run` load them). `DysonUiWebHost` also binds 5181 when `ASPNETCORE_ENVIRONMENT=Development` and no URL was passed, so `dotnet run --no-launch-profile` does not fall through to Kestrel's :5000. The installed Windows shell (`DysonHarness.exe`) is not on 5181: `DysonHarness.UI.Windows/App.xaml.cs` passes `http://127.0.0.1:0` (ephemeral loopback). Published Linux/macOS `Harness.UI` is Production and keeps the Kestrel default http://localhost:5000. Do not stop `DysonHarness.exe` to verify a debug build. Pass `--urls http://localhost:5181` when you want the debug port explicitly.
+Debug/Development binds **http://localhost:5181** (`Properties/launchSettings.json` `http` / `https` profiles; VS F5 and `dotnet run` load them). `DysonUiWebHost` also binds 5181 when `ASPNETCORE_ENVIRONMENT=Development` and no URL was passed, so `dotnet run --no-launch-profile` does not fall through to Kestrel's :5000. The installed Windows shell (`DysonHarness.exe`) and the macOS shell (`DysonHarness.app`) are not on 5181: both pass `http://127.0.0.1:0` (ephemeral loopback). Published Linux `Harness.UI` is Production and keeps the Kestrel default http://localhost:5000. Do not stop `DysonHarness` to verify a debug build. Pass `--urls http://localhost:5181` when you want the debug port explicitly.
 
 Or open the solution and set **DysonHarness.UI.Windows** (Windows) or **Harness.UI** as the startup project. The app uses Interactive Server rendering globally. F5 on `Harness.UI` uses the `http` profile (5181).
 
 DI: `AddDysonHosting` + `AddDysonLocalDb` (registers `IDyson*Repository` / `DysonDbContext` factory), scoped `DysonToolPolicyStore`, `DysonPluginCatalogService`, `IDysonPluginPackageService`, `DysonPluginLifecycleService`, protected-variable and hook-review services, `ThemeService`, singleton `HttpClient` (default `IHttpClientFactory` client, including `XaiGrokRequestHandler`; process lifetime so an adopted session survives circuit dispose), `ManagedInferenceProviderCatalog` (CLIProxy `All` plus direct OpenRouter / OrcaRouter `Direct`), `DysonUiHost`; singleton `DysonMessageBus` then `DysonSessionEventPublisher` next to `DysonSessionRuntimeRegistry` + `IDysonSessionRuntimeScopeFactory` (`DysonUiSessionRuntimeScopeFactory`); scoped `DysonUiRuntimeAttachment`, `IDysonAgentSessionRuntimeFactory` (`DysonUiAgentSessionRuntimeFactory`), `DysonUiAgentSessionRuntimeConfigBuilder`, and `DysonSessionRuntime` (resolved inside the retained subject scope, not the Blazor circuit); singleton `DysonPluginContributionResolver`, `DysonPluginPackageLimits`, and `IDysonPluginPackageParser`. Singletons also include `DysonCliProxyHost` (disposed on app shutdown) and `DysonAppUpdateService`. The registry is disposed on `ApplicationStopping`.
 
-**Windows only:** `DysonUiWebHost` also registers `AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>()`. `DysonUiHost` injects that singleton into every `DysonAgentSessionConfig.BrowserControl` it builds (new + resume) and subscribes to `SnipCaptured` so browser chrome snips become pending composer images. The retained-scope `DysonUiAgentSessionRuntimeConfigBuilder` assigns the same singleton when it is registered, and leaves `BrowserControl` null when it is not. When set, the engine MCP catalog includes browser tools (`OpenBrowser`, …) that open in-process CefSharp WPF windows. Continuous **win-x64** zips ship `DysonHarness.exe` from `DysonHarness.UI.Windows` — see [packaging/webview](../packaging/webview.md) and [releases](../packaging/releases.md).
+**Windows only:** `DysonUiWebHost` also registers `AddSingleton<IDysonBrowserControl, DysonCefBrowserControl>()`. **macOS shell:** `DysonHarness.UI.macOS` passes `DysonUiWebHostOptions.ConfigureServices` and registers `DysonMacBrowserControl` the same way. `DysonUiHost` injects that singleton into every `DysonAgentSessionConfig.BrowserControl` it builds (new + resume) and subscribes to `SnipCaptured` so browser chrome snips become pending composer images. The retained-scope `DysonUiAgentSessionRuntimeConfigBuilder` assigns the same singleton when it is registered, and leaves `BrowserControl` null when it is not. When set, the engine MCP catalog includes browser tools (`OpenBrowser`, …). Windows opens in-process CefSharp WPF windows. macOS opens a second WKWebView window. Continuous **win-x64** zips ship `DysonHarness.exe` from `DysonHarness.UI.Windows`. Continuous **osx-*** builds ship a signed `.pkg` and a zip of `DysonHarness.app` from `DysonHarness.UI.macOS`. See [packaging/webview](../packaging/webview.md) and [releases](../packaging/releases.md).
 
 On first open, a default **Demo Mock** provider + slug is seeded if none exists. SQLite lives under the platform app-data folder for the current `DysonAppMode` (see [storage/models](../storage/models.md)).
 

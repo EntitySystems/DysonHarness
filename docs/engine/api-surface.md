@@ -329,6 +329,7 @@ Keep `TError` / user-facing messages clean — do not stringify exceptions into 
 | `DysonBrowserSnipPayload` / `DysonBrowserSnipCrop` | Snip event payload (`ImageBytes`, empty `HtmlRef`, `FileName`, `Url`, `ScrollY`, `ScrollHeight`, `ViewportHeight`, `PercentDown`) + DIP→pixel crop math (`MapDipSelectionToPixelRect`) + composer line (`FormatPromptLine`, `PercentDownThePage`). Chrome crops the overlay bitmap (no second CDP capture). Host queues the JPEG and appends `Snip: {url} · {n}% down the page` in the composer |
 | `DysonNullBrowserControl` | All methods → `"browser control unavailable"` |
 | `DysonCefBrowserControl` | Windows CefSharp impl in `Harness.WindowsBrowser` (not referenced by Engine). Agent tabs grant every permission prompt and requested media capture; the shell webview does not (see packaging/webview.md) |
+| `DysonMacBrowserControl` | macOS WKWebView impl in `Harness.MacBrowser` (not referenced by Engine). Same contracts, JSON C ABI into `libDysonWebKit.dylib`. Agent window grants WebKit media, geolocation (macOS 27+), and file-open prompts; the shell WKWebView does not. DOM scripts are `DysonBrowserDomScripts` (shared with Cef) |
 
 ## Workspace filesystem
 
