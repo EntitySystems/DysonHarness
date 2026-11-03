@@ -122,7 +122,9 @@ public sealed class OpenAiFilesClient(HttpClient http)
         ArgumentNullException.ThrowIfNull(attachments);
 
         // xAI chat-proxy has no known /files endpoint: skip the guaranteed-failing upload (data-URL fallback).
-        if (DysonManagedSources.IsXaiGrok(provider.ManagedSource))
+        // xAI and the ChatGPT Codex backend have no known /files endpoint (data-URL fallback).
+        if (DysonManagedSources.IsXaiGrok(provider.ManagedSource)
+            || DysonManagedSources.IsOpenAiCodex(provider.ManagedSource))
             return;
 
         OpenAiFilesClient? client = null;

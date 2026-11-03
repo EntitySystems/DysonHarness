@@ -45,8 +45,12 @@ and derivative of CLIProxyAPI's xAI support, namely the OIDC discovery and devic
 token refresh, credential JSON shape, the Grok CLI chat-proxy request headers, Responses request
 sanitization, `encrypted_content` validation, error classification and the bundled model table
 (`internal/auth/xai/*`, `internal/runtime/executor/xai_executor*.go`,
-`internal/signature/grok_validation.go`, `internal/registry/models/models.json`). Each ported C# file
-carries a header naming the Go source it derives from.
+`internal/signature/grok_validation.go`, `internal/registry/models/models.json`). The native ChatGPT
+Codex provider (`src/Harness/Harness.Engine/Providers/OpenAi/Codex/`) is a port of the PKCE authorize
+and token exchange, localhost callback, credential JSON, request headers, Responses sanitizer and
+bundled model table (`internal/auth/codex/*`, `internal/runtime/executor/codex_executor_request.go`,
+`codex_executor_execute.go`), taken from main at `6e6afab99a1939525ecb6bb1f0873c8e7a9df877`
+(2026-11-02). Each ported C# file carries a header naming the Go source it derives from.
 
 CLIProxyAPI is used as a separate downloaded binary for the legacy `cliproxy-*` providers; that
 binary is not redistributed by this repository.

@@ -80,6 +80,8 @@ public class OpenAiReasoningTests
         Expect("https://api.openai.com", "https://api.openai.com/v1");
         Expect("https://api.z.ai/api/paas/v4/", "https://api.z.ai/api/paas/v4");
         Expect("https://api.openai.com/v1", "https://api.openai.com/v1");
+        Expect(OpenAiCodexClientProfile.InferenceBaseUrl, OpenAiCodexClientProfile.InferenceBaseUrl);
+        Expect(OpenAiCodexClientProfile.InferenceBaseUrl + "/", OpenAiCodexClientProfile.InferenceBaseUrl);
 
         var openaiChat = $"{OpenAiCompatibleHttp.NormalizeBaseUrl("https://api.openai.com")}/chat/completions";
         if (!string.Equals(openaiChat, "https://api.openai.com/v1/chat/completions", StringComparison.Ordinal))

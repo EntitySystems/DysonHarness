@@ -37,7 +37,7 @@ Also: `POST …/responses/compact`, `GET …/models?client_version=<v>`. This Ch
 | Auth | `Authorization: Bearer <api_key>` (optional `OpenAI-Organization` / `OpenAI-Project`) |
 | API mode | Responses (`POST /v1/responses`) — documented path for custom HTTP clients |
 
-Sanctioned subscription-backed harness paths: [Codex SDK](https://developers.openai.com/codex/sdk), `codex exec --json`, or Codex as MCP / `codex app-server`. Scraping OAuth into a custom client against `chatgpt.com/backend-api/codex` is undocumented and TOS-risky — **not wired yet** in Dyson.
+Sanctioned subscription-backed harness paths: [Codex SDK](https://developers.openai.com/codex/sdk), `codex exec --json`, or Codex as MCP / `codex app-server`. Dyson also ships an unofficial native card (below). A custom OpenAI-compatible row with a typed base URL is the platform-key path, not the subscription path.
 
 ## Model slugs
 
@@ -86,9 +86,8 @@ Codex client enum also has `Ultra` (rewritten to `max` on the wire; fans work to
 Documented HTTP paths:
 
 1. **Platform API key:** `ProviderKind=OpenAICompatible`, `BaseUrl=https://api.openai.com/v1`, API key, `OpenAiApiMode=Responses`.
-2. **ChatGPT subscription (managed):** Settings → Models → Import **ChatGPT Codex (CLIProxy)** (`ManagedSource=cliproxy-codex`). Local CLIProxyAPI handles OAuth; Dyson sessions still use OpenAI-compatible Responses against `http://127.0.0.1:8317/v1`. See [inference-providers README](README.md)#managed-cliproxy-providers.
-   - Connect calls management `codex-auth-url?is_webui=true` so CLIProxy starts a temporary OAuth forwarder on `http://localhost:1455` (Codex’s hardcoded redirect).
-   - Before that GET, Dyson bind-checks `127.0.0.1:1455`. If the port is occupied, Connect fails with a Models error banner (no silent browser `ERR_CONNECTION_REFUSED`).
+2. **ChatGPT subscription (native):** Settings → Models → Import **ChatGPT Codex** (`ManagedSource=openai-codex`). Authorization-code + PKCE against `https://auth.openai.com` using the public Codex CLI client id. Loopback `http://localhost:1455/auth/callback` (Dyson binds `127.0.0.1:1455`). Inference is Responses at `https://chatgpt.com/backend-api/codex` (code-owned; `NormalizeBaseUrl` does not append `/v1`). The provider `ApiKey` is a `dyson-openai-codex:<guid>` handle. Tokens are plaintext JSON in `app_settings` (`openai_codex_credential:<guid>`). The handler sends `Authorization`, `Chatgpt-Account-Id`, `User-Agent` (`codex-tui/0.154.0 …`, overridable with `Dyson:OpenAiCodex:UserAgent`), `Originator: codex-tui`, and copies `prompt_cache_key` to `Session-Id`. This is unofficial and may violate OpenAI's terms. Connect is blocked until the subject accepts `openai_codex_consent_accepted`. No CLIProxy, no port 8317. Device code and SIWC are not implemented.
+3. **ChatGPT subscription (legacy CLIProxy):** Import **ChatGPT Codex (CLIProxy)** (`ManagedSource=cliproxy-codex`). Local CLIProxyAPI handles OAuth; sessions use `http://127.0.0.1:8317/v1`. The card offers **Switch to native ChatGPT Codex** (keeps slug ids; a successful refresh can rotate the token and break CLIProxy's copy; the auth file is not deleted). Connect still needs localhost **1455** free for CLIProxy's forwarder. Do not Connect on the native and legacy cards at the same time.
 
 | Dyson field | Codex mapping |
 | ----------- | ------------- |
@@ -97,10 +96,10 @@ Documented HTTP paths:
 | Nested `reasoning.effort` | Wired on Responses (`OpenAiResponsesClient` → `reasoning: { effort }`) |
 | Nested `reasoning.mode` | Upstream contract; **not wired yet** |
 | `prompt_cache_key` | Always sent (session-scoped) |
-| `prompt_cache_options` / explicit breakpoints | Direct and custom GPT-5.6+ (`ManagedSource` null) — **omitted** for CLIProxy managed (`ManagedSource=cliproxy-codex`) |
-| Prompt cache (CLIProxy managed) | Full replay every tool hop: stable prefix, `prompt_cache_key`, no Anthropic `cache_control`, no Claude cache-anchor line |
-| ChatGPT OAuth + `ChatGPT-Account-ID` (direct) | Prefer CLIProxy managed provider; direct harness OAuth **not wired** |
-| Base `https://chatgpt.com/backend-api/codex` | **not wired** as a first-party Dyson endpoint (CLIProxy mediates) |
+| `prompt_cache_options` / explicit breakpoints | Direct and custom GPT-5.6+ (`ManagedSource` null) — **omitted** for native `openai-codex` and legacy `cliproxy-codex` |
+| Prompt cache (native and CLIProxy managed) | Full replay every tool hop: stable prefix, `prompt_cache_key`, no Anthropic `cache_control`, no Claude cache-anchor line |
+| ChatGPT OAuth + `Chatgpt-Account-Id` | Wired on the native card (`openai-codex`). The legacy CLIProxy card still mediates |
+| Base `https://chatgpt.com/backend-api/codex` | Wired for `openai-codex` only. `NormalizeBaseUrl` skips appending `/v1` for this base |
 | Codex SDK / `codex exec` host | **not wired yet** |
 | Responses tool-loop (direct API key, and any custom Responses row with `ManagedSource` unset) | Store chaining: `store: true` + `previous_response_id` delta hops (`function_call_output` only); always resends `instructions` + `tools`. On exact 400 “No tool call found for function call output…”, one full-replay retry. Later tool hops stay on that chain |
 | Responses tool-loop (CLIProxy managed) | Full replay every tool hop: `store: false`, never `previous_response_id`; stable prefix; `reasoning` (with `encrypted_content`) → `function_call` → `function_call_output`; `include: ["reasoning.encrypted_content"]`. No `cache_control` |
@@ -108,7 +107,8 @@ Documented HTTP paths:
 
 ## Gotchas
 
-- ChatGPT backend `/codex` is undocumented for third parties; prefer API key + `api.openai.com` or the Codex SDK/CLI.
+- ChatGPT backend `/codex` is undocumented for third parties. The native card uses it anyway (consent required). Prefer API key + `api.openai.com` or the Codex SDK/CLI when that is enough.
+- Native and legacy Connect both need localhost **1455**. Do not start both at once.
 - Completions are gone from Codex `wire_api` — Responses only.
 - Bare model ids for ChatGPT accounts; prefixed slugs error.
 - Slug lists rot fast; poll `/models` (presets include `default_reasoning_effort`, `supported_reasoning_efforts`).

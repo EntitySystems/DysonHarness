@@ -117,6 +117,19 @@ public class OpenAiUsageParseTests
     }
 
     [Fact]
+    public void Codex_shaped_usage_maps_input_and_output_tokens()
+    {
+        var json = Parse(
+            """
+            { "usage": { "input_tokens": 40, "output_tokens": 9, "total_tokens": 49 } }
+            """);
+
+        Assert.True(OpenAiCompatibleHttp.TryParseUsage(json, out var usage));
+        Assert.Equal(40, usage.InputTokens);
+        Assert.Equal(9, usage.WriteTokens);
+    }
+
+    [Fact]
     public void Missing_usage_returns_false()
     {
         var json = Parse("""{ "id": "chatcmpl-1" }""");

@@ -294,6 +294,10 @@ public class XaiGrokProviderWiringTests
         Assert.False(DysonManagedSources.IsCliProxy("xai-grok"));
         Assert.False(DysonManagedSources.IsDirectManaged("xai-grok"));
         Assert.True(DysonManagedSources.IsCliProxy(DysonManagedSources.CliProxyGrok));
+        Assert.True(DysonManagedSources.IsOpenAiCodex("openai-codex"));
+        Assert.False(DysonManagedSources.IsCliProxy("openai-codex"));
+        Assert.False(DysonManagedSources.IsDirectManaged("openai-codex"));
+        Assert.False(DysonManagedSources.IsOpenAiCodex("cliproxy-codex"));
     }
 
     [Fact]
@@ -320,6 +324,43 @@ public class XaiGrokProviderWiringTests
         Assert.NotEqual(DysonCliProxyHost.DefaultApiKey, provider.ApiKey);
         Assert.False(OpenAiCompatibleHttp.SupportsResponsesServerChaining(provider));
         Assert.False(OpenAiCompatibleHttp.SupportsExplicitPromptCache(provider));
+    }
+
+    [Fact]
+    public void Agent_provider_rewrites_base_url_for_openai_codex_but_keeps_the_handle_and_cliproxy_constants_alone()
+    {
+        var handle = OpenAiCodexAuthService.HandleFor(Guid.NewGuid());
+        var entity = new DysonModelProviderEntity
+        {
+            Id = Guid.NewGuid(),
+            DisplayName = "ChatGPT Codex",
+            ProviderKind = DysonProviderKinds.OpenAICompatible,
+            BaseUrl = "https://tampered.example/v1",
+            ApiKey = handle,
+            OpenAiApiMode = DysonOpenAiApiModes.Responses,
+            ManagedSource = DysonManagedSources.OpenAiCodex,
+        };
+        var slug = new DysonModelSlugEntity { Id = Guid.NewGuid(), ProviderId = entity.Id, Slug = "gpt-5.5", Provider = entity };
+
+        var provider = new OpenAiCompatibleAgentProvider(entity, slug);
+
+        Assert.Equal(OpenAiCodexClientProfile.InferenceBaseUrl, provider.BaseUrl);
+        Assert.Equal(handle, provider.ApiKey);
+        Assert.NotEqual(DysonCliProxyHost.DefaultLocalBaseUrl, provider.BaseUrl);
+        Assert.NotEqual(DysonCliProxyHost.DefaultApiKey, provider.ApiKey);
+
+        var legacy = new DysonModelProviderEntity
+        {
+            Id = Guid.NewGuid(),
+            DisplayName = "ChatGPT Codex (CLIProxy)",
+            ProviderKind = DysonProviderKinds.OpenAICompatible,
+            BaseUrl = "https://tampered.example/v1",
+            ApiKey = "user-key",
+            ManagedSource = DysonManagedSources.CliProxyCodex,
+        };
+        var legacyProvider = new OpenAiCompatibleAgentProvider(legacy, null);
+        Assert.Equal(DysonCliProxyHost.DefaultLocalBaseUrl, legacyProvider.BaseUrl);
+        Assert.Equal(DysonCliProxyHost.DefaultApiKey, legacyProvider.ApiKey);
     }
 }
 

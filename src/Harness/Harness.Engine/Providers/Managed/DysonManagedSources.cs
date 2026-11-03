@@ -11,6 +11,8 @@ public static class DysonManagedSources
     public const string CliProxyMeta = "cliproxy-meta";
     /// <summary>Native xAI/Grok Build OAuth provider (no CLIProxy); see <c>Providers/Xai/</c>.</summary>
     public const string XaiGrok = "xai-grok";
+    /// <summary>Native ChatGPT Codex OAuth provider (no CLIProxy); see <c>Providers/OpenAi/Codex/</c>.</summary>
+    public const string OpenAiCodex = "openai-codex";
     public const string OpenRouter = "openrouter";
     public const string OrcaRouter = "orcarouter";
 
@@ -20,6 +22,9 @@ public static class DysonManagedSources
 
     public static bool IsXaiGrok(string? source) =>
         string.Equals(source, XaiGrok, StringComparison.Ordinal);
+
+    public static bool IsOpenAiCodex(string? source) =>
+        string.Equals(source, OpenAiCodex, StringComparison.Ordinal);
 
     public static bool IsOpenRouter(string? source) =>
         string.Equals(source, OpenRouter, StringComparison.Ordinal);
