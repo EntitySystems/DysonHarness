@@ -22,3 +22,33 @@ jobs:
 
       - name: Test
         run: dotnet test src/Harness/Harness.Tests/Harness.Tests.csproj -c Release --nologo
+
+  macos-desktop:
+    name: macOS desktop (compile)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Publish shell
+        run: |
+          set -euo pipefail
+          dotnet publish src/Harness/DysonHarness.UI.macOS/DysonHarness.UI.macOS.csproj \
+            -c Release \
+            -r osx-arm64 \
+            --self-contained false \
+            -p:SelfContained=false \
+            -p:PublishSingleFile=false \
+            -o artifacts/macos
+
+      - name: Bundle and verify signature
+        run: |
+          set -euo pipefail
+          bash scripts/bundle-macos-app.sh artifacts/macos
+          codesign --verify --deep --strict artifacts/macos/DysonHarness.app

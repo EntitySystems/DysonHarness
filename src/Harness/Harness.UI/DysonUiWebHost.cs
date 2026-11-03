@@ -43,8 +43,9 @@ public static class DysonUiWebHost
         // --no-launch-profile` never reads that file and would otherwise fall back to Kestrel
         // :5000. Development with no explicit URL binds 5181. The installed Windows shell does
         // not use a fixed port: App.xaml.cs passes http://127.0.0.1:0 (ephemeral loopback).
-        // Published linux/osx Harness.UI has no launchSettings and is Production, so it keeps
+        // Published Linux Harness.UI has no launchSettings and is Production, so it keeps
         // the Kestrel default (http://localhost:5000) unless the caller passes a URL.
+        // The macOS desktop shell passes http://127.0.0.1:0, same as the Windows shell.
         // An explicit URL still wins: --urls, ASPNETCORE_URLS, or DysonUiWebHostOptions.Urls.
         if (builder.Environment.IsDevelopment()
             && string.IsNullOrWhiteSpace(options.Urls)
@@ -177,6 +178,7 @@ public static class DysonUiWebHost
         builder.Services.AddSingleton<IDysonAudioPlayback, DysonWindowsAudioPlayback>();
         builder.Services.AddSingleton<IDysonAudioCapture, DysonWindowsAudioCapture>();
 #endif
+        options.ConfigureServices?.Invoke(builder.Services);
         builder.Services.AddSingleton<IDysonSessionRuntimeScopeFactory, DysonUiSessionRuntimeScopeFactory>();
         builder.Services.AddSingleton<DysonSessionRuntimeRegistry>();
         builder.Services.AddSingleton<DysonMessageBus>();

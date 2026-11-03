@@ -66,7 +66,8 @@ jobs:
             os: ubuntu-latest
           - rid: osx-arm64
             os: macos-latest
-          # macos-13 retired Dec 2025; cross-publish osx-x64 from arm64 macOS (managed .NET).
+          # macos-13 retired Dec 2025; cross-publish osx-x64 from arm64 macOS.
+          # The macOS shell's Swift dylib is compiled with swiftc -target x86_64-apple-macos14 on that runner.
           - rid: osx-x64
             os: macos-latest
     runs-on: ${{ matrix.os }}
@@ -92,6 +93,8 @@ jobs:
           PROJECT="src/Harness/Harness.UI/Harness.UI.csproj"
           if [[ "${{ matrix.rid }}" == "win-x64" ]]; then
             PROJECT="src/Harness/DysonHarness.UI.Windows/DysonHarness.UI.Windows.csproj"
+          elif [[ "${{ matrix.rid }}" == osx-* ]]; then
+            PROJECT="src/Harness/DysonHarness.UI.macOS/DysonHarness.UI.macOS.csproj"
           fi
           dotnet publish "$PROJECT" \
             -c Release \
@@ -103,8 +106,98 @@ jobs:
             -p:InformationalVersion="${VERSION}+${SHORT_SHA}" \
             -p:DysonReleaseChannel="${CHANNEL}" \
             -o "$OUT"
-          # MIT attribution for ported CLIProxyAPI code must travel with every copy (zip + MSI payload).
+          # MIT attribution for ported CLIProxyAPI code must travel with every copy (zip + MSI + pkg payload).
           cp LICENSE THIRD-PARTY-NOTICES.md "$OUT/"
+
+      - name: Import Apple signing keychain
+        id: signing
+        if: startsWith(matrix.rid, 'osx-')
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in APPLE_TEAM_ID APPLE_CERTIFICATE_P12_BASE64 APPLE_CERTIFICATE_PASSWORD APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_PRIVATE_KEY; do
+            if [[ -z "${!name}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if ((${#missing[@]})); then
+            echo "Missing repository secrets: ${missing[*]}" >&2
+            echo "Add them under Settings → Secrets and variables → Actions before publishing macOS packages." >&2
+            exit 1
+          fi
+
+          KEYCHAIN="$RUNNER_TEMP/dyson-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          umask 077
+          printf '%s' "$KEYCHAIN_PASSWORD" > "$RUNNER_TEMP/keychain.password"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user | sed -e 's/^[[:space:]]*//' -e 's/"//g' > "$RUNNER_TEMP/keychains-before.txt"
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$KEYCHAIN" $(cat "$RUNNER_TEMP/keychains-before.txt")
+
+          curl -fsSL -o "$RUNNER_TEMP/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN"
+          if ! printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | tr -d ' \n\r\t' | base64 -D > "$RUNNER_TEMP/certs.p12"; then
+            echo "APPLE_CERTIFICATE_P12_BASE64 is not valid base64. Copy it with pbcopy, not from the terminal scrollback." >&2
+            exit 1
+          fi
+          security import "$RUNNER_TEMP/certs.p12" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productsign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign:,productsign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          rm -f "$RUNNER_TEMP/certs.p12"
+
+          APP_IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | sed -n 's/.*"\(Developer ID Application:[^"]*\)"/\1/p' | head -1)"
+          INSTALLER_IDENTITY="$(security find-identity -v "$KEYCHAIN" | sed -n 's/.*"\(Developer ID Installer:[^"]*\)"/\1/p' | head -1)"
+          if [[ -z "$APP_IDENTITY" || -z "$INSTALLER_IDENTITY" ]]; then
+            echo "The p12 must contain both a Developer ID Application identity and a Developer ID Installer identity." >&2
+            security find-identity -v "$KEYCHAIN" | sed 's/.*"\([^"]*\)".*/\1/' >&2 || true
+            exit 1
+          fi
+          if [[ "$APP_IDENTITY" != *"($APPLE_TEAM_ID)" || "$INSTALLER_IDENTITY" != *"($APPLE_TEAM_ID)" ]]; then
+            echo "Certificate team id does not match APPLE_TEAM_ID." >&2
+            echo "Application: $APP_IDENTITY" >&2
+            echo "Installer: $INSTALLER_IDENTITY" >&2
+            exit 1
+          fi
+          echo "Signing with: $APP_IDENTITY"
+          echo "Packaging with: $INSTALLER_IDENTITY"
+          {
+            echo "app_identity<<EOF"
+            echo "$APP_IDENTITY"
+            echo "EOF"
+            echo "installer_identity<<EOF"
+            echo "$INSTALLER_IDENTITY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Bundle and sign macOS app
+        if: startsWith(matrix.rid, 'osx-')
+        shell: bash
+        env:
+          CODESIGN_IDENTITY: ${{ steps.signing.outputs.app_identity }}
+          CODESIGN_KEYCHAIN: ${{ runner.temp }}/dyson-signing.keychain-db
+        run: |
+          set -euo pipefail
+          security unlock-keychain -p "$(cat "$RUNNER_TEMP/keychain.password")" "$CODESIGN_KEYCHAIN"
+          bash scripts/bundle-macos-app.sh "artifacts/publish/${{ matrix.rid }}"
+
+      - name: Notarize macOS app
+        if: startsWith(matrix.rid, 'osx-')
+        shell: bash
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: bash scripts/notarize-macos.sh "artifacts/publish/${{ matrix.rid }}/DysonHarness.app"
 
       - name: Zip (Windows)
         if: runner.os == 'Windows'
@@ -123,7 +216,12 @@ jobs:
           RID="${{ matrix.rid }}"
           ZIP_NAME="DysonHarness-${VERSION}-${RID}.zip"
           mkdir -p artifacts
-          (cd "artifacts/publish/${RID}" && zip -r "../../${ZIP_NAME}" .)
+          if [[ "$RID" == osx-* ]]; then
+            # ditto keeps the stapled notarization ticket. zip(1) drops it.
+            ditto -c -k --keepParent "artifacts/publish/${RID}/DysonHarness.app" "artifacts/${ZIP_NAME}"
+          else
+            (cd "artifacts/publish/${RID}" && zip -r "../../${ZIP_NAME}" .)
+          fi
 
       - name: Build MSI (win-x64)
         if: matrix.rid == 'win-x64'
@@ -147,6 +245,38 @@ jobs:
           }
           Copy-Item $msi.FullName "artifacts/$($msi.Name)" -Force
           Write-Host "Copied MSI to artifacts/$($msi.Name)"
+
+      - name: Build macOS pkg
+        if: startsWith(matrix.rid, 'osx-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          security unlock-keychain -p "$(cat "$RUNNER_TEMP/keychain.password")" "$RUNNER_TEMP/dyson-signing.keychain-db"
+          bash scripts/package-macos-pkg.sh \
+            "artifacts/publish/${{ matrix.rid }}/DysonHarness.app" \
+            "artifacts/DysonHarness-${VERSION}-${{ matrix.rid }}.pkg" \
+            "$VERSION" \
+            "${{ steps.signing.outputs.installer_identity }}"
+
+      - name: Notarize macOS pkg
+        if: startsWith(matrix.rid, 'osx-')
+        shell: bash
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: bash scripts/notarize-macos.sh "artifacts/DysonHarness-${VERSION}-${{ matrix.rid }}.pkg"
+
+      - name: Remove signing keychain
+        if: always() && startsWith(matrix.rid, 'osx-')
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/dyson-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/certs.p12" "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/DeveloperIDG2CA.cer" "$RUNNER_TEMP/keychain.password"
+          if [[ -f "$RUNNER_TEMP/keychains-before.txt" ]]; then
+            # shellcheck disable=SC2046
+            security list-keychains -d user -s $(cat "$RUNNER_TEMP/keychains-before.txt") || true
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -188,7 +318,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          assets=(release-assets/DysonHarness-*.zip release-assets/DysonHarness-*.msi)
+          assets=(release-assets/DysonHarness-*.zip release-assets/DysonHarness-*.msi release-assets/DysonHarness-*.pkg)
           if (( ${#assets[@]} == 0 )); then
             echo "No zip/MSI assets under release-assets/" >&2
             exit 1
@@ -219,7 +349,7 @@ jobs:
           | **Commit** | \`${GITHUB_SHA}\` (\`${SHORT_SHA}\`) |
           | **Workflow** | ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} |
 
-          **Windows:** prefer the MSI (\`DysonHarness-${VERSION}-win-x64.msi\`) for a per-user install (Start Menu shortcut + Apps & Features as **Dyson Harness**, manufacturer **Entity Systems**); zip remains portable. VC++ 2022 x64 redistributable required. **Linux / macOS:** unzip and run \`Harness.UI\`. See [docs/packaging/releases.md](https://github.com/${GITHUB_REPOSITORY}/blob/master/docs/packaging/releases.md).
+          **Windows:** prefer the MSI (\`DysonHarness-${VERSION}-win-x64.msi\`) for a per-user install (Start Menu shortcut + Apps & Features as **Dyson Harness**, manufacturer **Entity Systems**); zip remains portable. VC++ 2022 x64 redistributable required. **Linux:** unzip and run \`Harness.UI\`. **macOS:** install \`DysonHarness-${VERSION}-osx-arm64.pkg\` (Apple Silicon) or \`DysonHarness-${VERSION}-osx-x64.pkg\` (Intel). The package is Developer ID signed and notarized and installs \`DysonHarness.app\` into \`/Applications\`. Preview builds are named **Dyson Harness (Preview)** in Finder, the Dock, and the window title. The zip is that same stapled app. See [docs/packaging/releases.md](https://github.com/${GITHUB_REPOSITORY}/blob/master/docs/packaging/releases.md).
           EOF
           sed -i 's/^          //' "${RUNNER_TEMP}/continuous-notes.md"
 
@@ -240,8 +370,9 @@ jobs:
           gh release view "${VERSION}" --json assets --jq '.assets[] | "\(.name) (\(.size) bytes)"'
           zip_count="$(gh release view "${VERSION}" --json assets --jq '[.assets[] | select(.name | endswith(".zip"))] | length')"
           msi_count="$(gh release view "${VERSION}" --json assets --jq '[.assets[] | select(.name | endswith(".msi"))] | length')"
-          if [[ "${zip_count}" -ne 4 ]] || [[ "${msi_count}" -ne 1 ]]; then
-            echo "Expected 4 zips + 1 MSI, found ${zip_count} zips + ${msi_count} MSI" >&2
+          pkg_count="$(gh release view "${VERSION}" --json assets --jq '[.assets[] | select(.name | endswith(".pkg"))] | length')"
+          if [[ "${zip_count}" -ne 4 ]] || [[ "${msi_count}" -ne 1 ]] || [[ "${pkg_count}" -ne 2 ]]; then
+            echo "Expected 4 zips + 1 MSI + 2 pkgs, found ${zip_count} zips + ${msi_count} MSI + ${pkg_count} pkgs" >&2
             exit 1
           fi
 

@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+
 namespace Harness.UI;
 
 /// <summary>Optional overrides when embedding the Blazor host (e.g. Windows CEF shell).</summary>
@@ -14,4 +16,10 @@ public sealed class DysonUiWebHostOptions
 
     /// <summary>Web root; defaults to <c>{ContentRoot}/wwwroot</c> when unset.</summary>
     public string? WebRoot { get; init; }
+
+    /// <summary>
+    /// Extra host services. The macOS shell registers <c>IDysonBrowserControl</c> here.
+    /// Invoked after the Windows CefSharp registration.
+    /// </summary>
+    public Action<IServiceCollection>? ConfigureServices { get; init; }
 }
